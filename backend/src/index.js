@@ -1,0 +1,135 @@
+/**
+ * WhatsApp CRM — Servidor principal
+ *
+ * Arquitectura:
+ *   /webhook              ← Meta envía aquí los mensajes de WhatsApp
+ *   /twilio-webhook       ← Twilio envía aquí los mensajes de WhatsApp
+ *   /shopify-webhook/:id  ← Shopify envía aquí eventos de órdenes (pagos, cancelaciones)
+ *   /api/auth             ← Login / registro de usuarios
+ *   /api/setup            ← Wizard de configuración inicial
+ *   /api/conversations    ← Conversaciones y mensajes
+ *   /api/orders           ← Pedidos
+ *   /api/settings         ← Ajustes del CRM
+ */
+
+require('dotenv').config();
+const express  = require('express');
+const http     = require('http');
+const path     = require('path');
+const { Server } = require('socket.io');
+const cors     = require('cors');
+
+const isProd = process.env.NODE_ENV === 'production';
+
+// Inicializar base de datos
+require('./db/setup');
+
+// Rutas
+const webhookRouter        = require('./routes/webhook');         // WhatsApp (Meta)
+const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Twilio)
+const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
+const authRouter           = require('./routes/auth');
+const setupRouter          = require('./routes/setup');
+const conversationsRouter  = require('./routes/conversations');
+const ordersRouter         = require('./routes/orders');
+const settingsRouter       = require('./routes/settings');
+const catalogoRouter       = require('./routes/catalogo');
+const reengagementRouter   = require('./routes/reengagement');
+const clientesRouter       = require('./routes/clientes');
+
+const app    = express();
+const server = http.createServer(app);
+
+// ─── SOCKET.IO — Notificaciones en tiempo real al panel ──────────
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST'],
+  },
+});
+
+// Pasar Socket.IO a los routers que lo necesitan
+webhookRouter.setSocketIO(io);
+twilioWebhookRouter.setSocketIO(io);
+shopifyWebhookRouter.setSocketIO(io);
+conversationsRouter.setSocketIO(io);
+
+io.on('connection', (socket) => {
+  socket.on('join_org', (orgId) => {
+    socket.join(`org_${orgId}`);
+    console.log(`[Socket.io] Panel conectado → org_${orgId}`);
+  });
+});
+
+// ─── CORS ────────────────────────────────────────────────────────
+// En producción el frontend viene del mismo servidor → no necesita CORS
+// En dev apunta a Vite en :5173
+app.use(cors({
+  origin: isProd ? false : (process.env.FRONTEND_URL || 'http://localhost:5173'),
+  credentials: true,
+}));
+
+// ─── BODY PARSERS ────────────────────────────────────────────────
+// Twilio envía form-urlencoded; Shopify necesita raw body para HMAC.
+// Ambos se capturan ANTES de express.json().
+app.use((req, res, next) => {
+  if (req.path.startsWith('/twilio-webhook')) {
+    // Twilio: application/x-www-form-urlencoded
+    express.urlencoded({ extended: false })(req, res, next);
+  } else if (req.path.startsWith('/shopify-webhook')) {
+    // Shopify: raw body para verificar firma HMAC
+    let rawBody = '';
+    req.on('data', chunk => { rawBody += chunk.toString(); });
+    req.on('end', () => {
+      req.rawBody = rawBody;
+      try { req.body = JSON.parse(rawBody); } catch { req.body = {}; }
+      next();
+    });
+  } else {
+    next();
+  }
+});
+
+app.use(express.json());
+
+// ─── HEALTH CHECK ────────────────────────────────────────────────
+app.get('/health', (_, res) => res.json({
+  status: 'ok',
+  timestamp: new Date().toISOString(),
+}));
+
+// ─── RUTAS ───────────────────────────────────────────────────────
+app.use('/webhook',           webhookRouter);        // POST — Meta webhook
+app.use('/twilio-webhook',    twilioWebhookRouter);  // POST — Twilio webhook
+app.use('/shopify-webhook',   shopifyWebhookRouter); // POST — Shopify eventos
+app.use('/api/auth',          authRouter);           // POST login/register
+app.use('/api/setup',         setupRouter);          // Wizard configuración
+app.use('/api/conversations', conversationsRouter);  // Chats y mensajes
+app.use('/api/orders',        ordersRouter);         // Pedidos
+app.use('/api/settings',      settingsRouter);       // Ajustes del CRM
+app.use('/api/catalogo',      catalogoRouter);       // Catálogo de productos
+app.use('/api/reengagement',  reengagementRouter);  // Re-enganche de clientes dormidos
+app.use('/api/clientes',      clientesRouter);      // Lista completa de clientes
+
+// ─── FRONTEND ESTÁTICO (solo producción) ─────────────────────────
+if (isProd) {
+  const frontendDist = path.join(__dirname, '../../frontend/dist');
+  app.use(express.static(frontendDist));
+  // SPA fallback — cualquier ruta que no sea /api/* → index.html
+  app.get(/^(?!\/api|\/webhook|\/twilio-webhook|\/shopify-webhook|\/health).*/, (_, res) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
+
+// ─── ARRANCAR ────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`\n🤖 WhatsApp CRM — Puerto ${PORT}`);
+  console.log(`   WhatsApp Meta   : POST /webhook`);
+  console.log(`   WhatsApp Twilio : POST /twilio-webhook`);
+  console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
+  console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
+  console.log(`   Shopify app     : ${process.env.RAIGENTIC_URL || 'https://raigentic.onrender.com'}\n`);
+});
+
+process.on('unhandledRejection', (err) => console.error('[Error no manejado]', err));

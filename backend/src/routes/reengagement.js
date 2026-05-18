@@ -1,0 +1,583 @@
+/**
+ * reengagement.js — Pronóstico de compra con IA
+ *
+ * GET  /api/reengagement/candidates   → Claude analiza comportamiento de cada cliente
+ *                                       y predice cuándo comprará próximamente
+ * POST /api/reengagement/generate     → mensaje personalizado para un cliente
+ * POST /api/reengagement/send         → envía WhatsApp
+ * POST /api/reengagement/send-bulk    → envía a varios clientes
+ */
+
+const express   = require('express');
+const router    = express.Router();
+const db        = require('../db/database');
+const raigentic = require('../services/raigentic');
+const Anthropic = require('@anthropic-ai/sdk');
+const { requireAuth } = require('../middleware/auth');
+
+router.use(requireAuth);
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Cache en memoria: 2 horas (el análisis es costoso en tiempo)
+const analysisCache = new Map();
+const CACHE_TTL = 2 * 60 * 60 * 1000;
+
+/* ─────────────────────────────────────────────────────────────────────
+   ESTADÍSTICAS POR CLIENTE
+   Agrupa órdenes de Shopify por teléfono y calcula métricas de
+   comportamiento para alimentar el modelo predictivo de la IA.
+───────────────────────────────────────────────────────────────────── */
+/** Normaliza teléfono: quita espacios, asegura formato +56XXXXXXXXX */
+function normalizePhone(raw) {
+  if (!raw) return null;
+  let p = raw.replace(/\s+/g, '').replace(/[^+\d]/g, '');
+  // Si empieza con 9 y tiene 9 dígitos → asumir Chile
+  if (/^9\d{8}$/.test(p)) p = '+56' + p;
+  // Si empieza con 56 sin + y tiene 11 dígitos
+  if (/^56\d{9}$/.test(p)) p = '+' + p;
+  return p.length >= 8 ? p : null;
+}
+
+function buildCustomerStats(orders) {
+  const map = new Map();
+  const DOW = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+
+  for (const order of orders) {
+    // Buscar teléfono en varias fuentes (en orden de preferencia)
+    const rawPhone =
+      order.customer?.phone ||
+      order.shippingAddress?.phone ||
+      order.billingAddress?.phone ||
+      null;
+
+    const phone = normalizePhone(rawPhone);
+    if (!phone) continue;
+
+    // Nombre: customer > shippingAddress > billingAddress > phone
+    const name =
+      order.customer?.displayName ||
+      order.customer?.name ||
+      (order.shippingAddress
+        ? `${order.shippingAddress.firstName || ''} ${order.shippingAddress.lastName || ''}`.trim()
+        : null) ||
+      (order.billingAddress
+        ? `${order.billingAddress.firstName || ''} ${order.billingAddress.lastName || ''}`.trim()
+        : null) ||
+      phone;
+
+    const date  = new Date(order.createdAt);
+    const price = parseFloat(order.totalPrice) || 0;
+    const items = (order.lineItems || []).map(li => li.title).filter(Boolean);
+
+    if (!map.has(phone)) {
+      map.set(phone, {
+        phone,
+        name,
+        email:     order.customer?.email || null,
+        orders:    [],
+        dowCounts: [0,0,0,0,0,0,0],
+      });
+    }
+    const s = map.get(phone);
+    // Actualizar nombre si el nuevo es más informativo
+    if (name.length > s.name.length) s.name = name;
+    s.orders.push({ date, price, items, orderName: order.name });
+    s.dowCounts[date.getDay()]++;
+    items.forEach(i => {
+      if (!s.products) s.products = new Set();
+      s.products.add(i);
+    });
+  }
+
+  const now = Date.now();
+  const stats = [];
+
+  for (const [, s] of map) {
+    if (!s.orders.length) continue;
+    s.orders.sort((a, b) => a.date - b.date);
+
+    const last         = s.orders[s.orders.length - 1];
+    const daysInactive = Math.round((now - last.date.getTime()) / 86400000);
+    const totalSpent   = s.orders.reduce((t, o) => t + o.price, 0);
+    const avgOrderVal  = Math.round(totalSpent / s.orders.length);
+
+    // Intervalos entre compras (en días)
+    const gaps = [];
+    for (let i = 1; i < s.orders.length; i++) {
+      gaps.push(Math.round((s.orders[i].date - s.orders[i-1].date) / 86400000));
+    }
+    const avgFreqDays = gaps.length
+      ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length)
+      : null;
+
+    // Varianza de la frecuencia (qué tan regular es el cliente)
+    let freqStdDev = null;
+    if (gaps.length >= 2) {
+      const mean = avgFreqDays;
+      const variance = gaps.reduce((s, g) => s + Math.pow(g - mean, 2), 0) / gaps.length;
+      freqStdDev = Math.round(Math.sqrt(variance));
+    }
+
+    // Día favorito de compra
+    const maxDow  = s.dowCounts.indexOf(Math.max(...s.dowCounts));
+    const favDay  = DOW[maxDow];
+
+    // Tendencia de gasto (creciente / decreciente / estable)
+    let spendTrend = 'estable';
+    if (s.orders.length >= 3) {
+      const first = s.orders.slice(0, Math.ceil(s.orders.length / 2)).reduce((t, o) => t + o.price, 0);
+      const latter = s.orders.slice(Math.ceil(s.orders.length / 2)).reduce((t, o) => t + o.price, 0);
+      const ratio = latter / (first || 1);
+      if (ratio > 1.2) spendTrend = 'creciente';
+      else if (ratio < 0.8) spendTrend = 'decreciente';
+    }
+
+    // Días desde cada compra (historial reciente)
+    const recentOrders = s.orders.slice(-5).map(o => ({
+      date: o.date.toISOString().slice(0,10),
+      daysAgo: Math.round((now - o.date.getTime()) / 86400000),
+      price: Math.round(o.price),
+      items: o.items.slice(0, 2).join(', '),
+    }));
+
+    stats.push({
+      phone:        s.phone,
+      name:         s.name,
+      email:        s.email,
+      totalOrders:  s.orders.length,
+      totalSpent:   Math.round(totalSpent),
+      avgOrderVal,
+      daysInactive,
+      lastOrderDate: last.date.toISOString().slice(0, 10),
+      lastProducts: (last.items || []).slice(0, 3).join(', '),
+      avgFreqDays,
+      freqStdDev,     // desviación estándar (0 = muy regular, alto = irregular)
+      favDay,
+      spendTrend,
+      recentOrders,
+      dowCounts: s.dowCounts,
+    });
+  }
+
+  return stats;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   MODELO PREDICTIVO DE IA
+   Claude analiza el comportamiento de cada cliente y predice en cuántos
+   días realizará su próxima compra. Devuelve:
+     - predictedDays: días hasta la próxima compra (negativo = ya debería haber comprado)
+     - confidence: 0-100% de certeza en la predicción
+     - aiReason: explicación concisa (máx 15 palabras)
+     - buyWindow: "hoy" | "semana" | "mes" | "lejano"
+───────────────────────────────────────────────────────────────────── */
+async function predictWithAI(customers, todayDow) {
+  const D = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  const now      = new Date();
+  const todayISO = now.toISOString().slice(0, 10);
+  const todayD   = D[todayDow];
+
+  // Formato compacto: 1 línea por cliente (~35 tokens vs ~200 del formato anterior)
+  // campos: #|tel|inac|freq±dev|prox|fav|N|trend|fechas_recientes
+  const T = c => c.spendTrend === 'creciente' ? '↑' : c.spendTrend === 'decreciente' ? '↓' : '=';
+  const nextDate = c => c.avgFreqDays
+    ? new Date(now.getTime() + (c.avgFreqDays - c.daysInactive) * 86400000).toISOString().slice(5,10)
+    : '?';
+
+  const rows = customers.map((c, i) => {
+    const freq   = c.avgFreqDays ? `${c.avgFreqDays}±${c.freqStdDev ?? '?'}` : '?';
+    const ov     = c.avgFreqDays && c.daysInactive > c.avgFreqDays ? `!${c.daysInactive - c.avgFreqDays}` : '';
+    const dates  = c.recentOrders.slice(-3).map(o => o.date.slice(5)).join(',');
+    return `${i+1}|${c.phone}|${c.daysInactive}${ov}|${freq}|${nextDate(c)}|${c.favDay}|${c.totalOrders}|${T(c)}|${dates}`;
+  }).join('\n');
+
+  // Leyenda de columnas (solo 1 línea, no repetida)
+  const prompt =
+`Tienda frescos Chile,ciclos~semanales. HOY:${todayISO}(${todayD})
+Cols: #|tel|inac(días,!vencidoDías)|freq±dev|próxEst(MM-DD)|favDía|nPedidos|trend|últ3compras(MM-DD)
+${rows}
+Reglas: inac>freq→d<0; dev<3→conf alta; 1pedido→ciclo 7-14d; favDía mañana/pasado→restar días; trend↑→reducir d.
+JSON SOLO:[{"t":"tel","d":int,"c":0-100,"r":"≤8palabras"}] todos,orden d asc.`;
+
+  const response = await anthropic.messages.create({
+    model:      'claude-haiku-4-5-20251001',
+    max_tokens: 2500,
+    messages:   [{ role: 'user', content: prompt }],
+  });
+
+  const raw   = response.content[0]?.text?.trim() || '[]';
+  const match = raw.match(/\[[\s\S]*\]/);
+  if (!match) {
+    console.error('[Reengagement] AI no devolvió JSON:', raw.slice(0, 200));
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(match[0]);
+    // Mapear claves cortas → formato esperado por el resto del sistema
+    return parsed.map(r => ({
+      phone:         r.t,
+      predictedDays: r.d,
+      confidence:    r.c,
+      aiReason:      r.r,
+    }));
+  } catch {
+    console.error('[Reengagement] AI parse error:', raw.slice(0, 300));
+    return [];
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   GET /api/reengagement/candidates?refresh=false
+───────────────────────────────────────────────────────────────────── */
+router.get('/candidates', async (req, res) => {
+  try {
+    const ds = db.getPrimaryDataSource(req.orgId);
+    if (!ds) return res.json({ success: true, data: [], total: 0 });
+
+    const shop    = ds.config?.storeUrl;
+    const refresh = req.query.refresh === 'true';
+
+    // Caché
+    const cached = analysisCache.get(req.orgId);
+    if (!refresh && cached && Date.now() - cached.ts < CACHE_TTL) {
+      return res.json({ success: true, data: cached.data, total: cached.data.length, fromCache: true });
+    }
+
+    // 1. Descargar todas las órdenes de Shopify
+    console.log(`[Reengagement] Descargando órdenes de ${shop}...`);
+    const allOrders = await raigentic.getAllOrdenesPagadas(shop);
+    console.log(`[Reengagement] Total órdenes: ${allOrders.length}`);
+
+    if (!allOrders.length) {
+      return res.json({ success: true, data: [], total: 0, message: 'Sin órdenes en Shopify' });
+    }
+
+    // Log para diagnosticar fuentes de teléfono
+    const conCustomerPhone = allOrders.filter(o => o.customer?.phone).length;
+    const sinPhone         = allOrders.filter(o => !o.customer?.phone).length;
+    console.log(`[Reengagement] Teléfonos en órdenes — con phone: ${conCustomerPhone} | sin phone: ${sinPhone}`);
+
+    // 2. Enriquecer órdenes sin teléfono cruzando con catálogo de clientes
+    const toNumericId = (id) => String(id || '').replace(/[^0-9]/g, '');
+
+    const ordenesSinPhone    = allOrders.filter(o => !normalizePhone(o.customer?.phone));
+    const ordenesSinPhoneConId = ordenesSinPhone.filter(o => o.customer?.id);
+    const ordenesSinCliente  = ordenesSinPhone.filter(o => !o.customer?.id);
+
+    console.log(`[Reengagement] Órdenes sin teléfono — con customerId: ${ordenesSinPhoneConId.length} | sin customer (guest): ${ordenesSinCliente.length}`);
+
+    // Mostrar muestra de IDs para diagnóstico
+    if (ordenesSinPhoneConId.length > 0) {
+      const muestraOrden = ordenesSinPhoneConId.slice(0, 3).map(o => o.customer?.id);
+      console.log(`[Reengagement] Muestra IDs de órdenes: ${JSON.stringify(muestraOrden)}`);
+    }
+
+    if (ordenesSinPhoneConId.length > 0) {
+      console.log(`[Reengagement] Intentando enriquecer ${ordenesSinPhoneConId.length} órdenes con customerId...`);
+      try {
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const phoneMap = new Map(); // numericId → { phone, name, email }
+        let cursor = undefined;
+        let page = 0;
+
+        while (true) {
+          page++;
+          let result;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              result = await raigentic.getClientes(shop, { limit: 100, cursor });
+              break;
+            } catch (err) {
+              const status = err.response?.status;
+              if ((status === 503 || status === 429) && attempt < 3) {
+                await sleep(attempt * 1500);
+              } else throw err;
+            }
+          }
+
+          // Log muestra de IDs del catálogo en la primera página
+          if (page === 1 && result.customers?.length > 0) {
+            const muestraCatalogo = result.customers.slice(0, 3).map(c => c.id);
+            console.log(`[Reengagement] Muestra IDs catálogo: ${JSON.stringify(muestraCatalogo)}`);
+          }
+
+          for (const c of (result.customers || [])) {
+            const phone  = normalizePhone(c.phone);
+            if (!phone) continue;
+            const entry  = { phone, name: c.displayName || c.name || phone, email: c.email };
+            const numId  = toNumericId(c.id);
+            const fullId = String(c.id || '');
+            if (numId)  phoneMap.set(numId, entry);                    // "1234567890"
+            if (fullId) phoneMap.set(fullId, entry);                   // "gid://shopify/Customer/1234567890"
+            if (c.email) phoneMap.set(c.email.toLowerCase(), entry);   // "cliente@email.com"
+          }
+
+          if (!result.hasNextPage || !result.endCursor) break;
+          cursor = result.endCursor;
+          await sleep(300);
+          if (page >= 50) break;
+        }
+
+        console.log(`[Reengagement] Clientes con teléfono en catálogo: ${phoneMap.size / 2} (indexados por ID numérico y GID)`);
+
+        // Inyectar teléfono en órdenes (intentar por ID numérico, GID completo, o email)
+        let enriquecidas = 0;
+        let porId = 0, porEmail = 0;
+        for (const order of allOrders) {
+          if (normalizePhone(order.customer?.phone)) continue;
+          if (!order.customer) continue;
+
+          const rawId  = String(order.customer.id || '');
+          const numId  = toNumericId(rawId);
+          const email  = (order.customer.email || '').toLowerCase();
+
+          const enrichData =
+            phoneMap.get(rawId)   ||   // GID completo
+            phoneMap.get(numId)   ||   // numérico
+            (email ? phoneMap.get(email) : null); // email
+
+          if (enrichData) {
+            order.customer.phone = enrichData.phone;
+            if (!order.customer.name && !order.customer.displayName) order.customer.name = enrichData.name;
+            if (!order.customer.email) order.customer.email = enrichData.email;
+            enriquecidas++;
+            if (phoneMap.get(rawId) || phoneMap.get(numId)) porId++;
+            else porEmail++;
+          }
+        }
+        console.log(`[Reengagement] Órdenes enriquecidas: ${enriquecidas} (por ID: ${porId} | por email: ${porEmail})`);
+      } catch (err) {
+        console.warn('[Reengagement] No se pudo enriquecer con catálogo:', err.message);
+      }
+    }
+
+    // 3. Estadísticas por cliente
+    const allStats = buildCustomerStats(allOrders);
+    console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
+
+    console.log(`[Reengagement] Clientes únicos con teléfono tras enriquecimiento: ${allStats.length}`);
+
+    if (!allStats.length) {
+      return res.json({ success: true, data: [], total: 0, message: 'Clientes sin número de teléfono en Shopify' });
+    }
+
+    // 4. Predicción IA en batches de 60
+    const todayDow = new Date().getDay();
+    let aiResults  = [];
+
+    const BATCH = 40; // formato compacto: 40 × ~35 tokens input + 40 × ~35 tokens output ≈ 2800 tokens/batch
+    for (let i = 0; i < allStats.length; i += BATCH) {
+      const batch       = allStats.slice(i, i + BATCH);
+      const batchResult = await predictWithAI(batch, todayDow);
+      aiResults = aiResults.concat(batchResult);
+      console.log(`[Reengagement] Batch ${Math.floor(i/BATCH)+1}/${Math.ceil(allStats.length/BATCH)}: ${batchResult.length} predicciones`);
+      if (i + BATCH < allStats.length) {
+        await new Promise(r => setTimeout(r, 600));
+      }
+    }
+    console.log(`[Reengagement] Total predicciones AI recibidas: ${aiResults.length} / ${allStats.length} clientes`);
+
+    // 4. Combinar estadísticas con predicción IA
+    const aiMap = new Map(aiResults.map(r => [r.phone, r]));
+
+    const enriched = allStats.map(c => {
+      const ai = aiMap.get(c.phone) || {};
+      const predictedDays = ai.predictedDays ?? null;
+
+      // Categoría según predicción
+      let buyWindow, urgency;
+      if (predictedDays === null) {
+        buyWindow = 'desconocido'; urgency = 0;
+      } else if (predictedDays <= 1) {
+        buyWindow = 'hoy'; urgency = 4;
+      } else if (predictedDays <= 7) {
+        buyWindow = 'semana'; urgency = 3;
+      } else if (predictedDays <= 30) {
+        buyWindow = 'mes'; urgency = 2;
+      } else {
+        buyWindow = 'lejano'; urgency = 1;
+      }
+
+      return {
+        ...c,
+        predictedDays,
+        confidence: ai.confidence || 0,
+        aiReason:   ai.aiReason   || null,
+        buyWindow,
+        urgency,
+      };
+    })
+    .filter(c => c.predictedDays !== null && c.predictedDays <= 90) // hasta 90 días
+    .sort((a, b) => a.predictedDays - b.predictedDays); // más cercanos primero
+
+    // 5. Guardar en caché
+    analysisCache.set(req.orgId, { data: enriched, ts: Date.now() });
+
+    // ── LOG: listado de números a contactar ──────────────────────────
+    const windows = [
+      { key: 'hoy',    label: '🟢 HOY / MAÑANA',  max: 1  },
+      { key: 'semana', label: '🔵 ESTA SEMANA',    max: 7  },
+      { key: 'mes',    label: '🟡 ESTE MES',       max: 30 },
+      { key: 'lejano', label: '⚪ LEJANO (31-90d)', max: 90 },
+    ];
+    console.log('\n' + '═'.repeat(60));
+    console.log(`  📋 LISTA DE CONTACTOS — ${new Date().toLocaleString('es-CL')}`);
+    console.log('═'.repeat(60));
+    for (const w of windows) {
+      const grupo = enriched.filter(c => c.buyWindow === w.key);
+      if (!grupo.length) continue;
+      console.log(`\n${w.label} (${grupo.length} clientes)`);
+      console.log('─'.repeat(60));
+      grupo.forEach(c => {
+        const dias    = c.predictedDays <= 0 ? `vencido ${Math.abs(c.predictedDays)}d` : `en ${c.predictedDays}d`;
+        const conf    = `${c.confidence}%`.padStart(4);
+        const nombre  = (c.name || '—').slice(0, 20).padEnd(20);
+        const razon   = c.aiReason ? `  "${c.aiReason}"` : '';
+        console.log(`  ${nombre}  ${c.phone}  [${conf}]  ${dias}${razon}`);
+      });
+    }
+    console.log('\n' + '═'.repeat(60));
+    console.log(`  TOTAL: ${enriched.length} clientes | HOY/MAÑANA: ${enriched.filter(c=>c.buyWindow==='hoy').length} | SEMANA: ${enriched.filter(c=>c.buyWindow==='semana').length} | MES: ${enriched.filter(c=>c.buyWindow==='mes').length}`);
+    console.log('═'.repeat(60) + '\n');
+    // ────────────────────────────────────────────────────────────────
+
+    res.json({ success: true, data: enriched, total: enriched.length, fromCache: false });
+
+  } catch (err) {
+    console.error('[Reengagement] error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   POST /api/reengagement/generate
+───────────────────────────────────────────────────────────────────── */
+router.post('/generate', async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const cached    = analysisCache.get(req.orgId);
+    const c         = cached?.data?.find(x => x.phone === phone) || {};
+
+    const prompt = `Eres el asistente de ventas de una tienda de productos frescos del campo (huevos, aceitunas, quesos, miel y más).
+
+Cliente: ${c.name || phone}
+Última compra: hace ${c.daysInactive || '?'} días (${c.lastOrderDate || '—'})
+Productos que compra: ${c.lastProducts || 'productos frescos'}
+${c.avgFreqDays ? `Compra habitualmente cada ~${c.avgFreqDays} días` : ''}
+${c.predictedDays <= 1 ? 'La IA predice que comprará HOY o MAÑANA.' : c.predictedDays <= 7 ? `La IA predice que comprará en ~${c.predictedDays} días.` : ''}
+${c.aiReason ? `Contexto: ${c.aiReason}` : ''}
+
+Escribe un mensaje de WhatsApp CORTO (máximo 3 líneas) y cálido.
+- Tono cercano, como si fuera de un amigo que le recuerda los productos frescos
+- Menciona su producto habitual si es relevante
+- Si está próximo a su ciclo de compra, puedes insinuarlo sutilmente
+- Máximo 2 emojis
+- Termina con una pregunta o invitación suave
+- Escribe SOLO el mensaje, nada más`;
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 200,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    res.json({ success: true, message: response.content[0]?.text?.trim() || '', phone });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   POST /api/reengagement/send
+───────────────────────────────────────────────────────────────────── */
+router.post('/send', async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    if (!phone || !message) return res.status(400).json({ success: false, error: 'phone y message requeridos' });
+
+    const wc = db.getWhatsappConfig(req.orgId);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    let sentResult;
+    if (wc.provider === 'twilio') {
+      sentResult = await require('../services/twilio-whatsapp').sendTextMessage(phone, message, wc);
+    } else {
+      sentResult = await require('../services/whatsapp').sendTextMessage(phone, message, wc);
+    }
+
+    // Guardar en conversación si existe
+    const convId = db.getDb()
+      .prepare('SELECT id FROM conversations WHERE phone_number = ? AND organization_id = ? LIMIT 1')
+      .get(phone, req.orgId)?.id;
+
+    if (convId) {
+      db.createMessage({
+        conversationId:    convId,
+        organizationId:    req.orgId,
+        whatsappMessageId: sentResult?.messageId || sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
+        content:           message,
+        direction:         'outbound',
+        messageType:       'text',
+      });
+    }
+
+    res.json({ success: true, phone });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   POST /api/reengagement/send-bulk
+───────────────────────────────────────────────────────────────────── */
+router.post('/send-bulk', async (req, res) => {
+  const { items } = req.body;
+  if (!Array.isArray(items) || !items.length) {
+    return res.status(400).json({ success: false, error: 'items[] requerido' });
+  }
+
+  const wc = db.getWhatsappConfig(req.orgId);
+  if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+  const results = [];
+  for (const item of items) {
+    try {
+      let sentResult;
+      if (wc.provider === 'twilio') {
+        sentResult = await require('../services/twilio-whatsapp').sendTextMessage(item.phone, item.message, wc);
+      } else {
+        sentResult = await require('../services/whatsapp').sendTextMessage(item.phone, item.message, wc);
+      }
+
+      const convId = db.getDb()
+        .prepare('SELECT id FROM conversations WHERE phone_number = ? AND organization_id = ? LIMIT 1')
+        .get(item.phone, req.orgId)?.id;
+
+      if (convId) {
+        db.createMessage({
+          conversationId:    convId,
+          organizationId:    req.orgId,
+          whatsappMessageId: sentResult?.messageId || `reeng_${Date.now()}`,
+          content:           item.message,
+          direction:         'outbound',
+          messageType:       'text',
+        });
+      }
+
+      results.push({ phone: item.phone, success: true });
+    } catch (err) {
+      results.push({ phone: item.phone, success: false, error: err.message });
+    }
+
+    if (items.indexOf(item) < items.length - 1) {
+      await new Promise(r => setTimeout(r, 1200));
+    }
+  }
+
+  const sent   = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  res.json({ success: true, sent, failed, results });
+});
+
+module.exports = router;

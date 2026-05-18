@@ -1,0 +1,494 @@
+/**
+ * SettingsPanel — Ajustes del CRM
+ * Tabs: Shopify · WhatsApp · IA
+ */
+
+import { useState, useEffect } from 'react';
+import {
+  CheckCircle, AlertCircle, ExternalLink, Loader,
+  ShoppingBag, RefreshCw, MessageCircle, Phone, Brain,
+  Eye, EyeOff, Save, Zap,
+} from 'lucide-react';
+import { setupAPI, api } from '../utils/api.js';
+
+const TABS = [
+  { key: 'shopify',   label: 'Shopify',    icon: ShoppingBag },
+  { key: 'whatsapp',  label: 'WhatsApp',   icon: MessageCircle },
+  { key: 'ia',        label: 'IA & Bot',   icon: Brain },
+];
+
+/* ── helpers de estilo ── */
+const card = {
+  backgroundColor: '#202c33', borderRadius: '14px',
+  border: '1px solid #2a3942', overflow: 'hidden',
+};
+const cardHeader = (icon, title, badge) => ({
+  padding: '16px 22px', borderBottom: '1px solid #2a3942',
+  display: 'flex', alignItems: 'center', gap: '10px',
+});
+const inp = {
+  width: '100%', backgroundColor: '#111b21', border: '1px solid #374045',
+  borderRadius: '8px', padding: '10px 14px', color: '#e9edef', fontSize: '14px',
+  outline: 'none', boxSizing: 'border-box',
+};
+const label = { fontSize: '12px', color: '#8696a0', marginBottom: '5px', display: 'block' };
+const hint  = { fontSize: '11px', color: '#4a5568', margin: '4px 0 0' };
+
+function Field({ label: lbl, hint: h, type = 'text', value, onChange, placeholder, password }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div>
+      <label style={label}>{lbl}</label>
+      <div style={{ position: 'relative' }}>
+        <input
+          style={{ ...inp, paddingRight: password ? '40px' : '14px' }}
+          type={password && !show ? 'password' : 'text'}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+        {password && (
+          <button onClick={() => setShow(s => !s)}
+            style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#8696a0', padding: 0 }}>
+            {show ? <EyeOff size={15} /> : <Eye size={15} />}
+          </button>
+        )}
+      </div>
+      {h && <p style={hint}>{h}</p>}
+    </div>
+  );
+}
+
+function Badge({ ok }) {
+  return ok
+    ? <span style={{ marginLeft: 'auto', backgroundColor: '#0d2e25', color: '#00a884', fontSize: '11px', padding: '3px 10px', borderRadius: '20px', border: '1px solid #00a88455' }}>✓ Conectado</span>
+    : <span style={{ marginLeft: 'auto', backgroundColor: '#2d1a1a', color: '#e57373',  fontSize: '11px', padding: '3px 10px', borderRadius: '20px', border: '1px solid #5c262655' }}>Sin configurar</span>;
+}
+
+function Alert({ type, msg }) {
+  const isErr = type === 'error';
+  return (
+    <div style={{ backgroundColor: isErr ? '#2d1a1a' : '#0d2e25', border: `1px solid ${isErr ? '#5c2626' : '#00a884'}`, borderRadius: '8px', padding: '10px 14px', color: isErr ? '#e57373' : '#00a884', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+      {isErr ? <AlertCircle size={14} style={{ flexShrink: 0, marginTop: '1px' }} /> : <CheckCircle size={14} style={{ flexShrink: 0, marginTop: '1px' }} />}
+      {msg}
+    </div>
+  );
+}
+
+function SaveBtn({ loading, onClick, label: lbl = 'Guardar cambios' }) {
+  return (
+    <button onClick={onClick} disabled={loading}
+      style={{ padding: '11px', borderRadius: '8px', fontSize: '14px', fontWeight: 600, backgroundColor: loading ? '#374045' : '#00a884', color: 'white', border: 'none', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', width: '100%' }}>
+      {loading ? <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={15} />}
+      {loading ? 'Guardando...' : lbl}
+    </button>
+  );
+}
+
+/* ══════════════════════════════════════════════
+   TAB SHOPIFY
+══════════════════════════════════════════════ */
+function ShopifyTab() {
+  const [status, setStatus]   = useState(null);
+  const [shopUrl, setShopUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    setupAPI.shopifyStatus().then(r => { setStatus(r); if (r.storeUrl) setShopUrl(r.storeUrl); }).catch(() => {});
+  }, []);
+
+  const save = async () => {
+    if (!shopUrl.trim()) { setError('Ingresa el dominio'); return; }
+    setLoading(true); setError(''); setSuccess('');
+    try {
+      const r = await setupAPI.connectShopify({ storeUrl: shopUrl.trim() });
+      if (r.success) { setSuccess('✅ Shopify conectado correctamente'); setupAPI.shopifyStatus().then(setStatus).catch(() => {}); }
+      else setError(r.error || 'Error al conectar');
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo conectar. ¿Instalaste la app raigentic?');
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div style={card}>
+        <div style={{ padding: '16px 22px', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <ShoppingBag size={17} color="#00a884" />
+          <span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Tienda Shopify</span>
+          <Badge ok={status?.connected} />
+        </div>
+        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {status?.connected && (
+            <div style={{ backgroundColor: '#0d2e25', borderRadius: '8px', padding: '10px 14px', border: '1px solid #00a88433', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <CheckCircle size={14} color="#00a884" />
+              <span style={{ color: '#00a884', fontSize: '13px' }}><strong>{status.storeName}</strong> · {status.storeUrl}</span>
+            </div>
+          )}
+          <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
+            La conexión con Shopify requiere la app <strong style={{ color: '#e9edef' }}>raigentic</strong> instalada en tu tienda.{' '}
+            <a href="https://raigentic.onrender.com" target="_blank" rel="noreferrer" style={{ color: '#00a884', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+              raigentic.onrender.com <ExternalLink size={10} />
+            </a>
+          </div>
+          <Field label="Dominio de tu tienda" value={shopUrl} onChange={setShopUrl} placeholder="mi-tienda.myshopify.com" hint="Solo el dominio myshopify, sin https://" />
+          <SaveBtn loading={loading} onClick={save} label={status?.connected ? 'Actualizar conexión' : 'Conectar Shopify'} />
+          {error   && <Alert type="error"   msg={error} />}
+          {success && <Alert type="success" msg={success} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
+   TAB WHATSAPP
+══════════════════════════════════════════════ */
+function WhatsAppTab() {
+  const [provider,     setProvider]     = useState('meta');
+  const [savedProvider, setSavedProvider] = useState(null); // proveedor activo en DB
+  const [loading,      setLoading]      = useState(true);
+  const [saving,       setSaving]       = useState(false);
+  const [testing,      setTesting]      = useState(false);
+  const [error,        setError]        = useState('');
+  const [success,      setSuccess]      = useState('');
+  const [testResult,   setTestResult]   = useState(null); // { ok, msg }
+
+  // Meta fields
+  const [phoneNumberId,      setPhoneNumberId]      = useState('');
+  const [businessAccountId,  setBusinessAccountId]  = useState('');
+  const [accessToken,        setAccessToken]        = useState('');
+  const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
+
+  // Twilio fields
+  const [twilioSid,   setTwilioSid]   = useState('');
+  const [twilioToken, setTwilioToken] = useState('');
+  const [twilioPhone, setTwilioPhone] = useState('');
+
+  const loadConfig = () => {
+    api.get('/settings/whatsapp').then(r => {
+      const d = r.data?.data;
+      if (!d) return;
+      setProvider(d.provider || 'meta');
+      setSavedProvider(d.provider || null);
+      setPhoneNumberId(d.phoneNumberId || '');
+      setBusinessAccountId(d.businessAccountId || '');
+      setAccessToken(d.accessToken || '');
+      setWebhookVerifyToken(d.webhookVerifyToken || '');
+      setTwilioSid(d.twilioAccountSid || '');
+      setTwilioToken(d.twilioAuthToken || '');
+      setTwilioPhone(d.twilioPhoneNumber || '');
+    }).catch(() => {}).finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadConfig(); }, []);
+
+  const save = async () => {
+    setSaving(true); setError(''); setSuccess(''); setTestResult(null);
+    try {
+      const body = provider === 'twilio'
+        ? { provider: 'twilio', twilioAccountSid: twilioSid, twilioAuthToken: twilioToken, twilioPhoneNumber: twilioPhone }
+        : { provider: 'meta', phoneNumberId, businessAccountId, accessToken, webhookVerifyToken };
+      const r = await api.put('/settings/whatsapp', body);
+      if (r.data.success) {
+        setSuccess('✅ ' + r.data.message);
+        setSavedProvider(provider);
+      } else {
+        setError(r.data.error);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error al guardar');
+    } finally { setSaving(false); }
+  };
+
+  // Prueba enviando un GET al webhook propio para ver si responde
+  const testConnection = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await api.get('/settings/whatsapp/test');
+      setTestResult({ ok: r.data.success, msg: r.data.message || r.data.error });
+    } catch (err) {
+      setTestResult({ ok: false, msg: err.response?.data?.error || 'No se pudo conectar al backend' });
+    } finally { setTesting(false); }
+  };
+
+  if (loading) return (
+    <div style={{ textAlign: 'center', padding: '60px', color: '#8696a0' }}>
+      <Loader size={24} style={{ animation: 'spin 1s linear infinite', margin: '0 auto' }} />
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+      {/* Estado actual */}
+      {savedProvider && (
+        <div style={{ backgroundColor: '#0d2e25', border: '1px solid #00a88433', borderRadius: '10px', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <CheckCircle size={16} color="#00a884" />
+          <span style={{ color: '#00a884', fontSize: '13px', fontWeight: 600 }}>
+            Proveedor activo: {savedProvider === 'meta' ? 'WhatsApp Business (Meta)' : 'Twilio WhatsApp'}
+          </span>
+          <button onClick={testConnection} disabled={testing}
+            style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#182820', border: '1px solid #00a88455', borderRadius: '7px', padding: '5px 12px', color: '#00a884', fontSize: '12px', cursor: testing ? 'not-allowed' : 'pointer' }}>
+            {testing ? <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Zap size={12} />}
+            {testing ? 'Probando...' : 'Probar conexión'}
+          </button>
+        </div>
+      )}
+
+      {/* Resultado del test */}
+      {testResult && (
+        <Alert type={testResult.ok ? 'success' : 'error'} msg={testResult.ok ? '✅ ' + testResult.msg : '❌ ' + testResult.msg} />
+      )}
+
+      {/* Selector de proveedor */}
+      <div style={card}>
+        <div style={{ padding: '16px 22px', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <MessageCircle size={17} color="#00a884" />
+          <span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Proveedor de mensajería</span>
+          <span style={{ color: '#4a5568', fontSize: '11px', marginLeft: 'auto' }}>Solo uno puede estar activo</span>
+        </div>
+        <div style={{ padding: '20px 22px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            {[
+              { key: 'meta',   icon: MessageCircle, title: 'WhatsApp Business',  desc: 'API oficial de Meta · Recomendado' },
+              { key: 'twilio', icon: Phone,         title: 'Twilio WhatsApp',    desc: 'Via Twilio sandbox o número propio' },
+            ].map(opt => (
+              <button key={opt.key} onClick={() => setProvider(opt.key)}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '6px',
+                  padding: '16px', borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
+                  backgroundColor: provider === opt.key ? '#0d2e25' : '#111b21',
+                  border: `2px solid ${provider === opt.key ? '#00a884' : '#2a3942'}`,
+                  transition: 'all 0.15s', position: 'relative',
+                }}>
+                {/* Indicador ACTIVO vs INACTIVO */}
+                {savedProvider && (
+                  <span style={{
+                    position: 'absolute', top: '8px', right: '8px',
+                    fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                    backgroundColor: savedProvider === opt.key ? '#00a88422' : '#2d1a1a',
+                    color: savedProvider === opt.key ? '#00a884' : '#e57373',
+                  }}>
+                    {savedProvider === opt.key ? 'ACTIVO' : 'INACTIVO'}
+                  </span>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <opt.icon size={16} color={provider === opt.key ? '#00a884' : '#8696a0'} />
+                  <span style={{ color: provider === opt.key ? '#00a884' : '#e9edef', fontWeight: 600, fontSize: '13px' }}>
+                    {opt.title}
+                  </span>
+                  {opt.key === 'meta' && (
+                    <span style={{ backgroundColor: '#00a88422', color: '#00a884', fontSize: '10px', padding: '1px 6px', borderRadius: '4px' }}>
+                      Recomendado
+                    </span>
+                  )}
+                </div>
+                <span style={{ color: '#8696a0', fontSize: '11px' }}>{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Campos según proveedor */}
+      <div style={card}>
+        <div style={{ padding: '16px 22px', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {provider === 'meta'
+            ? <><MessageCircle size={17} color="#00a884" /><span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Configuración Meta WhatsApp</span></>
+            : <><Phone size={17} color="#00a884" /><span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Configuración Twilio</span></>
+          }
+        </div>
+        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+          {provider === 'meta' ? (
+            <>
+              <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
+                Obtén estos datos en{' '}
+                <a href="https://developers.facebook.com/apps" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>Meta for Developers</a>
+                {' '}→ tu app → WhatsApp → Configuración de la API.
+              </div>
+              <Field label="Phone Number ID *" value={phoneNumberId} onChange={setPhoneNumberId} placeholder="123456789012345" hint="ID numérico del número de WhatsApp registrado" />
+              <Field label="Business Account ID" value={businessAccountId} onChange={setBusinessAccountId} placeholder="123456789012345" hint="ID de tu cuenta de WhatsApp Business (opcional)" />
+              <Field label="Access Token *" value={accessToken} onChange={setAccessToken} placeholder="EAAxxxxx..." hint="Token de acceso permanente (usuario del sistema recomendado)" password />
+              <Field label="Webhook Verify Token *" value={webhookVerifyToken} onChange={setWebhookVerifyToken} placeholder="mi_token_secreto" hint="Cadena que usas para verificar el webhook en Meta" password />
+            </>
+          ) : (
+            <>
+              <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
+                Obtén estos datos en{' '}
+                <a href="https://console.twilio.com" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>console.twilio.com</a>
+                {' '}→ Account Info. El número debe tener WhatsApp habilitado.
+              </div>
+              <Field label="Account SID *" value={twilioSid} onChange={setTwilioSid} placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" hint="Empieza con AC — en tu panel principal de Twilio" />
+              <Field label="Auth Token *" value={twilioToken} onChange={setTwilioToken} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" hint="Token de autenticación de tu cuenta Twilio" password />
+              <Field label="Número WhatsApp Twilio *" value={twilioPhone} onChange={setTwilioPhone} placeholder="+14155238886" hint="Número con formato E.164 (+1 para sandbox, o tu número propio)" />
+            </>
+          )}
+
+          <SaveBtn loading={saving} onClick={save} />
+          {error   && <Alert type="error"   msg={error} />}
+          {success && <Alert type="success" msg={success} />}
+        </div>
+      </div>
+
+      {/* Info webhook */}
+      {provider === 'meta' && (
+        <div style={{ ...card }}>
+          <div style={{ padding: '16px 22px', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Zap size={17} color="#f0b429" />
+            <span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>URL del Webhook</span>
+          </div>
+          <div style={{ padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <p style={{ color: '#8696a0', fontSize: '12px', margin: 0 }}>
+              Configura esta URL en Meta for Developers → Webhooks → Suscripción al número:
+            </p>
+            <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '10px 14px', fontFamily: 'monospace', fontSize: '12px', color: '#00a884', wordBreak: 'break-all' }}>
+              {window.location.origin.replace(':5173', ':3001')}/api/webhooks/whatsapp
+            </div>
+            <p style={{ color: '#4a5568', fontSize: '11px', margin: 0 }}>
+              Suscribirse a: <strong style={{ color: '#8696a0' }}>messages</strong>
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
+   TAB IA & BOT
+══════════════════════════════════════════════ */
+function IATab() {
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [extraPrompt, setExtraPrompt] = useState('');
+  const [loading, setLoading]  = useState(true);
+  const [saving, setSaving]    = useState(false);
+  const [success, setSuccess]  = useState('');
+  const [error, setError]      = useState('');
+
+  useEffect(() => {
+    api.get('/settings').then(r => {
+      const d = r.data?.data;
+      if (!d) return;
+      setAiEnabled(d.ai_enabled_global !== false);
+      setExtraPrompt(d.ai_system_prompt_extra || '');
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    setSaving(true); setError(''); setSuccess('');
+    try {
+      await api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt });
+      setSuccess('✅ Configuración de IA guardada');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error al guardar');
+    } finally { setSaving(false); }
+  };
+
+  if (loading) return (
+    <div style={{ textAlign: 'center', padding: '60px', color: '#8696a0' }}>
+      <Loader size={24} style={{ animation: 'spin 1s linear infinite', margin: '0 auto' }} />
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div style={card}>
+        <div style={{ padding: '16px 22px', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Brain size={17} color="#00a884" />
+          <span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Agente IA</span>
+        </div>
+        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+          {/* Toggle IA global */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#111b21', borderRadius: '10px', padding: '14px 16px' }}>
+            <div>
+              <div style={{ color: '#e9edef', fontSize: '14px', fontWeight: 600 }}>IA activada globalmente</div>
+              <div style={{ color: '#8696a0', fontSize: '12px', marginTop: '2px' }}>El bot responde automáticamente a nuevos mensajes</div>
+            </div>
+            <button onClick={() => setAiEnabled(v => !v)}
+              style={{
+                width: '44px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
+                backgroundColor: aiEnabled ? '#00a884' : '#374045',
+                position: 'relative', transition: 'background-color 0.2s', flexShrink: 0,
+              }}>
+              <span style={{
+                position: 'absolute', top: '2px', left: aiEnabled ? '22px' : '2px',
+                width: '20px', height: '20px', borderRadius: '50%', backgroundColor: 'white',
+                transition: 'left 0.2s',
+              }} />
+            </button>
+          </div>
+
+          {/* Prompt extra */}
+          <div>
+            <label style={label}>Instrucciones adicionales para el bot</label>
+            <textarea
+              value={extraPrompt}
+              onChange={e => setExtraPrompt(e.target.value)}
+              rows={5}
+              placeholder="Ej: Siempre saluda con el nombre del cliente. No ofrezcas descuentos sin aprobación previa. Si preguntan por envíos, decir que demoran 24-48h..."
+              style={{ ...inp, resize: 'vertical', lineHeight: 1.55, fontFamily: 'inherit' }}
+            />
+            <p style={hint}>Estas instrucciones se agregan al prompt del agente en cada conversación</p>
+          </div>
+
+          <SaveBtn loading={saving} onClick={save} />
+          {error   && <Alert type="error"   msg={error} />}
+          {success && <Alert type="success" msg={success} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
+   PANEL PRINCIPAL
+══════════════════════════════════════════════ */
+export default function SettingsPanel({ successMessage, onClearMessage }) {
+  const [activeTab, setActiveTab] = useState('shopify');
+
+  useEffect(() => {
+    if (successMessage) onClearMessage?.();
+  }, [successMessage]);
+
+  return (
+    <div style={{ flex: 1, backgroundColor: '#0b141a', overflowY: 'auto', padding: '28px 32px' }}>
+      <div style={{ maxWidth: '640px', margin: '0 auto' }}>
+
+        {/* Título */}
+        <div style={{ marginBottom: '24px' }}>
+          <h1 style={{ color: '#e9edef', fontSize: '20px', fontWeight: 700, margin: 0 }}>⚙️ Ajustes</h1>
+          <p style={{ color: '#8696a0', fontSize: '13px', marginTop: '4px' }}>Configura las conexiones y el comportamiento del CRM</p>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: 'flex', backgroundColor: '#111b21', borderRadius: '10px', padding: '4px', marginBottom: '24px', gap: '2px' }}>
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setActiveTab(t.key)}
+              style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+                padding: '9px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                backgroundColor: activeTab === t.key ? '#202c33' : 'transparent',
+                color: activeTab === t.key ? '#e9edef' : '#8696a0',
+                fontSize: '13px', fontWeight: activeTab === t.key ? 600 : 400,
+                transition: 'all 0.15s',
+              }}>
+              <t.icon size={14} />
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Contenido del tab */}
+        {activeTab === 'shopify'  && <ShopifyTab />}
+        {activeTab === 'whatsapp' && <WhatsAppTab />}
+        {activeTab === 'ia'       && <IATab />}
+      </div>
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}

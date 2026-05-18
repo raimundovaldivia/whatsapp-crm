@@ -1,0 +1,68 @@
+import axios from 'axios';
+
+// En producción VITE_BACKEND_URL es "" (string vacío) → rutas relativas /api/*
+// En desarrollo es undefined → fallback a localhost:3001
+const BASE_URL = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:3001';
+
+const api = axios.create({ baseURL: `${BASE_URL}/api`, timeout: 12000 });
+
+// Inyectar token JWT en cada request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('crm_token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// Si el token expira, redirigir al login
+api.interceptors.response.use(
+  r => r,
+  err => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('crm_token');
+      localStorage.removeItem('crm_user');
+      localStorage.removeItem('crm_org');
+      window.location.href = '/';
+    }
+    return Promise.reject(err);
+  }
+);
+
+export const authAPI = {
+  register: (data) => api.post('/auth/register', data).then(r => r.data.data),
+  login: (data) => api.post('/auth/login', data).then(r => r.data.data),
+  me: () => api.get('/auth/me').then(r => r.data.data),
+};
+
+export const setupAPI = {
+  status: () => api.get('/setup/status').then(r => r.data.data),
+  connectWhatsApp: (data) => api.post('/setup/whatsapp', data).then(r => r.data),
+  connectShopify: (data) => api.post('/setup/shopify', data).then(r => r.data),
+  shopifyStatus: () => api.get('/setup/shopify-status').then(r => r.data),
+  complete: () => api.post('/setup/complete').then(r => r.data),
+};
+
+export const conversationsAPI = {
+  getAll: () => api.get('/conversations').then(r => r.data.data),
+  getMessages: (id) => api.get(`/conversations/${id}/messages`).then(r => r.data.data),
+  sendMessage: (id, text) => api.post(`/conversations/${id}/messages`, { text }).then(r => r.data.data),
+  setAgentMode: (id, mode) => api.patch(`/conversations/${id}/agent-mode`, { mode }).then(r => r.data.data),
+  markAsRead: (id) => api.patch(`/conversations/${id}/read`),
+  getOrders: (id) => api.get(`/conversations/${id}/orders`).then(r => r.data.data),
+};
+
+export const ordersAPI = {
+  getAll:      () => api.get('/orders').then(r => r.data.data),
+  getStats:    () => api.get('/orders/stats').then(r => r.data.data),
+  getById:     (id) => api.get(`/orders/${id}`).then(r => r.data.data),
+  setStatus:   (id, status) => api.patch(`/orders/${id}/status`, { status }).then(r => r.data.data),
+  resendLink:  (id) => api.post(`/orders/${id}/resend-link`).then(r => r.data),
+  syncShopify: (id) => api.post(`/orders/${id}/sync-shopify`).then(r => r.data.data),
+};
+
+export const catalogoAPI = {
+  getAll:  (params) => api.get('/catalogo', { params }).then(r => r.data),
+  sync:    () => api.post('/catalogo/sync').then(r => r.data),
+};
+
+export { api };
+export default api;
