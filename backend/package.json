@@ -7,8 +7,7 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "setup-db": "node src/db/setup.js",
-    "build": "cd ../frontend && npm install && npm run build",
-    "deploy": "npm run build && NODE_ENV=production node src/index.js"
+    "deploy": "NODE_ENV=production node src/index.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",

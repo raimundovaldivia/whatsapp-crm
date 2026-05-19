@@ -1,0 +1,38 @@
+services:
+  # ── BACKEND — Web Service ─────────────────────────────────────────
+  - type: web
+    name: whatsapp-crm-api
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node src/index.js
+    disk:
+      name: crm-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: FRONTEND_URL
+        value: https://whatsapp-crm.onrender.com   # actualizar con URL real del Static Site
+      - key: JWT_SECRET
+        sync: false          # poner manualmente en el dashboard de Render
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RAIGENTIC_URL
+        value: https://raigentic.onrender.com
+      - key: BOT_API_SECRET
+        sync: false
+
+  # ── FRONTEND — Static Site ────────────────────────────────────────
+  - type: web
+    name: whatsapp-crm
+    env: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_BACKEND_URL
+        value: https://whatsapp-crm-api.onrender.com   # actualizar con URL real del backend

@@ -1,8 +1,8 @@
 import axios from 'axios';
 
-// En producción VITE_BACKEND_URL es "" (string vacío) → rutas relativas /api/*
-// En desarrollo es undefined → fallback a localhost:3001
-const BASE_URL = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:3001';
+// En producción VITE_BACKEND_URL = URL del backend de Render (ej: https://whatsapp-crm-api.onrender.com)
+// En desarrollo = localhost:3001
+const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
 const api = axios.create({ baseURL: `${BASE_URL}/api`, timeout: 12000 });
 

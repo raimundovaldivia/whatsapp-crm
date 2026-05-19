@@ -19,6 +19,8 @@ const path     = require('path');
 const { Server } = require('socket.io');
 const cors     = require('cors');
 
+// isProd ya no se usa para servir estáticos (frontend en Render Static Site separado)
+// Se mantiene por si se necesita en el futuro
 const isProd = process.env.NODE_ENV === 'production';
 
 // Inicializar base de datos
@@ -62,10 +64,10 @@ io.on('connection', (socket) => {
 });
 
 // ─── CORS ────────────────────────────────────────────────────────
-// En producción el frontend viene del mismo servidor → no necesita CORS
-// En dev apunta a Vite en :5173
+// FRONTEND_URL en prod = URL del Static Site de Render
+// En dev = Vite en :5173
 app.use(cors({
-  origin: isProd ? false : (process.env.FRONTEND_URL || 'http://localhost:5173'),
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true,
 }));
 
@@ -111,15 +113,6 @@ app.use('/api/catalogo',      catalogoRouter);       // Catálogo de productos
 app.use('/api/reengagement',  reengagementRouter);  // Re-enganche de clientes dormidos
 app.use('/api/clientes',      clientesRouter);      // Lista completa de clientes
 
-// ─── FRONTEND ESTÁTICO (solo producción) ─────────────────────────
-if (isProd) {
-  const frontendDist = path.join(__dirname, '../../frontend/dist');
-  app.use(express.static(frontendDist));
-  // SPA fallback — cualquier ruta que no sea /api/* → index.html
-  app.get(/^(?!\/api|\/webhook|\/twilio-webhook|\/shopify-webhook|\/health).*/, (_, res) => {
-    res.sendFile(path.join(frontendDist, 'index.html'));
-  });
-}
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
