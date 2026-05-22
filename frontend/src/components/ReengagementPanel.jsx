@@ -65,6 +65,7 @@ export default function ReengagementPanel() {
   const [sendingBulk, setSendingBulk] = useState(false);
   const [expanded, setExpanded]       = useState(new Set());
   const [toast, setToast]             = useState(null);
+  const [minConf, setMinConf]         = useState(65);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -100,8 +101,18 @@ export default function ReengagementPanel() {
 
   useEffect(() => { load(true); }, []);
 
-  // Agrupar por ventana
-  const byWindow = (window) => candidates.filter(c => c.buyWindow === window);
+  // Score de relevancia: vencidos primero, luego confianza alta, luego más cercanos
+  const relevanceScore = (c) => {
+    const overdueBonus = c.predictedDays <= 0 ? 100 + Math.abs(c.predictedDays) * 2 : 0;
+    const urgencyBonus = c.predictedDays <= 1 ? 30 : c.predictedDays <= 3 ? 15 : 0;
+    const proximityPenalty = Math.max(0, c.predictedDays) * 0.4;
+    return c.confidence + overdueBonus + urgencyBonus - proximityPenalty;
+  };
+
+  // Agrupar por ventana, filtrar por confianza mínima y ordenar por relevancia
+  const byWindow = (window) => candidates
+    .filter(c => c.buyWindow === window && c.confidence >= minConf)
+    .sort((a, b) => relevanceScore(b) - relevanceScore(a));
 
   // Candidatos visibles según tab activo
   const visible = byWindow(activeWindow);
@@ -180,8 +191,10 @@ export default function ReengagementPanel() {
     }
   };
 
-  const selectedWithMsg = visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim()).length;
-  const totalCandidates = candidates.length;
+  const selectedWithMsg  = visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim()).length;
+  const totalCandidates  = candidates.length;
+  const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
+  const hiddenByFilter   = totalCandidates - filteredTotal;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#0b141a', overflow: 'hidden' }}>
@@ -199,9 +212,35 @@ export default function ReengagementPanel() {
               {totalCandidates} clientes analizados
             </span>
           )}
+          {!loading && hiddenByFilter > 0 && (
+            <Tooltip text={`${hiddenByFilter} clientes ocultos por tener menos de ${minConf}% de confianza`} position="bottom">
+              <span style={{ color: '#4a5568', fontSize: '11px', cursor: 'default' }}>
+                · {hiddenByFilter} ocultos &lt;{minConf}%
+              </span>
+            </Tooltip>
+          )}
           {fromCache && !loading && (
             <span style={{ color: '#374045', fontSize: '11px' }}>· desde caché</span>
           )}
+        </div>
+
+        {/* Filtro de confianza mínima */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Tooltip text="Mostrar solo predicciones con este nivel mínimo de confianza" position="bottom">
+            <span style={{ color: '#4a5568', fontSize: '11px' }}>Confianza mín.</span>
+          </Tooltip>
+          {[50, 65, 75, 85].map(val => (
+            <button key={val} onClick={() => setMinConf(val)}
+              style={{
+                padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                cursor: 'pointer', border: 'none',
+                backgroundColor: minConf === val ? '#00a884' : '#2a3942',
+                color: minConf === val ? '#fff' : '#8696a0',
+                transition: 'all 0.15s',
+              }}>
+              {val}%+
+            </button>
+          ))}
         </div>
 
         <button onClick={() => load(true)} disabled={loading}
