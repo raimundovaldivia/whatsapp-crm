@@ -10,6 +10,7 @@ function setSocketIO(socketIO) { io = socketIO; }
 /**
  * GET /webhook — Verificación de Meta
  * Meta envía hub.verify_token; lo comparamos con el de la org
+ * También acepta WEBHOOK_VERIFY_TOKEN como fallback de env var
  */
 router.get('/', (req, res) => {
   const mode      = req.query['hub.mode'];
@@ -23,7 +24,14 @@ router.get('/', (req, res) => {
     return res.sendStatus(403);
   }
 
-  // Cada cliente tiene su propio token guardado en la DB al hacer el setup
+  // 1. Verificar con token global de env var (fallback para setup inicial)
+  const envToken = process.env.WEBHOOK_VERIFY_TOKEN;
+  if (envToken && token === envToken) {
+    console.log('[Webhook] ✅ Verificado via WEBHOOK_VERIFY_TOKEN env var');
+    return res.status(200).send(challenge);
+  }
+
+  // 2. Cada cliente tiene su propio token guardado en la DB al hacer el setup
   const result = db.getOrgByWebhookToken(token);
   if (!result) {
     console.warn('[Webhook] ❌ Token no encontrado en ninguna org:', token);
