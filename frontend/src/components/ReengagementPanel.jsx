@@ -1,10 +1,45 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
   ShoppingBag, TrendingUp, ChevronDown, ChevronUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
 } from 'lucide-react';
 import { api } from '../utils/api.js';
+
+function Tooltip({ text, children, position = 'top' }) {
+  const [show, setShow] = useState(false);
+  const ref = useRef(null);
+
+  const tipStyle = {
+    position: 'absolute',
+    backgroundColor: '#1a2530',
+    color: '#e9edef',
+    fontSize: '11.5px',
+    lineHeight: 1.5,
+    padding: '7px 11px',
+    borderRadius: '7px',
+    border: '1px solid #2a3942',
+    boxShadow: '0 4px 14px rgba(0,0,0,0.6)',
+    zIndex: 9999,
+    pointerEvents: 'none',
+    whiteSpace: 'normal',
+    maxWidth: '200px',
+    textAlign: 'center',
+    ...(position === 'top'    && { bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)' }),
+    ...(position === 'bottom' && { top:    'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)' }),
+    ...(position === 'left'   && { right:  'calc(100% + 6px)', top: '50%',  transform: 'translateY(-50%)' }),
+    ...(position === 'right'  && { left:   'calc(100% + 6px)', top: '50%',  transform: 'translateY(-50%)' }),
+  };
+
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'default' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}>
+      {children}
+      {show && <span style={tipStyle}>{text}</span>}
+    </span>
+  );
+}
 
 // Ventanas de tiempo para agrupar predicciones
 const WINDOWS = [
@@ -374,38 +409,49 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         </span>
 
         {/* Badge predicción */}
-        <span style={{
-          backgroundColor: predBg, color: predColor,
-          borderRadius: '6px', padding: '3px 10px',
-          fontSize: '12px', fontWeight: 700,
-          border: `1px solid ${predColor}44`,
-          flexShrink: 0,
-        }}>
-          {predLabel}
-        </span>
+        <Tooltip text={predDays <= 0
+          ? `Lleva ${Math.abs(predDays)}d más de lo normal sin comprar. Su ciclo habitual es ~${c.avgFreqDays}d.`
+          : predDays <= 1 ? 'La IA predice que comprará hoy o mañana según su patrón de compras.'
+          : `La IA estima que comprará en aproximadamente ${predDays} días, basado en su ciclo habitual.`}>
+          <span style={{
+            backgroundColor: predBg, color: predColor,
+            borderRadius: '6px', padding: '3px 10px',
+            fontSize: '12px', fontWeight: 700,
+            border: `1px solid ${predColor}44`,
+            flexShrink: 0,
+          }}>
+            {predLabel}
+          </span>
+        </Tooltip>
 
         {/* Confianza */}
-        <span style={{
-          backgroundColor: '#1e2d3a', color: cColor,
-          borderRadius: '6px', padding: '3px 8px',
-          fontSize: '11px', fontWeight: 700, flexShrink: 0,
-        }}>
-          {conf}%
-        </span>
+        <Tooltip text={`Confianza de la predicción. ${conf >= 80 ? 'Alta — patrón de compra muy regular.' : conf >= 60 ? 'Media — patrón moderadamente consistente.' : 'Baja — pocos datos o compras irregulares.'}`}>
+          <span style={{
+            backgroundColor: '#1e2d3a', color: cColor,
+            borderRadius: '6px', padding: '3px 8px',
+            fontSize: '11px', fontWeight: 700, flexShrink: 0,
+          }}>
+            {conf}%
+          </span>
+        </Tooltip>
       </div>
 
       {/* ── FILA 2: tags secundarios ── */}
       {(overdue || (c.spendTrend && c.spendTrend !== 'estable')) && (
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', padding: '6px 14px 0 55px' }}>
           {overdue && (
-            <span style={{ backgroundColor: '#3a1a1a', color: '#e57373', borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
-              ⚠ {c.daysInactive - c.avgFreqDays}d fuera de ciclo
-            </span>
+            <Tooltip text={`Lleva ${c.daysInactive - c.avgFreqDays} días más de lo habitual sin comprar. Su ciclo normal es cada ~${c.avgFreqDays} días.`} position="bottom">
+              <span style={{ backgroundColor: '#3a1a1a', color: '#e57373', borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
+                ⚠ {c.daysInactive - c.avgFreqDays}d fuera de ciclo
+              </span>
+            </Tooltip>
           )}
           {c.spendTrend && c.spendTrend !== 'estable' && (
-            <span style={{ backgroundColor: '#1e2d3a', color: c.spendTrend === 'creciente' ? '#00c853' : '#e57373', borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
-              {c.spendTrend === 'creciente' ? '↑' : '↓'} gasto {c.spendTrend}
-            </span>
+            <Tooltip text={c.spendTrend === 'creciente' ? 'Este cliente gasta más en sus compras recientes que en las anteriores.' : 'Este cliente gasta menos en sus compras recientes que antes.'} position="bottom">
+              <span style={{ backgroundColor: '#1e2d3a', color: c.spendTrend === 'creciente' ? '#00c853' : '#e57373', borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
+                {c.spendTrend === 'creciente' ? '↑' : '↓'} gasto {c.spendTrend}
+              </span>
+            </Tooltip>
           )}
         </div>
       )}
@@ -422,34 +468,51 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
 
       {/* ── FILA 4: stats ── */}
       <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'center', padding: '8px 14px' }}>
-        <span style={{ color: '#8696a0', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <Clock size={11} />
-          <strong style={{ color: overdue ? '#e57373' : '#c8d1d9' }}>{c.daysInactive}d</strong>
-          <span style={{ color: '#4a5568' }}>inactivo</span>
-        </span>
-        <span style={{ color: '#8696a0', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <ShoppingBag size={11} />
-          <strong style={{ color: '#c8d1d9' }}>{c.totalOrders}</strong>
-          <span style={{ color: '#4a5568' }}>pedido{c.totalOrders !== 1 ? 's' : ''}</span>
-        </span>
+        <Tooltip text={`Días desde su última compra (${c.lastOrderDate || '—'}). ${overdue ? `Su ciclo habitual es ~${c.avgFreqDays}d, lleva ${c.daysInactive - c.avgFreqDays}d de retraso.` : ''}`}>
+          <span style={{ color: '#8696a0', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <Clock size={11} />
+            <strong style={{ color: overdue ? '#e57373' : '#c8d1d9' }}>{c.daysInactive}d</strong>
+            <span style={{ color: '#4a5568' }}>inactivo</span>
+          </span>
+        </Tooltip>
+
+        <Tooltip text={`Total de pedidos realizados en la tienda. Más pedidos = predicción más precisa.`}>
+          <span style={{ color: '#8696a0', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <ShoppingBag size={11} />
+            <strong style={{ color: '#c8d1d9' }}>{c.totalOrders}</strong>
+            <span style={{ color: '#4a5568' }}>pedido{c.totalOrders !== 1 ? 's' : ''}</span>
+          </span>
+        </Tooltip>
+
         {c.avgFreqDays && (
-          <span style={{ color: '#8696a0', fontSize: '12px' }}>
-            🔁 <strong style={{ color: '#c8d1d9' }}>~{c.avgFreqDays}d</strong>
-          </span>
+          <Tooltip text={`Frecuencia promedio de compra. Normalmente compra cada ~${c.avgFreqDays} días.`}>
+            <span style={{ color: '#8696a0', fontSize: '12px' }}>
+              🔁 <strong style={{ color: '#c8d1d9' }}>~{c.avgFreqDays}d</strong>
+            </span>
+          </Tooltip>
         )}
+
         {c.favDay && (
-          <span style={{ color: '#8696a0', fontSize: '12px' }}>
-            📅 <strong style={{ color: '#c8d1d9' }}>{c.favDay}</strong>
-          </span>
+          <Tooltip text={`Día de la semana en que más compra. Ideal para contactar los días ${c.favDay}.`}>
+            <span style={{ color: '#8696a0', fontSize: '12px' }}>
+              📅 <strong style={{ color: '#c8d1d9' }}>{c.favDay}</strong>
+            </span>
+          </Tooltip>
         )}
-        <span style={{ color: '#00a884', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <TrendingUp size={11} />
-          ${Math.round(c.totalSpent || 0).toLocaleString('es-CL')}
-        </span>
-        {c.lastProducts && (
-          <span style={{ color: '#374045', fontSize: '11px', fontStyle: 'italic', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {c.lastProducts}
+
+        <Tooltip text={`Total gastado histórico en la tienda. Ticket promedio: $${Math.round((c.avgOrderVal || 0)).toLocaleString('es-CL')}`}>
+          <span style={{ color: '#00a884', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <TrendingUp size={11} />
+            ${Math.round(c.totalSpent || 0).toLocaleString('es-CL')}
           </span>
+        </Tooltip>
+
+        {c.lastProducts && (
+          <Tooltip text={`Últimos productos comprados: ${c.lastProducts}`}>
+            <span style={{ color: '#374045', fontSize: '11px', fontStyle: 'italic', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {c.lastProducts}
+            </span>
+          </Tooltip>
         )}
       </div>
 

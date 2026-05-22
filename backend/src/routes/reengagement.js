@@ -228,7 +228,20 @@ router.get('/candidates', async (req, res) => {
     }
 
     console.log(`[Reengagement] Descargando órdenes de ${shop}...`);
-    const allOrders = await raigentic.getAllOrdenesPagadas(shop);
+    let allOrders;
+    try {
+      allOrders = await raigentic.getAllOrdenesPagadas(shop);
+    } catch (err) {
+      const status = err.response?.status;
+      if (!status || status === 502 || status === 503 || status === 504) {
+        return res.status(503).json({
+          success: false,
+          error: 'raigentic está iniciando (cold start). Espera 30-60 segundos y vuelve a intentarlo.',
+          retry: true,
+        });
+      }
+      throw err;
+    }
     console.log(`[Reengagement] Total órdenes: ${allOrders.length}`);
 
     if (!allOrders.length) {
