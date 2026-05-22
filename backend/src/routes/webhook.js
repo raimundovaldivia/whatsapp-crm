@@ -12,7 +12,7 @@ function setSocketIO(socketIO) { io = socketIO; }
  * Meta envía hub.verify_token; lo comparamos con el de la org
  * También acepta WEBHOOK_VERIFY_TOKEN como fallback de env var
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const mode      = req.query['hub.mode'];
   const token     = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -32,7 +32,7 @@ router.get('/', (req, res) => {
   }
 
   // 2. Cada cliente tiene su propio token guardado en la DB al hacer el setup
-  const result = db.getOrgByWebhookToken(token);
+  const result = await db.getOrgByWebhookToken(token);
   if (!result) {
     console.warn('[Webhook] ❌ Token no encontrado en ninguna org:', token);
     return res.sendStatus(403);
@@ -55,7 +55,7 @@ router.post('/', async (req, res) => {
   const phoneNumberId = body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
   if (!phoneNumberId) return;
 
-  const orgResult = db.getOrgByPhoneNumberId(phoneNumberId);
+  const orgResult = await db.getOrgByPhoneNumberId(phoneNumberId);
   if (!orgResult) {
     console.warn('[Webhook] Phone Number ID no registrado:', phoneNumberId);
     return;
@@ -65,7 +65,7 @@ router.post('/', async (req, res) => {
   // Actualizar status de mensaje (delivery receipt)
   const statusUpdate = whatsappService.parseStatusUpdate(body);
   if (statusUpdate) {
-    db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status);
+    await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status);
     io?.emit(`status_update_${org.id}`, statusUpdate);
     return;
   }
@@ -78,10 +78,10 @@ router.post('/', async (req, res) => {
 
   try {
     // 1. Obtener/crear conversación
-    const conversation = db.upsertConversation(org.id, parsed.from, parsed.contactName);
+    const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
 
     // 2. Guardar mensaje del cliente
-    const savedMsg = db.saveMessage({
+    const savedMsg = await db.saveMessage({
       conversationId: conversation.id,
       whatsappMessageId: parsed.messageId,
       direction: 'inbound',
@@ -90,11 +90,11 @@ router.post('/', async (req, res) => {
     });
     if (!savedMsg) return; // Duplicado
 
-    db.updateConversationLastMessage(conversation.id, parsed.text, true);
+    await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await whatsappService.markAsRead(parsed.messageId, whatsappConfig);
 
     // 3. Emitir al CRM en tiempo real
-    const updatedConv = db.getConversationById(conversation.id);
+    const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
     // 4. Si está en modo humano, no responder con IA
@@ -114,7 +114,7 @@ router.post('/', async (req, res) => {
     );
 
     // 7. Guardar respuesta en DB
-    const outMsg = db.saveMessage({
+    const outMsg = await db.saveMessage({
       conversationId: conversation.id,
       whatsappMessageId: sentResult?.messages?.[0]?.id || null,
       direction: 'outbound',
@@ -123,14 +123,14 @@ router.post('/', async (req, res) => {
       agentType: result.agentType,
     });
 
-    db.updateConversationLastMessage(conversation.id, result.response);
+    await db.updateConversationLastMessage(conversation.id, result.response);
 
     // 8. Si el pipeline indica cambiar a modo humano
     if (result.switchToHuman) {
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
     }
 
-    const finalConv = db.getConversationById(conversation.id);
+    const finalConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
     // 9. Si se creó una orden, notificar al CRM

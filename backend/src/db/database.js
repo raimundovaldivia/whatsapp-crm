@@ -1,329 +1,384 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+const { Pool } = require('pg');
 
-// En producción (Render) usar el disco persistente montado en /data
-// En dev usar backend/data/crm.db (local)
-const DB_PATH = process.env.NODE_ENV === 'production'
-  ? '/data/crm.db'
-  : path.join(__dirname, '../../data/crm.db');
-const dataDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
 
-let db;
-function getDb() {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-  }
-  return db;
+async function query(sql, params = []) {
+  const { rows } = await pool.query(sql, params);
+  return rows;
+}
+
+async function queryOne(sql, params = []) {
+  const { rows } = await pool.query(sql, params);
+  return rows[0] || null;
+}
+
+function getPool() {
+  return pool;
 }
 
 // ─── ORGANIZATIONS ────────────────────────────────────────────────
 
-function createOrganization({ name, slug }) {
-  const d = getDb();
-  const r = d.prepare(`INSERT INTO organizations (name, slug) VALUES (?, ?)`).run(name, slug);
-  return d.prepare('SELECT * FROM organizations WHERE id = ?').get(r.lastInsertRowid);
+async function createOrganization({ name, slug }) {
+  return queryOne(
+    `INSERT INTO organizations (name, slug) VALUES ($1, $2) RETURNING *`,
+    [name, slug]
+  );
 }
 
-function getOrgById(id) {
-  return getDb().prepare('SELECT * FROM organizations WHERE id = ?').get(id);
+async function getOrgById(id) {
+  return queryOne('SELECT * FROM organizations WHERE id = $1', [id]);
 }
 
-function markSetupDone(orgId) {
-  getDb().prepare('UPDATE organizations SET setup_done = 1 WHERE id = ?').run(orgId);
+async function markSetupDone(orgId) {
+  await pool.query('UPDATE organizations SET setup_done = 1 WHERE id = $1', [orgId]);
 }
 
 // ─── USERS / AUTH ─────────────────────────────────────────────────
 
-function createUser({ organizationId, email, passwordHash, name, role = 'owner' }) {
-  const d = getDb();
-  const r = d.prepare(`
-    INSERT INTO users (organization_id, email, password_hash, name, role)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(organizationId, email, passwordHash, name, role);
-  return d.prepare('SELECT id, organization_id, email, name, role, created_at FROM users WHERE id = ?').get(r.lastInsertRowid);
+async function createUser({ organizationId, email, passwordHash, name, role = 'owner' }) {
+  return queryOne(
+    `INSERT INTO users (organization_id, email, password_hash, name, role)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, organization_id, email, name, role, created_at`,
+    [organizationId, email, passwordHash, name, role]
+  );
 }
 
-function getUserByEmail(email) {
-  return getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
+async function getUserByEmail(email) {
+  return queryOne('SELECT * FROM users WHERE email = $1', [email]);
 }
 
-function getUserById(id) {
-  return getDb().prepare('SELECT id, organization_id, email, name, role FROM users WHERE id = ?').get(id);
+async function getUserById(id) {
+  return queryOne(
+    'SELECT id, organization_id, email, name, role FROM users WHERE id = $1',
+    [id]
+  );
 }
 
 // ─── WHATSAPP CONFIG ──────────────────────────────────────────────
 
-function upsertWhatsappConfig(orgId, config) {
-  const d = getDb();
-  d.prepare(`
-    INSERT INTO whatsapp_configs (
+async function upsertWhatsappConfig(orgId, config) {
+  await pool.query(
+    `INSERT INTO whatsapp_configs (
       organization_id, provider,
       phone_number_id, business_account_id, access_token, webhook_verify_token,
       twilio_account_sid, twilio_auth_token, twilio_phone_number,
       status
     )
-    VALUES (
-      @orgId, @provider,
-      @phoneNumberId, @businessAccountId, @accessToken, @webhookVerifyToken,
-      @twilioAccountSid, @twilioAuthToken, @twilioPhoneNumber,
-      'connected'
-    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'connected')
     ON CONFLICT(organization_id) DO UPDATE SET
-      provider              = excluded.provider,
-      phone_number_id       = excluded.phone_number_id,
-      business_account_id   = excluded.business_account_id,
-      access_token          = excluded.access_token,
-      webhook_verify_token  = excluded.webhook_verify_token,
-      twilio_account_sid    = excluded.twilio_account_sid,
-      twilio_auth_token     = excluded.twilio_auth_token,
-      twilio_phone_number   = excluded.twilio_phone_number,
-      status                = 'connected'
-  `).run({
-    orgId,
-    provider:           config.provider           || 'meta',
-    phoneNumberId:      config.phoneNumberId      || null,
-    businessAccountId:  config.businessAccountId  || null,
-    accessToken:        config.accessToken        || null,
-    webhookVerifyToken: config.webhookVerifyToken || null,
-    twilioAccountSid:   config.twilioAccountSid   || null,
-    twilioAuthToken:    config.twilioAuthToken     || null,
-    twilioPhoneNumber:  config.twilioPhoneNumber  || null,
-  });
+      provider              = EXCLUDED.provider,
+      phone_number_id       = EXCLUDED.phone_number_id,
+      business_account_id   = EXCLUDED.business_account_id,
+      access_token          = EXCLUDED.access_token,
+      webhook_verify_token  = EXCLUDED.webhook_verify_token,
+      twilio_account_sid    = EXCLUDED.twilio_account_sid,
+      twilio_auth_token     = EXCLUDED.twilio_auth_token,
+      twilio_phone_number   = EXCLUDED.twilio_phone_number,
+      status                = 'connected'`,
+    [
+      orgId,
+      config.provider           || 'meta',
+      config.phoneNumberId      || null,
+      config.businessAccountId  || null,
+      config.accessToken        || null,
+      config.webhookVerifyToken || null,
+      config.twilioAccountSid   || null,
+      config.twilioAuthToken    || null,
+      config.twilioPhoneNumber  || null,
+    ]
+  );
 }
 
-// Buscar org por número Twilio (para el webhook de Twilio)
-function getOrgByTwilioNumber(twilioPhoneNumber) {
-  const wc = getDb().prepare('SELECT * FROM whatsapp_configs WHERE twilio_phone_number = ?').get(twilioPhoneNumber);
+async function getWhatsappConfig(orgId) {
+  return queryOne('SELECT * FROM whatsapp_configs WHERE organization_id = $1', [orgId]);
+}
+
+async function getOrgByWebhookToken(token) {
+  const wc = await queryOne('SELECT * FROM whatsapp_configs WHERE webhook_verify_token = $1', [token]);
   if (!wc) return null;
-  return { org: getOrgById(wc.organization_id), whatsappConfig: wc };
+  const org = await getOrgById(wc.organization_id);
+  return { org, whatsappConfig: wc };
 }
 
-function getWhatsappConfig(orgId) {
-  return getDb().prepare('SELECT * FROM whatsapp_configs WHERE organization_id = ?').get(orgId);
-}
-
-// Buscar org por webhook verify token (para el webhook de Meta)
-function getOrgByWebhookToken(token) {
-  const wc = getDb().prepare('SELECT * FROM whatsapp_configs WHERE webhook_verify_token = ?').get(token);
+async function getOrgByPhoneNumberId(phoneNumberId) {
+  const wc = await queryOne('SELECT * FROM whatsapp_configs WHERE phone_number_id = $1', [phoneNumberId]);
   if (!wc) return null;
-  return { org: getOrgById(wc.organization_id), whatsappConfig: wc };
+  const org = await getOrgById(wc.organization_id);
+  return { org, whatsappConfig: wc };
 }
 
-function getOrgByPhoneNumberId(phoneNumberId) {
-  const wc = getDb().prepare('SELECT * FROM whatsapp_configs WHERE phone_number_id = ?').get(phoneNumberId);
+async function getOrgByTwilioNumber(twilioPhoneNumber) {
+  const wc = await queryOne('SELECT * FROM whatsapp_configs WHERE twilio_phone_number = $1', [twilioPhoneNumber]);
   if (!wc) return null;
-  return { org: getOrgById(wc.organization_id), whatsappConfig: wc };
+  const org = await getOrgById(wc.organization_id);
+  return { org, whatsappConfig: wc };
 }
 
 // ─── DATA SOURCES ─────────────────────────────────────────────────
 
-function createDataSource({ organizationId, type, name, config }) {
-  const d = getDb();
-  const r = d.prepare(`
-    INSERT INTO data_sources (organization_id, type, name, config)
-    VALUES (?, ?, ?, ?)
-  `).run(organizationId, type, name, JSON.stringify(config));
-  return d.prepare('SELECT * FROM data_sources WHERE id = ?').get(r.lastInsertRowid);
+async function createDataSource({ organizationId, type, name, config }) {
+  return queryOne(
+    `INSERT INTO data_sources (organization_id, type, name, config)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [organizationId, type, name, JSON.stringify(config)]
+  );
 }
 
-function getDataSources(orgId) {
-  return getDb().prepare('SELECT * FROM data_sources WHERE organization_id = ?').all(orgId);
+async function getDataSources(orgId) {
+  return query('SELECT * FROM data_sources WHERE organization_id = $1', [orgId]);
 }
 
-function getDataSource(id, orgId) {
-  const ds = getDb().prepare('SELECT * FROM data_sources WHERE id = ? AND organization_id = ?').get(id, orgId);
+async function getDataSource(id, orgId) {
+  const ds = await queryOne(
+    'SELECT * FROM data_sources WHERE id = $1 AND organization_id = $2',
+    [id, orgId]
+  );
   if (ds) ds.config = JSON.parse(ds.config || '{}');
   return ds;
 }
 
-function updateDataSourceStatus(id, status) {
-  getDb().prepare('UPDATE data_sources SET status = ?, last_sync_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
+async function updateDataSourceStatus(id, status) {
+  await pool.query(
+    'UPDATE data_sources SET status = $1, last_sync_at = CURRENT_TIMESTAMP WHERE id = $2',
+    [status, id]
+  );
 }
 
-function getPrimaryDataSource(orgId) {
-  const ds = getDb().prepare("SELECT * FROM data_sources WHERE organization_id = ? AND status = 'connected' LIMIT 1").get(orgId);
+async function getPrimaryDataSource(orgId) {
+  const ds = await queryOne(
+    "SELECT * FROM data_sources WHERE organization_id = $1 AND status = 'connected' LIMIT 1",
+    [orgId]
+  );
   if (ds) ds.config = JSON.parse(ds.config || '{}');
   return ds;
 }
 
 // ─── AGENTS ───────────────────────────────────────────────────────
 
-function createAgent({ organizationId, dataSourceId, name, type, systemPrompt = null, config = {} }) {
-  const d = getDb();
-  const r = d.prepare(`
-    INSERT INTO agents (organization_id, data_source_id, name, type, system_prompt, config)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(organizationId, dataSourceId, name, type, systemPrompt, JSON.stringify(config));
-  return d.prepare('SELECT * FROM agents WHERE id = ?').get(r.lastInsertRowid);
+async function createAgent({ organizationId, dataSourceId, name, type, systemPrompt = null, config = {} }) {
+  return queryOne(
+    `INSERT INTO agents (organization_id, data_source_id, name, type, system_prompt, config)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [organizationId, dataSourceId, name, type, systemPrompt, JSON.stringify(config)]
+  );
 }
 
-function getAgents(orgId) {
-  return getDb().prepare('SELECT * FROM agents WHERE organization_id = ? ORDER BY type').all(orgId);
+async function getAgents(orgId) {
+  return query('SELECT * FROM agents WHERE organization_id = $1 ORDER BY type', [orgId]);
 }
 
-function createDefaultAgents(orgId, dataSourceId) {
-  const d = getDb();
-  const existing = d.prepare('SELECT COUNT(*) as n FROM agents WHERE organization_id = ?').get(orgId);
-  if (existing.n > 0) return;
+async function createDefaultAgents(orgId, dataSourceId) {
+  const rows = await query('SELECT COUNT(*) as n FROM agents WHERE organization_id = $1', [orgId]);
+  if (parseInt(rows[0].n) > 0) return;
 
   const agents = [
-    { type: 'orchestrator', name: 'Orquestador', systemPrompt: null },
-    { type: 'sales',        name: 'Agente de Ventas', systemPrompt: null },
-    { type: 'orders',       name: 'Agente de Órdenes', systemPrompt: null },
+    { type: 'orchestrator', name: 'Orquestador' },
+    { type: 'sales',        name: 'Agente de Ventas' },
+    { type: 'orders',       name: 'Agente de Órdenes' },
   ];
   for (const a of agents) {
-    createAgent({ organizationId: orgId, dataSourceId, name: a.name, type: a.type });
+    await createAgent({ organizationId: orgId, dataSourceId, name: a.name, type: a.type });
   }
 }
 
 // ─── CONVERSATIONS ────────────────────────────────────────────────
 
-function upsertConversation(orgId, phoneNumber, contactName = null) {
-  const d = getDb();
-  const existing = d.prepare('SELECT * FROM conversations WHERE organization_id = ? AND phone_number = ?').get(orgId, phoneNumber);
+async function upsertConversation(orgId, phoneNumber, contactName = null) {
+  const existing = await queryOne(
+    'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2',
+    [orgId, phoneNumber]
+  );
   if (existing) {
     if (contactName && contactName !== existing.contact_name) {
-      d.prepare('UPDATE conversations SET contact_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(contactName, existing.id);
+      await pool.query(
+        'UPDATE conversations SET contact_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [contactName, existing.id]
+      );
     }
-    return d.prepare('SELECT * FROM conversations WHERE id = ?').get(existing.id);
+    return queryOne('SELECT * FROM conversations WHERE id = $1', [existing.id]);
   }
-  const r = d.prepare(`
-    INSERT INTO conversations (organization_id, phone_number, contact_name) VALUES (?, ?, ?)
-  `).run(orgId, phoneNumber, contactName || 'Cliente');
-  return d.prepare('SELECT * FROM conversations WHERE id = ?').get(r.lastInsertRowid);
+  return queryOne(
+    `INSERT INTO conversations (organization_id, phone_number, contact_name) VALUES ($1, $2, $3) RETURNING *`,
+    [orgId, phoneNumber, contactName || 'Cliente']
+  );
 }
 
-function getAllConversations(orgId) {
-  return getDb().prepare(`
-    SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
-    FROM conversations c
-    WHERE c.organization_id = ?
-    ORDER BY c.last_message_at DESC
-  `).all(orgId);
+async function getAllConversations(orgId) {
+  return query(
+    `SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
+     FROM conversations c
+     WHERE c.organization_id = $1
+     ORDER BY c.last_message_at DESC`,
+    [orgId]
+  );
 }
 
-function getConversationById(id, orgId = null) {
-  if (orgId) return getDb().prepare('SELECT * FROM conversations WHERE id = ? AND organization_id = ?').get(id, orgId);
-  return getDb().prepare('SELECT * FROM conversations WHERE id = ?').get(id);
+async function getConversationById(id, orgId = null) {
+  if (orgId) {
+    return queryOne('SELECT * FROM conversations WHERE id = $1 AND organization_id = $2', [id, orgId]);
+  }
+  return queryOne('SELECT * FROM conversations WHERE id = $1', [id]);
 }
 
-function updateConversationLastMessage(id, message, incrementUnread = false) {
-  const d = getDb();
+async function updateConversationLastMessage(id, message, incrementUnread = false) {
   if (incrementUnread) {
-    d.prepare(`UPDATE conversations SET last_message = ?, last_message_at = CURRENT_TIMESTAMP, unread_count = unread_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(message, id);
+    await pool.query(
+      `UPDATE conversations SET last_message = $1, last_message_at = CURRENT_TIMESTAMP, unread_count = unread_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [message, id]
+    );
   } else {
-    d.prepare(`UPDATE conversations SET last_message = ?, last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(message, id);
+    await pool.query(
+      `UPDATE conversations SET last_message = $1, last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [message, id]
+    );
   }
 }
 
-function markConversationAsRead(id) {
-  getDb().prepare('UPDATE conversations SET unread_count = 0 WHERE id = ?').run(id);
+async function markConversationAsRead(id) {
+  await pool.query('UPDATE conversations SET unread_count = 0 WHERE id = $1', [id]);
 }
 
-function setAgentMode(id, mode) {
-  getDb().prepare('UPDATE conversations SET agent_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(mode, id);
+async function setAgentMode(id, mode) {
+  await pool.query(
+    'UPDATE conversations SET agent_mode = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+    [mode, id]
+  );
 }
 
-function updatePipelineState(id, state, orderDraft = null) {
-  const d = getDb();
+async function updatePipelineState(id, state, orderDraft = null) {
   if (orderDraft !== null) {
-    d.prepare('UPDATE conversations SET pipeline_state = ?, order_draft = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(state, JSON.stringify(orderDraft), id);
+    await pool.query(
+      'UPDATE conversations SET pipeline_state = $1, order_draft = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+      [state, JSON.stringify(orderDraft), id]
+    );
   } else {
-    d.prepare('UPDATE conversations SET pipeline_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(state, id);
+    await pool.query(
+      'UPDATE conversations SET pipeline_state = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [state, id]
+    );
   }
 }
 
-function getOrderDraft(id) {
-  const conv = getDb().prepare('SELECT order_draft FROM conversations WHERE id = ?').get(id);
+async function getOrderDraft(id) {
+  const conv = await queryOne('SELECT order_draft FROM conversations WHERE id = $1', [id]);
   try { return JSON.parse(conv?.order_draft || '{}'); } catch { return {}; }
 }
 
 // ─── MESSAGES ─────────────────────────────────────────────────────
 
-function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = 'sent', sentBy = 'ai', agentType = null }) {
-  const d = getDb();
+async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = 'sent', sentBy = 'ai', agentType = null }) {
   try {
-    const r = d.prepare(`
-      INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType);
-    return d.prepare('SELECT * FROM messages WHERE id = ?').get(r.lastInsertRowid);
+    return queryOne(
+      `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType]
+    );
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') return null;
+    if (err.code === '23505') return null; // unique constraint violation
     throw err;
   }
 }
 
-function getMessagesByConversation(conversationId, limit = 50) {
-  return getDb().prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ?').all(conversationId, limit);
+async function getMessagesByConversation(conversationId, limit = 50) {
+  return query(
+    'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT $2',
+    [conversationId, limit]
+  );
 }
 
-function getLastMessages(conversationId, limit = 10) {
-  const rows = getDb().prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?').all(conversationId, limit);
+async function getLastMessages(conversationId, limit = 10) {
+  const rows = await query(
+    'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2',
+    [conversationId, limit]
+  );
   return rows.reverse();
 }
 
-function updateMessageStatus(whatsappMessageId, status) {
-  getDb().prepare('UPDATE messages SET status = ? WHERE whatsapp_message_id = ?').run(status, whatsappMessageId);
+async function updateMessageStatus(whatsappMessageId, status) {
+  await pool.query(
+    'UPDATE messages SET status = $1 WHERE whatsapp_message_id = $2',
+    [status, whatsappMessageId]
+  );
 }
 
 // ─── PRODUCTS CACHE ───────────────────────────────────────────────
 
-function cacheProducts(orgId, dataSourceId, products) {
-  const d = getDb();
-  const upsert = d.prepare(`
-    INSERT INTO products_cache (organization_id, data_source_id, external_id, title, description, price, compare_at_price, sku, inventory_quantity, image_url, tags, product_type, handle, raw_json, cached_at)
-    VALUES (@orgId, @dataSourceId, @externalId, @title, @description, @price, @compareAtPrice, @sku, @inventoryQuantity, @imageUrl, @tags, @productType, @handle, @rawJson, CURRENT_TIMESTAMP)
-    ON CONFLICT(organization_id, data_source_id, external_id) DO UPDATE SET
-      title = excluded.title, description = excluded.description, price = excluded.price,
-      compare_at_price = excluded.compare_at_price, sku = excluded.sku,
-      inventory_quantity = excluded.inventory_quantity, image_url = excluded.image_url,
-      tags = excluded.tags, product_type = excluded.product_type,
-      handle = excluded.handle, raw_json = excluded.raw_json, cached_at = CURRENT_TIMESTAMP
-  `);
-  const tx = d.transaction((prods) => { for (const p of prods) upsert.run(p); });
-  tx(products.map(p => ({ orgId, dataSourceId, ...p })));
+async function cacheProducts(orgId, dataSourceId, products) {
+  for (const p of products) {
+    await pool.query(
+      `INSERT INTO products_cache (organization_id, data_source_id, external_id, title, description, price, compare_at_price, sku, inventory_quantity, image_url, tags, product_type, handle, raw_json, cached_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+       ON CONFLICT(organization_id, data_source_id, external_id) DO UPDATE SET
+         title = EXCLUDED.title, description = EXCLUDED.description, price = EXCLUDED.price,
+         compare_at_price = EXCLUDED.compare_at_price, sku = EXCLUDED.sku,
+         inventory_quantity = EXCLUDED.inventory_quantity, image_url = EXCLUDED.image_url,
+         tags = EXCLUDED.tags, product_type = EXCLUDED.product_type,
+         handle = EXCLUDED.handle, raw_json = EXCLUDED.raw_json, cached_at = CURRENT_TIMESTAMP`,
+      [
+        orgId, dataSourceId,
+        p.externalId, p.title, p.description, p.price, p.compareAtPrice,
+        p.sku, p.inventoryQuantity, p.imageUrl, p.tags, p.productType, p.handle, p.rawJson,
+      ]
+    );
+  }
 }
 
-function getCachedProducts(orgId) {
-  return getDb().prepare('SELECT * FROM products_cache WHERE organization_id = ? ORDER BY title ASC').all(orgId);
+async function getCachedProducts(orgId) {
+  return query('SELECT * FROM products_cache WHERE organization_id = $1 ORDER BY title ASC', [orgId]);
 }
 
-function getProductsCacheAge(orgId) {
-  const row = getDb().prepare('SELECT MIN(cached_at) as oldest FROM products_cache WHERE organization_id = ?').get(orgId);
+async function getProductsCacheAge(orgId) {
+  const row = await queryOne('SELECT MIN(cached_at) as oldest FROM products_cache WHERE organization_id = $1', [orgId]);
   if (!row?.oldest) return Infinity;
   return (Date.now() - new Date(row.oldest).getTime()) / 1000 / 60;
 }
 
 // ─── ORDERS ───────────────────────────────────────────────────────
 
-function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice }) {
-  const d = getDb();
-  const r = d.prepare(`
-    INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice);
-  return d.prepare('SELECT * FROM orders WHERE id = ?').get(r.lastInsertRowid);
+async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice }) {
+  return queryOne(
+    `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice]
+  );
 }
 
-function updateOrder(id, updates) {
-  const d = getDb();
-  const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-  d.prepare(`UPDATE orders SET ${fields} WHERE id = ?`).run(...Object.values(updates), id);
-  return d.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+async function updateOrder(id, updates) {
+  const keys = Object.keys(updates);
+  const values = Object.values(updates);
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  values.push(id);
+  return queryOne(`UPDATE orders SET ${setClause} WHERE id = $${values.length} RETURNING *`, values);
 }
 
-function getOrdersByOrg(orgId) {
-  return getDb().prepare('SELECT * FROM orders WHERE organization_id = ? ORDER BY created_at DESC').all(orgId);
+async function getOrdersByOrg(orgId) {
+  return query('SELECT * FROM orders WHERE organization_id = $1 ORDER BY created_at DESC', [orgId]);
+}
+
+// ─── SETTINGS ─────────────────────────────────────────────────────
+
+async function getSetting(orgId, key) {
+  const row = await queryOne(
+    'SELECT value FROM settings WHERE organization_id = $1 AND key = $2',
+    [orgId, key]
+  );
+  return row?.value || null;
+}
+
+async function setSetting(orgId, key, value) {
+  await pool.query(
+    `INSERT INTO settings (organization_id, key, value) VALUES ($1, $2, $3)
+     ON CONFLICT(organization_id, key) DO UPDATE SET value = EXCLUDED.value`,
+    [orgId, key, value]
+  );
 }
 
 module.exports = {
-  getDb,
+  getPool,
   // Orgs
   createOrganization, getOrgById, markSetupDone,
   // Users
@@ -344,4 +399,6 @@ module.exports = {
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Orders
   createOrder, updateOrder, getOrdersByOrg,
+  // Settings
+  getSetting, setSetting,
 };

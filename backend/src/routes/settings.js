@@ -18,11 +18,11 @@ router.use(requireAuth);
 /**
  * GET /api/settings
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const settings = {
-      ai_enabled_global:      db.getSetting('ai_enabled_global') === 'true',
-      ai_system_prompt_extra: db.getSetting('ai_system_prompt_extra') || '',
+      ai_enabled_global:      (await db.getSetting(req.orgId, 'ai_enabled_global')) === 'true',
+      ai_system_prompt_extra: (await db.getSetting(req.orgId, 'ai_system_prompt_extra')) || '',
     };
     res.json({ success: true, data: settings });
   } catch (err) {
@@ -33,13 +33,13 @@ router.get('/', (req, res) => {
 /**
  * PUT /api/settings
  */
-router.put('/', (req, res) => {
+router.put('/', async (req, res) => {
   try {
     const { ai_enabled_global, ai_system_prompt_extra } = req.body;
     if (ai_enabled_global !== undefined)
-      db.setSetting('ai_enabled_global', ai_enabled_global ? 'true' : 'false');
+      await db.setSetting(req.orgId, 'ai_enabled_global', ai_enabled_global ? 'true' : 'false');
     if (ai_system_prompt_extra !== undefined)
-      db.setSetting('ai_system_prompt_extra', ai_system_prompt_extra);
+      await db.setSetting(req.orgId, 'ai_system_prompt_extra', ai_system_prompt_extra);
 
     res.json({ success: true });
   } catch (err) {
@@ -55,7 +55,7 @@ router.put('/', (req, res) => {
  */
 router.post('/sync-products', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds?.config?.storeUrl) {
       return res.status(400).json({ success: false, error: 'No hay tienda Shopify configurada' });
     }
@@ -74,7 +74,7 @@ router.post('/sync-products', async (req, res) => {
  */
 router.get('/products', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds?.config?.storeUrl) {
       return res.status(400).json({ success: false, error: 'No hay tienda Shopify configurada' });
     }
@@ -94,9 +94,9 @@ router.get('/products', async (req, res) => {
  * GET /api/settings/whatsapp
  * Devuelve la config actual de WhatsApp (tokens enmascarados para seguridad)
  */
-router.get('/whatsapp', (req, res) => {
+router.get('/whatsapp', async (req, res) => {
   try {
-    const wc = db.getWhatsappConfig(req.orgId);
+    const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.json({ success: true, data: null });
 
     const mask = (v) => v ? v.slice(0, 6) + '••••••' + v.slice(-4) : null;
@@ -129,11 +129,10 @@ router.get('/whatsapp', (req, res) => {
  */
 router.get('/whatsapp/test', async (req, res) => {
   try {
-    const wc = db.getWhatsappConfig(req.orgId);
+    const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.json({ success: false, error: 'No hay configuración de WhatsApp guardada' });
 
     if (wc.provider === 'twilio') {
-      // Verificar credenciales Twilio consultando el número
       const axios = require('axios');
       const sid   = wc.twilio_account_sid;
       const token = wc.twilio_auth_token;
@@ -144,7 +143,6 @@ router.get('/whatsapp/test', async (req, res) => {
       res.json({ success: true, message: `Twilio OK · Cuenta ${sid.slice(0,10)}...` });
 
     } else {
-      // Verificar token Meta consultando el Phone Number ID
       const axios = require('axios');
       const phoneId = wc.phone_number_id;
       const token   = wc.access_token;
@@ -165,7 +163,7 @@ router.get('/whatsapp/test', async (req, res) => {
  * PUT /api/settings/whatsapp
  * Actualiza la config de WhatsApp/Twilio
  */
-router.put('/whatsapp', (req, res) => {
+router.put('/whatsapp', async (req, res) => {
   try {
     const { provider = 'meta' } = req.body;
 
@@ -174,7 +172,7 @@ router.put('/whatsapp', (req, res) => {
       if (!twilioAccountSid || !twilioAuthToken || !twilioPhoneNumber) {
         return res.status(400).json({ success: false, error: 'Twilio requiere Account SID, Auth Token y número de teléfono' });
       }
-      db.upsertWhatsappConfig(req.orgId, {
+      await db.upsertWhatsappConfig(req.orgId, {
         provider: 'twilio',
         twilioAccountSid, twilioAuthToken, twilioPhoneNumber,
         status: 'connected',
@@ -184,7 +182,7 @@ router.put('/whatsapp', (req, res) => {
       if (!phoneNumberId || !accessToken || !webhookVerifyToken) {
         return res.status(400).json({ success: false, error: 'Meta requiere Phone Number ID, Access Token y Webhook Verify Token' });
       }
-      db.upsertWhatsappConfig(req.orgId, {
+      await db.upsertWhatsappConfig(req.orgId, {
         provider: 'meta',
         phoneNumberId, businessAccountId, accessToken, webhookVerifyToken,
         status: 'connected',

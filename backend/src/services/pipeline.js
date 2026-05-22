@@ -9,6 +9,7 @@
  */
 
 const db          = require('../db/database');
+const { getPool } = require('../db/database');
 const raigentic   = require('./raigentic');   // Shopify: productos y pedidos
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
@@ -19,10 +20,10 @@ const ordersAgent  = require('./agents/orders');
  * @returns {{ response: string, agentType: string, newState: string }}
  */
 async function processMessage(orgId, conversationId, userMessage) {
-  const conversation = db.getConversationById(conversationId);
-  const history = db.getLastMessages(conversationId, 12);
+  const conversation = await db.getConversationById(conversationId);
+  const history = await db.getLastMessages(conversationId, 12);
   // Obtener catálogo desde raigentic (DB local, sin llamar a Shopify en cada mensaje)
-  const ds = db.getPrimaryDataSource(orgId);
+  const ds = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
   let products = [];
   let productosTexto = '';
@@ -37,7 +38,7 @@ async function processMessage(orgId, conversationId, userMessage) {
   }
 
   const currentState = conversation.pipeline_state || 'exploring';
-  let orderDraft = db.getOrderDraft(conversationId);
+  let orderDraft = await db.getOrderDraft(conversationId);
 
   // ── Si estamos en proceso de recopilación de datos ──────────────
   if (currentState === 'collecting_order') {
@@ -52,8 +53,8 @@ async function processMessage(orgId, conversationId, userMessage) {
 
   // El cliente quiere hablar con humano
   if (intent === 'human_request') {
-    db.setAgentMode(conversationId, 'human');
-    db.updatePipelineState(conversationId, 'exploring');
+    await db.setAgentMode(conversationId, 'human');
+    await db.updatePipelineState(conversationId, 'exploring');
     return {
       response: '¡Claro! Te voy a conectar con uno de nuestros asesores ahora mismo. En un momento alguien te atiende 👋',
       agentType: 'orchestrator',
@@ -66,7 +67,7 @@ async function processMessage(orgId, conversationId, userMessage) {
   if (intent === 'wants_to_order' || (intent === 'interested' && confidence > 0.85)) {
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto);
     const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
-    db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
+    await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
     return { response: salesResponse, agentType: 'sales', newState };
   }
 
@@ -74,7 +75,7 @@ async function processMessage(orgId, conversationId, userMessage) {
   if (intent === 'interested' || intent === 'objection') {
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto);
     const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
-    db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
+    await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
     return { response: salesResponse, agentType: 'sales', newState };
   }
 
@@ -87,19 +88,20 @@ async function processMessage(orgId, conversationId, userMessage) {
  * Busca datos de un cliente existente por número de teléfono
  * para pre-llenar el draft y no volver a pedir datos ya conocidos.
  */
-function getKnownCustomerData(orgId, phoneNumber) {
+async function getKnownCustomerData(orgId, phoneNumber) {
   try {
-    const row = db.getDb().prepare(`
-      SELECT o.customer_name, o.shipping_address
-      FROM orders o
-      JOIN conversations c ON o.conversation_id = c.id
-      WHERE c.phone_number = ?
-        AND o.organization_id = ?
-        AND o.status NOT IN ('cancelled')
-      ORDER BY o.created_at DESC
-      LIMIT 1
-    `).get(phoneNumber, orgId);
-
+    const { rows } = await getPool().query(
+      `SELECT o.customer_name, o.shipping_address
+       FROM orders o
+       JOIN conversations c ON o.conversation_id = c.id
+       WHERE c.phone_number = $1
+         AND o.organization_id = $2
+         AND o.status NOT IN ('cancelled')
+       ORDER BY o.created_at DESC
+       LIMIT 1`,
+      [phoneNumber, orgId]
+    );
+    const row = rows[0];
     if (!row) return {};
 
     const addr = (() => { try { return JSON.parse(row.shipping_address || '{}'); } catch { return {}; } })();
@@ -119,7 +121,7 @@ function getKnownCustomerData(orgId, phoneNumber) {
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto) {
   // 0. Pre-llenar con datos del cliente si ya compró antes (por teléfono)
   if (Object.keys(orderDraft).length === 0) {
-    const known = getKnownCustomerData(orgId, conversation.phone_number);
+    const known = await getKnownCustomerData(orgId, conversation.phone_number);
     if (Object.keys(known).length > 0) {
       orderDraft = { ...known, ...orderDraft };
       console.log(`[Pipeline] Cliente conocido: ${known.customer_name || '?'} — datos pre-llenados`);
@@ -128,7 +130,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // 1. Extraer datos del mensaje del cliente y actualizar el draft
   const updatedDraft = await ordersAgent.extractOrderData(history, orderDraft);
-  db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
+  await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
 
   // 2. Generar respuesta del agente de órdenes
   const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto);
@@ -140,28 +142,25 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     // ── CREAR ORDEN EN SHOPIFY ─────────────────────────────────
     try {
       const result = await createShopifyOrder(orgId, conversationId, updatedDraft);
-      db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
+      await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
 
       const successMsg = `✅ ¡Pedido creado exitosamente!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
 
       return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
     } catch (err) {
-      // Log detallado del error de raigentic para debug
       const status  = err.response?.status;
       const resData = err.response?.data;
       const detail  = resData ? JSON.stringify(resData) : err.message;
       console.error(`[Pipeline] ❌ Error creando orden en Shopify (HTTP ${status || 'N/A'}):`, detail);
       console.error('[Pipeline] Draft que se intentó enviar:', JSON.stringify(updatedDraft));
 
-      // Mensaje amigable al cliente
       let errorMsg = 'Lo siento, hubo un problema al crear tu pedido automáticamente. Un asesor te ayudará a completarlo enseguida.';
 
-      // Si el token de raigentic está inválido, dar pista al equipo
       if (status === 401 || detail?.includes('Invalid API key') || detail?.includes('access token')) {
         console.error('[Pipeline] ⚠️  Token de Shopify inválido — la app raigentic necesita reautorizarse. Visita /auth en raigentic.');
       }
 
-      db.setAgentMode(conversationId, 'human');
+      await db.setAgentMode(conversationId, 'human');
       return { response: errorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true };
     }
   }
@@ -190,7 +189,6 @@ async function resolveVariantId(shop, productName) {
     const nameLower = (productName || '').toLowerCase();
 
     for (const p of products) {
-      // Buscar variante cuyo título coincida parcialmente con el nombre del producto del draft
       const matchVariant = (p.variants || []).find(v =>
         nameLower.includes(v.title.toLowerCase()) ||
         v.title.toLowerCase().includes(nameLower) ||
@@ -198,7 +196,6 @@ async function resolveVariantId(shop, productName) {
       );
       if (matchVariant?.id) return { variantId: matchVariant.id, price: matchVariant.price };
 
-      // Si el producto en sí coincide y tiene una variante, usar la primera
       if (nameLower.includes(p.title.toLowerCase()) && p.variants?.[0]?.id) {
         return { variantId: p.variants[0].id, price: p.variants[0].price };
       }
@@ -213,14 +210,13 @@ async function resolveVariantId(shop, productName) {
  * Crea la orden en Shopify via raigentic y la guarda en la DB local
  */
 async function createShopifyOrder(orgId, conversationId, draft) {
-  const ds   = db.getPrimaryDataSource(orgId);
+  const ds   = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
   if (!shop) throw new Error('No hay tienda Shopify conectada para esta organización');
 
-  const conversation = db.getConversationById(conversationId);
+  const conversation = await db.getConversationById(conversationId);
   const customerPhone = draft.customer_phone || conversation.phone_number;
 
-  // Resolver variantId si el agente no lo capturó del contexto
   let variantId = draft.variant_id || null;
   let price = draft.price || null;
   if (!variantId) {
@@ -241,8 +237,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     `WhatsApp CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}`,
   );
 
-  // Guardar en nuestra DB
-  const order = db.createOrder({
+  const order = await db.createOrder({
     conversationId,
     organizationId: orgId,
     items: [{ name: draft.product_name, quantity: draft.quantity }],
@@ -252,7 +247,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     totalPrice: shopifyResult.totalPrice,
   });
 
-  db.updateOrder(order.id, {
+  await db.updateOrder(order.id, {
     shopify_draft_id: shopifyResult.shopifyDraftId,
     invoice_url: shopifyResult.invoiceUrl,
     status: 'sent',

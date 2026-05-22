@@ -11,6 +11,7 @@
 const express    = require('express');
 const router     = express.Router();
 const db         = require('../db/database');
+const { getPool } = require('../db/database');
 const raigentic  = require('../services/raigentic');
 const { requireAuth } = require('../middleware/auth');
 
@@ -20,19 +21,20 @@ router.use(requireAuth);
  * GET /api/orders
  * Todas las órdenes de la organización con info de conversación
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const orders = db.getDb().prepare(`
-      SELECT
+    const { rows: orders } = await getPool().query(
+      `SELECT
         o.*,
         c.phone_number,
         c.contact_name,
         c.pipeline_state
       FROM orders o
       JOIN conversations c ON o.conversation_id = c.id
-      WHERE o.organization_id = ?
-      ORDER BY o.created_at DESC
-    `).all(req.orgId);
+      WHERE o.organization_id = $1
+      ORDER BY o.created_at DESC`,
+      [req.orgId]
+    );
 
     const parsed = orders.map(o => ({
       ...o,
@@ -50,23 +52,23 @@ router.get('/', (req, res) => {
  * GET /api/orders/stats
  * Resumen rápido para el dashboard
  */
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const d = db.getDb();
-    const total      = d.prepare('SELECT COUNT(*) as n FROM orders WHERE organization_id = ?').get(req.orgId);
-    const paid       = d.prepare("SELECT COUNT(*) as n FROM orders WHERE organization_id = ? AND status = 'paid'").get(req.orgId);
-    const pending    = d.prepare("SELECT COUNT(*) as n FROM orders WHERE organization_id = ? AND status IN ('draft','sent')").get(req.orgId);
-    const revenue    = d.prepare("SELECT SUM(CAST(total_price AS REAL)) as s FROM orders WHERE organization_id = ? AND status = 'paid'").get(req.orgId);
-    const today      = d.prepare("SELECT COUNT(*) as n FROM orders WHERE organization_id = ? AND date(created_at) = date('now')").get(req.orgId);
+    const pool = getPool();
+    const { rows: [totalRow] }   = await pool.query('SELECT COUNT(*) as n FROM orders WHERE organization_id = $1', [req.orgId]);
+    const { rows: [paidRow] }    = await pool.query("SELECT COUNT(*) as n FROM orders WHERE organization_id = $1 AND status = 'paid'", [req.orgId]);
+    const { rows: [pendingRow] } = await pool.query("SELECT COUNT(*) as n FROM orders WHERE organization_id = $1 AND status IN ('draft','sent')", [req.orgId]);
+    const { rows: [revenueRow] } = await pool.query("SELECT SUM(total_price::numeric) as s FROM orders WHERE organization_id = $1 AND status = 'paid'", [req.orgId]);
+    const { rows: [todayRow] }   = await pool.query("SELECT COUNT(*) as n FROM orders WHERE organization_id = $1 AND created_at::date = CURRENT_DATE", [req.orgId]);
 
     res.json({
       success: true,
       data: {
-        total:   total.n,
-        paid:    paid.n,
-        pending: pending.n,
-        revenue: revenue.s || 0,
-        today:   today.n,
+        total:   parseInt(totalRow.n),
+        paid:    parseInt(paidRow.n),
+        pending: parseInt(pendingRow.n),
+        revenue: parseFloat(revenueRow.s) || 0,
+        today:   parseInt(todayRow.n),
       },
     });
   } catch (err) {
@@ -81,7 +83,7 @@ router.get('/stats', (req, res) => {
  */
 router.get('/shopify', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, orders: [], total: 0 });
 
     const shop   = ds.config?.storeUrl;
@@ -93,7 +95,6 @@ router.get('/shopify', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[Orders/Shopify]', err.message);
-    // Dar mensaje amigable según el tipo de error
     const isTimeout  = err.code === 'ECONNABORTED';
     const isNotFound = err.response?.status === 404;
     const isUnauth   = err.response?.status === 401;
@@ -109,13 +110,14 @@ router.get('/shopify', async (req, res) => {
  * GET /api/orders/:id
  * Detalle de una orden
  */
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const order = db.getDb().prepare(`
-      SELECT o.*, c.phone_number, c.contact_name
-      FROM orders o JOIN conversations c ON o.conversation_id = c.id
-      WHERE o.id = ? AND o.organization_id = ?
-    `).get(parseInt(req.params.id), req.orgId);
+    const { rows: [order] } = await getPool().query(
+      `SELECT o.*, c.phone_number, c.contact_name
+       FROM orders o JOIN conversations c ON o.conversation_id = c.id
+       WHERE o.id = $1 AND o.organization_id = $2`,
+      [parseInt(req.params.id), req.orgId]
+    );
 
     if (!order) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
 
@@ -136,7 +138,7 @@ router.get('/:id', (req, res) => {
  * PATCH /api/orders/:id/status
  * Actualizar estado manualmente (ej: marcar como pagada)
  */
-router.patch('/:id/status', (req, res) => {
+router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     const validStatuses = ['draft', 'sent', 'paid', 'cancelled'];
@@ -144,12 +146,14 @@ router.patch('/:id/status', (req, res) => {
       return res.status(400).json({ success: false, error: `Estado inválido. Opciones: ${validStatuses.join(', ')}` });
     }
 
-    const order = db.getDb().prepare('SELECT * FROM orders WHERE id = ? AND organization_id = ?')
-      .get(parseInt(req.params.id), req.orgId);
+    const { rows: [order] } = await getPool().query(
+      'SELECT * FROM orders WHERE id = $1 AND organization_id = $2',
+      [parseInt(req.params.id), req.orgId]
+    );
     if (!order) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
 
-    db.updateOrder(order.id, { status });
-    res.json({ success: true, data: db.getDb().prepare('SELECT * FROM orders WHERE id = ?').get(order.id) });
+    const updated = await db.updateOrder(order.id, { status });
+    res.json({ success: true, data: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -161,17 +165,18 @@ router.patch('/:id/status', (req, res) => {
  */
 router.post('/:id/resend-link', async (req, res) => {
   try {
-    const order = db.getDb().prepare(`
-      SELECT o.*, c.phone_number FROM orders o
-      JOIN conversations c ON o.conversation_id = c.id
-      WHERE o.id = ? AND o.organization_id = ?
-    `).get(parseInt(req.params.id), req.orgId);
+    const { rows: [order] } = await getPool().query(
+      `SELECT o.*, c.phone_number FROM orders o
+       JOIN conversations c ON o.conversation_id = c.id
+       WHERE o.id = $1 AND o.organization_id = $2`,
+      [parseInt(req.params.id), req.orgId]
+    );
 
     if (!order) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
     if (!order.invoice_url) return res.status(400).json({ success: false, error: 'Sin link de pago disponible' });
 
     const whatsappService = require('../services/whatsapp');
-    const wc = db.getWhatsappConfig(req.orgId);
+    const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
     const msg = `🔔 Recordatorio de tu pedido:\n\n💳 Completa tu pago aquí:\n${order.invoice_url}\n\n¡Te esperamos! 😊`;
@@ -190,8 +195,10 @@ router.post('/:id/resend-link', async (req, res) => {
  */
 router.post('/:id/sync-shopify', async (req, res) => {
   try {
-    const order = db.getDb().prepare('SELECT * FROM orders WHERE id = ? AND organization_id = ?')
-      .get(parseInt(req.params.id), req.orgId);
+    const { rows: [order] } = await getPool().query(
+      'SELECT * FROM orders WHERE id = $1 AND organization_id = $2',
+      [parseInt(req.params.id), req.orgId]
+    );
     if (!order) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
     if (!order.shopify_draft_id) return res.status(400).json({ success: false, error: 'Sin ID de Shopify en esta orden' });
 

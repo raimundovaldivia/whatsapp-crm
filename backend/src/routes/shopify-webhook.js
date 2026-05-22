@@ -12,6 +12,7 @@ const express = require('express');
 const router  = express.Router();
 const crypto  = require('crypto');
 const db      = require('../db/database');
+const { getPool } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 
 let io;
@@ -21,7 +22,7 @@ function setSocketIO(socketIO) { io = socketIO; }
  * Middleware — verifica la firma HMAC de Shopify
  * Shopify firma cada webhook con HMAC-SHA256 usando el webhook secret
  */
-function verifyShopifyHmac(req, res, next) {
+async function verifyShopifyHmac(req, res, next) {
   const hmacHeader = req.headers['x-shopify-hmac-sha256'];
   const orgId      = req.params.orgId;
 
@@ -30,7 +31,7 @@ function verifyShopifyHmac(req, res, next) {
   }
 
   // Obtener el webhook secret de la org
-  const ds = db.getPrimaryDataSource(parseInt(orgId));
+  const ds = await db.getPrimaryDataSource(parseInt(orgId));
   if (!ds) return res.status(404).json({ error: 'Org no encontrada' });
 
   const webhookSecret = ds.config?.webhookSecret;
@@ -97,14 +98,12 @@ router.post('/:orgId', verifyShopifyHmac, async (req, res) => {
 
 /**
  * orders/paid — El cliente completó el pago
- * Este es el evento más importante. Actualiza el estado y confirma por WhatsApp.
  */
 async function handleOrderPaid(orgId, shopifyOrder) {
-  const draftOrderId  = shopifyOrder.source_identifier  // a veces viene aquí
+  const draftOrderId  = shopifyOrder.source_identifier
     || extractDraftIdFromNote(shopifyOrder.note);
 
-  // Buscar la orden en nuestra DB por draft_id o por order_id
-  let localOrder = findLocalOrder(orgId, {
+  let localOrder = await findLocalOrder(orgId, {
     shopifyOrderId:  String(shopifyOrder.id),
     shopifyDraftId:  draftOrderId,
     customerPhone:   cleanPhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone),
@@ -115,16 +114,13 @@ async function handleOrderPaid(orgId, shopifyOrder) {
     return;
   }
 
-  // Actualizar estado en DB
-  db.updateOrder(localOrder.id, {
+  await db.updateOrder(localOrder.id, {
     status:           'paid',
     shopify_order_id: String(shopifyOrder.id),
   });
 
-  // Actualizar pipeline state de la conversación
-  db.updatePipelineState(localOrder.conversation_id, 'done');
+  await db.updatePipelineState(localOrder.conversation_id, 'done');
 
-  // Emitir al CRM en tiempo real
   io?.emit(`order_paid_${orgId}`, {
     orderId:          localOrder.id,
     shopifyOrderId:   String(shopifyOrder.id),
@@ -132,9 +128,8 @@ async function handleOrderPaid(orgId, shopifyOrder) {
     total:            shopifyOrder.total_price,
   });
 
-  // Enviar confirmación al cliente por WhatsApp
-  const conv = db.getConversationById(localOrder.conversation_id);
-  const wc   = db.getWhatsappConfig(orgId);
+  const conv = await db.getConversationById(localOrder.conversation_id);
+  const wc   = await db.getWhatsappConfig(orgId);
 
   if (conv && wc) {
     const customerName = shopifyOrder.customer?.first_name || conv.contact_name || 'cliente';
@@ -151,15 +146,14 @@ async function handleOrderPaid(orgId, shopifyOrder) {
 
     await whatsappService.sendTextMessage(conv.phone_number, confirmMsg, wc);
 
-    // Guardar el mensaje en la conversación
-    db.saveMessage({
+    await db.saveMessage({
       conversationId: conv.id,
       direction:      'outbound',
       content:        confirmMsg,
       sentBy:         'ai',
       agentType:      'orders',
     });
-    db.updateConversationLastMessage(conv.id, confirmMsg);
+    await db.updateConversationLastMessage(conv.id, confirmMsg);
   }
 
   console.log(`[Shopify WH] ✅ Orden #${shopifyOrder.order_number} marcada como pagada`);
@@ -169,14 +163,13 @@ async function handleOrderPaid(orgId, shopifyOrder) {
  * orders/create — Shopify crea la orden real desde un draft
  */
 async function handleOrderCreate(orgId, shopifyOrder) {
-  // Intentar vincular con nuestra orden local
-  const localOrder = findLocalOrder(orgId, {
+  const localOrder = await findLocalOrder(orgId, {
     shopifyOrderId: String(shopifyOrder.id),
     customerPhone:  cleanPhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone),
   });
 
   if (localOrder && !localOrder.shopify_order_id) {
-    db.updateOrder(localOrder.id, { shopify_order_id: String(shopifyOrder.id) });
+    await db.updateOrder(localOrder.id, { shopify_order_id: String(shopifyOrder.id) });
     io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, shopifyOrderId: String(shopifyOrder.id) });
   }
 }
@@ -185,18 +178,17 @@ async function handleOrderCreate(orgId, shopifyOrder) {
  * orders/cancelled — Orden cancelada en Shopify
  */
 async function handleOrderCancelled(orgId, shopifyOrder) {
-  const localOrder = findLocalOrder(orgId, { shopifyOrderId: String(shopifyOrder.id) });
+  const localOrder = await findLocalOrder(orgId, { shopifyOrderId: String(shopifyOrder.id) });
   if (localOrder) {
-    db.updateOrder(localOrder.id, { status: 'cancelled' });
+    await db.updateOrder(localOrder.id, { status: 'cancelled' });
     io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: 'cancelled' });
 
-    // Notificar al cliente si queremos
-    const conv = db.getConversationById(localOrder.conversation_id);
-    const wc   = db.getWhatsappConfig(orgId);
+    const conv = await db.getConversationById(localOrder.conversation_id);
+    const wc   = await db.getWhatsappConfig(orgId);
     if (conv && wc) {
       const msg = `Tu pedido #${shopifyOrder.order_number} ha sido cancelado. Si tienes alguna pregunta, con gusto te ayudamos 😊`;
       await whatsappService.sendTextMessage(conv.phone_number, msg, wc);
-      db.saveMessage({ conversationId: conv.id, direction: 'outbound', content: msg, sentBy: 'ai', agentType: 'orders' });
+      await db.saveMessage({ conversationId: conv.id, direction: 'outbound', content: msg, sentBy: 'ai', agentType: 'orders' });
     }
   }
 }
@@ -205,7 +197,7 @@ async function handleOrderCancelled(orgId, shopifyOrder) {
  * orders/updated — Actualización general de orden
  */
 async function handleOrderUpdated(orgId, shopifyOrder) {
-  const localOrder = findLocalOrder(orgId, { shopifyOrderId: String(shopifyOrder.id) });
+  const localOrder = await findLocalOrder(orgId, { shopifyOrderId: String(shopifyOrder.id) });
   if (!localOrder) return;
 
   let newStatus = localOrder.status;
@@ -214,7 +206,7 @@ async function handleOrderUpdated(orgId, shopifyOrder) {
   if (shopifyOrder.cancelled_at)                     newStatus = 'cancelled';
 
   if (newStatus !== localOrder.status) {
-    db.updateOrder(localOrder.id, { status: newStatus });
+    await db.updateOrder(localOrder.id, { status: newStatus });
     io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: newStatus });
   }
 }
@@ -224,10 +216,9 @@ async function handleOrderUpdated(orgId, shopifyOrder) {
  */
 async function handleDraftOrderUpdate(orgId, draftOrder) {
   if (draftOrder.status === 'completed') {
-    // El draft se completó → convertir a pagado
-    const localOrder = findLocalOrder(orgId, { shopifyDraftId: String(draftOrder.id) });
+    const localOrder = await findLocalOrder(orgId, { shopifyDraftId: String(draftOrder.id) });
     if (localOrder) {
-      db.updateOrder(localOrder.id, { status: 'paid', shopify_order_id: String(draftOrder.order_id || '') });
+      await db.updateOrder(localOrder.id, { status: 'paid', shopify_order_id: String(draftOrder.order_id || '') });
       io?.emit(`order_paid_${orgId}`, { orderId: localOrder.id });
     }
   }
@@ -235,25 +226,33 @@ async function handleDraftOrderUpdate(orgId, draftOrder) {
 
 // ─── UTILS ────────────────────────────────────────────────────────
 
-function findLocalOrder(orgId, { shopifyOrderId, shopifyDraftId, customerPhone }) {
-  const d = db.getDb();
+async function findLocalOrder(orgId, { shopifyOrderId, shopifyDraftId, customerPhone } = {}) {
+  const pool = getPool();
 
   if (shopifyOrderId) {
-    const o = d.prepare('SELECT * FROM orders WHERE organization_id = ? AND shopify_order_id = ?').get(orgId, shopifyOrderId);
-    if (o) return o;
+    const { rows } = await pool.query(
+      'SELECT * FROM orders WHERE organization_id = $1 AND shopify_order_id = $2',
+      [orgId, shopifyOrderId]
+    );
+    if (rows[0]) return rows[0];
   }
   if (shopifyDraftId) {
-    const o = d.prepare('SELECT * FROM orders WHERE organization_id = ? AND shopify_draft_id = ?').get(orgId, shopifyDraftId);
-    if (o) return o;
+    const { rows } = await pool.query(
+      'SELECT * FROM orders WHERE organization_id = $1 AND shopify_draft_id = $2',
+      [orgId, shopifyDraftId]
+    );
+    if (rows[0]) return rows[0];
   }
   if (customerPhone) {
-    const o = d.prepare('SELECT * FROM orders WHERE organization_id = ? AND customer_phone = ? ORDER BY created_at DESC LIMIT 1').get(orgId, customerPhone);
-    if (o) return o;
+    const { rows } = await pool.query(
+      'SELECT * FROM orders WHERE organization_id = $1 AND customer_phone = $2 ORDER BY created_at DESC LIMIT 1',
+      [orgId, customerPhone]
+    );
+    if (rows[0]) return rows[0];
   }
   return null;
 }
 
-// Extraer draft ID de la nota de la orden (guardamos "Conv: X" en la nota)
 function extractDraftIdFromNote(note) {
   if (!note) return null;
   const match = note.match(/Conv:\s*(\d+)/);

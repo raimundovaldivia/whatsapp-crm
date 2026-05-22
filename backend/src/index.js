@@ -19,12 +19,7 @@ const path     = require('path');
 const { Server } = require('socket.io');
 const cors     = require('cors');
 
-// isProd ya no se usa para servir estáticos (frontend en Render Static Site separado)
-// Se mantiene por si se necesita en el futuro
 const isProd = process.env.NODE_ENV === 'production';
-
-// Inicializar base de datos
-require('./db/setup');
 
 // Rutas
 const webhookRouter        = require('./routes/webhook');         // WhatsApp (Meta)
@@ -64,22 +59,16 @@ io.on('connection', (socket) => {
 });
 
 // ─── CORS ────────────────────────────────────────────────────────
-// FRONTEND_URL en prod = URL del Static Site de Render
-// En dev = Vite en :5173
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true,
 }));
 
 // ─── BODY PARSERS ────────────────────────────────────────────────
-// Twilio envía form-urlencoded; Shopify necesita raw body para HMAC.
-// Ambos se capturan ANTES de express.json().
 app.use((req, res, next) => {
   if (req.path.startsWith('/twilio-webhook')) {
-    // Twilio: application/x-www-form-urlencoded
     express.urlencoded({ extended: false })(req, res, next);
   } else if (req.path.startsWith('/shopify-webhook')) {
-    // Shopify: raw body para verificar firma HMAC
     let rawBody = '';
     req.on('data', chunk => { rawBody += chunk.toString(); });
     req.on('end', () => {
@@ -113,16 +102,23 @@ app.use('/api/catalogo',      catalogoRouter);       // Catálogo de productos
 app.use('/api/reengagement',  reengagementRouter);  // Re-enganche de clientes dormidos
 app.use('/api/clientes',      clientesRouter);      // Lista completa de clientes
 
-
 // ─── ARRANCAR ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`\n🤖 WhatsApp CRM — Puerto ${PORT}`);
-  console.log(`   WhatsApp Meta   : POST /webhook`);
-  console.log(`   WhatsApp Twilio : POST /twilio-webhook`);
-  console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
-  console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
-  console.log(`   Shopify app     : ${process.env.RAIGENTIC_URL || 'https://raigentic.onrender.com'}\n`);
+
+const { setupDatabase } = require('./db/setup');
+
+setupDatabase().then(() => {
+  server.listen(PORT, () => {
+    console.log(`\n🤖 WhatsApp CRM — Puerto ${PORT}`);
+    console.log(`   WhatsApp Meta   : POST /webhook`);
+    console.log(`   WhatsApp Twilio : POST /twilio-webhook`);
+    console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
+    console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
+    console.log(`   Shopify app     : ${process.env.RAIGENTIC_URL || 'https://raigentic.onrender.com'}\n`);
+  });
+}).catch(err => {
+  console.error('Error iniciando DB:', err);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (err) => console.error('[Error no manejado]', err));

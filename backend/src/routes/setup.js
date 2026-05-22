@@ -13,6 +13,7 @@ const express    = require('express');
 const router     = express.Router();
 const axios      = require('axios');
 const db         = require('../db/database');
+const { getPool } = require('../db/database');
 const raigentic  = require('../services/raigentic');
 const { requireAuth } = require('../middleware/auth');
 
@@ -37,7 +38,7 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
         return res.status(400).json({ success: false, error: 'Faltan campos Twilio requeridos' });
       }
 
-      db.upsertWhatsappConfig(req.orgId, {
+      await db.upsertWhatsappConfig(req.orgId, {
         provider: 'twilio',
         twilioAccountSid, twilioAuthToken, twilioPhoneNumber,
       });
@@ -51,7 +52,7 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
         return res.status(400).json({ success: false, error: 'Faltan campos Meta requeridos' });
       }
 
-      db.upsertWhatsappConfig(req.orgId, {
+      await db.upsertWhatsappConfig(req.orgId, {
         provider: 'meta',
         phoneNumberId, businessAccountId, accessToken, webhookVerifyToken,
       });
@@ -81,10 +82,6 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
  * POST /api/setup/shopify
  * Guarda la tienda Shopify y verifica la conexión via raigentic.
  *
- * Requisito previo: el merchant debe haber instalado la app raigentic
- * en su tienda (Shopify Partner App). raigentic tiene el token OAuth;
- * el CRM solo necesita saber el dominio de la tienda.
- *
  * Body: { storeUrl: "mi-tienda.myshopify.com" }
  */
 router.post('/shopify', requireAuth, async (req, res) => {
@@ -96,8 +93,6 @@ router.post('/shopify', requireAuth, async (req, res) => {
 
     const shop = storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-    // Verificar que raigentic puede alcanzar esa tienda
-    // Si raigentic está dormido (502/503/504) guardamos igual y avisamos
     let productCount = 0;
     let raigenticWarning = null;
     try {
@@ -108,11 +103,9 @@ router.post('/shopify', requireAuth, async (req, res) => {
       const isSleeping = !status || status === 502 || status === 503 || status === 504;
 
       if (isSleeping) {
-        // Raigentic está despertando — guardar tienda igual, el bot se conectará cuando despierte
         raigenticWarning = `raigentic está iniciando (cold start). Los productos se sincronizarán automáticamente en 1-2 minutos. Puedes continuar el setup.`;
         console.warn(`[Setup/Shopify] raigentic dormido (${status}), guardando tienda de todas formas: ${shop}`);
       } else {
-        // Error real: tienda no instaló la app raigentic
         return res.status(400).json({
           success: false,
           error: `No se pudo verificar la tienda via raigentic. ¿Instalaste la app raigentic en ${shop}? (${err.message})`,
@@ -121,20 +114,21 @@ router.post('/shopify', requireAuth, async (req, res) => {
     }
 
     // Guardar el data source (sin accessToken — raigentic lo maneja)
-    const existing = db.getPrimaryDataSource(req.orgId);
+    const existing = await db.getPrimaryDataSource(req.orgId);
     if (existing) {
-      // Actualizar si ya existía
-      db.getDb().prepare('UPDATE data_sources SET name=?, config=?, status=? WHERE id=?')
-        .run(shop, JSON.stringify({ storeUrl: shop }), 'connected', existing.id);
+      await getPool().query(
+        'UPDATE data_sources SET name=$1, config=$2, status=$3 WHERE id=$4',
+        [shop, JSON.stringify({ storeUrl: shop }), 'connected', existing.id]
+      );
     } else {
-      const ds = db.createDataSource({
+      const ds = await db.createDataSource({
         organizationId: req.orgId,
         type: 'shopify',
         name: shop,
         config: { storeUrl: shop },
       });
-      db.updateDataSourceStatus(ds.id, 'connected');
-      db.createDefaultAgents(req.orgId, ds.id);
+      await db.updateDataSourceStatus(ds.id, 'connected');
+      await db.createDefaultAgents(req.orgId, ds.id);
     }
 
     res.json({
@@ -152,9 +146,9 @@ router.post('/shopify', requireAuth, async (req, res) => {
  * GET /api/setup/shopify-status
  * Devuelve si la tienda Shopify está configurada.
  */
-router.get('/shopify-status', requireAuth, (req, res) => {
+router.get('/shopify-status', requireAuth, async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     res.json({
       success:   true,
       connected: !!ds,
@@ -174,11 +168,11 @@ router.get('/shopify-status', requireAuth, (req, res) => {
  * POST /api/setup/complete
  * Marca el setup como terminado y habilita el CRM.
  */
-router.post('/complete', requireAuth, (req, res) => {
+router.post('/complete', requireAuth, async (req, res) => {
   try {
-    db.markSetupDone(req.orgId);
-    const wc = db.getWhatsappConfig(req.orgId);
-    const ds = db.getPrimaryDataSource(req.orgId);
+    await db.markSetupDone(req.orgId);
+    const wc = await db.getWhatsappConfig(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     res.json({
       success: true,
       message: '¡Setup completado!',
@@ -196,12 +190,12 @@ router.post('/complete', requireAuth, (req, res) => {
  * GET /api/setup/status
  * Estado general del setup para el wizard.
  */
-router.get('/status', requireAuth, (req, res) => {
+router.get('/status', requireAuth, async (req, res) => {
   try {
-    const org    = db.getOrgById(req.orgId);
-    const wc     = db.getWhatsappConfig(req.orgId);
-    const ds     = db.getPrimaryDataSource(req.orgId);
-    const agents = db.getAgents(req.orgId);
+    const org    = await db.getOrgById(req.orgId);
+    const wc     = await db.getWhatsappConfig(req.orgId);
+    const ds     = await db.getPrimaryDataSource(req.orgId);
+    const agents = await db.getAgents(req.orgId);
 
     res.json({
       success: true,

@@ -20,7 +20,7 @@ router.post('/register', async (req, res) => {
     }
 
     // Verificar email único
-    const existing = db.getUserByEmail(email);
+    const existing = await db.getUserByEmail(email);
     if (existing) {
       return res.status(409).json({ success: false, error: 'Este email ya está registrado' });
     }
@@ -32,13 +32,13 @@ router.post('/register', async (req, res) => {
       .slice(0, 30) + '-' + Date.now().toString(36);
 
     // Crear organización
-    const org = db.createOrganization({ name: businessName, slug });
+    const org = await db.createOrganization({ name: businessName, slug });
 
     // Hash de contraseña
     const passwordHash = await bcrypt.hash(password, 12);
 
     // Crear usuario owner
-    const user = db.createUser({
+    const user = await db.createUser({
       organizationId: org.id,
       email,
       passwordHash,
@@ -72,7 +72,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email y password requeridos' });
     }
 
-    const user = db.getUserByEmail(email);
+    const user = await db.getUserByEmail(email);
     if (!user) {
       return res.status(401).json({ success: false, error: 'Credenciales incorrectas' });
     }
@@ -82,7 +82,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Credenciales incorrectas' });
     }
 
-    const org = db.getOrgById(user.organization_id);
+    const org = await db.getOrgById(user.organization_id);
     const token = generateToken(user);
 
     res.json({
@@ -102,10 +102,10 @@ router.post('/login', async (req, res) => {
 /**
  * GET /api/auth/me — Valida token y devuelve usuario actual
  */
-router.get('/me', requireAuth, (req, res) => {
+router.get('/me', requireAuth, async (req, res) => {
   try {
-    const user = db.getUserById(req.userId);
-    const org  = db.getOrgById(req.orgId);
+    const user = await db.getUserById(req.userId);
+    const org  = await db.getOrgById(req.orgId);
     res.json({
       success: true,
       data: {

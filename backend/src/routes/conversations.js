@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
+const { getPool } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 const twilioService   = require('../services/twilio-whatsapp');
 const { requireAuth } = require('../middleware/auth');
@@ -14,9 +15,9 @@ router.use(requireAuth);
 /**
  * GET /api/conversations
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    res.json({ success: true, data: db.getAllConversations(req.orgId) });
+    res.json({ success: true, data: await db.getAllConversations(req.orgId) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -25,13 +26,13 @@ router.get('/', (req, res) => {
 /**
  * GET /api/conversations/:id/messages
  */
-router.get('/:id/messages', (req, res) => {
+router.get('/:id/messages', async (req, res) => {
   try {
-    const conv = db.getConversationById(parseInt(req.params.id), req.orgId);
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
-    const messages = db.getMessagesByConversation(conv.id, parseInt(req.query.limit) || 50);
-    db.markConversationAsRead(conv.id);
+    const messages = await db.getMessagesByConversation(conv.id, parseInt(req.query.limit) || 50);
+    await db.markConversationAsRead(conv.id);
     res.json({ success: true, data: { conversation: conv, messages } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -46,10 +47,10 @@ router.post('/:id/messages', async (req, res) => {
     const { text } = req.body;
     if (!text?.trim()) return res.status(400).json({ success: false, error: 'Texto vacío' });
 
-    const conv = db.getConversationById(parseInt(req.params.id), req.orgId);
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
-    const wc = db.getWhatsappConfig(req.orgId);
+    const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
     // Enviar por el proveedor correcto según configuración
@@ -60,7 +61,7 @@ router.post('/:id/messages', async (req, res) => {
       sentResult = await whatsappService.sendTextMessage(conv.phone_number, text.trim(), wc);
     }
 
-    const message = db.saveMessage({
+    const message = await db.saveMessage({
       conversationId: conv.id,
       whatsappMessageId: sentResult?.messageId || sentResult?.messages?.[0]?.id || null,
       direction: 'outbound',
@@ -68,8 +69,8 @@ router.post('/:id/messages', async (req, res) => {
       sentBy: 'human',
     });
 
-    db.updateConversationLastMessage(conv.id, text.trim());
-    const updated = db.getConversationById(conv.id);
+    await db.updateConversationLastMessage(conv.id, text.trim());
+    const updated = await db.getConversationById(conv.id);
     io?.emit(`new_message_${req.orgId}`, { message, conversation: updated });
 
     res.json({ success: true, data: message });
@@ -82,18 +83,18 @@ router.post('/:id/messages', async (req, res) => {
 /**
  * PATCH /api/conversations/:id/agent-mode
  */
-router.patch('/:id/agent-mode', (req, res) => {
+router.patch('/:id/agent-mode', async (req, res) => {
   try {
     const { mode } = req.body;
     if (!['ai', 'human'].includes(mode)) return res.status(400).json({ success: false, error: 'mode inválido' });
 
-    const conv = db.getConversationById(parseInt(req.params.id), req.orgId);
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
-    db.setAgentMode(conv.id, mode);
+    await db.setAgentMode(conv.id, mode);
     io?.emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode });
 
-    res.json({ success: true, data: db.getConversationById(conv.id) });
+    res.json({ success: true, data: await db.getConversationById(conv.id) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -102,9 +103,9 @@ router.patch('/:id/agent-mode', (req, res) => {
 /**
  * PATCH /api/conversations/:id/read
  */
-router.patch('/:id/read', (req, res) => {
+router.patch('/:id/read', async (req, res) => {
   try {
-    db.markConversationAsRead(parseInt(req.params.id));
+    await db.markConversationAsRead(parseInt(req.params.id));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -114,12 +115,13 @@ router.patch('/:id/read', (req, res) => {
 /**
  * GET /api/conversations/:id/orders
  */
-router.get('/:id/orders', (req, res) => {
+router.get('/:id/orders', async (req, res) => {
   try {
-    const orders = db.getDb().prepare(
-      'SELECT * FROM orders WHERE conversation_id = ? AND organization_id = ? ORDER BY created_at DESC'
-    ).all(parseInt(req.params.id), req.orgId);
-    res.json({ success: true, data: orders });
+    const { rows } = await getPool().query(
+      'SELECT * FROM orders WHERE conversation_id = $1 AND organization_id = $2 ORDER BY created_at DESC',
+      [parseInt(req.params.id), req.orgId]
+    );
+    res.json({ success: true, data: rows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

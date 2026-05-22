@@ -18,7 +18,7 @@ router.use(requireAuth);
  */
 router.get('/', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, products: [], total: 0, message: 'Sin tienda Shopify conectada' });
 
     const shop   = ds.config?.storeUrl;
@@ -50,7 +50,7 @@ router.get('/', async (req, res) => {
  */
 router.post('/sync', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.status(400).json({ success: false, error: 'Sin tienda Shopify conectada' });
 
     const shop = ds.config?.storeUrl;

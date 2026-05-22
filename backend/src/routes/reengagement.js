@@ -11,6 +11,7 @@
 const express   = require('express');
 const router    = express.Router();
 const db        = require('../db/database');
+const { getPool } = require('../db/database');
 const raigentic = require('../services/raigentic');
 const Anthropic = require('@anthropic-ai/sdk');
 const { requireAuth } = require('../middleware/auth');
@@ -44,7 +45,6 @@ function buildCustomerStats(orders) {
   const DOW = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
 
   for (const order of orders) {
-    // Buscar teléfono en varias fuentes (en orden de preferencia)
     const rawPhone =
       order.customer?.phone ||
       order.shippingAddress?.phone ||
@@ -54,7 +54,6 @@ function buildCustomerStats(orders) {
     const phone = normalizePhone(rawPhone);
     if (!phone) continue;
 
-    // Nombre: customer > shippingAddress > billingAddress > phone
     const name =
       order.customer?.displayName ||
       order.customer?.name ||
@@ -80,7 +79,6 @@ function buildCustomerStats(orders) {
       });
     }
     const s = map.get(phone);
-    // Actualizar nombre si el nuevo es más informativo
     if (name.length > s.name.length) s.name = name;
     s.orders.push({ date, price, items, orderName: order.name });
     s.dowCounts[date.getDay()]++;
@@ -102,7 +100,6 @@ function buildCustomerStats(orders) {
     const totalSpent   = s.orders.reduce((t, o) => t + o.price, 0);
     const avgOrderVal  = Math.round(totalSpent / s.orders.length);
 
-    // Intervalos entre compras (en días)
     const gaps = [];
     for (let i = 1; i < s.orders.length; i++) {
       gaps.push(Math.round((s.orders[i].date - s.orders[i-1].date) / 86400000));
@@ -111,7 +108,6 @@ function buildCustomerStats(orders) {
       ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length)
       : null;
 
-    // Varianza de la frecuencia (qué tan regular es el cliente)
     let freqStdDev = null;
     if (gaps.length >= 2) {
       const mean = avgFreqDays;
@@ -119,11 +115,9 @@ function buildCustomerStats(orders) {
       freqStdDev = Math.round(Math.sqrt(variance));
     }
 
-    // Día favorito de compra
     const maxDow  = s.dowCounts.indexOf(Math.max(...s.dowCounts));
     const favDay  = DOW[maxDow];
 
-    // Tendencia de gasto (creciente / decreciente / estable)
     let spendTrend = 'estable';
     if (s.orders.length >= 3) {
       const first = s.orders.slice(0, Math.ceil(s.orders.length / 2)).reduce((t, o) => t + o.price, 0);
@@ -133,7 +127,6 @@ function buildCustomerStats(orders) {
       else if (ratio < 0.8) spendTrend = 'decreciente';
     }
 
-    // Días desde cada compra (historial reciente)
     const recentOrders = s.orders.slice(-5).map(o => ({
       date: o.date.toISOString().slice(0,10),
       daysAgo: Math.round((now - o.date.getTime()) / 86400000),
@@ -152,7 +145,7 @@ function buildCustomerStats(orders) {
       lastOrderDate: last.date.toISOString().slice(0, 10),
       lastProducts: (last.items || []).slice(0, 3).join(', '),
       avgFreqDays,
-      freqStdDev,     // desviación estándar (0 = muy regular, alto = irregular)
+      freqStdDev,
       favDay,
       spendTrend,
       recentOrders,
@@ -165,12 +158,6 @@ function buildCustomerStats(orders) {
 
 /* ─────────────────────────────────────────────────────────────────────
    MODELO PREDICTIVO DE IA
-   Claude analiza el comportamiento de cada cliente y predice en cuántos
-   días realizará su próxima compra. Devuelve:
-     - predictedDays: días hasta la próxima compra (negativo = ya debería haber comprado)
-     - confidence: 0-100% de certeza en la predicción
-     - aiReason: explicación concisa (máx 15 palabras)
-     - buyWindow: "hoy" | "semana" | "mes" | "lejano"
 ───────────────────────────────────────────────────────────────────── */
 async function predictWithAI(customers, todayDow) {
   const D = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -178,8 +165,6 @@ async function predictWithAI(customers, todayDow) {
   const todayISO = now.toISOString().slice(0, 10);
   const todayD   = D[todayDow];
 
-  // Formato compacto: 1 línea por cliente (~35 tokens vs ~200 del formato anterior)
-  // campos: #|tel|inac|freq±dev|prox|fav|N|trend|fechas_recientes
   const T = c => c.spendTrend === 'creciente' ? '↑' : c.spendTrend === 'decreciente' ? '↓' : '=';
   const nextDate = c => c.avgFreqDays
     ? new Date(now.getTime() + (c.avgFreqDays - c.daysInactive) * 86400000).toISOString().slice(5,10)
@@ -192,7 +177,6 @@ async function predictWithAI(customers, todayDow) {
     return `${i+1}|${c.phone}|${c.daysInactive}${ov}|${freq}|${nextDate(c)}|${c.favDay}|${c.totalOrders}|${T(c)}|${dates}`;
   }).join('\n');
 
-  // Leyenda de columnas (solo 1 línea, no repetida)
   const prompt =
 `Tienda frescos Chile,ciclos~semanales. HOY:${todayISO}(${todayD})
 Cols: #|tel|inac(días,!vencidoDías)|freq±dev|próxEst(MM-DD)|favDía|nPedidos|trend|últ3compras(MM-DD)
@@ -215,7 +199,6 @@ JSON SOLO:[{"t":"tel","d":int,"c":0-100,"r":"≤8palabras"}] todos,orden d asc.`
 
   try {
     const parsed = JSON.parse(match[0]);
-    // Mapear claves cortas → formato esperado por el resto del sistema
     return parsed.map(r => ({
       phone:         r.t,
       predictedDays: r.d,
@@ -233,19 +216,17 @@ JSON SOLO:[{"t":"tel","d":int,"c":0-100,"r":"≤8palabras"}] todos,orden d asc.`
 ───────────────────────────────────────────────────────────────────── */
 router.get('/candidates', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, data: [], total: 0 });
 
     const shop    = ds.config?.storeUrl;
     const refresh = req.query.refresh === 'true';
 
-    // Caché
     const cached = analysisCache.get(req.orgId);
     if (!refresh && cached && Date.now() - cached.ts < CACHE_TTL) {
       return res.json({ success: true, data: cached.data, total: cached.data.length, fromCache: true });
     }
 
-    // 1. Descargar todas las órdenes de Shopify
     console.log(`[Reengagement] Descargando órdenes de ${shop}...`);
     const allOrders = await raigentic.getAllOrdenesPagadas(shop);
     console.log(`[Reengagement] Total órdenes: ${allOrders.length}`);
@@ -254,12 +235,10 @@ router.get('/candidates', async (req, res) => {
       return res.json({ success: true, data: [], total: 0, message: 'Sin órdenes en Shopify' });
     }
 
-    // Log para diagnosticar fuentes de teléfono
     const conCustomerPhone = allOrders.filter(o => o.customer?.phone).length;
     const sinPhone         = allOrders.filter(o => !o.customer?.phone).length;
     console.log(`[Reengagement] Teléfonos en órdenes — con phone: ${conCustomerPhone} | sin phone: ${sinPhone}`);
 
-    // 2. Enriquecer órdenes sin teléfono cruzando con catálogo de clientes
     const toNumericId = (id) => String(id || '').replace(/[^0-9]/g, '');
 
     const ordenesSinPhone    = allOrders.filter(o => !normalizePhone(o.customer?.phone));
@@ -268,7 +247,6 @@ router.get('/candidates', async (req, res) => {
 
     console.log(`[Reengagement] Órdenes sin teléfono — con customerId: ${ordenesSinPhoneConId.length} | sin customer (guest): ${ordenesSinCliente.length}`);
 
-    // Mostrar muestra de IDs para diagnóstico
     if (ordenesSinPhoneConId.length > 0) {
       const muestraOrden = ordenesSinPhoneConId.slice(0, 3).map(o => o.customer?.id);
       console.log(`[Reengagement] Muestra IDs de órdenes: ${JSON.stringify(muestraOrden)}`);
@@ -278,7 +256,7 @@ router.get('/candidates', async (req, res) => {
       console.log(`[Reengagement] Intentando enriquecer ${ordenesSinPhoneConId.length} órdenes con customerId...`);
       try {
         const sleep = ms => new Promise(r => setTimeout(r, ms));
-        const phoneMap = new Map(); // numericId → { phone, name, email }
+        const phoneMap = new Map();
         let cursor = undefined;
         let page = 0;
 
@@ -297,7 +275,6 @@ router.get('/candidates', async (req, res) => {
             }
           }
 
-          // Log muestra de IDs del catálogo en la primera página
           if (page === 1 && result.customers?.length > 0) {
             const muestraCatalogo = result.customers.slice(0, 3).map(c => c.id);
             console.log(`[Reengagement] Muestra IDs catálogo: ${JSON.stringify(muestraCatalogo)}`);
@@ -309,9 +286,9 @@ router.get('/candidates', async (req, res) => {
             const entry  = { phone, name: c.displayName || c.name || phone, email: c.email };
             const numId  = toNumericId(c.id);
             const fullId = String(c.id || '');
-            if (numId)  phoneMap.set(numId, entry);                    // "1234567890"
-            if (fullId) phoneMap.set(fullId, entry);                   // "gid://shopify/Customer/1234567890"
-            if (c.email) phoneMap.set(c.email.toLowerCase(), entry);   // "cliente@email.com"
+            if (numId)  phoneMap.set(numId, entry);
+            if (fullId) phoneMap.set(fullId, entry);
+            if (c.email) phoneMap.set(c.email.toLowerCase(), entry);
           }
 
           if (!result.hasNextPage || !result.endCursor) break;
@@ -322,7 +299,6 @@ router.get('/candidates', async (req, res) => {
 
         console.log(`[Reengagement] Clientes con teléfono en catálogo: ${phoneMap.size / 2} (indexados por ID numérico y GID)`);
 
-        // Inyectar teléfono en órdenes (intentar por ID numérico, GID completo, o email)
         let enriquecidas = 0;
         let porId = 0, porEmail = 0;
         for (const order of allOrders) {
@@ -334,9 +310,9 @@ router.get('/candidates', async (req, res) => {
           const email  = (order.customer.email || '').toLowerCase();
 
           const enrichData =
-            phoneMap.get(rawId)   ||   // GID completo
-            phoneMap.get(numId)   ||   // numérico
-            (email ? phoneMap.get(email) : null); // email
+            phoneMap.get(rawId)   ||
+            phoneMap.get(numId)   ||
+            (email ? phoneMap.get(email) : null);
 
           if (enrichData) {
             order.customer.phone = enrichData.phone;
@@ -353,21 +329,18 @@ router.get('/candidates', async (req, res) => {
       }
     }
 
-    // 3. Estadísticas por cliente
     const allStats = buildCustomerStats(allOrders);
     console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
-
     console.log(`[Reengagement] Clientes únicos con teléfono tras enriquecimiento: ${allStats.length}`);
 
     if (!allStats.length) {
       return res.json({ success: true, data: [], total: 0, message: 'Clientes sin número de teléfono en Shopify' });
     }
 
-    // 4. Predicción IA en batches de 60
     const todayDow = new Date().getDay();
     let aiResults  = [];
 
-    const BATCH = 40; // formato compacto: 40 × ~35 tokens input + 40 × ~35 tokens output ≈ 2800 tokens/batch
+    const BATCH = 40;
     for (let i = 0; i < allStats.length; i += BATCH) {
       const batch       = allStats.slice(i, i + BATCH);
       const batchResult = await predictWithAI(batch, todayDow);
@@ -379,14 +352,12 @@ router.get('/candidates', async (req, res) => {
     }
     console.log(`[Reengagement] Total predicciones AI recibidas: ${aiResults.length} / ${allStats.length} clientes`);
 
-    // 4. Combinar estadísticas con predicción IA
     const aiMap = new Map(aiResults.map(r => [r.phone, r]));
 
     const enriched = allStats.map(c => {
       const ai = aiMap.get(c.phone) || {};
       const predictedDays = ai.predictedDays ?? null;
 
-      // Categoría según predicción
       let buyWindow, urgency;
       if (predictedDays === null) {
         buyWindow = 'desconocido'; urgency = 0;
@@ -409,13 +380,11 @@ router.get('/candidates', async (req, res) => {
         urgency,
       };
     })
-    .filter(c => c.predictedDays !== null && c.predictedDays <= 90) // hasta 90 días
-    .sort((a, b) => a.predictedDays - b.predictedDays); // más cercanos primero
+    .filter(c => c.predictedDays !== null && c.predictedDays <= 90)
+    .sort((a, b) => a.predictedDays - b.predictedDays);
 
-    // 5. Guardar en caché
     analysisCache.set(req.orgId, { data: enriched, ts: Date.now() });
 
-    // ── LOG: listado de números a contactar ──────────────────────────
     const windows = [
       { key: 'hoy',    label: '🟢 HOY / MAÑANA',  max: 1  },
       { key: 'semana', label: '🔵 ESTA SEMANA',    max: 7  },
@@ -441,7 +410,6 @@ router.get('/candidates', async (req, res) => {
     console.log('\n' + '═'.repeat(60));
     console.log(`  TOTAL: ${enriched.length} clientes | HOY/MAÑANA: ${enriched.filter(c=>c.buyWindow==='hoy').length} | SEMANA: ${enriched.filter(c=>c.buyWindow==='semana').length} | MES: ${enriched.filter(c=>c.buyWindow==='mes').length}`);
     console.log('═'.repeat(60) + '\n');
-    // ────────────────────────────────────────────────────────────────
 
     res.json({ success: true, data: enriched, total: enriched.length, fromCache: false });
 
@@ -496,7 +464,7 @@ router.post('/send', async (req, res) => {
     const { phone, message } = req.body;
     if (!phone || !message) return res.status(400).json({ success: false, error: 'phone y message requeridos' });
 
-    const wc = db.getWhatsappConfig(req.orgId);
+    const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
     let sentResult;
@@ -507,18 +475,20 @@ router.post('/send', async (req, res) => {
     }
 
     // Guardar en conversación si existe
-    const convId = db.getDb()
-      .prepare('SELECT id FROM conversations WHERE phone_number = ? AND organization_id = ? LIMIT 1')
-      .get(phone, req.orgId)?.id;
+    const { rows } = await getPool().query(
+      'SELECT id FROM conversations WHERE phone_number = $1 AND organization_id = $2 LIMIT 1',
+      [phone, req.orgId]
+    );
+    const convId = rows[0]?.id;
 
     if (convId) {
-      db.createMessage({
+      await db.saveMessage({
         conversationId:    convId,
-        organizationId:    req.orgId,
         whatsappMessageId: sentResult?.messageId || sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
         content:           message,
         direction:         'outbound',
-        messageType:       'text',
+        type:              'text',
+        sentBy:            'ai',
       });
     }
 
@@ -537,7 +507,7 @@ router.post('/send-bulk', async (req, res) => {
     return res.status(400).json({ success: false, error: 'items[] requerido' });
   }
 
-  const wc = db.getWhatsappConfig(req.orgId);
+  const wc = await db.getWhatsappConfig(req.orgId);
   if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
   const results = [];
@@ -550,18 +520,20 @@ router.post('/send-bulk', async (req, res) => {
         sentResult = await require('../services/whatsapp').sendTextMessage(item.phone, item.message, wc);
       }
 
-      const convId = db.getDb()
-        .prepare('SELECT id FROM conversations WHERE phone_number = ? AND organization_id = ? LIMIT 1')
-        .get(item.phone, req.orgId)?.id;
+      const { rows } = await getPool().query(
+        'SELECT id FROM conversations WHERE phone_number = $1 AND organization_id = $2 LIMIT 1',
+        [item.phone, req.orgId]
+      );
+      const convId = rows[0]?.id;
 
       if (convId) {
-        db.createMessage({
+        await db.saveMessage({
           conversationId:    convId,
-          organizationId:    req.orgId,
           whatsappMessageId: sentResult?.messageId || `reeng_${Date.now()}`,
           content:           item.message,
           direction:         'outbound',
-          messageType:       'text',
+          type:              'text',
+          sentBy:            'ai',
         });
       }
 

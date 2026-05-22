@@ -32,7 +32,7 @@ router.post('/', async (req, res) => {
   const twilioNumber = req.body.To?.replace('whatsapp:', '') || null;
   if (!twilioNumber) return;
 
-  const orgResult = db.getOrgByTwilioNumber(twilioNumber);
+  const orgResult = await db.getOrgByTwilioNumber(twilioNumber);
   if (!orgResult) {
     console.warn('[TwilioWebhook] Número Twilio no registrado:', twilioNumber);
     return;
@@ -43,10 +43,10 @@ router.post('/', async (req, res) => {
 
   try {
     // 1. Obtener/crear conversación
-    const conversation = db.upsertConversation(org.id, parsed.from, parsed.contactName);
+    const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
 
     // 2. Guardar mensaje del cliente
-    const savedMsg = db.saveMessage({
+    const savedMsg = await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: parsed.messageId,
       direction:         'inbound',
@@ -55,10 +55,10 @@ router.post('/', async (req, res) => {
     });
     if (!savedMsg) return; // Duplicado
 
-    db.updateConversationLastMessage(conversation.id, parsed.text, true);
+    await db.updateConversationLastMessage(conversation.id, parsed.text, true);
 
     // 3. Emitir al CRM en tiempo real
-    const updatedConv = db.getConversationById(conversation.id);
+    const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
     // 4. Si está en modo humano, no responder con IA
@@ -75,7 +75,7 @@ router.post('/', async (req, res) => {
     );
 
     // 7. Guardar respuesta en DB
-    const outMsg = db.saveMessage({
+    const outMsg = await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: sentResult?.messageId || null,
       direction:         'outbound',
@@ -84,13 +84,13 @@ router.post('/', async (req, res) => {
       agentType:         result.agentType,
     });
 
-    db.updateConversationLastMessage(conversation.id, result.response);
+    await db.updateConversationLastMessage(conversation.id, result.response);
 
     if (result.switchToHuman) {
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
     }
 
-    const finalConv = db.getConversationById(conversation.id);
+    const finalConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
     if (result.orderCreated) {

@@ -9,6 +9,7 @@
 const express   = require('express');
 const router    = express.Router();
 const db        = require('../db/database');
+const { getPool } = require('../db/database');
 const raigentic = require('../services/raigentic');
 const { requireAuth } = require('../middleware/auth');
 
@@ -23,7 +24,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  */
 router.get('/all', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, customers: [], total: 0 });
 
     const shop  = ds.config?.storeUrl;
@@ -94,24 +95,25 @@ router.get('/all', async (req, res) => {
  * GET /api/clientes/local
  * Clientes del bot (conversaciones locales)
  */
-router.get('/local', (req, res) => {
+router.get('/local', async (req, res) => {
   try {
-    const rows = db.getDb().prepare(`
-      SELECT
+    const { rows } = await getPool().query(
+      `SELECT
         c.id            AS conversation_id,
         c.phone_number,
         c.contact_name,
         c.pipeline_state,
         c.last_message_at,
         COUNT(DISTINCT o.id)                    AS total_orders,
-        SUM(CAST(o.total_price AS REAL))        AS total_spent,
+        SUM(o.total_price::numeric)             AS total_spent,
         MAX(o.created_at)                       AS last_order_at
       FROM conversations c
-      LEFT JOIN orders o ON o.conversation_id = c.id AND o.organization_id = ?
-      WHERE c.organization_id = ?
+      LEFT JOIN orders o ON o.conversation_id = c.id AND o.organization_id = $1
+      WHERE c.organization_id = $2
       GROUP BY c.id
-      ORDER BY c.last_message_at DESC
-    `).all(req.orgId, req.orgId);
+      ORDER BY c.last_message_at DESC`,
+      [req.orgId, req.orgId]
+    );
 
     res.json({ success: true, data: rows, total: rows.length });
   } catch (err) {
@@ -125,7 +127,7 @@ router.get('/local', (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
-    const ds = db.getPrimaryDataSource(req.orgId);
+    const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, customers: [], total: 0 });
 
     const shop   = ds.config?.storeUrl;
