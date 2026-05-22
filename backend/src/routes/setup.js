@@ -97,15 +97,27 @@ router.post('/shopify', requireAuth, async (req, res) => {
     const shop = storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
     // Verificar que raigentic puede alcanzar esa tienda
+    // Si raigentic está dormido (502/503/504) guardamos igual y avisamos
     let productCount = 0;
+    let raigenticWarning = null;
     try {
-      const res = await raigentic.getProductos(shop, { limit: 1 });
-      productCount = res.total || (res.products?.length ? 'varios' : 0);
+      const result = await raigentic.getProductos(shop, { limit: 1 });
+      productCount = result.total || (result.products?.length ? 'varios' : 0);
     } catch (err) {
-      return res.status(400).json({
-        success: false,
-        error: `No se pudo verificar la tienda via raigentic. ¿Instalaste la app raigentic en ${shop}? (${err.message})`,
-      });
+      const status = err.response?.status;
+      const isSleeping = !status || status === 502 || status === 503 || status === 504;
+
+      if (isSleeping) {
+        // Raigentic está despertando — guardar tienda igual, el bot se conectará cuando despierte
+        raigenticWarning = `raigentic está iniciando (cold start). Los productos se sincronizarán automáticamente en 1-2 minutos. Puedes continuar el setup.`;
+        console.warn(`[Setup/Shopify] raigentic dormido (${status}), guardando tienda de todas formas: ${shop}`);
+      } else {
+        // Error real: tienda no instaló la app raigentic
+        return res.status(400).json({
+          success: false,
+          error: `No se pudo verificar la tienda via raigentic. ¿Instalaste la app raigentic en ${shop}? (${err.message})`,
+        });
+      }
     }
 
     // Guardar el data source (sin accessToken — raigentic lo maneja)
@@ -128,6 +140,7 @@ router.post('/shopify', requireAuth, async (req, res) => {
     res.json({
       success: true,
       message: `Shopify conectado: ${shop}`,
+      warning: raigenticWarning,
       data: { storeUrl: shop, productCount },
     });
   } catch (err) {
