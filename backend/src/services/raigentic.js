@@ -217,6 +217,38 @@ async function getClientes(shop, opts = {}) {
   return data;
 }
 
+/**
+ * Busca un cliente en Shopify por número de teléfono.
+ * Normaliza el teléfono para comparación (últimos 9 dígitos).
+ * @param {string} shop - dominio myshopify
+ * @param {string} phone - número en cualquier formato
+ * @returns {object|null} cliente Shopify o null si no se encuentra
+ */
+async function getClienteByPhone(shop, phone) {
+  try {
+    // Normalizar: quedarse con los últimos 9 dígitos para comparar
+    const normalize = (p) => (p || '').replace(/\D/g, '').slice(-9);
+    const targetNorm = normalize(phone);
+    if (!targetNorm || targetNorm.length < 8) return null;
+
+    // Buscar por teléfono en Shopify usando query
+    const { data } = await client.get('/api/clientes', {
+      params: { shop, query: phone, limit: 10 },
+    });
+
+    const customers = data.customers || [];
+    // Buscar coincidencia exacta por los últimos 9 dígitos
+    const match = customers.find(c => normalize(c.phone) === targetNorm);
+    if (match) return match;
+
+    // Si no coincide exacto, devolver el primero (puede ser que raigentic ya filtre)
+    return customers[0] || null;
+  } catch (err) {
+    console.warn('[Raigentic] getClienteByPhone error:', err.message);
+    return null;
+  }
+}
+
 /* ─────────────────────────────────────────────
    HEALTH CHECK
 ───────────────────────────────────────────── */
@@ -238,6 +270,7 @@ module.exports = {
   getOrdenes,
   getAllOrdenesPagadas,
   getClientes,
+  getClienteByPhone,
   crearPedido,
   ping,
 };

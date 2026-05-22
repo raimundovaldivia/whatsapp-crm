@@ -85,10 +85,16 @@ async function processMessage(orgId, conversationId, userMessage) {
 }
 
 /**
- * Busca datos de un cliente existente por número de teléfono
- * para pre-llenar el draft y no volver a pedir datos ya conocidos.
+ * Busca datos de un cliente por teléfono en dos fuentes:
+ * 1. Órdenes previas en la DB local del CRM (bot)
+ * 2. Base de clientes de Shopify via raigentic
+ *
+ * Si se encuentra en Shopify, guarda el customerId para linkear la nueva orden.
  */
-async function getKnownCustomerData(orgId, phoneNumber) {
+async function getKnownCustomerData(orgId, phoneNumber, shop = null) {
+  const result = {};
+
+  // ── Fuente 1: órdenes previas del bot ──────────────────────────
   try {
     const { rows } = await getPool().query(
       `SELECT o.customer_name, o.shipping_address
@@ -102,29 +108,57 @@ async function getKnownCustomerData(orgId, phoneNumber) {
       [phoneNumber, orgId]
     );
     const row = rows[0];
-    if (!row) return {};
-
-    const addr = (() => { try { return JSON.parse(row.shipping_address || '{}'); } catch { return {}; } })();
-    return {
-      customer_name: row.customer_name || undefined,
-      address:       addr.address  || undefined,
-      city:          addr.city     || undefined,
-    };
-  } catch {
-    return {};
+    if (row) {
+      const addr = (() => { try { return JSON.parse(row.shipping_address || '{}'); } catch { return {}; } })();
+      if (row.customer_name) result.customer_name = row.customer_name;
+      if (addr.address)      result.address       = addr.address;
+      if (addr.city)         result.city          = addr.city;
+    }
+  } catch (err) {
+    console.warn('[Pipeline] Error buscando en DB local:', err.message);
   }
+
+  // ── Fuente 2: clientes de Shopify via raigentic ─────────────────
+  if (shop) {
+    try {
+      const shopifyCustomer = await raigentic.getClienteByPhone(shop, phoneNumber);
+      if (shopifyCustomer) {
+        const addr = shopifyCustomer.defaultAddress;
+        // Solo sobreescribir si no teníamos el dato de la DB local
+        if (!result.customer_name && (shopifyCustomer.displayName || shopifyCustomer.name)) {
+          result.customer_name = shopifyCustomer.displayName || shopifyCustomer.name;
+        }
+        if (addr) {
+          if (!result.address && addr.address1) result.address = addr.address1;
+          if (!result.city   && addr.city)      result.city    = addr.city;
+        }
+        if (shopifyCustomer.email) result.customer_email = shopifyCustomer.email;
+        // Guardar el ID de Shopify para linkear la nueva orden al cliente existente
+        result.shopify_customer_id = shopifyCustomer.id;
+        result.found_in_shopify    = true;
+        console.log(`[Pipeline] ✅ Cliente encontrado en Shopify: ${result.customer_name} (${shopifyCustomer.id})`);
+      }
+    } catch (err) {
+      console.warn('[Pipeline] No se pudo buscar cliente en Shopify:', err.message);
+    }
+  }
+
+  return result;
 }
 
 /**
  * Maneja la recopilación de datos para el pedido
  */
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto) {
-  // 0. Pre-llenar con datos del cliente si ya compró antes (por teléfono)
+  // 0. Pre-llenar con datos del cliente si ya existe en CRM o en Shopify
   if (Object.keys(orderDraft).length === 0) {
-    const known = await getKnownCustomerData(orgId, conversation.phone_number);
+    const ds   = await db.getPrimaryDataSource(orgId);
+    const shop = ds?.config?.storeUrl || null;
+    const known = await getKnownCustomerData(orgId, conversation.phone_number, shop);
     if (Object.keys(known).length > 0) {
-      orderDraft = { ...known, ...orderDraft };
-      console.log(`[Pipeline] Cliente conocido: ${known.customer_name || '?'} — datos pre-llenados`);
+      orderDraft = { ...known };
+      const fuente = known.found_in_shopify ? 'Shopify' : 'historial CRM';
+      console.log(`[Pipeline] Cliente pre-llenado desde ${fuente}: ${known.customer_name || '?'}`);
     }
   }
 
@@ -226,13 +260,20 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     if (variantId) console.log(`[Pipeline] variantId resuelto por nombre: ${variantId}`);
   }
 
+  const customer = {
+    name:       draft.customer_name,
+    phone:      customerPhone,
+    email:      draft.customer_email || null,
+    customerId: draft.shopify_customer_id || null,  // linkear al cliente existente de Shopify
+  };
+
+  if (draft.shopify_customer_id) {
+    console.log(`[Pipeline] Linkeando orden al cliente Shopify existente: ${draft.shopify_customer_id}`);
+  }
+
   const shopifyResult = await raigentic.crearPedido(
     shop,
-    {
-      name:  draft.customer_name,
-      phone: customerPhone,
-      email: draft.customer_email || null,
-    },
+    customer,
     [{ variantId, quantity: parseInt(draft.quantity) || 1, title: draft.product_name, price }],
     `WhatsApp CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}`,
   );
