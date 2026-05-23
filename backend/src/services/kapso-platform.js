@@ -110,20 +110,22 @@ async function findCustomerByExternalId(orgId) {
  */
 async function registerNumberWebhook(phoneNumberId, webhookUrl, secretKey = null) {
   const client = getClient();
-  const body = {
-    whatsapp_webhook: {
-      url:    webhookUrl,
-      events: ['whatsapp.message.received', 'whatsapp.message.delivered', 'whatsapp.message.read'],
-      active: true,
-    },
-  };
-  if (secretKey) body.whatsapp_webhook.secret_key = secretKey;
+  // Kapso requiere secret_key obligatorio — generar uno si no se provee
+  const crypto = require('crypto');
+  const secret = secretKey || crypto.randomBytes(24).toString('hex');
 
   const { data } = await client.post(
     `/whatsapp/phone_numbers/${phoneNumberId}/webhooks`,
-    body
+    {
+      whatsapp_webhook: {
+        url:        webhookUrl,
+        secret_key: secret,
+        events:     ['whatsapp.message.received', 'whatsapp.message.delivered', 'whatsapp.message.read'],
+        active:     true,
+      },
+    }
   );
-  return data.data;
+  return { ...data.data, generatedSecret: secret };
 }
 
 module.exports = { createCustomer, generateSetupLink, getCustomer, findCustomerByExternalId, registerNumberWebhook };

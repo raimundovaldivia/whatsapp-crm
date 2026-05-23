@@ -368,7 +368,21 @@ router.post('/kapso/save', requireAuth, async (req, res) => {
           `${backendUrl}/kapso-webhook`
         );
         webhookRegistered = true;
-        console.log(`[Setup/Kapso] ✅ Webhook registrado automáticamente para número ${phoneNumberId} — id: ${webhookResult?.id}`);
+        console.log(`[Setup/Kapso] ✅ Webhook registrado automáticamente — número: ${phoneNumberId}, id: ${webhookResult?.id}`);
+
+        // Guardar el secret generado en DB para verificar firmas HMAC entrantes
+        if (webhookResult?.generatedSecret) {
+          const wc2 = await db.getWhatsappConfig(req.orgId);
+          await db.upsertWhatsappConfig(req.orgId, {
+            provider:          'kapso',
+            phoneNumberId,
+            businessAccountId: businessAccountId || null,
+            kapsoCustomerId:   wc2?.kapso_customer_id || null,
+            kapsoApiKey:       wc2?.kapso_api_key     || null,
+            webhookSecret:     webhookResult.generatedSecret,
+          });
+          console.log(`[Setup/Kapso] ✅ webhook_secret guardado en DB`);
+        }
       } catch (whErr) {
         const detail = whErr.response?.data?.error || whErr.message;
         webhookWarning = `Webhook no pudo registrarse automáticamente: ${detail}. Ve a app.kapso.ai → tu número → Webhooks y agrega: ${backendUrl}/kapso-webhook`;
