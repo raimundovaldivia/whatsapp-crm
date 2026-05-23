@@ -139,18 +139,50 @@ export default function SetupWizard({ org, onComplete }) {
   });
   const setTw = k => e => setTwilioForm(f => ({ ...f, [k]: e.target.value }));
 
-  // Formulario Kapso
-  const [kapsoForm, setKapsoForm] = useState({
-    kapsoApiKey:    '',
-    phoneNumberId:  '',
-    webhookSecret:  '',
-  });
-  const setKa = k => e => setKapsoForm(f => ({ ...f, [k]: e.target.value }));
+  // Kapso — flujo automático
+  const [kapsoConnecting, setKapsoConnecting] = useState(false);
+  const [kapsoConnected,  setKapsoConnected]  = useState(false);
 
   const [shopUrl, setShopUrl] = useState('');
 
-  // Detectar si Shopify acaba de conectarse (después de OAuth redirect)
+  // Detectar retorno de Kapso (kapso_success=1&phone_number_id=...) o Shopify
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    // ─── Kapso retorno exitoso ───────────────────────────────────────
+    if (params.get('kapso_success') === '1') {
+      const phoneNumberId       = params.get('phone_number_id');
+      const displayPhoneNumber  = params.get('display_phone_number');
+      const businessAccountId   = params.get('business_account_id');
+
+      // Limpiar URL sin recargar
+      window.history.replaceState({}, '', window.location.pathname);
+
+      if (phoneNumberId) {
+        // Guardar en backend y avanzar al siguiente paso
+        import('../utils/api.js').then(({ api }) => {
+          api.post('/setup/kapso/save', { phoneNumberId, displayPhoneNumber, businessAccountId })
+            .then(() => {
+              setKapsoConnected(true);
+              setProvider('kapso');
+              setSuccess(`✅ WhatsApp conectado${displayPhoneNumber ? ': ' + decodeURIComponent(displayPhoneNumber) : ''}`);
+              setTimeout(() => go(1), 1500); // avanzar al paso de webhook
+            })
+            .catch(() => {
+              setError('WhatsApp conectado en Kapso pero hubo un error guardando. Intenta de nuevo.');
+            });
+        });
+      } else {
+        setError('Kapso no devolvió el phone_number_id. Intenta conectar de nuevo.');
+      }
+    }
+
+    // ─── Kapso error ─────────────────────────────────────────────────
+    if (params.get('kapso_error') === '1') {
+      window.history.replaceState({}, '', window.location.pathname);
+      setError('No se pudo conectar WhatsApp via Kapso. Intenta de nuevo.');
+    }
+
     const shopifyData = sessionStorage.getItem('shopify_just_connected');
     const shopifyErr  = sessionStorage.getItem('shopify_error');
 
@@ -178,7 +210,26 @@ export default function SetupWizard({ org, onComplete }) {
   const go    = n => { setStep(n); setError(''); setSuccess(''); };
   const toggle = k => setShowPwd(s => ({ ...s, [k]: !s[k] }));
 
-  /* ── Guardar credenciales WA (Meta, Twilio o Kapso) → paso webhook ── */
+  /* ── Conectar WhatsApp via Kapso (flujo automático) ── */
+  const connectKapso = async () => {
+    setKapsoConnecting(true); setError('');
+    try {
+      const { api } = await import('../utils/api.js');
+      const r = await api.post('/setup/kapso/connect');
+      if (r.data?.setupUrl) {
+        // Redirigir al cliente al flujo de Kapso
+        window.location.href = r.data.setupUrl;
+      } else {
+        setError(r.data?.error || 'No se pudo generar el link de Kapso');
+        setKapsoConnecting(false);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error al conectar con Kapso. ¿Está KAPSO_API_KEY configurada?');
+      setKapsoConnecting(false);
+    }
+  };
+
+  /* ── Guardar credenciales WA (Meta o Twilio) → paso webhook ── */
   const saveWhatsApp = async () => {
     setLoading(true); setError(''); setSuccess('');
     try {
@@ -189,12 +240,6 @@ export default function SetupWizard({ org, onComplete }) {
           setError('Por favor completa todos los campos de Twilio.'); setLoading(false); return;
         }
         payload = { provider: 'twilio', twilioAccountSid, twilioAuthToken, twilioPhoneNumber };
-      } else if (provider === 'kapso') {
-        const { kapsoApiKey, phoneNumberId } = kapsoForm;
-        if (!kapsoApiKey || !phoneNumberId) {
-          setError('API Key y Phone Number ID son obligatorios.'); setLoading(false); return;
-        }
-        payload = { provider: 'kapso', ...kapsoForm };
       } else {
         const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken } = waForm;
         if (!phoneNumberId || !businessAccountId || !accessToken || !webhookVerifyToken) {
@@ -342,38 +387,57 @@ export default function SetupWizard({ org, onComplete }) {
                 ))}
               </div>
 
-              {/* ── Formulario Kapso ── */}
+              {/* ── Flujo automático Kapso ── */}
               {provider === 'kapso' && (<>
-                <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '12px 16px', border: '1px solid #00a88433' }}>
-                  <p style={{ color: '#00a884', fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
-                    🚀 <strong>Sin verificación de Facebook.</strong> Solo necesitas una cuenta en{' '}
-                    <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>app.kapso.ai</a>
-                    {' '}y un número activo.
+                <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '16px 18px', border: '1px solid #00a88433', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <p style={{ color: '#00a884', fontSize: '14px', margin: 0, fontWeight: 600 }}>
+                    🚀 Conexión en 5 minutos — sin escribir datos
                   </p>
-                </div>
-                <Field label="Kapso API Key *" hint="app.kapso.ai → Settings → API Keys → Create key">
-                  <div style={{ position: 'relative' }}>
-                    <input style={{ ...inp, paddingRight: '44px' }}
-                      type={showPwd.kapsoKey ? 'text' : 'password'}
-                      value={kapsoForm.kapsoApiKey} onChange={setKa('kapsoApiKey')}
-                      placeholder="ka_xxxxxxxxxxxxxxxxxxxxxxxx" />
-                    <button onClick={() => toggle('kapsoKey')} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', color: '#8696a0', cursor: 'pointer', border: 'none' }}>
-                      {showPwd.kapsoKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
+                  <p style={{ color: '#8696a0', fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
+                    Haz clic en el botón de abajo. Serás redirigido a Kapso donde conectarás tu número de WhatsApp con login de Facebook. Al terminar, volverás aquí automáticamente.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {[
+                      '✅ Sin verificación Manual de Meta',
+                      '✅ Sin copiar Phone Number IDs ni tokens',
+                      '✅ Webhook configurado automáticamente',
+                    ].map(t => (
+                      <span key={t} style={{ fontSize: '12px', color: '#00a884' }}>{t}</span>
+                    ))}
                   </div>
-                </Field>
-                <Field label="Phone Number ID *" hint="app.kapso.ai → tu número → Settings → Phone Number ID">
-                  <input style={inp} value={kapsoForm.phoneNumberId} onChange={setKa('phoneNumberId')} placeholder="647015955153740" />
-                </Field>
-                <Field label="Webhook Secret (opcional)" hint="Genera uno en app.kapso.ai → tu número → Webhooks para verificar firmas HMAC">
-                  <input style={inp} value={kapsoForm.webhookSecret} onChange={setKa('webhookSecret')} placeholder="Opcional — mayor seguridad" />
-                </Field>
-                <HelpPanel title="¿Cómo obtener tu API Key y Phone Number ID?">
-                  <GuideStep n="1" title="Crea cuenta en app.kapso.ai">Es gratis. El plan Free incluye 1 número y 2,000 mensajes/mes.</GuideStep>
-                  <GuideStep n="2" title="Conecta tu número de WhatsApp">Desde el dashboard, sigue el proceso de Embedded Signup de Meta (mucho más simple que el proceso completo).</GuideStep>
-                  <GuideStep n="3" title="API Key → Settings → API Keys">Crea una API Key nueva y cópiala aquí.</GuideStep>
-                  <GuideStep n="4" title="Phone Number ID → tu número → Settings">Copia el Phone Number ID y pégalo arriba.</GuideStep>
-                </HelpPanel>
+                </div>
+
+                {kapsoConnected ? (
+                  <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '16px 18px', border: '1px solid #00a884', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <CheckCircle size={22} color="#00a884" />
+                    <div>
+                      <div style={{ color: '#00a884', fontSize: '14px', fontWeight: 600 }}>WhatsApp conectado con Kapso</div>
+                      <div style={{ color: '#8696a0', fontSize: '12px', marginTop: '2px' }}>Continúa al siguiente paso</div>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={connectKapso}
+                    disabled={kapsoConnecting}
+                    style={{
+                      width: '100%', padding: '16px', borderRadius: '10px', fontSize: '15px', fontWeight: 700,
+                      backgroundColor: kapsoConnecting ? '#374045' : '#00a884',
+                      color: 'white', cursor: kapsoConnecting ? 'not-allowed' : 'pointer',
+                      border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+                      transition: 'background 0.2s',
+                    }}>
+                    {kapsoConnecting
+                      ? <><Loader size={18} style={{ animation: 'spin 1s linear infinite' }} /> Abriendo Kapso...</>
+                      : <>🔗 Conectar WhatsApp con Kapso <ExternalLink size={15} /></>
+                    }
+                  </button>
+                )}
+
+                <p style={{ color: '#556169', fontSize: '11px', textAlign: 'center', margin: 0, lineHeight: 1.5 }}>
+                  Necesitas una cuenta gratis en{' '}
+                  <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#8696a0' }}>app.kapso.ai</a>
+                  {' '}y la variable <code style={{ color: '#8696a0' }}>KAPSO_API_KEY</code> configurada en el backend.
+                </p>
               </>)}
 
               {/* ── Formulario Twilio ── */}
@@ -623,10 +687,15 @@ export default function SetupWizard({ org, onComplete }) {
           {step > 0 && step < 3 && (
             <button onClick={() => go(step - 1)} style={secondary}>← Atrás</button>
           )}
-          {step === 0 && (
+          {step === 0 && provider !== 'kapso' && (
             <button onClick={saveWhatsApp} disabled={loading} style={primary}>
               {loading && <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} />}
               {loading ? 'Guardando...' : 'Guardar y continuar →'}
+            </button>
+          )}
+          {step === 0 && provider === 'kapso' && kapsoConnected && (
+            <button onClick={() => go(1)} style={primary}>
+              Continuar →
             </button>
           )}
           {step === 1 && (

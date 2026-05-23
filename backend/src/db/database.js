@@ -66,10 +66,10 @@ async function upsertWhatsappConfig(orgId, config) {
       organization_id, provider,
       phone_number_id, business_account_id, access_token, webhook_verify_token,
       twilio_account_sid, twilio_auth_token, twilio_phone_number,
-      kapso_api_key, webhook_secret,
+      kapso_api_key, webhook_secret, kapso_customer_id,
       status
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'connected')
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'connected')
     ON CONFLICT(organization_id) DO UPDATE SET
       provider              = EXCLUDED.provider,
       phone_number_id       = EXCLUDED.phone_number_id,
@@ -81,19 +81,21 @@ async function upsertWhatsappConfig(orgId, config) {
       twilio_phone_number   = EXCLUDED.twilio_phone_number,
       kapso_api_key         = EXCLUDED.kapso_api_key,
       webhook_secret        = EXCLUDED.webhook_secret,
+      kapso_customer_id     = EXCLUDED.kapso_customer_id,
       status                = 'connected'`,
     [
       orgId,
-      config.provider           || 'meta',
-      config.phoneNumberId      || null,
-      config.businessAccountId  || null,
-      config.accessToken        || null,
-      config.webhookVerifyToken || null,
-      config.twilioAccountSid   || null,
-      config.twilioAuthToken    || null,
-      config.twilioPhoneNumber  || null,
-      config.kapsoApiKey        || null,
-      config.webhookSecret      || null,
+      config.provider            || 'meta',
+      config.phoneNumberId       || null,
+      config.businessAccountId   || null,
+      config.accessToken         || null,
+      config.webhookVerifyToken  || null,
+      config.twilioAccountSid    || null,
+      config.twilioAuthToken     || null,
+      config.twilioPhoneNumber   || null,
+      config.kapsoApiKey         || null,
+      config.webhookSecret       || null,
+      config.kapsoCustomerId     || null,
     ]
   );
 }

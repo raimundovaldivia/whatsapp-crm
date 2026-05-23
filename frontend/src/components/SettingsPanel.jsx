@@ -143,6 +143,64 @@ function ShopifyTab() {
 }
 
 /* ══════════════════════════════════════════════
+   KAPSO RECONNECT PANEL
+══════════════════════════════════════════════ */
+function KapsoReconnectPanel() {
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError]           = useState('');
+
+  const reconnect = async () => {
+    setConnecting(true); setError('');
+    try {
+      const r = await api.post('/setup/kapso/connect');
+      if (r.data?.setupUrl) {
+        window.location.href = r.data.setupUrl;
+      } else {
+        setError(r.data?.error || 'No se pudo generar el link de Kapso');
+        setConnecting(false);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error al conectar con Kapso. ¿Está KAPSO_API_KEY configurada?');
+      setConnecting(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={{ backgroundColor: '#0d2e25', borderRadius: '8px', padding: '14px 16px', border: '1px solid #00a88433' }}>
+        <p style={{ color: '#00a884', fontSize: '13px', margin: '0 0 8px', fontWeight: 600 }}>
+          🚀 Conexión automática — sin escribir datos
+        </p>
+        <p style={{ color: '#8696a0', fontSize: '12px', margin: 0, lineHeight: 1.7 }}>
+          Haz clic en el botón para reconectar o cambiar tu número de WhatsApp a través de Kapso. El proceso toma ~5 minutos con login de Facebook.
+        </p>
+      </div>
+
+      <button
+        onClick={reconnect}
+        disabled={connecting}
+        style={{
+          width: '100%', padding: '14px', borderRadius: '9px', fontSize: '14px', fontWeight: 700,
+          backgroundColor: connecting ? '#374045' : '#00a884',
+          color: 'white', cursor: connecting ? 'not-allowed' : 'pointer',
+          border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+        }}>
+        {connecting
+          ? <><Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> Abriendo Kapso...</>
+          : <><Zap size={16} /> Reconectar WhatsApp con Kapso <ExternalLink size={14} /></>
+        }
+      </button>
+
+      {error && <Alert type="error" msg={error} />}
+
+      <p style={{ color: '#556169', fontSize: '11px', textAlign: 'center', margin: 0 }}>
+        Requiere <code style={{ color: '#556169' }}>KAPSO_API_KEY</code> en variables de entorno del backend.
+      </p>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
    TAB WHATSAPP
 ══════════════════════════════════════════════ */
 function WhatsAppTab() {
@@ -315,22 +373,7 @@ function WhatsAppTab() {
         <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
           {provider === 'kapso' ? (
-            <>
-              <div style={{ backgroundColor: '#0d2e25', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#00a884', lineHeight: 1.7, border: '1px solid #00a88433' }}>
-                🚀 Sin proceso de verificación de empresa en Facebook. Gestiona todo desde{' '}
-                <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>app.kapso.ai</a>
-              </div>
-              <Field label="Kapso API Key *" value={kapsoApiKey} onChange={setKapsoApiKey} placeholder="ka_xxxxxxxxxxxxxxxxxxxxxxxx" hint="app.kapso.ai → Settings → API Keys" password />
-              <Field label="Phone Number ID *" value={kapsoPhoneId} onChange={setKapsoPhoneId} placeholder="647015955153740" hint="app.kapso.ai → tu número → Settings → Phone Number ID" />
-              <Field label="Webhook Secret" value={webhookSecret} onChange={setWebhookSecret} placeholder="Opcional — para verificar firmas HMAC" hint="app.kapso.ai → tu número → Webhooks → activar firma" password />
-              <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.6 }}>
-                <strong style={{ color: '#e9edef' }}>URL del Webhook para Kapso:</strong>
-                <code style={{ display: 'block', color: '#00a884', marginTop: '4px', wordBreak: 'break-all' }}>
-                  {window.location.origin.replace(':5173', ':3001')}/kapso-webhook
-                </code>
-                <span style={{ fontSize: '11px' }}>Configúrala en app.kapso.ai → tu número → Webhooks → evento: whatsapp.message.received</span>
-              </div>
-            </>
+            <KapsoReconnectPanel />
           ) : provider === 'meta' ? (
             <>
               <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
@@ -356,7 +399,7 @@ function WhatsAppTab() {
             </>
           )}
 
-          <SaveBtn loading={saving} onClick={save} />
+          {provider !== 'kapso' && <SaveBtn loading={saving} onClick={save} />}
           {error   && <Alert type="error"   msg={error} />}
           {success && <Alert type="success" msg={success} />}
         </div>

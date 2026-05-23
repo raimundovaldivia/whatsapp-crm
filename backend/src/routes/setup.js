@@ -15,6 +15,7 @@ const axios      = require('axios');
 const db         = require('../db/database');
 const { getPool } = require('../db/database');
 const raigentic  = require('../services/raigentic');
+const kapsoPlatform = require('../services/kapso-platform');
 const { requireAuth } = require('../middleware/auth');
 
 /* ─────────────────────────────────────────────────────────────
@@ -256,6 +257,132 @@ router.get('/status', requireAuth, async (req, res) => {
       },
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────
+   KAPSO — ONBOARDING AUTOMÁTICO (Setup Links)
+   El cliente hace clic en un link → login con Facebook → conecta WhatsApp
+   Sin escribir ningún dato manualmente.
+───────────────────────────────────────────────────────────── */
+
+/**
+ * POST /api/setup/kapso/connect
+ * Crea (o reutiliza) un customer en Kapso y genera un setup link.
+ * El cliente hace clic en el link y conecta su WhatsApp en ~5 min.
+ *
+ * Requiere KAPSO_API_KEY en variables de entorno (plan Platform de Kapso).
+ */
+router.post('/kapso/connect', requireAuth, async (req, res) => {
+  try {
+    if (!process.env.KAPSO_API_KEY) {
+      return res.status(400).json({
+        success: false,
+        error: 'KAPSO_API_KEY no está configurada. Agrégala en las variables de entorno de Render.',
+      });
+    }
+
+    const org = await db.getOrgById(req.orgId);
+    if (!org) return res.status(404).json({ success: false, error: 'Organización no encontrada' });
+
+    // Obtener o crear el customer en Kapso para esta org
+    let wc = await db.getWhatsappConfig(req.orgId);
+    let kapsoCustomerId = wc?.kapso_customer_id || null;
+
+    if (!kapsoCustomerId) {
+      // Buscar si ya existe en Kapso por external_customer_id
+      const existing = await kapsoPlatform.findCustomerByExternalId(req.orgId);
+      if (existing) {
+        kapsoCustomerId = existing.id;
+      } else {
+        const customer = await kapsoPlatform.createCustomer(req.orgId, org.name);
+        kapsoCustomerId = customer.id;
+      }
+
+      // Guardar el kapsoCustomerId en DB (proveedor kapso, sin phone_number_id aún)
+      await db.upsertWhatsappConfig(req.orgId, {
+        provider:         'kapso',
+        kapsoCustomerId,
+        // Preservar kapsoApiKey si ya tenía una configuración manual previa
+        kapsoApiKey:      wc?.kapso_api_key || null,
+        webhookSecret:    wc?.webhook_secret || null,
+      });
+    }
+
+    // URL de retorno: el frontend detecta kapso_success=1 en la URL
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const successUrl  = `${frontendUrl}?kapso_success=1`;
+    const failureUrl  = `${frontendUrl}?kapso_error=1`;
+
+    const setupLink = await kapsoPlatform.generateSetupLink(kapsoCustomerId, successUrl, failureUrl);
+
+    res.json({
+      success: true,
+      setupUrl:  setupLink.url,
+      expiresAt: setupLink.expires_at,
+    });
+
+  } catch (err) {
+    console.error('[Setup/Kapso/connect] Error:', err.message);
+    const detail = err.response?.data?.error || err.response?.data?.message || err.message;
+    res.status(500).json({ success: false, error: detail });
+  }
+});
+
+/**
+ * POST /api/setup/kapso/save
+ * El frontend llama a esta ruta después de que Kapso redirige al cliente de vuelta.
+ * Guarda el phone_number_id que viene en los query params de la URL de éxito.
+ *
+ * Body: { phoneNumberId, displayPhoneNumber?, businessAccountId? }
+ */
+router.post('/kapso/save', requireAuth, async (req, res) => {
+  try {
+    const { phoneNumberId, displayPhoneNumber, businessAccountId } = req.body;
+    if (!phoneNumberId) {
+      return res.status(400).json({ success: false, error: 'phoneNumberId es requerido' });
+    }
+
+    const wc = await db.getWhatsappConfig(req.orgId);
+
+    await db.upsertWhatsappConfig(req.orgId, {
+      provider:           'kapso',
+      phoneNumberId,
+      businessAccountId:  businessAccountId || null,
+      kapsoCustomerId:    wc?.kapso_customer_id || null,
+      kapsoApiKey:        wc?.kapso_api_key     || null,
+      webhookSecret:      wc?.webhook_secret    || null,
+    });
+
+    // También configurar el webhook en Kapso automáticamente
+    // (suscribir el número al endpoint /kapso-webhook del CRM)
+    const backendUrl = process.env.PUBLIC_URL || process.env.BACKEND_URL;
+    if (backendUrl && process.env.KAPSO_API_KEY) {
+      try {
+        await axios.post(
+          `https://api.kapso.ai/meta/whatsapp/v24.0/${phoneNumberId}/webhooks`,
+          {
+            url:    `${backendUrl}/kapso-webhook`,
+            events: ['whatsapp.message.received', 'whatsapp.message.delivered', 'whatsapp.message.read'],
+          },
+          { headers: { 'X-API-Key': process.env.KAPSO_API_KEY, 'Content-Type': 'application/json' } }
+        );
+        console.log(`[Setup/Kapso] ✅ Webhook configurado para número ${phoneNumberId}`);
+      } catch (whErr) {
+        // No es crítico — el cliente puede configurarlo manualmente desde Kapso
+        console.warn('[Setup/Kapso] No se pudo auto-configurar webhook:', whErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: '✅ WhatsApp conectado correctamente via Kapso',
+      data: { phoneNumberId, displayPhoneNumber },
+    });
+
+  } catch (err) {
+    console.error('[Setup/Kapso/save] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

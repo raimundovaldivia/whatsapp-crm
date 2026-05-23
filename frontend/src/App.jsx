@@ -12,7 +12,7 @@ import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
 import { useSocket }  from './hooks/useSocket.js';
-import { conversationsAPI, authAPI, ordersAPI } from './utils/api.js';
+import { conversationsAPI, authAPI, ordersAPI, api } from './utils/api.js';
 
 export default function App() {
   const [appState, setAppState] = useState('loading');
@@ -53,6 +53,27 @@ export default function App() {
     setOrg(o => ({ ...o, setup_done: 1 }));
     setAppState('crm');
   }, []);
+
+  // ── Retorno de Kapso (reconexión desde Settings) ───────────────
+  useEffect(() => {
+    if (appState !== 'crm') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('kapso_success') === '1') {
+      const phoneNumberId      = params.get('phone_number_id');
+      const displayPhoneNumber = params.get('display_phone_number');
+      const businessAccountId  = params.get('business_account_id');
+      window.history.replaceState({}, '', window.location.pathname);
+      if (phoneNumberId) {
+        api.post('/setup/kapso/save', { phoneNumberId, displayPhoneNumber, businessAccountId })
+          .then(() => setView('settings'))
+          .catch(console.error);
+      }
+    }
+    if (params.get('kapso_error') === '1') {
+      window.history.replaceState({}, '', window.location.pathname);
+      setView('settings');
+    }
+  }, [appState]);
 
   // ── Cargar conversaciones ───────────────────────────────────────
   const loadConversations = useCallback(async () => {

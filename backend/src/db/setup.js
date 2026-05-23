@@ -82,8 +82,9 @@ async function setupDatabase() {
       );
 
       -- Migración: agregar columnas Kapso si no existen (idempotente)
-      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS kapso_api_key  TEXT;
-      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS kapso_api_key      TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS webhook_secret     TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS kapso_customer_id  TEXT;
 
       -- ─── CONVERSACIONES ─────────────────────────────────────────
 
