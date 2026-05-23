@@ -96,4 +96,34 @@ async function findCustomerByExternalId(orgId) {
   }
 }
 
-module.exports = { createCustomer, generateSetupLink, getCustomer, findCustomerByExternalId };
+/**
+ * Registra un webhook de mensajes para un número de teléfono específico.
+ * Usa el endpoint correcto de la Platform API v1.
+ *
+ * Endpoint: POST /platform/v1/whatsapp/phone_numbers/{phone_number_id}/webhooks
+ * Docs: https://docs.kapso.ai/api/platform/v1/webhooks/create-webhook.md
+ *
+ * @param {string} phoneNumberId  - Meta phone number ID
+ * @param {string} webhookUrl     - URL pública del backend (ej: https://backend.onrender.com/kapso-webhook)
+ * @param {string} [secretKey]    - Opcional: secret para verificar firmas HMAC
+ * @returns {{ id, url, events, active }}
+ */
+async function registerNumberWebhook(phoneNumberId, webhookUrl, secretKey = null) {
+  const client = getClient();
+  const body = {
+    whatsapp_webhook: {
+      url:    webhookUrl,
+      events: ['whatsapp.message.received', 'whatsapp.message.delivered', 'whatsapp.message.read'],
+      active: true,
+    },
+  };
+  if (secretKey) body.whatsapp_webhook.secret_key = secretKey;
+
+  const { data } = await client.post(
+    `/whatsapp/phone_numbers/${phoneNumberId}/webhooks`,
+    body
+  );
+  return data.data;
+}
+
+module.exports = { createCustomer, generateSetupLink, getCustomer, findCustomerByExternalId, registerNumberWebhook };

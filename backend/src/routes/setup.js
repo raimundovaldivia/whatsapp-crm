@@ -355,30 +355,38 @@ router.post('/kapso/save', requireAuth, async (req, res) => {
       webhookSecret:      wc?.webhook_secret    || null,
     });
 
-    // También configurar el webhook en Kapso automáticamente
-    // (suscribir el número al endpoint /kapso-webhook del CRM)
+    // Configurar el webhook en Kapso automáticamente usando la Platform API
+    // Endpoint correcto: POST /platform/v1/whatsapp/phone_numbers/{id}/webhooks
     const backendUrl = process.env.PUBLIC_URL || process.env.BACKEND_URL;
+    let webhookRegistered = false;
+    let webhookWarning    = null;
+
     if (backendUrl && process.env.KAPSO_API_KEY) {
       try {
-        await axios.post(
-          `https://api.kapso.ai/meta/whatsapp/v24.0/${phoneNumberId}/webhooks`,
-          {
-            url:    `${backendUrl}/kapso-webhook`,
-            events: ['whatsapp.message.received', 'whatsapp.message.delivered', 'whatsapp.message.read'],
-          },
-          { headers: { 'X-API-Key': process.env.KAPSO_API_KEY, 'Content-Type': 'application/json' } }
+        const webhookResult = await kapsoPlatform.registerNumberWebhook(
+          phoneNumberId,
+          `${backendUrl}/kapso-webhook`
         );
-        console.log(`[Setup/Kapso] ✅ Webhook configurado para número ${phoneNumberId}`);
+        webhookRegistered = true;
+        console.log(`[Setup/Kapso] ✅ Webhook registrado automáticamente para número ${phoneNumberId} — id: ${webhookResult?.id}`);
       } catch (whErr) {
-        // No es crítico — el cliente puede configurarlo manualmente desde Kapso
-        console.warn('[Setup/Kapso] No se pudo auto-configurar webhook:', whErr.message);
+        const detail = whErr.response?.data?.error || whErr.message;
+        webhookWarning = `Webhook no pudo registrarse automáticamente: ${detail}. Ve a app.kapso.ai → tu número → Webhooks y agrega: ${backendUrl}/kapso-webhook`;
+        console.warn('[Setup/Kapso] ⚠️ No se pudo auto-registrar webhook:', detail);
       }
+    } else {
+      const missing = !backendUrl ? 'PUBLIC_URL' : 'KAPSO_API_KEY';
+      webhookWarning = `Falta la variable de entorno ${missing} en Render. El webhook debe configurarse manualmente en app.kapso.ai.`;
+      console.warn(`[Setup/Kapso] ⚠️ ${webhookWarning}`);
     }
 
     res.json({
       success: true,
-      message: '✅ WhatsApp conectado correctamente via Kapso',
-      data: { phoneNumberId, displayPhoneNumber },
+      message: webhookRegistered
+        ? `✅ WhatsApp conectado y webhook configurado automáticamente`
+        : `✅ WhatsApp conectado. ${webhookWarning || ''}`,
+      warning: webhookWarning,
+      data: { phoneNumberId, displayPhoneNumber, webhookRegistered },
     });
 
   } catch (err) {
