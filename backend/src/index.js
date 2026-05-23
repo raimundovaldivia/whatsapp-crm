@@ -26,6 +26,7 @@ const webhookRouter        = require('./routes/webhook');         // WhatsApp (M
 const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Twilio)
 const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
+const shopifyOAuthRouter   = require('./routes/shopify-oauth');   // Shopify OAuth flow
 const authRouter           = require('./routes/auth');
 const setupRouter          = require('./routes/setup');
 const conversationsRouter  = require('./routes/conversations');
@@ -96,6 +97,7 @@ app.use('/webhook',           webhookRouter);        // POST — Meta webhook
 app.use('/twilio-webhook',    twilioWebhookRouter);  // POST — Twilio webhook
 app.use('/kapso-webhook',     kapsoWebhookRouter);   // POST — Kapso webhook
 app.use('/shopify-webhook',   shopifyWebhookRouter); // POST — Shopify eventos
+app.use('/shopify-oauth',     shopifyOAuthRouter);   // GET  — Shopify OAuth flow
 app.use('/api/auth',          authRouter);           // POST login/register
 app.use('/api/setup',         setupRouter);          // Wizard configuración
 app.use('/api/conversations', conversationsRouter);  // Chats y mensajes

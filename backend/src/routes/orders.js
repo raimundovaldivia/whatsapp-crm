@@ -8,11 +8,11 @@
  * POST /api/orders/:id/resend-link → Reenviar link de pago por WhatsApp
  */
 
-const express    = require('express');
-const router     = express.Router();
-const db         = require('../db/database');
+const express     = require('express');
+const router      = express.Router();
+const db          = require('../db/database');
 const { getPool } = require('../db/database');
-const raigentic  = require('../services/raigentic');
+const shopifyApi  = require('../services/shopify-api');
 const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -78,7 +78,7 @@ router.get('/stats', async (req, res) => {
 
 /**
  * GET /api/orders/shopify?status=any&limit=50&cursor=
- * Órdenes reales de Shopify via raigentic (no del bot)
+ * Órdenes reales de Shopify via GraphQL directo (no del bot)
  * IMPORTANTE: debe estar ANTES de /:id para no ser interceptado
  */
 router.get('/shopify', async (req, res) => {
@@ -86,23 +86,23 @@ router.get('/shopify', async (req, res) => {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, orders: [], total: 0 });
 
-    const shop   = ds.config?.storeUrl;
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
     const limit  = Math.min(parseInt(req.query.limit) || 50, 250);
-    const cursor = req.query.cursor || undefined;
+    const cursor = req.query.cursor || null;
     const status = req.query.status || 'any';
 
-    const result = await raigentic.getOrdenes(shop, { limit, cursor, status });
+    const result = await shopifyApi.getOrders(shop, token, { limit, cursor, status });
     res.json(result);
   } catch (err) {
     console.error('[Orders/Shopify]', err.message);
-    const isTimeout  = err.code === 'ECONNABORTED';
-    const isNotFound = err.response?.status === 404;
-    const isUnauth   = err.response?.status === 401;
-    const friendly = isTimeout  ? 'Raigentic tardó demasiado en responder (cold start). Inténtalo de nuevo en 30s.'
-                   : isNotFound ? 'Endpoint /api/ordenes no encontrado en raigentic. Asegúrate de que la última versión esté desplegada en Render.'
-                   : isUnauth   ? 'BOT_API_SECRET incorrecto entre CRM y raigentic.'
-                   : err.message;
-    res.status(500).json({ success: false, error: friendly });
+    if (err.message.includes('accessToken') || err.message.includes('401')) {
+      return res.status(401).json({
+        success: false,
+        error:   'La conexión con Shopify expiró. Ve a Ajustes → Shopify → Reconectar.',
+        code:    'SHOPIFY_RECONNECT',
+      });
+    }
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

@@ -10,7 +10,7 @@
 
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
-const raigentic   = require('./raigentic');   // Shopify: productos y pedidos
+const shopifyApi  = require('./shopify-api');  // Shopify: productos y pedidos (directo)
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
@@ -27,13 +27,14 @@ async function processMessage(orgId, conversationId, userMessage) {
   const shop = ds?.config?.storeUrl;
   let products = [];
   let productosTexto = '';
-  if (shop) {
+  if (ds?.config?.accessToken) {
     try {
-      const res = await raigentic.getProductos(shop);
+      const { shop: s, token } = shopifyApi.credentialsFrom(ds);
+      const res = await shopifyApi.getProducts(s, token, { limit: 250 });
       products = res.products || [];
-      productosTexto = raigentic.formatProductosParaIA(products, shop);
+      productosTexto = shopifyApi.formatProductsForAI(products, s);
     } catch (err) {
-      console.warn('[Pipeline] No se pudieron cargar productos de raigentic:', err.message);
+      console.warn('[Pipeline] No se pudieron cargar productos de Shopify:', err.message);
     }
   }
 
@@ -118,25 +119,24 @@ async function getKnownCustomerData(orgId, phoneNumber, shop = null) {
     console.warn('[Pipeline] Error buscando en DB local:', err.message);
   }
 
-  // ── Fuente 2: clientes de Shopify via raigentic ─────────────────
-  if (shop) {
+  // ── Fuente 2: clientes de Shopify vía GraphQL directo ───────────
+  if (ds?.config?.accessToken) {
     try {
-      const shopifyCustomer = await raigentic.getClienteByPhone(shop, phoneNumber);
+      const { shop: s, token } = shopifyApi.credentialsFrom(ds);
+      const shopifyCustomer = await shopifyApi.getCustomerByPhone(s, token, phoneNumber);
       if (shopifyCustomer) {
-        const addr = shopifyCustomer.defaultAddress;
-        // Solo sobreescribir si no teníamos el dato de la DB local
-        if (!result.customer_name && (shopifyCustomer.displayName || shopifyCustomer.name)) {
-          result.customer_name = shopifyCustomer.displayName || shopifyCustomer.name;
+        const addr = shopifyCustomer.address;
+        if (!result.customer_name && shopifyCustomer.name) {
+          result.customer_name = shopifyCustomer.name;
         }
         if (addr) {
           if (!result.address && addr.address1) result.address = addr.address1;
           if (!result.city   && addr.city)      result.city    = addr.city;
         }
         if (shopifyCustomer.email) result.customer_email = shopifyCustomer.email;
-        // Guardar el ID de Shopify para linkear la nueva orden al cliente existente
         result.shopify_customer_id = shopifyCustomer.id;
         result.found_in_shopify    = true;
-        console.log(`[Pipeline] ✅ Cliente encontrado en Shopify: ${result.customer_name} (${shopifyCustomer.id})`);
+        console.log(`[Pipeline] ✅ Cliente en Shopify: ${result.customer_name} (${shopifyCustomer.id})`);
       }
     } catch (err) {
       console.warn('[Pipeline] No se pudo buscar cliente en Shopify:', err.message);
@@ -214,11 +214,12 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 }
 
 /**
- * Busca el variantId de Shopify por nombre de producto/variante en el catálogo local
+ * Busca el variantId de Shopify por nombre de producto/variante
  */
-async function resolveVariantId(shop, productName) {
+async function resolveVariantId(ds, productName) {
   try {
-    const res = await raigentic.getProductos(shop);
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const res = await shopifyApi.getProducts(shop, token, { limit: 250, search: productName });
     const products = res.products || [];
     const nameLower = (productName || '').toLowerCase();
 
@@ -241,12 +242,12 @@ async function resolveVariantId(shop, productName) {
 }
 
 /**
- * Crea la orden en Shopify via raigentic y la guarda en la DB local
+ * Crea la orden en Shopify vía GraphQL directo y la guarda en la DB local
  */
 async function createShopifyOrder(orgId, conversationId, draft) {
-  const ds   = await db.getPrimaryDataSource(orgId);
-  const shop = ds?.config?.storeUrl;
-  if (!shop) throw new Error('No hay tienda Shopify conectada para esta organización');
+  const ds = await db.getPrimaryDataSource(orgId);
+  if (!ds?.config?.accessToken) throw new Error('No hay tienda Shopify conectada. Reconecta desde Ajustes.');
+  const shop = ds.config.storeUrl;
 
   const conversation = await db.getConversationById(conversationId);
   const customerPhone = draft.customer_phone || conversation.phone_number;
@@ -254,7 +255,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
   let variantId = draft.variant_id || null;
   let price = draft.price || null;
   if (!variantId) {
-    const resolved = await resolveVariantId(shop, draft.product_name);
+    const resolved = await resolveVariantId(ds, draft.product_name);
     variantId = resolved.variantId;
     price = price || resolved.price;
     if (variantId) console.log(`[Pipeline] variantId resuelto por nombre: ${variantId}`);
@@ -271,10 +272,12 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     console.log(`[Pipeline] Linkeando orden al cliente Shopify existente: ${draft.shopify_customer_id}`);
   }
 
-  const shopifyResult = await raigentic.crearPedido(
-    shop,
+  const { shop: shopDomain, token: shopToken } = shopifyApi.credentialsFrom(ds);
+  const shopifyResult = await shopifyApi.createDraftOrder(
+    shopDomain,
+    shopToken,
     customer,
-    [{ variantId, quantity: parseInt(draft.quantity) || 1, title: draft.product_name, price }],
+    [{ variantId, quantity: parseInt(draft.quantity) || 1 }],
     `WhatsApp CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}`,
   );
 

@@ -183,19 +183,20 @@ export default function SetupWizard({ org, onComplete }) {
       setError('No se pudo conectar WhatsApp via Kapso. Intenta de nuevo.');
     }
 
-    const shopifyData = sessionStorage.getItem('shopify_just_connected');
-    const shopifyErr  = sessionStorage.getItem('shopify_error');
-
-    if (shopifyData) {
-      sessionStorage.removeItem('shopify_just_connected');
-      const { shopName, products } = JSON.parse(shopifyData);
-      setShopifyInfo({ shopName, productCount: products });
-      setSuccess(`✅ Shopify conectado: ${shopName}`);
+    // ─── Shopify OAuth retorno exitoso ───────────────────────────────
+    if (params.get('shopify_success') === '1') {
+      const shop = params.get('shop') || '';
+      window.history.replaceState({}, '', window.location.pathname);
+      setShopifyInfo({ shopName: shop });
+      setSuccess(`✅ Shopify conectado: ${shop}`);
       go(3);
     }
-    if (shopifyErr) {
-      sessionStorage.removeItem('shopify_error');
-      setError(`Error conectando Shopify: ${shopifyErr}`);
+
+    // ─── Shopify OAuth error ─────────────────────────────────────────
+    const shopifyError = params.get('shopify_error');
+    if (shopifyError) {
+      window.history.replaceState({}, '', window.location.pathname);
+      setError(`Error conectando Shopify: ${decodeURIComponent(shopifyError)}`);
       go(2);
     }
   }, []);
@@ -260,23 +261,16 @@ export default function SetupWizard({ org, onComplete }) {
     } finally { setLoading(false); }
   };
 
-  /* ── Conectar Shopify via raigentic ── */
-  const connectShopify = async () => {
-    if (!shopUrl.trim()) {
-      setError('Por favor ingresa la URL de tu tienda.'); return;
-    }
-    setLoading(true); setError(''); setSuccess('');
-    try {
-      const result = await setupAPI.connectShopify({ storeUrl: shopUrl.trim() });
-      if (result.success) {
-        setSuccess(`✅ Shopify conectado: ${shopUrl.trim()}`);
-        setTimeout(() => go(3), 1500);
-      } else {
-        setError(result.error || 'Error al conectar Shopify');
-      }
-    } catch (err) {
-      setError(err.response?.data?.error || 'No se pudo conectar. ¿Instalaste la app raigentic en tu tienda?');
-    } finally { setLoading(false); }
+  /* ── Conectar Shopify via OAuth ── */
+  const connectShopify = () => {
+    if (!shopUrl.trim()) { setError('Por favor ingresa el dominio de tu tienda.'); return; }
+    setLoading(true); setError('');
+    // Redirigir al backend que inicia el OAuth con Shopify
+    const backendUrl = import.meta.env.VITE_API_URL || window.location.origin.replace(':5173', ':3001');
+    // El token JWT se pasa como parámetro de query para que el backend lo acepte en la redirección
+    const token = localStorage.getItem('crm_token') || sessionStorage.getItem('crm_token') || '';
+    const shop  = shopUrl.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+    window.location.href = `${backendUrl}/shopify-oauth/connect?shop=${encodeURIComponent(shop)}&_token=${encodeURIComponent(token)}`;
   };
 
   const finish = async () => {
@@ -600,33 +594,44 @@ export default function SetupWizard({ org, onComplete }) {
             <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #2a3942' }}>
               <h2 style={{ color: '#e9edef', fontSize: '17px', fontWeight: 600, margin: 0 }}>🛍️ Conectar tu tienda Shopify</h2>
               <p style={{ color: '#8696a0', fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>
-                Ingresa tu dominio de Shopify para que el bot acceda a tus productos
+                Un clic — te llevamos a Shopify para que autorices el acceso
               </p>
             </div>
 
             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {/* Requisito previo */}
-              <div style={{ backgroundColor: '#111b21', borderRadius: '10px', padding: '14px 16px', border: '1px solid #2a3942' }}>
-                <div style={{ fontSize: '12px', color: '#e9edef', fontWeight: 600, marginBottom: '8px' }}>Requisito previo:</div>
-                <GuideStep n="1" title="Instala la app raigentic en tu tienda">
-                  <a href="https://raigentic.onrender.com" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>
-                    raigentic.onrender.com
-                  </a> — esto conecta Shopify con el bot.
-                </GuideStep>
-                <GuideStep n="2" title="Ingresa tu dominio myshopify abajo">
-                  El bot consultará tu catálogo y creará pedidos desde ahí.
-                </GuideStep>
+
+              {/* Banner info */}
+              <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '16px 18px', border: '1px solid #00a88433', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <p style={{ color: '#00a884', fontSize: '14px', margin: 0, fontWeight: 600 }}>
+                  🔐 Conexión segura con Shopify OAuth
+                </p>
+                <p style={{ color: '#8696a0', fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
+                  Ingresa tu dominio y haz clic en el botón. Te redirigiremos a Shopify donde inicias sesión y autorizas el acceso. Al terminar, vuelves aquí automáticamente.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {[
+                    '✅ Sin copiar tokens ni credenciales',
+                    '✅ Conexión permanente — no expira',
+                    '✅ Revocable desde tu panel de Shopify',
+                  ].map(t => (
+                    <span key={t} style={{ fontSize: '12px', color: '#00a884' }}>{t}</span>
+                  ))}
+                </div>
               </div>
 
-              <Field label="Dominio de tu tienda" hint="Ejemplo: mi-tienda.myshopify.com">
-                <input
-                  style={inp}
-                  value={shopUrl}
-                  onChange={e => setShopUrl(e.target.value)}
-                  placeholder="mi-tienda.myshopify.com"
-                  onKeyDown={e => e.key === 'Enter' && connectShopify()}
-                />
+              <Field label="Dominio de tu tienda" hint="Solo la parte del dominio · Ej: mi-tienda">
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    style={{ ...inp, flex: 1 }}
+                    value={shopUrl}
+                    onChange={e => setShopUrl(e.target.value)}
+                    placeholder="mi-tienda"
+                    onKeyDown={e => e.key === 'Enter' && connectShopify()}
+                  />
+                  <span style={{ color: '#556169', fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>.myshopify.com</span>
+                </div>
               </Field>
+
             </div>
           </div>
         )}
@@ -706,9 +711,9 @@ export default function SetupWizard({ org, onComplete }) {
             </button>
           )}
           {step === 2 && (
-            <button onClick={connectShopify} disabled={loading} style={primary}>
+            <button onClick={connectShopify} disabled={loading || !shopUrl.trim()} style={{ ...primary, backgroundColor: (!shopUrl.trim() || loading) ? '#374045' : '#00a884', cursor: (!shopUrl.trim() || loading) ? 'not-allowed' : 'pointer' }}>
               {loading && <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} />}
-              {loading ? 'Verificando...' : '🛍️ Conectar con Shopify →'}
+              {loading ? 'Redirigiendo a Shopify...' : '🛍️ Autorizar con Shopify →'}
             </button>
           )}
           {step === 3 && (

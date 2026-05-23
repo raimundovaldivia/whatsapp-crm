@@ -90,25 +90,50 @@ function SaveBtn({ loading, onClick, label: lbl = 'Guardar cambios' }) {
 ══════════════════════════════════════════════ */
 function ShopifyTab() {
   const [status, setStatus]   = useState(null);
-  const [shopUrl, setShopUrl] = useState('');
+  const [shopInput, setShopInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
   const [success, setSuccess] = useState('');
 
   useEffect(() => {
-    setupAPI.shopifyStatus().then(r => { setStatus(r); if (r.storeUrl) setShopUrl(r.storeUrl); }).catch(() => {});
+    setupAPI.shopifyStatus().then(r => {
+      setStatus(r);
+      if (r.shop) setShopInput(r.shop.replace('.myshopify.com', ''));
+    }).catch(() => {});
+
+    // Detectar retorno del OAuth de Shopify
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('shopify_success') === '1') {
+      const shop = params.get('shop') || '';
+      window.history.replaceState({}, '', window.location.pathname);
+      setSuccess(`✅ Shopify conectado: ${shop}`);
+      setupAPI.shopifyStatus().then(setStatus).catch(() => {});
+    }
+    if (params.get('shopify_error')) {
+      window.history.replaceState({}, '', window.location.pathname);
+      setError('Error conectando Shopify: ' + decodeURIComponent(params.get('shopify_error')));
+    }
   }, []);
 
-  const save = async () => {
-    if (!shopUrl.trim()) { setError('Ingresa el dominio'); return; }
-    setLoading(true); setError(''); setSuccess('');
+  const connectOAuth = () => {
+    if (!shopInput.trim()) { setError('Ingresa el dominio de tu tienda'); return; }
+    setLoading(true); setError('');
+    const backendUrl = import.meta.env.VITE_API_URL || window.location.origin.replace(':5173', ':3001');
+    const token = localStorage.getItem('crm_token') || sessionStorage.getItem('crm_token') || '';
+    const shop  = shopInput.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
+    window.location.href = `${backendUrl}/shopify-oauth/connect?shop=${encodeURIComponent(shop)}&_token=${encodeURIComponent(token)}`;
+  };
+
+  const disconnect = async () => {
+    if (!window.confirm('¿Desconectar Shopify? El bot dejará de tener acceso a productos y clientes.')) return;
     try {
-      const r = await setupAPI.connectShopify({ storeUrl: shopUrl.trim() });
-      if (r.success) { setSuccess('✅ Shopify conectado correctamente'); setupAPI.shopifyStatus().then(setStatus).catch(() => {}); }
-      else setError(r.error || 'Error al conectar');
+      const { api } = await import('../utils/api.js');
+      await api.delete('/shopify-oauth/disconnect');
+      setStatus({ connected: false });
+      setSuccess('Shopify desconectado.');
     } catch (err) {
-      setError(err.response?.data?.error || 'No se pudo conectar. ¿Instalaste la app raigentic?');
-    } finally { setLoading(false); }
+      setError('Error al desconectar: ' + (err.response?.data?.error || err.message));
+    }
   };
 
   return (
@@ -120,20 +145,59 @@ function ShopifyTab() {
           <Badge ok={status?.connected} />
         </div>
         <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {status?.connected && (
-            <div style={{ backgroundColor: '#0d2e25', borderRadius: '8px', padding: '10px 14px', border: '1px solid #00a88433', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <CheckCircle size={14} color="#00a884" />
-              <span style={{ color: '#00a884', fontSize: '13px' }}><strong>{status.storeName}</strong> · {status.storeUrl}</span>
-            </div>
+
+          {/* Conectado */}
+          {status?.connected ? (
+            <>
+              <div style={{ backgroundColor: '#0d2e25', borderRadius: '8px', padding: '12px 16px', border: '1px solid #00a884', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <CheckCircle size={16} color="#00a884" />
+                  <div>
+                    <div style={{ color: '#00a884', fontSize: '13px', fontWeight: 600 }}>Shopify conectado</div>
+                    <div style={{ color: '#8696a0', fontSize: '12px', marginTop: '1px' }}>{status.shop}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={disconnect}
+                  style={{ backgroundColor: '#2a3942', color: '#8696a0', border: '1px solid #374045', borderRadius: '6px', padding: '5px 12px', fontSize: '12px', cursor: 'pointer' }}>
+                  Desconectar
+                </button>
+              </div>
+              <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
+                Para cambiar de tienda, desconecta primero y vuelve a conectar.
+              </div>
+            </>
+          ) : (
+            /* No conectado — flujo OAuth */
+            <>
+              <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
+                🔐 Conexión segura vía Shopify OAuth — sin tokens manuales. El acceso no expira salvo que lo revoques desde tu panel de Shopify.
+              </div>
+              <div>
+                <label style={{ fontSize: '13px', color: '#e9edef', fontWeight: 500, marginBottom: '6px', display: 'block' }}>
+                  Dominio de tu tienda
+                </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    style={{ flex: 1, backgroundColor: '#111b21', border: '1px solid #374045', borderRadius: '8px', padding: '10px 14px', color: '#e9edef', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
+                    value={shopInput}
+                    onChange={e => setShopInput(e.target.value)}
+                    placeholder="mi-tienda"
+                    onKeyDown={e => e.key === 'Enter' && connectOAuth()}
+                  />
+                  <span style={{ color: '#556169', fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>.myshopify.com</span>
+                </div>
+              </div>
+              <button
+                onClick={connectOAuth}
+                disabled={loading || !shopInput.trim()}
+                style={{ padding: '12px', borderRadius: '9px', fontSize: '14px', fontWeight: 600, backgroundColor: (!shopInput.trim() || loading) ? '#374045' : '#00a884', color: 'white', cursor: (!shopInput.trim() || loading) ? 'not-allowed' : 'pointer', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                🛍️ Conectar con Shopify
+                <ExternalLink size={14} />
+              </button>
+            </>
           )}
-          <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
-            La conexión con Shopify requiere la app <strong style={{ color: '#e9edef' }}>raigentic</strong> instalada en tu tienda.{' '}
-            <a href="https://raigentic.onrender.com" target="_blank" rel="noreferrer" style={{ color: '#00a884', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-              raigentic.onrender.com <ExternalLink size={10} />
-            </a>
-          </div>
-          <Field label="Dominio de tu tienda" value={shopUrl} onChange={setShopUrl} placeholder="mi-tienda.myshopify.com" hint="Solo el dominio myshopify, sin https://" />
-          <SaveBtn loading={loading} onClick={save} label={status?.connected ? 'Actualizar conexión' : 'Conectar Shopify'} />
+
           {error   && <Alert type="error"   msg={error} />}
           {success && <Alert type="success" msg={success} />}
         </div>

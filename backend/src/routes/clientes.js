@@ -1,25 +1,23 @@
 /**
- * clientes.js — Clientes desde Shopify (fuente principal)
+ * clientes.js — Clientes desde Shopify GraphQL directo
  *
- * GET /api/clientes/all   → TODOS los clientes de Shopify (loop en backend, 1 sola llamada al frontend)
- * GET /api/clientes       → una página de clientes (cursor-based, para uso futuro)
- * GET /api/clientes/local → clientes en DB local del bot (conversaciones)
+ * GET /api/clientes/all   → TODOS los clientes (loop en backend)
+ * GET /api/clientes       → Una página de clientes (cursor-based)
+ * GET /api/clientes/local → Clientes en DB local (conversaciones del bot)
  */
 
-const express   = require('express');
-const router    = express.Router();
-const db        = require('../db/database');
+const express     = require('express');
+const router      = express.Router();
+const db          = require('../db/database');
 const { getPool } = require('../db/database');
-const raigentic = require('../services/raigentic');
+const shopifyApi  = require('../services/shopify-api');
 const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
 /**
  * GET /api/clientes/all
- * Descarga TODOS los clientes de Shopify paginando internamente (servidor a servidor).
+ * Descarga TODOS los clientes de Shopify paginando internamente.
  * El frontend hace UNA sola llamada y espera el resultado completo.
  */
 router.get('/all', async (req, res) => {
@@ -27,67 +25,30 @@ router.get('/all', async (req, res) => {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, customers: [], total: 0 });
 
-    const shop  = ds.config?.storeUrl;
-    const query = req.query.query || undefined;
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const query           = req.query.query || '';
 
-    let allCustomers = [];
-    let cursor       = undefined;
-    let page         = 0;
-
-    while (true) {
-      page++;
-
-      // Retry hasta 3 veces en caso de 503/429 de Shopify
-      let result;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          result = await raigentic.getClientes(shop, { limit: 100, cursor, query });
-          break; // éxito
-        } catch (err) {
-          const status = err.response?.status;
-          if ((status === 503 || status === 429) && attempt < 3) {
-            const wait = attempt * 1500; // 1.5s, 3s
-            console.warn(`[Clientes/all] Shopify ${status}, reintentando en ${wait}ms (intento ${attempt}/3)`);
-            await sleep(wait);
-          } else {
-            throw err;
-          }
-        }
-      }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Error obteniendo clientes');
-      }
-
-      allCustomers = allCustomers.concat(result.customers || []);
-      console.log(`[Clientes/all] Página ${page}: ${result.customers?.length || 0} clientes (total: ${allCustomers.length})`);
-
-      if (!result.hasNextPage || !result.endCursor) break;
-      cursor = result.endCursor;
-
-      // Pausa entre páginas para no saturar la API de Shopify
-      await sleep(300);
-
-      // Límite de seguridad: máximo 50 páginas (5.000 clientes con limit=100)
-      if (page >= 50) {
-        console.warn('[Clientes/all] Límite de páginas alcanzado (50). Deteniendo.');
-        break;
-      }
-    }
+    const customers = await shopifyApi.getAllCustomers(shop, token, query);
 
     res.json({
       success:   true,
-      customers: allCustomers,
-      total:     allCustomers.length,
+      customers,
+      total:     customers.length,
     });
 
   } catch (err) {
     console.error('[Clientes/all]', err.message);
-    const isTimeout = err.code === 'ECONNABORTED';
-    const friendly  = isTimeout
-      ? 'Raigentic tardó demasiado (cold start). Intenta de nuevo.'
-      : err.response?.data?.error || err.message;
-    res.status(500).json({ success: false, error: friendly });
+
+    // Token expirado o inválido → guiar al usuario a reconectar
+    if (err.message.includes('accessToken') || err.message.includes('401')) {
+      return res.status(401).json({
+        success: false,
+        error:   'La conexión con Shopify expiró. Ve a Ajustes → Shopify → Reconectar.',
+        code:    'SHOPIFY_RECONNECT',
+      });
+    }
+
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -123,27 +84,30 @@ router.get('/local', async (req, res) => {
 
 /**
  * GET /api/clientes?limit=50&cursor=&query=
- * Una página de clientes (mantener para compatibilidad)
+ * Una página de clientes (para uso futuro con paginación en UI)
  */
 router.get('/', async (req, res) => {
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, customers: [], total: 0 });
 
-    const shop   = ds.config?.storeUrl;
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
     const limit  = Math.min(parseInt(req.query.limit) || 50, 250);
-    const cursor = req.query.cursor || undefined;
-    const query  = req.query.query  || undefined;
+    const cursor = req.query.cursor || null;
+    const query  = req.query.query  || '';
 
-    const result = await raigentic.getClientes(shop, { limit, cursor, query });
+    const result = await shopifyApi.getCustomers(shop, token, { limit, cursor, query });
     res.json(result);
   } catch (err) {
-    console.error('[Clientes/Shopify]', err.message);
-    const isTimeout = err.code === 'ECONNABORTED';
-    const friendly  = isTimeout
-      ? 'Raigentic tardó demasiado (cold start). Intenta de nuevo.'
-      : err.response?.data?.error || err.message;
-    res.status(500).json({ success: false, error: friendly });
+    console.error('[Clientes]', err.message);
+    if (err.message.includes('accessToken') || err.message.includes('401')) {
+      return res.status(401).json({
+        success: false,
+        error:   'La conexión con Shopify expiró. Ve a Ajustes → Shopify → Reconectar.',
+        code:    'SHOPIFY_RECONNECT',
+      });
+    }
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
