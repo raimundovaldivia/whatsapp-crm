@@ -23,10 +23,11 @@ const { requireAuth } = require('../middleware/auth');
 
 /**
  * POST /api/setup/whatsapp
- * Guarda las credenciales de WhatsApp — soporta Meta y Twilio.
+ * Guarda las credenciales de WhatsApp — soporta Meta, Twilio y Kapso.
  *
- * Body Meta:   { provider:'meta', phoneNumberId, businessAccountId, accessToken, webhookVerifyToken }
+ * Body Meta:   { provider:'meta',   phoneNumberId, businessAccountId, accessToken, webhookVerifyToken }
  * Body Twilio: { provider:'twilio', twilioAccountSid, twilioAuthToken, twilioPhoneNumber }
+ * Body Kapso:  { provider:'kapso',  kapsoApiKey, phoneNumberId, webhookSecret? }
  */
 router.post('/whatsapp', requireAuth, async (req, res) => {
   try {
@@ -45,8 +46,54 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
 
       res.json({ success: true, message: 'Twilio WhatsApp configurado correctamente' });
 
+    } else if (provider === 'kapso') {
+      // ── Kapso: sin proceso de Meta, solo API key y phone_number_id ──
+      const { kapsoApiKey, phoneNumberId, webhookSecret } = req.body;
+      if (!kapsoApiKey || !phoneNumberId) {
+        return res.status(400).json({ success: false, error: 'Faltan campos Kapso requeridos: kapsoApiKey y phoneNumberId' });
+      }
+
+      await db.upsertWhatsappConfig(req.orgId, {
+        provider: 'kapso',
+        phoneNumberId,
+        kapsoApiKey,
+        webhookSecret: webhookSecret || null,
+      });
+
+      // Test rápido: verificar que la API key es válida listando números
+      let warning = null;
+      try {
+        await axios.get('https://api.kapso.ai/v1/phone-numbers', {
+          headers: { 'X-API-Key': kapsoApiKey },
+          timeout: 8000,
+        });
+      } catch (err) {
+        const status = err.response?.status;
+        if (status === 401 || status === 403) {
+          warning = 'La Kapso API Key no es válida. Verifica en app.kapso.ai → Settings → API Keys.';
+        } else {
+          // No bloqueamos si el test falla por otras razones (timeout, etc.)
+          console.warn('[Setup/Kapso] Test de API Key falló:', err.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: 'Kapso WhatsApp configurado correctamente',
+        warning,
+        data: {
+          webhookUrl: `${process.env.PUBLIC_URL || 'https://TU-BACKEND.onrender.com'}/kapso-webhook`,
+          instructions: [
+            '1. Ve a app.kapso.ai → tu número → Webhooks',
+            '2. Agrega un webhook con la URL anterior',
+            '3. Suscríbete al evento: whatsapp.message.received',
+            '4. (Opcional) Habilita firma y guarda el secret en webhookSecret',
+          ],
+        },
+      });
+
     } else {
-      // Meta Cloud API
+      // ── Meta Cloud API ──────────────────────────────────────────────
       const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken } = req.body;
       if (!phoneNumberId || !accessToken || !webhookVerifyToken) {
         return res.status(400).json({ success: false, error: 'Faltan campos Meta requeridos' });

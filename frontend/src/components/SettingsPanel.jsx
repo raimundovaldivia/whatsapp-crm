@@ -166,6 +166,11 @@ function WhatsAppTab() {
   const [twilioToken, setTwilioToken] = useState('');
   const [twilioPhone, setTwilioPhone] = useState('');
 
+  // Kapso fields
+  const [kapsoApiKey,     setKapsoApiKey]     = useState('');
+  const [kapsoPhoneId,    setKapsoPhoneId]    = useState('');
+  const [webhookSecret,   setWebhookSecret]   = useState('');
+
   const loadConfig = () => {
     api.get('/settings/whatsapp').then(r => {
       const d = r.data?.data;
@@ -179,6 +184,9 @@ function WhatsAppTab() {
       setTwilioSid(d.twilioAccountSid || '');
       setTwilioToken(d.twilioAuthToken || '');
       setTwilioPhone(d.twilioPhoneNumber || '');
+      setKapsoApiKey(d.kapsoApiKey || '');
+      setKapsoPhoneId(d.phoneNumberId || '');  // Kapso también usa phone_number_id
+      setWebhookSecret(d.webhookSecret || '');
     }).catch(() => {}).finally(() => setLoading(false));
   };
 
@@ -189,6 +197,8 @@ function WhatsAppTab() {
     try {
       const body = provider === 'twilio'
         ? { provider: 'twilio', twilioAccountSid: twilioSid, twilioAuthToken: twilioToken, twilioPhoneNumber: twilioPhone }
+        : provider === 'kapso'
+        ? { provider: 'kapso', kapsoApiKey, phoneNumberId: kapsoPhoneId, webhookSecret }
         : { provider: 'meta', phoneNumberId, businessAccountId, accessToken, webhookVerifyToken };
       const r = await api.put('/settings/whatsapp', body);
       if (r.data.success) {
@@ -227,7 +237,7 @@ function WhatsAppTab() {
         <div style={{ backgroundColor: '#0d2e25', border: '1px solid #00a88433', borderRadius: '10px', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
           <CheckCircle size={16} color="#00a884" />
           <span style={{ color: '#00a884', fontSize: '13px', fontWeight: 600 }}>
-            Proveedor activo: {savedProvider === 'meta' ? 'WhatsApp Business (Meta)' : 'Twilio WhatsApp'}
+            Proveedor activo: {savedProvider === 'kapso' ? 'Kapso WhatsApp 🚀' : savedProvider === 'meta' ? 'WhatsApp Business (Meta)' : 'Twilio WhatsApp'}
           </span>
           <button onClick={testConnection} disabled={testing}
             style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#182820', border: '1px solid #00a88455', borderRadius: '7px', padding: '5px 12px', color: '#00a884', fontSize: '12px', cursor: testing ? 'not-allowed' : 'pointer' }}>
@@ -250,42 +260,42 @@ function WhatsAppTab() {
           <span style={{ color: '#4a5568', fontSize: '11px', marginLeft: 'auto' }}>Solo uno puede estar activo</span>
         </div>
         <div style={{ padding: '20px 22px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
             {[
-              { key: 'meta',   icon: MessageCircle, title: 'WhatsApp Business',  desc: 'API oficial de Meta · Recomendado' },
-              { key: 'twilio', icon: Phone,         title: 'Twilio WhatsApp',    desc: 'Via Twilio sandbox o número propio' },
+              { key: 'kapso',  icon: Zap,           title: 'Kapso',             desc: 'Sin proceso Meta · más fácil' },
+              { key: 'meta',   icon: MessageCircle, title: 'WhatsApp Business', desc: 'API oficial de Meta' },
+              { key: 'twilio', icon: Phone,         title: 'Twilio',            desc: 'Sandbox o número propio' },
             ].map(opt => (
               <button key={opt.key} onClick={() => setProvider(opt.key)}
                 style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '6px',
-                  padding: '16px', borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
+                  display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '5px',
+                  padding: '14px', borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
                   backgroundColor: provider === opt.key ? '#0d2e25' : '#111b21',
                   border: `2px solid ${provider === opt.key ? '#00a884' : '#2a3942'}`,
                   transition: 'all 0.15s', position: 'relative',
                 }}>
-                {/* Indicador ACTIVO vs INACTIVO */}
                 {savedProvider && (
                   <span style={{
-                    position: 'absolute', top: '8px', right: '8px',
-                    fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                    position: 'absolute', top: '7px', right: '7px',
+                    fontSize: '9px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px',
                     backgroundColor: savedProvider === opt.key ? '#00a88422' : '#2d1a1a',
                     color: savedProvider === opt.key ? '#00a884' : '#e57373',
                   }}>
                     {savedProvider === opt.key ? 'ACTIVO' : 'INACTIVO'}
                   </span>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <opt.icon size={16} color={provider === opt.key ? '#00a884' : '#8696a0'} />
-                  <span style={{ color: provider === opt.key ? '#00a884' : '#e9edef', fontWeight: 600, fontSize: '13px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                  <opt.icon size={15} color={provider === opt.key ? '#00a884' : '#8696a0'} />
+                  <span style={{ color: provider === opt.key ? '#00a884' : '#e9edef', fontWeight: 600, fontSize: '12px' }}>
                     {opt.title}
                   </span>
-                  {opt.key === 'meta' && (
-                    <span style={{ backgroundColor: '#00a88422', color: '#00a884', fontSize: '10px', padding: '1px 6px', borderRadius: '4px' }}>
-                      Recomendado
+                  {opt.key === 'kapso' && (
+                    <span style={{ backgroundColor: '#00a88422', color: '#00a884', fontSize: '9px', padding: '1px 5px', borderRadius: '4px' }}>
+                      Nuevo
                     </span>
                   )}
                 </div>
-                <span style={{ color: '#8696a0', fontSize: '11px' }}>{opt.desc}</span>
+                <span style={{ color: '#8696a0', fontSize: '10px', lineHeight: 1.4 }}>{opt.desc}</span>
               </button>
             ))}
           </div>
@@ -295,14 +305,33 @@ function WhatsAppTab() {
       {/* Campos según proveedor */}
       <div style={card}>
         <div style={{ padding: '16px 22px', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {provider === 'meta'
+          {provider === 'kapso'
+            ? <><Zap size={17} color="#00a884" /><span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Configuración Kapso</span></>
+            : provider === 'meta'
             ? <><MessageCircle size={17} color="#00a884" /><span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Configuración Meta WhatsApp</span></>
             : <><Phone size={17} color="#00a884" /><span style={{ color: '#e9edef', fontSize: '15px', fontWeight: 600 }}>Configuración Twilio</span></>
           }
         </div>
         <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
-          {provider === 'meta' ? (
+          {provider === 'kapso' ? (
+            <>
+              <div style={{ backgroundColor: '#0d2e25', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#00a884', lineHeight: 1.7, border: '1px solid #00a88433' }}>
+                🚀 Sin proceso de verificación de empresa en Facebook. Gestiona todo desde{' '}
+                <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>app.kapso.ai</a>
+              </div>
+              <Field label="Kapso API Key *" value={kapsoApiKey} onChange={setKapsoApiKey} placeholder="ka_xxxxxxxxxxxxxxxxxxxxxxxx" hint="app.kapso.ai → Settings → API Keys" password />
+              <Field label="Phone Number ID *" value={kapsoPhoneId} onChange={setKapsoPhoneId} placeholder="647015955153740" hint="app.kapso.ai → tu número → Settings → Phone Number ID" />
+              <Field label="Webhook Secret" value={webhookSecret} onChange={setWebhookSecret} placeholder="Opcional — para verificar firmas HMAC" hint="app.kapso.ai → tu número → Webhooks → activar firma" password />
+              <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.6 }}>
+                <strong style={{ color: '#e9edef' }}>URL del Webhook para Kapso:</strong>
+                <code style={{ display: 'block', color: '#00a884', marginTop: '4px', wordBreak: 'break-all' }}>
+                  {window.location.origin.replace(':5173', ':3001')}/kapso-webhook
+                </code>
+                <span style={{ fontSize: '11px' }}>Configúrala en app.kapso.ai → tu número → Webhooks → evento: whatsapp.message.received</span>
+              </div>
+            </>
+          ) : provider === 'meta' ? (
             <>
               <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
                 Obtén estos datos en{' '}
@@ -333,8 +362,8 @@ function WhatsAppTab() {
         </div>
       </div>
 
-      {/* Info webhook */}
-      {provider === 'meta' && (
+      {/* Info webhook — Meta y Twilio */}
+      {(provider === 'meta' || provider === 'twilio') && (
         <div style={{ ...card }}>
           <div style={{ padding: '16px 22px', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Zap size={17} color="#f0b429" />
@@ -342,14 +371,18 @@ function WhatsAppTab() {
           </div>
           <div style={{ padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <p style={{ color: '#8696a0', fontSize: '12px', margin: 0 }}>
-              Configura esta URL en Meta for Developers → Webhooks → Suscripción al número:
+              {provider === 'meta'
+                ? 'Configura esta URL en Meta for Developers → Webhooks → Suscripción al número:'
+                : 'Configura esta URL en Twilio Dashboard → Messaging → Sandbox Settings → When a message comes in:'}
             </p>
             <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '10px 14px', fontFamily: 'monospace', fontSize: '12px', color: '#00a884', wordBreak: 'break-all' }}>
-              {window.location.origin.replace(':5173', ':3001')}/api/webhooks/whatsapp
+              {window.location.origin.replace(':5173', ':3001')}{provider === 'twilio' ? '/twilio-webhook' : '/webhook'}
             </div>
-            <p style={{ color: '#4a5568', fontSize: '11px', margin: 0 }}>
-              Suscribirse a: <strong style={{ color: '#8696a0' }}>messages</strong>
-            </p>
+            {provider === 'meta' && (
+              <p style={{ color: '#4a5568', fontSize: '11px', margin: 0 }}>
+                Suscribirse a: <strong style={{ color: '#8696a0' }}>messages</strong>
+              </p>
+            )}
           </div>
         </div>
       )}

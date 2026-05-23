@@ -5,9 +5,10 @@ import {
 } from 'lucide-react';
 import { setupAPI } from '../utils/api.js';
 
-const BASE_URL     = import.meta.env.VITE_API_URL || window.location.origin.replace(':5173', ':3001');
-const WEBHOOK_META   = `${BASE_URL}/webhook`;
-const WEBHOOK_TWILIO = `${BASE_URL}/twilio-webhook`;
+const BASE_URL        = import.meta.env.VITE_API_URL || window.location.origin.replace(':5173', ':3001');
+const WEBHOOK_META    = `${BASE_URL}/webhook`;
+const WEBHOOK_TWILIO  = `${BASE_URL}/twilio-webhook`;
+const WEBHOOK_KAPSO   = `${BASE_URL}/kapso-webhook`;
 
 const makeToken = () => {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -120,7 +121,7 @@ export default function SetupWizard({ org, onComplete }) {
   const [copied, setCopied]   = useState('');
   const [showPwd, setShowPwd] = useState({});
 
-  const [provider, setProvider] = useState('twilio'); // 'meta' | 'twilio'
+  const [provider, setProvider] = useState('kapso'); // 'meta' | 'twilio' | 'kapso'
 
   // Formulario Meta
   const [waForm, setWaForm] = useState({
@@ -134,9 +135,17 @@ export default function SetupWizard({ org, onComplete }) {
   const [twilioForm, setTwilioForm] = useState({
     twilioAccountSid:  '',
     twilioAuthToken:   '',
-    twilioPhoneNumber: '+14155238886', // sandbox por defecto
+    twilioPhoneNumber: '+14155238886',
   });
   const setTw = k => e => setTwilioForm(f => ({ ...f, [k]: e.target.value }));
+
+  // Formulario Kapso
+  const [kapsoForm, setKapsoForm] = useState({
+    kapsoApiKey:    '',
+    phoneNumberId:  '',
+    webhookSecret:  '',
+  });
+  const setKa = k => e => setKapsoForm(f => ({ ...f, [k]: e.target.value }));
 
   const [shopUrl, setShopUrl] = useState('');
 
@@ -169,7 +178,7 @@ export default function SetupWizard({ org, onComplete }) {
   const go    = n => { setStep(n); setError(''); setSuccess(''); };
   const toggle = k => setShowPwd(s => ({ ...s, [k]: !s[k] }));
 
-  /* ── Guardar credenciales WA (Meta o Twilio) → paso webhook ── */
+  /* ── Guardar credenciales WA (Meta, Twilio o Kapso) → paso webhook ── */
   const saveWhatsApp = async () => {
     setLoading(true); setError(''); setSuccess('');
     try {
@@ -180,6 +189,12 @@ export default function SetupWizard({ org, onComplete }) {
           setError('Por favor completa todos los campos de Twilio.'); setLoading(false); return;
         }
         payload = { provider: 'twilio', twilioAccountSid, twilioAuthToken, twilioPhoneNumber };
+      } else if (provider === 'kapso') {
+        const { kapsoApiKey, phoneNumberId } = kapsoForm;
+        if (!kapsoApiKey || !phoneNumberId) {
+          setError('API Key y Phone Number ID son obligatorios.'); setLoading(false); return;
+        }
+        payload = { provider: 'kapso', ...kapsoForm };
       } else {
         const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken } = waForm;
         if (!phoneNumberId || !businessAccountId || !accessToken || !webhookVerifyToken) {
@@ -308,23 +323,58 @@ export default function SetupWizard({ org, onComplete }) {
             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
               {/* ── Selector de provider ── */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
                 {[
-                  { key: 'twilio', emoji: '⚡', title: 'Twilio', sub: 'Más fácil · sandbox gratis' },
+                  { key: 'kapso',  emoji: '🚀', title: 'Kapso',    sub: 'Sin proceso Meta · Recomendado' },
+                  { key: 'twilio', emoji: '⚡', title: 'Twilio',   sub: 'Sandbox gratis · fácil' },
                   { key: 'meta',   emoji: '📘', title: 'Meta API', sub: 'Oficial · requiere app Meta' },
                 ].map(p => (
                   <button key={p.key} onClick={() => { setProvider(p.key); setError(''); }}
                     style={{
-                      padding: '14px', borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
+                      padding: '12px', borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
                       backgroundColor: provider === p.key ? '#0d2e25' : '#111b21',
                       border: `2px solid ${provider === p.key ? '#00a884' : '#2a3942'}`,
                     }}>
-                    <div style={{ fontSize: '20px', marginBottom: '6px' }}>{p.emoji}</div>
-                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#e9edef' }}>{p.title}</div>
-                    <div style={{ fontSize: '11px', color: '#8696a0', marginTop: '2px' }}>{p.sub}</div>
+                    <div style={{ fontSize: '20px', marginBottom: '5px' }}>{p.emoji}</div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#e9edef' }}>{p.title}</div>
+                    <div style={{ fontSize: '10px', color: '#8696a0', marginTop: '2px', lineHeight: 1.4 }}>{p.sub}</div>
                   </button>
                 ))}
               </div>
+
+              {/* ── Formulario Kapso ── */}
+              {provider === 'kapso' && (<>
+                <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '12px 16px', border: '1px solid #00a88433' }}>
+                  <p style={{ color: '#00a884', fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
+                    🚀 <strong>Sin verificación de Facebook.</strong> Solo necesitas una cuenta en{' '}
+                    <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>app.kapso.ai</a>
+                    {' '}y un número activo.
+                  </p>
+                </div>
+                <Field label="Kapso API Key *" hint="app.kapso.ai → Settings → API Keys → Create key">
+                  <div style={{ position: 'relative' }}>
+                    <input style={{ ...inp, paddingRight: '44px' }}
+                      type={showPwd.kapsoKey ? 'text' : 'password'}
+                      value={kapsoForm.kapsoApiKey} onChange={setKa('kapsoApiKey')}
+                      placeholder="ka_xxxxxxxxxxxxxxxxxxxxxxxx" />
+                    <button onClick={() => toggle('kapsoKey')} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', color: '#8696a0', cursor: 'pointer', border: 'none' }}>
+                      {showPwd.kapsoKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </Field>
+                <Field label="Phone Number ID *" hint="app.kapso.ai → tu número → Settings → Phone Number ID">
+                  <input style={inp} value={kapsoForm.phoneNumberId} onChange={setKa('phoneNumberId')} placeholder="647015955153740" />
+                </Field>
+                <Field label="Webhook Secret (opcional)" hint="Genera uno en app.kapso.ai → tu número → Webhooks para verificar firmas HMAC">
+                  <input style={inp} value={kapsoForm.webhookSecret} onChange={setKa('webhookSecret')} placeholder="Opcional — mayor seguridad" />
+                </Field>
+                <HelpPanel title="¿Cómo obtener tu API Key y Phone Number ID?">
+                  <GuideStep n="1" title="Crea cuenta en app.kapso.ai">Es gratis. El plan Free incluye 1 número y 2,000 mensajes/mes.</GuideStep>
+                  <GuideStep n="2" title="Conecta tu número de WhatsApp">Desde el dashboard, sigue el proceso de Embedded Signup de Meta (mucho más simple que el proceso completo).</GuideStep>
+                  <GuideStep n="3" title="API Key → Settings → API Keys">Crea una API Key nueva y cópiala aquí.</GuideStep>
+                  <GuideStep n="4" title="Phone Number ID → tu número → Settings">Copia el Phone Number ID y pégalo arriba.</GuideStep>
+                </HelpPanel>
+              </>)}
 
               {/* ── Formulario Twilio ── */}
               {provider === 'twilio' && (<>
@@ -389,10 +439,10 @@ export default function SetupWizard({ org, onComplete }) {
           <div style={{ backgroundColor: '#202c33', borderRadius: '16px', border: '1px solid #2a3942' }}>
             <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #2a3942' }}>
               <h2 style={{ color: '#e9edef', fontSize: '17px', fontWeight: 600, margin: 0 }}>
-                🔗 Configurar Webhook en {provider === 'twilio' ? 'Twilio' : 'Meta'}
+                🔗 Configurar Webhook en {provider === 'twilio' ? 'Twilio' : provider === 'kapso' ? 'Kapso' : 'Meta'}
               </h2>
               <p style={{ color: '#8696a0', fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>
-                Copia esta URL y pégala en {provider === 'twilio' ? 'Twilio Dashboard' : 'Meta for Developers'}
+                Copia esta URL y pégala en {provider === 'twilio' ? 'Twilio Dashboard' : provider === 'kapso' ? 'app.kapso.ai' : 'Meta for Developers'}
               </p>
             </div>
 
@@ -403,6 +453,31 @@ export default function SetupWizard({ org, onComplete }) {
                   ✅ Tus credenciales ya están guardadas. Configura el webhook con los valores de abajo.
                 </p>
               </div>
+
+              {/* ─── Kapso ─── */}
+              {provider === 'kapso' && (<>
+                <CopyBox
+                  label="URL del Webhook → pégala en Kapso"
+                  value={WEBHOOK_KAPSO}
+                  copied={copied === 'kapsourl'}
+                  onCopy={v => copy(v, 'kapsourl')}
+                  accent
+                />
+                <div style={{ backgroundColor: '#111b21', borderRadius: '10px', padding: '16px', border: '1px solid #2a3942', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '12px', color: '#e9edef', fontWeight: 600 }}>Pasos en Kapso:</div>
+                  <GuideStep n="1" title="Ve a app.kapso.ai → tu número">
+                    <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>
+                      app.kapso.ai <ExternalLink size={10} />
+                    </a>
+                  </GuideStep>
+                  <GuideStep n="2" title="Webhooks → Add webhook">
+                    Pega la URL de arriba. Suscríbete al evento: <code style={{ color: '#00a884' }}>whatsapp.message.received</code>
+                  </GuideStep>
+                  <GuideStep n="3" title="(Opcional) Activa firma HMAC">
+                    Si habilitaste firma, copia el secret y guárdalo en Ajustes → WhatsApp → Webhook Secret.
+                  </GuideStep>
+                </div>
+              </>)}
 
               {/* ─── Twilio ─── */}
               {provider === 'twilio' && (<>
@@ -556,7 +631,9 @@ export default function SetupWizard({ org, onComplete }) {
           )}
           {step === 1 && (
             <button onClick={() => go(2)} style={primary}>
-              Ya verifiqué el webhook en Meta →
+              {provider === 'kapso' ? 'Ya configuré el webhook en Kapso →'
+               : provider === 'twilio' ? 'Ya configuré el webhook en Twilio →'
+               : 'Ya verifiqué el webhook en Meta →'}
             </button>
           )}
           {step === 2 && (

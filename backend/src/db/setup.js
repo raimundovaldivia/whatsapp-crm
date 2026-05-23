@@ -74,10 +74,16 @@ async function setupDatabase() {
         twilio_account_sid         TEXT,
         twilio_auth_token          TEXT,
         twilio_phone_number        TEXT,
+        kapso_api_key              TEXT,
+        webhook_secret             TEXT,
         status                     TEXT DEFAULT 'pending',
         created_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
       );
+
+      -- Migración: agregar columnas Kapso si no existen (idempotente)
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS kapso_api_key  TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
 
       -- ─── CONVERSACIONES ─────────────────────────────────────────
 

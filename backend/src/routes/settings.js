@@ -114,6 +114,9 @@ router.get('/whatsapp', async (req, res) => {
         twilioAccountSid:   mask(wc.twilio_account_sid),
         twilioAuthToken:    mask(wc.twilio_auth_token),
         twilioPhoneNumber:  wc.twilio_phone_number    || '',
+        // Kapso
+        kapsoApiKey:        mask(wc.kapso_api_key),
+        webhookSecret:      mask(wc.webhook_secret),
         // Estado
         status:             wc.status || 'pending',
       },
@@ -141,6 +144,19 @@ router.get('/whatsapp/test', async (req, res) => {
         auth: { username: sid, password: token }, timeout: 8000,
       });
       res.json({ success: true, message: `Twilio OK · Cuenta ${sid.slice(0,10)}...` });
+
+    } else if (wc.provider === 'kapso') {
+      const axios    = require('axios');
+      const apiKey   = wc.kapso_api_key;
+      const phoneId  = wc.phone_number_id;
+      if (!apiKey || !phoneId) return res.json({ success: false, error: 'Faltan Kapso API Key o Phone Number ID en la DB' });
+      const r = await axios.get('https://api.kapso.ai/v1/phone-numbers', {
+        headers: { 'X-API-Key': apiKey }, timeout: 8000,
+      });
+      const numbers = r.data?.data || r.data?.phone_numbers || [];
+      const found   = numbers.find(n => n.id === phoneId || n.phone_number_id === phoneId);
+      const display = found?.display_phone_number || found?.phone_number || phoneId;
+      res.json({ success: true, message: `Kapso OK · ${display}` });
 
     } else {
       const axios = require('axios');
@@ -175,6 +191,16 @@ router.put('/whatsapp', async (req, res) => {
       await db.upsertWhatsappConfig(req.orgId, {
         provider: 'twilio',
         twilioAccountSid, twilioAuthToken, twilioPhoneNumber,
+        status: 'connected',
+      });
+    } else if (provider === 'kapso') {
+      const { kapsoApiKey, phoneNumberId, webhookSecret } = req.body;
+      if (!kapsoApiKey || !phoneNumberId) {
+        return res.status(400).json({ success: false, error: 'Kapso requiere API Key y Phone Number ID' });
+      }
+      await db.upsertWhatsappConfig(req.orgId, {
+        provider: 'kapso',
+        phoneNumberId, kapsoApiKey, webhookSecret: webhookSecret || null,
         status: 'connected',
       });
     } else {

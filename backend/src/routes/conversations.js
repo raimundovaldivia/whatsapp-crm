@@ -4,6 +4,7 @@ const db = require('../db/database');
 const { getPool } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 const twilioService   = require('../services/twilio-whatsapp');
+const kapsoService    = require('../services/kapso-whatsapp');
 const { requireAuth } = require('../middleware/auth');
 
 let io;
@@ -57,6 +58,8 @@ router.post('/:id/messages', async (req, res) => {
     let sentResult;
     if (wc.provider === 'twilio') {
       sentResult = await twilioService.sendTextMessage(conv.phone_number, text.trim(), wc);
+    } else if (wc.provider === 'kapso') {
+      sentResult = await kapsoService.sendTextMessage(conv.phone_number, text.trim(), wc);
     } else {
       sentResult = await whatsappService.sendTextMessage(conv.phone_number, text.trim(), wc);
     }

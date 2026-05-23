@@ -24,6 +24,7 @@ const isProd = process.env.NODE_ENV === 'production';
 // Rutas
 const webhookRouter        = require('./routes/webhook');         // WhatsApp (Meta)
 const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Twilio)
+const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
 const authRouter           = require('./routes/auth');
 const setupRouter          = require('./routes/setup');
@@ -48,6 +49,7 @@ const io = new Server(server, {
 // Pasar Socket.IO a los routers que lo necesitan
 webhookRouter.setSocketIO(io);
 twilioWebhookRouter.setSocketIO(io);
+kapsoWebhookRouter.setSocketIO(io);
 shopifyWebhookRouter.setSocketIO(io);
 conversationsRouter.setSocketIO(io);
 
@@ -92,6 +94,7 @@ app.get('/health', (_, res) => res.json({
 // ─── RUTAS ───────────────────────────────────────────────────────
 app.use('/webhook',           webhookRouter);        // POST — Meta webhook
 app.use('/twilio-webhook',    twilioWebhookRouter);  // POST — Twilio webhook
+app.use('/kapso-webhook',     kapsoWebhookRouter);   // POST — Kapso webhook
 app.use('/shopify-webhook',   shopifyWebhookRouter); // POST — Shopify eventos
 app.use('/api/auth',          authRouter);           // POST login/register
 app.use('/api/setup',         setupRouter);          // Wizard configuración
@@ -112,6 +115,7 @@ setupDatabase().then(() => {
     console.log(`\n🤖 WhatsApp CRM — Puerto ${PORT}`);
     console.log(`   WhatsApp Meta   : POST /webhook`);
     console.log(`   WhatsApp Twilio : POST /twilio-webhook`);
+    console.log(`   WhatsApp Kapso  : POST /kapso-webhook`);
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
     console.log(`   Shopify app     : ${process.env.RAIGENTIC_URL || 'https://raigentic.onrender.com'}\n`);
