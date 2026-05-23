@@ -31,7 +31,10 @@ const API_VER  = 'v24.0';
  * @param {object} config - Config de la org (kapso_api_key, phone_number_id)
  */
 async function sendTextMessage(to, text, config) {
-  const { kapso_api_key, phone_number_id } = config;
+  const { phone_number_id } = config;
+  // Preferir la API Key de la org; si no existe (flujo Setup Links), usar la key de plataforma
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey) throw new Error('No hay Kapso API Key disponible (ni por org ni como KAPSO_API_KEY env var)');
 
   const response = await axios.post(
     `${BASE_URL}/${API_VER}/${phone_number_id}/messages`,
@@ -44,7 +47,7 @@ async function sendTextMessage(to, text, config) {
     },
     {
       headers: {
-        'X-API-Key':     kapso_api_key,
+        'X-API-Key':     apiKey,
         'Content-Type':  'application/json',
       },
     }
@@ -59,12 +62,14 @@ async function sendTextMessage(to, text, config) {
  * @param {object} config    - Config de la org (kapso_api_key, phone_number_id)
  */
 async function markAsRead(messageId, config) {
-  const { kapso_api_key, phone_number_id } = config;
+  const { phone_number_id } = config;
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey) return; // Sin key, saltar silenciosamente
   try {
     await axios.post(
       `${BASE_URL}/${API_VER}/${phone_number_id}/messages`,
       { messaging_product: 'whatsapp', status: 'read', message_id: messageId },
-      { headers: { 'X-API-Key': kapso_api_key } }
+      { headers: { 'X-API-Key': apiKey } }
     );
   } catch { /* No crítico */ }
 }

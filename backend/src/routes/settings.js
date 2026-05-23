@@ -127,6 +127,35 @@ router.get('/whatsapp', async (req, res) => {
 });
 
 /**
+ * GET /api/settings/whatsapp/debug
+ * Diagnóstico: qué hay guardado en DB y qué env vars están presentes.
+ * No devuelve secretos completos, solo indica si están presentes (true/false).
+ */
+router.get('/whatsapp/debug', requireAuth, async (req, res) => {
+  const wc = await db.getWhatsappConfig(req.orgId);
+  res.json({
+    db: {
+      provider:         wc?.provider          || null,
+      phone_number_id:  wc?.phone_number_id   || null,
+      kapso_api_key:    wc?.kapso_api_key     ? `${wc.kapso_api_key.slice(0, 8)}...` : null,
+      kapso_customer_id: wc?.kapso_customer_id || null,
+      webhook_secret:   wc?.webhook_secret    ? '(configurado)' : null,
+      status:           wc?.status            || null,
+    },
+    env: {
+      KAPSO_API_KEY:   process.env.KAPSO_API_KEY  ? `${process.env.KAPSO_API_KEY.slice(0, 8)}...` : null,
+      PUBLIC_URL:      process.env.PUBLIC_URL     || null,
+      FRONTEND_URL:    process.env.FRONTEND_URL   || null,
+    },
+    effective: {
+      apiKeySource: wc?.kapso_api_key ? 'db (org)' : process.env.KAPSO_API_KEY ? 'env (platform)' : 'NINGUNA ❌',
+      webhookUrl:   `${process.env.PUBLIC_URL || process.env.BACKEND_URL || '???'}/kapso-webhook`,
+      canSend:      !!(wc?.phone_number_id && (wc?.kapso_api_key || process.env.KAPSO_API_KEY)),
+    },
+  });
+});
+
+/**
  * GET /api/settings/whatsapp/test
  * Verifica que la config guardada es válida haciendo una llamada real a la API
  */
@@ -146,15 +175,17 @@ router.get('/whatsapp/test', async (req, res) => {
       res.json({ success: true, message: `Twilio OK · Cuenta ${sid.slice(0,10)}...` });
 
     } else if (wc.provider === 'kapso') {
-      const axios    = require('axios');
-      const apiKey   = wc.kapso_api_key;
-      const phoneId  = wc.phone_number_id;
-      if (!apiKey || !phoneId) return res.json({ success: false, error: 'Faltan Kapso API Key o Phone Number ID en la DB' });
+      const axios   = require('axios');
+      const apiKey  = wc.kapso_api_key || process.env.KAPSO_API_KEY; // fallback a key de plataforma
+      const phoneId = wc.phone_number_id;
+      if (!phoneId) return res.json({ success: false, error: 'Falta Phone Number ID en la DB. Reconecta WhatsApp con Kapso.' });
+      if (!apiKey)  return res.json({ success: false, error: 'No hay Kapso API Key (ni por org ni como KAPSO_API_KEY en env vars). Agrega KAPSO_API_KEY en Render.' });
       const r = await axios.get('https://api.kapso.ai/v1/phone-numbers', {
         headers: { 'X-API-Key': apiKey }, timeout: 8000,
       });
-      const numbers = r.data?.data || r.data?.phone_numbers || [];
-      const found   = numbers.find(n => n.id === phoneId || n.phone_number_id === phoneId);
+      const numbers = r.data?.data || r.data?.phone_numbers || r.data || [];
+      const list    = Array.isArray(numbers) ? numbers : [];
+      const found   = list.find(n => n.id === phoneId || n.phone_number_id === phoneId || String(n.id) === String(phoneId));
       const display = found?.display_phone_number || found?.phone_number || phoneId;
       res.json({ success: true, message: `Kapso OK · ${display}` });
 

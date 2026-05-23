@@ -29,7 +29,14 @@ router.post('/', async (req, res) => {
   res.sendStatus(200);
 
   const body = req.body;
-  if (!body?.event) return;
+
+  // Log de diagnóstico — siempre registrar que llegó algo
+  console.log(`[KapsoWebhook] ← evento recibido: ${body?.event || '(sin evento)'} | keys: ${Object.keys(body || {}).join(', ')}`);
+
+  if (!body?.event) {
+    console.warn('[KapsoWebhook] Body sin campo "event":', JSON.stringify(body).slice(0, 200));
+    return;
+  }
 
   // ── Verificación de firma (si hay webhook_secret configurado) ────────
   // Kapso envía X-Webhook-Signature con HMAC-SHA256 del payload
@@ -39,13 +46,13 @@ router.post('/', async (req, res) => {
   // ── Identificar la organización por phone_number_id ──────────────────
   const phoneNumberId = body.phone_number_id;
   if (!phoneNumberId) {
-    console.warn('[KapsoWebhook] Evento sin phone_number_id:', body.event);
+    console.warn('[KapsoWebhook] Evento sin phone_number_id. Body:', JSON.stringify(body).slice(0, 300));
     return;
   }
 
   const orgResult = await db.getOrgByPhoneNumberId(phoneNumberId);
   if (!orgResult) {
-    console.warn('[KapsoWebhook] phone_number_id no registrado:', phoneNumberId);
+    console.warn(`[KapsoWebhook] phone_number_id '${phoneNumberId}' no registrado en DB. Asegúrate de haber completado el setup.`);
     return;
   }
   const { org, whatsappConfig } = orgResult;
