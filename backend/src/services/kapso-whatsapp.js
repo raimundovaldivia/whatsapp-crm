@@ -88,26 +88,51 @@ async function markAsRead(messageId, config) {
  * @param {object} body - req.body ya parseado
  * @returns {{ messageId, from, contactName, text, type }} | null
  */
-function parseWebhookMessage(body) {
+/**
+ * parseWebhookMessage — soporta Kapso v2
+ *
+ * En v2 el evento llega en el header X-Webhook-Event, no en body.event.
+ * Se pasa explícitamente como parámetro `event`.
+ *
+ * Payload v2 reference:
+ *   https://docs.kapso.ai/docs/platform/webhooks/event-types.md
+ */
+function parseWebhookMessage(body, event) {
   try {
-    if (body.event !== 'whatsapp.message.received') return null;
+    // Aceptar tanto el header como body.event (por si acaso)
+    const evtName = event || body.event;
+    if (evtName !== 'whatsapp.message.received') return null;
 
     const message  = body.message;
     const conv     = body.conversation;
-    if (!message || !conv) return null;
+    if (!message) return null;
 
-    // Solo procesamos mensajes de texto por ahora
-    // Para audio, Kapso ya transcribe automáticamente en message.kapso.transcript
-    const text = message.type === 'text'
-      ? message.text?.body
-      : message.kapso?.content || null;   // fallback: descripción generada por Kapso
+    // Solo mensajes entrantes (inbound)
+    const direction = message.kapso?.direction;
+    if (direction && direction !== 'inbound') return null;
 
+    // Texto: v2 usa message.text.body para texto;
+    // Para audio Kapso genera transcript en message.kapso.transcript
+    // Para otros tipos usa message.kapso.content como fallback
+    let text = null;
+    if (message.type === 'text') {
+      text = message.text?.body;
+    } else if (message.type === 'audio' && message.kapso?.transcript?.text) {
+      text = `🎤 ${message.kapso.transcript.text}`;
+    } else {
+      text = message.kapso?.content || null;
+    }
     if (!text) return null;
+
+    // Número del remitente: v2 usa conversation.phone_number (con +)
+    // Fallback a message.from (también presente en v2)
+    const fromRaw = conv?.phone_number || message.from || null;
+    const from    = fromRaw?.replace(/^\+/, ''); // sin "+" para consistencia interna
 
     return {
       messageId:   message.id,
-      from:        conv.phone_number?.replace(/^\+/, ''), // sin "+" para consistencia interna
-      contactName: conv.kapso?.contact_name || null,
+      from,
+      contactName: conv?.kapso?.contact_name || null,
       timestamp:   message.timestamp,
       type:        message.type,
       text,
@@ -123,21 +148,25 @@ function parseWebhookMessage(body) {
  * @param {object} body
  * @returns {{ messageId, status, recipientId }} | null
  */
-function parseStatusUpdate(body) {
+/**
+ * parseStatusUpdate — soporta Kapso v2 (evento en header, no en body)
+ */
+function parseStatusUpdate(body, event) {
   try {
+    const evtName = event || body.event;
     const statusEvents = [
       'whatsapp.message.sent',
       'whatsapp.message.delivered',
       'whatsapp.message.read',
       'whatsapp.message.failed',
     ];
-    if (!statusEvents.includes(body.event)) return null;
+    if (!statusEvents.includes(evtName)) return null;
 
     const message = body.message;
     if (!message?.id) return null;
 
     // Extraer status limpio del event name: "whatsapp.message.delivered" → "delivered"
-    const status = body.event.split('.').pop();
+    const status = evtName.split('.').pop();
 
     return {
       messageId:   message.id,

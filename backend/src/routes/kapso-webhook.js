@@ -30,35 +30,34 @@ router.post('/', async (req, res) => {
 
   const body = req.body;
 
-  // Log de diagnóstico — siempre registrar que llegó algo
-  console.log(`[KapsoWebhook] ← evento recibido: ${body?.event || '(sin evento)'} | keys: ${Object.keys(body || {}).join(', ')}`);
+  // En Kapso v2 el evento va en el HEADER X-Webhook-Event (no en el body)
+  // Fallback a body.event por compatibilidad futura
+  const event = req.headers['x-webhook-event'] || body?.event;
 
-  if (!body?.event) {
-    console.warn('[KapsoWebhook] Body sin campo "event":', JSON.stringify(body).slice(0, 200));
+  console.log(`[KapsoWebhook] ← ${event || '(sin evento)'} | phone_number_id: ${body?.phone_number_id || '?'}`);
+
+  if (!event) {
+    console.warn('[KapsoWebhook] Sin X-Webhook-Event ni body.event. Ignorando.');
     return;
   }
 
-  // ── Verificación de firma (si hay webhook_secret configurado) ────────
-  // Kapso envía X-Webhook-Signature con HMAC-SHA256 del payload
-  const signature = req.headers['x-webhook-signature'];
-  const globalSecret = process.env.KAPSO_WEBHOOK_SECRET;
-
   // ── Identificar la organización por phone_number_id ──────────────────
-  const phoneNumberId = body.phone_number_id;
+  const phoneNumberId = body?.phone_number_id;
   if (!phoneNumberId) {
-    console.warn('[KapsoWebhook] Evento sin phone_number_id. Body:', JSON.stringify(body).slice(0, 300));
+    console.warn('[KapsoWebhook] Payload sin phone_number_id:', JSON.stringify(body).slice(0, 200));
     return;
   }
 
   const orgResult = await db.getOrgByPhoneNumberId(phoneNumberId);
   if (!orgResult) {
-    console.warn(`[KapsoWebhook] phone_number_id '${phoneNumberId}' no registrado en DB. Asegúrate de haber completado el setup.`);
+    console.warn(`[KapsoWebhook] phone_number_id '${phoneNumberId}' no registrado en DB.`);
     return;
   }
   const { org, whatsappConfig } = orgResult;
 
-  // Verificar firma con el secret de la org o el global
-  const secret = whatsappConfig.webhook_secret || globalSecret;
+  // ── Verificación de firma HMAC (si hay webhook_secret configurado) ────
+  const signature  = req.headers['x-webhook-signature'];
+  const secret     = whatsappConfig.webhook_secret || process.env.KAPSO_WEBHOOK_SECRET;
   if (secret && signature) {
     const rawBody = JSON.stringify(body);
     const valid = kapsoService.verifySignature(rawBody, signature, secret);
@@ -69,7 +68,7 @@ router.post('/', async (req, res) => {
   }
 
   // ── Actualizar estado de mensaje (delivered/read/failed) ─────────────
-  const statusUpdate = kapsoService.parseStatusUpdate(body);
+  const statusUpdate = kapsoService.parseStatusUpdate(body, event);
   if (statusUpdate) {
     await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status);
     io?.emit(`status_update_${org.id}`, statusUpdate);
@@ -77,7 +76,7 @@ router.post('/', async (req, res) => {
   }
 
   // ── Parsear mensaje entrante ─────────────────────────────────────────
-  const parsed = kapsoService.parseWebhookMessage(body);
+  const parsed = kapsoService.parseWebhookMessage(body, event);
   if (!parsed || !parsed.text) return;
 
   console.log(`[KapsoWebhook] [Org:${org.name}] 📩 ${parsed.from}: ${parsed.text}`);
