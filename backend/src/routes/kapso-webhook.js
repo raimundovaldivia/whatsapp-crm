@@ -85,7 +85,7 @@ router.post('/', async (req, res) => {
     // 1. Obtener/crear conversación
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
 
-    // 2. Guardar mensaje del cliente
+    // 2. Guardar mensaje del cliente (puede ser duplicado si otro webhook llegó primero)
     const savedMsg = await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: parsed.messageId,
@@ -93,14 +93,16 @@ router.post('/', async (req, res) => {
       content:           parsed.text,
       sentBy:            'client',
     });
-    if (!savedMsg) return; // Duplicado
+    // Si es duplicado (savedMsg null), continuar igual — el Meta webhook pudo haberlo guardado
+    // pero no puede responder (null token). Kapso sí puede, así que seguimos.
 
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig);
 
-    // 3. Emitir al CRM en tiempo real
+    // 3. Emitir al CRM en tiempo real (usar savedMsg o buscarlo si fue duplicado)
+    const msgForSocket = savedMsg || { conversationId: conversation.id, direction: 'inbound', content: parsed.text };
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
+    io?.emit(`new_message_${org.id}`, { message: msgForSocket, conversation: updatedConv });
 
     // 4. Si está en modo humano, no responder con IA
     if (updatedConv.agent_mode !== 'ai') {

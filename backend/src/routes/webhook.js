@@ -62,6 +62,12 @@ router.post('/', async (req, res) => {
   }
   const { org, whatsappConfig } = orgResult;
 
+  // Si el proveedor activo es Kapso, ignorar — el kapso-webhook lo maneja
+  if (whatsappConfig?.provider === 'kapso') {
+    console.log(`[Webhook] Org ${org.name} usa Kapso, ignorando Meta webhook`);
+    return;
+  }
+
   // Actualizar status de mensaje (delivery receipt)
   const statusUpdate = whatsappService.parseStatusUpdate(body);
   if (statusUpdate) {
