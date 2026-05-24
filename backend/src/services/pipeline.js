@@ -92,7 +92,7 @@ async function processMessage(orgId, conversationId, userMessage) {
  *
  * Si se encuentra en Shopify, guarda el customerId para linkear la nueva orden.
  */
-async function getKnownCustomerData(orgId, phoneNumber, shop = null) {
+async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
   const result = {};
 
   // ── Fuente 1: órdenes previas del bot ──────────────────────────
@@ -153,8 +153,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   // 0. Pre-llenar con datos del cliente si ya existe en CRM o en Shopify
   if (Object.keys(orderDraft).length === 0) {
     const ds   = await db.getPrimaryDataSource(orgId);
-    const shop = ds?.config?.storeUrl || null;
-    const known = await getKnownCustomerData(orgId, conversation.phone_number, shop);
+    const known = await getKnownCustomerData(orgId, conversation.phone_number, ds);
     if (Object.keys(known).length > 0) {
       orderDraft = { ...known };
       const fuente = known.found_in_shopify ? 'Shopify' : 'historial CRM';
