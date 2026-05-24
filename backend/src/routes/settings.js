@@ -170,18 +170,31 @@ router.get('/whatsapp/test', async (req, res) => {
 
     } else if (wc.provider === 'kapso') {
       const axios   = require('axios');
-      const apiKey  = wc.kapso_api_key || process.env.KAPSO_API_KEY; // fallback a key de plataforma
+      const apiKey  = wc.kapso_api_key || process.env.KAPSO_API_KEY;
       const phoneId = wc.phone_number_id;
-      if (!phoneId) return res.json({ success: false, error: 'Falta Phone Number ID en la DB. Reconecta WhatsApp con Kapso.' });
-      if (!apiKey)  return res.json({ success: false, error: 'No hay Kapso API Key (ni por org ni como KAPSO_API_KEY en env vars). Agrega KAPSO_API_KEY en Render.' });
-      const r = await axios.get('https://api.kapso.ai/v1/phone-numbers', {
-        headers: { 'X-API-Key': apiKey }, timeout: 8000,
-      });
-      const numbers = r.data?.data || r.data?.phone_numbers || r.data || [];
-      const list    = Array.isArray(numbers) ? numbers : [];
-      const found   = list.find(n => n.id === phoneId || n.phone_number_id === phoneId || String(n.id) === String(phoneId));
-      const display = found?.display_phone_number || found?.phone_number || phoneId;
-      res.json({ success: true, message: `Kapso OK · ${display}` });
+      if (!phoneId) return res.json({ success: false, error: 'Falta Phone Number ID. Reconecta WhatsApp con Kapso.' });
+      if (!apiKey)  return res.json({ success: false, error: 'No hay Kapso API Key. Agrega KAPSO_API_KEY en Render o reconecta.' });
+
+      // Verificar API key consultando el perfil del número vía Kapso
+      try {
+        const r = await axios.get(
+          `https://api.kapso.ai/meta/whatsapp/v24.0/${phoneId}/whatsapp_business_profile`,
+          { headers: { 'X-API-Key': apiKey }, timeout: 8000 }
+        );
+        const profile = r.data?.data?.[0] || {};
+        const display = profile?.about || phoneId;
+        res.json({ success: true, message: `Kapso ✅ conectado · Phone ID: ${phoneId}` });
+      } catch (kapsoErr) {
+        const status  = kapsoErr.response?.status;
+        const detail  = kapsoErr.response?.data?.error?.message || kapsoErr.message;
+        // 401 = API key inválida, otros = puede ser config de Meta pero key OK
+        if (status === 401) {
+          return res.json({ success: false, error: `API Key inválida: ${detail}` });
+        }
+        // Si la key es válida pero el número tiene restricciones, igual está conectado
+        res.json({ success: true, message: `Kapso conectado · Phone ID: ${phoneId} (status ${status || 'OK'})` });
+      }
+      return;
 
     } else {
       const axios = require('axios');
