@@ -103,17 +103,23 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    // 5. Ejecutar pipeline de 3 agentes
+    // 5. Verificar que tenemos access_token válido antes de procesar con IA
+    if (!whatsappConfig?.access_token || whatsappConfig.access_token === 'null') {
+      console.warn(`[Webhook] ⚠️  access_token nulo para org ${org.name} — omitiendo respuesta IA`);
+      return;
+    }
+
+    // 6. Ejecutar pipeline de 3 agentes
     const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);
 
-    // 6. Enviar respuesta por WhatsApp
+    // 7. Enviar respuesta por WhatsApp
     const sentResult = await whatsappService.sendTextMessage(
       parsed.from,
       result.response,
       whatsappConfig
     );
 
-    // 7. Guardar respuesta en DB
+    // 8. Guardar respuesta en DB
     const outMsg = await db.saveMessage({
       conversationId: conversation.id,
       whatsappMessageId: sentResult?.messages?.[0]?.id || null,
