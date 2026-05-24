@@ -230,35 +230,55 @@ router.post('/generate', async (req, res) => {
     const Anthropic = require('@anthropic-ai/sdk');
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-    const prompt = `Eres un experto en WhatsApp Business Templates para una tienda de productos frescos del campo (huevos, aceitunas, quesos, miel, conservas, etc.) en Chile.
+    const prompt = `Eres un experto en WhatsApp Business API Templates con años de experiencia aprobando templates en Meta para tiendas de productos frescos del campo (huevos, aceitunas, quesos, miel, conservas, etc.) en Chile.
 
-El usuario quiere crear un template de WhatsApp con este objetivo:
+El usuario quiere un template para este objetivo:
 "${goal.trim()}"
 
-Categoría: ${category}
-Idioma: ${language}
+Categoría: ${category} | Idioma: ${language}
 
-Genera un template de WhatsApp que cumpla ese objetivo. Reglas:
-- El nombre debe ser en snake_case, todo minúsculas, descriptivo (ej: reenganche_clientes_inactivos)
-- El body puede tener variables numeradas {{1}}, {{2}}, etc. para personalizar por cliente
-  - {{1}} = nombre del cliente (casi siempre recomendado)
-  - {{2}}, {{3}}... = otros datos (productos, días inactivo, etc.) — solo si aportan valor
-- Máximo 3-4 variables, no más (Meta rechaza templates muy complejos)
-- Tono: cercano, cálido, como un amigo que cuida al cliente
-- Body: máximo 160 caracteres, directo y natural
-- Header: opcional, corto (máximo 60 chars). CRÍTICO: sin emojis, sin asteriscos, sin caracteres especiales — solo texto plano. Meta rechaza headers con emojis. Si no hay un header útil en texto plano, pon null.
-- Footer: opcional, solo para instrucciones de baja (STOP) o info legal. Generalmente no es necesario.
-- Variables deben ser numeradas consecutivamente empezando por 1
+════════════════════════════════════════
+REGLAS CRÍTICAS — Meta rechaza por esto:
+════════════════════════════════════════
+✗ NUNCA uses lenguaje presuntuoso ("ya se te acabaron", "sabemos que necesitas", "seguro que quieres")
+✗ NUNCA asumas el estado del cliente sin que él lo haya indicado
+✗ NUNCA uses urgencia falsa ("¡ÚLTIMA OPORTUNIDAD!", "SOLO HOY")
+✗ NUNCA uses todas mayúsculas ni signos repetidos (!!!, ???)
+✗ NUNCA prometas cosas que no puedes garantizar
+✗ El header NO puede tener emojis, asteriscos ni caracteres especiales — solo texto plano simple
+✗ Máximo 3 variables (más variables = más probabilidad de rechazo)
 
-Responde ÚNICAMENTE con este JSON (sin markdown, sin explicaciones):
+════════════════════════════════════════
+FÓRMULAS QUE APRUEBA META (úsalas):
+════════════════════════════════════════
+✓ Referencia la relación comercial existente: "tu último pedido", "como siempre pides"
+✓ Ofrece valor concreto sin asumir necesidad: "tenemos disponible", "está listo para ti"
+✓ Pregunta en lugar de afirmar: "¿Te preparamos un pedido?" en vez de "ya necesitas más"
+✓ Tono cercano y directo, como mensaje de un conocido de confianza
+✓ Body: máximo 160 caracteres
+✓ Variables: {{1}} = nombre, {{2}} = producto o días — solo las que aporten valor real
+
+════════════════════════════════════════
+EJEMPLOS APROBADOS vs RECHAZADOS:
+════════════════════════════════════════
+✗ RECHAZADO: "Se nos ocurre que ya se te acabaron los huevos. ¿Hacemos pedido?"
+✓ APROBADO:  "Hola {{1}} 👋 Esta semana tenemos huevos frescos del campo disponibles. ¿Te mandamos tu pedido habitual?"
+
+✗ RECHAZADO: "¡OFERTA! Sabemos que necesitas productos frescos. ¡Compra hoy!"
+✓ APROBADO:  "Hola {{1}}, hace {{2}} semanas que no pedías. Tenemos {{3}} frescos esta semana 🌿 ¿Te interesa?"
+
+✗ RECHAZADO: "Ya es hora de que renueves tu stock de quesos."
+✓ APROBADO:  "{{1}}, llegaron los quesos nuevos que tanto te gustan. ¿Te apartamos algunos?"
+
+Responde ÚNICAMENTE con este JSON (sin markdown, sin explicaciones extra):
 {
-  "name": "nombre_del_template",
-  "header": "Texto de encabezado o null",
-  "body": "Cuerpo del mensaje con {{1}} y otras variables si aplica",
-  "footer": "Texto de pie o null",
+  "name": "nombre_snake_case_descriptivo",
+  "header": "Texto plano sin emojis ni caracteres especiales, o null si no agrega valor",
+  "body": "Mensaje natural con {{1}} nombre y opcionalmente {{2}} {{3}} si aportan valor real",
+  "footer": "null en la mayoría de casos. Solo usar: Responde STOP para darte de baja",
   "variables": {
-    "1": "descripción de qué va aquí (ej: nombre del cliente)",
-    "2": "descripción de qué va aquí si hay más variables"
+    "1": "nombre del cliente",
+    "2": "descripción si hay segunda variable"
   }
 }`;
 
