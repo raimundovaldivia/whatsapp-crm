@@ -232,13 +232,15 @@ router.put('/whatsapp', async (req, res) => {
         status: 'connected',
       });
     } else if (provider === 'kapso') {
-      const { kapsoApiKey, phoneNumberId, webhookSecret } = req.body;
+      const { kapsoApiKey, phoneNumberId, webhookSecret, businessAccountId } = req.body;
       if (!kapsoApiKey || !phoneNumberId) {
         return res.status(400).json({ success: false, error: 'Kapso requiere API Key y Phone Number ID' });
       }
       await db.upsertWhatsappConfig(req.orgId, {
         provider: 'kapso',
-        phoneNumberId, kapsoApiKey, webhookSecret: webhookSecret || null,
+        phoneNumberId, kapsoApiKey,
+        businessAccountId: businessAccountId || null,  // WABA ID para templates
+        webhookSecret: webhookSecret || null,
         status: 'connected',
       });
     } else {

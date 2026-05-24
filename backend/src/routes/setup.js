@@ -49,7 +49,7 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
 
     } else if (provider === 'kapso') {
       // ── Kapso: sin proceso de Meta, solo API key y phone_number_id ──
-      const { kapsoApiKey, phoneNumberId, webhookSecret } = req.body;
+      const { kapsoApiKey, phoneNumberId, webhookSecret, businessAccountId } = req.body;
       if (!kapsoApiKey || !phoneNumberId) {
         return res.status(400).json({ success: false, error: 'Faltan campos Kapso requeridos: kapsoApiKey y phoneNumberId' });
       }
@@ -58,6 +58,7 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
         provider: 'kapso',
         phoneNumberId,
         kapsoApiKey,
+        businessAccountId: businessAccountId || null,  // WABA ID — necesario para templates
         webhookSecret: webhookSecret || null,
       });
 

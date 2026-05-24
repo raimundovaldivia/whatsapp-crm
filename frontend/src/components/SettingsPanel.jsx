@@ -301,7 +301,10 @@ function WhatsAppTab() {
   // Kapso fields
   const [kapsoApiKey,     setKapsoApiKey]     = useState('');
   const [kapsoPhoneId,    setKapsoPhoneId]    = useState('');
+  const [kapsoWabaId,     setKapsoWabaId]     = useState('');  // WABA ID para templates
   const [webhookSecret,   setWebhookSecret]   = useState('');
+  const [savingWabaId,    setSavingWabaId]    = useState(false);
+  const [wabaIdSuccess,   setWabaIdSuccess]   = useState('');
 
   const loadConfig = () => {
     api.get('/settings/whatsapp').then(r => {
@@ -318,6 +321,7 @@ function WhatsAppTab() {
       setTwilioPhone(d.twilioPhoneNumber || '');
       setKapsoApiKey(d.kapsoApiKey || '');
       setKapsoPhoneId(d.phoneNumberId || '');  // Kapso también usa phone_number_id
+      setKapsoWabaId(d.businessAccountId || '');  // WABA ID para templates
       setWebhookSecret(d.webhookSecret || '');
     }).catch(() => {}).finally(() => setLoading(false));
   };
@@ -330,7 +334,7 @@ function WhatsAppTab() {
       const body = provider === 'twilio'
         ? { provider: 'twilio', twilioAccountSid: twilioSid, twilioAuthToken: twilioToken, twilioPhoneNumber: twilioPhone }
         : provider === 'kapso'
-        ? { provider: 'kapso', kapsoApiKey, phoneNumberId: kapsoPhoneId, webhookSecret }
+        ? { provider: 'kapso', kapsoApiKey, phoneNumberId: kapsoPhoneId, webhookSecret, businessAccountId: kapsoWabaId || null }
         : { provider: 'meta', phoneNumberId, businessAccountId, accessToken, webhookVerifyToken };
       const r = await api.put('/settings/whatsapp', body);
       if (r.data.success) {
@@ -342,6 +346,29 @@ function WhatsAppTab() {
     } catch (err) {
       setError(err.response?.data?.error || 'Error al guardar');
     } finally { setSaving(false); }
+  };
+
+  // Guarda solo el WABA ID para Kapso (sin tocar el resto de la config)
+  const saveWabaId = async () => {
+    setSavingWabaId(true); setWabaIdSuccess(''); setError('');
+    try {
+      const r = await api.put('/settings/whatsapp', {
+        provider: 'kapso',
+        kapsoApiKey,
+        phoneNumberId: kapsoPhoneId,
+        webhookSecret,
+        businessAccountId: kapsoWabaId || null,
+      });
+      if (r.data.success) {
+        setWabaIdSuccess('✅ WABA ID guardado');
+        setSavedProvider('kapso');
+        setTimeout(() => setWabaIdSuccess(''), 3000);
+      } else {
+        setError(r.data.error);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error al guardar');
+    } finally { setSavingWabaId(false); }
   };
 
   // Prueba enviando un GET al webhook propio para ver si responde
@@ -447,7 +474,53 @@ function WhatsAppTab() {
         <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
           {provider === 'kapso' ? (
-            <KapsoReconnectPanel />
+            <>
+              <KapsoReconnectPanel />
+
+              {/* WABA ID — necesario para enviar templates */}
+              <div style={{ marginTop: '4px', backgroundColor: '#111b21', borderRadius: '9px', padding: '14px 16px', border: '1px solid #2a3942' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                  <span style={{ color: '#e9edef', fontSize: '13px', fontWeight: 600 }}>WABA ID — para Templates WhatsApp</span>
+                  <span style={{ backgroundColor: '#1a4060', color: '#4db6e8', fontSize: '10px', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>Templates</span>
+                </div>
+                <p style={{ color: '#8696a0', fontSize: '11px', margin: '0 0 10px', lineHeight: 1.6 }}>
+                  El WhatsApp Business Account ID es necesario para listar y enviar templates cuando la ventana de 24h ha expirado.
+                  Encuéntralo en <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#4db6e8' }}>app.kapso.ai</a> → tu número → Account ID.
+                </p>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    value={kapsoWabaId}
+                    onChange={e => setKapsoWabaId(e.target.value)}
+                    placeholder="123456789012345"
+                    style={{
+                      flex: 1, backgroundColor: '#182028', color: '#e9edef',
+                      border: '1px solid #2a3942', borderRadius: '7px',
+                      padding: '8px 12px', fontSize: '13px', outline: 'none',
+                      fontFamily: 'monospace',
+                    }}
+                  />
+                  <button
+                    onClick={saveWabaId}
+                    disabled={savingWabaId}
+                    style={{
+                      backgroundColor: '#1a4060', color: '#4db6e8',
+                      border: '1px solid #1e5a80', borderRadius: '7px',
+                      padding: '8px 14px', fontSize: '12px', fontWeight: 600,
+                      cursor: savingWabaId ? 'not-allowed' : 'pointer',
+                      flexShrink: 0, opacity: savingWabaId ? 0.7 : 1,
+                      whiteSpace: 'nowrap',
+                    }}>
+                    {savingWabaId ? 'Guardando...' : 'Guardar'}
+                  </button>
+                </div>
+                {wabaIdSuccess && <div style={{ color: '#00c853', fontSize: '12px', marginTop: '6px' }}>{wabaIdSuccess}</div>}
+                {kapsoWabaId && (
+                  <div style={{ color: '#4a5568', fontSize: '11px', marginTop: '6px' }}>
+                    ✓ WABA ID configurado — los templates están disponibles
+                  </div>
+                )}
+              </div>
+            </>
           ) : provider === 'meta' ? (
             <>
               <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: '#8696a0', lineHeight: 1.7 }}>
