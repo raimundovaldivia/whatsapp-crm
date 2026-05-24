@@ -155,12 +155,40 @@ Funciones clave en `database.js`:
 
 ---
 
+## WhatsApp Templates (ventana 24h expirada)
+
+Cuando el cliente no escribe en 24h, WhatsApp **solo permite templates pre-aprobados**.
+
+### Flujo
+1. Template se crea en Meta Business Manager → espera aprobación (1-3 días)
+2. Template aprobado tiene: `name`, `language` (ej: `es`), `components` (HEADER, BODY, FOOTER)
+3. Variables en BODY: `{{1}}`, `{{2}}` etc.
+4. Para enviar: `kapsoService.sendTemplate(to, name, languageCode, components, wc)`
+   - `components`: `[{ type: 'body', parameters: [{ type: 'text', text: 'Juan' }] }]`
+
+### Endpoints
+- `GET  /api/reengagement/templates` → lista templates aprobados de la org
+- `POST /api/reengagement/send`      → soporta `{ phone, templateName, languageCode, components }` O `{ phone, message }`
+- `POST /api/reengagement/send-bulk` → igual pero `items[]`
+- `POST /api/conversations/:id/send-template` → desde chat individual
+
+### Configuración necesaria
+- `business_account_id` en `whatsapp_configs` (WABA ID de Meta) — o env var `KAPSO_WABA_ID`
+- Para Kapso: se obtiene en app.kapso.ai → tu número → WABA ID
+
+### UI
+- ReengagementPanel: botón "📋 Usar Template" en header → activa modo template → selector + variables + preview → envío masivo
+- ChatWindow: botón "📋 Template" en header de conversación → modal con selector, variables, preview, envío
+
+---
+
 ## Variables de entorno (Render backend)
 
 ```
 DATABASE_URL          → PostgreSQL connection string
 ANTHROPIC_API_KEY     → Claude API
 KAPSO_API_KEY         → Kapso (puede estar en DB por org también)
+KAPSO_WABA_ID         → WhatsApp Business Account ID (para listar templates)
 PUBLIC_URL            → https://whatsapp-crm-front.onrender.com
 FRONTEND_URL          → https://whatsapp-crm-6fzm.onrender.com
 JWT_SECRET            → auth tokens
