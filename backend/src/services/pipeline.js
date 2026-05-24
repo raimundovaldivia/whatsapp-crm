@@ -187,10 +187,17 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       console.error(`[Pipeline] ❌ Error creando orden en Shopify (HTTP ${status || 'N/A'}):`, detail);
       console.error('[Pipeline] Draft que se intentó enviar:', JSON.stringify(updatedDraft));
 
-      let errorMsg = 'Lo siento, hubo un problema al crear tu pedido automáticamente. Un asesor te ayudará a completarlo enseguida.';
+      // Construir mensaje de error con resumen del pedido para que el cliente sepa que recibimos su info
+      const productInfo = updatedDraft.product_name
+        ? `📦 *${updatedDraft.product_name}* x${updatedDraft.quantity || 1}\n📍 ${updatedDraft.address || ''}, ${updatedDraft.city || ''}`
+        : '';
+
+      const errorMsg = productInfo
+        ? `Recibí todos tus datos 📝${productInfo ? '\n\n' + productInfo : ''}\n\nHubo un problema técnico al generar tu link de pago 😔 Un asesor te lo enviará manualmente en unos minutos. ¡Gracias por tu paciencia!`
+        : 'Recibí tu pedido pero hubo un problema técnico al generarlo 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
 
       if (status === 401 || detail?.includes('Invalid API key') || detail?.includes('access token')) {
-        console.error('[Pipeline] ⚠️  Token de Shopify inválido — la app raigentic necesita reautorizarse. Visita /auth en raigentic.');
+        console.error('[Pipeline] ⚠️  Token de Shopify inválido — reconecta Shopify desde Ajustes del CRM.');
       }
 
       await db.setAgentMode(conversationId, 'human');
