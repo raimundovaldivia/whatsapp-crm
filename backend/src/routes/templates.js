@@ -177,4 +177,90 @@ router.delete('/:name', async (req, res) => {
   }
 });
 
+/* ─────────────────────────────────────────────────────────────────────
+   POST /api/templates/generate
+   La IA genera el contenido de un template dado un objetivo en lenguaje
+   natural. No crea el template en Meta — solo devuelve el draft para
+   que el usuario lo revise antes de enviarlo.
+
+   Body: { goal, category?, language? }
+     goal: descripción libre de lo que debe hacer el template
+           ej: "recordarle al cliente sus productos favoritos cuando
+                hace mucho que no compra"
+
+   Response: { name, header, body, footer, variables: ["1":"nombre", ...] }
+───────────────────────────────────────────────────────────────────── */
+router.post('/generate', async (req, res) => {
+  try {
+    const { goal, category = 'MARKETING', language = 'es' } = req.body;
+    if (!goal?.trim()) {
+      return res.status(400).json({ success: false, error: 'goal requerido' });
+    }
+
+    const Anthropic = require('@anthropic-ai/sdk');
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const prompt = `Eres un experto en WhatsApp Business Templates para una tienda de productos frescos del campo (huevos, aceitunas, quesos, miel, conservas, etc.) en Chile.
+
+El usuario quiere crear un template de WhatsApp con este objetivo:
+"${goal.trim()}"
+
+Categoría: ${category}
+Idioma: ${language}
+
+Genera un template de WhatsApp que cumpla ese objetivo. Reglas:
+- El nombre debe ser en snake_case, todo minúsculas, descriptivo (ej: reenganche_clientes_inactivos)
+- El body puede tener variables numeradas {{1}}, {{2}}, etc. para personalizar por cliente
+  - {{1}} = nombre del cliente (casi siempre recomendado)
+  - {{2}}, {{3}}... = otros datos (productos, días inactivo, etc.) — solo si aportan valor
+- Máximo 3-4 variables, no más (Meta rechaza templates muy complejos)
+- Tono: cercano, cálido, como un amigo que cuida al cliente
+- Body: máximo 160 caracteres, directo y natural
+- Header: opcional, corto, en negrita (máximo 60 chars). Usa solo si agrega valor real.
+- Footer: opcional, solo para instrucciones de baja (STOP) o info legal. Generalmente no es necesario.
+- Variables deben ser numeradas consecutivamente empezando por 1
+
+Responde ÚNICAMENTE con este JSON (sin markdown, sin explicaciones):
+{
+  "name": "nombre_del_template",
+  "header": "Texto de encabezado o null",
+  "body": "Cuerpo del mensaje con {{1}} y otras variables si aplica",
+  "footer": "Texto de pie o null",
+  "variables": {
+    "1": "descripción de qué va aquí (ej: nombre del cliente)",
+    "2": "descripción de qué va aquí si hay más variables"
+  }
+}`;
+
+    const response = await anthropic.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      messages:   [{ role: 'user', content: prompt }],
+    });
+
+    const raw   = response.content[0]?.text?.trim() || '{}';
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) {
+      return res.status(500).json({ success: false, error: 'La IA no devolvió un JSON válido', raw: raw.slice(0, 200) });
+    }
+
+    const generated = JSON.parse(match[0]);
+
+    // Asegurar que name sea snake_case válido
+    if (generated.name) {
+      generated.name = generated.name.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/__+/g, '_');
+    }
+
+    // Limpiar nulls
+    if (!generated.header) generated.header = '';
+    if (!generated.footer) generated.footer = '';
+
+    console.log(`[Templates/generate] Org ${req.orgId} generó draft: "${generated.name}"`);
+    res.json({ success: true, data: generated });
+  } catch (err) {
+    console.error('[Templates/generate]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
