@@ -237,5 +237,57 @@ router.post('/:id/escalation-feedback', async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/conversations/:id/messages
+ * Borra todos los mensajes de una conversación y resetea su estado.
+ * Solo disponible para raivaldiviabou@gmail.com (uso en testing).
+ */
+router.delete('/:id/messages', async (req, res) => {
+  try {
+    // Verificar que el usuario es el dev autorizado
+    const user = await db.getUserById(req.userId);
+    if (!user || user.email !== 'raivaldiviabou@gmail.com') {
+      return res.status(403).json({ success: false, error: 'No autorizado' });
+    }
+
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+
+    const pool = getPool();
+
+    // Borrar todos los mensajes
+    const { rowCount } = await pool.query(
+      'DELETE FROM messages WHERE conversation_id = $1',
+      [conv.id]
+    );
+
+    // Resetear estado de la conversación
+    await pool.query(
+      `UPDATE conversations SET
+        pipeline_state         = 'exploring',
+        order_draft            = '{}',
+        agent_mode             = 'ai',
+        last_message           = NULL,
+        last_message_at        = CURRENT_TIMESTAMP,
+        unread_count           = 0,
+        last_escalation_trigger = NULL,
+        last_escalation_reason  = NULL,
+        last_escalation_at      = NULL,
+        updated_at             = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [conv.id]
+    );
+
+    console.log(`[DevTool] 🗑️  ${rowCount} mensajes borrados en conv ${conv.id} por ${user.email}`);
+
+    const freshConv = await db.getConversationById(conv.id);
+    io?.emit(`new_message_${req.orgId}`, { message: null, conversation: freshConv });
+
+    res.json({ success: true, deleted: rowCount });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

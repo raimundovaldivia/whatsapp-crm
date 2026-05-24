@@ -239,6 +239,15 @@ export default function App() {
               onEscalationFeedback={async (convId, feedback) => {
                 await conversationsAPI.sendEscalationFeedback(convId, feedback);
               }}
+              currentUserEmail={user?.email}
+              onDeleteMessages={async (convId) => {
+                await conversationsAPI.deleteMessages(convId);
+                // Limpiar mensajes en el estado local
+                setMessages(prev => ({ ...prev, [convId]: [] }));
+                // Refrescar la conversación en el sidebar
+                const updated = await conversationsAPI.getAll();
+                setConversations(updated);
+              }}
             />
           ) : (
             <EmptyState orgName={org?.name} />

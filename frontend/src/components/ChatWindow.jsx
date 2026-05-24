@@ -1,17 +1,21 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2 } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback }) {
+const DEV_EMAIL = 'raivaldiviabou@gmail.com';
+
+export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback, onDeleteMessages, currentUserEmail }) {
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
+  const [deleting, setDeleting] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
   const isHumanMode = conversation.agent_mode === 'human';
+  const isDevUser = currentUserEmail === DEV_EMAIL;
 
   // Reset feedback state when conversation changes
   useEffect(() => {
@@ -39,6 +43,18 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       await onEscalationFeedback(conversation.id, feedback);
     } catch (err) {
       console.error('Error guardando feedback:', err);
+    }
+  };
+
+  const handleDeleteMessages = async () => {
+    if (!window.confirm(`¿Borrar todos los mensajes de ${conversation.contact_name || conversation.phone_number}?\n\nEsto resetea el estado del agente para este número.`)) return;
+    setDeleting(true);
+    try {
+      await onDeleteMessages(conversation.id);
+    } catch (err) {
+      setError('Error borrando mensajes.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -107,10 +123,38 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             </div>
           </div>
         </div>
-        <AgentToggle
-          mode={conversation.agent_mode}
-          onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode)}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* Botón dev: solo visible para raivaldiviabou@gmail.com */}
+          {isDevUser && (
+            <button
+              onClick={handleDeleteMessages}
+              disabled={deleting}
+              title="Borrar todos los mensajes (testing)"
+              style={{
+                backgroundColor: 'transparent',
+                border: '1px solid #3d4f59',
+                borderRadius: '6px',
+                padding: '5px 8px',
+                color: deleting ? '#5c6b74' : '#e57373',
+                cursor: deleting ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '11px',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => !deleting && (e.currentTarget.style.backgroundColor = '#3b1f1f')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+            >
+              <Trash2 size={13} />
+              {deleting ? 'Borrando...' : 'Reset chat'}
+            </button>
+          )}
+          <AgentToggle
+            mode={conversation.agent_mode}
+            onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode)}
+          />
+        </div>
       </div>
 
       {/* Banner modo humano */}
