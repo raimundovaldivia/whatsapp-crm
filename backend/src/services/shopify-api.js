@@ -272,8 +272,8 @@ const ORDERS_QUERY = `
           id
           name
           createdAt
-          financialStatus
-          fulfillmentStatus
+          displayFinancialStatus
+          displayFulfillmentStatus
           totalPriceSet { shopMoney { amount currencyCode } }
           customer {
             id firstName lastName email phone
@@ -317,8 +317,8 @@ async function getOrders(shop, token, opts = {}) {
     id:                node.id,
     name:              node.name,
     createdAt:         node.createdAt,
-    financialStatus:   node.financialStatus,
-    fulfillmentStatus: node.fulfillmentStatus,
+    financialStatus:   node.displayFinancialStatus,
+    fulfillmentStatus: node.displayFulfillmentStatus,
     totalPrice:        parseFloat(node.totalPriceSet?.shopMoney?.amount || 0),
     currency:          node.totalPriceSet?.shopMoney?.currencyCode || 'CLP',
     customer:          node.customer ? {
