@@ -12,7 +12,7 @@ const express   = require('express');
 const router    = express.Router();
 const db        = require('../db/database');
 const { getPool } = require('../db/database');
-const raigentic = require('../services/raigentic');
+const shopifyApi = require('../services/shopify-api');
 const Anthropic = require('@anthropic-ai/sdk');
 const { requireAuth } = require('../middleware/auth');
 
@@ -219,7 +219,6 @@ router.get('/candidates', async (req, res) => {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, data: [], total: 0 });
 
-    const shop    = ds.config?.storeUrl;
     const refresh = req.query.refresh === 'true';
 
     const cached = analysisCache.get(req.orgId);
@@ -227,19 +226,27 @@ router.get('/candidates', async (req, res) => {
       return res.json({ success: true, data: cached.data, total: cached.data.length, fromCache: true });
     }
 
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+
     console.log(`[Reengagement] Descargando órdenes de ${shop}...`);
     let allOrders;
     try {
-      allOrders = await raigentic.getAllOrdenesPagadas(shop);
-    } catch (err) {
-      const status = err.response?.status;
-      if (!status || status === 502 || status === 503 || status === 504) {
-        return res.status(503).json({
-          success: false,
-          error: 'raigentic está iniciando (cold start). Espera 30-60 segundos y vuelve a intentarlo.',
-          retry: true,
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      let cursor = null; let page = 0;
+      allOrders = [];
+      while (true) {
+        page++;
+        const result = await shopifyApi.getOrders(shop, token, { limit: 250, cursor, status: 'any' });
+        const validas = (result.orders || []).filter(o => {
+          const fs = (o.financialStatus || '').toUpperCase();
+          return fs !== 'VOIDED' && fs !== 'REFUNDED';
         });
+        allOrders = allOrders.concat(validas);
+        if (!result.hasNextPage || !result.endCursor || page >= 50) break;
+        cursor = result.endCursor;
+        await sleep(300);
       }
+    } catch (err) {
       throw err;
     }
     console.log(`[Reengagement] Total órdenes: ${allOrders.length}`);
@@ -275,18 +282,7 @@ router.get('/candidates', async (req, res) => {
 
         while (true) {
           page++;
-          let result;
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-              result = await raigentic.getClientes(shop, { limit: 100, cursor });
-              break;
-            } catch (err) {
-              const status = err.response?.status;
-              if ((status === 503 || status === 429) && attempt < 3) {
-                await sleep(attempt * 1500);
-              } else throw err;
-            }
-          }
+          const result = await shopifyApi.getCustomers(shop, token, { limit: 100, cursor });
 
           if (page === 1 && result.customers?.length > 0) {
             const muestraCatalogo = result.customers.slice(0, 3).map(c => c.id);
@@ -296,7 +292,7 @@ router.get('/candidates', async (req, res) => {
           for (const c of (result.customers || [])) {
             const phone  = normalizePhone(c.phone);
             if (!phone) continue;
-            const entry  = { phone, name: c.displayName || c.name || phone, email: c.email };
+            const entry  = { phone, name: c.name || phone, email: c.email };
             const numId  = toNumericId(c.id);
             const fullId = String(c.id || '');
             if (numId)  phoneMap.set(numId, entry);
@@ -329,7 +325,7 @@ router.get('/candidates', async (req, res) => {
 
           if (enrichData) {
             order.customer.phone = enrichData.phone;
-            if (!order.customer.name && !order.customer.displayName) order.customer.name = enrichData.name;
+            if (!order.customer.name) order.customer.name = enrichData.name;
             if (!order.customer.email) order.customer.email = enrichData.email;
             enriquecidas++;
             if (phoneMap.get(rawId) || phoneMap.get(numId)) porId++;
