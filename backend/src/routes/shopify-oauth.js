@@ -170,12 +170,17 @@ router.get('/status', requireAuth, async (req, res) => {
 
 /**
  * DELETE /shopify-oauth/disconnect
- * Desconecta Shopify para la org (borra el data source).
+ * Desconecta Shopify: limpia el access token y marca como desconectado.
+ * No borra el row para no romper FK con la tabla agents.
  */
 router.delete('/disconnect', requireAuth, async (req, res) => {
   try {
     await getPool().query(
-      "DELETE FROM data_sources WHERE organization_id = $1 AND type = 'shopify'",
+      `UPDATE data_sources
+       SET status = 'pending',
+           config = jsonb_set(config::jsonb, '{accessToken}', 'null'::jsonb)::text,
+           last_sync_at = CURRENT_TIMESTAMP
+       WHERE organization_id = $1 AND type = 'shopify'`,
       [req.orgId]
     );
     res.json({ success: true });
