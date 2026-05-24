@@ -60,6 +60,13 @@ export const reengagementAPI = {
   send: (data) => api.post('/reengagement/send', data).then(r => r.data),
   sendBulk: (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
   getTemplates: () => api.get('/reengagement/templates').then(r => r.data),
+  fillTemplateVars: (phone, templateBody) => api.post('/reengagement/fill-template-vars', { phone, templateBody }).then(r => r.data),
+};
+
+export const templatesAPI = {
+  getAll:  () => api.get('/templates').then(r => r.data),
+  create:  (data) => api.post('/templates', data).then(r => r.data),
+  delete:  (name) => api.delete(`/templates/${encodeURIComponent(name)}`).then(r => r.data),
 };
 
 export const ordersAPI = {

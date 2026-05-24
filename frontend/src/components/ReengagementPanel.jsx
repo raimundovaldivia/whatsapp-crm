@@ -78,6 +78,11 @@ export default function ReengagementPanel() {
   const [varMap, setVarMap]                 = useState({});
   // manualVars: { "1": "texto manual" }
   const [manualVars, setManualVars]         = useState({});
+  // perCustomerVars: { [phone]: { "1": "Juan", "2": "14" } } — rellenado por IA por cliente
+  const [perCustomerVars, setPerCustomerVars] = useState({});
+  // fillingVars: Set de phones cuyas variables se están generando
+  const [fillingVars, setFillingVars]       = useState(new Set());
+  const [fillingAll, setFillingAll]         = useState(false);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -153,14 +158,19 @@ export default function ReengagementPanel() {
   };
 
   // Construye components[] para un cliente específico
+  // Prioridad: perCustomerVars (IA) > varMap/manualVars (manual)
   const buildComponents = (candidate) => {
     if (!selectedTemplate) return [];
     const vars = parseTemplateVars(selectedTemplate);
     if (vars.length === 0) return [];
+    const aiVars = perCustomerVars[candidate.phone] || {};
     const parameters = vars.map(v => {
+      // Si hay valor generado por IA para este cliente, usarlo
+      if (aiVars[v] != null) return { type: 'text', text: aiVars[v] };
+      // Sino, usar el mapa manual
       const mapping = varMap[v] || 'manual';
       let text = '';
-      if (mapping === 'name')  text = candidate.name || candidate.phone;
+      if (mapping === 'name')       text = candidate.name || candidate.phone;
       else if (mapping === 'phone') text = candidate.phone;
       else text = manualVars[v] || '';
       return { type: 'text', text };
@@ -175,15 +185,56 @@ export default function ReengagementPanel() {
     if (!bodyComp?.text) return `[Template: ${selectedTemplate.name}]`;
     let text = bodyComp.text;
     const vars = parseTemplateVars(selectedTemplate);
+    const aiVars = perCustomerVars[candidate?.phone] || {};
     vars.forEach(v => {
-      const mapping = varMap[v] || 'manual';
       let val = '';
-      if (mapping === 'name')       val = candidate?.name || candidate?.phone || `{{${v}}}`;
-      else if (mapping === 'phone') val = candidate?.phone || `{{${v}}}`;
-      else val = manualVars[v] || `{{${v}}}`;
+      if (aiVars[v] != null) {
+        val = aiVars[v];
+      } else {
+        const mapping = varMap[v] || 'manual';
+        if (mapping === 'name')       val = candidate?.name || candidate?.phone || `{{${v}}}`;
+        else if (mapping === 'phone') val = candidate?.phone || `{{${v}}}`;
+        else val = manualVars[v] || `{{${v}}}`;
+      }
       text = text.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), val);
     });
     return text;
+  };
+
+  // Rellena las variables de un cliente con IA
+  const fillVarsForOne = async (phone) => {
+    if (!selectedTemplate) return;
+    const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
+    if (!bodyComp?.text) return;
+    setFillingVars(prev => new Set(prev).add(phone));
+    try {
+      const res = await reengagementAPI.fillTemplateVars(phone, bodyComp.text);
+      if (res.success && res.vars) {
+        setPerCustomerVars(prev => ({ ...prev, [phone]: res.vars }));
+        setSelected(prev => new Set(prev).add(phone)); // auto-seleccionar al rellenar
+      }
+    } catch (err) {
+      showToast('Error generando variables: ' + (err.response?.data?.error || err.message), 'error');
+    } finally {
+      setFillingVars(prev => { const n = new Set(prev); n.delete(phone); return n; });
+    }
+  };
+
+  // Rellena variables para todos los clientes visibles (o seleccionados)
+  const fillVarsForAll = async () => {
+    if (!selectedTemplate) return;
+    const targets = selected.size > 0
+      ? visible.filter(c => selected.has(c.phone))
+      : visible;
+    setFillingAll(true);
+    for (const c of targets) {
+      if (!perCustomerVars[c.phone]) {
+        await fillVarsForOne(c.phone);
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    setFillingAll(false);
+    showToast(`✅ Variables rellenadas para ${targets.length} clientes`);
   };
 
   // Score de relevancia: vencidos primero, luego confianza alta, luego más cercanos
@@ -285,8 +336,8 @@ export default function ReengagementPanel() {
 
     if (useTemplate) {
       if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
-      targets = visible.filter(c => selected.has(c.phone));
-      if (!targets.length) { showToast('Selecciona al menos un cliente', 'error'); return; }
+      targets = visible.filter(c => selected.has(c.phone) && perCustomerVars[c.phone]);
+      if (!targets.length) { showToast('Primero usa "Rellenar con IA" para los clientes seleccionados', 'error'); return; }
       items = targets.map(c => ({
         phone:        c.phone,
         templateName: selectedTemplate.name,
@@ -314,7 +365,7 @@ export default function ReengagementPanel() {
   };
 
   const selectedWithMsg  = useTemplate
-    ? visible.filter(c => selected.has(c.phone)).length
+    ? visible.filter(c => selected.has(c.phone) && perCustomerVars[c.phone]).length
     : visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim()).length;
   const totalCandidates  = candidates.length;
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
@@ -571,6 +622,23 @@ export default function ReengagementPanel() {
             </span>
           )}
 
+          {useTemplate && selectedTemplate && (
+            <button
+              onClick={fillVarsForAll}
+              disabled={fillingAll}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                backgroundColor: '#1a2530', color: '#a78bfa',
+                padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
+                border: '1px solid #7c3aed44', cursor: fillingAll ? 'not-allowed' : 'pointer',
+                opacity: fillingAll ? 0.7 : 1,
+              }}>
+              {fillingAll
+                ? <><Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Rellenando...</>
+                : <><Sparkles size={14} /> Rellenar con IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}</>}
+            </button>
+          )}
+
           <button onClick={sendBulk}
             disabled={sendingBulk || selectedWithMsg === 0 || (useTemplate && !selectedTemplate)}
             style={{
@@ -637,11 +705,14 @@ export default function ReengagementPanel() {
                 message={messages[c.phone] || ''}
                 isGenerating={generating.has(c.phone)}
                 isSending={sending.has(c.phone)}
+                isFilling={fillingVars.has(c.phone)}
+                hasAiFill={!!(perCustomerVars[c.phone])}
                 onToggleSelect={() => toggleSelect(c.phone)}
                 onToggleExpand={() => setExpanded(prev => {
                   const n = new Set(prev); n.has(c.phone) ? n.delete(c.phone) : n.add(c.phone); return n;
                 })}
                 onGenerate={() => generateMessage(c.phone)}
+                onFillVars={() => fillVarsForOne(c.phone)}
                 onMessageChange={val => setMessages(prev => ({ ...prev, [c.phone]: val }))}
                 onSend={() => sendOne(c.phone)}
                 useTemplate={useTemplate}
@@ -670,7 +741,7 @@ export default function ReengagementPanel() {
   );
 }
 
-function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenerating, isSending, onToggleSelect, onToggleExpand, onGenerate, onMessageChange, onSend, useTemplate, templatePreview }) {
+function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenerating, isSending, isFilling, hasAiFill, onToggleSelect, onToggleExpand, onGenerate, onFillVars, onMessageChange, onSend, useTemplate, templatePreview }) {
   const hasMsg  = message?.trim().length > 0;
   const conf    = c.confidence || 0;
   const cColor  = confColor(conf);
@@ -852,21 +923,46 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         )}
 
         {useTemplate && (
-          <div style={{ flex: 1, backgroundColor: '#0f1820', borderRadius: '7px', padding: '6px 10px', border: '1px solid #1e3a50', fontSize: '12px', color: '#8696a0', fontStyle: 'italic' }}>
-            {templatePreview
-              ? <span style={{ color: '#c8d1d9' }}>{templatePreview.slice(0, 80)}{templatePreview.length > 80 ? '…' : ''}</span>
-              : <span>Template personalizado para {c.name || c.phone}</span>}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {/* Botón rellenar con IA individual */}
+            <button
+              onClick={onFillVars}
+              disabled={isFilling}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                backgroundColor: hasAiFill ? '#1a2040' : '#1a2530',
+                color: hasAiFill ? '#a78bfa' : '#8696a0',
+                padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
+                border: `1px solid ${hasAiFill ? '#7c3aed44' : '#2a3942'}`,
+                cursor: isFilling ? 'not-allowed' : 'pointer',
+                opacity: isFilling ? 0.6 : 1, alignSelf: 'flex-start',
+              }}>
+              {isFilling
+                ? <><Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> Generando...</>
+                : hasAiFill
+                ? <><Sparkles size={11} /> ✓ Re-generar IA</>
+                : <><Sparkles size={11} /> Rellenar con IA</>}
+            </button>
+
+            {/* Preview del template con variables rellenadas */}
+            <div style={{ backgroundColor: '#0f1820', borderRadius: '7px', padding: '6px 10px', border: `1px solid ${hasAiFill ? '#1e3a50' : '#1a2530'}`, fontSize: '12px' }}>
+              {templatePreview
+                ? <span style={{ color: hasAiFill ? '#c8d1d9' : '#8696a0' }}>
+                    {templatePreview.slice(0, 100)}{templatePreview.length > 100 ? '…' : ''}
+                  </span>
+                : <span style={{ color: '#4a5568', fontStyle: 'italic' }}>Rellenar variables con IA para ver preview</span>}
+            </div>
           </div>
         )}
 
-        <button onClick={onSend} disabled={isSending || (useTemplate && !templatePreview)}
+        <button onClick={onSend} disabled={isSending || (useTemplate && !hasAiFill)}
           style={{
             display: 'flex', alignItems: 'center', gap: '6px',
-            backgroundColor: (useTemplate ? !!templatePreview : hasMsg) ? (useTemplate ? '#1a4060' : '#00a884') : '#1e2d3a',
-            color: (useTemplate ? !!templatePreview : hasMsg) ? (useTemplate ? '#4db6e8' : '#fff') : '#374045',
+            backgroundColor: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? '#1a4060' : '#00a884') : '#1e2d3a',
+            color: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? '#4db6e8' : '#fff') : '#374045',
             padding: '7px 18px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
             border: useTemplate ? '1px solid #1e5a80' : 'none',
-            cursor: (isSending || (useTemplate && !templatePreview)) ? 'not-allowed' : (useTemplate ? !!templatePreview : hasMsg) ? 'pointer' : 'not-allowed',
+            cursor: (isSending || (useTemplate && !hasAiFill)) ? 'not-allowed' : (useTemplate ? hasAiFill : hasMsg) ? 'pointer' : 'not-allowed',
             opacity: isSending ? 0.7 : 1, flexShrink: 0,
           }}>
           {isSending

@@ -466,6 +466,82 @@ Escribe un mensaje de WhatsApp CORTO (máximo 3 líneas) y cálido.
 });
 
 /* ─────────────────────────────────────────────────────────────────────
+   POST /api/reengagement/fill-template-vars
+   La IA lee el texto del template, identifica las variables {{N}}, y las
+   rellena con los datos del cliente de forma natural.
+
+   Body: { phone, templateBody }
+   Response: { vars: { "1": "Juan", "2": "huevos", ... } }
+───────────────────────────────────────────────────────────────────── */
+router.post('/fill-template-vars', async (req, res) => {
+  try {
+    const { phone, templateBody } = req.body;
+    if (!phone || !templateBody) {
+      return res.status(400).json({ success: false, error: 'phone y templateBody requeridos' });
+    }
+
+    // Buscar datos del cliente en el caché de análisis
+    const cached = analysisCache.get(req.orgId);
+    const c = cached?.data?.find(x => x.phone === phone) || {};
+
+    // Extraer variables del template
+    const varNums = [...new Set([...templateBody.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))].sort();
+    if (varNums.length === 0) {
+      return res.json({ success: true, vars: {} });
+    }
+
+    const daysLabel = c.daysInactive != null
+      ? `${c.daysInactive} días`
+      : 'unos días';
+
+    const prompt =
+`Eres un asistente de ventas. Debes rellenar las variables de un template de WhatsApp con los datos reales de un cliente.
+
+TEMPLATE:
+"${templateBody}"
+
+DATOS DEL CLIENTE:
+- Nombre: ${c.name || phone}
+- Teléfono: ${phone}
+- Última compra: hace ${daysLabel} (${c.lastOrderDate || '—'})
+- Productos habituales: ${c.lastProducts || 'productos frescos'}
+- Frecuencia de compra: ${c.avgFreqDays ? `cada ~${c.avgFreqDays} días` : 'variable'}
+- La IA predice que compraría: ${c.predictedDays != null ? `en ~${c.predictedDays} días` : 'pronto'}
+${c.aiReason ? `- Contexto IA: ${c.aiReason}` : ''}
+
+Variables a rellenar: ${varNums.map(v => `{{${v}}}`).join(', ')}
+
+Reglas:
+- {{1}} normalmente es el nombre del cliente (usa solo su primer nombre)
+- Usa los datos del cliente de forma natural, sin inventar información
+- Textos cortos (máximo 1-3 palabras por variable, a menos que sea claramente un texto largo)
+- Si no hay dato, usa un valor genérico apropiado
+
+Responde SOLO con un objeto JSON, sin explicaciones:
+{${varNums.map(v => `"${v}": "..."`).join(', ')}}`;
+
+    const response = await anthropic.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      messages:   [{ role: 'user', content: prompt }],
+    });
+
+    const raw   = response.content[0]?.text?.trim() || '{}';
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) {
+      console.error('[Reengagement/fill-vars] No JSON en respuesta:', raw);
+      return res.json({ success: true, vars: {} });
+    }
+
+    const vars = JSON.parse(match[0]);
+    res.json({ success: true, vars });
+  } catch (err) {
+    console.error('[Reengagement/fill-vars]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
    GET /api/reengagement/templates
    Lista los templates aprobados de WhatsApp Business para esta org.
 ───────────────────────────────────────────────────────────────────── */

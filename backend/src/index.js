@@ -35,6 +35,7 @@ const settingsRouter       = require('./routes/settings');
 const catalogoRouter       = require('./routes/catalogo');
 const reengagementRouter   = require('./routes/reengagement');
 const clientesRouter       = require('./routes/clientes');
+const templatesRouter      = require('./routes/templates');
 
 const app    = express();
 const server = http.createServer(app);
@@ -107,6 +108,7 @@ app.use('/api/settings',      settingsRouter);       // Ajustes del CRM
 app.use('/api/catalogo',      catalogoRouter);       // Catálogo de productos
 app.use('/api/reengagement',  reengagementRouter);  // Re-enganche de clientes dormidos
 app.use('/api/clientes',      clientesRouter);      // Lista completa de clientes
+app.use('/api/templates',     templatesRouter);     // WhatsApp Message Templates
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;

@@ -7,14 +7,16 @@ import { useState, useEffect } from 'react';
 import {
   CheckCircle, AlertCircle, ExternalLink, Loader,
   ShoppingBag, RefreshCw, MessageCircle, Phone, Brain,
-  Eye, EyeOff, Save, Zap,
+  Eye, EyeOff, Save, Zap, FileText,
 } from 'lucide-react';
 import { setupAPI, api } from '../utils/api.js';
+import TemplateManager from './TemplateManager.jsx';
 
 const TABS = [
   { key: 'shopify',   label: 'Shopify',    icon: ShoppingBag },
   { key: 'whatsapp',  label: 'WhatsApp',   icon: MessageCircle },
   { key: 'ia',        label: 'IA & Bot',   icon: Brain },
+  { key: 'templates', label: 'Templates',  icon: FileText },
 ];
 
 /* ── helpers de estilo ── */
@@ -706,9 +708,22 @@ export default function SettingsPanel({ successMessage, onClearMessage }) {
         </div>
 
         {/* Contenido del tab */}
-        {activeTab === 'shopify'  && <ShopifyTab />}
-        {activeTab === 'whatsapp' && <WhatsAppTab />}
-        {activeTab === 'ia'       && <IATab />}
+        {activeTab === 'shopify'   && <ShopifyTab />}
+        {activeTab === 'whatsapp'  && <WhatsAppTab />}
+        {activeTab === 'ia'        && <IATab />}
+        {activeTab === 'templates' && (
+          <div style={{ padding: '20px 24px' }}>
+            <div style={{ marginBottom: '16px' }}>
+              <h2 style={{ color: '#e9edef', fontSize: '17px', fontWeight: 700, margin: '0 0 4px' }}>
+                WhatsApp Templates
+              </h2>
+              <p style={{ color: '#8696a0', fontSize: '12px', margin: 0 }}>
+                Crea y gestiona templates pre-aprobados por Meta. Son la única forma de contactar clientes cuya ventana de 24h ha expirado.
+              </p>
+            </div>
+            <TemplateManager />
+          </div>
+        )}
       </div>
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
