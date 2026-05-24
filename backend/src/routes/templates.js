@@ -103,7 +103,7 @@ router.get('/', async (req, res) => {
 ───────────────────────────────────────────────────────────────────── */
 router.post('/', async (req, res) => {
   try {
-    const { name, language, category, header, body, footer } = req.body;
+    const { name, language, category, header, body, footer, varSamples } = req.body;
 
     if (!name?.trim())     return res.status(400).json({ success: false, error: 'name requerido' });
     if (!language?.trim()) return res.status(400).json({ success: false, error: 'language requerido' });
@@ -143,7 +143,17 @@ router.post('/', async (req, res) => {
       components.push({ type: 'HEADER', format: 'TEXT', text: cleanHeader });
     }
 
-    components.push({ type: 'BODY', text: body.trim() });
+    // BODY con example — Meta lo exige cuando hay variables {{N}}
+    const bodyVars = [...new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
+      .sort((a, b) => +a - +b);
+
+    const bodyComponent = { type: 'BODY', text: body.trim() };
+    if (bodyVars.length > 0 && varSamples && Object.keys(varSamples).length > 0) {
+      bodyComponent.example = {
+        body_text: [ bodyVars.map(n => (varSamples[n] || `muestra${n}`).trim()) ],
+      };
+    }
+    components.push(bodyComponent);
 
     if (footer?.trim()) {
       components.push({ type: 'FOOTER', text: footer.trim() });

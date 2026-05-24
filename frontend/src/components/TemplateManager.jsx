@@ -161,6 +161,9 @@ function CreateTemplateForm({ onCreated }) {
   const [aiVarDescs,  setAiVarDescs]  = useState({});  // { "1": "nombre del cliente", ... }
   const [aiUsed,      setAiUsed]      = useState(false);
 
+  // ── Valores de muestra para Meta ──
+  const [varSamples,  setVarSamples]  = useState({});  // { "1": "Juan", "2": "14" }
+
   // Detectar variables en el body en tiempo real
   const vars = body
     ? [...new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
@@ -178,7 +181,19 @@ function CreateTemplateForm({ onCreated }) {
       if (d.header !== undefined) setHeader(d.header || '');
       if (d.body)   setBody(d.body);
       if (d.footer !== undefined) setFooter(d.footer || '');
-      if (d.variables && Object.keys(d.variables).length) setAiVarDescs(d.variables);
+      if (d.variables && Object.keys(d.variables).length) {
+        setAiVarDescs(d.variables);
+        // Pre-llenar muestras con valores típicos según descripción
+        const samples = {};
+        Object.entries(d.variables).forEach(([n, desc]) => {
+          const d2 = desc.toLowerCase();
+          if (d2.includes('nombre')) samples[n] = 'Juan';
+          else if (d2.includes('día') || d2.includes('semana')) samples[n] = '14';
+          else if (d2.includes('producto')) samples[n] = 'huevos';
+          else samples[n] = 'ejemplo';
+        });
+        setVarSamples(samples);
+      }
       setAiUsed(true);
     } catch (err) {
       setError(err.response?.data?.error || err.message);
@@ -195,11 +210,11 @@ function CreateTemplateForm({ onCreated }) {
 
     setCreating(true);
     try {
-      const res = await templatesAPI.create({ name, language: lang, category, header, body, footer });
+      const res = await templatesAPI.create({ name, language: lang, category, header, body, footer, varSamples });
       if (res.success) {
         setSuccess(`✅ Template "${name}" creado — estado: ${res.status || 'PENDING'}. Meta lo revisará en las próximas horas.`);
         setName(''); setHeader(''); setBody(''); setFooter('');
-        setGoal(''); setAiVarDescs({}); setAiUsed(false);
+        setGoal(''); setAiVarDescs({}); setAiUsed(false); setVarSamples({});
         onCreated?.();
       } else {
         setError(res.error || 'Error creando template');
@@ -379,6 +394,47 @@ function CreateTemplateForm({ onCreated }) {
         </div>
       </div>
 
+      {/* ── Valores de muestra — OBLIGATORIO si hay variables ────────────── */}
+      {vars.length > 0 && (
+        <div style={{ backgroundColor: '#1a2010', border: '1px solid #3a5020', borderRadius: '10px', padding: '12px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '10px' }}>
+            <span style={{ fontSize: '13px' }}>📋</span>
+            <span style={{ color: '#a8d080', fontSize: '13px', fontWeight: 700 }}>Valores de muestra</span>
+            <span style={{ color: '#5a7040', fontSize: '11px' }}>— Meta los necesita para revisar el template</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {vars.sort((a, b) => +a - +b).map(n => (
+              <div key={n} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{
+                  backgroundColor: '#00a88422', color: '#00a884', border: '1px solid #00a88444',
+                  borderRadius: '5px', padding: '3px 8px', fontSize: '12px', fontWeight: 700,
+                  flexShrink: 0, fontFamily: 'monospace', minWidth: '36px', textAlign: 'center',
+                }}>
+                  {`{{${n}}}`}
+                </span>
+                {aiVarDescs[n] && (
+                  <span style={{ color: '#5a7040', fontSize: '11px', flexShrink: 0 }}>{aiVarDescs[n]}</span>
+                )}
+                <input
+                  value={varSamples[n] || ''}
+                  onChange={e => setVarSamples(prev => ({ ...prev, [n]: e.target.value }))}
+                  placeholder={aiVarDescs[n] ? `ej: ${aiVarDescs[n] === 'nombre del cliente' ? 'Juan' : aiVarDescs[n]}` : `valor de muestra para {{${n}}}`}
+                  style={{
+                    flex: 1, backgroundColor: '#0f1a08', color: '#e9edef',
+                    border: `1px solid ${varSamples[n]?.trim() ? '#3a5020' : '#ff665544'}`,
+                    borderRadius: '7px', padding: '7px 10px', fontSize: '13px',
+                    outline: 'none', fontFamily: 'inherit',
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: '8px', color: '#5a7040', fontSize: '11px' }}>
+            Sin estos valores Meta rechaza el template automáticamente. No serán enviados a clientes — son solo para revisión.
+          </div>
+        </div>
+      )}
+
       {/* Footer (opcional) */}
       <div>
         <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
@@ -422,14 +478,23 @@ function CreateTemplateForm({ onCreated }) {
       {error   && <div style={{ backgroundColor: '#3a1a1a', color: '#e57373', borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{error}</div>}
       {success && <div style={{ backgroundColor: '#0a2e15', color: '#00c853', borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{success}</div>}
 
+      {/* Advertencia si faltan muestras */}
+      {vars.length > 0 && vars.some(n => !varSamples[n]?.trim()) && (
+        <div style={{ backgroundColor: '#2a1a00', border: '1px solid #ff8c0044', borderRadius: '7px', padding: '9px 12px', fontSize: '12px', color: '#f0b429', display: 'flex', gap: '7px', alignItems: 'flex-start' }}>
+          <span style={{ flexShrink: 0 }}>⚠️</span>
+          <span>Completa los <strong>valores de muestra</strong> de todas las variables. Meta los exige para aprobar el template.</span>
+        </div>
+      )}
+
       <button
         onClick={handleCreate}
-        disabled={creating || !name.trim() || !body.trim()}
+        disabled={creating || !name.trim() || !body.trim() || (vars.length > 0 && vars.some(n => !varSamples[n]?.trim()))}
         style={{
-          backgroundColor: (name.trim() && body.trim()) ? '#00a884' : '#2a3942',
-          color: (name.trim() && body.trim()) ? 'white' : '#8696a0',
+          backgroundColor: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? '#00a884' : '#2a3942',
+          color: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? 'white' : '#8696a0',
           border: 'none', borderRadius: '9px', padding: '12px',
-          fontSize: '14px', fontWeight: 700, cursor: (name.trim() && body.trim()) ? 'pointer' : 'not-allowed',
+          fontSize: '14px', fontWeight: 700,
+          cursor: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? 'pointer' : 'not-allowed',
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
           opacity: creating ? 0.7 : 1,
         }}>
