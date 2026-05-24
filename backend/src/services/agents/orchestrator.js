@@ -58,62 +58,82 @@ Nada más. Solo el JSON.`;
  * @returns {{ escalate: boolean, reason: string, urgency: 'low'|'medium'|'high' }}
  */
 async function checkEscalation(userMessage, conversationHistory, pipelineState) {
-  // Señales rápidas sin llamar a la IA (ahorra costo y latencia)
-  const msg = userMessage.toLowerCase();
+  // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────
+  const simpleGreetings = /^(hola|hi|hello|hey|buenas?|buen[oa]s? (días?|tardes?|noches?)|como estas?|qué tal|cómo estás?|saludos?|holis?|que tal|ke tal)\s*[!?\.]*$/i;
+  if (simpleGreetings.test(userMessage.trim())) {
+    return { escalate: false, reason: 'Saludo simple', urgency: 'low' };
+  }
 
-  // Señales obvias de frustración / solicitud de humano
+  // ── 2. Señales explícitas de solicitud de humano (alta prioridad) ──
   const hardEscalationPatterns = [
     /habla[r]? con (una |un )?(persona|humano|asesor|agente|vendedor)/i,
     /quiero (hablar|habla) con alguien/i,
-    /no (me |te )?(entiendes?|sirves?|funciona[s]?|ayuda[s]?)/i,
-    /que (bronca|rabia|pena|molestia)/i,
-    /esto (es|está) (muy |súper )?(malo|terrible|pésimo|horrible)/i,
-    /\b(mentira|estafa|fraude|engaño)\b/i,
-    /\b(enojado|molesto|furioso|harto)\b/i,
+    /pásame? (con|a) (un |una )?(persona|humano|asesor|agente)/i,
+    /\b(asesor|ejecutivo|persona real|humano)\b.*por favor/i,
   ];
   if (hardEscalationPatterns.some(p => p.test(userMessage))) {
-    return { escalate: true, reason: 'Cliente muestra frustración o solicita humano explícitamente', urgency: 'high' };
+    return { escalate: true, reason: 'Cliente solicita hablar con una persona explícitamente', urgency: 'high' };
   }
 
-  // Conversación muy larga sin resolución (≥ 12 mensajes en collecting_order)
-  if (pipelineState === 'collecting_order' && conversationHistory.length >= 14) {
-    return { escalate: true, reason: 'Proceso de pedido demasiado largo sin completarse', urgency: 'medium' };
+  // ── 3. Señales de frustración fuerte ─────────────────────────────
+  const frustrationPatterns = [
+    /no (me |te )?(entiendes?|sirves?|funciona[s]?|ayuda[s]?)/i,
+    /\b(mentira|estafa|fraude|engaño|pésimo|horrible|terrible)\b/i,
+    /\b(enojado|molesto|furioso|harto|indignado)\b/i,
+    /esto (es|está) (un )?desastre/i,
+  ];
+  if (frustrationPatterns.some(p => p.test(userMessage))) {
+    return { escalate: true, reason: 'Cliente muestra frustración fuerte', urgency: 'high' };
   }
 
-  // Si hay menos de 4 mensajes, no escalar aún (muy temprano)
-  if (conversationHistory.length < 4) {
-    return { escalate: false, reason: 'Conversación nueva', urgency: 'low' };
+  // ── 4. Solo usar IA si hay suficiente historial CON respuestas del bot ──
+  const botResponses = conversationHistory.filter(m => m.direction === 'outbound').length;
+  const clientMessages = conversationHistory.filter(m => m.direction === 'inbound').length;
+
+  // No escalar si el bot no ha respondido aún (problema técnico, no conversacional)
+  if (botResponses < 2) {
+    return { escalate: false, reason: 'Bot aún no ha tenido interacción suficiente', urgency: 'low' };
   }
 
-  // ── IA para casos ambiguos ──────────────────────────────────────
+  // Pedido muy largo sin completarse (solo si el bot SÍ ha respondido activamente)
+  if (pipelineState === 'collecting_order' && clientMessages >= 12 && botResponses >= 6) {
+    return { escalate: true, reason: 'Proceso de pedido muy largo sin completarse', urgency: 'medium' };
+  }
+
+  // No llamar a la IA para conversaciones cortas o normales
+  if (conversationHistory.length < 8 || botResponses < 3) {
+    return { escalate: false, reason: 'Conversación en curso normal', urgency: 'low' };
+  }
+
+  // ── 5. IA solo para casos con historial real de interacción ──────
   const ESCALATION_SYSTEM = `Eres un supervisor de calidad de chat para una tienda online.
-Analiza los últimos mensajes de esta conversación de WhatsApp y decide si un humano debe intervenir.
+Analiza los últimos mensajes y decide si un humano debe intervenir.
 
-ESCALA (escalate: true) cuando detectes:
-- Cliente frustrado, molesto, o repitiendo la misma queja 2+ veces
-- Conversación circular: la IA hace la misma pregunta sin avanzar
-- Preguntas sobre problemas con pedidos anteriores, devoluciones, quejas
-- Cliente confundido durante demasiados turnos (5+) sin resolución
-- Situación que claramente excede la capacidad de un bot de ventas
-- Cliente dejó de responder mucho tiempo y retoma con reclamo
+ESCALA (escalate: true) SOLO cuando detectes claramente:
+- Cliente repite la MISMA queja o problema 3+ veces sin resolución
+- Cliente explícitamente frustrado con el servicio del bot
+- Situación de posventa: devoluciones, pedidos perdidos, reclamos
 
-NO ESCALES cuando:
-- El cliente simplemente está explorando productos
-- La conversación avanza normalmente hacia un pedido
-- El cliente solo tiene una duda puntual que la IA puede resolver
+NO ESCALES por:
+- Conversación normal de ventas aunque sea larga
+- Cliente haciendo preguntas normales sobre productos
+- Proceso de pedido en curso aunque tenga varios pasos
+- Mensajes cortos o respuestas simples
 
 Estado actual: ${pipelineState}
 
-Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea clara", "urgency": "low|medium|high"}`;
+Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgency": "low|medium|high"}`;
 
-  const recent = conversationHistory.slice(-8).map(m =>
-    `${m.direction === 'inbound' ? 'CLIENTE' : 'BOT'}: ${m.content}`
-  ).join('\n');
+  // Solo los últimos mensajes donde el bot SÍ respondió (excluir mensajes sin respuesta)
+  const recent = conversationHistory.slice(-10)
+    .filter(m => m.content?.length > 2) // ignorar mensajes vacíos
+    .map(m => `${m.direction === 'inbound' ? 'CLIENTE' : 'BOT'}: ${m.content}`)
+    .join('\n');
 
   try {
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 120,
+      max_tokens: 100,
       system: ESCALATION_SYSTEM,
       messages: [{ role: 'user', content: `${recent}\nCLIENTE: ${userMessage}` }],
     });
