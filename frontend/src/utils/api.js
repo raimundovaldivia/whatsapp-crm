@@ -64,9 +64,11 @@ export const reengagementAPI = {
 };
 
 export const templatesAPI = {
-  getAll:  () => api.get('/templates').then(r => r.data),
-  create:  (data) => api.post('/templates', data).then(r => r.data),
-  delete:  (name) => api.delete(`/templates/${encodeURIComponent(name)}`).then(r => r.data),
+  getAll:    () => api.get('/templates').then(r => r.data),
+  create:    (data) => api.post('/templates', data).then(r => r.data),
+  delete:    (name) => api.delete(`/templates/${encodeURIComponent(name)}`).then(r => r.data),
+  generate:  (goal, category = 'MARKETING', language = 'es') =>
+               api.post('/templates/generate', { goal, category, language }, { timeout: 30000 }).then(r => r.data),
 };
 
 export const ordersAPI = {

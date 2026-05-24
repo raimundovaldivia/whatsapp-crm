@@ -29,18 +29,30 @@ backend/           → Node.js + Express + Socket.io (Web Service en Render)
 
 ## Git — cómo pushear cambios
 
-El workspace está montado en Windows (NTFS), git no funciona directamente ahí. Usar el clon temporal:
+**Token GitHub (PAT):**  
+El token real está guardado en memoria local de Claude (no en el repo para evitar Push Protection de GitHub).  
+> ⚠️ Si el push da 403, el token expiró. Generar uno nuevo en https://github.com/settings/tokens → Fine-grained → repo `whatsapp-crm` → permisos: **Contents: Read & Write** → decirle a Claude el nuevo token.
+
+**Flujo de push — Claude usa /tmp/crm-push (clon temporal):**
 
 ```bash
-cd /tmp/crm-push          # clon temporal del repo
-git pull origin main
-cp <workspace>/archivo.js /tmp/crm-push/ruta/archivo.js   # copiar cambios
+# 1. Preparar clon temporal (una vez por sesión)
+cd /tmp && rm -rf crm-push
+git clone https://TOKEN@github.com/raimundovaldivia/whatsapp-crm.git crm-push
+cd crm-push
+git config user.email "raivaldiviabou@gmail.com"
+git config user.name "Rai"
+
+# 2. Copiar archivos modificados desde el workspace
+cp /sessions/.../mnt/A-SHOPIFY/whatsapp-crm/<ruta> /tmp/crm-push/<ruta>
+
+# 3. Commit y push
 git add <archivos>
-git commit -m "mensaje"
+git commit -m "feat: ..."
 git push origin main
 ```
 
-Token GitHub: guardarlo en un lugar seguro (no en el repo). Usar `git remote set-url origin https://<TOKEN>@github.com/raimundovaldivia/whatsapp-crm.git`
+**Regla:** nunca hacer `git push` directo al workspace NTFS — siempre desde el clon `/tmp/crm-push`.
 
 Después del push, el backend en Render hace **auto-deploy**. El frontend (Static Site) requiere **Manual Deploy** en el dashboard de Render.
 

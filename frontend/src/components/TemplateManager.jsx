@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   FileText, Plus, Trash2, RefreshCw, CheckCircle,
   Clock, XCircle, Loader, AlertCircle, ChevronDown, ChevronUp,
-  Info,
+  Info, Sparkles, Wand2,
 } from 'lucide-react';
 import { templatesAPI } from '../utils/api.js';
 
@@ -145,26 +145,49 @@ function TemplateCard({ template, onDelete, deleting }) {
 }
 
 function CreateTemplateForm({ onCreated }) {
-  const [name,     setName]     = useState('');
-  const [lang,     setLang]     = useState('es');
-  const [category, setCategory] = useState('MARKETING');
-  const [header,   setHeader]   = useState('');
-  const [body,     setBody]     = useState('');
-  const [footer,   setFooter]   = useState('');
-  const [creating, setCreating] = useState(false);
-  const [error,    setError]    = useState('');
-  const [success,  setSuccess]  = useState('');
+  const [name,       setName]       = useState('');
+  const [lang,       setLang]       = useState('es');
+  const [category,   setCategory]   = useState('MARKETING');
+  const [header,     setHeader]     = useState('');
+  const [body,       setBody]       = useState('');
+  const [footer,     setFooter]     = useState('');
+  const [creating,   setCreating]   = useState(false);
+  const [error,      setError]      = useState('');
+  const [success,    setSuccess]    = useState('');
+
+  // ── IA ──
+  const [goal,        setGoal]        = useState('');
+  const [generating,  setGenerating]  = useState(false);
+  const [aiVarDescs,  setAiVarDescs]  = useState({});  // { "1": "nombre del cliente", ... }
+  const [aiUsed,      setAiUsed]      = useState(false);
 
   // Detectar variables en el body en tiempo real
   const vars = body
     ? [...new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
     : [];
 
-  // Preview del body con variables resaltadas
-  const bodyPreview = body.replace(/\{\{(\d+)\}\}/g, (_, n) =>
-    `[var${n}]`
-  );
+  // ── Generar con IA ──────────────────────────────────────────────────────
+  const handleGenerate = async () => {
+    if (!goal.trim()) return;
+    setGenerating(true); setError(''); setAiVarDescs({}); setAiUsed(false);
+    try {
+      const res = await templatesAPI.generate(goal.trim(), category, lang);
+      if (!res.success) { setError(res.error || 'Error generando template'); return; }
+      const d = res.data;
+      if (d.name)   setName(d.name);
+      if (d.header !== undefined) setHeader(d.header || '');
+      if (d.body)   setBody(d.body);
+      if (d.footer !== undefined) setFooter(d.footer || '');
+      if (d.variables && Object.keys(d.variables).length) setAiVarDescs(d.variables);
+      setAiUsed(true);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
+  // ── Crear en Meta ───────────────────────────────────────────────────────
   const handleCreate = async () => {
     setError(''); setSuccess('');
     if (!name.trim()) { setError('El nombre es requerido'); return; }
@@ -176,6 +199,7 @@ function CreateTemplateForm({ onCreated }) {
       if (res.success) {
         setSuccess(`✅ Template "${name}" creado — estado: ${res.status || 'PENDING'}. Meta lo revisará en las próximas horas.`);
         setName(''); setHeader(''); setBody(''); setFooter('');
+        setGoal(''); setAiVarDescs({}); setAiUsed(false);
         onCreated?.();
       } else {
         setError(res.error || 'Error creando template');
@@ -203,23 +227,87 @@ function CreateTemplateForm({ onCreated }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
-      {/* Nombre */}
-      <div>
-        <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
-          Nombre del template *
-        </label>
-        <input
-          value={name}
-          onChange={e => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
-          placeholder="ej: reenganche_frescos_cl"
-          style={inputStyle}
-        />
-        <div style={{ color: '#4a5568', fontSize: '11px', marginTop: '4px' }}>
-          Solo minúsculas, números y guiones bajos. Ej: <code style={{ color: '#8696a0' }}>reenganche_frescos</code>
+      {/* ── Sección IA ──────────────────────────────────────────────────── */}
+      <div style={{
+        background: 'linear-gradient(135deg, #1a1f2e 0%, #0d1a2a 100%)',
+        border: '1px solid #2a4060',
+        borderRadius: '12px',
+        padding: '14px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+          <Sparkles size={15} color="#7b68ee" />
+          <span style={{ color: '#b8a9ff', fontSize: '13px', fontWeight: 700 }}>Generar con IA</span>
+          <span style={{ color: '#4a5568', fontSize: '11px' }}>— describe el objetivo y la IA crea el template</span>
         </div>
+
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+          <textarea
+            value={goal}
+            onChange={e => setGoal(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && goal.trim()) { e.preventDefault(); handleGenerate(); } }}
+            placeholder="ej: recordarle al cliente sus productos favoritos cuando lleva más de 2 semanas sin comprar"
+            rows={2}
+            style={{
+              ...inputStyle,
+              flex: 1,
+              backgroundColor: '#0d1520',
+              border: '1px solid #2a4060',
+              resize: 'none',
+              fontSize: '13px',
+            }}
+          />
+          <button
+            onClick={handleGenerate}
+            disabled={generating || !goal.trim()}
+            title="Generar template con IA (Enter)"
+            style={{
+              backgroundColor: (goal.trim() && !generating) ? '#7b68ee' : '#1a2030',
+              color: (goal.trim() && !generating) ? 'white' : '#4a5568',
+              border: `1px solid ${(goal.trim() && !generating) ? '#7b68ee' : '#2a3942'}`,
+              borderRadius: '9px',
+              padding: '9px 14px',
+              fontSize: '13px', fontWeight: 700,
+              cursor: (goal.trim() && !generating) ? 'pointer' : 'not-allowed',
+              display: 'flex', alignItems: 'center', gap: '6px',
+              whiteSpace: 'nowrap', flexShrink: 0,
+              transition: 'all 0.15s',
+            }}>
+            {generating
+              ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Generando...</>
+              : <><Wand2 size={13} /> Generar</>}
+          </button>
+        </div>
+
+        {/* Descripciones de variables de la IA */}
+        {aiUsed && Object.keys(aiVarDescs).length > 0 && (
+          <div style={{ marginTop: '10px', backgroundColor: '#0a1520', borderRadius: '8px', padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <span style={{ color: '#4a5568', fontSize: '11px', width: '100%', marginBottom: '2px' }}>Variables detectadas:</span>
+            {Object.entries(aiVarDescs).sort(([a], [b]) => +a - +b).map(([n, desc]) => (
+              <span key={n} style={{
+                backgroundColor: '#00a88422', color: '#00a884', border: '1px solid #00a88444',
+                borderRadius: '6px', padding: '2px 8px', fontSize: '11px',
+              }}>
+                {'{{' + n + '}}'} = {desc}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {aiUsed && (
+          <div style={{ marginTop: '8px', color: '#7b68ee', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <Sparkles size={10} /> Template generado — revisa y edita los campos antes de enviarlo a Meta
+          </div>
+        )}
       </div>
 
-      {/* Idioma + Categoría en fila */}
+      {/* ── Separador ───────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ flex: 1, height: '1px', backgroundColor: '#2a3942' }} />
+        <span style={{ color: '#4a5568', fontSize: '11px' }}>o edita manualmente</span>
+        <div style={{ flex: 1, height: '1px', backgroundColor: '#2a3942' }} />
+      </div>
+
+      {/* ── Idioma + Categoría en fila ───────────────────────────────────── */}
       <div style={{ display: 'flex', gap: '10px' }}>
         <div style={{ flex: 1 }}>
           <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>Idioma *</label>
@@ -238,6 +326,22 @@ function CreateTemplateForm({ onCreated }) {
         </div>
       </div>
 
+      {/* Nombre */}
+      <div>
+        <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
+          Nombre del template *
+        </label>
+        <input
+          value={name}
+          onChange={e => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+          placeholder="ej: reenganche_frescos_cl"
+          style={{ ...inputStyle, borderColor: aiUsed && name ? '#7b68ee44' : '#374045' }}
+        />
+        <div style={{ color: '#4a5568', fontSize: '11px', marginTop: '4px' }}>
+          Solo minúsculas, números y guiones bajos. Ej: <code style={{ color: '#8696a0' }}>reenganche_frescos</code>
+        </div>
+      </div>
+
       {/* Header (opcional) */}
       <div>
         <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
@@ -247,7 +351,7 @@ function CreateTemplateForm({ onCreated }) {
           value={header}
           onChange={e => setHeader(e.target.value)}
           placeholder="ej: 🌿 Productos Frescos del Campo"
-          style={inputStyle}
+          style={{ ...inputStyle, borderColor: aiUsed && header ? '#7b68ee44' : '#374045' }}
           maxLength={60}
         />
         <div style={{ color: '#4a5568', fontSize: '11px', marginTop: '4px' }}>{header.length}/60 · Aparece en negrita sobre el mensaje</div>
@@ -263,7 +367,7 @@ function CreateTemplateForm({ onCreated }) {
           onChange={e => setBody(e.target.value)}
           placeholder={'Hola {{1}}, llevas {{2}} días sin pedir tus {{3}} favoritos. ¿Te hacemos un pedido hoy? 🌿'}
           rows={4}
-          style={{ ...inputStyle, resize: 'vertical' }}
+          style={{ ...inputStyle, resize: 'vertical', borderColor: aiUsed && body ? '#7b68ee44' : '#374045' }}
           maxLength={1024}
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: '4px' }}>
@@ -296,9 +400,10 @@ function CreateTemplateForm({ onCreated }) {
           <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', border: '1px solid #2a3942', maxWidth: '360px' }}>
             {header && <div style={{ color: '#e9edef', fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>{header}</div>}
             <div style={{ color: '#c8d1d9', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-              {body.replace(/\{\{(\d+)\}\}/g, (_, n) => (
-                `[var${n}]`
-              ))}
+              {body.replace(/\{\{(\d+)\}\}/g, (_, n) => {
+                const desc = aiVarDescs[n];
+                return desc ? `[${desc}]` : `[var${n}]`;
+              })}
             </div>
             {footer && <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '6px' }}>{footer}</div>}
           </div>
