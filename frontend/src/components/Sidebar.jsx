@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { MessageSquare, Search, RefreshCw, Plus, X, Send } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
-import api from '../api.js';
+import { conversationsAPI } from '../utils/api.js';
 
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh }) {
   const [search, setSearch]       = useState('');
@@ -39,11 +39,11 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     setSending(true);
     setError('');
     try {
-      const { data } = await api.post('/conversations/start', { phone: phone.trim(), name: name.trim(), text: text.trim() });
-      if (data.success) {
+      const result = await conversationsAPI.startConversation({ phone: phone.trim(), name: name.trim(), text: text.trim() });
+      if (result.success) {
         setShowModal(false);
         onRefresh();
-        onSelect(data.data.conversationId);
+        onSelect(result.data.conversationId);
       }
     } catch (err) {
       setError(err.response?.data?.error || err.message);

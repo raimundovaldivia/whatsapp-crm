@@ -50,6 +50,7 @@ export const conversationsAPI = {
   getOrders: (id) => api.get(`/conversations/${id}/orders`).then(r => r.data.data),
   sendEscalationFeedback: (id, feedback) => api.post(`/conversations/${id}/escalation-feedback`, { feedback }).then(r => r.data),
   deleteMessages: (id) => api.delete(`/conversations/${id}/messages`).then(r => r.data),
+  startConversation: (data) => api.post('/conversations/start', data).then(r => r.data),
 };
 
 export const ordersAPI = {
