@@ -122,20 +122,36 @@ router.post('/', async (req, res) => {
     const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);
 
     // 6. Enviar respuesta por WhatsApp via Kapso
-    const sentResult = await kapsoService.sendTextMessage(
-      parsed.from,
-      result.response,
-      whatsappConfig
-    );
+    let sentResult = null;
+    let windowExpired = false;
+    try {
+      sentResult = await kapsoService.sendTextMessage(
+        parsed.from,
+        result.response,
+        whatsappConfig
+      );
+    } catch (sendErr) {
+      if (sendErr.is24hWindow) {
+        windowExpired = true;
+        console.warn(`[KapsoWebhook] ⏰ Ventana 24h expirada para ${parsed.from} — guardando respuesta como bloqueada`);
+        // Notificar al CRM para que muestre el banner
+        io?.emit(`window_expired_${org.id}`, { conversationId: conversation.id, phone: parsed.from });
+      } else {
+        throw sendErr; // otro error — propagar
+      }
+    }
 
-    // 7. Guardar respuesta en DB
+    // 7. Guardar respuesta en DB (aunque no se haya podido enviar)
     const outMsg = await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: sentResult?.messages?.[0]?.id || null,
       direction:         'outbound',
-      content:           result.response,
+      content:           windowExpired
+        ? `⏰ [Mensaje bloqueado — ventana 24h expirada]\n${result.response}`
+        : result.response,
       sentBy:            'ai',
       agentType:         result.agentType,
+      status:            windowExpired ? 'failed' : 'sent',
     });
 
     await db.updateConversationLastMessage(conversation.id, result.response);

@@ -67,7 +67,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     try {
       await onSendMessage(conversation.id, text);
     } catch (err) {
-      setError('Error enviando el mensaje. Intenta de nuevo.');
+      const is24h = err.response?.data?.error === 'WINDOW_EXPIRED';
+      if (is24h) {
+        setError('⏰ Ventana de 24h expirada — el cliente debe escribirte primero para poder responder.');
+      } else {
+        setError('Error enviando el mensaje. Intenta de nuevo.');
+      }
       setInputText(text);
     } finally {
       setSending(false);
@@ -187,6 +192,27 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           >
             <Play size={11} /> Reactivar IA
           </button>
+        </div>
+      )}
+
+      {/* Banner ventana 24h expirada */}
+      {error?.includes('Ventana de 24h') && (
+        <div style={{
+          backgroundColor: '#2d1b00',
+          borderBottom: '1px solid #4a3000',
+          padding: '8px 16px',
+          fontSize: '12px',
+          color: '#fb923c',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+        }}>
+          <span>⏰</span>
+          <span>
+            <strong>Ventana de 24 horas expirada.</strong>{' '}
+            WhatsApp solo permite responder si el cliente ha escrito en las últimas 24h.
+            Espera a que el cliente te escriba primero.
+          </span>
         </div>
       )}
 

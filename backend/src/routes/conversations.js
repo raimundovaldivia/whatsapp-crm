@@ -56,12 +56,23 @@ router.post('/:id/messages', async (req, res) => {
 
     // Enviar por el proveedor correcto según configuración
     let sentResult;
-    if (wc.provider === 'twilio') {
-      sentResult = await twilioService.sendTextMessage(conv.phone_number, text.trim(), wc);
-    } else if (wc.provider === 'kapso') {
-      sentResult = await kapsoService.sendTextMessage(conv.phone_number, text.trim(), wc);
-    } else {
-      sentResult = await whatsappService.sendTextMessage(conv.phone_number, text.trim(), wc);
+    try {
+      if (wc.provider === 'twilio') {
+        sentResult = await twilioService.sendTextMessage(conv.phone_number, text.trim(), wc);
+      } else if (wc.provider === 'kapso') {
+        sentResult = await kapsoService.sendTextMessage(conv.phone_number, text.trim(), wc);
+      } else {
+        sentResult = await whatsappService.sendTextMessage(conv.phone_number, text.trim(), wc);
+      }
+    } catch (sendErr) {
+      if (sendErr.is24hWindow) {
+        return res.status(400).json({
+          success: false,
+          error: 'WINDOW_EXPIRED',
+          message: 'La ventana de 24 horas expiró. El cliente debe escribirte primero para que puedas responder.',
+        });
+      }
+      throw sendErr;
     }
 
     const message = await db.saveMessage({

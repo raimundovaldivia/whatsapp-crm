@@ -30,6 +30,24 @@ const API_VER  = 'v24.0';
  * @param {string} text   - Texto del mensaje
  * @param {object} config - Config de la org (kapso_api_key, phone_number_id)
  */
+/**
+ * Detecta si un error de Kapso/Meta es por ventana de 24h expirada.
+ * En ese caso solo se pueden enviar templates, no mensajes de texto libre.
+ */
+function is24hWindowError(err) {
+  const body = err.response?.data;
+  // Kapso devuelve el error como string o como objeto
+  const msg = typeof body === 'string' ? body
+    : body?.error || body?.message || JSON.stringify(body || '');
+  return typeof msg === 'string' && (
+    msg.includes('24-hour window') ||
+    msg.includes('non-template') ||
+    msg.includes('outside the 24') ||
+    // código de error Meta: 131047
+    msg.includes('131047')
+  );
+}
+
 async function sendTextMessage(to, text, config) {
   const { phone_number_id } = config;
   // Preferir la API Key de la org; si no existe (flujo Setup Links), usar la key de plataforma
@@ -58,8 +76,17 @@ async function sendTextMessage(to, text, config) {
     const status  = err.response?.status;
     const errBody = err.response?.data;
     const detail  = errBody ? JSON.stringify(errBody) : err.message;
+
+    // Marcar el error con un flag especial para que los callers lo detecten
+    if (is24hWindowError(err)) {
+      console.warn(`[KapsoWA] ⏰ Ventana 24h expirada para ${to} — solo se pueden enviar templates`);
+      const windowErr = new Error('WINDOW_EXPIRED: ventana de 24 horas expirada');
+      windowErr.is24hWindow = true;
+      throw windowErr;
+    }
+
     console.error(`[KapsoWA] sendTextMessage FAILED — to:${to} phone_number_id:${phone_number_id} status:${status} — ${detail}`);
-    throw err; // re-lanzar para que el caller lo maneje
+    throw err;
   }
 }
 
@@ -207,4 +234,4 @@ function verifySignature(rawBody, signature, secret) {
   } catch { return false; }
 }
 
-module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature };
+module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError };
