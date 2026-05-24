@@ -168,7 +168,7 @@ const CUSTOMERS_QUERY = `
           email
           phone
           numberOfOrders
-          totalSpentV2 { amount currencyCode }
+          amountSpent { amount currencyCode }
           createdAt
           updatedAt
           defaultAddress {
@@ -207,8 +207,8 @@ async function getCustomers(shop, token, opts = {}) {
     email:         node.email,
     phone:         node.phone,
     ordersCount:   node.numberOfOrders,
-    totalSpent:    parseFloat(node.totalSpentV2?.amount || 0),
-    currency:      node.totalSpentV2?.currencyCode || 'CLP',
+    totalSpent:    parseFloat(node.amountSpent?.amount || 0),
+    currency:      node.amountSpent?.currencyCode || 'CLP',
     createdAt:     node.createdAt,
     updatedAt:     node.updatedAt,
     address:       node.defaultAddress || null,
