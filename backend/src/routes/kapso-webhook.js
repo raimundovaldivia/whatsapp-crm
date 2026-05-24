@@ -147,7 +147,14 @@ router.post('/', async (req, res) => {
     }
 
   } catch (err) {
-    console.error('[KapsoWebhook] Error procesando mensaje:', err);
+    // Imprimir error completo incluyendo respuesta de APIs externas
+    if (err.response) {
+      console.error('[KapsoWebhook] Error HTTP', err.response.status,
+        'url:', err.config?.url,
+        'body:', JSON.stringify(err.response.data));
+    } else {
+      console.error('[KapsoWebhook] Error procesando mensaje:', err.message, err.stack?.split('\n')[1]);
+    }
   }
 });
 

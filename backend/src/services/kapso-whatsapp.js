@@ -36,24 +36,31 @@ async function sendTextMessage(to, text, config) {
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   if (!apiKey) throw new Error('No hay Kapso API Key disponible (ni por org ni como KAPSO_API_KEY env var)');
 
-  const response = await axios.post(
-    `${BASE_URL}/${API_VER}/${phone_number_id}/messages`,
-    {
-      messaging_product: 'whatsapp',
-      recipient_type:    'individual',
-      to,
-      type: 'text',
-      text: { body: text },
-    },
-    {
-      headers: {
-        'X-API-Key':     apiKey,
-        'Content-Type':  'application/json',
+  try {
+    const response = await axios.post(
+      `${BASE_URL}/${API_VER}/${phone_number_id}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type:    'individual',
+        to,
+        type: 'text',
+        text: { body: text },
       },
-    }
-  );
-
-  return response.data;
+      {
+        headers: {
+          'X-API-Key':     apiKey,
+          'Content-Type':  'application/json',
+        },
+      }
+    );
+    return response.data;
+  } catch (err) {
+    const status  = err.response?.status;
+    const errBody = err.response?.data;
+    const detail  = errBody ? JSON.stringify(errBody) : err.message;
+    console.error(`[KapsoWA] sendTextMessage FAILED — to:${to} phone_number_id:${phone_number_id} status:${status} — ${detail}`);
+    throw err; // re-lanzar para que el caller lo maneje
+  }
 }
 
 /**
