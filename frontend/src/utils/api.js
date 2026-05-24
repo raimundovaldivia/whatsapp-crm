@@ -48,6 +48,7 @@ export const conversationsAPI = {
   setAgentMode: (id, mode) => api.patch(`/conversations/${id}/agent-mode`, { mode }).then(r => r.data.data),
   markAsRead: (id) => api.patch(`/conversations/${id}/read`),
   getOrders: (id) => api.get(`/conversations/${id}/orders`).then(r => r.data.data),
+  sendEscalationFeedback: (id, feedback) => api.post(`/conversations/${id}/escalation-feedback`, { feedback }).then(r => r.data),
 };
 
 export const ordersAPI = {

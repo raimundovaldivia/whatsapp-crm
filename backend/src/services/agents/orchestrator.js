@@ -57,7 +57,7 @@ Nada más. Solo el JSON.`;
  *
  * @returns {{ escalate: boolean, reason: string, urgency: 'low'|'medium'|'high' }}
  */
-async function checkEscalation(userMessage, conversationHistory, pipelineState) {
+async function checkEscalation(userMessage, conversationHistory, pipelineState, orgId = null) {
   // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────
   const simpleGreetings = /^(hola|hi|hello|hey|buenas?|buen[oa]s? (días?|tardes?|noches?)|como estas?|qué tal|cómo estás?|saludos?|holis?|que tal|ke tal)\s*[!?\.]*$/i;
   if (simpleGreetings.test(userMessage.trim())) {
@@ -90,22 +90,34 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState) 
   const botResponses = conversationHistory.filter(m => m.direction === 'outbound').length;
   const clientMessages = conversationHistory.filter(m => m.direction === 'inbound').length;
 
-  // No escalar si el bot no ha respondido aún (problema técnico, no conversacional)
   if (botResponses < 2) {
     return { escalate: false, reason: 'Bot aún no ha tenido interacción suficiente', urgency: 'low' };
   }
 
-  // Pedido muy largo sin completarse (solo si el bot SÍ ha respondido activamente)
   if (pipelineState === 'collecting_order' && clientMessages >= 12 && botResponses >= 6) {
     return { escalate: true, reason: 'Proceso de pedido muy largo sin completarse', urgency: 'medium' };
   }
 
-  // No llamar a la IA para conversaciones cortas o normales
   if (conversationHistory.length < 8 || botResponses < 3) {
     return { escalate: false, reason: 'Conversación en curso normal', urgency: 'low' };
   }
 
-  // ── 5. IA solo para casos con historial real de interacción ──────
+  // ── 5. IA con ejemplos negativos de feedback ──────────────────
+  // Cargar ejemplos donde el agente se equivocó (feedback 'unnecessary')
+  let negativeExamplesText = '';
+  if (orgId) {
+    try {
+      const db = require('../../db/database');  // lazy require para evitar circular
+      const negExamples = await db.getEscalationNegativeExamples(orgId, 6);
+      if (negExamples.length > 0) {
+        negativeExamplesText = `\n\nAPRENDIZAJE DE ERRORES PASADOS — NO escalar cuando el mensaje sea similar a:\n` +
+          negExamples.map((e, i) => `${i + 1}. "${e.message_content}" → razón incorrecta fue: "${e.escalation_reason}"`).join('\n');
+      }
+    } catch (err) {
+      // silencioso — no romper si la tabla no existe aún
+    }
+  }
+
   const ESCALATION_SYSTEM = `Eres un supervisor de calidad de chat para una tienda online.
 Analiza los últimos mensajes y decide si un humano debe intervenir.
 
@@ -118,15 +130,14 @@ NO ESCALES por:
 - Conversación normal de ventas aunque sea larga
 - Cliente haciendo preguntas normales sobre productos
 - Proceso de pedido en curso aunque tenga varios pasos
-- Mensajes cortos o respuestas simples
+- Mensajes cortos o respuestas simples${negativeExamplesText}
 
 Estado actual: ${pipelineState}
 
 Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgency": "low|medium|high"}`;
 
-  // Solo los últimos mensajes donde el bot SÍ respondió (excluir mensajes sin respuesta)
   const recent = conversationHistory.slice(-10)
-    .filter(m => m.content?.length > 2) // ignorar mensajes vacíos
+    .filter(m => m.content?.length > 2)
     .map(m => `${m.direction === 'inbound' ? 'CLIENTE' : 'BOT'}: ${m.content}`)
     .join('\n');
 

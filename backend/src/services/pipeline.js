@@ -43,7 +43,7 @@ async function processMessage(orgId, conversationId, userMessage) {
 
   // ── Agente de escalación — corre en paralelo con la clasificación ──
   const [escalationResult, intentResult] = await Promise.all([
-    orchestrator.checkEscalation(userMessage, history, currentState),
+    orchestrator.checkEscalation(userMessage, history, currentState, orgId),
     currentState === 'collecting_order'
       ? Promise.resolve(null)
       : orchestrator.classifyIntent(userMessage, history, currentState),
@@ -53,6 +53,7 @@ async function processMessage(orgId, conversationId, userMessage) {
   if (escalationResult.escalate) {
     console.log(`[Pipeline] 🚨 Escalación detectada (${escalationResult.urgency}): ${escalationResult.reason}`);
     await db.setAgentMode(conversationId, 'human');
+    await db.setLastEscalation(conversationId, userMessage, escalationResult.reason);
     await db.updatePipelineState(conversationId, currentState); // mantiene el estado actual
 
     const escalationMessages = {

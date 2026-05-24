@@ -383,6 +383,44 @@ async function getOrdersByOrg(orgId) {
   return query('SELECT * FROM orders WHERE organization_id = $1 ORDER BY created_at DESC', [orgId]);
 }
 
+// ─── ESCALATION FEEDBACK ──────────────────────────────────────
+
+async function saveEscalationFeedback(orgId, conversationId, messageContent, escalationReason, feedback) {
+  return queryOne(
+    `INSERT INTO escalation_feedback (organization_id, conversation_id, message_content, escalation_reason, feedback)
+     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [orgId, conversationId, messageContent, escalationReason || '', feedback]
+  );
+}
+
+async function getEscalationNegativeExamples(orgId, limit = 8) {
+  return query(
+    `SELECT message_content, escalation_reason, created_at
+     FROM escalation_feedback
+     WHERE organization_id = $1 AND feedback = 'unnecessary'
+     ORDER BY created_at DESC LIMIT $2`,
+    [orgId, limit]
+  );
+}
+
+async function setLastEscalation(conversationId, triggerMessage, reason) {
+  await pool.query(
+    `UPDATE conversations
+     SET last_escalation_trigger = $1, last_escalation_reason = $2, last_escalation_at = CURRENT_TIMESTAMP
+     WHERE id = $3`,
+    [triggerMessage, reason, conversationId]
+  );
+}
+
+async function clearLastEscalation(conversationId) {
+  await pool.query(
+    `UPDATE conversations
+     SET last_escalation_trigger = NULL, last_escalation_reason = NULL, last_escalation_at = NULL
+     WHERE id = $1`,
+    [conversationId]
+  );
+}
+
 // ─── SETTINGS ─────────────────────────────────────────────────────
 
 async function getSetting(orgId, key) {
@@ -425,4 +463,6 @@ module.exports = {
   createOrder, updateOrder, getOrdersByOrg,
   // Settings
   getSetting, setSetting,
+  // Escalation feedback
+  saveEscalationFeedback, getEscalationNegativeExamples, setLastEscalation, clearLastEscalation,
 };

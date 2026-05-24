@@ -196,5 +196,46 @@ router.get('/:id/orders', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/conversations/:id/escalation-feedback
+ * Guarda si la escalación fue correcta o innecesaria
+ * Body: { feedback: 'correct' | 'unnecessary' }
+ */
+router.post('/:id/escalation-feedback', async (req, res) => {
+  try {
+    const { feedback } = req.body;
+    if (!['correct', 'unnecessary'].includes(feedback)) {
+      return res.status(400).json({ success: false, error: 'feedback debe ser correct o unnecessary' });
+    }
+
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
+
+    // Guardar feedback
+    await db.saveEscalationFeedback(
+      req.orgId,
+      conv.id,
+      conv.last_escalation_trigger || '',
+      conv.last_escalation_reason  || '',
+      feedback
+    );
+
+    // Limpiar el contexto de escalación para no mostrar los botones de nuevo
+    await db.clearLastEscalation(conv.id);
+
+    // Contar cuántos negativos hay para loggear
+    const negCount = feedback === 'unnecessary' ? 1 : 0;
+    if (negCount > 0) {
+      console.log(`[Feedback] ❌ Escalación innecesaria registrada para conv ${conv.id}: "${conv.last_escalation_trigger?.slice(0,50)}"`);
+    } else {
+      console.log(`[Feedback] ✅ Escalación correcta confirmada para conv ${conv.id}`);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

@@ -185,6 +185,24 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_conversations_upd    ON conversations(last_message_at DESC);
       CREATE INDEX IF NOT EXISTS idx_products_org         ON products_cache(organization_id);
       CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
+
+      -- ─── FEEDBACK DE ESCALACIÓN (reentrenamiento continuo) ──────
+      CREATE TABLE IF NOT EXISTS escalation_feedback (
+        id               SERIAL PRIMARY KEY,
+        organization_id  INTEGER NOT NULL,
+        conversation_id  INTEGER NOT NULL,
+        message_content  TEXT NOT NULL,
+        escalation_reason TEXT,
+        feedback         TEXT NOT NULL CHECK(feedback IN ('correct','unnecessary')),
+        created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      );
+
+      -- Migración: agregar campos de escalación a conversations
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_trigger TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_reason TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_at TIMESTAMP;
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

@@ -236,6 +236,9 @@ export default function App() {
               messages={selectedMsgs}
               onSendMessage={handleSendMessage}
               onToggleAgentMode={handleToggleAgentMode}
+              onEscalationFeedback={async (convId, feedback) => {
+                await conversationsAPI.sendEscalationFeedback(convId, feedback);
+              }}
             />
           ) : (
             <EmptyState orgName={org?.name} />
