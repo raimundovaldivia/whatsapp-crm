@@ -314,6 +314,21 @@ async function updateMessageStatus(whatsappMessageId, status) {
   );
 }
 
+/**
+ * Devuelve cuántos minutos hace que un humano envió el último mensaje en esta conversación.
+ * Si nunca hubo respuesta humana, devuelve Infinity.
+ */
+async function minutesSinceLastHumanReply(conversationId) {
+  const row = await queryOne(
+    `SELECT created_at FROM messages
+     WHERE conversation_id = $1 AND direction = 'outbound' AND sent_by = 'human'
+     ORDER BY created_at DESC LIMIT 1`,
+    [conversationId]
+  );
+  if (!row?.created_at) return Infinity;
+  return (Date.now() - new Date(row.created_at).getTime()) / 1000 / 60;
+}
+
 // ─── PRODUCTS CACHE ───────────────────────────────────────────────
 
 async function cacheProducts(orgId, dataSourceId, products) {
@@ -403,7 +418,7 @@ module.exports = {
   updateConversationLastMessage, markConversationAsRead, setAgentMode,
   updatePipelineState, getOrderDraft,
   // Messages
-  saveMessage, getMessagesByConversation, getLastMessages, updateMessageStatus,
+  saveMessage, getMessagesByConversation, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Orders
