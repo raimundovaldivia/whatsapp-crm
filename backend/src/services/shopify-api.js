@@ -93,7 +93,7 @@ async function getProducts(shop, token, opts = {}) {
   const variables = {
     first: Math.min(limit, 250),
     after: cursor || null,
-    query: search ? `title:*${search}* OR product_type:*${search}*` : 'status:active',
+    query: search ? `title:*${search}* OR product_type:*${search}*` : null,
   };
 
   const { data } = await client.post('/graphql.json', {
@@ -113,6 +113,7 @@ async function getProducts(shop, token, opts = {}) {
     productType: node.productType,
     status:      node.status,
     image:       node.images?.edges?.[0]?.node?.url || null,
+    imageUrl:    node.images?.edges?.[0]?.node?.url || null,
     priceMin:    parseFloat(node.priceRangeV2?.minVariantPrice?.amount || 0),
     priceMax:    parseFloat(node.priceRangeV2?.maxVariantPrice?.amount || 0),
     currency:    node.priceRangeV2?.minVariantPrice?.currencyCode || 'CLP',
