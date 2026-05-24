@@ -3,14 +3,14 @@
  *
  * GET  /api/settings                  → Obtener ajustes actuales
  * PUT  /api/settings                  → Actualizar ajustes
- * POST /api/settings/sync-products    → Forzar sincronización de productos desde raigentic
- * GET  /api/settings/products         → Listar productos en cache (raigentic)
+ * POST /api/settings/sync-products    → Forzar resync de productos desde Shopify directo
+ * GET  /api/settings/products         → Listar productos desde Shopify directo
  */
 
-const express   = require('express');
-const router    = express.Router();
-const db        = require('../db/database');
-const raigentic = require('../services/raigentic');
+const express    = require('express');
+const router     = express.Router();
+const db         = require('../db/database');
+const shopifyApi = require('../services/shopify-api');
 const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -49,19 +49,15 @@ router.put('/', async (req, res) => {
 
 /**
  * POST /api/settings/sync-products
- * Fuerza la sincronización completa de productos desde raigentic (llama POST /api/sync).
- * Solo necesario después de cambios masivos en el catálogo de Shopify.
- * Los webhooks de productos (create/update/delete) mantienen la DB al día automáticamente.
+ * Descarga el catálogo completo desde Shopify y lo devuelve (no cachea en DB).
  */
 router.post('/sync-products', async (req, res) => {
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
-    if (!ds?.config?.storeUrl) {
-      return res.status(400).json({ success: false, error: 'No hay tienda Shopify configurada' });
-    }
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
 
-    const result = await raigentic.sincronizarProductos(ds.config.storeUrl);
-    res.json({ success: true, message: 'Sincronización iniciada', data: result });
+    const products = await shopifyApi.getAllProducts(shop, token);
+    res.json({ success: true, message: `${products.length} productos sincronizados`, data: { count: products.length } });
   } catch (err) {
     console.error('[Settings] Error sincronizando productos:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -70,16 +66,14 @@ router.post('/sync-products', async (req, res) => {
 
 /**
  * GET /api/settings/products
- * Devuelve el catálogo de productos desde raigentic (DB local, rápido).
+ * Devuelve el catálogo de productos directo desde Shopify.
  */
 router.get('/products', async (req, res) => {
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
-    if (!ds?.config?.storeUrl) {
-      return res.status(400).json({ success: false, error: 'No hay tienda Shopify configurada' });
-    }
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
 
-    const result = await raigentic.getProductos(ds.config.storeUrl);
+    const result = await shopifyApi.getProducts(shop, token, { limit: 250 });
     res.json({
       success: true,
       data:    result.products || [],

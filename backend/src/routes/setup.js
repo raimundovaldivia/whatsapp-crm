@@ -3,7 +3,7 @@
  *
  * Rutas:
  *   POST /api/setup/whatsapp      → Guardar credenciales de WhatsApp Business
- *   POST /api/setup/shopify       → Conectar tienda (via raigentic)
+ *   POST /api/setup/shopify       → Conectar tienda (legacy — ahora usar /shopify-oauth)
  *   GET  /api/setup/shopify-status → Estado de la conexión Shopify
  *   POST /api/setup/complete      → Marcar setup como terminado
  *   GET  /api/setup/status        → Estado general del setup
@@ -14,7 +14,7 @@ const router     = express.Router();
 const axios      = require('axios');
 const db         = require('../db/database');
 const { getPool } = require('../db/database');
-const raigentic  = require('../services/raigentic');
+const shopifyApi = require('../services/shopify-api');
 const kapsoPlatform = require('../services/kapso-platform');
 const { requireAuth } = require('../middleware/auth');
 
@@ -123,12 +123,13 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────────────────────
-   SHOPIFY (via raigentic)
+   SHOPIFY (OAuth directo)
 ───────────────────────────────────────────────────────────── */
 
 /**
  * POST /api/setup/shopify
- * Guarda la tienda Shopify y verifica la conexión via raigentic.
+ * Guarda la tienda Shopify. La conexión real se hace via OAuth en /shopify-oauth.
+ * Este endpoint persiste el storeUrl para que el wizard sepa a qué tienda conectar.
  *
  * Body: { storeUrl: "mi-tienda.myshopify.com" }
  */
@@ -141,32 +142,13 @@ router.post('/shopify', requireAuth, async (req, res) => {
 
     const shop = storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-    let productCount = 0;
-    let raigenticWarning = null;
-    try {
-      const result = await raigentic.getProductos(shop, { limit: 1 });
-      productCount = result.total || (result.products?.length ? 'varios' : 0);
-    } catch (err) {
-      const status = err.response?.status;
-      const isSleeping = !status || status === 502 || status === 503 || status === 504;
-
-      if (isSleeping) {
-        raigenticWarning = `raigentic está iniciando (cold start). Los productos se sincronizarán automáticamente en 1-2 minutos. Puedes continuar el setup.`;
-        console.warn(`[Setup/Shopify] raigentic dormido (${status}), guardando tienda de todas formas: ${shop}`);
-      } else {
-        return res.status(400).json({
-          success: false,
-          error: `No se pudo verificar la tienda via raigentic. ¿Instalaste la app raigentic en ${shop}? (${err.message})`,
-        });
-      }
-    }
-
-    // Guardar el data source (sin accessToken — raigentic lo maneja)
+    // Guardar el data source con storeUrl (accessToken llegará vía OAuth)
     const existing = await db.getPrimaryDataSource(req.orgId);
     if (existing) {
+      const currentConfig = existing.config || {};
       await getPool().query(
-        'UPDATE data_sources SET name=$1, config=$2, status=$3 WHERE id=$4',
-        [shop, JSON.stringify({ storeUrl: shop }), 'connected', existing.id]
+        'UPDATE data_sources SET name=$1, config=$2 WHERE id=$3',
+        [shop, JSON.stringify({ ...currentConfig, storeUrl: shop }), existing.id]
       );
     } else {
       const ds = await db.createDataSource({
@@ -175,15 +157,13 @@ router.post('/shopify', requireAuth, async (req, res) => {
         name: shop,
         config: { storeUrl: shop },
       });
-      await db.updateDataSourceStatus(ds.id, 'connected');
       await db.createDefaultAgents(req.orgId, ds.id);
     }
 
     res.json({
       success: true,
-      message: `Shopify conectado: ${shop}`,
-      warning: raigenticWarning,
-      data: { storeUrl: shop, productCount },
+      message: `Tienda guardada: ${shop}. Ahora conecta via OAuth para obtener el token de acceso.`,
+      data: { storeUrl: shop },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
