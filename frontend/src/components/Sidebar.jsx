@@ -1,9 +1,16 @@
 import { useState } from 'react';
-import { MessageSquare, Search, RefreshCw } from 'lucide-react';
+import { MessageSquare, Search, RefreshCw, Plus, X, Send } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
+import api from '../api.js';
 
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh }) {
-  const [search, setSearch] = useState('');
+  const [search, setSearch]       = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const [phone, setPhone]         = useState('');
+  const [name, setName]           = useState('');
+  const [text, setText]           = useState('');
+  const [sending, setSending]     = useState(false);
+  const [error, setError]         = useState('');
 
   const filtered = conversations.filter(c => {
     const q = search.toLowerCase();
@@ -14,7 +21,128 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     );
   });
 
+  const openModal = () => { setPhone(''); setName(''); setText(''); setError(''); setShowModal(true); };
+  const closeModal = () => { if (!sending) setShowModal(false); };
+
+  const handleSend = async () => {
+    if (!phone.trim() || !text.trim()) { setError('Número y mensaje son requeridos'); return; }
+    setSending(true);
+    setError('');
+    try {
+      const { data } = await api.post('/conversations/start', { phone: phone.trim(), name: name.trim(), text: text.trim() });
+      if (data.success) {
+        setShowModal(false);
+        onRefresh();
+        onSelect(data.data.conversationId);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const inputStyle = {
+    width: '100%', backgroundColor: '#2a3942', border: '1px solid #374045',
+    borderRadius: '8px', padding: '10px 12px', color: '#e9edef',
+    fontSize: '14px', outline: 'none', boxSizing: 'border-box',
+  };
+
   return (
+    <>
+    {/* Modal nueva conversación */}
+    {showModal && (
+      <div style={{
+        position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000,
+      }} onClick={closeModal}>
+        <div style={{
+          backgroundColor: '#1e2a30', borderRadius: '12px', padding: '24px',
+          width: '360px', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }} onClick={e => e.stopPropagation()}>
+
+          {/* Título */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+            <span style={{ fontWeight: 600, fontSize: '16px', color: '#e9edef' }}>Nueva conversación</span>
+            <button onClick={closeModal} style={{ background: 'none', border: 'none', color: '#8696a0', cursor: 'pointer', padding: '4px' }}>
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* Campos */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div>
+              <label style={{ fontSize: '12px', color: '#8696a0', marginBottom: '6px', display: 'block' }}>
+                Número de teléfono *
+              </label>
+              <input
+                type="tel"
+                placeholder="56912345678"
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                style={inputStyle}
+                autoFocus
+              />
+              <span style={{ fontSize: '11px', color: '#8696a0', marginTop: '4px', display: 'block' }}>
+                Con código de país, sin + (ej: 56912345678)
+              </span>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '12px', color: '#8696a0', marginBottom: '6px', display: 'block' }}>
+                Nombre (opcional)
+              </label>
+              <input
+                type="text"
+                placeholder="Juan Pérez"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                style={inputStyle}
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: '12px', color: '#8696a0', marginBottom: '6px', display: 'block' }}>
+                Mensaje *
+              </label>
+              <textarea
+                placeholder="Escribe el mensaje..."
+                value={text}
+                onChange={e => setText(e.target.value)}
+                rows={3}
+                style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
+                onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) handleSend(); }}
+              />
+              <span style={{ fontSize: '11px', color: '#8696a0', marginTop: '4px', display: 'block' }}>
+                Ctrl+Enter para enviar
+              </span>
+            </div>
+
+            {error && (
+              <div style={{ backgroundColor: '#3d1a1a', border: '1px solid #6b2c2c', borderRadius: '8px', padding: '10px 12px', color: '#ff8a80', fontSize: '13px' }}>
+                {error}
+              </div>
+            )}
+
+            <button
+              onClick={handleSend}
+              disabled={sending}
+              style={{
+                backgroundColor: sending ? '#374045' : '#00a884',
+                color: '#fff', border: 'none', borderRadius: '8px',
+                padding: '12px', fontSize: '14px', fontWeight: 600,
+                cursor: sending ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+              }}>
+              <Send size={16} />
+              {sending ? 'Enviando...' : 'Enviar mensaje'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     <div style={{
       width: '320px', minWidth: '260px', height: '100vh',
       backgroundColor: '#111b21', borderRight: '1px solid #2a3942',
@@ -29,13 +157,22 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         <span style={{ fontWeight: 600, fontSize: '15px', color: '#e9edef' }}>
           Conversaciones
         </span>
-        <button onClick={onRefresh}
-          style={{ background: 'none', color: '#8696a0', padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center' }}
-          onMouseEnter={e => e.currentTarget.style.background = '#374045'}
-          onMouseLeave={e => e.currentTarget.style.background = 'none'}
-          title="Actualizar">
-          <RefreshCw size={16} />
-        </button>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button onClick={openModal}
+            style={{ background: 'none', color: '#8696a0', padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: 'pointer' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#374045'}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+            title="Nueva conversación">
+            <Plus size={18} />
+          </button>
+          <button onClick={onRefresh}
+            style={{ background: 'none', color: '#8696a0', padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: 'pointer' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#374045'}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+            title="Actualizar">
+            <RefreshCw size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Buscador */}
@@ -80,5 +217,6 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         {conversations.length} conversaciones
       </div>
     </div>
+    </>
   );
 }

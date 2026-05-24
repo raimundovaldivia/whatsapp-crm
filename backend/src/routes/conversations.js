@@ -116,6 +116,72 @@ router.patch('/:id/read', async (req, res) => {
 });
 
 /**
+ * POST /api/conversations/start
+ * Inicia o reutiliza una conversación con un número y envía el primer mensaje.
+ * Body: { phone: "56912345678", name?: "Juan", text: "Hola..." }
+ */
+router.post('/start', async (req, res) => {
+  try {
+    const { phone, name, text } = req.body;
+    if (!phone?.trim()) return res.status(400).json({ success: false, error: 'Número de teléfono requerido' });
+    if (!text?.trim())  return res.status(400).json({ success: false, error: 'Mensaje requerido' });
+
+    // Normalizar el teléfono: solo dígitos, sin +
+    const phoneNorm = phone.trim().replace(/^\+/, '').replace(/\s/g, '');
+
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    // Buscar conversación existente con ese número
+    const { rows: existing } = await getPool().query(
+      `SELECT id FROM conversations WHERE organization_id = $1 AND phone_number = $2 LIMIT 1`,
+      [req.orgId, phoneNorm]
+    );
+
+    let convId;
+    if (existing.length > 0) {
+      convId = existing[0].id;
+    } else {
+      // Crear nueva conversación
+      const { rows: created } = await getPool().query(
+        `INSERT INTO conversations (organization_id, phone_number, contact_name, last_message, agent_mode, pipeline_state)
+         VALUES ($1, $2, $3, $4, 'human', 'exploring') RETURNING id`,
+        [req.orgId, phoneNorm, name?.trim() || phoneNorm, text.trim()]
+      );
+      convId = created[0].id;
+    }
+
+    // Enviar por el proveedor correcto
+    let sentResult;
+    if (wc.provider === 'twilio') {
+      sentResult = await twilioService.sendTextMessage(phoneNorm, text.trim(), wc);
+    } else if (wc.provider === 'kapso') {
+      sentResult = await kapsoService.sendTextMessage(phoneNorm, text.trim(), wc);
+    } else {
+      sentResult = await whatsappService.sendTextMessage(phoneNorm, text.trim(), wc);
+    }
+
+    const message = await db.saveMessage({
+      conversationId: convId,
+      whatsappMessageId: sentResult?.messages?.[0]?.id || null,
+      direction: 'outbound',
+      content: text.trim(),
+      sentBy: 'human',
+    });
+
+    await db.updateConversationLastMessage(convId, text.trim());
+    const conv = await db.getConversationById(convId);
+    io?.emit(`new_message_${req.orgId}`, { message, conversation: conv });
+
+    res.json({ success: true, data: { conversationId: convId, message, conversation: conv } });
+  } catch (err) {
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error('[Conv/start] Error:', detail);
+    res.status(500).json({ success: false, error: detail });
+  }
+});
+
+/**
  * GET /api/conversations/:id/orders
  */
 router.get('/:id/orders', async (req, res) => {
