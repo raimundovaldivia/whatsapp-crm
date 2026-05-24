@@ -28,7 +28,7 @@ const API_KEY    = process.env.SHOPIFY_API_KEY    || '';
 const API_SECRET = process.env.SHOPIFY_API_SECRET || '';
 const SCOPES     = process.env.SHOPIFY_SCOPES
   || 'read_products,write_draft_orders,read_draft_orders,read_orders,write_orders,read_customers';
-const CRM_URL    = process.env.CRM_PUBLIC_URL || process.env.BACKEND_URL || 'http://localhost:3001';
+const CRM_URL    = process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL || 'http://localhost:3001';
 const FRONTEND   = process.env.FRONTEND_URL   || 'http://localhost:5173';
 
 const REDIRECT_URI = `${CRM_URL}/shopify-oauth/callback`;
