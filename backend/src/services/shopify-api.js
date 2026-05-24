@@ -372,10 +372,23 @@ async function createDraftOrder(shop, token, customer, items, note = '') {
   const client = graphqlClient(shop, token);
 
   const input = {
-    lineItems: items.map(item => ({
-      variantId: item.variantId,
-      quantity:  parseInt(item.quantity) || 1,
-    })),
+    lineItems: items.map(item => {
+      if (item.variantId) {
+        // Producto Shopify real — linkea al catálogo
+        return {
+          variantId: item.variantId,
+          quantity:  parseInt(item.quantity) || 1,
+        };
+      }
+      // Custom line item — cuando no se encontró variantId por nombre
+      return {
+        title:             item.title || 'Producto',
+        originalUnitPrice: String(parseFloat(item.price) || 0),
+        quantity:          parseInt(item.quantity) || 1,
+        requiresShipping:  true,
+        taxable:           true,
+      };
+    }),
     note: note || undefined,
     shippingAddress: customer.address || undefined,
     email: customer.email || undefined,

@@ -254,20 +254,48 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 async function resolveVariantId(ds, productName) {
   try {
     const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const nameLower = (productName || '').toLowerCase().trim();
+
+    // Búsqueda 1: con el nombre completo
     const res = await shopifyApi.getProducts(shop, token, { limit: 250, search: productName });
-    const products = res.products || [];
-    const nameLower = (productName || '').toLowerCase();
+    const allProducts = res.products || [];
 
-    for (const p of products) {
-      const matchVariant = (p.variants || []).find(v =>
-        nameLower.includes(v.title.toLowerCase()) ||
-        v.title.toLowerCase().includes(nameLower) ||
-        nameLower.includes(p.title.toLowerCase())
-      );
-      if (matchVariant?.id) return { variantId: matchVariant.id, price: matchVariant.price };
+    // Buscar primero por coincidencia exacta de título
+    for (const p of allProducts) {
+      const titleLower = p.title.toLowerCase();
+      // Coincidencia exacta o contenida
+      if (titleLower === nameLower || nameLower.includes(titleLower) || titleLower.includes(nameLower)) {
+        // Buscar variante que coincida
+        const matchVariant = (p.variants || []).find(v => {
+          const vLow = v.title.toLowerCase();
+          return vLow !== 'default title' && (nameLower.includes(vLow) || vLow.includes(nameLower));
+        });
+        if (matchVariant?.id) {
+          console.log(`[Pipeline] variantId resuelto (variante exacta): ${matchVariant.id}`);
+          return { variantId: matchVariant.id, price: matchVariant.price };
+        }
+        // Usar la primera variante disponible del producto
+        const firstVariant = p.variants?.find(v => v.available !== false) || p.variants?.[0];
+        if (firstVariant?.id) {
+          console.log(`[Pipeline] variantId resuelto (primera variante): ${firstVariant.id} del producto "${p.title}"`);
+          return { variantId: firstVariant.id, price: firstVariant.price };
+        }
+      }
+    }
 
-      if (nameLower.includes(p.title.toLowerCase()) && p.variants?.[0]?.id) {
-        return { variantId: p.variants[0].id, price: p.variants[0].price };
+    // Búsqueda 2: con palabras clave del nombre (tomar primeras 2-3 palabras)
+    const keywords = nameLower.split(/\s+/).slice(0, 3).join(' ');
+    if (keywords !== nameLower) {
+      const res2 = await shopifyApi.getProducts(shop, token, { limit: 100, search: keywords });
+      for (const p of (res2.products || [])) {
+        const titleLower = p.title.toLowerCase();
+        if (titleLower.includes(keywords) || keywords.includes(titleLower.split(' ')[0])) {
+          const firstVariant = p.variants?.find(v => v.available !== false) || p.variants?.[0];
+          if (firstVariant?.id) {
+            console.log(`[Pipeline] variantId resuelto (palabras clave "${keywords}"): ${firstVariant.id} del producto "${p.title}"`);
+            return { variantId: firstVariant.id, price: firstVariant.price };
+          }
+        }
       }
     }
   } catch (err) {
@@ -308,11 +336,21 @@ async function createShopifyOrder(orgId, conversationId, draft) {
   }
 
   const { shop: shopDomain, token: shopToken } = shopifyApi.credentialsFrom(ds);
+
+  if (!variantId) {
+    console.warn(`[Pipeline] ⚠️  No se encontró variantId para "${draft.product_name}" — usando custom line item`);
+  }
+
   const shopifyResult = await shopifyApi.createDraftOrder(
     shopDomain,
     shopToken,
     customer,
-    [{ variantId, quantity: parseInt(draft.quantity) || 1 }],
+    [{
+      variantId,
+      title:    draft.product_name,
+      price:    price || draft.price || 0,
+      quantity: parseInt(draft.quantity) || 1,
+    }],
     `WhatsApp CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}`,
   );
 
