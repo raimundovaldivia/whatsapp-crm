@@ -44,15 +44,36 @@ router.get('/', async (req, res) => {
       { headers: { 'X-API-Key': apiKey } }
     );
 
-    const templates = (response.data?.data || response.data || []).map(t => ({
-      id:         t.id,
-      name:       t.name,
-      language:   t.language,
-      status:     t.status,
-      category:   t.category,
-      components: t.components || [],
-      rejectedReason: t.quality_score?.reasons?.[0] || t.rejected_reason || null,
-    }));
+    const templates = (response.data?.data || response.data || []).map(t => {
+      // Meta puede devolver el motivo de rechazo en varios campos distintos según versión API
+      const rejectedReason =
+        t.quality_score?.reasons?.[0] ||
+        t.quality_score?.reason ||
+        (Array.isArray(t.quality_score?.reasons) ? t.quality_score.reasons.join(', ') : null) ||
+        t.rejected_reason ||
+        t.rejection_reason ||
+        t.quality_score?.score?.reasons?.[0] ||
+        (t.status === 'REJECTED' ? 'Meta no proporcionó el motivo. Intenta recrear el template con otro contenido.' : null);
+
+      // Log para debugging en producción
+      if (t.status === 'REJECTED') {
+        console.log(`[Templates/GET] REJECTED template "${t.name}":`, JSON.stringify({
+          quality_score: t.quality_score,
+          rejected_reason: t.rejected_reason,
+          rejection_reason: t.rejection_reason,
+        }));
+      }
+
+      return {
+        id:         t.id,
+        name:       t.name,
+        language:   t.language,
+        status:     t.status,
+        category:   t.category,
+        components: t.components || [],
+        rejectedReason,
+      };
+    });
 
     // Ordenar: APPROVED primero, luego PENDING, luego REJECTED
     const order = { APPROVED: 0, PENDING: 1, REJECTED: 2 };
