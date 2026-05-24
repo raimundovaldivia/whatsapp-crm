@@ -5,6 +5,7 @@ import api from '../api.js';
 
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh }) {
   const [search, setSearch]       = useState('');
+  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'ai' | 'human'
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
   const [name, setName]           = useState('');
@@ -12,7 +13,16 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [sending, setSending]     = useState(false);
   const [error, setError]         = useState('');
 
+  // Conteos por tab
+  const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
+  const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
+  const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
+
   const filtered = conversations.filter(c => {
+    // Filtro por tab
+    if (activeTab === 'ai'    && c.agent_mode !== 'ai')    return false;
+    if (activeTab === 'human' && c.agent_mode !== 'human') return false;
+    // Filtro por búsqueda
     const q = search.toLowerCase();
     return (
       c.contact_name?.toLowerCase().includes(q) ||
@@ -176,7 +186,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       </div>
 
       {/* Buscador */}
-      <div style={{ padding: '8px 12px', backgroundColor: '#111b21' }}>
+      <div style={{ padding: '8px 12px 4px', backgroundColor: '#111b21' }}>
         <div style={{ backgroundColor: '#202c33', borderRadius: '8px', display: 'flex', alignItems: 'center', padding: '8px 12px', gap: '8px' }}>
           <Search size={16} color="#8696a0" />
           <input
@@ -187,6 +197,65 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
             style={{ background: 'none', border: 'none', color: '#e9edef', fontSize: '14px', flex: 1, outline: 'none' }}
           />
         </div>
+      </div>
+
+      {/* Tabs — Todos / IA / Humano */}
+      <div style={{ display: 'flex', backgroundColor: '#111b21', padding: '4px 12px 6px', gap: '6px' }}>
+        {[
+          { key: 'all',   label: 'Todos',   count: conversations.length, color: '#8696a0' },
+          { key: 'ai',    label: '🤖 IA',    count: aiCount,              color: '#00a884' },
+          { key: 'human', label: '👤 Humano', count: humanCount,           color: '#f0b429', urgent: humanUnread },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            style={{
+              flex: 1,
+              padding: '5px 4px',
+              borderRadius: '6px',
+              border: activeTab === tab.key ? `1px solid ${tab.color}` : '1px solid #2a3942',
+              backgroundColor: activeTab === tab.key ? `${tab.color}22` : 'transparent',
+              color: activeTab === tab.key ? tab.color : '#8696a0',
+              fontSize: '12px',
+              fontWeight: activeTab === tab.key ? 600 : 400,
+              cursor: 'pointer',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '4px',
+              transition: 'all 0.15s',
+            }}
+          >
+            <span>{tab.label}</span>
+            <span style={{
+              backgroundColor: activeTab === tab.key ? tab.color : '#2a3942',
+              color: activeTab === tab.key ? '#111b21' : '#8696a0',
+              borderRadius: '10px',
+              padding: '0 5px',
+              fontSize: '10px',
+              fontWeight: 700,
+              minWidth: '16px',
+              textAlign: 'center',
+            }}>
+              {tab.count}
+            </span>
+            {/* Pulso rojo si hay conversaciones humanas con mensajes sin leer */}
+            {tab.key === 'human' && tab.urgent > 0 && (
+              <span style={{
+                position: 'absolute',
+                top: '-3px',
+                right: '-3px',
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: '#ef4444',
+                border: '1px solid #111b21',
+                animation: 'pulse 1.5s infinite',
+              }} />
+            )}
+          </button>
+        ))}
       </div>
 
       {/* Lista */}

@@ -41,13 +41,42 @@ async function processMessage(orgId, conversationId, userMessage) {
   const currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
 
+  // ── Agente de escalación — corre en paralelo con la clasificación ──
+  const [escalationResult, intentResult] = await Promise.all([
+    orchestrator.checkEscalation(userMessage, history, currentState),
+    currentState === 'collecting_order'
+      ? Promise.resolve(null)
+      : orchestrator.classifyIntent(userMessage, history, currentState),
+  ]);
+
+  // Si el agente de escalación detecta que se necesita humano
+  if (escalationResult.escalate) {
+    console.log(`[Pipeline] 🚨 Escalación detectada (${escalationResult.urgency}): ${escalationResult.reason}`);
+    await db.setAgentMode(conversationId, 'human');
+    await db.updatePipelineState(conversationId, currentState); // mantiene el estado actual
+
+    const escalationMessages = {
+      high: '⚠️ Entiendo tu situación. Voy a conectarte ahora mismo con un asesor para que te ayude personalmente. ¡Ya te atienden! 👋',
+      medium: 'Quiero asegurarme de que recibas la mejor atención. Te voy a conectar con uno de nuestros asesores. En un momento alguien te escribe 😊',
+      low: 'Para darte una mejor atención, voy a pasarte con un asesor que podrá ayudarte con esto. ¡Un momento! 👋',
+    };
+
+    return {
+      response: escalationMessages[escalationResult.urgency] || escalationMessages.low,
+      agentType: 'orchestrator',
+      newState: currentState,
+      switchToHuman: true,
+      escalationReason: escalationResult.reason,
+    };
+  }
+
   // ── Si estamos en proceso de recopilación de datos ──────────────
   if (currentState === 'collecting_order') {
     return await handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto);
   }
 
   // ── Paso 1: Orquestador clasifica la intención ──────────────────
-  const { intent, confidence } = await orchestrator.classifyIntent(userMessage, history, currentState);
+  const { intent, confidence } = intentResult;
   console.log(`[Pipeline] Intent: ${intent} (${Math.round(confidence * 100)}%) | State: ${currentState}`);
 
   // ── Mapeo de intent → acción ─────────────────────────────────────
