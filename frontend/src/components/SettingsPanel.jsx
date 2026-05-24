@@ -115,13 +115,23 @@ function ShopifyTab() {
     }
   }, []);
 
-  const connectOAuth = () => {
+  const connectOAuth = async () => {
     if (!shopInput.trim()) { setError('Ingresa el dominio de tu tienda'); return; }
     setLoading(true); setError('');
-    const backendUrl = import.meta.env.VITE_API_URL || window.location.origin.replace(':5173', ':3001');
-    const token = localStorage.getItem('crm_token') || sessionStorage.getItem('crm_token') || '';
-    const shop  = shopInput.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
-    window.location.href = `${backendUrl}/shopify-oauth/connect?shop=${encodeURIComponent(shop)}&_token=${encodeURIComponent(token)}`;
+    try {
+      const { api } = await import('../utils/api.js');
+      const shop = shopInput.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
+      const { data } = await api.get('/shopify-oauth/auth-url', { params: { shop } });
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setError(data.error || 'No se pudo generar la URL de Shopify');
+        setLoading(false);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error al conectar con Shopify');
+      setLoading(false);
+    }
   };
 
   const disconnect = async () => {

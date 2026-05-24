@@ -46,6 +46,41 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 /**
+ * GET /shopify-oauth/auth-url?shop=mi-tienda
+ *
+ * Devuelve la URL de OAuth para que el frontend redirija.
+ * El frontend llama esto via api.get() (que ya sabe la URL del backend).
+ */
+router.get('/auth-url', requireAuth, (req, res) => {
+  let { shop } = req.query;
+  if (!shop) return res.status(400).json({ error: 'Falta el parámetro "shop"' });
+
+  shop = shop.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
+  if (!shop.includes('.')) shop += '.myshopify.com';
+
+  if (!/^[a-z0-9-]+\.myshopify\.com$/.test(shop)) {
+    return res.status(400).json({ error: 'Dominio inválido. Ej: mi-tienda.myshopify.com' });
+  }
+
+  const state = crypto.randomBytes(16).toString('hex');
+  pendingStates.set(state, {
+    shop,
+    orgId: req.orgId,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  });
+
+  const authUrl = `https://${shop}/admin/oauth/authorize?` + new URLSearchParams({
+    client_id:           API_KEY,
+    scope:               SCOPES,
+    redirect_uri:        REDIRECT_URI,
+    state,
+    'grant_options[]':   'offline',
+  }).toString();
+
+  res.json({ url: authUrl });
+});
+
+/**
  * GET /shopify-oauth/connect?shop=mi-tienda.myshopify.com
  *
  * Protegido con requireAuth — el orgId viene del JWT.

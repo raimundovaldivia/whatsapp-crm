@@ -262,15 +262,23 @@ export default function SetupWizard({ org, onComplete }) {
   };
 
   /* ── Conectar Shopify via OAuth ── */
-  const connectShopify = () => {
+  const connectShopify = async () => {
     if (!shopUrl.trim()) { setError('Por favor ingresa el dominio de tu tienda.'); return; }
     setLoading(true); setError('');
-    // Redirigir al backend que inicia el OAuth con Shopify
-    const backendUrl = import.meta.env.VITE_API_URL || window.location.origin.replace(':5173', ':3001');
-    // El token JWT se pasa como parámetro de query para que el backend lo acepte en la redirección
-    const token = localStorage.getItem('crm_token') || sessionStorage.getItem('crm_token') || '';
-    const shop  = shopUrl.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
-    window.location.href = `${backendUrl}/shopify-oauth/connect?shop=${encodeURIComponent(shop)}&_token=${encodeURIComponent(token)}`;
+    try {
+      const { api } = await import('../utils/api.js');
+      const shop = shopUrl.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
+      const { data } = await api.get('/shopify-oauth/auth-url', { params: { shop } });
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setError(data.error || 'No se pudo generar la URL de Shopify');
+        setLoading(false);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error al conectar con Shopify');
+      setLoading(false);
+    }
   };
 
   const finish = async () => {
