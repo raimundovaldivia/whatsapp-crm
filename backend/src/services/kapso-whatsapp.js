@@ -234,4 +234,81 @@ function verifySignature(rawBody, signature, secret) {
   } catch { return false; }
 }
 
-module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError };
+/**
+ * Obtiene la lista de templates aprobados de la cuenta de WhatsApp Business.
+ * @param {object} config - Config de la org (kapso_api_key, business_account_id)
+ * @returns {Array} Lista de templates
+ */
+async function getTemplates(config) {
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  const wabaId = config.business_account_id || process.env.KAPSO_WABA_ID;
+
+  if (!apiKey) throw new Error('No hay Kapso API Key disponible');
+  if (!wabaId) throw new Error('No hay WABA ID configurado. Agrégalo en la config de WhatsApp o como variable KAPSO_WABA_ID.');
+
+  try {
+    const response = await axios.get(
+      `${BASE_URL}/${API_VER}/${wabaId}/message_templates?limit=100&status=APPROVED`,
+      { headers: { 'X-API-Key': apiKey } }
+    );
+    return response.data?.data || response.data || [];
+  } catch (err) {
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error(`[KapsoWA] getTemplates FAILED — waba_id:${wabaId} — ${detail}`);
+    throw err;
+  }
+}
+
+/**
+ * Envía un mensaje de template de WhatsApp via Kapso.
+ * @param {string} to             - Número destino (ej: 56912345678)
+ * @param {string} templateName   - Nombre del template aprobado
+ * @param {string} languageCode   - Código de idioma (ej: 'es', 'es_MX', 'en_US')
+ * @param {Array}  components     - Componentes con variables (body params, etc.)
+ * @param {object} config         - Config de la org
+ *
+ * Ejemplo components para body con {{1}}:
+ *   [{ type: 'body', parameters: [{ type: 'text', text: 'Juan' }] }]
+ */
+async function sendTemplate(to, templateName, languageCode = 'es', components = [], config) {
+  const { phone_number_id } = config;
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey) throw new Error('No hay Kapso API Key disponible');
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type:    'individual',
+    to,
+    type:     'template',
+    template: {
+      name:     templateName,
+      language: { code: languageCode },
+    },
+  };
+
+  if (components && components.length > 0) {
+    payload.template.components = components;
+  }
+
+  try {
+    const response = await axios.post(
+      `${BASE_URL}/${API_VER}/${phone_number_id}/messages`,
+      payload,
+      {
+        headers: {
+          'X-API-Key':    apiKey,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    return response.data;
+  } catch (err) {
+    const status  = err.response?.status;
+    const errBody = err.response?.data;
+    const detail  = errBody ? JSON.stringify(errBody) : err.message;
+    console.error(`[KapsoWA] sendTemplate FAILED — to:${to} template:${templateName} status:${status} — ${detail}`);
+    throw err;
+  }
+}
+
+module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate };

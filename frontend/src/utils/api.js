@@ -51,6 +51,15 @@ export const conversationsAPI = {
   sendEscalationFeedback: (id, feedback) => api.post(`/conversations/${id}/escalation-feedback`, { feedback }).then(r => r.data),
   deleteMessages: (id) => api.delete(`/conversations/${id}/messages`).then(r => r.data),
   startConversation: (data) => api.post('/conversations/start', data).then(r => r.data),
+  sendTemplate: (id, data) => api.post(`/conversations/${id}/send-template`, data).then(r => r.data),
+};
+
+export const reengagementAPI = {
+  getCandidates: (refresh = false) => api.get(`/reengagement/candidates${refresh ? '?refresh=true' : ''}`, { timeout: 180000 }).then(r => r.data),
+  generate: (phone) => api.post('/reengagement/generate', { phone }).then(r => r.data),
+  send: (data) => api.post('/reengagement/send', data).then(r => r.data),
+  sendBulk: (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
+  getTemplates: () => api.get('/reengagement/templates').then(r => r.data),
 };
 
 export const ordersAPI = {

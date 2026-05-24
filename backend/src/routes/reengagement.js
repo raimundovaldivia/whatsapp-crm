@@ -466,21 +466,81 @@ Escribe un mensaje de WhatsApp CORTO (máximo 3 líneas) y cálido.
 });
 
 /* ─────────────────────────────────────────────────────────────────────
+   GET /api/reengagement/templates
+   Lista los templates aprobados de WhatsApp Business para esta org.
+───────────────────────────────────────────────────────────────────── */
+router.get('/templates', async (req, res) => {
+  try {
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    if (wc.provider !== 'kapso' && wc.provider !== 'meta') {
+      return res.json({ success: true, data: [], message: 'Templates solo disponibles para Kapso o Meta' });
+    }
+
+    const kapsoService = require('../services/kapso-whatsapp');
+    const templates = await kapsoService.getTemplates(wc);
+
+    // Normalizar y filtrar solo APPROVED
+    const normalized = (Array.isArray(templates) ? templates : []).filter(t =>
+      !t.status || t.status === 'APPROVED' || t.status === 'approved'
+    ).map(t => ({
+      name:       t.name,
+      language:   t.language,
+      status:     t.status,
+      category:   t.category,
+      components: t.components || [],
+    }));
+
+    res.json({ success: true, data: normalized, total: normalized.length });
+  } catch (err) {
+    console.error('[Reengagement/templates]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/send
+   Soporta dos modos:
+     A) Texto libre:  { phone, message }
+     B) Template:     { phone, templateName, languageCode?, components? }
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message } = req.body;
-    if (!phone || !message) return res.status(400).json({ success: false, error: 'phone y message requeridos' });
+    const { phone, message, templateName, languageCode, components } = req.body;
+    if (!phone) return res.status(400).json({ success: false, error: 'phone requerido' });
+
+    const isTemplate = !!templateName;
+    if (!isTemplate && !message) {
+      return res.status(400).json({ success: false, error: 'message o templateName requerido' });
+    }
 
     const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
     let sentResult;
-    if (wc.provider === 'twilio') {
-      sentResult = await require('../services/twilio-whatsapp').sendTextMessage(phone, message, wc);
+    let savedContent;
+
+    if (isTemplate) {
+      // ── Modo Template ───────────────────────────────────────────
+      if (wc.provider !== 'kapso' && wc.provider !== 'meta') {
+        return res.status(400).json({ success: false, error: 'Templates solo disponibles con Kapso o Meta' });
+      }
+      const kapsoService = require('../services/kapso-whatsapp');
+      sentResult = await kapsoService.sendTemplate(
+        phone, templateName, languageCode || 'es', components || [], wc
+      );
+      savedContent = `[Template: ${templateName}]`;
     } else {
-      sentResult = await require('../services/whatsapp').sendTextMessage(phone, message, wc);
+      // ── Modo Texto libre ─────────────────────────────────────────
+      if (wc.provider === 'twilio') {
+        sentResult = await require('../services/twilio-whatsapp').sendTextMessage(phone, message, wc);
+      } else if (wc.provider === 'kapso') {
+        sentResult = await require('../services/kapso-whatsapp').sendTextMessage(phone, message, wc);
+      } else {
+        sentResult = await require('../services/whatsapp').sendTextMessage(phone, message, wc);
+      }
+      savedContent = message;
     }
 
     // Guardar en conversación si existe
@@ -493,10 +553,10 @@ router.post('/send', async (req, res) => {
     if (convId) {
       await db.saveMessage({
         conversationId:    convId,
-        whatsappMessageId: sentResult?.messageId || sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
-        content:           message,
+        whatsappMessageId: sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
+        content:           savedContent,
         direction:         'outbound',
-        type:              'text',
+        type:              isTemplate ? 'template' : 'text',
         sentBy:            'ai',
       });
     }
@@ -509,6 +569,9 @@ router.post('/send', async (req, res) => {
 
 /* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/send-bulk
+   Soporta dos modos por ítem:
+     A) Texto libre:  { phone, message }
+     B) Template:     { phone, templateName, languageCode?, components? }
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send-bulk', async (req, res) => {
   const { items } = req.body;
@@ -522,11 +585,25 @@ router.post('/send-bulk', async (req, res) => {
   const results = [];
   for (const item of items) {
     try {
+      const isTemplate = !!item.templateName;
       let sentResult;
-      if (wc.provider === 'twilio') {
-        sentResult = await require('../services/twilio-whatsapp').sendTextMessage(item.phone, item.message, wc);
+      let savedContent;
+
+      if (isTemplate) {
+        const kapsoService = require('../services/kapso-whatsapp');
+        sentResult = await kapsoService.sendTemplate(
+          item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
+        );
+        savedContent = `[Template: ${item.templateName}]`;
       } else {
-        sentResult = await require('../services/whatsapp').sendTextMessage(item.phone, item.message, wc);
+        if (wc.provider === 'twilio') {
+          sentResult = await require('../services/twilio-whatsapp').sendTextMessage(item.phone, item.message, wc);
+        } else if (wc.provider === 'kapso') {
+          sentResult = await require('../services/kapso-whatsapp').sendTextMessage(item.phone, item.message, wc);
+        } else {
+          sentResult = await require('../services/whatsapp').sendTextMessage(item.phone, item.message, wc);
+        }
+        savedContent = item.message;
       }
 
       const { rows } = await getPool().query(
@@ -538,10 +615,10 @@ router.post('/send-bulk', async (req, res) => {
       if (convId) {
         await db.saveMessage({
           conversationId:    convId,
-          whatsappMessageId: sentResult?.messageId || `reeng_${Date.now()}`,
-          content:           item.message,
+          whatsappMessageId: sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
+          content:           savedContent,
           direction:         'outbound',
-          type:              'text',
+          type:              isTemplate ? 'template' : 'text',
           sentBy:            'ai',
         });
       }

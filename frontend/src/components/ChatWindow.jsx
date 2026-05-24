@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2 } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
+import { conversationsAPI } from '../utils/api.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
@@ -11,6 +12,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
+
+  // Template modal state
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState(null);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [templateVarMap, setTemplateVarMap] = useState({}); // { "1": "name"|"manual" }
+  const [templateManualVars, setTemplateManualVars] = useState({}); // { "1": "texto" }
+  const [sendingTemplate, setSendingTemplate] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -58,6 +69,99 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
   };
 
+  // ── Template helpers ────────────────────────────────────────────
+  const openTemplateModal = async () => {
+    setShowTemplateModal(true);
+    setSelectedTemplate(null);
+    setTemplateVarMap({});
+    setTemplateManualVars({});
+    if (templates.length === 0) {
+      setTemplatesLoading(true);
+      setTemplatesError(null);
+      try {
+        const res = await conversationsAPI.sendTemplate(0, {}); // dummy to trigger error and get config
+      } catch {}
+      try {
+        const { api } = await import('../utils/api.js');
+        const res = await api.get('/reengagement/templates');
+        setTemplates(res.data.data || []);
+      } catch (err) {
+        setTemplatesError(err.response?.data?.error || err.message);
+      } finally {
+        setTemplatesLoading(false);
+      }
+    }
+  };
+
+  const parseVars = (tpl) => {
+    if (!tpl) return [];
+    const bodyComp = (tpl.components || []).find(c => c.type === 'BODY');
+    if (!bodyComp?.text) return [];
+    const matches = [...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)];
+    return [...new Set(matches.map(m => m[1]))].sort();
+  };
+
+  const handleSelectTpl = (tpl) => {
+    setSelectedTemplate(tpl);
+    const vars = parseVars(tpl);
+    const defaultMap = {};
+    vars.forEach((v, i) => { defaultMap[v] = i === 0 ? 'name' : 'manual'; });
+    setTemplateVarMap(defaultMap);
+    setTemplateManualVars({});
+  };
+
+  const buildTplComponents = () => {
+    if (!selectedTemplate) return [];
+    const vars = parseVars(selectedTemplate);
+    if (vars.length === 0) return [];
+    const contactName = conversation.contact_name || conversation.phone_number;
+    const parameters = vars.map(v => {
+      const mapping = templateVarMap[v] || 'manual';
+      let text = '';
+      if (mapping === 'name')  text = contactName;
+      else if (mapping === 'phone') text = conversation.phone_number;
+      else text = templateManualVars[v] || '';
+      return { type: 'text', text };
+    });
+    return [{ type: 'body', parameters }];
+  };
+
+  const previewTpl = () => {
+    if (!selectedTemplate) return '';
+    const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
+    if (!bodyComp?.text) return `[Template: ${selectedTemplate.name}]`;
+    let text = bodyComp.text;
+    const vars = parseVars(selectedTemplate);
+    const contactName = conversation.contact_name || conversation.phone_number;
+    vars.forEach(v => {
+      const mapping = templateVarMap[v] || 'manual';
+      let val = '';
+      if (mapping === 'name')       val = contactName;
+      else if (mapping === 'phone') val = conversation.phone_number;
+      else val = templateManualVars[v] || `{{${v}}}`;
+      text = text.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), val);
+    });
+    return text;
+  };
+
+  const sendTemplateMessage = async () => {
+    if (!selectedTemplate) return;
+    setSendingTemplate(true);
+    try {
+      await conversationsAPI.sendTemplate(conversation.id, {
+        templateName:  selectedTemplate.name,
+        languageCode:  selectedTemplate.language,
+        components:    buildTplComponents(),
+      });
+      setShowTemplateModal(false);
+      setError(null);
+    } catch (err) {
+      setTemplatesError(err.response?.data?.error || 'Error enviando template');
+    } finally {
+      setSendingTemplate(false);
+    }
+  };
+
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text || sending) return;
@@ -96,6 +200,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       display: 'flex',
       flexDirection: 'column',
       height: '100vh',
+      position: 'relative',
       backgroundColor: '#0b141a',
       backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='%23ffffff05'/%3E%3C/svg%3E")`,
     }}>
@@ -155,6 +260,29 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               {deleting ? 'Borrando...' : 'Reset chat'}
             </button>
           )}
+          {/* Botón enviar template */}
+          <button
+            onClick={openTemplateModal}
+            title="Enviar template de WhatsApp (funciona aunque haya expirado la ventana de 24h)"
+            style={{
+              backgroundColor: 'transparent',
+              border: '1px solid #3d4f59',
+              borderRadius: '6px',
+              padding: '5px 8px',
+              color: '#4db6e8',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              fontSize: '11px',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#1a3040')}
+            onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            <FileText size={13} />
+            Template
+          </button>
           <AgentToggle
             mode={conversation.agent_mode}
             onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode)}
@@ -320,6 +448,158 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         </div>
       )}
 
+      {/* Modal de templates */}
+      {showTemplateModal && (
+        <div style={{
+          position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)',
+          zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '20px',
+        }}>
+          <div style={{
+            backgroundColor: '#202c33', borderRadius: '12px',
+            border: '1px solid #2a3942', width: '100%', maxWidth: '520px',
+            maxHeight: '80vh', overflow: 'auto',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          }}>
+            {/* Modal header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid #2a3942' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FileText size={16} color="#4db6e8" />
+                <span style={{ color: '#e9edef', fontWeight: 600, fontSize: '15px' }}>Enviar Template</span>
+              </div>
+              <button onClick={() => setShowTemplateModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8696a0', padding: '4px' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Info banner */}
+            <div style={{ padding: '10px 20px', backgroundColor: '#0d2e25', borderBottom: '1px solid #2a3942', fontSize: '12px', color: '#4db6e8', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+              <span>💡</span>
+              <span>Los templates funcionan aunque la ventana de 24h haya expirado. Solo puedes enviar templates aprobados por Meta.</span>
+            </div>
+
+            {/* Modal body */}
+            <div style={{ padding: '20px' }}>
+              {templatesLoading ? (
+                <div style={{ textAlign: 'center', padding: '30px', color: '#8696a0' }}>
+                  <Loader size={24} style={{ animation: 'spin 1s linear infinite', marginBottom: '10px' }} />
+                  <div style={{ fontSize: '13px' }}>Cargando templates aprobados...</div>
+                </div>
+              ) : templatesError ? (
+                <div style={{ color: '#e57373', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <AlertCircle size={14} /> {templatesError}
+                </div>
+              ) : templates.length === 0 ? (
+                <div style={{ color: '#8696a0', fontSize: '13px', textAlign: 'center', padding: '20px' }}>
+                  No hay templates aprobados.<br />Créalos en Meta Business Manager.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {/* Selector de template */}
+                  <div>
+                    <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Template</label>
+                    <select
+                      value={selectedTemplate?.name || ''}
+                      onChange={e => {
+                        const tpl = templates.find(t => t.name === e.target.value);
+                        if (tpl) handleSelectTpl(tpl);
+                        else setSelectedTemplate(null);
+                      }}
+                      style={{ width: '100%', backgroundColor: '#2a3942', color: '#e9edef', border: '1px solid #374045', borderRadius: '7px', padding: '9px 12px', fontSize: '13px', cursor: 'pointer', outline: 'none' }}
+                    >
+                      <option value="">— Selecciona un template —</option>
+                      {templates.map(t => (
+                        <option key={t.name} value={t.name}>
+                          {t.name} · {t.language} · {t.category || 'MARKETING'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Variables */}
+                  {selectedTemplate && parseVars(selectedTemplate).length > 0 && (
+                    <div>
+                      <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '8px' }}>Variables</label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {parseVars(selectedTemplate).map(v => (
+                          <div key={v} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#182028', borderRadius: '7px', padding: '8px 12px' }}>
+                            <span style={{ color: '#00a884', fontSize: '12px', fontWeight: 700, flexShrink: 0 }}>{'{{' + v + '}}'}</span>
+                            <select
+                              value={templateVarMap[v] || 'manual'}
+                              onChange={e => setTemplateVarMap(prev => ({ ...prev, [v]: e.target.value }))}
+                              style={{ backgroundColor: '#0f1820', color: '#e9edef', border: '1px solid #2a3942', borderRadius: '5px', padding: '4px 8px', fontSize: '12px', cursor: 'pointer' }}
+                            >
+                              <option value="name">Nombre del contacto</option>
+                              <option value="phone">Teléfono</option>
+                              <option value="manual">Texto fijo</option>
+                            </select>
+                            {(templateVarMap[v] || 'manual') === 'manual' && (
+                              <input
+                                value={templateManualVars[v] || ''}
+                                onChange={e => setTemplateManualVars(prev => ({ ...prev, [v]: e.target.value }))}
+                                placeholder={`Texto para {{${v}}}...`}
+                                style={{ flex: 1, backgroundColor: '#0f1820', color: '#e9edef', border: '1px solid #2a3942', borderRadius: '5px', padding: '4px 8px', fontSize: '12px', outline: 'none' }}
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Preview */}
+                  {selectedTemplate && (
+                    <div>
+                      <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Vista previa</label>
+                      <div style={{ backgroundColor: '#0f1820', borderRadius: '8px', padding: '12px 14px', border: '1px solid #2a3942' }}>
+                        {(() => {
+                          const header = selectedTemplate.components?.find(c => c.type === 'HEADER');
+                          const footer = selectedTemplate.components?.find(c => c.type === 'FOOTER');
+                          return (
+                            <>
+                              {header?.text && <div style={{ color: '#e9edef', fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>{header.text}</div>}
+                              <div style={{ color: '#c8d1d9', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{previewTpl()}</div>
+                              {footer?.text && <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '8px' }}>{footer.text}</div>}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Modal footer */}
+            {!templatesLoading && templates.length > 0 && (
+              <div style={{ padding: '12px 20px', borderTop: '1px solid #2a3942', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button onClick={() => setShowTemplateModal(false)}
+                  style={{ padding: '8px 16px', borderRadius: '8px', backgroundColor: 'transparent', color: '#8696a0', border: '1px solid #374045', cursor: 'pointer', fontSize: '13px' }}>
+                  Cancelar
+                </button>
+                <button
+                  onClick={sendTemplateMessage}
+                  disabled={!selectedTemplate || sendingTemplate}
+                  style={{
+                    padding: '8px 20px', borderRadius: '8px',
+                    backgroundColor: selectedTemplate ? '#4db6e8' : '#2a3942',
+                    color: selectedTemplate ? '#000' : '#8696a0',
+                    border: 'none', cursor: selectedTemplate ? 'pointer' : 'not-allowed',
+                    fontSize: '13px', fontWeight: 600,
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    opacity: sendingTemplate ? 0.7 : 1,
+                  }}>
+                  {sendingTemplate
+                    ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Enviando...</>
+                    : <><Send size={13} /> Enviar Template</>}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Input */}
       <div style={{
         padding: '10px 16px',
@@ -354,6 +634,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
         />
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
         <button
           onClick={handleSend}
           disabled={!inputText.trim() || sending}

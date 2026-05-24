@@ -3,8 +3,9 @@ import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
   ShoppingBag, TrendingUp, ChevronDown, ChevronUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
+  FileText, ToggleLeft, ToggleRight, ChevronDown as ChevronDownIcon,
 } from 'lucide-react';
-import { api } from '../utils/api.js';
+import { api, reengagementAPI } from '../utils/api.js';
 
 function Tooltip({ text, children, position = 'top' }) {
   const [show, setShow] = useState(false);
@@ -67,6 +68,17 @@ export default function ReengagementPanel() {
   const [toast, setToast]             = useState(null);
   const [minConf, setMinConf]         = useState(65);
 
+  // ── Template mode ──────────────────────────────────────────────
+  const [useTemplate, setUseTemplate]       = useState(false);
+  const [templates, setTemplates]           = useState([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState(null);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  // varMap: { "1": "name" | "phone" | "manual" }
+  const [varMap, setVarMap]                 = useState({});
+  // manualVars: { "1": "texto manual" }
+  const [manualVars, setManualVars]         = useState({});
+
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 4000);
@@ -100,6 +112,79 @@ export default function ReengagementPanel() {
   }, []);
 
   useEffect(() => { load(true); }, []);
+
+  // Cargar templates cuando se activa el modo template
+  const loadTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    try {
+      const res = await reengagementAPI.getTemplates();
+      setTemplates(res.data || []);
+    } catch (err) {
+      setTemplatesError(err.response?.data?.error || err.message);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, []);
+
+  const toggleTemplateMode = () => {
+    const next = !useTemplate;
+    setUseTemplate(next);
+    if (next && templates.length === 0) loadTemplates();
+  };
+
+  // Parsea las variables {{N}} del texto de un template
+  const parseTemplateVars = (tpl) => {
+    if (!tpl) return [];
+    const bodyComp = (tpl.components || []).find(c => c.type === 'BODY');
+    if (!bodyComp?.text) return [];
+    const matches = [...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)];
+    return [...new Set(matches.map(m => m[1]))].sort();
+  };
+
+  // Seleccionar template e inicializar varMap con "name" por defecto para {{1}}
+  const handleSelectTemplate = (tpl) => {
+    setSelectedTemplate(tpl);
+    const vars = parseTemplateVars(tpl);
+    const defaultMap = {};
+    vars.forEach((v, i) => { defaultMap[v] = i === 0 ? 'name' : 'manual'; });
+    setVarMap(defaultMap);
+    setManualVars({});
+  };
+
+  // Construye components[] para un cliente específico
+  const buildComponents = (candidate) => {
+    if (!selectedTemplate) return [];
+    const vars = parseTemplateVars(selectedTemplate);
+    if (vars.length === 0) return [];
+    const parameters = vars.map(v => {
+      const mapping = varMap[v] || 'manual';
+      let text = '';
+      if (mapping === 'name')  text = candidate.name || candidate.phone;
+      else if (mapping === 'phone') text = candidate.phone;
+      else text = manualVars[v] || '';
+      return { type: 'text', text };
+    });
+    return [{ type: 'body', parameters }];
+  };
+
+  // Preview del template con variables sustituidas para un cliente
+  const previewTemplate = (candidate) => {
+    if (!selectedTemplate) return '';
+    const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
+    if (!bodyComp?.text) return `[Template: ${selectedTemplate.name}]`;
+    let text = bodyComp.text;
+    const vars = parseTemplateVars(selectedTemplate);
+    vars.forEach(v => {
+      const mapping = varMap[v] || 'manual';
+      let val = '';
+      if (mapping === 'name')       val = candidate?.name || candidate?.phone || `{{${v}}}`;
+      else if (mapping === 'phone') val = candidate?.phone || `{{${v}}}`;
+      else val = manualVars[v] || `{{${v}}}`;
+      text = text.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), val);
+    });
+    return text;
+  };
 
   // Score de relevancia: vencidos primero, luego confianza alta, luego más cercanos
   const relevanceScore = (c) => {
@@ -157,31 +242,68 @@ export default function ReengagementPanel() {
 
   // ── Enviar ─────────────────────────────────────────────────────
   const sendOne = async (phone) => {
-    const msg = messages[phone];
-    if (!msg?.trim()) { showToast('Primero genera un mensaje con IA', 'error'); return; }
-    setSending(prev => new Set(prev).add(phone));
-    try {
-      await api.post('/reengagement/send', { phone, message: msg });
-      showToast('✅ Mensaje enviado');
-      setCandidates(prev => prev.filter(c => c.phone !== phone));
-      setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
-    } catch (err) {
-      showToast(err.response?.data?.error || 'Error enviando', 'error');
-    } finally {
-      setSending(prev => { const n = new Set(prev); n.delete(phone); return n; });
+    const candidate = candidates.find(c => c.phone === phone);
+
+    if (useTemplate) {
+      if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
+      setSending(prev => new Set(prev).add(phone));
+      try {
+        await reengagementAPI.send({
+          phone,
+          templateName:  selectedTemplate.name,
+          languageCode:  selectedTemplate.language,
+          components:    buildComponents(candidate),
+        });
+        showToast('✅ Template enviado');
+        setCandidates(prev => prev.filter(c => c.phone !== phone));
+        setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
+      } catch (err) {
+        showToast(err.response?.data?.error || 'Error enviando template', 'error');
+      } finally {
+        setSending(prev => { const n = new Set(prev); n.delete(phone); return n; });
+      }
+    } else {
+      const msg = messages[phone];
+      if (!msg?.trim()) { showToast('Primero genera un mensaje con IA', 'error'); return; }
+      setSending(prev => new Set(prev).add(phone));
+      try {
+        await reengagementAPI.send({ phone, message: msg });
+        showToast('✅ Mensaje enviado');
+        setCandidates(prev => prev.filter(c => c.phone !== phone));
+        setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
+      } catch (err) {
+        showToast(err.response?.data?.error || 'Error enviando', 'error');
+      } finally {
+        setSending(prev => { const n = new Set(prev); n.delete(phone); return n; });
+      }
     }
   };
 
   const sendBulk = async () => {
-    const targets = visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim());
-    if (!targets.length) { showToast('Selecciona clientes con mensajes generados', 'error'); return; }
+    let targets;
+    let items;
+
+    if (useTemplate) {
+      if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
+      targets = visible.filter(c => selected.has(c.phone));
+      if (!targets.length) { showToast('Selecciona al menos un cliente', 'error'); return; }
+      items = targets.map(c => ({
+        phone:        c.phone,
+        templateName: selectedTemplate.name,
+        languageCode: selectedTemplate.language,
+        components:   buildComponents(c),
+      }));
+    } else {
+      targets = visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim());
+      if (!targets.length) { showToast('Selecciona clientes con mensajes generados', 'error'); return; }
+      items = targets.map(c => ({ phone: c.phone, message: messages[c.phone] }));
+    }
+
     setSendingBulk(true);
     try {
-      const res = await api.post('/reengagement/send-bulk', {
-        items: targets.map(c => ({ phone: c.phone, message: messages[c.phone] })),
-      });
-      showToast(`✅ ${res.data.sent} mensajes enviados${res.data.failed > 0 ? ` · ${res.data.failed} fallaron` : ''}`);
-      const sent = new Set(res.data.results.filter(r => r.success).map(r => r.phone));
+      const res = await reengagementAPI.sendBulk(items);
+      showToast(`✅ ${res.sent} enviados${res.failed > 0 ? ` · ${res.failed} fallaron` : ''}`);
+      const sent = new Set(res.results.filter(r => r.success).map(r => r.phone));
       setCandidates(prev => prev.filter(c => !sent.has(c.phone)));
       setSelected(new Set());
     } catch (err) {
@@ -191,7 +313,9 @@ export default function ReengagementPanel() {
     }
   };
 
-  const selectedWithMsg  = visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim()).length;
+  const selectedWithMsg  = useTemplate
+    ? visible.filter(c => selected.has(c.phone)).length
+    : visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim()).length;
   const totalCandidates  = candidates.length;
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
   const hiddenByFilter   = totalCandidates - filteredTotal;
@@ -243,6 +367,26 @@ export default function ReengagementPanel() {
           ))}
         </div>
 
+        {/* Toggle modo Template */}
+        <button onClick={toggleTemplateMode}
+          title={useTemplate ? 'Cambiar a modo texto libre' : 'Cambiar a modo template WhatsApp'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '7px',
+            padding: '7px 14px', borderRadius: '8px',
+            backgroundColor: useTemplate ? '#1a3040' : '#2a3942',
+            border: `1px solid ${useTemplate ? '#00a884' : '#374045'}`,
+            cursor: 'pointer',
+            color: useTemplate ? '#00a884' : '#8696a0',
+            fontSize: '12px', fontWeight: useTemplate ? 600 : 400,
+            transition: 'all 0.15s',
+          }}>
+          <FileText size={13} />
+          {useTemplate ? '📋 Modo Template' : '📋 Usar Template'}
+          {useTemplate
+            ? <ToggleRight size={15} color="#00a884" />
+            : <ToggleLeft size={15} />}
+        </button>
+
         <button onClick={() => load(true)} disabled={loading}
           style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: '#2a3942', border: '1px solid #374045', cursor: loading ? 'not-allowed' : 'pointer', color: '#8696a0', fontSize: '12px', opacity: loading ? 0.5 : 1 }}>
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
@@ -287,6 +431,117 @@ export default function ReengagementPanel() {
         </div>
       )}
 
+      {/* Panel de templates */}
+      {useTemplate && !loading && (
+        <div style={{ backgroundColor: '#0d1f2d', borderBottom: '1px solid #1e3a50', padding: '12px 24px' }}>
+          {templatesLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#8696a0', fontSize: '13px' }}>
+              <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+              Cargando templates aprobados...
+            </div>
+          ) : templatesError ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle size={14} color="#e57373" />
+              <span style={{ color: '#e57373', fontSize: '12px' }}>{templatesError}</span>
+              <button onClick={loadTemplates} style={{ color: '#00a884', fontSize: '12px', background: 'none', border: 'none', cursor: 'pointer' }}>Reintentar</button>
+            </div>
+          ) : templates.length === 0 ? (
+            <span style={{ color: '#8696a0', fontSize: '12px' }}>
+              No hay templates aprobados. Créalos en Meta Business Manager y espera la aprobación.
+            </span>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {/* Selector de template */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <span style={{ color: '#8696a0', fontSize: '12px', flexShrink: 0 }}>Template:</span>
+                <div style={{ position: 'relative', flex: 1, maxWidth: '380px' }}>
+                  <select
+                    value={selectedTemplate?.name || ''}
+                    onChange={e => {
+                      const tpl = templates.find(t => t.name === e.target.value);
+                      if (tpl) handleSelectTemplate(tpl);
+                      else { setSelectedTemplate(null); setVarMap({}); }
+                    }}
+                    style={{
+                      width: '100%', backgroundColor: '#182028', color: '#e9edef',
+                      border: '1px solid #2a3942', borderRadius: '7px',
+                      padding: '7px 12px', fontSize: '13px', cursor: 'pointer', outline: 'none',
+                    }}
+                  >
+                    <option value="">— Selecciona un template —</option>
+                    {templates.map(t => (
+                      <option key={t.name} value={t.name}>
+                        {t.name} ({t.language})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedTemplate && (
+                  <span style={{
+                    backgroundColor: '#0a2e15', color: '#00c853',
+                    borderRadius: '5px', padding: '3px 8px', fontSize: '11px',
+                    border: '1px solid #00c85333',
+                  }}>
+                    ✓ {selectedTemplate.category || 'MARKETING'}
+                  </span>
+                )}
+              </div>
+
+              {/* Preview del template */}
+              {selectedTemplate && (() => {
+                const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY');
+                const headerComp = selectedTemplate.components?.find(c => c.type === 'HEADER');
+                const footerComp = selectedTemplate.components?.find(c => c.type === 'FOOTER');
+                const vars = parseTemplateVars(selectedTemplate);
+                return (
+                  <div>
+                    {/* Variables */}
+                    {vars.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+                        {vars.map(v => (
+                          <div key={v} style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#182028', borderRadius: '6px', padding: '5px 10px', border: '1px solid #2a3942' }}>
+                            <span style={{ color: '#00a884', fontSize: '11px', fontWeight: 700 }}>{'{{' + v + '}}'}</span>
+                            <span style={{ color: '#8696a0', fontSize: '11px' }}>→</span>
+                            <select
+                              value={varMap[v] || 'manual'}
+                              onChange={e => setVarMap(prev => ({ ...prev, [v]: e.target.value }))}
+                              style={{ backgroundColor: '#0f1820', color: '#e9edef', border: 'none', fontSize: '11px', cursor: 'pointer', outline: 'none' }}
+                            >
+                              <option value="name">Nombre del cliente</option>
+                              <option value="phone">Teléfono</option>
+                              <option value="manual">Texto fijo</option>
+                            </select>
+                            {(varMap[v] || 'manual') === 'manual' && (
+                              <input
+                                value={manualVars[v] || ''}
+                                onChange={e => setManualVars(prev => ({ ...prev, [v]: e.target.value }))}
+                                placeholder="Escribe aquí..."
+                                style={{ backgroundColor: '#0f1820', color: '#e9edef', border: '1px solid #2a3942', borderRadius: '4px', padding: '2px 6px', fontSize: '11px', width: '100px' }}
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Preview del mensaje */}
+                    <div style={{ backgroundColor: '#182028', borderRadius: '8px', padding: '10px 12px', border: '1px solid #2a3942', maxWidth: '480px' }}>
+                      <div style={{ color: '#4a5568', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Vista previa</div>
+                      {headerComp?.text && <div style={{ color: '#e9edef', fontSize: '13px', fontWeight: 700, marginBottom: '4px' }}>{headerComp.text}</div>}
+                      <div style={{ color: '#c8d1d9', fontSize: '13px', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                        {previewTemplate(visible[0])}
+                      </div>
+                      {footerComp?.text && <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '6px' }}>{footerComp.text}</div>}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Barra de acciones */}
       {visible.length > 0 && !loading && (
         <div style={{ padding: '8px 24px', backgroundColor: '#111b21', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
@@ -302,16 +557,35 @@ export default function ReengagementPanel() {
 
           <div style={{ flex: 1 }} />
 
-          <button onClick={generateAll}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#1a2530', color: '#00a884', padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500, border: '1px solid #00a88433', cursor: 'pointer' }}>
-            <Sparkles size={14} />
-            Generar mensajes IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}
-          </button>
+          {!useTemplate && (
+            <button onClick={generateAll}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#1a2530', color: '#00a884', padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500, border: '1px solid #00a88433', cursor: 'pointer' }}>
+              <Sparkles size={14} />
+              Generar mensajes IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}
+            </button>
+          )}
 
-          <button onClick={sendBulk} disabled={sendingBulk || selectedWithMsg === 0}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: selectedWithMsg > 0 ? '#00a884' : '#2a3942', color: selectedWithMsg > 0 ? 'white' : '#8696a0', padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500, border: 'none', cursor: selectedWithMsg > 0 ? 'pointer' : 'not-allowed', opacity: sendingBulk ? 0.7 : 1 }}>
-            {sendingBulk ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
-            {sendingBulk ? 'Enviando...' : `Enviar a ${selectedWithMsg} clientes`}
+          {useTemplate && !selectedTemplate && (
+            <span style={{ color: '#f0b429', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <FileText size={13} /> Selecciona un template arriba para continuar
+            </span>
+          )}
+
+          <button onClick={sendBulk}
+            disabled={sendingBulk || selectedWithMsg === 0 || (useTemplate && !selectedTemplate)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              backgroundColor: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? '#1a4060' : '#00a884') : '#2a3942',
+              color: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? '#4db6e8' : 'white') : '#8696a0',
+              padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
+              border: useTemplate ? '1px solid #1e5a80' : 'none',
+              cursor: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? 'pointer' : 'not-allowed',
+              opacity: sendingBulk ? 0.7 : 1,
+            }}>
+            {sendingBulk ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : (useTemplate ? <FileText size={14} /> : <Send size={14} />)}
+            {sendingBulk ? 'Enviando...' : useTemplate
+              ? `Enviar template a ${selectedWithMsg} clientes`
+              : `Enviar a ${selectedWithMsg} clientes`}
           </button>
         </div>
       )}
@@ -370,6 +644,8 @@ export default function ReengagementPanel() {
                 onGenerate={() => generateMessage(c.phone)}
                 onMessageChange={val => setMessages(prev => ({ ...prev, [c.phone]: val }))}
                 onSend={() => sendOne(c.phone)}
+                useTemplate={useTemplate}
+                templatePreview={useTemplate && selectedTemplate ? previewTemplate(c) : null}
               />
             </div>
           ))
@@ -394,7 +670,7 @@ export default function ReengagementPanel() {
   );
 }
 
-function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenerating, isSending, onToggleSelect, onToggleExpand, onGenerate, onMessageChange, onSend }) {
+function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenerating, isSending, onToggleSelect, onToggleExpand, onGenerate, onMessageChange, onSend, useTemplate, templatePreview }) {
   const hasMsg  = message?.trim().length > 0;
   const conf    = c.confidence || 0;
   const cColor  = confColor(conf);
@@ -557,50 +833,62 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
 
       {/* ── FILA 5: botones de acción ── */}
       <div style={{ display: 'flex', gap: '8px', padding: '0 14px 12px', alignItems: 'center' }}>
-        <button onClick={onGenerate} disabled={isGenerating}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '6px',
-            backgroundColor: hasMsg ? '#0d2419' : '#1e2d3a',
-            color: hasMsg ? '#00c853' : '#8696a0',
-            padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500,
-            border: `1px solid ${hasMsg ? '#00c85333' : '#2a3942'}`,
-            cursor: isGenerating ? 'not-allowed' : 'pointer',
-            opacity: isGenerating ? 0.6 : 1, flex: 1,
-          }}>
-          {isGenerating
-            ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Sparkles size={13} />}
-          {isGenerating ? 'Generando...' : hasMsg ? '✓ Regenerar IA' : 'Generar con IA'}
-        </button>
+        {!useTemplate && (
+          <button onClick={onGenerate} disabled={isGenerating}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              backgroundColor: hasMsg ? '#0d2419' : '#1e2d3a',
+              color: hasMsg ? '#00c853' : '#8696a0',
+              padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500,
+              border: `1px solid ${hasMsg ? '#00c85333' : '#2a3942'}`,
+              cursor: isGenerating ? 'not-allowed' : 'pointer',
+              opacity: isGenerating ? 0.6 : 1, flex: 1,
+            }}>
+            {isGenerating
+              ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
+              : <Sparkles size={13} />}
+            {isGenerating ? 'Generando...' : hasMsg ? '✓ Regenerar IA' : 'Generar con IA'}
+          </button>
+        )}
 
-        <button onClick={onSend} disabled={!hasMsg || isSending}
+        {useTemplate && (
+          <div style={{ flex: 1, backgroundColor: '#0f1820', borderRadius: '7px', padding: '6px 10px', border: '1px solid #1e3a50', fontSize: '12px', color: '#8696a0', fontStyle: 'italic' }}>
+            {templatePreview
+              ? <span style={{ color: '#c8d1d9' }}>{templatePreview.slice(0, 80)}{templatePreview.length > 80 ? '…' : ''}</span>
+              : <span>Template personalizado para {c.name || c.phone}</span>}
+          </div>
+        )}
+
+        <button onClick={onSend} disabled={isSending || (useTemplate && !templatePreview)}
           style={{
             display: 'flex', alignItems: 'center', gap: '6px',
-            backgroundColor: hasMsg ? '#00a884' : '#1e2d3a',
-            color: hasMsg ? '#fff' : '#374045',
+            backgroundColor: (useTemplate ? !!templatePreview : hasMsg) ? (useTemplate ? '#1a4060' : '#00a884') : '#1e2d3a',
+            color: (useTemplate ? !!templatePreview : hasMsg) ? (useTemplate ? '#4db6e8' : '#fff') : '#374045',
             padding: '7px 18px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
-            border: 'none',
-            cursor: hasMsg && !isSending ? 'pointer' : 'not-allowed',
+            border: useTemplate ? '1px solid #1e5a80' : 'none',
+            cursor: (isSending || (useTemplate && !templatePreview)) ? 'not-allowed' : (useTemplate ? !!templatePreview : hasMsg) ? 'pointer' : 'not-allowed',
             opacity: isSending ? 0.7 : 1, flexShrink: 0,
           }}>
           {isSending
             ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Send size={13} />}
-          {isSending ? 'Enviando...' : 'Enviar'}
+            : useTemplate ? <FileText size={13} /> : <Send size={13} />}
+          {isSending ? 'Enviando...' : useTemplate ? 'Enviar template' : 'Enviar'}
         </button>
 
-        <button onClick={onToggleExpand}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '4px',
-            padding: '7px 10px', backgroundColor: '#1e2d3a', border: 'none',
-            borderRadius: '7px', cursor: 'pointer', color: '#8696a0', fontSize: '11px', flexShrink: 0,
-          }}>
-          {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-        </button>
+        {!useTemplate && (
+          <button onClick={onToggleExpand}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '4px',
+              padding: '7px 10px', backgroundColor: '#1e2d3a', border: 'none',
+              borderRadius: '7px', cursor: 'pointer', color: '#8696a0', fontSize: '11px', flexShrink: 0,
+            }}>
+            {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        )}
       </div>
 
-      {/* ── Área de mensaje expandible ── */}
-      {isExpanded && (
+      {/* ── Área de mensaje expandible (solo modo texto libre) ── */}
+      {!useTemplate && isExpanded && (
         <div style={{ padding: '12px 14px 14px', borderTop: '1px solid #2a3942', backgroundColor: '#0f1820' }}>
           <div style={{ color: '#4a5568', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' }}>
             Mensaje WhatsApp

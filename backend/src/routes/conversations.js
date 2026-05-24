@@ -249,6 +249,59 @@ router.post('/:id/escalation-feedback', async (req, res) => {
 });
 
 /**
+ * POST /api/conversations/:id/send-template
+ * Envía un template de WhatsApp a una conversación específica.
+ * Útil cuando la ventana de 24h ha expirado.
+ * Body: { templateName, languageCode?, components? }
+ *   components ejemplo: [{ type: 'body', parameters: [{ type: 'text', text: 'Juan' }] }]
+ */
+router.post('/:id/send-template', async (req, res) => {
+  try {
+    const { templateName, languageCode, components } = req.body;
+    if (!templateName?.trim()) {
+      return res.status(400).json({ success: false, error: 'templateName requerido' });
+    }
+
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
+
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    if (wc.provider !== 'kapso' && wc.provider !== 'meta') {
+      return res.status(400).json({ success: false, error: 'Templates solo disponibles con Kapso o Meta' });
+    }
+
+    const kapsoService = require('../services/kapso-whatsapp');
+    const sentResult = await kapsoService.sendTemplate(
+      conv.phone_number,
+      templateName.trim(),
+      languageCode || 'es',
+      components || [],
+      wc
+    );
+
+    const message = await db.saveMessage({
+      conversationId:    conv.id,
+      whatsappMessageId: sentResult?.messages?.[0]?.id || null,
+      direction:         'outbound',
+      content:           `[Template: ${templateName.trim()}]`,
+      sentBy:            'human',
+      agentType:         null,
+    });
+
+    await db.updateConversationLastMessage(conv.id, `[Template enviado: ${templateName.trim()}]`);
+    const updated = await db.getConversationById(conv.id);
+    io?.emit(`new_message_${req.orgId}`, { message, conversation: updated });
+
+    res.json({ success: true, data: message });
+  } catch (err) {
+    console.error('[Conv/send-template] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * DELETE /api/conversations/:id/messages
  * Borra todos los mensajes de una conversación y resetea su estado.
  * Solo disponible para raivaldiviabou@gmail.com (uso en testing).
