@@ -106,11 +106,20 @@ router.post('/', async (req, res) => {
     if (!apiKey) return res.status(400).json({ success: false, error: 'Kapso API Key no configurada' });
     if (!wabaId) return res.status(400).json({ success: false, error: 'WABA ID no configurado' });
 
+    // Limpiar header: Meta no permite emojis, asteriscos ni saltos de línea en HEADER
+    const cleanHeader = (header?.trim() || '')
+      .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')   // emojis supplementary
+      .replace(/[☀-➿]/gu, '')           // emojis misc symbols
+      .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')     // emojis extended
+      .replace(/[*_~`]/g, '')                     // markdown formatting
+      .replace(/\n/g, ' ')                        // newlines
+      .trim();
+
     // Construir componentes
     const components = [];
 
-    if (header?.trim()) {
-      components.push({ type: 'HEADER', format: 'TEXT', text: header.trim() });
+    if (cleanHeader) {
+      components.push({ type: 'HEADER', format: 'TEXT', text: cleanHeader });
     }
 
     components.push({ type: 'BODY', text: body.trim() });
@@ -216,7 +225,7 @@ Genera un template de WhatsApp que cumpla ese objetivo. Reglas:
 - Máximo 3-4 variables, no más (Meta rechaza templates muy complejos)
 - Tono: cercano, cálido, como un amigo que cuida al cliente
 - Body: máximo 160 caracteres, directo y natural
-- Header: opcional, corto, en negrita (máximo 60 chars). Usa solo si agrega valor real.
+- Header: opcional, corto (máximo 60 chars). CRÍTICO: sin emojis, sin asteriscos, sin caracteres especiales — solo texto plano. Meta rechaza headers con emojis. Si no hay un header útil en texto plano, pon null.
 - Footer: opcional, solo para instrucciones de baja (STOP) o info legal. Generalmente no es necesario.
 - Variables deben ser numeradas consecutivamente empezando por 1
 
