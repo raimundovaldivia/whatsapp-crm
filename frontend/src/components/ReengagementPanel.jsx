@@ -419,7 +419,7 @@ export default function ReengagementPanel() {
   const exportToExcel = () => {
     if (!candidates.length) return;
 
-    const windowLabel = { hoy: 'Hoy/Mañana', semana: 'Esta semana', mes: 'Este mes', lejano: '1-6 meses', desconocido: 'Desconocido' };
+    const windowLabel = { hoy: 'Hoy-Mañana', semana: 'Esta semana', mes: 'Este mes', lejano: '1-6 meses', desconocido: 'Desconocido' };
 
     // Hoja principal: todos los candidatos
     const mainRows = candidates.map(c => ({
