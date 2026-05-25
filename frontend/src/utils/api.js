@@ -55,12 +55,15 @@ export const conversationsAPI = {
 };
 
 export const reengagementAPI = {
-  getCandidates: (refresh = false) => api.get(`/reengagement/candidates${refresh ? '?refresh=true' : ''}`, { timeout: 180000 }).then(r => r.data),
-  generate: (phone) => api.post('/reengagement/generate', { phone }).then(r => r.data),
-  send: (data) => api.post('/reengagement/send', data).then(r => r.data),
-  sendBulk: (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
-  getTemplates: () => api.get('/reengagement/templates').then(r => r.data),
+  getCandidates:    (refresh = false) => api.get(`/reengagement/candidates${refresh ? '?refresh=true' : ''}`, { timeout: 180000 }).then(r => r.data),
+  generate:         (phone) => api.post('/reengagement/generate', { phone }).then(r => r.data),
+  send:             (data) => api.post('/reengagement/send', data).then(r => r.data),
+  sendBulk:         (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
+  getTemplates:     () => api.get('/reengagement/templates').then(r => r.data),
   fillTemplateVars: (phone, templateBody) => api.post('/reengagement/fill-template-vars', { phone, templateBody }).then(r => r.data),
+  calibrate:        () => api.post('/reengagement/calibrate', {}, { timeout: 120000 }).then(r => r.data),
+  getCalibration:   () => api.get('/reengagement/calibration').then(r => r.data),
+  getAccuracy:      () => api.get('/reengagement/accuracy').then(r => r.data),
 };
 
 export const templatesAPI = {

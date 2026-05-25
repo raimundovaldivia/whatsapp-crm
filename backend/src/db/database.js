@@ -439,6 +439,142 @@ async function setSetting(orgId, key, value) {
   );
 }
 
+// ─── RE-ENGANCHE: calibración, caché y predicciones ──────────────────
+
+async function saveCalibration(orgId, result) {
+  await pool.query(
+    `INSERT INTO org_reengagement_calibration
+       (organization_id, calibration_factor, bucket_factors, accuracy_rate, mean_error_days,
+        total_predictions, customers_analyzed, bucket_stats, top_customers, insight, calibrated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT(organization_id) DO UPDATE SET
+       calibration_factor  = EXCLUDED.calibration_factor,
+       bucket_factors      = EXCLUDED.bucket_factors,
+       accuracy_rate       = EXCLUDED.accuracy_rate,
+       mean_error_days     = EXCLUDED.mean_error_days,
+       total_predictions   = EXCLUDED.total_predictions,
+       customers_analyzed  = EXCLUDED.customers_analyzed,
+       bucket_stats        = EXCLUDED.bucket_stats,
+       top_customers       = EXCLUDED.top_customers,
+       insight             = EXCLUDED.insight,
+       calibrated_at       = EXCLUDED.calibrated_at`,
+    [
+      orgId,
+      result.calibrationFactor,
+      JSON.stringify(result.bucketFactors),
+      result.accuracyRate,
+      result.meanErrorDays,
+      result.totalPredictions,
+      result.customersAnalyzed,
+      JSON.stringify(result.bucketStats),
+      JSON.stringify(result.topCustomers),
+      result.insight,
+      result.calibratedAt,
+    ]
+  );
+}
+
+async function getCalibration(orgId) {
+  const row = await queryOne(
+    `SELECT * FROM org_reengagement_calibration WHERE organization_id = $1`,
+    [orgId]
+  );
+  if (!row) return null;
+  return {
+    calibrationFactor:  parseFloat(row.calibration_factor),
+    bucketFactors:      row.bucket_factors,
+    accuracyRate:       parseFloat(row.accuracy_rate),
+    meanErrorDays:      parseFloat(row.mean_error_days),
+    totalPredictions:   row.total_predictions,
+    customersAnalyzed:  row.customers_analyzed,
+    bucketStats:        row.bucket_stats,
+    topCustomers:       row.top_customers,
+    insight:            row.insight,
+    calibratedAt:       row.calibrated_at,
+  };
+}
+
+async function getDailyCache(orgId, date) {
+  const row = await queryOne(
+    `SELECT * FROM reengagement_daily_cache WHERE organization_id=$1 AND cache_date=$2`,
+    [orgId, date]
+  );
+  return row ? row.candidates : null;
+}
+
+async function saveDailyCache(orgId, date, candidates) {
+  await pool.query(
+    `INSERT INTO reengagement_daily_cache (organization_id, cache_date, candidates, total_candidates)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT(organization_id, cache_date) DO UPDATE SET
+       candidates=$3, total_candidates=$4`,
+    [orgId, date, JSON.stringify(candidates), candidates.length]
+  );
+}
+
+async function savePredictions(orgId, candidates, today) {
+  for (const c of candidates) {
+    const predictedBuyDate = c.predictedDays != null
+      ? new Date(Date.now() + c.predictedDays * 86400000).toISOString().slice(0, 10)
+      : null;
+    await pool.query(
+      `INSERT INTO reengagement_predictions
+         (organization_id, customer_phone, customer_name, prediction_date,
+          confidence_raw, confidence_calibrated, predicted_days, predicted_buy_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(organization_id, customer_phone, prediction_date) DO NOTHING`,
+      [orgId, c.phone, c.name, today,
+       c.confidenceRaw ?? c.confidence,
+       c.confidence,
+       c.predictedDays,
+       predictedBuyDate]
+    );
+  }
+}
+
+async function markMessageSent(orgId, phone, today, templateName) {
+  await pool.query(
+    `UPDATE reengagement_predictions
+     SET message_sent=TRUE, message_sent_at=NOW(), template_name=$4
+     WHERE organization_id=$1 AND customer_phone=$2 AND prediction_date=$3`,
+    [orgId, phone, today, templateName || null]
+  );
+}
+
+async function getPendingOutcomeCheck(orgId, beforeDate) {
+  return query(
+    `SELECT * FROM reengagement_predictions
+     WHERE organization_id=$1 AND outcome_checked=FALSE AND prediction_date < $2
+     ORDER BY prediction_date ASC LIMIT 200`,
+    [orgId, beforeDate]
+  );
+}
+
+async function saveOutcome(orgId, phone, predictionDate, bought, daysToActualBuy) {
+  const isMiss = !bought; // si no compró = miss (independiente de si se mandó msg)
+  await pool.query(
+    `UPDATE reengagement_predictions
+     SET outcome_checked=TRUE, outcome_date=CURRENT_DATE,
+         actually_bought=$4, days_to_actual_buy=$5, miss_flag=$6
+     WHERE organization_id=$1 AND customer_phone=$2 AND prediction_date=$3`,
+    [orgId, phone, predictionDate, bought, daysToActualBuy, isMiss]
+  );
+}
+
+async function getAccuracyStats(orgId) {
+  return queryOne(
+    `SELECT
+       COUNT(*) FILTER (WHERE outcome_checked)                          AS total_checked,
+       COUNT(*) FILTER (WHERE outcome_checked AND actually_bought)      AS total_bought,
+       COUNT(*) FILTER (WHERE miss_flag AND confidence_calibrated >= 80) AS high_conf_misses,
+       COUNT(*) FILTER (WHERE miss_flag AND NOT message_sent AND confidence_calibrated >= 80) AS missed_no_msg,
+       AVG(days_to_actual_buy) FILTER (WHERE actually_bought)          AS avg_days_to_buy
+     FROM reengagement_predictions
+     WHERE organization_id=$1 AND prediction_date >= CURRENT_DATE - INTERVAL '60 days'`,
+    [orgId]
+  );
+}
+
 module.exports = {
   getPool,
   // Orgs
@@ -465,4 +601,9 @@ module.exports = {
   getSetting, setSetting,
   // Escalation feedback
   saveEscalationFeedback, getEscalationNegativeExamples, setLastEscalation, clearLastEscalation,
+  // Re-enganche: calibración, caché y predicciones
+  saveCalibration, getCalibration,
+  getDailyCache, saveDailyCache,
+  savePredictions, markMessageSent,
+  getPendingOutcomeCheck, saveOutcome, getAccuracyStats,
 };

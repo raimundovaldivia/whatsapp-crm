@@ -15,12 +15,13 @@ const { getPool } = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
 const Anthropic = require('@anthropic-ai/sdk');
 const { requireAuth } = require('../middleware/auth');
+const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 
 router.use(requireAuth);
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Cache en memoria: 2 horas (el análisis es costoso en tiempo)
+// Cache en memoria: sesión actual (respaldo al cache de DB)
 const analysisCache = new Map();
 const CACHE_TTL = 2 * 60 * 60 * 1000;
 
@@ -221,9 +222,22 @@ router.get('/candidates', async (req, res) => {
 
     const refresh = req.query.refresh === 'true';
 
-    const cached = analysisCache.get(req.orgId);
-    if (!refresh && cached && Date.now() - cached.ts < CACHE_TTL) {
-      return res.json({ success: true, data: cached.data, total: cached.data.length, fromCache: true });
+    // ── 1. Cache en memoria (misma sesión) ────────────────────────────
+    const memCached = analysisCache.get(req.orgId);
+    if (!refresh && memCached && Date.now() - memCached.ts < CACHE_TTL) {
+      return res.json({ success: true, data: memCached.data, total: memCached.data.length, fromCache: true, cacheSource: 'memory' });
+    }
+
+    // ── 2. Cache en DB (mismo día) ────────────────────────────────────
+    const today = new Date().toISOString().slice(0, 10);
+    if (!refresh) {
+      const dbCached = await db.getDailyCache(req.orgId, today);
+      if (dbCached) {
+        const candidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+        analysisCache.set(req.orgId, { data: candidates, ts: Date.now() });
+        console.log(`[Reengagement] Cache DB hit para org ${req.orgId} (${today})`);
+        return res.json({ success: true, data: candidates, total: candidates.length, fromCache: true, cacheSource: 'db', cacheDate: today });
+      }
     }
 
     const { shop, token } = shopifyApi.credentialsFrom(ds);
@@ -363,9 +377,32 @@ router.get('/candidates', async (req, res) => {
 
     const aiMap = new Map(aiResults.map(r => [r.phone, r]));
 
+    // ── Cargar calibración existente ──────────────────────────────────
+    const calibration = await db.getCalibration(req.orgId);
+    if (calibration) {
+      console.log(`[Reengagement] Calibración activa: factor=${calibration.calibrationFactor}, accuracy=${Math.round(calibration.accuracyRate*100)}%`);
+    }
+
+    // ── Correr backtesting si no existe calibración (primera vez) ─────
+    if (!calibration && allOrders.length > 0) {
+      try {
+        console.log(`[Reengagement] Primera vez — corriendo backtesting inicial...`);
+        const btResult = runBacktesting(allOrders, normalizePhone);
+        await db.saveCalibration(req.orgId, btResult);
+        console.log(`[Reengagement] Backtesting inicial: factor=${btResult.calibrationFactor}, accuracy=${Math.round(btResult.accuracyRate*100)}%, predicciones=${btResult.totalPredictions}`);
+      } catch (btErr) {
+        console.warn('[Reengagement] Error en backtesting inicial:', btErr.message);
+      }
+    }
+
+    // Recargar calibración (puede haberse creado recién)
+    const activeCalibration = calibration || await db.getCalibration(req.orgId);
+
     const enriched = allStats.map(c => {
       const ai = aiMap.get(c.phone) || {};
-      const predictedDays = ai.predictedDays ?? null;
+      const predictedDays   = ai.predictedDays ?? null;
+      const confidenceRaw   = ai.confidence || 0;
+      const confidenceCalib = applyCalibration(confidenceRaw, activeCalibration);
 
       let buyWindow, urgency;
       if (predictedDays === null) {
@@ -383,14 +420,24 @@ router.get('/candidates', async (req, res) => {
       return {
         ...c,
         predictedDays,
-        confidence: ai.confidence || 0,
-        aiReason:   ai.aiReason   || null,
+        confidenceRaw,
+        confidence:   confidenceCalib,   // confianza calibrada (la que ve el usuario)
+        aiReason:     ai.aiReason || null,
         buyWindow,
         urgency,
       };
     })
     .filter(c => c.predictedDays !== null && c.predictedDays <= 90)
     .sort((a, b) => a.predictedDays - b.predictedDays);
+
+    // ── Guardar en cache DB (único por día) ───────────────────────────
+    try {
+      await db.saveDailyCache(req.orgId, today, enriched);
+      await db.savePredictions(req.orgId, enriched, today);
+      console.log(`[Reengagement] Cache guardado en DB para ${today} (${enriched.length} candidatos)`);
+    } catch (cacheErr) {
+      console.warn('[Reengagement] Error guardando cache:', cacheErr.message);
+    }
 
     analysisCache.set(req.orgId, { data: enriched, ts: Date.now() });
 
@@ -712,6 +759,95 @@ router.post('/send-bulk', async (req, res) => {
   const sent   = results.filter(r => r.success).length;
   const failed = results.filter(r => !r.success).length;
   res.json({ success: true, sent, failed, results });
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   POST /api/reengagement/calibrate
+   Corre backtesting completo con historial de Shopify y guarda
+   el factor de calibración en DB. Se puede llamar manualmente
+   o automáticamente cuando no existe calibración previa.
+───────────────────────────────────────────────────────────────────── */
+router.post('/calibrate', async (req, res) => {
+  try {
+    const ds = await db.getPrimaryDataSource(req.orgId);
+    if (!ds) return res.status(400).json({ success: false, error: 'Sin fuente de datos configurada' });
+
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+
+    console.log(`[Calibration] Org ${req.orgId}: descargando historial para backtesting...`);
+
+    // Descargar todas las órdenes (mismo flujo que /candidates)
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    let allOrders = [];
+    let cursor = null;
+    let page = 0;
+    while (true) {
+      page++;
+      const result = await shopifyApi.getOrders(shop, token, { limit: 250, cursor, status: 'any' });
+      const validas = (result.orders || []).filter(o => {
+        const fs = (o.financialStatus || '').toUpperCase();
+        return fs !== 'VOIDED' && fs !== 'REFUNDED';
+      });
+      allOrders = allOrders.concat(validas);
+      if (!result.hasNextPage || !result.endCursor || page >= 50) break;
+      cursor = result.endCursor;
+      await sleep(300);
+    }
+
+    console.log(`[Calibration] Órdenes descargadas: ${allOrders.length}`);
+
+    if (allOrders.length < 20) {
+      return res.status(400).json({
+        success: false,
+        error: 'Historial insuficiente para calibración (necesitas al menos 20 órdenes)',
+      });
+    }
+
+    // Correr backtesting
+    const result = runBacktesting(allOrders, normalizePhone);
+
+    // Guardar en DB
+    await db.saveCalibration(req.orgId, result);
+
+    // Invalidar cache de memoria y DB para forzar recálculo con nueva calibración
+    analysisCache.delete(req.orgId);
+    const today = new Date().toISOString().slice(0, 10);
+    // El próximo acceso a /candidates regenerará con la nueva calibración
+
+    console.log(`[Calibration] Org ${req.orgId}: factor=${result.calibrationFactor}, accuracy=${Math.round(result.accuracyRate*100)}%, predicciones simuladas=${result.totalPredictions}`);
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[Calibration]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   GET /api/reengagement/calibration
+   Devuelve el estado actual de la calibración sin recalcular.
+───────────────────────────────────────────────────────────────────── */
+router.get('/calibration', async (req, res) => {
+  try {
+    const calibration = await db.getCalibration(req.orgId);
+    res.json({ success: true, data: calibration });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   GET /api/reengagement/accuracy
+   Estadísticas de accuracy de predicciones pasadas (outcomes reales).
+───────────────────────────────────────────────────────────────────── */
+router.get('/accuracy', async (req, res) => {
+  try {
+    const stats = await db.getAccuracyStats(req.orgId);
+    const calibration = await db.getCalibration(req.orgId);
+    res.json({ success: true, data: { outcomes: stats, calibration } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;

@@ -203,6 +203,66 @@ async function setupDatabase() {
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_trigger TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_reason TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_at TIMESTAMP;
+
+      -- ─── RE-ENGANCHE: calibración, caché y predicciones ──────────
+
+      -- Calibración por organización (backtesting histórico)
+      CREATE TABLE IF NOT EXISTS org_reengagement_calibration (
+        id                     SERIAL PRIMARY KEY,
+        organization_id        INTEGER UNIQUE NOT NULL,
+        calibration_factor     DECIMAL(5,3) DEFAULT 1.0,
+        bucket_factors         JSONB,
+        accuracy_rate          DECIMAL(5,3),
+        mean_error_days        DECIMAL(8,2),
+        total_predictions      INTEGER DEFAULT 0,
+        customers_analyzed     INTEGER DEFAULT 0,
+        bucket_stats           JSONB,
+        top_customers          JSONB,
+        insight                TEXT,
+        calibrated_at          TIMESTAMP,
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+
+      -- Caché diario del análisis completo de re-enganche
+      CREATE TABLE IF NOT EXISTS reengagement_daily_cache (
+        id               SERIAL PRIMARY KEY,
+        organization_id  INTEGER NOT NULL,
+        cache_date       DATE NOT NULL,
+        candidates       JSONB NOT NULL,
+        total_candidates INTEGER DEFAULT 0,
+        created_at       TIMESTAMP DEFAULT NOW(),
+        UNIQUE(organization_id, cache_date),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+
+      -- Predicciones individuales para tracking de outcomes
+      CREATE TABLE IF NOT EXISTS reengagement_predictions (
+        id                   SERIAL PRIMARY KEY,
+        organization_id      INTEGER NOT NULL,
+        customer_phone       VARCHAR(30) NOT NULL,
+        customer_name        VARCHAR(200),
+        prediction_date      DATE NOT NULL,
+        confidence_raw       DECIMAL(5,2),
+        confidence_calibrated DECIMAL(5,2),
+        predicted_days       INTEGER,
+        predicted_buy_date   DATE,
+        message_sent         BOOLEAN DEFAULT FALSE,
+        message_sent_at      TIMESTAMP,
+        template_name        VARCHAR(100),
+        -- Outcome (se llena al día siguiente)
+        outcome_checked      BOOLEAN DEFAULT FALSE,
+        outcome_date         DATE,
+        actually_bought      BOOLEAN,
+        days_to_actual_buy   INTEGER,
+        miss_flag            BOOLEAN DEFAULT FALSE,
+        created_at           TIMESTAMP DEFAULT NOW(),
+        UNIQUE(organization_id, customer_phone, prediction_date),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reeng_cache_org_date ON reengagement_daily_cache(organization_id, cache_date);
+      CREATE INDEX IF NOT EXISTS idx_reeng_pred_org_date  ON reengagement_predictions(organization_id, prediction_date);
+      CREATE INDEX IF NOT EXISTS idx_reeng_pred_outcome   ON reengagement_predictions(outcome_checked, prediction_date);
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

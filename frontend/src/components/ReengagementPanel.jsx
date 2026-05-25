@@ -58,6 +58,10 @@ export default function ReengagementPanel() {
   const [loadingStep, setLoadingStep] = useState('');
   const [error, setError]             = useState(null);
   const [fromCache, setFromCache]     = useState(false);
+  const [cacheDate, setCacheDate]     = useState(null);
+  const [cacheSource, setCacheSource] = useState(null);
+  const [calibration, setCalibration] = useState(null);
+  const [calibrating, setCalibrating] = useState(false);
   const [activeWindow, setActiveWindow] = useState('hoy');
   const [selected, setSelected]       = useState(new Set());
   const [messages, setMessages]       = useState({});
@@ -104,6 +108,13 @@ export default function ReengagementPanel() {
       );
       setCandidates(res.data.data || []);
       setFromCache(res.data.fromCache || false);
+      setCacheDate(res.data.cacheDate || null);
+      setCacheSource(res.data.cacheSource || null);
+      // Cargar calibración en paralelo
+      try {
+        const calRes = await reengagementAPI.getCalibration();
+        setCalibration(calRes.data);
+      } catch (_) {}
       // Auto-seleccionar la ventana con más candidatos
       const data = res.data.data || [];
       if (data.some(c => c.buyWindow === 'hoy')) setActiveWindow('hoy');
@@ -395,7 +406,22 @@ export default function ReengagementPanel() {
             </Tooltip>
           )}
           {fromCache && !loading && (
-            <span style={{ color: '#374045', fontSize: '11px' }}>· desde caché</span>
+            <span style={{ color: '#374045', fontSize: '11px' }}>
+              · caché {cacheSource === 'db' ? '📅' : '💾'} {cacheDate || ''}
+            </span>
+          )}
+          {calibration && !loading && (
+            <Tooltip text={`Factor calibración: ${calibration.calibrationFactor} · Accuracy histórica: ${Math.round((calibration.accuracyRate||0)*100)}% · ${calibration.totalPredictions} predicciones simuladas`} position="bottom">
+              <span style={{
+                backgroundColor: calibration.accuracyRate >= 0.70 ? '#0a2e15' : calibration.accuracyRate >= 0.50 ? '#2a2000' : '#2a1a00',
+                color: calibration.accuracyRate >= 0.70 ? '#00c853' : calibration.accuracyRate >= 0.50 ? '#f0b429' : '#e57373',
+                border: `1px solid ${calibration.accuracyRate >= 0.70 ? '#00c85344' : calibration.accuracyRate >= 0.50 ? '#f0b42944' : '#e5737344'}`,
+                borderRadius: '6px', padding: '2px 8px', fontSize: '11px', fontWeight: 600,
+                cursor: 'default', display: 'flex', alignItems: 'center', gap: '4px',
+              }}>
+                ⚖️ {Math.round((calibration.accuracyRate||0)*100)}% preciso
+              </span>
+            </Tooltip>
           )}
         </div>
 
@@ -443,6 +469,40 @@ export default function ReengagementPanel() {
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           Nuevo análisis
         </button>
+
+        <Tooltip text={calibration ? `Último backtesting: ${calibration.totalPredictions} predicciones simuladas · Accuracy ${Math.round((calibration.accuracyRate||0)*100)}%` : 'Calibrar el algoritmo con historial real de Shopify'} position="bottom">
+          <button
+            onClick={async () => {
+              setCalibrating(true);
+              try {
+                const res = await reengagementAPI.calibrate();
+                if (res.success) {
+                  setCalibration(res.data);
+                  // Forzar recarga con nueva calibración
+                  analysisCache?.delete?.(req?.orgId);
+                  showToast(`✅ Calibración completa: ${Math.round((res.data.accuracyRate||0)*100)}% accuracy histórica · factor ${res.data.calibrationFactor}`);
+                  load(true);
+                }
+              } catch (err) {
+                showToast('Error en calibración: ' + (err.response?.data?.error || err.message), 'error');
+              } finally {
+                setCalibrating(false);
+              }
+            }}
+            disabled={calibrating || loading}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px',
+              borderRadius: '8px', fontSize: '12px', border: '1px solid #2a4060',
+              backgroundColor: calibrating ? '#1a2030' : '#1a2030',
+              color: calibrating ? '#4a5568' : '#b8a9ff',
+              cursor: (calibrating || loading) ? 'not-allowed' : 'pointer',
+              opacity: (calibrating || loading) ? 0.6 : 1,
+            }}>
+            {calibrating
+              ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Calibrando...</>
+              : <>⚖️ {calibration ? 'Recalibrar' : 'Calibrar IA'}</>}
+          </button>
+        </Tooltip>
       </div>
 
       {/* Tabs de ventanas de tiempo */}
