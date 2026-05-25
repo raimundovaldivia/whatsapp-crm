@@ -29,30 +29,37 @@ backend/           → Node.js + Express + Socket.io (Web Service en Render)
 
 ## Git — cómo pushear cambios
 
-**Token GitHub (PAT):**  
-El token real está guardado en memoria local de Claude (no en el repo para evitar Push Protection de GitHub).  
-> ⚠️ Si el push da 403, el token expiró. Generar uno nuevo en https://github.com/settings/tokens → Fine-grained → repo `whatsapp-crm` → permisos: **Contents: Read & Write** → decirle a Claude el nuevo token.
+**⚠️ IMPORTANTE: El workspace está en NTFS (Windows). Git en NTFS tiene problemas con lock files.**  
+**NUNCA hacer git directamente en `/sessions/.../mnt/A-SHOPIFY/whatsapp-crm`. SIEMPRE usar el clon en `/tmp/crm-push`.**
 
-**Flujo de push — Claude usa /tmp/crm-push (clon temporal):**
+**Token GitHub:** guardado en auto-memory (`reference_github_token.md`). Leerlo con `Read` antes de pushear. NUNCA poner el token en este archivo ni en ningún archivo del repo — GitHub Push Protection lo bloquea.
+
+**Flujo de push — siempre por `/tmp/crm-push`:**
 
 ```bash
-# 1. Preparar clon temporal (una vez por sesión)
+# 1. Si el clon no existe o está desactualizado:
 cd /tmp && rm -rf crm-push
-git clone https://TOKEN@github.com/raimundovaldivia/whatsapp-crm.git crm-push
-cd crm-push
-git config user.email "raivaldiviabou@gmail.com"
-git config user.name "Rai"
+# El token viene de auto-memory — leerlo antes de este paso
+git clone https://raimundovaldivia:<TOKEN>@github.com/raimundovaldivia/whatsapp-crm.git crm-push
+cd crm-push && git config user.email "raivaldiviabou@gmail.com" && git config user.name "Rai"
 
-# 2. Copiar archivos modificados desde el workspace
-cp /sessions/.../mnt/A-SHOPIFY/whatsapp-crm/<ruta> /tmp/crm-push/<ruta>
+# 2. Sincronizar con remote (siempre antes de copiar archivos):
+cd /tmp/crm-push && git fetch origin && git reset --hard origin/main
 
-# 3. Commit y push
+# 3. Copiar archivos modificados:
+cp /sessions/hopeful-admiring-carson/mnt/A-SHOPIFY/whatsapp-crm/<archivo> /tmp/crm-push/<archivo>
+
+# 4. Verificar sintaxis antes de commitear:
+node --check /tmp/crm-push/backend/src/routes/<archivo>.js
+
+# 5. Commit y push:
+cd /tmp/crm-push
 git add <archivos>
-git commit -m "feat: ..."
+git commit -m "feat: descripción
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 git push origin main
 ```
-
-**Regla:** nunca hacer `git push` directo al workspace NTFS — siempre desde el clon `/tmp/crm-push`.
 
 Después del push, el backend en Render hace **auto-deploy**. El frontend (Static Site) requiere **Manual Deploy** en el dashboard de Render.
 
@@ -208,6 +215,46 @@ JWT_SECRET            → auth tokens
 
 ---
 
+## Sistema de Re-enganche (`/api/reengagement`)
+
+Predice qué clientes van a comprar próximamente y permite enviarles mensajes.
+
+### Arquitectura
+- `routes/reengagement.js` — endpoints y lógica de análisis
+- `services/reengagement-calibration.js` — backtesting histórico para calibrar el algoritmo
+- Tablas DB: `reengagement_daily_cache`, `reengagement_predictions`, `org_reengagement_calibration`
+
+### Fuentes de teléfono en órdenes Shopify (orden de prioridad)
+```
+1. order.customer.phone
+2. order.shippingAddress.phone
+3. order.billingAddress.phone
+4. Catálogo de clientes (getCustomers) → match por customerId o email
+```
+**⚠️ CRÍTICO:** La query GraphQL `ORDERS_QUERY` en `shopify-api.js` DEBE incluir `shippingAddress { firstName lastName phone }` y `billingAddress { firstName lastName phone }`. Si no están en la query, los campos llegan como `null` aunque existan en Shopify. Esto ya se olvidó y tuvo que re-arreglarse — no remover esos campos.
+
+### Batches de predicción IA
+- Batch size: **20 clientes** (no más). Con 40, el JSON de respuesta supera `max_tokens`.
+- `max_tokens`: **8192** (no bajar). Con 2500, la respuesta se trunca y `JSON.parse` falla silenciosamente devolviendo `[]`.
+- Si la IA falla para un cliente → **fallback heurístico**: `predictedDays = avgFreqDays - daysInactive`.
+
+### Caché y refresh
+- Análisis corre una vez por día → guarda en `reengagement_daily_cache`
+- Cache en memoria (misma sesión) → `analysisCache` Map con TTL 2h
+- **Refresh (`?refresh=true`) es asíncrono** — retorna inmediatamente `{ refreshing: true }`. El análisis corre en segundo plano (`setImmediate`). El frontend hace polling cada 60s.
+- Motivo: Render free tier corta conexiones HTTP a los 30s. El análisis tarda 3-5 min.
+
+### CORS
+- Backend acepta cualquier `*.onrender.com` (no solo el FRONTEND_URL exacto).
+- Si Render mata una conexión lenta, su proxy responde sin CORS headers → aparece como "CORS error" en el browser pero es un timeout.
+
+### Calibración
+- Primera vez: corre backtesting automático con órdenes históricas.
+- Factor de calibración: `accuracyRate / 0.75`, capped `[0.40, 1.10]`.
+- Se guarda en `org_reengagement_calibration`.
+
+---
+
 ## Lo que NO hacer
 
 - No llamar a raigentic para datos de Shopify (usa shopify-api.js directo)
@@ -215,3 +262,8 @@ JWT_SECRET            → auth tokens
 - No bajar el umbral de escalación de la IA — Haiku sobre-escala por naturaleza
 - No agregar `await` a `pool.query` sin verificar que el caller también use await (async bug silencioso)
 - No agregar lógica en webhook.js para orgs con provider='kapso' — kapso-webhook.js es el handler correcto
+- No remover `shippingAddress`/`billingAddress` de `ORDERS_QUERY` en shopify-api.js — son necesarios para recuperar teléfonos
+- No bajar `max_tokens` del batch de predicción IA por debajo de 8192 — el JSON se trunca silenciosamente
+- No subir el batch size de predicción IA por encima de 20 — misma razón
+- No hacer git directamente en el workspace NTFS — siempre usar `/tmp/crm-push`
+- No poner tokens de GitHub en ningún archivo del repo — GitHub Push Protection lo bloquea
