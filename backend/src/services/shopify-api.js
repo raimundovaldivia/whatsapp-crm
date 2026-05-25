@@ -278,6 +278,12 @@ const ORDERS_QUERY = `
           customer {
             id firstName lastName email phone
           }
+          shippingAddress {
+            firstName lastName phone
+          }
+          billingAddress {
+            firstName lastName phone
+          }
           lineItems(first: 50) {
             edges {
               node {
@@ -326,6 +332,16 @@ async function getOrders(shop, token, opts = {}) {
       name:      `${node.customer.firstName || ''} ${node.customer.lastName || ''}`.trim(),
       email:     node.customer.email,
       phone:     node.customer.phone,
+    } : null,
+    shippingAddress:   node.shippingAddress ? {
+      firstName: node.shippingAddress.firstName,
+      lastName:  node.shippingAddress.lastName,
+      phone:     node.shippingAddress.phone,
+    } : null,
+    billingAddress:    node.billingAddress ? {
+      firstName: node.billingAddress.firstName,
+      lastName:  node.billingAddress.lastName,
+      phone:     node.billingAddress.phone,
     } : null,
     items: node.lineItems?.edges?.map(({ node: li }) => ({
       title:    li.title,
