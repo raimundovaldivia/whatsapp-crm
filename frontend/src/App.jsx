@@ -11,14 +11,25 @@ import DashboardPanel     from './components/DashboardPanel.jsx';
 import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
+import TemplateManager  from './components/TemplateManager.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, api } from './utils/api.js';
+import { DARK, LIGHT, ThemeCtx } from './theme.js';
 
 export default function App() {
   const [appState, setAppState] = useState('loading');
   const [user, setUser]         = useState(null);
   const [org, setOrg]           = useState(null);
-  const [view, setView]         = useState('chats'); // 'chats'|'catalogo'|'orders'|'dashboard'|'settings'
+  const [view, setView]         = useState('chats'); // 'chats'|'catalogo'|'orders'|'dashboard'|'settings'|'templates'
+
+  // Theme
+  const [theme, setTheme] = useState(() => localStorage.getItem('crm_theme') || 'dark');
+  const colors = theme === 'dark' ? DARK : LIGHT;
+  const toggleTheme = () => {
+    const n = theme === 'dark' ? 'light' : 'dark';
+    setTheme(n);
+    localStorage.setItem('crm_theme', n);
+  };
 
   // CRM state
   const [conversations, setConversations] = useState([]);
@@ -194,20 +205,31 @@ export default function App() {
 
   // ── Render ──────────────────────────────────────────────────────
   if (appState === 'loading') return (
-    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111b21' }}>
-      <div style={{ color: '#00a884', fontSize: '14px' }}>Cargando...</div>
-    </div>
+    <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgApp }}>
+        <div style={{ color: colors.green, fontSize: '14px' }}>Cargando...</div>
+      </div>
+    </ThemeCtx.Provider>
   );
 
-  if (appState === 'auth')  return <AuthPage onAuth={handleAuth} />;
-  if (appState === 'setup') return <SetupWizard org={org} onComplete={handleSetupComplete} />;
+  if (appState === 'auth')  return (
+    <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
+      <AuthPage onAuth={handleAuth} />
+    </ThemeCtx.Provider>
+  );
+  if (appState === 'setup') return (
+    <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
+      <SetupWizard org={org} onComplete={handleSetupComplete} />
+    </ThemeCtx.Provider>
+  );
 
   const selectedConv = conversations.find(c => c.id === selectedId);
   const selectedMsgs = messages[selectedId] || [];
   const totalUnread  = conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
 
   return (
-    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
+    <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
+    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', backgroundColor: colors.bgApp }}>
 
       {/* Barra de navegación vertical */}
       <NavBar
@@ -218,6 +240,7 @@ export default function App() {
         onLogout={handleLogout}
         unreadCount={totalUnread}
         pendingOrders={pendingOrders}
+        colors={colors}
       />
 
       {/* Vista Chats: sidebar de conversaciones + chat */}
@@ -274,11 +297,19 @@ export default function App() {
       {/* Vista Re-enganche */}
       {view === 'reengagement' && <ReengagementPanel />}
 
+      {/* Vista Templates */}
+      {view === 'templates' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: colors.bgApp, padding: '24px' }}>
+          <TemplateManager />
+        </div>
+      )}
+
       {/* Vista Dashboard */}
       {view === 'dashboard' && <DashboardPanel />}
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}
     </div>
+    </ThemeCtx.Provider>
   );
 }

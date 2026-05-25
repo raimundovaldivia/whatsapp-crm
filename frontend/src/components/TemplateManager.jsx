@@ -12,6 +12,7 @@ import {
   Info, Sparkles, Wand2,
 } from 'lucide-react';
 import { templatesAPI } from '../utils/api.js';
+import { useTheme } from '../theme.js';
 
 const LANGUAGES = [
   { value: 'es',    label: 'Español (es)' },
@@ -509,6 +510,7 @@ function CreateTemplateForm({ onCreated }) {
 }
 
 export default function TemplateManager() {
+  const { colors } = useTheme();
   const [tab, setTab]         = useState('list');   // 'list' | 'create'
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -549,9 +551,9 @@ export default function TemplateManager() {
   const rejected = templates.filter(t => t.status === 'REJECTED');
 
   return (
-    <div>
+    <div style={{ color: colors.textPrimary }}>
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0', marginBottom: '16px', backgroundColor: '#111b21', borderRadius: '9px', padding: '3px' }}>
+      <div style={{ display: 'flex', gap: '0', marginBottom: '16px', backgroundColor: colors.bgInput, borderRadius: '9px', padding: '3px' }}>
         {[
           { key: 'list',   label: 'Mis Templates', count: templates.length },
           { key: 'create', label: '+ Crear Template' },
@@ -559,8 +561,8 @@ export default function TemplateManager() {
           <button key={t.key} onClick={() => setTab(t.key)}
             style={{
               flex: 1, padding: '8px 14px', border: 'none',
-              backgroundColor: tab === t.key ? '#202c33' : 'transparent',
-              color: tab === t.key ? '#e9edef' : '#8696a0',
+              backgroundColor: tab === t.key ? colors.bgPanel : 'transparent',
+              color: tab === t.key ? colors.textPrimary : colors.textSecondary,
               borderRadius: '7px', cursor: 'pointer', fontSize: '13px', fontWeight: tab === t.key ? 600 : 400,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
             }}>

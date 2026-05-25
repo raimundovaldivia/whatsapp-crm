@@ -651,6 +651,181 @@ router.get('/templates', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/reengagement/generate-templates
+ * Usa IA para generar 5 templates de re-engagement personalizados para la tienda.
+ */
+router.post('/generate-templates', async (req, res) => {
+  try {
+    const orgId = req.user.orgId;
+    const db    = require('../db/database.js');
+    const shopifyApi = require('../services/shopify-api.js');
+    const Anthropic  = require('@anthropic-ai/sdk');
+
+    // Obtener datos de la tienda
+    const ds = await db.getPrimaryDataSource(orgId);
+    let storeContext = 'Tienda online';
+    let shopName = 'la tienda';
+
+    if (ds) {
+      try {
+        const { shop } = shopifyApi.credentialsFrom(ds);
+        shopName = shop.replace('.myshopify.com', '').replace(/-/g, ' ');
+
+        // Obtener productos top
+        const products = await shopifyApi.getProducts(ds, { first: 15 });
+        const productNames = (products || []).slice(0, 10).map(p => p.title).filter(Boolean);
+
+        // Obtener org name
+        const org = await db.getOrgById(orgId);
+        const orgName = org?.name || shopName;
+
+        storeContext = `
+Nombre de la tienda: ${orgName}
+Dominio Shopify: ${shop}
+Productos principales: ${productNames.join(', ') || 'varios productos'}
+        `.trim();
+      } catch (e) {
+        console.warn('[generate-templates] Error obteniendo datos Shopify:', e.message);
+      }
+    }
+
+    const client = new Anthropic();
+    const prompt = `Eres un experto en marketing de WhatsApp para e-commerce latinoamericano.
+
+Datos de la tienda:
+${storeContext}
+
+Genera exactamente 5 templates de WhatsApp Business para re-engagement de clientes (clientes que compraron antes pero no han vuelto). Los templates se envían a Meta para aprobación.
+
+REGLAS ESTRICTAS:
+- name: solo minúsculas, números y guiones bajos (ej: "reenganche_general")
+- category: siempre "MARKETING"
+- language: "es"
+- El BODY debe tener máximo 1024 caracteres
+- Usa {{1}} para nombre del cliente (siempre la primera variable)
+- Usa {{2}} para un dato de la tienda si aplica
+- El footer siempre: "Responde STOP para no recibir mensajes"
+- NO incluir URLs ni emojis en el header
+- El tono debe ser cálido, cercano y latinoamericano
+
+Los 5 templates deben ser:
+1. Re-engagement general (hace tiempo sin comprar)
+2. Novedad de productos (hay cosas nuevas)
+3. Carrito o producto abandonado (interés previo detectado)
+4. Oferta exclusiva para clientes anteriores
+5. Seguimiento post-compra (¿cómo quedaste?)
+
+Responde SOLO con JSON válido (sin markdown):
+{
+  "templates": [
+    {
+      "name": "nombre_snake_case",
+      "displayName": "Nombre legible",
+      "category": "MARKETING",
+      "language": "es",
+      "headerText": "Texto del header (sin variables, max 60 chars)",
+      "body": "Cuerpo del mensaje con {{1}} para nombre...",
+      "footer": "Responde STOP para no recibir mensajes",
+      "variables": ["nombre del cliente", "descripción de variable 2 si existe"],
+      "useCase": "Descripción breve del cuándo usar este template"
+    }
+  ]
+}`;
+
+    const msg = await client.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 3000,
+      messages:   [{ role: 'user', content: prompt }],
+    });
+
+    const raw = msg.content[0]?.text || '';
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const match = raw.match(/\{[\s\S]*\}/);
+      parsed = match ? JSON.parse(match[0]) : { templates: [] };
+    }
+
+    return res.json({ success: true, templates: parsed.templates || [] });
+  } catch (err) {
+    console.error('[generate-templates]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/reengagement/submit-templates
+ * Envía templates a Meta via Kapso para revisión.
+ * Body: { templates: [{name, category, language, headerText, body, footer}] }
+ */
+router.post('/submit-templates', async (req, res) => {
+  try {
+    const orgId    = req.user.orgId;
+    const { templates } = req.body;
+    if (!Array.isArray(templates) || templates.length === 0) {
+      return res.status(400).json({ success: false, error: 'templates array requerido' });
+    }
+
+    const db           = require('../db/database.js');
+    const kapsoService = require('../services/kapso-whatsapp.js');
+
+    const wc = await db.getWhatsAppConfig(orgId);
+    if (!wc || (wc.provider !== 'kapso' && wc.provider !== 'meta')) {
+      return res.status(400).json({ success: false, error: 'Requiere proveedor Kapso o Meta' });
+    }
+
+    const results = [];
+    for (const t of templates) {
+      try {
+        // Construir componentes Meta
+        const components = [];
+        if (t.headerText) {
+          components.push({ type: 'HEADER', format: 'TEXT', text: t.headerText });
+        }
+        const bodyComp = { type: 'BODY', text: t.body };
+        // Agregar ejemplos de variables si las hay
+        const varMatches = [...(t.body || '').matchAll(/\{\{(\d+)\}\}/g)];
+        if (varMatches.length > 0) {
+          const exampleValues = (t.variables || []).map((v, i) => v || `Ejemplo ${i+1}`);
+          bodyComp.example = { body_text: [exampleValues.slice(0, varMatches.length)] };
+        }
+        components.push(bodyComp);
+        if (t.footer) {
+          components.push({ type: 'FOOTER', text: t.footer });
+        }
+
+        const payload = {
+          name:       t.name,
+          language:   t.language || 'es',
+          category:   t.category || 'MARKETING',
+          components,
+        };
+
+        const apiResult = await kapsoService.createTemplate(payload, wc);
+        results.push({ name: t.name, status: 'submitted', id: apiResult?.id });
+      } catch (err) {
+        const errMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+        results.push({ name: t.name, status: 'error', error: errMsg });
+      }
+    }
+
+    const allOk    = results.every(r => r.status === 'submitted');
+    const someOk   = results.some(r => r.status === 'submitted');
+    res.json({
+      success: someOk,
+      results,
+      message: allOk
+        ? `${results.length} templates enviados a Meta. Revisión en 1-3 días hábiles.`
+        : `${results.filter(r => r.status === 'submitted').length}/${results.length} templates enviados. Algunos fallaron.`,
+    });
+  } catch (err) {
+    console.error('[submit-templates]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 /* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/send
    Soporta dos modos:

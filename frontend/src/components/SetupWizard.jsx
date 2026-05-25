@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import {
   CheckCircle, Copy, ExternalLink, Loader, AlertCircle,
-  ChevronDown, ChevronUp, Eye, EyeOff,
+  ChevronDown, ChevronUp, Eye, EyeOff, Sparkles,
 } from 'lucide-react';
 import { setupAPI } from '../utils/api.js';
+import { useTheme } from '../theme.js';
 
 const BASE_URL        = import.meta.env.VITE_API_URL || window.location.origin.replace(':5173', ':3001');
 const WEBHOOK_META    = `${BASE_URL}/webhook`;
@@ -17,37 +18,37 @@ const makeToken = () => {
 
 /* ════════ sub-componentes ════════ */
 
-function Field({ label, hint, children }) {
+function Field({ label, hint, children, colors }) {
   return (
     <div>
-      <label style={{ fontSize: '13px', color: '#e9edef', fontWeight: 500, marginBottom: '6px', display: 'block' }}>
+      <label style={{ fontSize: '13px', color: colors.textPrimary, fontWeight: 500, marginBottom: '6px', display: 'block' }}>
         {label}
       </label>
       {children}
-      {hint && <p style={{ fontSize: '11px', color: '#8696a0', marginTop: '4px', lineHeight: '1.5', margin: '4px 0 0' }}>{hint}</p>}
+      {hint && <p style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '4px', lineHeight: '1.5', margin: '4px 0 0' }}>{hint}</p>}
     </div>
   );
 }
 
-function CopyBox({ label, value, copied, onCopy, accent }) {
+function CopyBox({ label, value, copied, onCopy, accent, colors }) {
   return (
     <div style={{
-      backgroundColor: accent ? '#0d2e25' : '#1a2428',
-      border: `1px solid ${accent ? '#00a884' : '#374045'}`,
+      backgroundColor: accent ? colors.bgAccent : colors.bgSub,
+      border: `1px solid ${accent ? colors.green : colors.borderStrong}`,
       borderRadius: '8px', padding: '10px 14px',
       display: 'flex', alignItems: 'center', gap: '10px',
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        {label && <div style={{ fontSize: '10px', color: '#8696a0', marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>}
-        <code style={{ fontSize: '12px', color: accent ? '#00a884' : '#e9edef', wordBreak: 'break-all' }}>{value}</code>
+        {label && <div style={{ fontSize: '10px', color: colors.textSecondary, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>}
+        <code style={{ fontSize: '12px', color: accent ? colors.green : colors.textPrimary, wordBreak: 'break-all' }}>{value}</code>
       </div>
       <button onClick={() => onCopy(value)}
         style={{
           display: 'flex', alignItems: 'center', gap: '4px',
-          backgroundColor: copied ? '#0d2e25' : '#2a3942',
-          color: copied ? '#00a884' : '#8696a0',
+          backgroundColor: copied ? colors.bgAccent : colors.bgHover,
+          color: copied ? colors.green : colors.textSecondary,
           padding: '6px 10px', borderRadius: '6px', fontSize: '12px',
-          border: `1px solid ${copied ? '#00a884' : 'transparent'}`,
+          border: `1px solid ${copied ? colors.green : 'transparent'}`,
           flexShrink: 0, transition: 'all 0.2s', cursor: 'pointer',
         }}>
         <Copy size={12} />
@@ -57,37 +58,21 @@ function CopyBox({ label, value, copied, onCopy, accent }) {
   );
 }
 
-function StepNum({ n, label, done }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-      <div style={{
-        width: '26px', height: '26px', borderRadius: '50%', flexShrink: 0,
-        backgroundColor: done ? '#00a884' : '#2a3942',
-        border: `2px solid ${done ? '#00a884' : '#374045'}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        {done ? <CheckCircle size={14} color="white" /> : <span style={{ fontSize: '12px', color: '#e9edef', fontWeight: 700 }}>{n}</span>}
-      </div>
-      <span style={{ fontSize: '14px', color: '#e9edef', fontWeight: 600 }}>{label}</span>
-    </div>
-  );
-}
-
-function HelpPanel({ title, children }) {
+function HelpPanel({ title, children, colors }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ backgroundColor: '#111b21', borderRadius: '10px', border: '1px solid #2a3942', overflow: 'hidden' }}>
+    <div style={{ backgroundColor: colors.bgInput, borderRadius: '10px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
       <button onClick={() => setOpen(o => !o)}
         style={{
           width: '100%', padding: '11px 16px', display: 'flex', alignItems: 'center',
-          justifyContent: 'space-between', background: 'none', color: '#8696a0',
+          justifyContent: 'space-between', background: 'none', color: colors.textSecondary,
           fontSize: '13px', textAlign: 'left', cursor: 'pointer', border: 'none',
         }}>
         <span>📖 {title}</span>
         {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
       </button>
       {open && (
-        <div style={{ padding: '4px 16px 16px', display: 'flex', flexDirection: 'column', gap: '12px', borderTop: '1px solid #2a3942' }}>
+        <div style={{ padding: '4px 16px 16px', display: 'flex', flexDirection: 'column', gap: '12px', borderTop: `1px solid ${colors.border}` }}>
           {children}
         </div>
       )}
@@ -95,13 +80,13 @@ function HelpPanel({ title, children }) {
   );
 }
 
-function GuideStep({ n, title, children }) {
+function GuideStep({ n, title, children, colors }) {
   return (
     <div style={{ display: 'flex', gap: '10px', paddingTop: '8px' }}>
-      <div style={{ width: '20px', height: '20px', borderRadius: '50%', backgroundColor: '#2a3942', color: '#00a884', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0, marginTop: '1px' }}>{n}</div>
+      <div style={{ width: '20px', height: '20px', borderRadius: '50%', backgroundColor: colors.bgHover, color: colors.green, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0, marginTop: '1px' }}>{n}</div>
       <div>
-        <div style={{ fontSize: '13px', color: '#e9edef', fontWeight: 500 }}>{title}</div>
-        {children && <div style={{ fontSize: '12px', color: '#8696a0', marginTop: '3px', lineHeight: '1.7' }}>{children}</div>}
+        <div style={{ fontSize: '13px', color: colors.textPrimary, fontWeight: 500 }}>{title}</div>
+        {children && <div style={{ fontSize: '12px', color: colors.textSecondary, marginTop: '3px', lineHeight: '1.7' }}>{children}</div>}
       </div>
     </div>
   );
@@ -112,7 +97,9 @@ function GuideStep({ n, title, children }) {
 ════════════════════════════════════════ */
 
 export default function SetupWizard({ org, onComplete }) {
-  // step: 0=whatsapp-credenciales, 1=whatsapp-webhook, 2=shopify, 3=done
+  const { colors } = useTheme();
+
+  // step: 0=whatsapp, 1=shopify, 2=templates, 3=done
   const [step, setStep]       = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
@@ -142,10 +129,18 @@ export default function SetupWizard({ org, onComplete }) {
   // Kapso — flujo automático
   const [kapsoConnecting, setKapsoConnecting] = useState(false);
   const [kapsoConnected,  setKapsoConnected]  = useState(false);
+  const [webhookVisible,  setWebhookVisible]  = useState(false);
 
   const [shopUrl, setShopUrl] = useState('');
 
-  // Detectar retorno de Kapso (kapso_success=1&phone_number_id=...) o Shopify
+  // Template step state
+  const [generatingTemplates,  setGeneratingTemplates]  = useState(false);
+  const [suggestedTemplates,   setSuggestedTemplates]   = useState([]);
+  const [submittingTemplates,  setSubmittingTemplates]  = useState(false);
+  const [templatesSubmitted,   setTemplatesSubmitted]   = useState(false);
+  const [editingTemplate,      setEditingTemplate]      = useState(null);
+
+  // Detectar retorno de Kapso o Shopify
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
 
@@ -154,19 +149,16 @@ export default function SetupWizard({ org, onComplete }) {
       const phoneNumberId       = params.get('phone_number_id');
       const displayPhoneNumber  = params.get('display_phone_number');
       const businessAccountId   = params.get('business_account_id');
-
-      // Limpiar URL sin recargar
       window.history.replaceState({}, '', window.location.pathname);
 
       if (phoneNumberId) {
-        // Guardar en backend y avanzar al siguiente paso
         import('../utils/api.js').then(({ api }) => {
           api.post('/setup/kapso/save', { phoneNumberId, displayPhoneNumber, businessAccountId })
             .then(() => {
               setKapsoConnected(true);
               setProvider('kapso');
               setSuccess(`✅ WhatsApp conectado${displayPhoneNumber ? ': ' + decodeURIComponent(displayPhoneNumber) : ''}`);
-              setTimeout(() => go(1), 1500); // avanzar al paso de webhook
+              setTimeout(() => go(1), 1500);
             })
             .catch(() => {
               setError('WhatsApp conectado en Kapso pero hubo un error guardando. Intenta de nuevo.');
@@ -189,7 +181,7 @@ export default function SetupWizard({ org, onComplete }) {
       window.history.replaceState({}, '', window.location.pathname);
       setShopifyInfo({ shopName: shop });
       setSuccess(`✅ Shopify conectado: ${shop}`);
-      go(3);
+      go(2); // Go to templates step
     }
 
     // ─── Shopify OAuth error ─────────────────────────────────────────
@@ -197,7 +189,7 @@ export default function SetupWizard({ org, onComplete }) {
     if (shopifyError) {
       window.history.replaceState({}, '', window.location.pathname);
       setError(`Error conectando Shopify: ${decodeURIComponent(shopifyError)}`);
-      go(2);
+      go(1);
     }
   }, []);
 
@@ -211,14 +203,13 @@ export default function SetupWizard({ org, onComplete }) {
   const go    = n => { setStep(n); setError(''); setSuccess(''); };
   const toggle = k => setShowPwd(s => ({ ...s, [k]: !s[k] }));
 
-  /* ── Conectar WhatsApp via Kapso (flujo automático) ── */
+  /* ── Conectar WhatsApp via Kapso ── */
   const connectKapso = async () => {
     setKapsoConnecting(true); setError('');
     try {
       const { api } = await import('../utils/api.js');
       const r = await api.post('/setup/kapso/connect');
       if (r.data?.setupUrl) {
-        // Redirigir al cliente al flujo de Kapso
         window.location.href = r.data.setupUrl;
       } else {
         setError(r.data?.error || 'No se pudo generar el link de Kapso');
@@ -230,7 +221,7 @@ export default function SetupWizard({ org, onComplete }) {
     }
   };
 
-  /* ── Guardar credenciales WA (Meta o Twilio) → paso webhook ── */
+  /* ── Guardar credenciales WA (Meta o Twilio) ── */
   const saveWhatsApp = async () => {
     setLoading(true); setError(''); setSuccess('');
     try {
@@ -281,95 +272,122 @@ export default function SetupWizard({ org, onComplete }) {
     }
   };
 
+  /* ── Generar templates con IA ── */
+  const generateTemplates = async () => {
+    setGeneratingTemplates(true);
+    setError('');
+    try {
+      const { api } = await import('../utils/api.js');
+      const r = await api.post('/reengagement/generate-templates');
+      setSuggestedTemplates(r.data.templates || []);
+    } catch (err) {
+      setError('Error generando templates: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setGeneratingTemplates(false);
+    }
+  };
+
+  /* ── Enviar templates a Meta ── */
+  const submitTemplates = async () => {
+    setSubmittingTemplates(true);
+    setError('');
+    try {
+      const { api } = await import('../utils/api.js');
+      await api.post('/reengagement/submit-templates', { templates: suggestedTemplates });
+      setTemplatesSubmitted(true);
+      setSuccess('✅ Templates enviados a Meta para revisión. La aprobación tarda 1-3 días hábiles.');
+    } catch (err) {
+      setError('Error enviando templates: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setSubmittingTemplates(false);
+    }
+  };
+
   const finish = async () => {
     setLoading(true);
     try { await setupAPI.complete(); onComplete(); }
     catch (err) { setError(err.response?.data?.error || 'Error'); setLoading(false); }
   };
 
-  /* estilos */
+  /* estilos dinámicos */
   const inp = {
-    width: '100%', backgroundColor: '#111b21', border: '1px solid #374045',
-    borderRadius: '8px', padding: '11px 14px', color: '#e9edef', fontSize: '14px',
+    width: '100%', backgroundColor: colors.bgInput, border: `1px solid ${colors.borderStrong}`,
+    borderRadius: '8px', padding: '11px 14px', color: colors.textPrimary, fontSize: '14px',
     outline: 'none', boxSizing: 'border-box',
   };
   const primary = {
     flex: 1, padding: '13px', borderRadius: '9px', fontSize: '15px', fontWeight: 600,
-    backgroundColor: loading ? '#374045' : '#00a884', color: 'white',
+    backgroundColor: loading ? colors.bgHover : colors.green, color: 'white',
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
     cursor: loading ? 'not-allowed' : 'pointer', border: 'none',
   };
   const secondary = {
     padding: '13px 20px', borderRadius: '9px', fontSize: '14px',
-    backgroundColor: '#2a3942', color: '#8696a0', cursor: 'pointer', border: 'none',
+    backgroundColor: colors.bgHover, color: colors.textSecondary, cursor: 'pointer', border: 'none',
   };
 
-  /* ── indicadores de progreso visual ── */
-  const progressSteps = [
-    { label: 'Credenciales', done: step >= 1 },
-    { label: 'Webhook',      done: step >= 2 },
-    { label: 'Shopify',      done: step >= 3 },
-    { label: 'Listo',        done: step >= 3 },
+  // Progress steps: 4 steps total now
+  const PROGRESS = [
+    { emoji: '💬', label: 'WhatsApp',  done: step > 0 },
+    { emoji: '🛍️', label: 'Shopify',  done: step > 1 },
+    { emoji: '📋', label: 'Templates', done: step > 2 },
+    { emoji: '🎉', label: 'Listo',     done: step > 3 },
   ];
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#111b21', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflowY: 'auto' }}>
-      <div style={{ width: '100%', maxWidth: '600px' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: colors.bgApp, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflowY: 'auto' }}>
+      <div style={{ width: '100%', maxWidth: '620px' }}>
 
         {/* Encabezado */}
         <div style={{ textAlign: 'center', marginBottom: '28px' }}>
           <div style={{ fontSize: '40px', marginBottom: '10px' }}>🤖</div>
-          <h1 style={{ color: '#e9edef', fontSize: '22px', fontWeight: 700, margin: 0 }}>
+          <h1 style={{ color: colors.textPrimary, fontSize: '22px', fontWeight: 700, margin: 0 }}>
             Conecta tu WhatsApp a Shopify
           </h1>
-          <p style={{ color: '#8696a0', fontSize: '14px', marginTop: '8px' }}>
-            Bienvenido, <strong style={{ color: '#e9edef' }}>{org?.name}</strong>
+          <p style={{ color: colors.textSecondary, fontSize: '14px', marginTop: '8px' }}>
+            Bienvenido, <strong style={{ color: colors.textPrimary }}>{org?.name}</strong>
           </p>
         </div>
 
-        {/* Barra de progreso */}
+        {/* Barra de progreso — 4 pasos */}
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: '28px', padding: '0 8px' }}>
-          {[
-            { emoji: '🔑', label: 'Cuenta WA',  done: step > 0 },
-            { emoji: '🔗', label: 'Webhook',    done: step > 1 },
-            { emoji: '🛍️', label: 'Shopify',   done: step > 2 },
-            { emoji: '🎉', label: 'Listo',      done: step > 3 },
-          ].map((s, i, arr) => (
+          {PROGRESS.map((s, i, arr) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', flex: i < arr.length - 1 ? 1 : 'none' }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
                 <div style={{
                   width: '38px', height: '38px', borderRadius: '50%', fontSize: '16px',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: s.done ? '#00a884' : i === step || (i === 1 && step === 1) ? '#2a3942' : '#1a2428',
-                  border: `2px solid ${s.done ? '#00a884' : (i === step || (i===1&&step===1)) ? '#00a884' : '#2a3942'}`,
-                  boxShadow: (i === step || (i===1&&step===1)) && !s.done ? '0 0 0 3px rgba(0,168,132,0.12)' : 'none',
+                  backgroundColor: s.done ? colors.green : i === step ? colors.bgHover : colors.bgSub,
+                  border: `2px solid ${s.done ? colors.green : i === step ? colors.green : colors.border}`,
+                  boxShadow: i === step && !s.done ? `0 0 0 3px ${colors.green}22` : 'none',
+                  transition: 'all 0.3s',
                 }}>
                   {s.done ? <CheckCircle size={18} color="white" /> : s.emoji}
                 </div>
-                <span style={{ fontSize: '10px', color: s.done || i === step ? '#e9edef' : '#556169', fontWeight: s.done || i === step ? 600 : 400 }}>
+                <span style={{ fontSize: '10px', color: s.done || i === step ? colors.textPrimary : colors.textMuted, fontWeight: s.done || i === step ? 600 : 400 }}>
                   {s.label}
                 </span>
               </div>
               {i < arr.length - 1 && (
-                <div style={{ flex: 1, height: '2px', margin: '0 6px', marginBottom: '16px', backgroundColor: s.done ? '#00a884' : '#2a3942', transition: 'background 0.3s' }} />
+                <div style={{ flex: 1, height: '2px', margin: '0 6px', marginBottom: '16px', backgroundColor: s.done ? colors.green : colors.border, transition: 'background 0.3s' }} />
               )}
             </div>
           ))}
         </div>
 
         {/* ══════════════════════════════════
-            PASO 0: Credenciales WhatsApp
+            PASO 0: Conectar WhatsApp
         ══════════════════════════════════ */}
         {step === 0 && (
-          <div style={{ backgroundColor: '#202c33', borderRadius: '16px', border: '1px solid #2a3942' }}>
-            <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #2a3942' }}>
-              <h2 style={{ color: '#e9edef', fontSize: '17px', fontWeight: 600, margin: 0 }}>💬 Conectar WhatsApp</h2>
-              <p style={{ color: '#8696a0', fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>Elige tu proveedor de WhatsApp Business API</p>
+          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '16px', border: `1px solid ${colors.border}` }}>
+            <div style={{ padding: '20px 24px 16px', borderBottom: `1px solid ${colors.border}` }}>
+              <h2 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600, margin: 0 }}>💬 Conectar WhatsApp</h2>
+              <p style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>Elige tu proveedor de WhatsApp Business API</p>
             </div>
 
             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
-              {/* ── Selector de provider ── */}
+              {/* Selector de provider */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
                 {[
                   { key: 'kapso',  emoji: '🚀', title: 'Kapso',    sub: 'Sin proceso Meta · Recomendado' },
@@ -379,42 +397,71 @@ export default function SetupWizard({ org, onComplete }) {
                   <button key={p.key} onClick={() => { setProvider(p.key); setError(''); }}
                     style={{
                       padding: '12px', borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
-                      backgroundColor: provider === p.key ? '#0d2e25' : '#111b21',
-                      border: `2px solid ${provider === p.key ? '#00a884' : '#2a3942'}`,
+                      backgroundColor: provider === p.key ? colors.bgAccent : colors.bgInput,
+                      border: `2px solid ${provider === p.key ? colors.green : colors.border}`,
                     }}>
                     <div style={{ fontSize: '20px', marginBottom: '5px' }}>{p.emoji}</div>
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#e9edef' }}>{p.title}</div>
-                    <div style={{ fontSize: '10px', color: '#8696a0', marginTop: '2px', lineHeight: 1.4 }}>{p.sub}</div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>{p.title}</div>
+                    <div style={{ fontSize: '10px', color: colors.textSecondary, marginTop: '2px', lineHeight: 1.4 }}>{p.sub}</div>
                   </button>
                 ))}
               </div>
 
-              {/* ── Flujo automático Kapso ── */}
+              {/* Flujo automático Kapso */}
               {provider === 'kapso' && (<>
-                <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '16px 18px', border: '1px solid #00a88433', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <p style={{ color: '#00a884', fontSize: '14px', margin: 0, fontWeight: 600 }}>
+                <div style={{ backgroundColor: colors.bgAccent, borderRadius: '10px', padding: '16px 18px', border: `1px solid ${colors.green}33`, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <p style={{ color: colors.green, fontSize: '14px', margin: 0, fontWeight: 600 }}>
                     🚀 Conexión en 5 minutos — sin escribir datos
                   </p>
-                  <p style={{ color: '#8696a0', fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
-                    Haz clic en el botón de abajo. Serás redirigido a Kapso donde conectarás tu número de WhatsApp con login de Facebook. Al terminar, volverás aquí automáticamente.
+                  <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
+                    Haz clic en el botón de abajo. Serás redirigido a Kapso donde conectarás tu número con login de Facebook. Al terminar, volverás aquí automáticamente.
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {[
-                      '✅ Sin verificación Manual de Meta',
+                      '✅ Sin verificación manual de Meta',
                       '✅ Sin copiar Phone Number IDs ni tokens',
                       '✅ Webhook configurado automáticamente',
                     ].map(t => (
-                      <span key={t} style={{ fontSize: '12px', color: '#00a884' }}>{t}</span>
+                      <span key={t} style={{ fontSize: '12px', color: colors.green }}>{t}</span>
                     ))}
                   </div>
                 </div>
 
+                {/* Webhook URL inline para Kapso (collapsible) */}
+                <div style={{ backgroundColor: colors.bgSub, borderRadius: '10px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
+                  <button onClick={() => setWebhookVisible(v => !v)}
+                    style={{ width: '100%', padding: '11px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', color: colors.textSecondary, fontSize: '13px', cursor: 'pointer', border: 'none' }}>
+                    <span>🔗 URL del webhook (para configurar en Kapso)</span>
+                    {webhookVisible ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                  {webhookVisible && (
+                    <div style={{ padding: '4px 16px 16px', borderTop: `1px solid ${colors.border}` }}>
+                      <CopyBox
+                        label="URL del Webhook → pégala en app.kapso.ai"
+                        value={WEBHOOK_KAPSO}
+                        copied={copied === 'kapsourl'}
+                        onCopy={v => copy(v, 'kapsourl')}
+                        accent
+                        colors={colors}
+                      />
+                      <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <GuideStep n="1" title="Ve a app.kapso.ai → tu número" colors={colors}>
+                          <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: colors.green }}>app.kapso.ai <ExternalLink size={10} /></a>
+                        </GuideStep>
+                        <GuideStep n="2" title="Webhooks → Add webhook" colors={colors}>
+                          Pega la URL de arriba. Evento: <code style={{ color: colors.green }}>whatsapp.message.received</code>
+                        </GuideStep>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {kapsoConnected ? (
-                  <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '16px 18px', border: '1px solid #00a884', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <CheckCircle size={22} color="#00a884" />
+                  <div style={{ backgroundColor: colors.bgAccent, borderRadius: '10px', padding: '16px 18px', border: `1px solid ${colors.green}`, display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <CheckCircle size={22} color={colors.green} />
                     <div>
-                      <div style={{ color: '#00a884', fontSize: '14px', fontWeight: 600 }}>WhatsApp conectado con Kapso</div>
-                      <div style={{ color: '#8696a0', fontSize: '12px', marginTop: '2px' }}>Continúa al siguiente paso</div>
+                      <div style={{ color: colors.green, fontSize: '14px', fontWeight: 600 }}>WhatsApp conectado con Kapso</div>
+                      <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px' }}>Continúa al siguiente paso</div>
                     </div>
                   </div>
                 ) : (
@@ -423,7 +470,7 @@ export default function SetupWizard({ org, onComplete }) {
                     disabled={kapsoConnecting}
                     style={{
                       width: '100%', padding: '16px', borderRadius: '10px', fontSize: '15px', fontWeight: 700,
-                      backgroundColor: kapsoConnecting ? '#374045' : '#00a884',
+                      backgroundColor: kapsoConnecting ? colors.bgHover : colors.green,
                       color: 'white', cursor: kapsoConnecting ? 'not-allowed' : 'pointer',
                       border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
                       transition: 'background 0.2s',
@@ -435,63 +482,93 @@ export default function SetupWizard({ org, onComplete }) {
                   </button>
                 )}
 
-                <p style={{ color: '#556169', fontSize: '11px', textAlign: 'center', margin: 0, lineHeight: 1.5 }}>
-                  Necesitas una cuenta gratis en{' '}
-                  <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#8696a0' }}>app.kapso.ai</a>
-                  {' '}y la variable <code style={{ color: '#8696a0' }}>KAPSO_API_KEY</code> configurada en el backend.
+                <p style={{ color: colors.textMuted, fontSize: '11px', textAlign: 'center', margin: 0, lineHeight: 1.5 }}>
+                  Necesitas cuenta en{' '}
+                  <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: colors.textSecondary }}>app.kapso.ai</a>
+                  {' '}y <code style={{ color: colors.textSecondary }}>KAPSO_API_KEY</code> en el backend.
                 </p>
               </>)}
 
-              {/* ── Formulario Twilio ── */}
+              {/* Formulario Twilio */}
               {provider === 'twilio' && (<>
-                <Field label="Account SID" hint="console.twilio.com → Dashboard → Account Info → Account SID">
+                <Field label="Account SID" hint="console.twilio.com → Dashboard → Account Info → Account SID" colors={colors}>
                   <input style={inp} value={twilioForm.twilioAccountSid} onChange={setTw('twilioAccountSid')} placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
                 </Field>
-                <Field label="Auth Token" hint="console.twilio.com → Dashboard → Account Info → Auth Token">
+                <Field label="Auth Token" hint="console.twilio.com → Dashboard → Account Info → Auth Token" colors={colors}>
                   <div style={{ position: 'relative' }}>
                     <input style={{ ...inp, paddingRight: '44px' }}
                       type={showPwd.twToken ? 'text' : 'password'}
                       value={twilioForm.twilioAuthToken} onChange={setTw('twilioAuthToken')}
                       placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-                    <button onClick={() => toggle('twToken')} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', color: '#8696a0', cursor: 'pointer', border: 'none' }}>
+                    <button onClick={() => toggle('twToken')} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', color: colors.textSecondary, cursor: 'pointer', border: 'none' }}>
                       {showPwd.twToken ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
                 </Field>
-                <Field label="Número Twilio WhatsApp" hint="Sandbox: +14155238886 · O tu número real de Twilio">
+                <Field label="Número Twilio WhatsApp" hint="Sandbox: +14155238886 · O tu número real de Twilio" colors={colors}>
                   <input style={inp} value={twilioForm.twilioPhoneNumber} onChange={setTw('twilioPhoneNumber')} placeholder="+14155238886" />
                 </Field>
 
-                <HelpPanel title="¿Cómo configurar Twilio en 3 pasos?">
-                  <GuideStep n="1" title="Crea cuenta en console.twilio.com">Es gratis. Copia el Account SID y Auth Token del Dashboard.</GuideStep>
-                  <GuideStep n="2" title="Activa el Sandbox de WhatsApp">Messaging → Try it Out → Send a WhatsApp message. Sigue las instrucciones para unirte al sandbox desde tu celular.</GuideStep>
-                  <GuideStep n="3" title="En el siguiente paso configuras el webhook">Te daremos la URL exacta que debes pegar en Twilio.</GuideStep>
+                <HelpPanel title="¿Cómo configurar Twilio en 3 pasos?" colors={colors}>
+                  <GuideStep n="1" title="Crea cuenta en console.twilio.com" colors={colors}>Es gratis. Copia el Account SID y Auth Token del Dashboard.</GuideStep>
+                  <GuideStep n="2" title="Activa el Sandbox de WhatsApp" colors={colors}>Messaging → Try it Out → Send a WhatsApp message. Sigue las instrucciones para unirte al sandbox desde tu celular.</GuideStep>
+                  <GuideStep n="3" title="Configura el webhook en el paso siguiente" colors={colors}>Te daremos la URL exacta que debes pegar en Twilio.</GuideStep>
                 </HelpPanel>
+
+                {/* Webhook URL inline para Twilio */}
+                <div style={{ backgroundColor: colors.bgSub, borderRadius: '10px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
+                  <button onClick={() => setWebhookVisible(v => !v)}
+                    style={{ width: '100%', padding: '11px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', color: colors.textSecondary, fontSize: '13px', cursor: 'pointer', border: 'none' }}>
+                    <span>🔗 URL del webhook Twilio</span>
+                    {webhookVisible ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                  {webhookVisible && (
+                    <div style={{ padding: '4px 16px 16px', borderTop: `1px solid ${colors.border}` }}>
+                      <CopyBox label="URL del Webhook → Twilio" value={WEBHOOK_TWILIO} copied={copied === 'twurl'} onCopy={v => copy(v, 'twurl')} accent colors={colors} />
+                    </div>
+                  )}
+                </div>
               </>)}
 
-              {/* ── Formulario Meta ── */}
+              {/* Formulario Meta */}
               {provider === 'meta' && (<>
-                <Field label="Phone Number ID" hint="Meta → WhatsApp → Configuración de API → 'Phone Number ID'">
+                <Field label="Phone Number ID" hint="Meta → WhatsApp → Configuración de API → 'Phone Number ID'" colors={colors}>
                   <input style={inp} value={waForm.phoneNumberId} onChange={setWa('phoneNumberId')} placeholder="367417763113234" />
                 </Field>
-                <Field label="WhatsApp Business Account ID" hint="Meta → WhatsApp → Configuración de API → 'WhatsApp Business Account ID'">
+                <Field label="WhatsApp Business Account ID" hint="Meta → WhatsApp → Configuración de API → 'WhatsApp Business Account ID'" colors={colors}>
                   <input style={inp} value={waForm.businessAccountId} onChange={setWa('businessAccountId')} placeholder="341716095690499" />
                 </Field>
-                <Field label="Token de acceso permanente" hint="Meta → Configuración → Usuarios del sistema → Generar token → permiso: whatsapp_business_messaging">
+                <Field label="Token de acceso permanente" hint="Meta → Configuración → Usuarios del sistema → Generar token → permiso: whatsapp_business_messaging" colors={colors}>
                   <div style={{ position: 'relative' }}>
                     <input style={{ ...inp, paddingRight: '44px' }}
                       type={showPwd.token ? 'text' : 'password'}
                       value={waForm.accessToken} onChange={setWa('accessToken')}
                       placeholder="EAAxxxxxxxxxxxxxxxxxx..." />
-                    <button onClick={() => toggle('token')} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', color: '#8696a0', cursor: 'pointer', border: 'none' }}>
+                    <button onClick={() => toggle('token')} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', color: colors.textSecondary, cursor: 'pointer', border: 'none' }}>
                       {showPwd.token ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
                 </Field>
-                <HelpPanel title="¿Dónde encuentro estos datos?">
-                  <GuideStep n="1" title="Ve a developers.facebook.com">Inicia sesión y abre tu App de WhatsApp Business.</GuideStep>
-                  <GuideStep n="2" title="Menú → WhatsApp → Configuración de API">Ahí verás el Phone Number ID y el Business Account ID.</GuideStep>
-                  <GuideStep n="3" title="Token permanente">Menú → Configuración → Usuarios del sistema → crear admin → Generar token → activar <code style={{ color: '#00a884' }}>whatsapp_business_messaging</code>.</GuideStep>
+
+                {/* Webhook URL inline para Meta */}
+                <div style={{ backgroundColor: colors.bgSub, borderRadius: '10px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
+                  <button onClick={() => setWebhookVisible(v => !v)}
+                    style={{ width: '100%', padding: '11px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', color: colors.textSecondary, fontSize: '13px', cursor: 'pointer', border: 'none' }}>
+                    <span>🔗 Datos del webhook Meta</span>
+                    {webhookVisible ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                  {webhookVisible && (
+                    <div style={{ padding: '4px 16px 16px', borderTop: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <CopyBox label="1 · URL del Webhook" value={WEBHOOK_META} copied={copied === 'wurl'} onCopy={v => copy(v, 'wurl')} accent colors={colors} />
+                      <CopyBox label="2 · Token de verificación" value={waForm.webhookVerifyToken} copied={copied === 'wtok'} onCopy={v => copy(v, 'wtok')} accent colors={colors} />
+                    </div>
+                  )}
+                </div>
+
+                <HelpPanel title="¿Dónde encuentro estos datos?" colors={colors}>
+                  <GuideStep n="1" title="Ve a developers.facebook.com" colors={colors}>Inicia sesión y abre tu App de WhatsApp Business.</GuideStep>
+                  <GuideStep n="2" title="Menú → WhatsApp → Configuración de API" colors={colors}>Ahí verás el Phone Number ID y el Business Account ID.</GuideStep>
+                  <GuideStep n="3" title="Token permanente" colors={colors}>Menú → Configuración → Usuarios del sistema → crear admin → Generar token → activar <code style={{ color: colors.green }}>whatsapp_business_messaging</code>.</GuideStep>
                 </HelpPanel>
               </>)}
             </div>
@@ -499,121 +576,24 @@ export default function SetupWizard({ org, onComplete }) {
         )}
 
         {/* ══════════════════════════════════
-            PASO 1: Configurar webhook
+            PASO 1: Shopify OAuth
         ══════════════════════════════════ */}
         {step === 1 && (
-          <div style={{ backgroundColor: '#202c33', borderRadius: '16px', border: '1px solid #2a3942' }}>
-            <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #2a3942' }}>
-              <h2 style={{ color: '#e9edef', fontSize: '17px', fontWeight: 600, margin: 0 }}>
-                🔗 Configurar Webhook en {provider === 'twilio' ? 'Twilio' : provider === 'kapso' ? 'Kapso' : 'Meta'}
-              </h2>
-              <p style={{ color: '#8696a0', fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>
-                Copia esta URL y pégala en {provider === 'twilio' ? 'Twilio Dashboard' : provider === 'kapso' ? 'app.kapso.ai' : 'Meta for Developers'}
-              </p>
-            </div>
-
-            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
-              <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '14px 16px', border: '1px solid #00a88433' }}>
-                <p style={{ color: '#00a884', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>
-                  ✅ Tus credenciales ya están guardadas. Configura el webhook con los valores de abajo.
-                </p>
-              </div>
-
-              {/* ─── Kapso ─── */}
-              {provider === 'kapso' && (<>
-                <CopyBox
-                  label="URL del Webhook → pégala en Kapso"
-                  value={WEBHOOK_KAPSO}
-                  copied={copied === 'kapsourl'}
-                  onCopy={v => copy(v, 'kapsourl')}
-                  accent
-                />
-                <div style={{ backgroundColor: '#111b21', borderRadius: '10px', padding: '16px', border: '1px solid #2a3942', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '12px', color: '#e9edef', fontWeight: 600 }}>Pasos en Kapso:</div>
-                  <GuideStep n="1" title="Ve a app.kapso.ai → tu número">
-                    <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>
-                      app.kapso.ai <ExternalLink size={10} />
-                    </a>
-                  </GuideStep>
-                  <GuideStep n="2" title="Webhooks → Add webhook">
-                    Pega la URL de arriba. Suscríbete al evento: <code style={{ color: '#00a884' }}>whatsapp.message.received</code>
-                  </GuideStep>
-                  <GuideStep n="3" title="(Opcional) Activa firma HMAC">
-                    Si habilitaste firma, copia el secret y guárdalo en Ajustes → WhatsApp → Webhook Secret.
-                  </GuideStep>
-                </div>
-              </>)}
-
-              {/* ─── Twilio ─── */}
-              {provider === 'twilio' && (<>
-                <CopyBox
-                  label="URL del Webhook → pégala en Twilio"
-                  value={WEBHOOK_TWILIO}
-                  copied={copied === 'twurl'}
-                  onCopy={v => copy(v, 'twurl')}
-                  accent
-                />
-                <div style={{ backgroundColor: '#111b21', borderRadius: '10px', padding: '16px', border: '1px solid #2a3942', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '12px', color: '#e9edef', fontWeight: 600 }}>Pasos en Twilio:</div>
-                  <GuideStep n="1" title="Ve a console.twilio.com">
-                    <a href="https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>
-                      Messaging → Try it Out → Send a WhatsApp message <ExternalLink size={10} />
-                    </a>
-                  </GuideStep>
-                  <GuideStep n="2" title="Únete al sandbox desde tu celular">
-                    Sigue las instrucciones para enviar el código de unión por WhatsApp (ej: <code style={{ color: '#00a884' }}>join silver-cat</code>).
-                  </GuideStep>
-                  <GuideStep n="3" title="Sandbox Settings → 'When a message comes in'">
-                    Pega la URL del webhook de arriba. Método: <strong style={{ color: '#e9edef' }}>HTTP POST</strong>. Guarda.
-                  </GuideStep>
-                </div>
-                <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', border: '1px solid #2a3942' }}>
-                  <p style={{ color: '#8696a0', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>
-                    💡 Necesitas <strong style={{ color: '#e9edef' }}>ngrok</strong> corriendo para que Twilio llegue a tu backend local: <code style={{ color: '#00a884', fontSize: '11px' }}>ngrok http 3001</code>
-                  </p>
-                </div>
-              </>)}
-
-              {/* ─── Meta ─── */}
-              {provider === 'meta' && (<>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <CopyBox label="1 · URL del Webhook → pégala en Meta" value={WEBHOOK_META} copied={copied === 'wurl'} onCopy={v => copy(v, 'wurl')} accent />
-                  <CopyBox label="2 · Token de verificación → pégalo en Meta" value={waForm.webhookVerifyToken} copied={copied === 'wtok'} onCopy={v => copy(v, 'wtok')} accent />
-                </div>
-                <div style={{ backgroundColor: '#111b21', borderRadius: '10px', padding: '16px', border: '1px solid #2a3942', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '12px', color: '#e9edef', fontWeight: 600 }}>Pasos en Meta for Developers:</div>
-                  <GuideStep n="1" title="Tu App → WhatsApp → Configuración de API">
-                    <a href="https://developers.facebook.com" target="_blank" rel="noreferrer" style={{ color: '#00a884' }}>developers.facebook.com <ExternalLink size={10} /></a>
-                  </GuideStep>
-                  <GuideStep n="2" title="Sección 'Webhook' → Editar">Pega la URL y el token. Clic en <strong style={{ color: '#e9edef' }}>Verificar y guardar</strong>.</GuideStep>
-                  <GuideStep n="3" title="Activa la suscripción 'messages'">Activa el campo <code style={{ color: '#00a884' }}>messages</code>.</GuideStep>
-                </div>
-              </>)}
-            </div>
-          </div>
-        )}
-
-        {/* ══════════════════════════════════
-            PASO 2: Shopify OAuth
-        ══════════════════════════════════ */}
-        {step === 2 && (
-          <div style={{ backgroundColor: '#202c33', borderRadius: '16px', border: '1px solid #2a3942' }}>
-            <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #2a3942' }}>
-              <h2 style={{ color: '#e9edef', fontSize: '17px', fontWeight: 600, margin: 0 }}>🛍️ Conectar tu tienda Shopify</h2>
-              <p style={{ color: '#8696a0', fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>
+          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '16px', border: `1px solid ${colors.border}` }}>
+            <div style={{ padding: '20px 24px 16px', borderBottom: `1px solid ${colors.border}` }}>
+              <h2 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600, margin: 0 }}>🛍️ Conectar tu tienda Shopify</h2>
+              <p style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>
                 Un clic — te llevamos a Shopify para que autorices el acceso
               </p>
             </div>
 
             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
-              {/* Banner info */}
-              <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '16px 18px', border: '1px solid #00a88433', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <p style={{ color: '#00a884', fontSize: '14px', margin: 0, fontWeight: 600 }}>
+              <div style={{ backgroundColor: colors.bgAccent, borderRadius: '10px', padding: '16px 18px', border: `1px solid ${colors.green}33`, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <p style={{ color: colors.green, fontSize: '14px', margin: 0, fontWeight: 600 }}>
                   🔐 Conexión segura con Shopify OAuth
                 </p>
-                <p style={{ color: '#8696a0', fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
+                <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
                   Ingresa tu dominio y haz clic en el botón. Te redirigiremos a Shopify donde inicias sesión y autorizas el acceso. Al terminar, vuelves aquí automáticamente.
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -622,12 +602,12 @@ export default function SetupWizard({ org, onComplete }) {
                     '✅ Conexión permanente — no expira',
                     '✅ Revocable desde tu panel de Shopify',
                   ].map(t => (
-                    <span key={t} style={{ fontSize: '12px', color: '#00a884' }}>{t}</span>
+                    <span key={t} style={{ fontSize: '12px', color: colors.green }}>{t}</span>
                   ))}
                 </div>
               </div>
 
-              <Field label="Dominio de tu tienda" hint="Solo la parte del dominio · Ej: mi-tienda">
+              <Field label="Dominio de tu tienda" hint="Solo la parte del dominio · Ej: mi-tienda" colors={colors}>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <input
                     style={{ ...inp, flex: 1 }}
@@ -636,7 +616,7 @@ export default function SetupWizard({ org, onComplete }) {
                     placeholder="mi-tienda"
                     onKeyDown={e => e.key === 'Enter' && connectShopify()}
                   />
-                  <span style={{ color: '#556169', fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>.myshopify.com</span>
+                  <span style={{ color: colors.textMuted, fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>.myshopify.com</span>
                 </div>
               </Field>
 
@@ -645,20 +625,152 @@ export default function SetupWizard({ org, onComplete }) {
         )}
 
         {/* ══════════════════════════════════
+            PASO 2: Templates de Re-engagement
+        ══════════════════════════════════ */}
+        {step === 2 && (
+          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '16px', border: `1px solid ${colors.border}` }}>
+            <div style={{ padding: '20px 24px 16px', borderBottom: `1px solid ${colors.border}` }}>
+              <h2 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600, margin: 0 }}>📋 Templates de Re-engagement</h2>
+              <p style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '4px', marginBottom: 0 }}>
+                Plantillas de mensajes aprobadas por Meta para contactar clientes
+              </p>
+            </div>
+
+            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+              {/* Banner explicativo */}
+              <div style={{ backgroundColor: colors.bgAccent2, borderRadius: '10px', padding: '14px 16px', border: `1px solid ${colors.border}`, display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                <span style={{ fontSize: '16px', flexShrink: 0 }}>💡</span>
+                <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
+                  Para contactar clientes que no han comprado en un tiempo, WhatsApp requiere templates pre-aprobados. Los creamos automáticamente con el contenido de tu tienda.
+                </p>
+              </div>
+
+              {!suggestedTemplates.length && !generatingTemplates && !templatesSubmitted && (
+                <button
+                  onClick={generateTemplates}
+                  style={{
+                    width: '100%', padding: '16px', borderRadius: '10px', fontSize: '15px', fontWeight: 700,
+                    background: `linear-gradient(135deg, ${colors.green} 0%, #00c853 100%)`,
+                    color: 'white', cursor: 'pointer', border: 'none',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+                    boxShadow: `0 4px 12px ${colors.green}44`,
+                    transition: 'opacity 0.2s',
+                  }}>
+                  <Sparkles size={18} /> ✨ Generar templates con IA
+                </button>
+              )}
+
+              {generatingTemplates && (
+                <div style={{ textAlign: 'center', padding: '32px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                  <Loader size={28} color={colors.green} style={{ animation: 'spin 1s linear infinite' }} />
+                  <span style={{ color: colors.textSecondary, fontSize: '14px' }}>Analizando tu catálogo...</span>
+                </div>
+              )}
+
+              {/* Cards de templates */}
+              {suggestedTemplates.length > 0 && !templatesSubmitted && (
+                <>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {suggestedTemplates.map((t, i) => (
+                      <div key={i} style={{ backgroundColor: colors.bgSub, borderRadius: '10px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
+                        <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                              <span style={{ backgroundColor: `${colors.green}22`, color: colors.green, border: `1px solid ${colors.green}44`, borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 700, fontFamily: 'monospace' }}>
+                                {t.name}
+                              </span>
+                              {t.displayName && (
+                                <span style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 600 }}>{t.displayName}</span>
+                              )}
+                            </div>
+                            {editingTemplate === i ? (
+                              <textarea
+                                value={t.body}
+                                onChange={e => setSuggestedTemplates(prev => prev.map((tmpl, idx) => idx === i ? { ...tmpl, body: e.target.value } : tmpl))}
+                                rows={4}
+                                style={{
+                                  width: '100%', backgroundColor: colors.bgInput, color: colors.textPrimary,
+                                  border: `1px solid ${colors.green}`, borderRadius: '8px',
+                                  padding: '9px 12px', fontSize: '13px', resize: 'vertical', boxSizing: 'border-box',
+                                  fontFamily: 'inherit', outline: 'none',
+                                }}
+                              />
+                            ) : (
+                              <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                                {t.body}
+                              </p>
+                            )}
+                            {t.variables && t.variables.length > 0 && (
+                              <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                {t.variables.map((v, vi) => (
+                                  <span key={vi} style={{ backgroundColor: `${colors.green}15`, color: colors.green, fontSize: '11px', borderRadius: '4px', padding: '2px 6px' }}>
+                                    {`{{${vi + 1}}}`} = {v}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {t.useCase && (
+                              <p style={{ color: colors.textMuted, fontSize: '11px', margin: '6px 0 0', fontStyle: 'italic' }}>{t.useCase}</p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => setEditingTemplate(editingTemplate === i ? null : i)}
+                            style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '6px', cursor: 'pointer', color: colors.textSecondary, padding: '5px 10px', fontSize: '12px', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                            {editingTemplate === i ? 'Guardar' : 'Editar'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={submitTemplates}
+                    disabled={submittingTemplates}
+                    style={{
+                      width: '100%', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 700,
+                      backgroundColor: submittingTemplates ? colors.bgHover : colors.green,
+                      color: 'white', cursor: submittingTemplates ? 'not-allowed' : 'pointer', border: 'none',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                    }}>
+                    {submittingTemplates
+                      ? <><Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> Enviando a Meta...</>
+                      : <>Enviar a Meta → <span style={{ fontSize: '12px', fontWeight: 400, opacity: 0.8 }}>revisión en 1-3 días</span></>
+                    }
+                  </button>
+                </>
+              )}
+
+              {/* Estado de éxito post-envío */}
+              {templatesSubmitted && (
+                <div style={{ backgroundColor: colors.bgAccent, borderRadius: '12px', padding: '20px', border: `1px solid ${colors.green}`, textAlign: 'center' }}>
+                  <CheckCircle size={36} color={colors.green} style={{ marginBottom: '12px' }} />
+                  <div style={{ color: colors.textPrimary, fontSize: '16px', fontWeight: 700, marginBottom: '8px' }}>Templates enviados a Meta</div>
+                  <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0, lineHeight: 1.7 }}>
+                    Meta revisará y aprobará los templates en <strong style={{ color: colors.textPrimary }}>1-3 días hábiles</strong>.<br />
+                    Una vez aprobados, aparecerán en la sección Templates y podrás usarlos en Re-enganche.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════
             PASO 3: Listo
         ══════════════════════════════════ */}
         {step === 3 && (
-          <div style={{ backgroundColor: '#202c33', borderRadius: '16px', border: '1px solid #2a3942', padding: '32px 28px', textAlign: 'center' }}>
+          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '16px', border: `1px solid ${colors.border}`, padding: '32px 28px', textAlign: 'center' }}>
             <div style={{ fontSize: '52px', marginBottom: '12px' }}>🎉</div>
-            <h2 style={{ color: '#e9edef', fontSize: '21px', fontWeight: 700, margin: '0 0 8px' }}>¡Todo listo!</h2>
-            <p style={{ color: '#8696a0', fontSize: '14px', marginBottom: '28px' }}>
+            <h2 style={{ color: colors.textPrimary, fontSize: '21px', fontWeight: 700, margin: '0 0 8px' }}>¡Todo listo!</h2>
+            <p style={{ color: colors.textSecondary, fontSize: '14px', marginBottom: '28px' }}>
               Tu agente IA ya está respondiendo mensajes en WhatsApp.
             </p>
 
             {shopifyInfo && (
-              <div style={{ backgroundColor: '#0d2e25', borderRadius: '10px', padding: '12px 18px', marginBottom: '20px', border: '1px solid #00a884', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                <CheckCircle size={16} color="#00a884" />
-                <span style={{ color: '#00a884', fontSize: '13px' }}>
+              <div style={{ backgroundColor: colors.bgAccent, borderRadius: '10px', padding: '12px 18px', marginBottom: '20px', border: `1px solid ${colors.green}`, display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle size={16} color={colors.green} />
+                <span style={{ color: colors.green, fontSize: '13px' }}>
                   <strong>{shopifyInfo.shopName}</strong> — {shopifyInfo.productCount || 'N/A'} productos sincronizados
                 </span>
               </div>
@@ -670,13 +782,13 @@ export default function SetupWizard({ org, onComplete }) {
                 { emoji: '💼', name: 'Agente de Ventas',    desc: 'Persuade, resuelve dudas y guía hacia la compra' },
                 { emoji: '📦', name: 'Agente de Órdenes',   desc: 'Toma el pedido y lo crea en Shopify automáticamente' },
               ].map(a => (
-                <div key={a.name} style={{ backgroundColor: '#111b21', borderRadius: '10px', padding: '14px 16px', border: '1px solid #2a3942', display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <div key={a.name} style={{ backgroundColor: colors.bgSub, borderRadius: '10px', padding: '14px 16px', border: `1px solid ${colors.border}`, display: 'flex', gap: '12px', alignItems: 'center' }}>
                   <span style={{ fontSize: '22px' }}>{a.emoji}</span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ color: '#e9edef', fontSize: '14px', fontWeight: 500 }}>{a.name}</div>
-                    <div style={{ color: '#8696a0', fontSize: '12px', marginTop: '2px' }}>{a.desc}</div>
+                    <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 500 }}>{a.name}</div>
+                    <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px' }}>{a.desc}</div>
                   </div>
-                  <CheckCircle size={18} color="#00a884" />
+                  <CheckCircle size={18} color={colors.green} />
                 </div>
               ))}
             </div>
@@ -685,17 +797,17 @@ export default function SetupWizard({ org, onComplete }) {
 
         {/* Mensajes error / éxito */}
         {error && (
-          <div style={{ backgroundColor: '#2d1a1a', border: '1px solid #5c2626', borderRadius: '8px', padding: '12px 16px', color: '#e57373', fontSize: '13px', marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+          <div style={{ backgroundColor: '#2d1a1a', border: `1px solid ${colors.red}66`, borderRadius: '8px', padding: '12px 16px', color: colors.red, fontSize: '13px', marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
             <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '1px' }} />{error}
           </div>
         )}
         {success && (
-          <div style={{ backgroundColor: '#0d2e25', border: '1px solid #00a884', borderRadius: '8px', padding: '12px 16px', color: '#00a884', fontSize: '13px', marginTop: '16px' }}>
+          <div style={{ backgroundColor: colors.bgAccent, border: `1px solid ${colors.green}`, borderRadius: '8px', padding: '12px 16px', color: colors.green, fontSize: '13px', marginTop: '16px' }}>
             {success}
           </div>
         )}
 
-        {/* Botones */}
+        {/* Botones de navegación */}
         <div style={{ marginTop: '16px', display: 'flex', gap: '10px' }}>
           {step > 0 && step < 3 && (
             <button onClick={() => go(step - 1)} style={secondary}>← Atrás</button>
@@ -712,16 +824,14 @@ export default function SetupWizard({ org, onComplete }) {
             </button>
           )}
           {step === 1 && (
-            <button onClick={() => go(2)} style={primary}>
-              {provider === 'kapso' ? 'Ya configuré el webhook en Kapso →'
-               : provider === 'twilio' ? 'Ya configuré el webhook en Twilio →'
-               : 'Ya verifiqué el webhook en Meta →'}
-            </button>
-          )}
-          {step === 2 && (
-            <button onClick={connectShopify} disabled={loading || !shopUrl.trim()} style={{ ...primary, backgroundColor: (!shopUrl.trim() || loading) ? '#374045' : '#00a884', cursor: (!shopUrl.trim() || loading) ? 'not-allowed' : 'pointer' }}>
+            <button onClick={connectShopify} disabled={loading || !shopUrl.trim()} style={{ ...primary, backgroundColor: (!shopUrl.trim() || loading) ? colors.bgHover : colors.green, cursor: (!shopUrl.trim() || loading) ? 'not-allowed' : 'pointer' }}>
               {loading && <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} />}
               {loading ? 'Redirigiendo a Shopify...' : '🛍️ Autorizar con Shopify →'}
+            </button>
+          )}
+          {step === 2 && (templatesSubmitted || suggestedTemplates.length > 0) && (
+            <button onClick={() => go(3)} style={primary}>
+              Continuar →
             </button>
           )}
           {step === 3 && (
@@ -734,9 +844,14 @@ export default function SetupWizard({ org, onComplete }) {
 
         {/* Saltar */}
         {step < 3 && (
-          <button onClick={() => go(step === 0 ? 1 : step === 1 ? 2 : 3)}
-            style={{ background: 'none', color: '#556169', fontSize: '12px', width: '100%', textAlign: 'center', marginTop: '10px', padding: '6px', cursor: 'pointer', border: 'none' }}>
-            {step === 1 ? 'Configurar webhook después' : 'Saltar por ahora'}
+          <button
+            onClick={() => {
+              if (step === 2) go(3);
+              else if (step === 1) go(2);
+              else go(1);
+            }}
+            style={{ background: 'none', color: colors.textMuted, fontSize: '12px', width: '100%', textAlign: 'center', marginTop: '10px', padding: '6px', cursor: 'pointer', border: 'none' }}>
+            {step === 2 ? 'Configurar templates después' : 'Saltar por ahora'}
           </button>
         )}
 
@@ -744,6 +859,7 @@ export default function SetupWizard({ org, onComplete }) {
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         input:focus { border-color: #00a884 !important; box-shadow: 0 0 0 2px rgba(0,168,132,0.15); }
+        textarea:focus { border-color: #00a884 !important; box-shadow: 0 0 0 2px rgba(0,168,132,0.15); }
       `}</style>
     </div>
   );

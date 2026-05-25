@@ -311,4 +311,36 @@ async function sendTemplate(to, templateName, languageCode = 'es', components = 
   }
 }
 
-module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate };
+/**
+ * Crea un template de WhatsApp en Meta Business Manager via Kapso.
+ * El template queda en estado PENDING hasta que Meta lo aprueba (1-3 días).
+ * @param {Object} templateData - { name, language, category, components }
+ * @param {Object} config       - { kapso_api_key, business_account_id }
+ */
+async function createTemplate(templateData, config) {
+  const wabaId = config.business_account_id || process.env.KAPSO_WABA_ID;
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!wabaId) throw new Error('business_account_id requerido para crear templates');
+  if (!apiKey) throw new Error('Kapso API Key no disponible');
+
+  try {
+    const response = await axios.post(
+      `${BASE_URL}/${API_VER}/${wabaId}/message_templates`,
+      templateData,
+      {
+        headers: {
+          'X-API-Key':    apiKey,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    return response.data;
+  } catch (err) {
+    const status  = err.response?.status;
+    const detail  = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error(`[KapsoWA] createTemplate FAILED — name:${templateData.name} status:${status} — ${detail}`);
+    throw err;
+  }
+}
+
+module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createTemplate };
