@@ -1,7 +1,9 @@
 import { timeAgo } from '../utils/dates.js';
 import { Bot, User } from 'lucide-react';
+import { useTheme } from '../theme.js';
 
 export default function ConversationItem({ conversation, selected, onClick }) {
+  const { colors } = useTheme();
   const { contact_name, phone_number, last_message, last_message_at, unread_count, agent_mode } = conversation;
 
   const timeAgoStr = timeAgo(last_message_at);
@@ -24,12 +26,12 @@ export default function ConversationItem({ conversation, selected, onClick }) {
         padding: '10px 16px',
         gap: '12px',
         cursor: 'pointer',
-        backgroundColor: selected ? '#2a3942' : 'transparent',
-        borderBottom: '1px solid #1f2c33',
+        backgroundColor: selected ? colors.bgHover : 'transparent',
+        borderBottom: `1px solid ${colors.border}`,
         transition: 'background 0.15s',
         position: 'relative',
       }}
-      onMouseEnter={e => { if (!selected) e.currentTarget.style.backgroundColor = '#202c33'; }}
+      onMouseEnter={e => { if (!selected) e.currentTarget.style.backgroundColor = colors.bgSub; }}
       onMouseLeave={e => { if (!selected) e.currentTarget.style.backgroundColor = 'transparent'; }}
     >
       {/* Avatar */}
@@ -56,8 +58,8 @@ export default function ConversationItem({ conversation, selected, onClick }) {
           width: '16px',
           height: '16px',
           borderRadius: '50%',
-          backgroundColor: agent_mode === 'ai' ? '#00a884' : '#f0b429',
-          border: '2px solid #111b21',
+          backgroundColor: agent_mode === 'ai' ? colors.green : colors.yellow,
+          border: `2px solid ${colors.bgApp}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -75,7 +77,7 @@ export default function ConversationItem({ conversation, selected, onClick }) {
           <span style={{
             fontSize: '15px',
             fontWeight: unread_count > 0 ? 600 : 400,
-            color: '#e9edef',
+            color: colors.textPrimary,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -83,14 +85,14 @@ export default function ConversationItem({ conversation, selected, onClick }) {
           }}>
             {contact_name || phone_number}
           </span>
-          <span style={{ fontSize: '11px', color: unread_count > 0 ? '#00a884' : '#8696a0', flexShrink: 0 }}>
+          <span style={{ fontSize: '11px', color: unread_count > 0 ? colors.green : colors.textSecondary, flexShrink: 0 }}>
             {timeAgoStr}
           </span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
           <span style={{
             fontSize: '13px',
-            color: '#8696a0',
+            color: colors.textSecondary,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -100,7 +102,7 @@ export default function ConversationItem({ conversation, selected, onClick }) {
           </span>
           {unread_count > 0 && (
             <span style={{
-              backgroundColor: '#00a884',
+              backgroundColor: colors.green,
               color: 'white',
               borderRadius: '50%',
               minWidth: '20px',

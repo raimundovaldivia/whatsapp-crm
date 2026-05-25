@@ -3,10 +3,12 @@ import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loade
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI } from '../utils/api.js';
+import { useTheme } from '../theme.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
 export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback, onDeleteMessages, currentUserEmail }) {
+  const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
@@ -201,17 +203,19 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       flexDirection: 'column',
       height: '100vh',
       position: 'relative',
-      backgroundColor: '#0b141a',
-      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='%23ffffff05'/%3E%3C/svg%3E")`,
+      backgroundColor: isDark ? '#0b141a' : '#efeae2',
+      backgroundImage: isDark
+        ? `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='%23ffffff05'/%3E%3C/svg%3E")`
+        : `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='%2300000008'/%3E%3C/svg%3E")`,
     }}>
       {/* Header */}
       <div style={{
         padding: '10px 16px',
-        backgroundColor: '#202c33',
+        backgroundColor: colors.bgPanel,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        borderBottom: '1px solid #2a3942',
+        borderBottom: `1px solid ${colors.border}`,
         minHeight: '60px',
         zIndex: 10,
       }}>
@@ -225,16 +229,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             {initials}
           </div>
           <div>
-            <div style={{ fontWeight: 600, fontSize: '15px', color: '#e9edef' }}>
+            <div style={{ fontWeight: 600, fontSize: '15px', color: colors.textPrimary }}>
               {conversation.contact_name || conversation.phone_number}
             </div>
-            <div style={{ fontSize: '12px', color: '#8696a0' }}>
+            <div style={{ fontSize: '12px', color: colors.textSecondary }}>
               {conversation.phone_number}
             </div>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {/* Botón dev: solo visible para raivaldiviabou@gmail.com */}
           {isDevUser && (
             <button
               onClick={handleDeleteMessages}
@@ -242,43 +245,30 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               title="Borrar todos los mensajes (testing)"
               style={{
                 backgroundColor: 'transparent',
-                border: '1px solid #3d4f59',
-                borderRadius: '6px',
-                padding: '5px 8px',
-                color: deleting ? '#5c6b74' : '#e57373',
+                border: `1px solid ${colors.borderStrong}`,
+                borderRadius: '6px', padding: '5px 8px',
+                color: deleting ? colors.textMuted : colors.red,
                 cursor: deleting ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '11px',
-                transition: 'all 0.15s',
+                display: 'flex', alignItems: 'center', gap: '4px',
+                fontSize: '11px', transition: 'all 0.15s',
               }}
-              onMouseEnter={e => !deleting && (e.currentTarget.style.backgroundColor = '#3b1f1f')}
-              onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
             >
               <Trash2 size={13} />
               {deleting ? 'Borrando...' : 'Reset chat'}
             </button>
           )}
-          {/* Botón enviar template */}
           <button
             onClick={openTemplateModal}
-            title="Enviar template de WhatsApp (funciona aunque haya expirado la ventana de 24h)"
+            title="Enviar template de WhatsApp"
             style={{
               backgroundColor: 'transparent',
-              border: '1px solid #3d4f59',
-              borderRadius: '6px',
-              padding: '5px 8px',
+              border: `1px solid ${colors.borderStrong}`,
+              borderRadius: '6px', padding: '5px 8px',
               color: '#4db6e8',
               cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              fontSize: '11px',
-              transition: 'all 0.15s',
+              display: 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', transition: 'all 0.15s',
             }}
-            onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#1a3040')}
-            onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
           >
             <FileText size={13} />
             Template
@@ -424,7 +414,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         {messages.length === 0 ? (
           <div style={{
             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#8696a0', fontSize: '14px',
+            color: colors.textSecondary, fontSize: '14px',
           }}>
             Sin mensajes aún
           </div>
@@ -439,8 +429,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       {error && (
         <div style={{
           padding: '8px 16px',
-          backgroundColor: '#3b1f1f',
-          color: '#e57373',
+          backgroundColor: `${colors.red}22`,
+          color: colors.red,
           fontSize: '13px',
           textAlign: 'center',
         }}>
@@ -451,118 +441,91 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       {/* Modal de templates */}
       {showTemplateModal && (
         <div style={{
-          position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)',
-          zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: '20px',
+          position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)',
+          zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
         }}>
           <div style={{
-            backgroundColor: '#202c33', borderRadius: '12px',
-            border: '1px solid #2a3942', width: '100%', maxWidth: '520px',
+            backgroundColor: colors.bgPanel, borderRadius: '12px',
+            border: `1px solid ${colors.border}`, width: '100%', maxWidth: '520px',
             maxHeight: '80vh', overflow: 'auto',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
           }}>
-            {/* Modal header */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid #2a3942' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${colors.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <FileText size={16} color="#4db6e8" />
-                <span style={{ color: '#e9edef', fontWeight: 600, fontSize: '15px' }}>Enviar Template</span>
+                <span style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '15px' }}>Enviar Template</span>
               </div>
               <button onClick={() => setShowTemplateModal(false)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8696a0', padding: '4px' }}>
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: '4px' }}>
                 <X size={18} />
               </button>
             </div>
-
-            {/* Info banner */}
-            <div style={{ padding: '10px 20px', backgroundColor: '#0d2e25', borderBottom: '1px solid #2a3942', fontSize: '12px', color: '#4db6e8', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+            <div style={{ padding: '10px 20px', backgroundColor: colors.bgAccent, borderBottom: `1px solid ${colors.border}`, fontSize: '12px', color: '#4db6e8', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
               <span>💡</span>
-              <span>Los templates funcionan aunque la ventana de 24h haya expirado. Solo puedes enviar templates aprobados por Meta.</span>
+              <span>Los templates funcionan aunque la ventana de 24h haya expirado.</span>
             </div>
-
-            {/* Modal body */}
             <div style={{ padding: '20px' }}>
               {templatesLoading ? (
-                <div style={{ textAlign: 'center', padding: '30px', color: '#8696a0' }}>
-                  <Loader size={24} style={{ animation: 'spin 1s linear infinite', marginBottom: '10px' }} />
+                <div style={{ textAlign: 'center', padding: '30px', color: colors.textSecondary }}>
+                  <Loader size={24} color={colors.green} style={{ animation: 'spin 1s linear infinite', marginBottom: '10px' }} />
                   <div style={{ fontSize: '13px' }}>Cargando templates aprobados...</div>
                 </div>
               ) : templatesError ? (
-                <div style={{ color: '#e57373', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div style={{ color: colors.red, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <AlertCircle size={14} /> {templatesError}
                 </div>
               ) : templates.length === 0 ? (
-                <div style={{ color: '#8696a0', fontSize: '13px', textAlign: 'center', padding: '20px' }}>
-                  No hay templates aprobados.<br />Créalos en Meta Business Manager.
+                <div style={{ color: colors.textSecondary, fontSize: '13px', textAlign: 'center', padding: '20px' }}>
+                  No hay templates aprobados.<br />Créalos desde la sección Templates.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {/* Selector de template */}
                   <div>
-                    <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Template</label>
-                    <select
-                      value={selectedTemplate?.name || ''}
-                      onChange={e => {
-                        const tpl = templates.find(t => t.name === e.target.value);
-                        if (tpl) handleSelectTpl(tpl);
-                        else setSelectedTemplate(null);
-                      }}
-                      style={{ width: '100%', backgroundColor: '#2a3942', color: '#e9edef', border: '1px solid #374045', borderRadius: '7px', padding: '9px 12px', fontSize: '13px', cursor: 'pointer', outline: 'none' }}
-                    >
+                    <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Template</label>
+                    <select value={selectedTemplate?.name || ''}
+                      onChange={e => { const tpl = templates.find(t => t.name === e.target.value); if (tpl) handleSelectTpl(tpl); else setSelectedTemplate(null); }}
+                      style={{ width: '100%', backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.borderStrong}`, borderRadius: '7px', padding: '9px 12px', fontSize: '13px', cursor: 'pointer', outline: 'none' }}>
                       <option value="">— Selecciona un template —</option>
                       {templates.map(t => (
-                        <option key={t.name} value={t.name}>
-                          {t.name} · {t.language} · {t.category || 'MARKETING'}
-                        </option>
+                        <option key={t.name} value={t.name}>{t.name} · {t.language} · {t.category || 'MARKETING'}</option>
                       ))}
                     </select>
                   </div>
-
-                  {/* Variables */}
                   {selectedTemplate && parseVars(selectedTemplate).length > 0 && (
                     <div>
-                      <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '8px' }}>Variables</label>
+                      <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '8px' }}>Variables</label>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {parseVars(selectedTemplate).map(v => (
-                          <div key={v} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#182028', borderRadius: '7px', padding: '8px 12px' }}>
-                            <span style={{ color: '#00a884', fontSize: '12px', fontWeight: 700, flexShrink: 0 }}>{'{{' + v + '}}'}</span>
-                            <select
-                              value={templateVarMap[v] || 'manual'}
-                              onChange={e => setTemplateVarMap(prev => ({ ...prev, [v]: e.target.value }))}
-                              style={{ backgroundColor: '#0f1820', color: '#e9edef', border: '1px solid #2a3942', borderRadius: '5px', padding: '4px 8px', fontSize: '12px', cursor: 'pointer' }}
-                            >
+                          <div key={v} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: colors.bgSub, borderRadius: '7px', padding: '8px 12px', border: `1px solid ${colors.border}` }}>
+                            <span style={{ color: colors.green, fontSize: '12px', fontWeight: 700, flexShrink: 0 }}>{'{{' + v + '}}'}</span>
+                            <select value={templateVarMap[v] || 'manual'} onChange={e => setTemplateVarMap(prev => ({ ...prev, [v]: e.target.value }))}
+                              style={{ backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '5px', padding: '4px 8px', fontSize: '12px', cursor: 'pointer' }}>
                               <option value="name">Nombre del contacto</option>
                               <option value="phone">Teléfono</option>
                               <option value="manual">Texto fijo</option>
                             </select>
                             {(templateVarMap[v] || 'manual') === 'manual' && (
-                              <input
-                                value={templateManualVars[v] || ''}
-                                onChange={e => setTemplateManualVars(prev => ({ ...prev, [v]: e.target.value }))}
+                              <input value={templateManualVars[v] || ''} onChange={e => setTemplateManualVars(prev => ({ ...prev, [v]: e.target.value }))}
                                 placeholder={`Texto para {{${v}}}...`}
-                                style={{ flex: 1, backgroundColor: '#0f1820', color: '#e9edef', border: '1px solid #2a3942', borderRadius: '5px', padding: '4px 8px', fontSize: '12px', outline: 'none' }}
-                              />
+                                style={{ flex: 1, backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '5px', padding: '4px 8px', fontSize: '12px', outline: 'none' }} />
                             )}
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
-
-                  {/* Preview */}
                   {selectedTemplate && (
                     <div>
-                      <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Vista previa</label>
-                      <div style={{ backgroundColor: '#0f1820', borderRadius: '8px', padding: '12px 14px', border: '1px solid #2a3942' }}>
+                      <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Vista previa</label>
+                      <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '12px 14px', border: `1px solid ${colors.border}` }}>
                         {(() => {
                           const header = selectedTemplate.components?.find(c => c.type === 'HEADER');
                           const footer = selectedTemplate.components?.find(c => c.type === 'FOOTER');
-                          return (
-                            <>
-                              {header?.text && <div style={{ color: '#e9edef', fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>{header.text}</div>}
-                              <div style={{ color: '#c8d1d9', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{previewTpl()}</div>
-                              {footer?.text && <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '8px' }}>{footer.text}</div>}
-                            </>
-                          );
+                          return (<>
+                            {header?.text && <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>{header.text}</div>}
+                            <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{previewTpl()}</div>
+                            {footer?.text && <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '8px' }}>{footer.text}</div>}
+                          </>);
                         })()}
                       </div>
                     </div>
@@ -570,29 +533,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 </div>
               )}
             </div>
-
-            {/* Modal footer */}
             {!templatesLoading && templates.length > 0 && (
-              <div style={{ padding: '12px 20px', borderTop: '1px solid #2a3942', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <div style={{ padding: '12px 20px', borderTop: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                 <button onClick={() => setShowTemplateModal(false)}
-                  style={{ padding: '8px 16px', borderRadius: '8px', backgroundColor: 'transparent', color: '#8696a0', border: '1px solid #374045', cursor: 'pointer', fontSize: '13px' }}>
+                  style={{ padding: '8px 16px', borderRadius: '8px', backgroundColor: 'transparent', color: colors.textSecondary, border: `1px solid ${colors.borderStrong}`, cursor: 'pointer', fontSize: '13px' }}>
                   Cancelar
                 </button>
-                <button
-                  onClick={sendTemplateMessage}
-                  disabled={!selectedTemplate || sendingTemplate}
-                  style={{
-                    padding: '8px 20px', borderRadius: '8px',
-                    backgroundColor: selectedTemplate ? '#4db6e8' : '#2a3942',
-                    color: selectedTemplate ? '#000' : '#8696a0',
-                    border: 'none', cursor: selectedTemplate ? 'pointer' : 'not-allowed',
-                    fontSize: '13px', fontWeight: 600,
-                    display: 'flex', alignItems: 'center', gap: '6px',
-                    opacity: sendingTemplate ? 0.7 : 1,
-                  }}>
-                  {sendingTemplate
-                    ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Enviando...</>
-                    : <><Send size={13} /> Enviar Template</>}
+                <button onClick={sendTemplateMessage} disabled={!selectedTemplate || sendingTemplate}
+                  style={{ padding: '8px 20px', borderRadius: '8px', backgroundColor: selectedTemplate ? '#4db6e8' : colors.bgHover, color: selectedTemplate ? '#000' : colors.textSecondary, border: 'none', cursor: selectedTemplate ? 'pointer' : 'not-allowed', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', opacity: sendingTemplate ? 0.7 : 1 }}>
+                  {sendingTemplate ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Enviando...</> : <><Send size={13} /> Enviar Template</>}
                 </button>
               </div>
             )}
@@ -603,11 +552,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       {/* Input */}
       <div style={{
         padding: '10px 16px',
-        backgroundColor: '#202c33',
+        backgroundColor: colors.bgPanel,
         display: 'flex',
         alignItems: 'flex-end',
         gap: '10px',
-        borderTop: '1px solid #2a3942',
+        borderTop: `1px solid ${colors.border}`,
       }}>
         <textarea
           ref={inputRef}
@@ -618,16 +567,17 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           rows={1}
           style={{
             flex: 1,
-            backgroundColor: '#2a3942',
-            border: 'none',
+            backgroundColor: colors.bgInput,
+            border: `1px solid ${colors.border}`,
             borderRadius: '8px',
             padding: '10px 14px',
-            color: '#e9edef',
+            color: colors.textPrimary,
             fontSize: '14px',
             resize: 'none',
             maxHeight: '120px',
             lineHeight: '1.5',
             fontFamily: 'inherit',
+            outline: 'none',
           }}
           onInput={e => {
             e.target.style.height = 'auto';
@@ -639,7 +589,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           onClick={handleSend}
           disabled={!inputText.trim() || sending}
           style={{
-            backgroundColor: inputText.trim() ? '#00a884' : '#374045',
+            backgroundColor: inputText.trim() ? colors.green : colors.bgHover,
             color: 'white',
             width: '42px',
             height: '42px',
