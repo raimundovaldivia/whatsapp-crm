@@ -10,8 +10,8 @@
 
 const express   = require('express');
 const router    = express.Router();
-const db        = require('../db/database');
-const { getPool } = require('../db/database');
+const db             = require('../db/database');
+const { getPool }    = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
 const Anthropic = require('@anthropic-ai/sdk');
 const { requireAuth } = require('../middleware/auth');
@@ -806,26 +806,26 @@ router.post('/calibrate', async (req, res) => {
     console.log(`[Calibration] Org ${req.orgId}: descargando historial para backtesting...`);
 
     // Descargar todas las órdenes (mismo flujo que /candidates)
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    let allOrders = [];
-    let cursor = null;
-    let page = 0;
+    const sleepCal = ms => new Promise(r => setTimeout(r, ms));
+    let calibOrders = [];
+    let calibCursor = null;
+    let calibPage   = 0;
     while (true) {
-      page++;
-      const result = await shopifyApi.getOrders(shop, token, { limit: 250, cursor, status: 'any' });
-      const validas = (result.orders || []).filter(o => {
+      calibPage++;
+      const page = await shopifyApi.getOrders(shop, token, { limit: 250, cursor: calibCursor, status: 'any' });
+      const validas = (page.orders || []).filter(o => {
         const fs = (o.financialStatus || '').toUpperCase();
         return fs !== 'VOIDED' && fs !== 'REFUNDED';
       });
-      allOrders = allOrders.concat(validas);
-      if (!result.hasNextPage || !result.endCursor || page >= 50) break;
-      cursor = result.endCursor;
-      await sleep(300);
+      calibOrders = calibOrders.concat(validas);
+      if (!page.hasNextPage || !page.endCursor || calibPage >= 50) break;
+      calibCursor = page.endCursor;
+      await sleepCal(300);
     }
 
-    console.log(`[Calibration] Órdenes descargadas: ${allOrders.length}`);
+    console.log(`[Calibration] Órdenes descargadas: ${calibOrders.length}`);
 
-    if (allOrders.length < 20) {
+    if (calibOrders.length < 20) {
       return res.status(400).json({
         success: false,
         error: 'Historial insuficiente para calibración (necesitas al menos 20 órdenes)',
@@ -833,19 +833,17 @@ router.post('/calibrate', async (req, res) => {
     }
 
     // Correr backtesting
-    const result = runBacktesting(allOrders, normalizePhone);
+    const btResult = runBacktesting(calibOrders, normalizePhone);
 
     // Guardar en DB
-    await db.saveCalibration(req.orgId, result);
+    await db.saveCalibration(req.orgId, btResult);
 
-    // Invalidar cache de memoria y DB para forzar recálculo con nueva calibración
+    // Invalidar cache para que la próxima carga use la nueva calibración
     analysisCache.delete(req.orgId);
-    const today = new Date().toISOString().slice(0, 10);
-    // El próximo acceso a /candidates regenerará con la nueva calibración
 
-    console.log(`[Calibration] Org ${req.orgId}: factor=${result.calibrationFactor}, accuracy=${Math.round(result.accuracyRate*100)}%, predicciones simuladas=${result.totalPredictions}`);
+    console.log(`[Calibration] Org ${req.orgId}: factor=${btResult.calibrationFactor}, accuracy=${Math.round(btResult.accuracyRate*100)}%, simuladas=${btResult.totalPredictions}`);
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, data: btResult });
   } catch (err) {
     console.error('[Calibration]', err.message);
     res.status(500).json({ success: false, error: err.message });
