@@ -50,7 +50,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function TemplateCard({ template, onDelete, deleting }) {
+function TemplateCard({ template, onDelete, deleting, colors }) {
   const [expanded, setExpanded] = useState(false);
   const bodyComp   = template.components?.find(c => c.type === 'BODY');
   const headerComp = template.components?.find(c => c.type === 'HEADER');
@@ -63,33 +63,33 @@ function TemplateCard({ template, onDelete, deleting }) {
 
   return (
     <div style={{
-      backgroundColor: '#182028',
-      border: '1px solid #2a3942',
+      backgroundColor: colors.bgSub,
+      border: `1px solid ${colors.border}`,
       borderRadius: '10px',
       overflow: 'hidden',
       transition: 'border-color 0.15s',
     }}>
       {/* Header de la card */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px' }}>
-        <FileText size={15} color="#8696a0" style={{ flexShrink: 0 }} />
+        <FileText size={15} color={colors.textSecondary} style={{ flexShrink: 0 }} />
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ color: '#e9edef', fontWeight: 700, fontSize: '14px', fontFamily: 'monospace' }}>
+            <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '14px', fontFamily: 'monospace' }}>
               {template.name}
             </span>
             <StatusBadge status={template.status} />
           </div>
-          <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '2px' }}>
+          <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '2px' }}>
             {template.language} · {template.category}
-            {vars.length > 0 && <span style={{ color: '#00a884' }}> · {vars.length} variable{vars.length !== 1 ? 's' : ''}</span>}
+            {vars.length > 0 && <span style={{ color: colors.green }}> · {vars.length} variable{vars.length !== 1 ? 's' : ''}</span>}
           </div>
         </div>
 
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
           <button
             onClick={() => setExpanded(p => !p)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8696a0', padding: '4px', display: 'flex' }}>
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: '4px', display: 'flex' }}>
             {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
           <button
@@ -97,9 +97,9 @@ function TemplateCard({ template, onDelete, deleting }) {
             disabled={deleting === template.name}
             title="Eliminar template"
             style={{
-              background: 'none', border: '1px solid #3d4f59', borderRadius: '5px',
+              background: 'none', border: `1px solid ${colors.borderStrong}`, borderRadius: '5px',
               cursor: deleting === template.name ? 'not-allowed' : 'pointer',
-              color: deleting === template.name ? '#5c6b74' : '#e57373',
+              color: deleting === template.name ? colors.textMuted : colors.red,
               padding: '4px 6px', display: 'flex', alignItems: 'center',
             }}>
             {deleting === template.name
@@ -111,31 +111,31 @@ function TemplateCard({ template, onDelete, deleting }) {
 
       {/* Contenido expandible: preview del template */}
       {expanded && (
-        <div style={{ padding: '0 14px 14px', borderTop: '1px solid #2a3942' }}>
-          <div style={{ marginTop: '10px', backgroundColor: '#0f1820', borderRadius: '8px', padding: '10px 12px' }}>
+        <div style={{ padding: '0 14px 14px', borderTop: `1px solid ${colors.border}` }}>
+          <div style={{ marginTop: '10px', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '10px 12px' }}>
             {headerComp?.text && (
-              <div style={{ color: '#e9edef', fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>
+              <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>
                 {headerComp.text}
               </div>
             )}
-            <div style={{ color: '#c8d1d9', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+            <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
               {bodyComp?.text || '(sin cuerpo)'}
             </div>
             {footerComp?.text && (
-              <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '6px' }}>
+              <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '6px' }}>
                 {footerComp.text}
               </div>
             )}
           </div>
 
           {template.status === 'REJECTED' && template.rejectedReason && (
-            <div style={{ marginTop: '8px', backgroundColor: '#3a1a1a', borderRadius: '6px', padding: '8px 10px', fontSize: '11px', color: '#e57373' }}>
+            <div style={{ marginTop: '8px', backgroundColor: '#3a1a1a', borderRadius: '6px', padding: '8px 10px', fontSize: '11px', color: colors.red }}>
               <strong>Motivo del rechazo:</strong> {template.rejectedReason}
             </div>
           )}
 
           {template.status === 'PENDING' && (
-            <div style={{ marginTop: '8px', color: '#f0b429', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ marginTop: '8px', color: colors.yellow, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Clock size={11} /> Meta está revisando este template. Normalmente tarda entre 1 y 24 horas.
             </div>
           )}
@@ -145,7 +145,7 @@ function TemplateCard({ template, onDelete, deleting }) {
   );
 }
 
-function CreateTemplateForm({ onCreated }) {
+function CreateTemplateForm({ onCreated, colors }) {
   const [name,       setName]       = useState('');
   const [lang,       setLang]       = useState('es');
   const [category,   setCategory]   = useState('MARKETING');
@@ -228,14 +228,14 @@ function CreateTemplateForm({ onCreated }) {
   };
 
   const sel = {
-    backgroundColor: '#111b21', color: '#e9edef',
-    border: '1px solid #374045', borderRadius: '8px',
+    backgroundColor: colors.bgApp, color: colors.textPrimary,
+    border: `1px solid ${colors.borderStrong}`, borderRadius: '8px',
     padding: '9px 12px', fontSize: '13px', cursor: 'pointer', outline: 'none', width: '100%',
   };
 
   const inputStyle = {
-    width: '100%', backgroundColor: '#111b21', color: '#e9edef',
-    border: '1px solid #374045', borderRadius: '8px',
+    width: '100%', backgroundColor: colors.bgApp, color: colors.textPrimary,
+    border: `1px solid ${colors.borderStrong}`, borderRadius: '8px',
     padding: '9px 12px', fontSize: '13px', outline: 'none', boxSizing: 'border-box',
     fontFamily: 'inherit',
   };
@@ -245,15 +245,15 @@ function CreateTemplateForm({ onCreated }) {
 
       {/* ── Sección IA ──────────────────────────────────────────────────── */}
       <div style={{
-        background: 'linear-gradient(135deg, #1a1f2e 0%, #0d1a2a 100%)',
-        border: '1px solid #2a4060',
+        background: `linear-gradient(135deg, ${colors.bgSub} 0%, ${colors.bgAccent2} 100%)`,
+        border: `1px solid #2a4060`,
         borderRadius: '12px',
         padding: '14px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
           <Sparkles size={15} color="#7b68ee" />
-          <span style={{ color: '#b8a9ff', fontSize: '13px', fontWeight: 700 }}>Generar con IA</span>
-          <span style={{ color: '#4a5568', fontSize: '11px' }}>— describe el objetivo y la IA crea el template</span>
+          <span style={{ color: colors.purple, fontSize: '13px', fontWeight: 700 }}>Generar con IA</span>
+          <span style={{ color: colors.textMuted, fontSize: '11px' }}>— describe el objetivo y la IA crea el template</span>
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
@@ -266,7 +266,7 @@ function CreateTemplateForm({ onCreated }) {
             style={{
               ...inputStyle,
               flex: 1,
-              backgroundColor: '#0d1520',
+              backgroundColor: colors.bgAccent2,
               border: '1px solid #2a4060',
               resize: 'none',
               fontSize: '13px',
@@ -277,9 +277,9 @@ function CreateTemplateForm({ onCreated }) {
             disabled={generating || !goal.trim()}
             title="Generar template con IA (Enter)"
             style={{
-              backgroundColor: (goal.trim() && !generating) ? '#7b68ee' : '#1a2030',
-              color: (goal.trim() && !generating) ? 'white' : '#4a5568',
-              border: `1px solid ${(goal.trim() && !generating) ? '#7b68ee' : '#2a3942'}`,
+              backgroundColor: (goal.trim() && !generating) ? '#7b68ee' : colors.bgAccent2,
+              color: (goal.trim() && !generating) ? 'white' : colors.textMuted,
+              border: `1px solid ${(goal.trim() && !generating) ? '#7b68ee' : colors.border}`,
               borderRadius: '9px',
               padding: '9px 14px',
               fontSize: '13px', fontWeight: 700,
@@ -296,11 +296,11 @@ function CreateTemplateForm({ onCreated }) {
 
         {/* Descripciones de variables de la IA */}
         {aiUsed && Object.keys(aiVarDescs).length > 0 && (
-          <div style={{ marginTop: '10px', backgroundColor: '#0a1520', borderRadius: '8px', padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-            <span style={{ color: '#4a5568', fontSize: '11px', width: '100%', marginBottom: '2px' }}>Variables detectadas:</span>
+          <div style={{ marginTop: '10px', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <span style={{ color: colors.textMuted, fontSize: '11px', width: '100%', marginBottom: '2px' }}>Variables detectadas:</span>
             {Object.entries(aiVarDescs).sort(([a], [b]) => +a - +b).map(([n, desc]) => (
               <span key={n} style={{
-                backgroundColor: '#00a88422', color: '#00a884', border: '1px solid #00a88444',
+                backgroundColor: `${colors.green}22`, color: colors.green, border: `1px solid ${colors.green}44`,
                 borderRadius: '6px', padding: '2px 8px', fontSize: '11px',
               }}>
                 {'{{' + n + '}}'} = {desc}
@@ -318,25 +318,25 @@ function CreateTemplateForm({ onCreated }) {
 
       {/* ── Separador ───────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div style={{ flex: 1, height: '1px', backgroundColor: '#2a3942' }} />
-        <span style={{ color: '#4a5568', fontSize: '11px' }}>o edita manualmente</span>
-        <div style={{ flex: 1, height: '1px', backgroundColor: '#2a3942' }} />
+        <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
+        <span style={{ color: colors.textMuted, fontSize: '11px' }}>o edita manualmente</span>
+        <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
       </div>
 
       {/* ── Idioma + Categoría en fila ───────────────────────────────────── */}
       <div style={{ display: 'flex', gap: '10px' }}>
         <div style={{ flex: 1 }}>
-          <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>Idioma *</label>
+          <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>Idioma *</label>
           <select value={lang} onChange={e => setLang(e.target.value)} style={sel}>
             {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
           </select>
         </div>
         <div style={{ flex: 1 }}>
-          <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>Categoría *</label>
+          <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>Categoría *</label>
           <select value={category} onChange={e => setCategory(e.target.value)} style={sel}>
             {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
-          <div style={{ color: '#4a5568', fontSize: '10px', marginTop: '3px' }}>
+          <div style={{ color: colors.textMuted, fontSize: '10px', marginTop: '3px' }}>
             {CATEGORIES.find(c => c.value === category)?.desc}
           </div>
         </div>
@@ -344,38 +344,38 @@ function CreateTemplateForm({ onCreated }) {
 
       {/* Nombre */}
       <div>
-        <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
+        <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
           Nombre del template *
         </label>
         <input
           value={name}
           onChange={e => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
           placeholder="ej: reenganche_frescos_cl"
-          style={{ ...inputStyle, borderColor: aiUsed && name ? '#7b68ee44' : '#374045' }}
+          style={{ ...inputStyle, borderColor: aiUsed && name ? '#7b68ee44' : colors.borderStrong }}
         />
-        <div style={{ color: '#4a5568', fontSize: '11px', marginTop: '4px' }}>
-          Solo minúsculas, números y guiones bajos. Ej: <code style={{ color: '#8696a0' }}>reenganche_frescos</code>
+        <div style={{ color: colors.textMuted, fontSize: '11px', marginTop: '4px' }}>
+          Solo minúsculas, números y guiones bajos. Ej: <code style={{ color: colors.textSecondary }}>reenganche_frescos</code>
         </div>
       </div>
 
       {/* Header (opcional) */}
       <div>
-        <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
+        <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
           Encabezado (opcional)
         </label>
         <input
           value={header}
           onChange={e => setHeader(e.target.value)}
           placeholder="ej: 🌿 Productos Frescos del Campo"
-          style={{ ...inputStyle, borderColor: aiUsed && header ? '#7b68ee44' : '#374045' }}
+          style={{ ...inputStyle, borderColor: aiUsed && header ? '#7b68ee44' : colors.borderStrong }}
           maxLength={60}
         />
-        <div style={{ color: '#4a5568', fontSize: '11px', marginTop: '4px' }}>{header.length}/60 · Aparece en negrita sobre el mensaje</div>
+        <div style={{ color: colors.textMuted, fontSize: '11px', marginTop: '4px' }}>{header.length}/60 · Aparece en negrita sobre el mensaje</div>
       </div>
 
       {/* Body */}
       <div>
-        <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
+        <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
           Cuerpo del mensaje *
         </label>
         <textarea
@@ -383,15 +383,15 @@ function CreateTemplateForm({ onCreated }) {
           onChange={e => setBody(e.target.value)}
           placeholder={'Hola {{1}}, llevas {{2}} días sin pedir tus {{3}} favoritos. ¿Te hacemos un pedido hoy? 🌿'}
           rows={4}
-          style={{ ...inputStyle, resize: 'vertical', borderColor: aiUsed && body ? '#7b68ee44' : '#374045' }}
+          style={{ ...inputStyle, resize: 'vertical', borderColor: aiUsed && body ? '#7b68ee44' : colors.borderStrong }}
           maxLength={1024}
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: '4px' }}>
-          <div style={{ color: '#4a5568', fontSize: '11px' }}>
-            Usa <code style={{ color: '#00a884' }}>{'{{1}}'}</code>, <code style={{ color: '#00a884' }}>{'{{2}}'}</code>... para variables que la IA rellenará por cliente.
-            {vars.length > 0 && <span style={{ color: '#00a884' }}> · {vars.length} variable{vars.length !== 1 ? 's' : ''} detectada{vars.length !== 1 ? 's' : ''}: {vars.map(v => `{{${v}}}`).join(', ')}</span>}
+          <div style={{ color: colors.textMuted, fontSize: '11px' }}>
+            Usa <code style={{ color: colors.green }}>{'{{1}}'}</code>, <code style={{ color: colors.green }}>{'{{2}}'}</code>... para variables que la IA rellenará por cliente.
+            {vars.length > 0 && <span style={{ color: colors.green }}> · {vars.length} variable{vars.length !== 1 ? 's' : ''} detectada{vars.length !== 1 ? 's' : ''}: {vars.map(v => `{{${v}}}`).join(', ')}</span>}
           </div>
-          <span style={{ color: '#4a5568', fontSize: '11px', flexShrink: 0, marginLeft: '8px' }}>{body.length}/1024</span>
+          <span style={{ color: colors.textMuted, fontSize: '11px', flexShrink: 0, marginLeft: '8px' }}>{body.length}/1024</span>
         </div>
       </div>
 
@@ -407,7 +407,7 @@ function CreateTemplateForm({ onCreated }) {
             {vars.sort((a, b) => +a - +b).map(n => (
               <div key={n} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{
-                  backgroundColor: '#00a88422', color: '#00a884', border: '1px solid #00a88444',
+                  backgroundColor: `${colors.green}22`, color: colors.green, border: `1px solid ${colors.green}44`,
                   borderRadius: '5px', padding: '3px 8px', fontSize: '12px', fontWeight: 700,
                   flexShrink: 0, fontFamily: 'monospace', minWidth: '36px', textAlign: 'center',
                 }}>
@@ -421,7 +421,7 @@ function CreateTemplateForm({ onCreated }) {
                   onChange={e => setVarSamples(prev => ({ ...prev, [n]: e.target.value }))}
                   placeholder={aiVarDescs[n] ? `ej: ${aiVarDescs[n] === 'nombre del cliente' ? 'Juan' : aiVarDescs[n]}` : `valor de muestra para {{${n}}}`}
                   style={{
-                    flex: 1, backgroundColor: '#0f1a08', color: '#e9edef',
+                    flex: 1, backgroundColor: '#0f1a08', color: colors.textPrimary,
                     border: `1px solid ${varSamples[n]?.trim() ? '#3a5020' : '#ff665544'}`,
                     borderRadius: '7px', padding: '7px 10px', fontSize: '13px',
                     outline: 'none', fontFamily: 'inherit',
@@ -438,7 +438,7 @@ function CreateTemplateForm({ onCreated }) {
 
       {/* Footer (opcional) */}
       <div>
-        <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
+        <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>
           Pie de mensaje (opcional)
         </label>
         <input
@@ -453,35 +453,35 @@ function CreateTemplateForm({ onCreated }) {
       {/* Preview */}
       {body && (
         <div>
-          <label style={{ color: '#8696a0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>Vista previa</label>
-          <div style={{ backgroundColor: '#111b21', borderRadius: '8px', padding: '12px 14px', border: '1px solid #2a3942', maxWidth: '360px' }}>
-            {header && <div style={{ color: '#e9edef', fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>{header}</div>}
-            <div style={{ color: '#c8d1d9', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+          <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '5px' }}>Vista previa</label>
+          <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px', border: `1px solid ${colors.border}`, maxWidth: '360px' }}>
+            {header && <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>{header}</div>}
+            <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
               {body.replace(/\{\{(\d+)\}\}/g, (_, n) => {
                 const desc = aiVarDescs[n];
                 return desc ? `[${desc}]` : `[var${n}]`;
               })}
             </div>
-            {footer && <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '6px' }}>{footer}</div>}
+            {footer && <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '6px' }}>{footer}</div>}
           </div>
         </div>
       )}
 
       {/* Info Meta */}
-      <div style={{ backgroundColor: '#1a2530', borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: '#8696a0', lineHeight: 1.6, display: 'flex', gap: '8px' }}>
+      <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.6, display: 'flex', gap: '8px' }}>
         <Info size={14} color="#4db6e8" style={{ flexShrink: 0, marginTop: '1px' }} />
         <span>
-          Los templates de categoría <strong style={{ color: '#e9edef' }}>Marketing</strong> son revisados por Meta y normalmente aprobados en <strong style={{ color: '#e9edef' }}>1-24 horas</strong>.
-          Una vez aprobados aparecerán en Re-enganche con el badge <span style={{ color: '#00c853' }}>✓ Aprobado</span>.
+          Los templates de categoría <strong style={{ color: colors.textPrimary }}>Marketing</strong> son revisados por Meta y normalmente aprobados en <strong style={{ color: colors.textPrimary }}>1-24 horas</strong>.
+          Una vez aprobados aparecerán en Re-enganche con el badge <span style={{ color: colors.greenLight }}>✓ Aprobado</span>.
         </span>
       </div>
 
-      {error   && <div style={{ backgroundColor: '#3a1a1a', color: '#e57373', borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{error}</div>}
-      {success && <div style={{ backgroundColor: '#0a2e15', color: '#00c853', borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{success}</div>}
+      {error   && <div style={{ backgroundColor: '#3a1a1a', color: colors.red,       borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{error}</div>}
+      {success && <div style={{ backgroundColor: '#0a2e15', color: colors.greenLight, borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{success}</div>}
 
       {/* Advertencia si faltan muestras */}
       {vars.length > 0 && vars.some(n => !varSamples[n]?.trim()) && (
-        <div style={{ backgroundColor: '#2a1a00', border: '1px solid #ff8c0044', borderRadius: '7px', padding: '9px 12px', fontSize: '12px', color: '#f0b429', display: 'flex', gap: '7px', alignItems: 'flex-start' }}>
+        <div style={{ backgroundColor: '#2a1a00', border: '1px solid #ff8c0044', borderRadius: '7px', padding: '9px 12px', fontSize: '12px', color: colors.yellow, display: 'flex', gap: '7px', alignItems: 'flex-start' }}>
           <span style={{ flexShrink: 0 }}>⚠️</span>
           <span>Completa los <strong>valores de muestra</strong> de todas las variables. Meta los exige para aprobar el template.</span>
         </div>
@@ -491,8 +491,8 @@ function CreateTemplateForm({ onCreated }) {
         onClick={handleCreate}
         disabled={creating || !name.trim() || !body.trim() || (vars.length > 0 && vars.some(n => !varSamples[n]?.trim()))}
         style={{
-          backgroundColor: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? '#00a884' : '#2a3942',
-          color: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? 'white' : '#8696a0',
+          backgroundColor: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? colors.green : colors.border,
+          color: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? 'white' : colors.textSecondary,
           border: 'none', borderRadius: '9px', padding: '12px',
           fontSize: '14px', fontWeight: 700,
           cursor: (name.trim() && body.trim() && (vars.length === 0 || vars.every(n => varSamples[n]?.trim()))) ? 'pointer' : 'not-allowed',
@@ -553,7 +553,7 @@ export default function TemplateManager() {
   return (
     <div style={{ color: colors.textPrimary }}>
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0', marginBottom: '16px', backgroundColor: colors.bgInput, borderRadius: '9px', padding: '3px' }}>
+      <div style={{ display: 'flex', gap: '0', marginBottom: '16px', backgroundColor: colors.bgApp, borderRadius: '9px', padding: '3px' }}>
         {[
           { key: 'list',   label: 'Mis Templates', count: templates.length },
           { key: 'create', label: '+ Crear Template' },
@@ -568,7 +568,7 @@ export default function TemplateManager() {
             }}>
             {t.label}
             {t.count != null && t.count > 0 && (
-              <span style={{ backgroundColor: '#00a88433', color: '#00a884', borderRadius: '8px', padding: '1px 6px', fontSize: '11px', fontWeight: 700 }}>
+              <span style={{ backgroundColor: `${colors.green}33`, color: colors.green, borderRadius: '8px', padding: '1px 6px', fontSize: '11px', fontWeight: 700 }}>
                 {t.count}
               </span>
             )}
@@ -580,41 +580,41 @@ export default function TemplateManager() {
       {tab === 'list' && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div style={{ color: '#8696a0', fontSize: '12px' }}>
-              {approved.length > 0 && <span style={{ color: '#00c853' }}>{approved.length} aprobado{approved.length !== 1 ? 's' : ''}</span>}
-              {pending.length > 0 && <><span style={{ color: '#4a5568' }}> · </span><span style={{ color: '#f0b429' }}>{pending.length} pendiente{pending.length !== 1 ? 's' : ''}</span></>}
-              {rejected.length > 0 && <><span style={{ color: '#4a5568' }}> · </span><span style={{ color: '#e57373' }}>{rejected.length} rechazado{rejected.length !== 1 ? 's' : ''}</span></>}
+            <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
+              {approved.length > 0 && <span style={{ color: colors.greenLight }}>{approved.length} aprobado{approved.length !== 1 ? 's' : ''}</span>}
+              {pending.length > 0 && <><span style={{ color: colors.textMuted }}> · </span><span style={{ color: colors.yellow }}>{pending.length} pendiente{pending.length !== 1 ? 's' : ''}</span></>}
+              {rejected.length > 0 && <><span style={{ color: colors.textMuted }}> · </span><span style={{ color: colors.red }}>{rejected.length} rechazado{rejected.length !== 1 ? 's' : ''}</span></>}
               {templates.length === 0 && !loading && 'Sin templates creados aún'}
             </div>
             <button onClick={loadTemplates} disabled={loading}
-              style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'none', border: 'none', cursor: 'pointer', color: '#8696a0', fontSize: '12px' }}>
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, fontSize: '12px' }}>
               <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
               Recargar
             </button>
           </div>
 
           {loading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#8696a0' }}>
+            <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>
               <Loader size={24} style={{ animation: 'spin 1s linear infinite' }} />
             </div>
           ) : error ? (
-            <div style={{ color: '#e57373', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', padding: '12px', backgroundColor: '#3a1a1a', borderRadius: '8px' }}>
+            <div style={{ color: colors.red, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', padding: '12px', backgroundColor: '#3a1a1a', borderRadius: '8px' }}>
               <AlertCircle size={14} /> {error}
             </div>
           ) : templates.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#8696a0' }}>
+            <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>
               <FileText size={40} style={{ opacity: 0.2, marginBottom: '12px' }} />
               <div style={{ fontSize: '14px', fontWeight: 500 }}>Sin templates</div>
               <div style={{ fontSize: '12px', marginTop: '6px', opacity: 0.7 }}>Crea tu primer template para poder enviarlo en Re-enganche</div>
               <button onClick={() => setTab('create')}
-                style={{ marginTop: '16px', backgroundColor: '#00a884', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 18px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                style={{ marginTop: '16px', backgroundColor: colors.green, color: 'white', border: 'none', borderRadius: '8px', padding: '8px 18px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
                 + Crear Template
               </button>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {templates.map(t => (
-                <TemplateCard key={t.name} template={t} onDelete={handleDelete} deleting={deleting} />
+                <TemplateCard key={t.name} template={t} onDelete={handleDelete} deleting={deleting} colors={colors} />
               ))}
             </div>
           )}
@@ -623,7 +623,7 @@ export default function TemplateManager() {
 
       {/* Crear template */}
       {tab === 'create' && (
-        <CreateTemplateForm onCreated={() => { setTab('list'); loadTemplates(); }} />
+        <CreateTemplateForm onCreated={() => { setTab('list'); loadTemplates(); }} colors={colors} />
       )}
     </div>
   );

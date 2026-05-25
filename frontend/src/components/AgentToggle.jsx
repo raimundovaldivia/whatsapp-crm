@@ -1,7 +1,9 @@
 import { Bot, User, Pause, Play } from 'lucide-react';
 import { useState } from 'react';
+import { useTheme } from '../theme.js';
 
 export default function AgentToggle({ mode, onToggle }) {
+  const { colors, isDark } = useTheme();
   const [loading, setLoading] = useState(false);
   const isAI = mode === 'ai';
 
@@ -21,12 +23,12 @@ export default function AgentToggle({ mode, onToggle }) {
         display: 'flex',
         alignItems: 'center',
         gap: '5px',
-        backgroundColor: isAI ? '#0d2e25' : '#2e2100',
-        border: `1px solid ${isAI ? '#00a884' : '#f0b429'}`,
+        backgroundColor: isAI ? colors.bgAccent : (isDark ? '#2e2100' : '#fff8e1'),
+        border: `1px solid ${isAI ? colors.green : colors.yellow}`,
         borderRadius: '20px',
         padding: '4px 10px',
         fontSize: '12px',
-        color: isAI ? '#00a884' : '#f0b429',
+        color: isAI ? colors.green : colors.yellow,
         fontWeight: 500,
       }}>
         {isAI
@@ -41,8 +43,8 @@ export default function AgentToggle({ mode, onToggle }) {
         disabled={loading}
         title={isAI ? 'Pausar IA y tomar control' : 'Reactivar agente IA'}
         style={{
-          backgroundColor: isAI ? '#2a3942' : '#00a884',
-          color: isAI ? '#8696a0' : 'white',
+          backgroundColor: isAI ? colors.bgHover : colors.green,
+          color: isAI ? colors.textSecondary : 'white',
           padding: '7px 14px',
           borderRadius: '20px',
           fontSize: '13px',
