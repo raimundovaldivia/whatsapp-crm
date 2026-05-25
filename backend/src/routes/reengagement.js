@@ -262,6 +262,179 @@ Incluir TODOS los ${customers.length} clientes. Ordenar por d ascendente.`;
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+   Set de orgs cuyo análisis corre en segundo plano
+───────────────────────────────────────────────────────────────────── */
+const bgProcessing = new Set();
+
+/* ─────────────────────────────────────────────────────────────────────
+   ANÁLISIS COMPLETO — función standalone reutilizable
+   Devuelve { enriched, diagnostico } o null si no hay datos.
+───────────────────────────────────────────────────────────────────── */
+async function runFullAnalysis(orgId, ds) {
+  const today = new Date().toISOString().slice(0, 10);
+  const { shop, token } = shopifyApi.credentialsFrom(ds);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  console.log(`[Reengagement] Descargando órdenes de ${shop}...`);
+  let allOrders = [];
+  let cursor = null; let page = 0;
+  while (true) {
+    page++;
+    const result = await shopifyApi.getOrders(shop, token, { limit: 250, cursor, status: 'any' });
+    const validas = (result.orders || []).filter(o => {
+      const fs = (o.financialStatus || '').toUpperCase();
+      return fs !== 'VOIDED' && fs !== 'REFUNDED';
+    });
+    allOrders = allOrders.concat(validas);
+    if (!result.hasNextPage || !result.endCursor || page >= 50) break;
+    cursor = result.endCursor;
+    await sleep(300);
+  }
+  console.log(`[Reengagement] Total órdenes: ${allOrders.length}`);
+  if (!allOrders.length) return null;
+
+  const conCustomerPhone = allOrders.filter(o => normalizePhone(o.customer?.phone)).length;
+  const sinPhone         = allOrders.length - conCustomerPhone;
+  const conShippingPhone = allOrders.filter(o =>
+    !normalizePhone(o.customer?.phone) &&
+    (normalizePhone(o.shippingAddress?.phone) || normalizePhone(o.billingAddress?.phone))
+  ).length;
+  console.log(`[Reengagement] Teléfonos — customer: ${conCustomerPhone} | shipping/billing: ${conShippingPhone} | sin phone: ${sinPhone - conShippingPhone}`);
+
+  const toNumericId = (id) => String(id || '').replace(/[^0-9]/g, '');
+  const ordenesSinPhoneConId = allOrders.filter(o => !normalizePhone(o.customer?.phone) && o.customer?.id);
+  console.log(`[Reengagement] Órdenes sin teléfono con customerId: ${ordenesSinPhoneConId.length}`);
+
+  if (ordenesSinPhoneConId.length > 0) {
+    try {
+      const phoneMap = new Map();
+      let cur2 = undefined; let pg2 = 0;
+      while (true) {
+        pg2++;
+        const result = await shopifyApi.getCustomers(shop, token, { limit: 100, cursor: cur2 });
+        for (const c of (result.customers || [])) {
+          const phone = normalizePhone(c.phone);
+          if (!phone) continue;
+          const entry  = { phone, name: c.name || phone, email: c.email };
+          const numId  = toNumericId(c.id);
+          const fullId = String(c.id || '');
+          if (numId)   phoneMap.set(numId, entry);
+          if (fullId)  phoneMap.set(fullId, entry);
+          if (c.email) phoneMap.set(c.email.toLowerCase(), entry);
+        }
+        if (!result.hasNextPage || !result.endCursor || pg2 >= 50) break;
+        cur2 = result.endCursor;
+        await sleep(300);
+      }
+      let enriquecidas = 0;
+      for (const order of allOrders) {
+        if (normalizePhone(order.customer?.phone)) continue;
+        if (!order.customer) continue;
+        const rawId = String(order.customer.id || '');
+        const email = (order.customer.email || '').toLowerCase();
+        const ed = phoneMap.get(rawId) || phoneMap.get(toNumericId(rawId)) || (email ? phoneMap.get(email) : null);
+        if (ed) { order.customer.phone = ed.phone; if (!order.customer.name) order.customer.name = ed.name; enriquecidas++; }
+      }
+      console.log(`[Reengagement] Órdenes enriquecidas con catálogo: ${enriquecidas}`);
+    } catch (err) {
+      console.warn('[Reengagement] No se pudo enriquecer con catálogo:', err.message);
+    }
+  }
+
+  const allStats = buildCustomerStats(allOrders);
+  console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
+  if (!allStats.length) return null;
+
+  const todayDow = new Date().getDay();
+  let aiResults  = [];
+  const BATCH = 20;
+  for (let i = 0; i < allStats.length; i += BATCH) {
+    const batch  = allStats.slice(i, i + BATCH);
+    const result = await predictWithAI(batch, todayDow);
+    aiResults = aiResults.concat(result);
+    console.log(`[Reengagement] Batch ${Math.floor(i/BATCH)+1}/${Math.ceil(allStats.length/BATCH)}: ${result.length}/${batch.length}`);
+    if (i + BATCH < allStats.length) await sleep(400);
+  }
+  console.log(`[Reengagement] AI: ${aiResults.length}/${allStats.length} predicciones`);
+
+  const aiMap = new Map(aiResults.map(r => [r.phone, r]));
+
+  let calibration = await db.getCalibration(orgId);
+  if (!calibration && allOrders.length > 0) {
+    try {
+      const bt = runBacktesting(allOrders, normalizePhone);
+      await db.saveCalibration(orgId, bt);
+      console.log(`[Reengagement] Backtesting: factor=${bt.calibrationFactor}, accuracy=${Math.round(bt.accuracyRate*100)}%`);
+      calibration = await db.getCalibration(orgId);
+    } catch (e) { console.warn('[Reengagement] Backtesting error:', e.message); }
+  }
+
+  let aiHits = 0, heuristicHits = 0;
+
+  const enriched = allStats.map(c => {
+    const aiEntry = aiMap.get(c.phone);
+    let predictedDays, confidenceRaw, aiReason, predSource;
+
+    if (aiEntry && aiEntry.predictedDays !== null && aiEntry.predictedDays !== undefined) {
+      predictedDays = aiEntry.predictedDays;
+      confidenceRaw = aiEntry.confidence || 50;
+      aiReason      = aiEntry.aiReason || null;
+      predSource    = 'ai';
+      aiHits++;
+    } else {
+      const h       = heuristicPredict(c);
+      predictedDays = h.predictedDays;
+      confidenceRaw = h.confidence;
+      aiReason      = h.aiReason;
+      predSource    = 'heuristic';
+      heuristicHits++;
+    }
+
+    const confidence = applyCalibration(confidenceRaw, calibration);
+
+    let buyWindow, urgency;
+    if      (predictedDays <= 1)   { buyWindow = 'hoy';    urgency = 4; }
+    else if (predictedDays <= 7)   { buyWindow = 'semana'; urgency = 3; }
+    else if (predictedDays <= 30)  { buyWindow = 'mes';    urgency = 2; }
+    else                           { buyWindow = 'lejano'; urgency = 1; }
+
+    return { ...c, predictedDays, confidenceRaw, confidence, aiReason, predSource, buyWindow, urgency };
+  })
+  .filter(c => c.predictedDays <= 365)   // mostrar hasta 1 año
+  .sort((a, b) => a.predictedDays - b.predictedDays);
+
+  console.log(`[Reengagement] Resultado: IA=${aiHits} | heurística=${heuristicHits} | total=${enriched.length}`);
+
+  // Guardar caché del día
+  try {
+    await db.saveDailyCache(orgId, today, enriched);
+    await db.savePredictions(orgId, enriched, today);
+    console.log(`[Reengagement] Cache guardado: ${today} (${enriched.length} candidatos)`);
+  } catch (e) { console.warn('[Reengagement] Error guardando cache:', e.message); }
+
+  analysisCache.set(orgId, { data: enriched, ts: Date.now() });
+
+  // Log resumen en consola
+  ['hoy','semana','mes','lejano'].forEach(w => {
+    const g = enriched.filter(c => c.buyWindow === w);
+    if (g.length) console.log(`  ${w.toUpperCase()}: ${g.length} clientes`);
+  });
+
+  const diagnostico = {
+    totalOrdenes:      allOrders.length,
+    clientesConTel:    allStats.length,
+    sinTelefono:       sinPhone - conShippingPhone,
+    conShippingPhone,
+    conPrediccionAI:   aiHits,
+    conPrediccionHeur: heuristicHits,
+    enVentana:         enriched.length,
+  };
+  console.log(`[Reengagement] Diag: ${JSON.stringify(diagnostico)}`);
+
+  return { enriched, diagnostico };
+}
+
+/* ─────────────────────────────────────────────────────────────────────
    GET /api/reengagement/candidates?refresh=false
 ───────────────────────────────────────────────────────────────────── */
 router.get('/candidates', async (req, res) => {
@@ -270,303 +443,59 @@ router.get('/candidates', async (req, res) => {
     if (!ds) return res.json({ success: true, data: [], total: 0 });
 
     const refresh = req.query.refresh === 'true';
+    const today   = new Date().toISOString().slice(0, 10);
 
-    // ── 1. Cache en memoria (misma sesión) ────────────────────────────
+    // ── 1. Cache en memoria ──────────────────────────────────────────
     const memCached = analysisCache.get(req.orgId);
     if (!refresh && memCached && Date.now() - memCached.ts < CACHE_TTL) {
       return res.json({ success: true, data: memCached.data, total: memCached.data.length, fromCache: true, cacheSource: 'memory' });
     }
 
-    // ── 2. Cache en DB (mismo día) ────────────────────────────────────
-    const today = new Date().toISOString().slice(0, 10);
-    if (!refresh) {
-      const dbCached = await db.getDailyCache(req.orgId, today);
-      if (dbCached) {
-        const candidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
-        analysisCache.set(req.orgId, { data: candidates, ts: Date.now() });
-        console.log(`[Reengagement] Cache DB hit para org ${req.orgId} (${today})`);
-        return res.json({ success: true, data: candidates, total: candidates.length, fromCache: true, cacheSource: 'db', cacheDate: today });
-      }
-    }
-
-    const { shop, token } = shopifyApi.credentialsFrom(ds);
-
-    console.log(`[Reengagement] Descargando órdenes de ${shop}...`);
-    let allOrders;
-    try {
-      const sleep = ms => new Promise(r => setTimeout(r, ms));
-      let cursor = null; let page = 0;
-      allOrders = [];
-      while (true) {
-        page++;
-        const result = await shopifyApi.getOrders(shop, token, { limit: 250, cursor, status: 'any' });
-        const validas = (result.orders || []).filter(o => {
-          const fs = (o.financialStatus || '').toUpperCase();
-          return fs !== 'VOIDED' && fs !== 'REFUNDED';
-        });
-        allOrders = allOrders.concat(validas);
-        if (!result.hasNextPage || !result.endCursor || page >= 50) break;
-        cursor = result.endCursor;
-        await sleep(300);
-      }
-    } catch (err) {
-      throw err;
-    }
-    console.log(`[Reengagement] Total órdenes: ${allOrders.length}`);
-
-    if (!allOrders.length) {
-      return res.json({ success: true, data: [], total: 0, message: 'Sin órdenes en Shopify' });
-    }
-
-    const conCustomerPhone = allOrders.filter(o => normalizePhone(o.customer?.phone)).length;
-    const sinPhone         = allOrders.length - conCustomerPhone;
-    // Contar teléfonos en shipping/billing que tampoco tienen en customer
-    const conShippingPhone = allOrders.filter(o =>
-      !normalizePhone(o.customer?.phone) &&
-      (normalizePhone(o.shippingAddress?.phone) || normalizePhone(o.billingAddress?.phone))
-    ).length;
-    console.log(`[Reengagement] Teléfonos en órdenes — con phone: ${conCustomerPhone} | shipping/billing: ${conShippingPhone} | sin phone: ${sinPhone - conShippingPhone}`);
-
-    const toNumericId = (id) => String(id || '').replace(/[^0-9]/g, '');
-
-    const ordenesSinPhone    = allOrders.filter(o => !normalizePhone(o.customer?.phone));
-    const ordenesSinPhoneConId = ordenesSinPhone.filter(o => o.customer?.id);
-    const ordenesSinCliente  = ordenesSinPhone.filter(o => !o.customer?.id);
-
-    console.log(`[Reengagement] Órdenes sin teléfono — con customerId: ${ordenesSinPhoneConId.length} | sin customer (guest): ${ordenesSinCliente.length}`);
-
-    if (ordenesSinPhoneConId.length > 0) {
-      const muestraOrden = ordenesSinPhoneConId.slice(0, 3).map(o => o.customer?.id);
-      console.log(`[Reengagement] Muestra IDs de órdenes: ${JSON.stringify(muestraOrden)}`);
-    }
-
-    if (ordenesSinPhoneConId.length > 0) {
-      console.log(`[Reengagement] Intentando enriquecer ${ordenesSinPhoneConId.length} órdenes con customerId...`);
-      try {
-        const sleep = ms => new Promise(r => setTimeout(r, ms));
-        const phoneMap = new Map();
-        let cursor = undefined;
-        let page = 0;
-
-        while (true) {
-          page++;
-          const result = await shopifyApi.getCustomers(shop, token, { limit: 100, cursor });
-
-          if (page === 1 && result.customers?.length > 0) {
-            const muestraCatalogo = result.customers.slice(0, 3).map(c => c.id);
-            console.log(`[Reengagement] Muestra IDs catálogo: ${JSON.stringify(muestraCatalogo)}`);
-          }
-
-          for (const c of (result.customers || [])) {
-            const phone  = normalizePhone(c.phone);
-            if (!phone) continue;
-            const entry  = { phone, name: c.name || phone, email: c.email };
-            const numId  = toNumericId(c.id);
-            const fullId = String(c.id || '');
-            if (numId)  phoneMap.set(numId, entry);
-            if (fullId) phoneMap.set(fullId, entry);
-            if (c.email) phoneMap.set(c.email.toLowerCase(), entry);
-          }
-
-          if (!result.hasNextPage || !result.endCursor) break;
-          cursor = result.endCursor;
-          await sleep(300);
-          if (page >= 50) break;
+    // ── 2. Refresh solicitado → iniciar en SEGUNDO PLANO y retornar ──
+    if (refresh) {
+      if (bgProcessing.has(req.orgId)) {
+        // Ya está corriendo — devolver caché anterior si existe
+        const dbCached = await db.getDailyCache(req.orgId, today);
+        if (dbCached) {
+          const data = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+          return res.json({ success: true, data, total: data.length, fromCache: true, cacheSource: 'db_stale', refreshing: true });
         }
-
-        console.log(`[Reengagement] Clientes con teléfono en catálogo: ${phoneMap.size / 2} (indexados por ID numérico y GID)`);
-
-        let enriquecidas = 0;
-        let porId = 0, porEmail = 0;
-        for (const order of allOrders) {
-          if (normalizePhone(order.customer?.phone)) continue;
-          if (!order.customer) continue;
-
-          const rawId  = String(order.customer.id || '');
-          const numId  = toNumericId(rawId);
-          const email  = (order.customer.email || '').toLowerCase();
-
-          const enrichData =
-            phoneMap.get(rawId)   ||
-            phoneMap.get(numId)   ||
-            (email ? phoneMap.get(email) : null);
-
-          if (enrichData) {
-            order.customer.phone = enrichData.phone;
-            if (!order.customer.name) order.customer.name = enrichData.name;
-            if (!order.customer.email) order.customer.email = enrichData.email;
-            enriquecidas++;
-            if (phoneMap.get(rawId) || phoneMap.get(numId)) porId++;
-            else porEmail++;
-          }
-        }
-        console.log(`[Reengagement] Órdenes enriquecidas: ${enriquecidas} (por ID: ${porId} | por email: ${porEmail})`);
-      } catch (err) {
-        console.warn('[Reengagement] No se pudo enriquecer con catálogo:', err.message);
-      }
-    }
-
-    const allStats = buildCustomerStats(allOrders);
-    console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
-    console.log(`[Reengagement] Clientes únicos con teléfono tras enriquecimiento: ${allStats.length}`);
-
-    if (!allStats.length) {
-      return res.json({ success: true, data: [], total: 0, message: 'Clientes sin número de teléfono en Shopify' });
-    }
-
-    const todayDow = new Date().getDay();
-    let aiResults  = [];
-
-    const BATCH = 20;  // 20 por batch → respuestas más cortas, menos truncamiento
-    for (let i = 0; i < allStats.length; i += BATCH) {
-      const batch       = allStats.slice(i, i + BATCH);
-      const batchResult = await predictWithAI(batch, todayDow);
-      aiResults = aiResults.concat(batchResult);
-      console.log(`[Reengagement] Batch ${Math.floor(i/BATCH)+1}/${Math.ceil(allStats.length/BATCH)}: ${batchResult.length}/${batch.length} predicciones`);
-      if (i + BATCH < allStats.length) {
-        await new Promise(r => setTimeout(r, 400));
-      }
-    }
-    console.log(`[Reengagement] Total predicciones AI recibidas: ${aiResults.length} / ${allStats.length} clientes`);
-
-    const aiMap = new Map(aiResults.map(r => [r.phone, r]));
-
-    // ── Cargar calibración existente ──────────────────────────────────
-    const calibration = await db.getCalibration(req.orgId);
-    if (calibration) {
-      console.log(`[Reengagement] Calibración activa: factor=${calibration.calibrationFactor}, accuracy=${Math.round(calibration.accuracyRate*100)}%`);
-    }
-
-    // ── Correr backtesting si no existe calibración (primera vez) ─────
-    if (!calibration && allOrders.length > 0) {
-      try {
-        console.log(`[Reengagement] Primera vez — corriendo backtesting inicial...`);
-        const btResult = runBacktesting(allOrders, normalizePhone);
-        await db.saveCalibration(req.orgId, btResult);
-        console.log(`[Reengagement] Backtesting inicial: factor=${btResult.calibrationFactor}, accuracy=${Math.round(btResult.accuracyRate*100)}%, predicciones=${btResult.totalPredictions}`);
-      } catch (btErr) {
-        console.warn('[Reengagement] Error en backtesting inicial:', btErr.message);
-      }
-    }
-
-    // Recargar calibración (puede haberse creado recién)
-    const activeCalibration = calibration || await db.getCalibration(req.orgId);
-
-    let aiHits = 0, heuristicHits = 0;
-
-    const enriched = allStats.map(c => {
-      // ── Preferir predicción IA; si falta, usar heurística matemática ──
-      const aiEntry = aiMap.get(c.phone);
-      let predictedDays, confidenceRaw, aiReason, predSource;
-
-      if (aiEntry && aiEntry.predictedDays !== null && aiEntry.predictedDays !== undefined) {
-        predictedDays  = aiEntry.predictedDays;
-        confidenceRaw  = aiEntry.confidence || 50;
-        aiReason       = aiEntry.aiReason || null;
-        predSource     = 'ai';
-        aiHits++;
-      } else {
-        // Fallback heurístico: avgFreqDays - daysInactive
-        const h        = heuristicPredict(c);
-        predictedDays  = h.predictedDays;
-        confidenceRaw  = h.confidence;
-        aiReason       = h.aiReason;
-        predSource     = 'heuristic';
-        heuristicHits++;
+        return res.json({ success: true, data: [], total: 0, refreshing: true, message: 'Análisis en progreso...' });
       }
 
-      const confidenceCalib = applyCalibration(confidenceRaw, activeCalibration);
+      // Limpiar caché y arrancar
+      try { await db.saveDailyCache(req.orgId, today, null); } catch {}
+      analysisCache.delete(req.orgId);
+      bgProcessing.add(req.orgId);
+      runFullAnalysis(req.orgId, ds).finally(() => bgProcessing.delete(req.orgId));
 
-      let buyWindow, urgency;
-      if (predictedDays <= 1) {
-        buyWindow = 'hoy'; urgency = 4;
-      } else if (predictedDays <= 7) {
-        buyWindow = 'semana'; urgency = 3;
-      } else if (predictedDays <= 30) {
-        buyWindow = 'mes'; urgency = 2;
-      } else if (predictedDays <= 180) {
-        buyWindow = 'lejano'; urgency = 1;
-      } else {
-        buyWindow = 'lejano'; urgency = 0;
-      }
-
-      return {
-        ...c,
-        predictedDays,
-        confidenceRaw,
-        confidence:   confidenceCalib,
-        aiReason,
-        predSource,   // 'ai' o 'heuristic'
-        buyWindow,
-        urgency,
-      };
-    })
-    // Mostrar todos (incluso los muy lejanos o negativos) — el usuario los filtra por tab
-    .filter(c => c.predictedDays <= 180)
-    .sort((a, b) => a.predictedDays - b.predictedDays);
-
-    console.log(`[Reengagement] Predicciones: IA=${aiHits} | heurística=${heuristicHits} | total en vista=${enriched.length}`);
-
-    // ── Guardar en cache DB (único por día) ───────────────────────────
-    try {
-      await db.saveDailyCache(req.orgId, today, enriched);
-      await db.savePredictions(req.orgId, enriched, today);
-      console.log(`[Reengagement] Cache guardado en DB para ${today} (${enriched.length} candidatos)`);
-    } catch (cacheErr) {
-      console.warn('[Reengagement] Error guardando cache:', cacheErr.message);
-    }
-
-    analysisCache.set(req.orgId, { data: enriched, ts: Date.now() });
-
-    const windows = [
-      { key: 'hoy',    label: '🟢 HOY / MAÑANA',  max: 1  },
-      { key: 'semana', label: '🔵 ESTA SEMANA',    max: 7  },
-      { key: 'mes',    label: '🟡 ESTE MES',       max: 30 },
-      { key: 'lejano', label: '⚪ LEJANO (31-90d)', max: 90 },
-    ];
-    console.log('\n' + '═'.repeat(60));
-    console.log(`  📋 LISTA DE CONTACTOS — ${new Date().toLocaleString('es-CL')}`);
-    console.log('═'.repeat(60));
-    for (const w of windows) {
-      const grupo = enriched.filter(c => c.buyWindow === w.key);
-      if (!grupo.length) continue;
-      console.log(`\n${w.label} (${grupo.length} clientes)`);
-      console.log('─'.repeat(60));
-      grupo.forEach(c => {
-        const dias    = c.predictedDays <= 0 ? `vencido ${Math.abs(c.predictedDays)}d` : `en ${c.predictedDays}d`;
-        const conf    = `${c.confidence}%`.padStart(4);
-        const nombre  = (c.name || '—').slice(0, 20).padEnd(20);
-        const razon   = c.aiReason ? `  "${c.aiReason}"` : '';
-        console.log(`  ${nombre}  ${c.phone}  [${conf}]  ${dias}${razon}`);
+      // Retornar inmediatamente sin esperar
+      return res.json({
+        success: true, data: [], total: 0, refreshing: true,
+        message: 'Análisis iniciado en segundo plano. Recarga la página en 3-5 minutos.',
       });
     }
-    console.log('\n' + '═'.repeat(60));
-    console.log(`  TOTAL: ${enriched.length} clientes | HOY/MAÑANA: ${enriched.filter(c=>c.buyWindow==='hoy').length} | SEMANA: ${enriched.filter(c=>c.buyWindow==='semana').length} | MES: ${enriched.filter(c=>c.buyWindow==='mes').length}`);
-    console.log('═'.repeat(60) + '\n');
 
-    // Diagnóstico detallado
-    const totalOrdenesDescargadas = allOrders.length;
-    const clientesConTelefono     = allStats.length;
-    const clientesConPrediccion   = enriched.length;
-    const filtradosMasDe180       = allStats.length - enriched.length - (allStats.length - aiHits - heuristicHits);
+    // ── 3. Cache en DB (mismo día) ───────────────────────────────────
+    const dbCached = await db.getDailyCache(req.orgId, today);
+    if (dbCached && (Array.isArray(dbCached) ? dbCached.length > 0 : JSON.parse(dbCached).length > 0)) {
+      const candidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+      analysisCache.set(req.orgId, { data: candidates, ts: Date.now() });
+      return res.json({ success: true, data: candidates, total: candidates.length, fromCache: true, cacheSource: 'db', cacheDate: today });
+    }
 
-    console.log(`[Reengagement] Diagnóstico: órdenes=${totalOrdenesDescargadas} → clientes con tel=${clientesConTelefono} → en vista 180d=${clientesConPrediccion} (IA=${aiHits} | heurística=${heuristicHits})`);
+    // ── 4. Análisis completo (primera carga del día) ─────────────────
+    bgProcessing.add(req.orgId);
+    const result = await runFullAnalysis(req.orgId, ds).finally(() => bgProcessing.delete(req.orgId));
+
+    if (!result) return res.json({ success: true, data: [], total: 0, message: 'Sin órdenes o teléfonos en Shopify' });
 
     res.json({
-      success:   true,
-      data:      enriched,
-      total:     enriched.length,
-      fromCache: false,
-      diagnostico: {
-        totalOrdenes:        totalOrdenesDescargadas,
-        clientesConTel:      clientesConTelefono,
-        sinTelefono:         sinPhone - conShippingPhone,
-        conShippingPhone:    conShippingPhone,
-        conPrediccionAI:     aiHits,
-        conPrediccionHeur:   heuristicHits,
-        filtradosMasDe180:   filtradosMasDe180,
-        enVentana180d:       clientesConPrediccion,
-      },
+      success:     true,
+      data:        result.enriched,
+      total:       result.enriched.length,
+      fromCache:   false,
+      diagnostico: result.diagnostico,
     });
 
   } catch (err) {

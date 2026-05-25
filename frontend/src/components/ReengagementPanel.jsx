@@ -91,27 +91,56 @@ export default function ReengagementPanel() {
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 4000);
+    setTimeout(() => setToast(null), type === 'info' ? 8000 : 4000);
   };
+
+  // Ref para el polling cuando el análisis corre en segundo plano
+  const pollRef = useRef(null);
+
+  const stopPolling = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
 
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setError(null);
     setSelected(new Set());
+    stopPolling();
     setLoadingStep(forceRefresh
-      ? 'Descargando órdenes de Shopify...'
+      ? 'Iniciando análisis en segundo plano...'
       : 'Cargando análisis predictivo...');
 
     try {
       const res = await api.get(
         `/reengagement/candidates${forceRefresh ? '?refresh=true' : ''}`,
-        { timeout: 180000 }
+        { timeout: 30000 }  // 30s — el refresh responde inmediatamente
       );
+
+      // El servidor inició el análisis en segundo plano
+      if (res.data.refreshing && forceRefresh) {
+        setLoading(false);
+        setLoadingStep('');
+        showToast('Análisis iniciado en segundo plano. Se actualizará automáticamente en ~5 min.', 'info');
+        // Polling cada 60s para ver si ya terminó
+        pollRef.current = setInterval(async () => {
+          try {
+            const poll = await api.get('/reengagement/candidates', { timeout: 15000 });
+            if (poll.data.data?.length > 0) {
+              stopPolling();
+              setCandidates(poll.data.data);
+              setFromCache(poll.data.fromCache || false);
+              setCacheDate(poll.data.cacheDate || null);
+              setCacheSource(poll.data.cacheSource || null);
+              showToast(`Análisis completado: ${poll.data.total} clientes`, 'success');
+            }
+          } catch (_) {}
+        }, 60000);
+        return;
+      }
+
       setCandidates(res.data.data || []);
       setFromCache(res.data.fromCache || false);
       setCacheDate(res.data.cacheDate || null);
       setCacheSource(res.data.cacheSource || null);
-      // Cargar calibración en paralelo
+      // Cargar calibración
       try {
         const calRes = await reengagementAPI.getCalibration();
         setCalibration(calRes.data);
@@ -122,13 +151,14 @@ export default function ReengagementPanel() {
       else if (data.some(c => c.buyWindow === 'semana')) setActiveWindow('semana');
       else setActiveWindow('mes');
     } catch (err) {
-      setError(err.response?.data?.error || err.message);
+      setError(err.response?.data?.error || err.message || 'Error de conexión');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(true); }, []);
+  // Al montar: cargar datos sin forceRefresh (usa caché del día si existe)
+  useEffect(() => { load(false); return stopPolling; }, []);
 
   // Cargar templates cuando se activa el modo template
   const loadTemplates = useCallback(async () => {
@@ -787,9 +817,9 @@ export default function ReengagementPanel() {
       {toast && (
         <div style={{
           position: 'fixed', bottom: '24px', right: '24px', zIndex: 1000,
-          backgroundColor: toast.type === 'error' ? '#2d1a1a' : '#0d2e25',
-          border: `1px solid ${toast.type === 'error' ? '#5c2626' : '#00a884'}`,
-          color: toast.type === 'error' ? '#e57373' : '#00a884',
+          backgroundColor: toast.type === 'error' ? '#2d1a1a' : toast.type === 'info' ? '#1a2535' : '#0d2e25',
+          border: `1px solid ${toast.type === 'error' ? '#5c2626' : toast.type === 'info' ? '#4a6fa5' : '#00a884'}`,
+          color: toast.type === 'error' ? '#e57373' : toast.type === 'info' ? '#90b8e8' : '#00a884',
           padding: '12px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 500,
           boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
         }}>

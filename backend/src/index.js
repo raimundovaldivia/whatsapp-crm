@@ -43,7 +43,12 @@ const server = http.createServer(app);
 // ─── SOCKET.IO — Notificaciones en tiempo real al panel ──────────
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (origin.endsWith('.onrender.com')) return callback(null, true);
+      if (!isProd && origin.startsWith('http://localhost')) return callback(null, true);
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    },
     methods: ['GET', 'POST'],
   },
 });
@@ -63,8 +68,25 @@ io.on('connection', (socket) => {
 });
 
 // ─── CORS ────────────────────────────────────────────────────────
+// Acepta cualquier origen en desarrollo; en producción acepta los dominios
+// configurados en FRONTEND_URL (puede ser lista separada por comas)
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Permitir requests sin origin (curl, Postman, SSR)
+    if (!origin) return callback(null, true);
+    // Permitir cualquier subdominio de onrender.com en producción
+    if (origin.endsWith('.onrender.com') || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    // En desarrollo local permitir cualquier localhost
+    if (!isProd && origin.startsWith('http://localhost')) {
+      return callback(null, true);
+    }
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
 }));
 
