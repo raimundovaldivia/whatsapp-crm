@@ -4,7 +4,9 @@ import {
   ShoppingBag, TrendingUp, ChevronDown, ChevronUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
   FileText, ToggleLeft, ToggleRight, ChevronDown as ChevronDownIcon,
+  Download,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { api, reengagementAPI } from '../utils/api.js';
 
 function Tooltip({ text, children, position = 'top' }) {
@@ -413,6 +415,73 @@ export default function ReengagementPanel() {
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
   const hiddenByFilter   = totalCandidates - filteredTotal;
 
+  // ── Exportar a Excel ────────────────────────────────────────────────
+  const exportToExcel = () => {
+    if (!candidates.length) return;
+
+    const windowLabel = { hoy: 'Hoy/Mañana', semana: 'Esta semana', mes: 'Este mes', lejano: '1-6 meses', desconocido: 'Desconocido' };
+
+    // Hoja principal: todos los candidatos
+    const mainRows = candidates.map(c => ({
+      'Nombre':           c.name || '—',
+      'Teléfono':         c.phone,
+      'Email':            c.email || '—',
+      'Ventana':          windowLabel[c.buyWindow] || c.buyWindow,
+      'Días estimados':   c.predictedDays ?? '—',
+      'Confianza (%)':    c.confidence ?? '—',
+      'Fuente predict.':  c.predSource === 'ai' ? 'IA' : 'Matemático',
+      'Razón IA':         c.aiReason || '—',
+      'Días inactivo':    c.daysInactive,
+      'Última compra':    c.lastOrderDate || '—',
+      'Últimos productos': c.lastProducts || '—',
+      'N° pedidos':       c.totalOrders,
+      'Total gastado ($)': c.totalSpent,
+      'Ticket promedio ($)': c.avgOrderVal,
+      'Frec. compra (días)': c.avgFreqDays ?? '—',
+      'Día favorito':     c.favDay || '—',
+      'Tendencia gasto':  c.spendTrend || '—',
+    }));
+
+    const wb = XLSX.utils.book_new();
+
+    // Hoja 1: Todos los candidatos
+    const ws1 = XLSX.utils.json_to_sheet(mainRows);
+    // Anchos de columna
+    ws1['!cols'] = [
+      { wch: 22 }, { wch: 16 }, { wch: 28 }, { wch: 14 }, { wch: 14 },
+      { wch: 14 }, { wch: 14 }, { wch: 30 }, { wch: 13 }, { wch: 13 },
+      { wch: 30 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 18 },
+      { wch: 13 }, { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Todos');
+
+    // Hojas separadas por ventana
+    const windows = ['hoy', 'semana', 'mes', 'lejano'];
+    for (const w of windows) {
+      const grupo = candidates.filter(c => c.buyWindow === w);
+      if (!grupo.length) continue;
+      const rows = grupo.map(c => ({
+        'Nombre':           c.name || '—',
+        'Teléfono':         c.phone,
+        'Días estimados':   c.predictedDays ?? '—',
+        'Confianza (%)':    c.confidence ?? '—',
+        'Razón IA':         c.aiReason || '—',
+        'Días inactivo':    c.daysInactive,
+        'Última compra':    c.lastOrderDate || '—',
+        'Últimos productos': c.lastProducts || '—',
+        'N° pedidos':       c.totalOrders,
+        'Total gastado ($)': c.totalSpent,
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = [{ wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 30 }, { wch: 13 }, { wch: 13 }, { wch: 30 }, { wch: 10 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, ws, windowLabel[w]);
+    }
+
+    const fecha = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `reenganche_${fecha}.xlsx`);
+    showToast(`Excel generado: ${candidates.length} clientes`, 'success');
+  };
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#0b141a', overflow: 'hidden' }}>
 
@@ -499,6 +568,12 @@ export default function ReengagementPanel() {
           style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: '#2a3942', border: '1px solid #374045', cursor: loading ? 'not-allowed' : 'pointer', color: '#8696a0', fontSize: '12px', opacity: loading ? 0.5 : 1 }}>
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           Nuevo análisis
+        </button>
+
+        <button onClick={exportToExcel} disabled={loading || !candidates.length}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: '#0d2e25', border: '1px solid #00a88444', cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer', color: '#00a884', fontSize: '12px', opacity: (!candidates.length || loading) ? 0.5 : 1 }}>
+          <Download size={13} />
+          Exportar Excel
         </button>
 
         <Tooltip text={calibration ? `Último backtesting: ${calibration.totalPredictions} predicciones simuladas · Accuracy ${Math.round((calibration.accuracyRate||0)*100)}%` : 'Calibrar el algoritmo con historial real de Shopify'} position="bottom">
