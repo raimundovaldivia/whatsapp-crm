@@ -47,6 +47,7 @@ const WINDOWS = [
   { key: 'hoy',     label: 'Hoy / Mañana',  color: '#00c853', bg: '#0a2e15', desc: 'Predicción: comprarían en las próximas 24-48h' },
   { key: 'semana',  label: 'Esta semana',    color: '#00a884', bg: '#0d2e25', desc: 'Predicción: comprarían en los próximos 7 días' },
   { key: 'mes',     label: 'Este mes',       color: '#f0b429', bg: '#2e2100', desc: 'Predicción: comprarían en los próximos 30 días' },
+  { key: 'lejano',  label: '1-6 meses',      color: '#8696a0', bg: '#1a2028', desc: 'Predicción: comprarían en los próximos 31-180 días' },
 ];
 
 const confColor = (conf) =>

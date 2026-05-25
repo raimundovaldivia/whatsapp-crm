@@ -269,9 +269,14 @@ router.get('/candidates', async (req, res) => {
       return res.json({ success: true, data: [], total: 0, message: 'Sin órdenes en Shopify' });
     }
 
-    const conCustomerPhone = allOrders.filter(o => o.customer?.phone).length;
-    const sinPhone         = allOrders.filter(o => !o.customer?.phone).length;
-    console.log(`[Reengagement] Teléfonos en órdenes — con phone: ${conCustomerPhone} | sin phone: ${sinPhone}`);
+    const conCustomerPhone = allOrders.filter(o => normalizePhone(o.customer?.phone)).length;
+    const sinPhone         = allOrders.length - conCustomerPhone;
+    // Contar teléfonos en shipping/billing que tampoco tienen en customer
+    const conShippingPhone = allOrders.filter(o =>
+      !normalizePhone(o.customer?.phone) &&
+      (normalizePhone(o.shippingAddress?.phone) || normalizePhone(o.billingAddress?.phone))
+    ).length;
+    console.log(`[Reengagement] Teléfonos en órdenes — con phone: ${conCustomerPhone} | shipping/billing: ${conShippingPhone} | sin phone: ${sinPhone - conShippingPhone}`);
 
     const toNumericId = (id) => String(id || '').replace(/[^0-9]/g, '');
 
@@ -427,7 +432,7 @@ router.get('/candidates', async (req, res) => {
         urgency,
       };
     })
-    .filter(c => c.predictedDays !== null && c.predictedDays <= 90)
+    .filter(c => c.predictedDays !== null && c.predictedDays <= 180)  // ampliado a 180 días
     .sort((a, b) => a.predictedDays - b.predictedDays);
 
     // ── Guardar en cache DB (único por día) ───────────────────────────
@@ -467,7 +472,32 @@ router.get('/candidates', async (req, res) => {
     console.log(`  TOTAL: ${enriched.length} clientes | HOY/MAÑANA: ${enriched.filter(c=>c.buyWindow==='hoy').length} | SEMANA: ${enriched.filter(c=>c.buyWindow==='semana').length} | MES: ${enriched.filter(c=>c.buyWindow==='mes').length}`);
     console.log('═'.repeat(60) + '\n');
 
-    res.json({ success: true, data: enriched, total: enriched.length, fromCache: false });
+    // Diagnóstico: contar cuántos se perdieron en cada etapa
+    const totalOrdenesDescargadas = allOrders.length;
+    const clientesConTelefono     = allStats.length;
+    const clientesConPrediccion   = enriched.length;
+    const sinPrediccionAI         = allStats.length - aiResults.length;
+    const filtradosPorDias        = allStats.length - aiResults.length +
+      aiResults.filter(r => r.predictedDays === null || r.predictedDays > 180).length;
+
+    console.log(`[Reengagement] Diagnóstico: órdenes=${totalOrdenesDescargadas} → clientes con tel=${clientesConTelefono} → con predicción AI=${aiResults.length} → en ventana 180d=${clientesConPrediccion}`);
+
+    res.json({
+      success:   true,
+      data:      enriched,
+      total:     enriched.length,
+      fromCache: false,
+      diagnostico: {
+        totalOrdenes:       totalOrdenesDescargadas,
+        clientesConTel:     clientesConTelefono,
+        sinTelefono:        sinPhone - conShippingPhone,
+        conShippingPhone:   conShippingPhone,
+        conPrediccionAI:    aiResults.length,
+        sinPrediccionAI,
+        filtradosPorVentana: filtradosPorDias,
+        enVentana180d:      clientesConPrediccion,
+      },
+    });
 
   } catch (err) {
     console.error('[Reengagement] error:', err.message);
