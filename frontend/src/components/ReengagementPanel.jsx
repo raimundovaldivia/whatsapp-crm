@@ -903,12 +903,17 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         </div>
       )}
 
-      {/* ── FILA 3: razón IA ── */}
+      {/* ── FILA 3: razón / fuente de predicción ── */}
       {c.aiReason && (
         <div style={{ margin: '8px 14px 0', backgroundColor: '#0f1e28', borderRadius: '7px', padding: '7px 10px', display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
-          <Brain size={13} color="#00a884" style={{ flexShrink: 0, marginTop: '1px' }} />
+          {c.predSource === 'heuristic'
+            ? <Zap size={13} color="#f0b429" style={{ flexShrink: 0, marginTop: '1px' }} />
+            : <Brain size={13} color="#00a884" style={{ flexShrink: 0, marginTop: '1px' }} />}
           <span style={{ color: '#8696a0', fontSize: '12px', fontStyle: 'italic', lineHeight: 1.45 }}>
             {c.aiReason}
+            {c.predSource === 'heuristic' && (
+              <span style={{ marginLeft: '6px', color: '#4a5568', fontSize: '10px', fontStyle: 'normal' }}>(matemático)</span>
+            )}
           </span>
         </div>
       )}

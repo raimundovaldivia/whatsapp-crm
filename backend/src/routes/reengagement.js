@@ -158,7 +158,32 @@ function buildCustomerStats(orders) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+   PREDICCIÓN MATEMÁTICA DE RESPALDO
+   Usada cuando la IA falla o para clientes con ciclo claro.
+   Returns { predictedDays, confidence, aiReason, source }
+───────────────────────────────────────────────────────────────────── */
+function heuristicPredict(c) {
+  if (!c.avgFreqDays) {
+    // Solo 1 pedido: asumir ciclo de 14 días desde la última compra
+    const d = 14 - c.daysInactive;
+    return { predictedDays: d, confidence: 40, aiReason: '1 compra, ciclo est. 14d', source: 'heuristic' };
+  }
+
+  const d    = c.avgFreqDays - c.daysInactive;  // negativo = ya venció
+  const cv   = c.freqStdDev != null ? c.freqStdDev / c.avgFreqDays : 1;
+  // Confianza: baja si coeficiente de variación > 0.5, alta si < 0.2
+  let conf = 75 - Math.round(cv * 50);
+  // Más pedidos → más confianza
+  conf += Math.min(15, c.totalOrders * 2);
+  conf = Math.max(25, Math.min(85, conf));
+
+  return { predictedDays: d, confidence: conf, aiReason: `ciclo ${c.avgFreqDays}d`, source: 'heuristic' };
+}
+
+/* ─────────────────────────────────────────────────────────────────────
    MODELO PREDICTIVO DE IA
+   Batches pequeños (20) con max_tokens alto para evitar truncamiento.
+   Si el JSON llega cortado, se recuperan las entradas completas.
 ───────────────────────────────────────────────────────────────────── */
 async function predictWithAI(customers, todayDow) {
   const D = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -179,36 +204,60 @@ async function predictWithAI(customers, todayDow) {
   }).join('\n');
 
   const prompt =
-`Tienda frescos Chile,ciclos~semanales. HOY:${todayISO}(${todayD})
+`Analiza clientes recurrentes y predice días hasta próxima compra. HOY:${todayISO}(${todayD})
 Cols: #|tel|inac(días,!vencidoDías)|freq±dev|próxEst(MM-DD)|favDía|nPedidos|trend|últ3compras(MM-DD)
 ${rows}
-Reglas: inac>freq→d<0; dev<3→conf alta; 1pedido→ciclo 7-14d; favDía mañana/pasado→restar días; trend↑→reducir d.
-JSON SOLO:[{"t":"tel","d":int,"c":0-100,"r":"≤8palabras"}] todos,orden d asc.`;
+Reglas:
+- d = días hasta próxima compra (negativo si ya venció el ciclo)
+- inac>freq → d negativo (ya debería haber comprado)
+- dev pequeño (<5) → conf alta (patrón muy regular)
+- 1 pedido → usar ciclo 7-30d según categoría, conf 40-50
+- trend↑ → reducir d levemente
+- c = 0-100 (confianza basada en regularidad del patrón)
+RESPONDER SOLO JSON (sin texto extra): [{"t":"TEL_EXACTO","d":DIAS_INT,"c":CONF_INT,"r":"razon max 6 palabras"}]
+Incluir TODOS los ${customers.length} clientes. Ordenar por d ascendente.`;
 
-  const response = await anthropic.messages.create({
-    model:      'claude-haiku-4-5-20251001',
-    max_tokens: 2500,
-    messages:   [{ role: 'user', content: prompt }],
-  });
+  let raw = '';
+  try {
+    const response = await anthropic.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages:   [{ role: 'user', content: prompt }],
+    });
+    raw = response.content[0]?.text?.trim() || '[]';
+  } catch (apiErr) {
+    console.error('[Reengagement] Error llamando a IA:', apiErr.message);
+    return [];
+  }
 
-  const raw   = response.content[0]?.text?.trim() || '[]';
+  // Intentar extraer JSON completo
   const match = raw.match(/\[[\s\S]*\]/);
   if (!match) {
-    console.error('[Reengagement] AI no devolvió JSON:', raw.slice(0, 200));
+    console.error('[Reengagement] AI no devolvió JSON válido:', raw.slice(0, 300));
     return [];
   }
 
   try {
     const parsed = JSON.parse(match[0]);
+    console.log(`[Reengagement] IA devolvió ${parsed.length}/${customers.length} predicciones`);
     return parsed.map(r => ({
       phone:         r.t,
-      predictedDays: r.d,
-      confidence:    r.c,
-      aiReason:      r.r,
+      predictedDays: typeof r.d === 'number' ? r.d : null,
+      confidence:    typeof r.c === 'number' ? r.c : 50,
+      aiReason:      r.r || null,
+      source:        'ai',
     }));
   } catch {
-    console.error('[Reengagement] AI parse error:', raw.slice(0, 300));
-    return [];
+    // JSON truncado: recuperar entradas completas con regex
+    console.warn('[Reengagement] JSON truncado, recuperando entradas parciales...');
+    const entries = [];
+    const entryRx = /\{"t"\s*:\s*"([^"]+)"\s*,\s*"d"\s*:\s*(-?\d+)\s*,\s*"c"\s*:\s*(\d+)\s*,\s*"r"\s*:\s*"([^"]*)"\s*\}/g;
+    let m;
+    while ((m = entryRx.exec(raw)) !== null) {
+      entries.push({ phone: m[1], predictedDays: parseInt(m[2]), confidence: parseInt(m[3]), aiReason: m[4], source: 'ai' });
+    }
+    console.log(`[Reengagement] Recuperadas ${entries.length} entradas de JSON truncado`);
+    return entries;
   }
 }
 
@@ -368,14 +417,14 @@ router.get('/candidates', async (req, res) => {
     const todayDow = new Date().getDay();
     let aiResults  = [];
 
-    const BATCH = 40;
+    const BATCH = 20;  // 20 por batch → respuestas más cortas, menos truncamiento
     for (let i = 0; i < allStats.length; i += BATCH) {
       const batch       = allStats.slice(i, i + BATCH);
       const batchResult = await predictWithAI(batch, todayDow);
       aiResults = aiResults.concat(batchResult);
-      console.log(`[Reengagement] Batch ${Math.floor(i/BATCH)+1}/${Math.ceil(allStats.length/BATCH)}: ${batchResult.length} predicciones`);
+      console.log(`[Reengagement] Batch ${Math.floor(i/BATCH)+1}/${Math.ceil(allStats.length/BATCH)}: ${batchResult.length}/${batch.length} predicciones`);
       if (i + BATCH < allStats.length) {
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 400));
       }
     }
     console.log(`[Reengagement] Total predicciones AI recibidas: ${aiResults.length} / ${allStats.length} clientes`);
@@ -403,37 +452,60 @@ router.get('/candidates', async (req, res) => {
     // Recargar calibración (puede haberse creado recién)
     const activeCalibration = calibration || await db.getCalibration(req.orgId);
 
+    let aiHits = 0, heuristicHits = 0;
+
     const enriched = allStats.map(c => {
-      const ai = aiMap.get(c.phone) || {};
-      const predictedDays   = ai.predictedDays ?? null;
-      const confidenceRaw   = ai.confidence || 0;
+      // ── Preferir predicción IA; si falta, usar heurística matemática ──
+      const aiEntry = aiMap.get(c.phone);
+      let predictedDays, confidenceRaw, aiReason, predSource;
+
+      if (aiEntry && aiEntry.predictedDays !== null && aiEntry.predictedDays !== undefined) {
+        predictedDays  = aiEntry.predictedDays;
+        confidenceRaw  = aiEntry.confidence || 50;
+        aiReason       = aiEntry.aiReason || null;
+        predSource     = 'ai';
+        aiHits++;
+      } else {
+        // Fallback heurístico: avgFreqDays - daysInactive
+        const h        = heuristicPredict(c);
+        predictedDays  = h.predictedDays;
+        confidenceRaw  = h.confidence;
+        aiReason       = h.aiReason;
+        predSource     = 'heuristic';
+        heuristicHits++;
+      }
+
       const confidenceCalib = applyCalibration(confidenceRaw, activeCalibration);
 
       let buyWindow, urgency;
-      if (predictedDays === null) {
-        buyWindow = 'desconocido'; urgency = 0;
-      } else if (predictedDays <= 1) {
+      if (predictedDays <= 1) {
         buyWindow = 'hoy'; urgency = 4;
       } else if (predictedDays <= 7) {
         buyWindow = 'semana'; urgency = 3;
       } else if (predictedDays <= 30) {
         buyWindow = 'mes'; urgency = 2;
-      } else {
+      } else if (predictedDays <= 180) {
         buyWindow = 'lejano'; urgency = 1;
+      } else {
+        buyWindow = 'lejano'; urgency = 0;
       }
 
       return {
         ...c,
         predictedDays,
         confidenceRaw,
-        confidence:   confidenceCalib,   // confianza calibrada (la que ve el usuario)
-        aiReason:     ai.aiReason || null,
+        confidence:   confidenceCalib,
+        aiReason,
+        predSource,   // 'ai' o 'heuristic'
         buyWindow,
         urgency,
       };
     })
-    .filter(c => c.predictedDays !== null && c.predictedDays <= 180)  // ampliado a 180 días
+    // Mostrar todos (incluso los muy lejanos o negativos) — el usuario los filtra por tab
+    .filter(c => c.predictedDays <= 180)
     .sort((a, b) => a.predictedDays - b.predictedDays);
+
+    console.log(`[Reengagement] Predicciones: IA=${aiHits} | heurística=${heuristicHits} | total en vista=${enriched.length}`);
 
     // ── Guardar en cache DB (único por día) ───────────────────────────
     try {
@@ -472,15 +544,13 @@ router.get('/candidates', async (req, res) => {
     console.log(`  TOTAL: ${enriched.length} clientes | HOY/MAÑANA: ${enriched.filter(c=>c.buyWindow==='hoy').length} | SEMANA: ${enriched.filter(c=>c.buyWindow==='semana').length} | MES: ${enriched.filter(c=>c.buyWindow==='mes').length}`);
     console.log('═'.repeat(60) + '\n');
 
-    // Diagnóstico: contar cuántos se perdieron en cada etapa
+    // Diagnóstico detallado
     const totalOrdenesDescargadas = allOrders.length;
     const clientesConTelefono     = allStats.length;
     const clientesConPrediccion   = enriched.length;
-    const sinPrediccionAI         = allStats.length - aiResults.length;
-    const filtradosPorDias        = allStats.length - aiResults.length +
-      aiResults.filter(r => r.predictedDays === null || r.predictedDays > 180).length;
+    const filtradosMasDe180       = allStats.length - enriched.length - (allStats.length - aiHits - heuristicHits);
 
-    console.log(`[Reengagement] Diagnóstico: órdenes=${totalOrdenesDescargadas} → clientes con tel=${clientesConTelefono} → con predicción AI=${aiResults.length} → en ventana 180d=${clientesConPrediccion}`);
+    console.log(`[Reengagement] Diagnóstico: órdenes=${totalOrdenesDescargadas} → clientes con tel=${clientesConTelefono} → en vista 180d=${clientesConPrediccion} (IA=${aiHits} | heurística=${heuristicHits})`);
 
     res.json({
       success:   true,
@@ -488,14 +558,14 @@ router.get('/candidates', async (req, res) => {
       total:     enriched.length,
       fromCache: false,
       diagnostico: {
-        totalOrdenes:       totalOrdenesDescargadas,
-        clientesConTel:     clientesConTelefono,
-        sinTelefono:        sinPhone - conShippingPhone,
-        conShippingPhone:   conShippingPhone,
-        conPrediccionAI:    aiResults.length,
-        sinPrediccionAI,
-        filtradosPorVentana: filtradosPorDias,
-        enVentana180d:      clientesConPrediccion,
+        totalOrdenes:        totalOrdenesDescargadas,
+        clientesConTel:      clientesConTelefono,
+        sinTelefono:         sinPhone - conShippingPhone,
+        conShippingPhone:    conShippingPhone,
+        conPrediccionAI:     aiHits,
+        conPrediccionHeur:   heuristicHits,
+        filtradosMasDe180:   filtradosMasDe180,
+        enVentana180d:       clientesConPrediccion,
       },
     });
 
