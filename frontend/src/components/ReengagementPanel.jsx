@@ -748,16 +748,10 @@ export default function ReengagementPanel() {
               <CandidateCard
                 candidate={c}
                 isSelected={selected.has(c.phone)}
-                isExpanded={expanded.has(c.phone)}
-                message={messages[c.phone] || ''}
-                isGenerating={generating.has(c.phone)}
                 isSending={sending.has(c.phone)}
                 isFilling={fillingVars.has(c.phone)}
                 hasAiFill={!!(perCustomerVars[c.phone])}
                 onToggleSelect={() => toggleSelect(c.phone)}
-                onToggleExpand={() => setExpanded(prev => {
-                  const n = new Set(prev); n.has(c.phone) ? n.delete(c.phone) : n.add(c.phone); return n;
-                })}
                 onFillVars={() => fillVarsForOne(c.phone)}
                 onSend={() => sendOne(c.phone)}
                 templatePreview={selectedTemplate ? previewTemplate(c) : null}
