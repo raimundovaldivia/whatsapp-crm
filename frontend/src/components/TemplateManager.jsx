@@ -144,28 +144,55 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
    BulkGenerateTab — genera varios templates del catálogo Shopify de un solo click
 ───────────────────────────────────────────────────────────────────────── */
 function BulkGenerateTab({ onSubmitted, colors }) {
+  // ── Estado del contexto ──────────────────────────────────────────────────
+  const [ctxLoading,  setCtxLoading]  = useState(true);
+  const [hasShopify,  setHasShopify]  = useState(false);
+  const [shopName,    setShopName]    = useState('');
+  const [shopProducts,setShopProducts]= useState([]);
+  const [storeContext,setStoreContext]= useState('');   // textarea editable
+
+  // ── Estado de generación ─────────────────────────────────────────────────
   const [generating, setGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [cards, setCards]           = useState([]);       // templates generados editables
-  const [selected, setSelected]     = useState({});       // { index: bool }
-  const [results, setResults]       = useState([]);       // resultados del submit
+  const [cards, setCards]           = useState([]);
+  const [selected, setSelected]     = useState({});
+  const [results, setResults]       = useState([]);
   const [error, setError]           = useState('');
 
-  const inputStyle = {
+  const taStyle = {
     width: '100%', backgroundColor: colors.bgApp, color: colors.textPrimary,
-    border: `1px solid ${colors.borderStrong}`, borderRadius: '8px',
-    padding: '9px 12px', fontSize: '13px', outline: 'none',
-    boxSizing: 'border-box', fontFamily: 'inherit',
+    border: `1px solid ${colors.borderStrong}`, borderRadius: '9px',
+    padding: '10px 12px', fontSize: '13px', outline: 'none',
+    boxSizing: 'border-box', fontFamily: 'inherit', resize: 'vertical',
+    lineHeight: 1.6,
   };
 
+  // Cargar contexto al montar
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await reengagementAPI.getStoreContext();
+        setHasShopify(res.hasShopify || false);
+        setShopName(res.shopName || '');
+        setShopProducts(res.products || []);
+        setStoreContext(res.context || '');
+      } catch {
+        setHasShopify(false);
+        setStoreContext('');
+      } finally {
+        setCtxLoading(false);
+      }
+    })();
+  }, []);
+
   const handleGenerate = async () => {
+    if (!storeContext.trim()) { setError('Agrega contexto de tu tienda antes de generar'); return; }
     setGenerating(true); setError(''); setCards([]); setSelected({}); setResults([]);
     try {
-      const res = await reengagementAPI.generateBulkTemplates();
+      const res = await reengagementAPI.generateBulkTemplates(storeContext.trim());
       const templates = res.templates || res.data?.templates || [];
-      if (!templates.length) { setError('No se pudieron generar templates. Verifica que Shopify esté conectado.'); return; }
+      if (!templates.length) { setError('No se generaron templates. Revisa el contexto e intenta de nuevo.'); return; }
       setCards(templates);
-      // Seleccionar todos por defecto
       const sel = {};
       templates.forEach((_, i) => { sel[i] = true; });
       setSelected(sel);
@@ -199,62 +226,137 @@ function BulkGenerateTab({ onSubmitted, colors }) {
 
   const selectedCount = Object.values(selected).filter(Boolean).length;
 
-  // ── Estado vacío ────────────────────────────────────────────────────────
+  // ── Cargando contexto inicial ────────────────────────────────────────────
+  if (ctxLoading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px 20px', color: colors.textSecondary }}>
+        <Loader size={28} color={colors.purple} style={{ animation: 'spin 1s linear infinite', marginBottom: '12px' }} />
+        <div style={{ fontSize: '14px' }}>Cargando contexto de tu tienda...</div>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  // ── Estado vacío — paso de contexto ─────────────────────────────────────
   if (!cards.length && !results.length) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        {/* Hero */}
-        <div style={{
-          background: `linear-gradient(135deg, ${colors.bgSub} 0%, ${colors.bgAccent2} 100%)`,
-          border: `1px solid ${colors.purple}33`,
-          borderRadius: '14px', padding: '24px',
-          textAlign: 'center',
-        }}>
-          <div style={{ fontSize: '40px', marginBottom: '10px' }}>✨</div>
-          <h3 style={{ color: colors.textPrimary, fontSize: '16px', fontWeight: 700, margin: '0 0 8px' }}>
-            Genera varios templates de un solo click
-          </h3>
-          <p style={{ color: colors.textSecondary, fontSize: '13px', lineHeight: 1.6, margin: '0 0 20px' }}>
-            La IA analiza tu catálogo de Shopify y crea <strong style={{ color: colors.purple }}>5 templates</strong> listos
-            para Meta — distintos enfoques: re-enganche, oferta, recordatorio, nuevos productos y más.
-            Puedes editarlos antes de enviarlos.
-          </p>
-          <button
-            onClick={handleGenerate}
-            disabled={generating}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+        {/* Banner de estado Shopify */}
+        {hasShopify ? (
+          <div style={{
+            backgroundColor: colors.greenTint,
+            border: `1px solid ${colors.green}44`,
+            borderRadius: '10px', padding: '12px 16px',
+            display: 'flex', alignItems: 'flex-start', gap: '12px',
+          }}>
+            <CheckCircle size={18} color={colors.greenLight} style={{ flexShrink: 0, marginTop: '1px' }} />
+            <div>
+              <div style={{ color: colors.greenLight, fontWeight: 700, fontSize: '13px' }}>
+                Catálogo Shopify cargado{shopName ? ` — ${shopName}` : ''}
+              </div>
+              {shopProducts.length > 0 && (
+                <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '3px' }}>
+                  {shopProducts.slice(0, 6).join(' · ')}{shopProducts.length > 6 ? ` +${shopProducts.length - 6} más` : ''}
+                </div>
+              )}
+              <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '4px' }}>
+                La IA usará este catálogo para personalizar los templates. Puedes editar o agregar más contexto abajo.
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{
+            backgroundColor: `${colors.yellow}18`,
+            border: `1px solid ${colors.yellow}55`,
+            borderRadius: '10px', padding: '12px 16px',
+            display: 'flex', alignItems: 'flex-start', gap: '12px',
+          }}>
+            <AlertCircle size={18} color={colors.yellow} style={{ flexShrink: 0, marginTop: '1px' }} />
+            <div>
+              <div style={{ color: colors.yellow, fontWeight: 700, fontSize: '13px' }}>
+                Sin catálogo Shopify detectado
+              </div>
+              <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '3px', lineHeight: 1.5 }}>
+                Conecta Shopify en Ajustes para que la IA use tu catálogo real. Por ahora,
+                cuéntanos qué vendes en el campo de abajo para que los templates sean relevantes.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Textarea de contexto */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <label style={{ color: colors.textSecondary, fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              {hasShopify ? 'Contexto de tu tienda (editable)' : '¿Qué vendes? Cuéntanos sobre tu tienda *'}
+            </label>
+            {hasShopify && storeContext !== '' && (
+              <button
+                onClick={() => reengagementAPI.getStoreContext().then(r => setStoreContext(r.context || ''))}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textMuted, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <RefreshCw size={11} /> Recargar desde Shopify
+              </button>
+            )}
+          </div>
+          <textarea
+            value={storeContext}
+            onChange={e => setStoreContext(e.target.value)}
+            rows={hasShopify ? 4 : 5}
+            placeholder={hasShopify
+              ? 'Tienda: ...\nProductos principales: ...\nAgregar más contexto si quieres...'
+              : 'Ejemplo: Vendo ropa casual femenina para mujeres de 25-40 años. Mis productos más populares son vestidos de verano, blusas de lino y jeans. Tengo colecciones de temporada y descuentos en productos seleccionados. Mi tienda se llama "La Boutique de Ana" y mis clientas buscan moda cómoda y accesible.'}
             style={{
-              backgroundColor: generating ? colors.bgHover : colors.purple,
-              color: generating ? colors.textSecondary : 'white',
-              border: 'none', borderRadius: '10px',
-              padding: '13px 28px', fontSize: '15px', fontWeight: 700,
-              cursor: generating ? 'not-allowed' : 'pointer',
-              display: 'inline-flex', alignItems: 'center', gap: '8px',
-              transition: 'all 0.15s',
-            }}>
-            {generating
-              ? <><Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> Analizando catálogo...</>
-              : <><Zap size={16} /> Generar 5 templates con IA</>}
-          </button>
-          {generating && (
-            <p style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '12px' }}>
-              Esto puede tardar 15-30 segundos mientras la IA lee tu catálogo Shopify...
-            </p>
-          )}
+              ...taStyle,
+              borderColor: storeContext.trim()
+                ? (hasShopify ? `${colors.green}55` : `${colors.purple}55`)
+                : `${colors.yellow}77`,
+              minHeight: '100px',
+            }}
+          />
+          <div style={{ color: colors.textMuted, fontSize: '11px', marginTop: '4px' }}>
+            {hasShopify
+              ? 'Puedes añadir info adicional: promociones actuales, nicho, tipo de cliente...'
+              : 'Mientras más detalles des (productos, precios, nicho, tipo de cliente), mejores serán los templates generados.'}
+          </div>
         </div>
 
         {error && (
-          <div style={{ backgroundColor: '#3a1a1a', border: `1px solid ${colors.red}44`, borderRadius: '8px', padding: '12px 14px', color: colors.red, fontSize: '13px', display: 'flex', gap: '8px' }}>
-            <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '1px' }} /> {error}
+          <div style={{ backgroundColor: '#3a1a1a', border: `1px solid ${colors.red}44`, borderRadius: '8px', padding: '10px 14px', color: colors.red, fontSize: '13px', display: 'flex', gap: '8px' }}>
+            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: '1px' }} /> {error}
+          </div>
+        )}
+
+        {/* Botón generar */}
+        <button
+          onClick={handleGenerate}
+          disabled={generating || !storeContext.trim()}
+          style={{
+            backgroundColor: (storeContext.trim() && !generating) ? colors.purple : colors.bgHover,
+            color: (storeContext.trim() && !generating) ? 'white' : colors.textSecondary,
+            border: 'none', borderRadius: '10px',
+            padding: '13px', fontSize: '15px', fontWeight: 700,
+            cursor: (storeContext.trim() && !generating) ? 'pointer' : 'not-allowed',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            transition: 'all 0.15s',
+          }}>
+          {generating
+            ? <><Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> Generando con IA...</>
+            : <><Zap size={16} /> Generar 5 templates con IA</>}
+        </button>
+        {generating && (
+          <div style={{ color: colors.textSecondary, fontSize: '12px', textAlign: 'center', marginTop: '-8px' }}>
+            La IA está creando templates personalizados... puede tardar 15–30 segundos.
           </div>
         )}
 
         {/* Info */}
-        <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.7, display: 'flex', gap: '8px' }}>
+        <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.6, display: 'flex', gap: '8px' }}>
           <Info size={14} color="#4db6e8" style={{ flexShrink: 0, marginTop: '1px' }} />
           <span>
             Los templates generados estarán en estado <strong style={{ color: colors.yellow }}>Pendiente</strong> hasta
             que Meta los apruebe (1–24 h). Una vez <strong style={{ color: colors.greenLight }}>Aprobados</strong>,
-            aparecerán disponibles en la sección Re-enganche para enviarlos a tus clientes.
+            estarán disponibles en Re-enganche para enviarlos a tus clientes.
           </span>
         </div>
 
@@ -333,20 +435,32 @@ function BulkGenerateTab({ onSubmitted, colors }) {
             Edita el nombre y cuerpo de cada uno si quieres personalizar. Luego selecciona los que quieres enviar.
           </div>
         </div>
-        <button
-          onClick={handleGenerate}
-          disabled={generating}
-          style={{
-            backgroundColor: 'transparent', color: colors.purple,
-            border: `1px solid ${colors.purple}66`, borderRadius: '7px',
-            padding: '7px 12px', fontSize: '12px', fontWeight: 600,
-            cursor: generating ? 'not-allowed' : 'pointer',
-            display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
-          }}>
-          {generating
-            ? <><Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> Regenerando...</>
-            : <><RefreshCw size={12} /> Regenerar</>}
-        </button>
+        <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+          <button
+            onClick={() => { setCards([]); setResults([]); setSelected({}); }}
+            style={{
+              backgroundColor: 'transparent', color: colors.textSecondary,
+              border: `1px solid ${colors.border}`, borderRadius: '7px',
+              padding: '7px 10px', fontSize: '12px',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+            }}>
+            ← Editar contexto
+          </button>
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            style={{
+              backgroundColor: 'transparent', color: colors.purple,
+              border: `1px solid ${colors.purple}66`, borderRadius: '7px',
+              padding: '7px 12px', fontSize: '12px', fontWeight: 600,
+              cursor: generating ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', gap: '5px',
+            }}>
+            {generating
+              ? <><Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> Regenerando...</>
+              : <><RefreshCw size={12} /> Regenerar</>}
+          </button>
+        </div>
       </div>
 
       {error && (

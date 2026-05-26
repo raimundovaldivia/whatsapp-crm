@@ -652,71 +652,122 @@ router.get('/templates', async (req, res) => {
 });
 
 /**
+/**
+ * GET /api/reengagement/store-context
+ * Devuelve el contexto de la tienda (Shopify o vacío para que el usuario lo llene).
+ */
+router.get('/store-context', async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ds    = await db.getPrimaryDataSource(orgId);
+
+    if (!ds) {
+      return res.json({ success: true, hasShopify: false, context: '', products: [], shopName: '' });
+    }
+
+    const { shop } = shopifyApi.credentialsFrom(ds);
+    const shopName = shop.replace('.myshopify.com', '').replace(/-/g, ' ');
+
+    let products = [];
+    let collections = [];
+    try {
+      const raw = await shopifyApi.getProducts(ds, { first: 20 });
+      products = (raw || []).slice(0, 15).map(p => p.title).filter(Boolean);
+    } catch (e) {
+      console.warn('[store-context] getProducts error:', e.message);
+    }
+
+    const org = await db.getOrgById(orgId);
+    const orgName = org?.name || shopName;
+
+    const context = [
+      `Tienda: ${orgName}`,
+      `Dominio Shopify: ${shop}`,
+      products.length ? `Productos principales: ${products.join(', ')}` : '',
+    ].filter(Boolean).join('\n');
+
+    return res.json({
+      success: true,
+      hasShopify: true,
+      shopName: orgName,
+      products,
+      context,
+    });
+  } catch (err) {
+    console.error('[store-context]', err.message);
+    res.json({ success: false, hasShopify: false, context: '', products: [], shopName: '' });
+  }
+});
+
+/**
  * POST /api/reengagement/generate-templates
  * Usa IA para generar 5 templates de re-engagement personalizados para la tienda.
+ * Body (opcional): { storeContext: "texto libre con contexto de la tienda" }
  */
 router.post('/generate-templates', async (req, res) => {
   try {
     const orgId = req.orgId;
+    const { storeContext: providedContext } = req.body || {};
     const db    = require('../db/database.js');
     const shopifyApi = require('../services/shopify-api.js');
     const Anthropic  = require('@anthropic-ai/sdk');
 
-    // Obtener datos de la tienda
-    const ds = await db.getPrimaryDataSource(orgId);
-    let storeContext = 'Tienda online';
+    // Usar contexto provisto por el usuario, o intentar Shopify
+    let storeContext = '';
     let shopName = 'la tienda';
 
-    if (ds) {
-      try {
-        const { shop } = shopifyApi.credentialsFrom(ds);
-        shopName = shop.replace('.myshopify.com', '').replace(/-/g, ' ');
-
-        // Obtener productos top
-        const products = await shopifyApi.getProducts(ds, { first: 15 });
-        const productNames = (products || []).slice(0, 10).map(p => p.title).filter(Boolean);
-
-        // Obtener org name
-        const org = await db.getOrgById(orgId);
-        const orgName = org?.name || shopName;
-
-        storeContext = `
-Nombre de la tienda: ${orgName}
-Dominio Shopify: ${shop}
-Productos principales: ${productNames.join(', ') || 'varios productos'}
-        `.trim();
-      } catch (e) {
-        console.warn('[generate-templates] Error obteniendo datos Shopify:', e.message);
+    if (providedContext && providedContext.trim()) {
+      // El frontend ya hizo el enriquecimiento con Shopify o el usuario escribió su contexto
+      storeContext = providedContext.trim();
+    } else {
+      // Fallback: intentar Shopify directamente
+      const ds = await db.getPrimaryDataSource(orgId);
+      if (ds) {
+        try {
+          const { shop } = shopifyApi.credentialsFrom(ds);
+          shopName = shop.replace('.myshopify.com', '').replace(/-/g, ' ');
+          const products = await shopifyApi.getProducts(ds, { first: 15 });
+          const productNames = (products || []).slice(0, 10).map(p => p.title).filter(Boolean);
+          const org = await db.getOrgById(orgId);
+          const orgName = org?.name || shopName;
+          storeContext = `Tienda: ${orgName}\nDominio Shopify: ${shop}\nProductos principales: ${productNames.join(', ') || 'varios productos'}`;
+        } catch (e) {
+          console.warn('[generate-templates] Error obteniendo datos Shopify:', e.message);
+          storeContext = 'Tienda online latinoamericana';
+        }
+      } else {
+        storeContext = 'Tienda online latinoamericana';
       }
     }
 
     const client = new Anthropic();
     const prompt = `Eres un experto en marketing de WhatsApp para e-commerce latinoamericano.
 
-Datos de la tienda:
+Contexto de la tienda:
 ${storeContext}
 
 Genera exactamente 5 templates de WhatsApp Business para re-engagement de clientes (clientes que compraron antes pero no han vuelto). Los templates se envían a Meta para aprobación.
 
 REGLAS ESTRICTAS:
-- name: solo minúsculas, números y guiones bajos (ej: "reenganche_general")
+- name: solo minúsculas, números y guiones bajos, máx 40 chars (ej: "reenganche_general")
 - category: siempre "MARKETING"
 - language: "es"
 - El BODY debe tener máximo 1024 caracteres
 - Usa {{1}} para nombre del cliente (siempre la primera variable)
-- Usa {{2}} para un dato de la tienda si aplica
+- Si mencionas un producto específico de la tienda usa {{2}}
 - El footer siempre: "Responde STOP para no recibir mensajes"
-- NO incluir URLs ni emojis en el header
+- NO incluir URLs ni emojis en el header (headerText)
 - El tono debe ser cálido, cercano y latinoamericano
+- Menciona productos reales del catálogo cuando sea posible
 
 Los 5 templates deben ser:
 1. Re-engagement general (hace tiempo sin comprar)
-2. Novedad de productos (hay cosas nuevas)
-3. Carrito o producto abandonado (interés previo detectado)
+2. Novedad de productos (hay cosas nuevas en el catálogo)
+3. Recordatorio de producto (interés previo o producto favorito)
 4. Oferta exclusiva para clientes anteriores
-5. Seguimiento post-compra (¿cómo quedaste?)
+5. Seguimiento post-compra (¿cómo quedaste con tu pedido?)
 
-Responde SOLO con JSON válido (sin markdown):
+Responde SOLO con JSON válido (sin markdown ni texto extra):
 {
   "templates": [
     {
@@ -724,18 +775,18 @@ Responde SOLO con JSON válido (sin markdown):
       "displayName": "Nombre legible",
       "category": "MARKETING",
       "language": "es",
-      "headerText": "Texto del header (sin variables, max 60 chars)",
-      "body": "Cuerpo del mensaje con {{1}} para nombre...",
+      "headerText": "Texto del header (sin variables, max 60 chars, sin emojis)",
+      "body": "Cuerpo del mensaje con {{1}} para nombre del cliente...",
       "footer": "Responde STOP para no recibir mensajes",
       "variables": ["nombre del cliente", "descripción de variable 2 si existe"],
-      "useCase": "Descripción breve del cuándo usar este template"
+      "useCase": "Cuándo usar este template (1 línea)"
     }
   ]
 }`;
 
     const msg = await client.messages.create({
       model:      'claude-haiku-4-5-20251001',
-      max_tokens: 3000,
+      max_tokens: 3500,
       messages:   [{ role: 'user', content: prompt }],
     });
 
