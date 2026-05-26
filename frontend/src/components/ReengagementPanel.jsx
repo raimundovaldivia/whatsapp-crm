@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
-  ShoppingBag, TrendingUp, ChevronDown, ChevronUp,
+  ShoppingBag, TrendingUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
-  FileText, ToggleLeft, ToggleRight,
+  FileText,
   Download,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -72,16 +72,12 @@ export default function ReengagementPanel() {
   const [calibrating, setCalibrating] = useState(false);
   const [activeWindow, setActiveWindow] = useState('hoy');
   const [selected, setSelected]       = useState(new Set());
-  const [messages, setMessages]       = useState({});
-  const [generating, setGenerating]   = useState(new Set());
   const [sending, setSending]         = useState(new Set());
   const [sendingBulk, setSendingBulk] = useState(false);
-  const [expanded, setExpanded]       = useState(new Set());
   const [toast, setToast]             = useState(null);
   const [minConf, setMinConf]         = useState(65);
 
-  // ── Template mode ──────────────────────────────────────────────
-  const [useTemplate, setUseTemplate]       = useState(false);
+  // ── Template mode (único modo válido para re-enganche) ────────
   const [templates, setTemplates]           = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState(null);
@@ -169,11 +165,8 @@ export default function ReengagementPanel() {
     }
   }, []);
 
-  const toggleTemplateMode = () => {
-    const next = !useTemplate;
-    setUseTemplate(next);
-    if (next && templates.length === 0) loadTemplates();
-  };
+  // Cargar templates al montar
+  useEffect(() => { loadTemplates(); }, []);
 
   const parseTemplateVars = (tpl) => {
     if (!tpl) return [];
@@ -289,91 +282,41 @@ export default function ReengagementPanel() {
     else setSelected(new Set(visible.map(c => c.phone)));
   };
 
-  const generateMessage = async (phone) => {
-    setGenerating(prev => new Set(prev).add(phone));
-    try {
-      const res = await api.post('/reengagement/generate', { phone });
-      setMessages(prev => ({ ...prev, [phone]: res.data.message }));
-      setSelected(prev => new Set(prev).add(phone));
-    } catch (err) {
-      showToast(err.response?.data?.error || 'Error generando mensaje', 'error');
-    } finally {
-      setGenerating(prev => { const n = new Set(prev); n.delete(phone); return n; });
-    }
-  };
-
-  const generateAll = async () => {
-    const targets = selected.size > 0
-      ? visible.filter(c => selected.has(c.phone))
-      : visible;
-    for (const c of targets) {
-      if (!messages[c.phone]) {
-        await generateMessage(c.phone);
-        await new Promise(r => setTimeout(r, 400));
-      }
-    }
-  };
-
   const sendOne = async (phone) => {
+    if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
     const candidate = candidates.find(c => c.phone === phone);
-
-    if (useTemplate) {
-      if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
-      setSending(prev => new Set(prev).add(phone));
-      try {
-        await reengagementAPI.send({
-          phone,
-          templateName:  selectedTemplate.name,
-          languageCode:  selectedTemplate.language,
-          components:    buildComponents(candidate),
-          previewText:   previewTemplate(candidate),
-        });
-        showToast('✅ Template enviado');
-        setCandidates(prev => prev.filter(c => c.phone !== phone));
-        setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
-      } catch (err) {
-        showToast(err.response?.data?.error || 'Error enviando template', 'error');
-      } finally {
-        setSending(prev => { const n = new Set(prev); n.delete(phone); return n; });
-      }
-    } else {
-      const msg = messages[phone];
-      if (!msg?.trim()) { showToast('Primero genera un mensaje con IA', 'error'); return; }
-      setSending(prev => new Set(prev).add(phone));
-      try {
-        await reengagementAPI.send({ phone, message: msg });
-        showToast('✅ Mensaje enviado');
-        setCandidates(prev => prev.filter(c => c.phone !== phone));
-        setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
-      } catch (err) {
-        showToast(err.response?.data?.error || 'Error enviando', 'error');
-      } finally {
-        setSending(prev => { const n = new Set(prev); n.delete(phone); return n; });
-      }
+    setSending(prev => new Set(prev).add(phone));
+    try {
+      await reengagementAPI.send({
+        phone,
+        templateName:  selectedTemplate.name,
+        languageCode:  selectedTemplate.language,
+        components:    buildComponents(candidate),
+        previewText:   previewTemplate(candidate),
+      });
+      showToast('✅ Template enviado');
+      setCandidates(prev => prev.filter(c => c.phone !== phone));
+      setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Error enviando template', 'error');
+    } finally {
+      setSending(prev => { const n = new Set(prev); n.delete(phone); return n; });
     }
   };
 
   const sendBulk = async () => {
-    let targets;
-    let items;
-
-    if (useTemplate) {
-      if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
-      targets = visible.filter(c => selected.has(c.phone) && perCustomerVars[c.phone]);
-      if (!targets.length) { showToast('Primero usa "Rellenar con IA" para los clientes seleccionados', 'error'); return; }
-      items = targets.map(c => ({
-        phone:        c.phone,
-        templateName: selectedTemplate.name,
-        languageCode: selectedTemplate.language,
-        components:   buildComponents(c),
-        previewText:  previewTemplate(c),
-      }));
-    } else {
-      targets = visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim());
-      if (!targets.length) { showToast('Selecciona clientes con mensajes generados', 'error'); return; }
-      items = targets.map(c => ({ phone: c.phone, message: messages[c.phone] }));
-    }
-
+    if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
+    const targets = selected.size > 0
+      ? visible.filter(c => selected.has(c.phone))
+      : visible;
+    if (!targets.length) { showToast('Selecciona al menos un cliente', 'error'); return; }
+    const items = targets.map(c => ({
+      phone:        c.phone,
+      templateName: selectedTemplate.name,
+      languageCode: selectedTemplate.language,
+      components:   buildComponents(c),
+      previewText:  previewTemplate(c),
+    }));
     setSendingBulk(true);
     try {
       const res = await reengagementAPI.sendBulk(items);
@@ -388,9 +331,7 @@ export default function ReengagementPanel() {
     }
   };
 
-  const selectedWithMsg  = useTemplate
-    ? visible.filter(c => selected.has(c.phone) && perCustomerVars[c.phone]).length
-    : visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim()).length;
+  const selectedWithMsg  = visible.filter(c => selected.has(c.phone)).length;
   const totalCandidates  = candidates.length;
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
   const hiddenByFilter   = totalCandidates - filteredTotal;
@@ -518,26 +459,6 @@ export default function ReengagementPanel() {
           ))}
         </div>
 
-        {/* Toggle modo Template */}
-        <button onClick={toggleTemplateMode}
-          title={useTemplate ? 'Cambiar a modo texto libre' : 'Cambiar a modo template WhatsApp'}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '7px',
-            padding: '7px 14px', borderRadius: '8px',
-            backgroundColor: useTemplate ? colors.bgAccent2 : colors.bgHover,
-            border: `1px solid ${useTemplate ? colors.green : colors.borderStrong}`,
-            cursor: 'pointer',
-            color: useTemplate ? colors.green : colors.textSecondary,
-            fontSize: '12px', fontWeight: useTemplate ? 600 : 400,
-            transition: 'all 0.15s',
-          }}>
-          <FileText size={13} />
-          {useTemplate ? '📋 Modo Template' : '📋 Usar Template'}
-          {useTemplate
-            ? <ToggleRight size={15} color={colors.green} />
-            : <ToggleLeft size={15} />}
-        </button>
-
         <button onClick={() => load(true)} disabled={loading}
           style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: colors.bgHover, border: `1px solid ${colors.borderStrong}`, cursor: loading ? 'not-allowed' : 'pointer', color: colors.textSecondary, fontSize: '12px', opacity: loading ? 0.5 : 1 }}>
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
@@ -620,8 +541,8 @@ export default function ReengagementPanel() {
         </div>
       )}
 
-      {/* Panel de templates */}
-      {useTemplate && !loading && (
+      {/* Panel de templates (siempre visible) */}
+      {!loading && (
         <div style={{ backgroundColor: colors.bgSub, borderBottom: `1px solid ${colors.border}`, padding: '12px 24px' }}>
           {templatesLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: colors.textSecondary, fontSize: '13px' }}>
@@ -744,21 +665,13 @@ export default function ReengagementPanel() {
 
           <div style={{ flex: 1 }} />
 
-          {!useTemplate && (
-            <button onClick={generateAll}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.bgHover, color: colors.green, padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500, border: `1px solid ${colors.green}33`, cursor: 'pointer' }}>
-              <Sparkles size={14} />
-              Generar mensajes IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}
-            </button>
-          )}
-
-          {useTemplate && !selectedTemplate && (
+          {!selectedTemplate && (
             <span style={{ color: colors.yellow, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <FileText size={13} /> Selecciona un template arriba para continuar
             </span>
           )}
 
-          {useTemplate && selectedTemplate && (
+          {selectedTemplate && (
             <button
               onClick={fillVarsForAll}
               disabled={fillingAll}
@@ -771,25 +684,23 @@ export default function ReengagementPanel() {
               }}>
               {fillingAll
                 ? <><Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Rellenando...</>
-                : <><Sparkles size={14} /> Rellenar con IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}</>}
+                : <><Sparkles size={14} /> Generar mensajes IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}</>}
             </button>
           )}
 
           <button onClick={sendBulk}
-            disabled={sendingBulk || selectedWithMsg === 0 || (useTemplate && !selectedTemplate)}
+            disabled={sendingBulk || selectedWithMsg === 0 || !selectedTemplate}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
-              backgroundColor: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? colors.bgAccent2 : colors.green) : colors.bgHover,
-              color: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? colors.purple : 'white') : colors.textSecondary,
+              backgroundColor: (selectedWithMsg > 0 && selectedTemplate) ? colors.green : colors.bgHover,
+              color: (selectedWithMsg > 0 && selectedTemplate) ? 'white' : colors.textSecondary,
               padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
-              border: useTemplate ? `1px solid ${colors.purple}44` : 'none',
-              cursor: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? 'pointer' : 'not-allowed',
+              border: 'none',
+              cursor: (selectedWithMsg > 0 && selectedTemplate) ? 'pointer' : 'not-allowed',
               opacity: sendingBulk ? 0.7 : 1,
             }}>
-            {sendingBulk ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : (useTemplate ? <FileText size={14} /> : <Send size={14} />)}
-            {sendingBulk ? 'Enviando...' : useTemplate
-              ? `Enviar template a ${selectedWithMsg} clientes`
-              : `Enviar a ${selectedWithMsg} clientes`}
+            {sendingBulk ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
+            {sendingBulk ? 'Enviando...' : `Enviar a ${selectedWithMsg} clientes`}
           </button>
         </div>
       )}
@@ -847,12 +758,9 @@ export default function ReengagementPanel() {
                 onToggleExpand={() => setExpanded(prev => {
                   const n = new Set(prev); n.has(c.phone) ? n.delete(c.phone) : n.add(c.phone); return n;
                 })}
-                onGenerate={() => generateMessage(c.phone)}
                 onFillVars={() => fillVarsForOne(c.phone)}
-                onMessageChange={val => setMessages(prev => ({ ...prev, [c.phone]: val }))}
                 onSend={() => sendOne(c.phone)}
-                useTemplate={useTemplate}
-                templatePreview={useTemplate && selectedTemplate ? previewTemplate(c) : null}
+                templatePreview={selectedTemplate ? previewTemplate(c) : null}
               />
             </div>
           ))
@@ -877,10 +785,9 @@ export default function ReengagementPanel() {
   );
 }
 
-function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenerating, isSending, isFilling, hasAiFill, onToggleSelect, onToggleExpand, onGenerate, onFillVars, onMessageChange, onSend, useTemplate, templatePreview }) {
+function CandidateCard({ candidate: c, isSelected, isSending, isFilling, hasAiFill, onToggleSelect, onFillVars, onSend, templatePreview }) {
   const { colors } = useTheme();
 
-  const hasMsg  = message?.trim().length > 0;
   const conf    = c.confidence || 0;
   const cColor  = confColor(conf, colors);
   const overdue = c.avgFreqDays && c.daysInactive > c.avgFreqDays;
@@ -1047,112 +954,51 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
 
       {/* ── FILA 5: botones de acción ── */}
       <div style={{ display: 'flex', gap: '8px', padding: '0 14px 12px', alignItems: 'center' }}>
-        {!useTemplate && (
-          <button onClick={onGenerate} disabled={isGenerating}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <button
+            onClick={onFillVars}
+            disabled={isFilling}
             style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              backgroundColor: hasMsg ? colors.greenTint : colors.bgHover,
-              color: hasMsg ? colors.greenLight : colors.textSecondary,
-              padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500,
-              border: `1px solid ${hasMsg ? `${colors.greenLight}33` : colors.border}`,
-              cursor: isGenerating ? 'not-allowed' : 'pointer',
-              opacity: isGenerating ? 0.6 : 1, flex: 1,
+              display: 'flex', alignItems: 'center', gap: '5px',
+              backgroundColor: hasAiFill ? colors.bgAccent2 : colors.bgHover,
+              color: hasAiFill ? colors.purple : colors.textSecondary,
+              padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
+              border: `1px solid ${hasAiFill ? `${colors.purple}44` : colors.border}`,
+              cursor: isFilling ? 'not-allowed' : 'pointer',
+              opacity: isFilling ? 0.6 : 1, alignSelf: 'flex-start',
             }}>
-            {isGenerating
-              ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
-              : <Sparkles size={13} />}
-            {isGenerating ? 'Generando...' : hasMsg ? '✓ Regenerar IA' : 'Generar con IA'}
+            {isFilling
+              ? <><Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> Generando...</>
+              : hasAiFill
+              ? <><Sparkles size={11} /> ✓ Re-generar IA</>
+              : <><Sparkles size={11} /> Personalizar con IA</>}
           </button>
-        )}
 
-        {useTemplate && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <button
-              onClick={onFillVars}
-              disabled={isFilling}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '5px',
-                backgroundColor: hasAiFill ? colors.bgAccent2 : colors.bgHover,
-                color: hasAiFill ? colors.purple : colors.textSecondary,
-                padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
-                border: `1px solid ${hasAiFill ? `${colors.purple}44` : colors.border}`,
-                cursor: isFilling ? 'not-allowed' : 'pointer',
-                opacity: isFilling ? 0.6 : 1, alignSelf: 'flex-start',
-              }}>
-              {isFilling
-                ? <><Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> Generando...</>
-                : hasAiFill
-                ? <><Sparkles size={11} /> ✓ Re-generar IA</>
-                : <><Sparkles size={11} /> Rellenar con IA</>}
-            </button>
-
-            <div style={{ backgroundColor: colors.bgInput, borderRadius: '7px', padding: '6px 10px', border: `1px solid ${hasAiFill ? colors.border : colors.bgSub}`, fontSize: '12px' }}>
-              {templatePreview
-                ? <span style={{ color: hasAiFill ? colors.textPrimary : colors.textSecondary }}>
-                    {templatePreview.slice(0, 100)}{templatePreview.length > 100 ? '…' : ''}
-                  </span>
-                : <span style={{ color: colors.textMuted, fontStyle: 'italic' }}>Rellenar variables con IA para ver preview</span>}
-            </div>
+          <div style={{ backgroundColor: colors.bgInput, borderRadius: '7px', padding: '6px 10px', border: `1px solid ${hasAiFill ? colors.border : colors.bgSub}`, fontSize: '12px' }}>
+            {templatePreview
+              ? <span style={{ color: hasAiFill ? colors.textPrimary : colors.textSecondary }}>
+                  {templatePreview.slice(0, 100)}{templatePreview.length > 100 ? '…' : ''}
+                </span>
+              : <span style={{ color: colors.textMuted, fontStyle: 'italic' }}>
+                  {templatePreview === null ? 'Selecciona un template arriba' : 'Variables con valores por defecto'}
+                </span>}
           </div>
-        )}
+        </div>
 
-        <button onClick={onSend} disabled={isSending || (useTemplate && !hasAiFill)}
+        <button onClick={onSend} disabled={isSending}
           style={{
             display: 'flex', alignItems: 'center', gap: '6px',
-            backgroundColor: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? colors.bgAccent2 : colors.green) : colors.bgHover,
-            color: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? colors.purple : '#fff') : colors.textMuted,
+            backgroundColor: colors.green, color: 'white',
             padding: '7px 18px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
-            border: useTemplate ? `1px solid ${colors.purple}44` : 'none',
-            cursor: (isSending || (useTemplate && !hasAiFill)) ? 'not-allowed' : (useTemplate ? hasAiFill : hasMsg) ? 'pointer' : 'not-allowed',
+            border: 'none', cursor: isSending ? 'not-allowed' : 'pointer',
             opacity: isSending ? 0.7 : 1, flexShrink: 0,
           }}>
           {isSending
             ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
-            : useTemplate ? <FileText size={13} /> : <Send size={13} />}
-          {isSending ? 'Enviando...' : useTemplate ? 'Enviar template' : 'Enviar'}
+            : <Send size={13} />}
+          {isSending ? 'Enviando...' : 'Enviar'}
         </button>
-
-        {!useTemplate && (
-          <button onClick={onToggleExpand}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '4px',
-              padding: '7px 10px', backgroundColor: colors.bgHover, border: 'none',
-              borderRadius: '7px', cursor: 'pointer', color: colors.textSecondary, fontSize: '11px', flexShrink: 0,
-            }}>
-            {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-          </button>
-        )}
       </div>
-
-      {/* ── Área de mensaje expandible (solo modo texto libre) ── */}
-      {!useTemplate && isExpanded && (
-        <div style={{ padding: '12px 14px 14px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgInput }}>
-          <div style={{ color: colors.textMuted, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' }}>
-            Mensaje WhatsApp
-          </div>
-          <textarea
-            value={message}
-            onChange={e => onMessageChange(e.target.value)}
-            placeholder="Genera un mensaje con IA o escríbelo manualmente..."
-            rows={4}
-            style={{
-              width: '100%', backgroundColor: colors.bgSub, color: colors.textPrimary,
-              border: `1px solid ${colors.border}`, borderRadius: '8px',
-              padding: '10px 12px', fontSize: '13px', lineHeight: 1.55,
-              resize: 'vertical', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box',
-            }}
-          />
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-            <span style={{ color: colors.borderStrong, fontSize: '11px' }}>{message.length} caracteres</span>
-            {hasMsg && (
-              <button onClick={onSend} disabled={isSending}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.green, color: 'white', padding: '7px 16px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer', opacity: isSending ? 0.7 : 1 }}>
-                <Send size={13} /> {isSending ? 'Enviando...' : 'Enviar por WhatsApp'}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
