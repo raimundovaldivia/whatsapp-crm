@@ -76,6 +76,8 @@ export default function ReengagementPanel() {
   const [sendingBulk, setSendingBulk] = useState(false);
   const [toast, setToast]             = useState(null);
   const [minConf, setMinConf]         = useState(65);
+  const [testMode, setTestMode]       = useState(false);
+  const TEST_PHONE = '56954565558';
 
   // ── Templates ─────────────────────────────────────────────────
   const [templates, setTemplates]           = useState([]);
@@ -300,19 +302,22 @@ export default function ReengagementPanel() {
     const pick = clientPicks[phone];
     const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
     if (!tpl) { showToast('Primero usa "IA elige template" para este cliente', 'error'); return; }
+    const destPhone = testMode ? TEST_PHONE : phone;
     setSending(prev => new Set(prev).add(phone));
     try {
       await reengagementAPI.send({
-        phone,
+        phone:         destPhone,
         templateName:  tpl.name,
         languageCode:  tpl.language,
         components:    buildComponents(candidate),
         previewText:   getPreviewText(candidate),
       });
-      showToast('✅ Template enviado');
-      setCandidates(prev => prev.filter(c => c.phone !== phone));
-      setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
-      setClientPicks(prev => { const n = { ...prev }; delete n[phone]; return n; });
+      showToast(testMode ? `🧪 Enviado a tu número (${TEST_PHONE})` : '✅ Template enviado');
+      if (!testMode) {
+        setCandidates(prev => prev.filter(c => c.phone !== phone));
+        setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
+        setClientPicks(prev => { const n = { ...prev }; delete n[phone]; return n; });
+      }
     } catch (err) {
       showToast(err.response?.data?.error || 'Error enviando template', 'error');
     } finally {
@@ -338,7 +343,7 @@ export default function ReengagementPanel() {
       const pick = clientPicks[c.phone];
       const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
       return {
-        phone:        c.phone,
+        phone:        testMode ? TEST_PHONE : c.phone,
         templateName: tpl.name,
         languageCode: tpl.language,
         components:   buildComponents(c),
@@ -348,10 +353,14 @@ export default function ReengagementPanel() {
     setSendingBulk(true);
     try {
       const res = await reengagementAPI.sendBulk(items);
-      showToast(`✅ ${res.sent} enviados${res.failed > 0 ? ` · ${res.failed} fallaron` : ''}`);
-      const sent = new Set(res.results.filter(r => r.success).map(r => r.phone));
-      setCandidates(prev => prev.filter(c => !sent.has(c.phone)));
-      setSelected(new Set());
+      if (testMode) {
+        showToast(`🧪 ${res.sent} mensajes enviados a tu número (${TEST_PHONE})`);
+      } else {
+        showToast(`✅ ${res.sent} enviados${res.failed > 0 ? ` · ${res.failed} fallaron` : ''}`);
+        const sent = new Set(res.results.filter(r => r.success).map(r => r.phone));
+        setCandidates(prev => prev.filter(c => !sent.has(c.phone)));
+        setSelected(new Set());
+      }
     } catch (err) {
       showToast(err.response?.data?.error || 'Error en envío masivo', 'error');
     } finally {
@@ -535,6 +544,22 @@ export default function ReengagementPanel() {
               : <>⚖️ {calibration ? 'Recalibrar' : 'Calibrar IA'}</>}
           </button>
         </Tooltip>
+
+        {/* Toggle modo prueba */}
+        <Tooltip text={testMode ? `Modo prueba activo — todos los envíos van a ${TEST_PHONE}` : 'Activar para enviar a tu número en vez de los clientes reales'} position="bottom">
+          <button
+            onClick={() => setTestMode(t => !t)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px',
+              borderRadius: '8px', fontSize: '12px', fontWeight: testMode ? 600 : 400,
+              border: `1px solid ${testMode ? colors.yellow : colors.borderStrong}`,
+              backgroundColor: testMode ? `${colors.yellow}22` : colors.bgHover,
+              color: testMode ? colors.yellow : colors.textSecondary,
+              cursor: 'pointer', transition: 'all 0.15s',
+            }}>
+            🧪 {testMode ? 'Prueba ON' : 'Modo prueba'}
+          </button>
+        </Tooltip>
       </div>
 
       {/* Tabs de ventanas de tiempo */}
@@ -575,6 +600,22 @@ export default function ReengagementPanel() {
       )}
 
       {/* Panel de templates (siempre visible) */}
+      {/* Banner modo prueba */}
+      {testMode && (
+        <div style={{
+          backgroundColor: `${colors.yellow}18`, borderBottom: `1px solid ${colors.yellow}44`,
+          padding: '8px 24px', display: 'flex', alignItems: 'center', gap: '8px',
+        }}>
+          <span style={{ fontSize: '14px' }}>🧪</span>
+          <span style={{ color: colors.yellow, fontSize: '12px', fontWeight: 600 }}>
+            Modo prueba activo — todos los envíos irán a {TEST_PHONE} en vez del cliente real
+          </span>
+          <button onClick={() => setTestMode(false)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: colors.yellow, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline' }}>
+            Desactivar
+          </button>
+        </div>
+      )}
+
       {/* Banner de templates */}
       {!loading && (
         <div style={{ backgroundColor: colors.bgSub, borderBottom: `1px solid ${colors.border}`, padding: '10px 24px' }}>
