@@ -350,13 +350,45 @@ function BulkGenerateTab({ onSubmitted, colors }) {
           </div>
         )}
 
-        {/* Info */}
+        {/* Explicación estrategia 24h */}
+        <div style={{
+          backgroundColor: `${colors.purple}11`,
+          border: `1px solid ${colors.purple}33`,
+          borderRadius: '10px', padding: '14px',
+          fontSize: '12px', lineHeight: 1.7,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '8px' }}>
+            <Zap size={14} color={colors.purple} />
+            <span style={{ color: colors.purple, fontWeight: 700, fontSize: '13px' }}>
+              Estrategia: template → respuesta → venta gratis
+            </span>
+          </div>
+          <div style={{ color: colors.textSecondary, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <span style={{ color: colors.yellow, fontWeight: 700, flexShrink: 0 }}>1.</span>
+              <span>Envías el template (cuesta dinero, pero llega a quien ya te compró)</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <span style={{ color: colors.green, fontWeight: 700, flexShrink: 0 }}>2.</span>
+              <span>El cliente responde la pregunta final del template (cualquier respuesta abre la ventana)</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <span style={{ color: colors.purple, fontWeight: 700, flexShrink: 0 }}>3.</span>
+              <span><strong style={{ color: colors.textPrimary }}>Se abre una ventana gratuita de 24h</strong> — el bot conversa, muestra productos y cierra la venta sin costo adicional</span>
+            </div>
+          </div>
+          <div style={{ marginTop: '8px', color: colors.textMuted, fontSize: '11px' }}>
+            Por eso los templates generados terminan con una pregunta fácil de responder (Sí/No o 1 palabra).
+          </div>
+        </div>
+
+        {/* Info aprobación */}
         <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.6, display: 'flex', gap: '8px' }}>
           <Info size={14} color="#4db6e8" style={{ flexShrink: 0, marginTop: '1px' }} />
           <span>
-            Los templates generados estarán en estado <strong style={{ color: colors.yellow }}>Pendiente</strong> hasta
+            Los templates estarán en estado <strong style={{ color: colors.yellow }}>Pendiente</strong> hasta
             que Meta los apruebe (1–24 h). Una vez <strong style={{ color: colors.greenLight }}>Aprobados</strong>,
-            estarán disponibles en Re-enganche para enviarlos a tus clientes.
+            estarán disponibles en Re-enganche.
           </span>
         </div>
 
@@ -601,14 +633,14 @@ function BulkTemplateCard({ index, card, selected, onToggle, onUpdate, colors, r
             />
           </div>
 
-          {card.header !== undefined && (
+          {(card.header !== undefined || card.headerText !== undefined) && (
             <div>
               <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
                 Encabezado (opcional)
               </label>
               <input
-                value={card.header || ''}
-                onChange={e => onUpdate('header', e.target.value)}
+                value={card.headerText || card.header || ''}
+                onChange={e => { onUpdate('headerText', e.target.value); onUpdate('header', e.target.value); }}
                 style={inputStyle}
                 maxLength={60}
               />
@@ -631,13 +663,44 @@ function BulkTemplateCard({ index, card, selected, onToggle, onUpdate, colors, r
             </div>
           </div>
 
-          {/* Preview */}
+          {/* Preview con pregunta de cierre destacada */}
           {card.body && (
             <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '10px 12px', border: `1px solid ${colors.border}` }}>
               <div style={{ color: colors.textMuted, fontSize: '10px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Vista previa</div>
-              {card.header && <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '4px' }}>{card.header}</div>}
+              {(card.headerText || card.header) && (
+                <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '4px' }}>
+                  {card.headerText || card.header}
+                </div>
+              )}
               <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{card.body}</div>
               {card.footer && <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '6px' }}>{card.footer}</div>}
+            </div>
+          )}
+
+          {/* Pregunta de cierre (gancho para abrir ventana de 24h) */}
+          {card.closingQuestion && (
+            <div style={{
+              backgroundColor: `${colors.purple}15`,
+              border: `1px solid ${colors.purple}44`,
+              borderRadius: '8px', padding: '8px 12px',
+              display: 'flex', alignItems: 'flex-start', gap: '8px',
+            }}>
+              <Zap size={13} color={colors.purple} style={{ flexShrink: 0, marginTop: '2px' }} />
+              <div>
+                <div style={{ color: colors.purple, fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '2px' }}>
+                  Pregunta gancho (abre la ventana de 24h)
+                </div>
+                <div style={{ color: colors.textPrimary, fontSize: '12px' }}>
+                  {card.closingQuestion}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Caso de uso */}
+          {card.useCase && (
+            <div style={{ color: colors.textMuted, fontSize: '11px', fontStyle: 'italic' }}>
+              💡 {card.useCase}
             </div>
           )}
         </div>

@@ -746,26 +746,40 @@ router.post('/generate-templates', async (req, res) => {
 Contexto de la tienda:
 ${storeContext}
 
-Genera exactamente 5 templates de WhatsApp Business para re-engagement de clientes (clientes que compraron antes pero no han vuelto). Los templates se envían a Meta para aprobación.
+Genera exactamente 5 templates de WhatsApp Business para re-engagement. Los templates se envían a Meta para aprobación.
 
-REGLAS ESTRICTAS:
+OBJETIVO ESTRATÉGICO — MUY IMPORTANTE:
+WhatsApp cobra por cada template enviado, pero cuando el cliente RESPONDE (cualquier respuesta),
+se abre una ventana GRATUITA de 24 horas donde el bot puede conversar sin costo.
+Por eso, cada template debe estar diseñado para PROVOCAR UNA RESPUESTA del cliente.
+El bot luego toma esa respuesta y guía al cliente hacia una compra.
+
+REGLA CLAVE — PREGUNTA DE CIERRE:
+Cada template DEBE terminar con UNA pregunta simple que el cliente quiera responder.
+La pregunta debe ser:
+- De respuesta corta: Sí/No, una palabra, un número
+- Que genere curiosidad o sea difícil de ignorar
+- Que conecte naturalmente con mostrar productos o hacer una venta
+Ejemplos buenos: "¿Te muestro lo nuevo?", "¿Quieres que te guarde uno?", "¿Cuándo fue la última vez que pediste?"
+
+REGLAS TÉCNICAS:
 - name: solo minúsculas, números y guiones bajos, máx 40 chars (ej: "reenganche_general")
 - category: siempre "MARKETING"
 - language: "es"
 - El BODY debe tener máximo 1024 caracteres
 - Usa {{1}} para nombre del cliente (siempre la primera variable)
-- Si mencionas un producto específico de la tienda usa {{2}}
+- Si mencionas un producto específico usa {{2}}
 - El footer siempre: "Responde STOP para no recibir mensajes"
 - NO incluir URLs ni emojis en el header (headerText)
-- El tono debe ser cálido, cercano y latinoamericano
+- Tono cálido, cercano, latinoamericano
 - Menciona productos reales del catálogo cuando sea posible
 
-Los 5 templates deben ser:
-1. Re-engagement general (hace tiempo sin comprar)
-2. Novedad de productos (hay cosas nuevas en el catálogo)
-3. Recordatorio de producto (interés previo o producto favorito)
-4. Oferta exclusiva para clientes anteriores
-5. Seguimiento post-compra (¿cómo quedaste con tu pedido?)
+Los 5 templates (cada uno con un gancho diferente para provocar respuesta):
+1. Re-engagement emocional — "Te extrañamos" + pregunta sobre qué necesitan esta semana
+2. Novedad irresistible — "Llegó algo que creo que te va a encantar" + ¿quieres verlo?
+3. Recordatorio de producto favorito — menciona el último producto que compraron + ¿lo repetimos?
+4. Oferta exclusiva con urgencia — descuento/beneficio especial + ¿lo activo para ti?
+5. Post-compra con upsell — seguimiento de pedido anterior + ¿qué más necesitas?
 
 Responde SOLO con JSON válido (sin markdown ni texto extra):
 {
@@ -775,10 +789,11 @@ Responde SOLO con JSON válido (sin markdown ni texto extra):
       "displayName": "Nombre legible",
       "category": "MARKETING",
       "language": "es",
-      "headerText": "Texto del header (sin variables, max 60 chars, sin emojis)",
-      "body": "Cuerpo del mensaje con {{1}} para nombre del cliente...",
+      "headerText": "Texto del header (sin variables, max 60 chars, sin emojis ni URLs)",
+      "body": "Cuerpo del mensaje con {{1}} para nombre... termina con una pregunta simple.",
       "footer": "Responde STOP para no recibir mensajes",
       "variables": ["nombre del cliente", "descripción de variable 2 si existe"],
+      "closingQuestion": "La pregunta de cierre del template (para mostrar en la UI)",
       "useCase": "Cuándo usar este template (1 línea)"
     }
   ]
@@ -937,6 +952,11 @@ router.post('/send', async (req, res) => {
         type:              isTemplate ? 'template' : 'text',
         sentBy:            'ai',
       });
+      // Marcar conversación como "esperando respuesta a template"
+      // El pipeline lo detecta y activa modo warm lead cuando el cliente responda
+      if (isTemplate) {
+        await db.updatePipelineState(convId, 'template_sent');
+      }
     }
 
     res.json({ success: true, phone });
@@ -999,6 +1019,9 @@ router.post('/send-bulk', async (req, res) => {
           type:              isTemplate ? 'template' : 'text',
           sentBy:            'ai',
         });
+        if (isTemplate) {
+          await db.updatePipelineState(convId, 'template_sent');
+        }
       }
 
       results.push({ phone: item.phone, success: true });

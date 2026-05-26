@@ -25,7 +25,25 @@ FORMATO DE MENSAJE:
 CATÁLOGO DISPONIBLE:
 {PRODUCTOS}
 
+{WARM_LEAD_CONTEXT}
+
 {CUSTOM_PROMPT}`;
+
+const WARM_LEAD_SECTION = `⚡ MODO LEAD CALIENTE — EL CLIENTE RESPONDIÓ A UN MENSAJE DE RE-ENGAGEMENT:
+Este cliente ya conoce la tienda y decidió responder a nuestro mensaje. Eso significa que tiene interés real.
+
+TU ESTRATEGIA AHORA:
+1. Reconoce su respuesta de forma breve y cálida (1 frase, no repitas lo que dijiste antes)
+2. Inmediatamente conecta con lo que vendemos — muestra el producto más relevante, precio y beneficio clave
+3. Cierra rápido con UNA pregunta directa ("¿Te lo preparo?", "¿Cuántas unidades necesitas?", "¿Lo pedimos hoy?")
+4. Si dice "Sí" o cualquier afirmación → ve directo a pedir los datos del pedido
+
+NO hagas:
+- No repitas el template que le enviamos
+- No hagas preguntas generales de "¿en qué te puedo ayudar?"
+- No pierdas tiempo con rodeos — este cliente ya está caliente
+
+CONTEXTO DEL TEMPLATE QUE RECIBIÓ: {TEMPLATE_NAME}`;
 
 /**
  * Agente de Ventas — recibe el catálogo ya formateado como texto
@@ -33,12 +51,19 @@ CATÁLOGO DISPONIBLE:
  * @param {string} userMessage
  * @param {string} productosTexto - catálogo formateado por raigentic.formatProductosParaIA()
  * @param {string} customPrompt
+ * @param {object} opts - { isWarmLead: bool, templateName: string }
  */
-async function generateSalesResponse(conversationHistory, userMessage, productosTexto = '', customPrompt = '') {
+async function generateSalesResponse(conversationHistory, userMessage, productosTexto = '', customPrompt = '', opts = {}) {
+  const { isWarmLead = false, templateName = '' } = opts;
   const catalogoTexto = productosTexto || 'No hay productos disponibles en este momento.';
+
+  const warmLeadText = isWarmLead
+    ? WARM_LEAD_SECTION.replace('{TEMPLATE_NAME}', templateName || 'template de re-engagement')
+    : '';
 
   const system = SALES_SYSTEM
     .replace('{PRODUCTOS}', catalogoTexto)
+    .replace('{WARM_LEAD_CONTEXT}', warmLeadText)
     .replace('{CUSTOM_PROMPT}', customPrompt ? `\nINSTRUCCIONES ADICIONALES:\n${customPrompt}` : '');
 
   const messages = buildMessages(conversationHistory, userMessage);
