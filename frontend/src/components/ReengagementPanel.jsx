@@ -3,26 +3,28 @@ import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
   ShoppingBag, TrendingUp, ChevronDown, ChevronUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
-  FileText, ToggleLeft, ToggleRight, ChevronDown as ChevronDownIcon,
+  FileText, ToggleLeft, ToggleRight,
   Download,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { api, reengagementAPI } from '../utils/api.js';
+import { useTheme } from '../theme.js';
 
 function Tooltip({ text, children, position = 'top' }) {
+  const { colors } = useTheme();
   const [show, setShow] = useState(false);
   const ref = useRef(null);
 
   const tipStyle = {
     position: 'absolute',
-    backgroundColor: '#1a2530',
-    color: '#e9edef',
+    backgroundColor: colors.bgHover,
+    color: colors.textPrimary,
     fontSize: '11.5px',
     lineHeight: 1.5,
     padding: '7px 11px',
     borderRadius: '7px',
-    border: '1px solid #2a3942',
-    boxShadow: '0 4px 14px rgba(0,0,0,0.6)',
+    border: `1px solid ${colors.border}`,
+    boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
     zIndex: 9999,
     pointerEvents: 'none',
     whiteSpace: 'normal',
@@ -44,18 +46,21 @@ function Tooltip({ text, children, position = 'top' }) {
   );
 }
 
-// Ventanas de tiempo para agrupar predicciones
-const WINDOWS = [
-  { key: 'hoy',     label: 'Hoy / Mañana',  color: '#00c853', bg: '#0a2e15', desc: 'Predicción: comprarían en las próximas 24-48h' },
-  { key: 'semana',  label: 'Esta semana',    color: '#00a884', bg: '#0d2e25', desc: 'Predicción: comprarían en los próximos 7 días' },
-  { key: 'mes',     label: 'Este mes',       color: '#f0b429', bg: '#2e2100', desc: 'Predicción: comprarían en los próximos 30 días' },
-  { key: 'lejano',  label: '1-6 meses',      color: '#8696a0', bg: '#1a2028', desc: 'Predicción: comprarían en los próximos 31-180 días' },
+// Ventanas de tiempo — generadas en función del theme
+const getWINDOWS = (colors) => [
+  { key: 'hoy',    label: 'Hoy / Mañana', color: colors.greenLight,    bg: colors.greenTint,     desc: 'Predicción: comprarían en las próximas 24-48h' },
+  { key: 'semana', label: 'Esta semana',  color: colors.green,         bg: colors.greenTint,     desc: 'Predicción: comprarían en los próximos 7 días' },
+  { key: 'mes',    label: 'Este mes',     color: colors.yellow,        bg: `${colors.yellow}22`, desc: 'Predicción: comprarían en los próximos 30 días' },
+  { key: 'lejano', label: '1-6 meses',    color: colors.textSecondary, bg: colors.bgSub,         desc: 'Predicción: comprarían en los próximos 31-180 días' },
 ];
 
-const confColor = (conf) =>
-  conf >= 80 ? '#00c853' : conf >= 60 ? '#00a884' : conf >= 40 ? '#f0b429' : '#8696a0';
+const confColor = (conf, colors) =>
+  conf >= 80 ? colors.greenLight : conf >= 60 ? colors.green : conf >= 40 ? colors.yellow : colors.textSecondary;
 
 export default function ReengagementPanel() {
+  const { colors } = useTheme();
+  const WINDOWS = getWINDOWS(colors);
+
   const [candidates, setCandidates]   = useState([]);
   const [loading, setLoading]         = useState(true);
   const [loadingStep, setLoadingStep] = useState('');
@@ -81,13 +86,9 @@ export default function ReengagementPanel() {
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState(null);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
-  // varMap: { "1": "name" | "phone" | "manual" }
   const [varMap, setVarMap]                 = useState({});
-  // manualVars: { "1": "texto manual" }
   const [manualVars, setManualVars]         = useState({});
-  // perCustomerVars: { [phone]: { "1": "Juan", "2": "14" } } — rellenado por IA por cliente
   const [perCustomerVars, setPerCustomerVars] = useState({});
-  // fillingVars: Set de phones cuyas variables se están generando
   const [fillingVars, setFillingVars]       = useState(new Set());
   const [fillingAll, setFillingAll]         = useState(false);
 
@@ -96,9 +97,7 @@ export default function ReengagementPanel() {
     setTimeout(() => setToast(null), type === 'info' ? 8000 : 4000);
   };
 
-  // Ref para el polling cuando el análisis corre en segundo plano
   const pollRef = useRef(null);
-
   const stopPolling = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
 
   const load = useCallback(async (forceRefresh = false) => {
@@ -113,15 +112,13 @@ export default function ReengagementPanel() {
     try {
       const res = await api.get(
         `/reengagement/candidates${forceRefresh ? '?refresh=true' : ''}`,
-        { timeout: 30000 }  // 30s — el refresh responde inmediatamente
+        { timeout: 30000 }
       );
 
-      // El servidor inició el análisis en segundo plano
       if (res.data.refreshing && forceRefresh) {
         setLoading(false);
         setLoadingStep('');
         showToast('Análisis iniciado en segundo plano. Se actualizará automáticamente en ~5 min.', 'info');
-        // Polling cada 60s para ver si ya terminó
         pollRef.current = setInterval(async () => {
           try {
             const poll = await api.get('/reengagement/candidates', { timeout: 15000 });
@@ -142,12 +139,10 @@ export default function ReengagementPanel() {
       setFromCache(res.data.fromCache || false);
       setCacheDate(res.data.cacheDate || null);
       setCacheSource(res.data.cacheSource || null);
-      // Cargar calibración
       try {
         const calRes = await reengagementAPI.getCalibration();
         setCalibration(calRes.data);
       } catch (_) {}
-      // Auto-seleccionar la ventana con más candidatos
       const data = res.data.data || [];
       if (data.some(c => c.buyWindow === 'hoy')) setActiveWindow('hoy');
       else if (data.some(c => c.buyWindow === 'semana')) setActiveWindow('semana');
@@ -159,10 +154,8 @@ export default function ReengagementPanel() {
     }
   }, []);
 
-  // Al montar: cargar datos sin forceRefresh (usa caché del día si existe)
   useEffect(() => { load(false); return stopPolling; }, []);
 
-  // Cargar templates cuando se activa el modo template
   const loadTemplates = useCallback(async () => {
     setTemplatesLoading(true);
     setTemplatesError(null);
@@ -182,7 +175,6 @@ export default function ReengagementPanel() {
     if (next && templates.length === 0) loadTemplates();
   };
 
-  // Parsea las variables {{N}} del texto de un template
   const parseTemplateVars = (tpl) => {
     if (!tpl) return [];
     const bodyComp = (tpl.components || []).find(c => c.type === 'BODY');
@@ -191,7 +183,6 @@ export default function ReengagementPanel() {
     return [...new Set(matches.map(m => m[1]))].sort();
   };
 
-  // Seleccionar template e inicializar varMap con "name" por defecto para {{1}}
   const handleSelectTemplate = (tpl) => {
     setSelectedTemplate(tpl);
     const vars = parseTemplateVars(tpl);
@@ -201,17 +192,13 @@ export default function ReengagementPanel() {
     setManualVars({});
   };
 
-  // Construye components[] para un cliente específico
-  // Prioridad: perCustomerVars (IA) > varMap/manualVars (manual)
   const buildComponents = (candidate) => {
     if (!selectedTemplate) return [];
     const vars = parseTemplateVars(selectedTemplate);
     if (vars.length === 0) return [];
     const aiVars = perCustomerVars[candidate.phone] || {};
     const parameters = vars.map(v => {
-      // Si hay valor generado por IA para este cliente, usarlo
       if (aiVars[v] != null) return { type: 'text', text: aiVars[v] };
-      // Sino, usar el mapa manual
       const mapping = varMap[v] || 'manual';
       let text = '';
       if (mapping === 'name')       text = candidate.name || candidate.phone;
@@ -222,7 +209,6 @@ export default function ReengagementPanel() {
     return [{ type: 'body', parameters }];
   };
 
-  // Preview del template con variables sustituidas para un cliente
   const previewTemplate = (candidate) => {
     if (!selectedTemplate) return '';
     const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
@@ -245,7 +231,6 @@ export default function ReengagementPanel() {
     return text;
   };
 
-  // Rellena las variables de un cliente con IA
   const fillVarsForOne = async (phone) => {
     if (!selectedTemplate) return;
     const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
@@ -255,7 +240,7 @@ export default function ReengagementPanel() {
       const res = await reengagementAPI.fillTemplateVars(phone, bodyComp.text);
       if (res.success && res.vars) {
         setPerCustomerVars(prev => ({ ...prev, [phone]: res.vars }));
-        setSelected(prev => new Set(prev).add(phone)); // auto-seleccionar al rellenar
+        setSelected(prev => new Set(prev).add(phone));
       }
     } catch (err) {
       showToast('Error generando variables: ' + (err.response?.data?.error || err.message), 'error');
@@ -264,7 +249,6 @@ export default function ReengagementPanel() {
     }
   };
 
-  // Rellena variables para todos los clientes visibles (o seleccionados)
   const fillVarsForAll = async () => {
     if (!selectedTemplate) return;
     const targets = selected.size > 0
@@ -281,7 +265,6 @@ export default function ReengagementPanel() {
     showToast(`✅ Variables rellenadas para ${targets.length} clientes`);
   };
 
-  // Score de relevancia: vencidos primero, luego confianza alta, luego más cercanos
   const relevanceScore = (c) => {
     const overdueBonus = c.predictedDays <= 0 ? 100 + Math.abs(c.predictedDays) * 2 : 0;
     const urgencyBonus = c.predictedDays <= 1 ? 30 : c.predictedDays <= 3 ? 15 : 0;
@@ -289,15 +272,12 @@ export default function ReengagementPanel() {
     return c.confidence + overdueBonus + urgencyBonus - proximityPenalty;
   };
 
-  // Agrupar por ventana, filtrar por confianza mínima y ordenar por relevancia
   const byWindow = (window) => candidates
     .filter(c => c.buyWindow === window && c.confidence >= minConf)
     .sort((a, b) => relevanceScore(b) - relevanceScore(a));
 
-  // Candidatos visibles según tab activo
   const visible = byWindow(activeWindow);
 
-  // ── Selección ──────────────────────────────────────────────────
   const toggleSelect = (phone) => setSelected(prev => {
     const n = new Set(prev);
     n.has(phone) ? n.delete(phone) : n.add(phone);
@@ -309,7 +289,6 @@ export default function ReengagementPanel() {
     else setSelected(new Set(visible.map(c => c.phone)));
   };
 
-  // ── Generar mensaje IA ─────────────────────────────────────────
   const generateMessage = async (phone) => {
     setGenerating(prev => new Set(prev).add(phone));
     try {
@@ -335,7 +314,6 @@ export default function ReengagementPanel() {
     }
   };
 
-  // ── Enviar ─────────────────────────────────────────────────────
   const sendOne = async (phone) => {
     const candidate = candidates.find(c => c.phone === phone);
 
@@ -415,38 +393,33 @@ export default function ReengagementPanel() {
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
   const hiddenByFilter   = totalCandidates - filteredTotal;
 
-  // ── Exportar a Excel ────────────────────────────────────────────────
   const exportToExcel = () => {
     if (!candidates.length) return;
 
     const windowLabel = { hoy: 'Hoy-Mañana', semana: 'Esta semana', mes: 'Este mes', lejano: '1-6 meses', desconocido: 'Desconocido' };
 
-    // Hoja principal: todos los candidatos
     const mainRows = candidates.map(c => ({
-      'Nombre':           c.name || '—',
-      'Teléfono':         c.phone,
-      'Email':            c.email || '—',
-      'Ventana':          windowLabel[c.buyWindow] || c.buyWindow,
-      'Días estimados':   c.predictedDays ?? '—',
-      'Confianza (%)':    c.confidence ?? '—',
-      'Fuente predict.':  c.predSource === 'ai' ? 'IA' : 'Matemático',
-      'Razón IA':         c.aiReason || '—',
-      'Días inactivo':    c.daysInactive,
-      'Última compra':    c.lastOrderDate || '—',
-      'Últimos productos': c.lastProducts || '—',
-      'N° pedidos':       c.totalOrders,
-      'Total gastado ($)': c.totalSpent,
+      'Nombre':              c.name || '—',
+      'Teléfono':            c.phone,
+      'Email':               c.email || '—',
+      'Ventana':             windowLabel[c.buyWindow] || c.buyWindow,
+      'Días estimados':      c.predictedDays ?? '—',
+      'Confianza (%)':       c.confidence ?? '—',
+      'Fuente predict.':     c.predSource === 'ai' ? 'IA' : 'Matemático',
+      'Razón IA':            c.aiReason || '—',
+      'Días inactivo':       c.daysInactive,
+      'Última compra':       c.lastOrderDate || '—',
+      'Últimos productos':   c.lastProducts || '—',
+      'N° pedidos':          c.totalOrders,
+      'Total gastado ($)':   c.totalSpent,
       'Ticket promedio ($)': c.avgOrderVal,
       'Frec. compra (días)': c.avgFreqDays ?? '—',
-      'Día favorito':     c.favDay || '—',
-      'Tendencia gasto':  c.spendTrend || '—',
+      'Día favorito':        c.favDay || '—',
+      'Tendencia gasto':     c.spendTrend || '—',
     }));
 
     const wb = XLSX.utils.book_new();
-
-    // Hoja 1: Todos los candidatos
     const ws1 = XLSX.utils.json_to_sheet(mainRows);
-    // Anchos de columna
     ws1['!cols'] = [
       { wch: 22 }, { wch: 16 }, { wch: 28 }, { wch: 14 }, { wch: 14 },
       { wch: 14 }, { wch: 14 }, { wch: 30 }, { wch: 13 }, { wch: 13 },
@@ -455,21 +428,20 @@ export default function ReengagementPanel() {
     ];
     XLSX.utils.book_append_sheet(wb, ws1, 'Todos');
 
-    // Hojas separadas por ventana
     const windows = ['hoy', 'semana', 'mes', 'lejano'];
     for (const w of windows) {
       const grupo = candidates.filter(c => c.buyWindow === w);
       if (!grupo.length) continue;
       const rows = grupo.map(c => ({
-        'Nombre':           c.name || '—',
-        'Teléfono':         c.phone,
-        'Días estimados':   c.predictedDays ?? '—',
-        'Confianza (%)':    c.confidence ?? '—',
-        'Razón IA':         c.aiReason || '—',
-        'Días inactivo':    c.daysInactive,
-        'Última compra':    c.lastOrderDate || '—',
+        'Nombre':            c.name || '—',
+        'Teléfono':          c.phone,
+        'Días estimados':    c.predictedDays ?? '—',
+        'Confianza (%)':     c.confidence ?? '—',
+        'Razón IA':          c.aiReason || '—',
+        'Días inactivo':     c.daysInactive,
+        'Última compra':     c.lastOrderDate || '—',
         'Últimos productos': c.lastProducts || '—',
-        'N° pedidos':       c.totalOrders,
+        'N° pedidos':        c.totalOrders,
         'Total gastado ($)': c.totalSpent,
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
@@ -483,39 +455,39 @@ export default function ReengagementPanel() {
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#0b141a', overflow: 'hidden' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.bgApp, overflow: 'hidden' }}>
 
       {/* Header */}
-      <div style={{ padding: '14px 24px', backgroundColor: '#202c33', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+      <div style={{ padding: '14px 24px', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <UserCheck size={20} color="#00a884" />
-          <h1 style={{ color: '#e9edef', fontSize: '17px', fontWeight: 600 }}>Re-enganche</h1>
-          <span style={{ backgroundColor: '#0d2e25', color: '#00a884', borderRadius: '6px', padding: '2px 8px', fontSize: '11px', fontWeight: 600, border: '1px solid #00a88433', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <UserCheck size={20} color={colors.green} />
+          <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600 }}>Re-enganche</h1>
+          <span style={{ backgroundColor: colors.greenTint, color: colors.green, borderRadius: '6px', padding: '2px 8px', fontSize: '11px', fontWeight: 600, border: `1px solid ${colors.green}33`, display: 'flex', alignItems: 'center', gap: '4px' }}>
             <Brain size={11} /> Pronóstico IA
           </span>
           {!loading && totalCandidates > 0 && (
-            <span style={{ backgroundColor: '#2a3942', color: '#8696a0', borderRadius: '12px', padding: '2px 8px', fontSize: '12px' }}>
+            <span style={{ backgroundColor: colors.bgHover, color: colors.textSecondary, borderRadius: '12px', padding: '2px 8px', fontSize: '12px' }}>
               {totalCandidates} clientes analizados
             </span>
           )}
           {!loading && hiddenByFilter > 0 && (
             <Tooltip text={`${hiddenByFilter} clientes ocultos por tener menos de ${minConf}% de confianza`} position="bottom">
-              <span style={{ color: '#4a5568', fontSize: '11px', cursor: 'default' }}>
+              <span style={{ color: colors.textMuted, fontSize: '11px', cursor: 'default' }}>
                 · {hiddenByFilter} ocultos &lt;{minConf}%
               </span>
             </Tooltip>
           )}
           {fromCache && !loading && (
-            <span style={{ color: '#374045', fontSize: '11px' }}>
+            <span style={{ color: colors.borderStrong, fontSize: '11px' }}>
               · caché {cacheSource === 'db' ? '📅' : '💾'} {cacheDate || ''}
             </span>
           )}
           {calibration && !loading && (
             <Tooltip text={`Factor calibración: ${calibration.calibrationFactor} · Accuracy histórica: ${Math.round((calibration.accuracyRate||0)*100)}% · ${calibration.totalPredictions} predicciones simuladas`} position="bottom">
               <span style={{
-                backgroundColor: calibration.accuracyRate >= 0.70 ? '#0a2e15' : calibration.accuracyRate >= 0.50 ? '#2a2000' : '#2a1a00',
-                color: calibration.accuracyRate >= 0.70 ? '#00c853' : calibration.accuracyRate >= 0.50 ? '#f0b429' : '#e57373',
-                border: `1px solid ${calibration.accuracyRate >= 0.70 ? '#00c85344' : calibration.accuracyRate >= 0.50 ? '#f0b42944' : '#e5737344'}`,
+                backgroundColor: calibration.accuracyRate >= 0.70 ? colors.greenTint : calibration.accuracyRate >= 0.50 ? `${colors.yellow}22` : `${colors.red}22`,
+                color: calibration.accuracyRate >= 0.70 ? colors.greenLight : calibration.accuracyRate >= 0.50 ? colors.yellow : colors.red,
+                border: `1px solid ${calibration.accuracyRate >= 0.70 ? `${colors.greenLight}44` : calibration.accuracyRate >= 0.50 ? `${colors.yellow}44` : `${colors.red}44`}`,
                 borderRadius: '6px', padding: '2px 8px', fontSize: '11px', fontWeight: 600,
                 cursor: 'default', display: 'flex', alignItems: 'center', gap: '4px',
               }}>
@@ -528,15 +500,15 @@ export default function ReengagementPanel() {
         {/* Filtro de confianza mínima */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <Tooltip text="Mostrar solo predicciones con este nivel mínimo de confianza" position="bottom">
-            <span style={{ color: '#4a5568', fontSize: '11px' }}>Confianza mín.</span>
+            <span style={{ color: colors.textMuted, fontSize: '11px' }}>Confianza mín.</span>
           </Tooltip>
           {[50, 65, 75, 85].map(val => (
             <button key={val} onClick={() => setMinConf(val)}
               style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                 cursor: 'pointer', border: 'none',
-                backgroundColor: minConf === val ? '#00a884' : '#2a3942',
-                color: minConf === val ? '#fff' : '#8696a0',
+                backgroundColor: minConf === val ? colors.green : colors.bgHover,
+                color: minConf === val ? '#fff' : colors.textSecondary,
                 transition: 'all 0.15s',
               }}>
               {val}%+
@@ -550,28 +522,28 @@ export default function ReengagementPanel() {
           style={{
             display: 'flex', alignItems: 'center', gap: '7px',
             padding: '7px 14px', borderRadius: '8px',
-            backgroundColor: useTemplate ? '#1a3040' : '#2a3942',
-            border: `1px solid ${useTemplate ? '#00a884' : '#374045'}`,
+            backgroundColor: useTemplate ? colors.bgAccent2 : colors.bgHover,
+            border: `1px solid ${useTemplate ? colors.green : colors.borderStrong}`,
             cursor: 'pointer',
-            color: useTemplate ? '#00a884' : '#8696a0',
+            color: useTemplate ? colors.green : colors.textSecondary,
             fontSize: '12px', fontWeight: useTemplate ? 600 : 400,
             transition: 'all 0.15s',
           }}>
           <FileText size={13} />
           {useTemplate ? '📋 Modo Template' : '📋 Usar Template'}
           {useTemplate
-            ? <ToggleRight size={15} color="#00a884" />
+            ? <ToggleRight size={15} color={colors.green} />
             : <ToggleLeft size={15} />}
         </button>
 
         <button onClick={() => load(true)} disabled={loading}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: '#2a3942', border: '1px solid #374045', cursor: loading ? 'not-allowed' : 'pointer', color: '#8696a0', fontSize: '12px', opacity: loading ? 0.5 : 1 }}>
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: colors.bgHover, border: `1px solid ${colors.borderStrong}`, cursor: loading ? 'not-allowed' : 'pointer', color: colors.textSecondary, fontSize: '12px', opacity: loading ? 0.5 : 1 }}>
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           Nuevo análisis
         </button>
 
         <button onClick={exportToExcel} disabled={loading || !candidates.length}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: '#0d2e25', border: '1px solid #00a88444', cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer', color: '#00a884', fontSize: '12px', opacity: (!candidates.length || loading) ? 0.5 : 1 }}>
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: colors.greenTint, border: `1px solid ${colors.green}44`, cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer', color: colors.green, fontSize: '12px', opacity: (!candidates.length || loading) ? 0.5 : 1 }}>
           <Download size={13} />
           Exportar Excel
         </button>
@@ -584,8 +556,6 @@ export default function ReengagementPanel() {
                 const res = await reengagementAPI.calibrate();
                 if (res.success) {
                   setCalibration(res.data);
-                  // Forzar recarga con nueva calibración
-                  analysisCache?.delete?.(req?.orgId);
                   showToast(`✅ Calibración completa: ${Math.round((res.data.accuracyRate||0)*100)}% accuracy histórica · factor ${res.data.calibrationFactor}`);
                   load(true);
                 }
@@ -598,9 +568,9 @@ export default function ReengagementPanel() {
             disabled={calibrating || loading}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px',
-              borderRadius: '8px', fontSize: '12px', border: '1px solid #2a4060',
-              backgroundColor: calibrating ? '#1a2030' : '#1a2030',
-              color: calibrating ? '#4a5568' : '#b8a9ff',
+              borderRadius: '8px', fontSize: '12px', border: `1px solid ${colors.purple}44`,
+              backgroundColor: colors.bgAccent2,
+              color: calibrating ? colors.textMuted : colors.purple,
               cursor: (calibrating || loading) ? 'not-allowed' : 'pointer',
               opacity: (calibrating || loading) ? 0.6 : 1,
             }}>
@@ -613,7 +583,7 @@ export default function ReengagementPanel() {
 
       {/* Tabs de ventanas de tiempo */}
       {!loading && !error && totalCandidates > 0 && (
-        <div style={{ display: 'flex', backgroundColor: '#111b21', borderBottom: '1px solid #2a3942', padding: '0 24px' }}>
+        <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}`, padding: '0 24px' }}>
           {WINDOWS.map(w => {
             const count   = byWindow(w.key).length;
             const isActive = activeWindow === w.key;
@@ -623,13 +593,13 @@ export default function ReengagementPanel() {
                   display: 'flex', alignItems: 'center', gap: '8px',
                   padding: '12px 20px', background: 'none', border: 'none', cursor: 'pointer',
                   borderBottom: isActive ? `2px solid ${w.color}` : '2px solid transparent',
-                  color: isActive ? w.color : '#8696a0', fontSize: '13px', fontWeight: isActive ? 600 : 400,
+                  color: isActive ? w.color : colors.textSecondary, fontSize: '13px', fontWeight: isActive ? 600 : 400,
                   transition: 'all 0.15s',
                 }}>
                 {w.key === 'hoy' && <Zap size={13} />}
                 {w.label}
                 {count > 0 && (
-                  <span style={{ backgroundColor: isActive ? w.bg : '#2a3942', color: isActive ? w.color : '#8696a0', borderRadius: '10px', padding: '1px 7px', fontSize: '11px', fontWeight: 700 }}>
+                  <span style={{ backgroundColor: isActive ? w.bg : colors.bgHover, color: isActive ? w.color : colors.textSecondary, borderRadius: '10px', padding: '1px 7px', fontSize: '11px', fontWeight: 700 }}>
                     {count}
                   </span>
                 )}
@@ -641,8 +611,8 @@ export default function ReengagementPanel() {
 
       {/* Descripción de la ventana activa */}
       {!loading && !error && visible.length > 0 && (
-        <div style={{ padding: '8px 24px', backgroundColor: '#0b141a', borderBottom: '1px solid #1a2530' }}>
-          <span style={{ color: '#8696a0', fontSize: '12px', fontStyle: 'italic' }}>
+        <div style={{ padding: '8px 24px', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}` }}>
+          <span style={{ color: colors.textSecondary, fontSize: '12px', fontStyle: 'italic' }}>
             {WINDOWS.find(w => w.key === activeWindow)?.desc}
           </span>
         </div>
@@ -650,27 +620,27 @@ export default function ReengagementPanel() {
 
       {/* Panel de templates */}
       {useTemplate && !loading && (
-        <div style={{ backgroundColor: '#0d1f2d', borderBottom: '1px solid #1e3a50', padding: '12px 24px' }}>
+        <div style={{ backgroundColor: colors.bgSub, borderBottom: `1px solid ${colors.border}`, padding: '12px 24px' }}>
           {templatesLoading ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#8696a0', fontSize: '13px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: colors.textSecondary, fontSize: '13px' }}>
               <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
               Cargando templates aprobados...
             </div>
           ) : templatesError ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <AlertCircle size={14} color="#e57373" />
-              <span style={{ color: '#e57373', fontSize: '12px' }}>{templatesError}</span>
-              <button onClick={loadTemplates} style={{ color: '#00a884', fontSize: '12px', background: 'none', border: 'none', cursor: 'pointer' }}>Reintentar</button>
+              <AlertCircle size={14} color={colors.red} />
+              <span style={{ color: colors.red, fontSize: '12px' }}>{templatesError}</span>
+              <button onClick={loadTemplates} style={{ color: colors.green, fontSize: '12px', background: 'none', border: 'none', cursor: 'pointer' }}>Reintentar</button>
             </div>
           ) : templates.length === 0 ? (
-            <span style={{ color: '#8696a0', fontSize: '12px' }}>
+            <span style={{ color: colors.textSecondary, fontSize: '12px' }}>
               No hay templates aprobados. Créalos en Meta Business Manager y espera la aprobación.
             </span>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {/* Selector de template */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                <span style={{ color: '#8696a0', fontSize: '12px', flexShrink: 0 }}>Template:</span>
+                <span style={{ color: colors.textSecondary, fontSize: '12px', flexShrink: 0 }}>Template:</span>
                 <div style={{ position: 'relative', flex: 1, maxWidth: '380px' }}>
                   <select
                     value={selectedTemplate?.name || ''}
@@ -680,8 +650,8 @@ export default function ReengagementPanel() {
                       else { setSelectedTemplate(null); setVarMap({}); }
                     }}
                     style={{
-                      width: '100%', backgroundColor: '#182028', color: '#e9edef',
-                      border: '1px solid #2a3942', borderRadius: '7px',
+                      width: '100%', backgroundColor: colors.bgSub, color: colors.textPrimary,
+                      border: `1px solid ${colors.border}`, borderRadius: '7px',
                       padding: '7px 12px', fontSize: '13px', cursor: 'pointer', outline: 'none',
                     }}
                   >
@@ -696,9 +666,9 @@ export default function ReengagementPanel() {
 
                 {selectedTemplate && (
                   <span style={{
-                    backgroundColor: '#0a2e15', color: '#00c853',
+                    backgroundColor: colors.greenTint, color: colors.greenLight,
                     borderRadius: '5px', padding: '3px 8px', fontSize: '11px',
-                    border: '1px solid #00c85333',
+                    border: `1px solid ${colors.greenLight}33`,
                   }}>
                     ✓ {selectedTemplate.category || 'MARKETING'}
                   </span>
@@ -713,17 +683,16 @@ export default function ReengagementPanel() {
                 const vars = parseTemplateVars(selectedTemplate);
                 return (
                   <div>
-                    {/* Variables */}
                     {vars.length > 0 && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
                         {vars.map(v => (
-                          <div key={v} style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#182028', borderRadius: '6px', padding: '5px 10px', border: '1px solid #2a3942' }}>
-                            <span style={{ color: '#00a884', fontSize: '11px', fontWeight: 700 }}>{'{{' + v + '}}'}</span>
-                            <span style={{ color: '#8696a0', fontSize: '11px' }}>→</span>
+                          <div key={v} style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.bgSub, borderRadius: '6px', padding: '5px 10px', border: `1px solid ${colors.border}` }}>
+                            <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700 }}>{'{{' + v + '}}'}</span>
+                            <span style={{ color: colors.textSecondary, fontSize: '11px' }}>→</span>
                             <select
                               value={varMap[v] || 'manual'}
                               onChange={e => setVarMap(prev => ({ ...prev, [v]: e.target.value }))}
-                              style={{ backgroundColor: '#0f1820', color: '#e9edef', border: 'none', fontSize: '11px', cursor: 'pointer', outline: 'none' }}
+                              style={{ backgroundColor: colors.bgInput, color: colors.textPrimary, border: 'none', fontSize: '11px', cursor: 'pointer', outline: 'none' }}
                             >
                               <option value="name">Nombre del cliente</option>
                               <option value="phone">Teléfono</option>
@@ -734,7 +703,7 @@ export default function ReengagementPanel() {
                                 value={manualVars[v] || ''}
                                 onChange={e => setManualVars(prev => ({ ...prev, [v]: e.target.value }))}
                                 placeholder="Escribe aquí..."
-                                style={{ backgroundColor: '#0f1820', color: '#e9edef', border: '1px solid #2a3942', borderRadius: '4px', padding: '2px 6px', fontSize: '11px', width: '100px' }}
+                                style={{ backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '2px 6px', fontSize: '11px', width: '100px' }}
                               />
                             )}
                           </div>
@@ -742,14 +711,13 @@ export default function ReengagementPanel() {
                       </div>
                     )}
 
-                    {/* Preview del mensaje */}
-                    <div style={{ backgroundColor: '#182028', borderRadius: '8px', padding: '10px 12px', border: '1px solid #2a3942', maxWidth: '480px' }}>
-                      <div style={{ color: '#4a5568', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Vista previa</div>
-                      {headerComp?.text && <div style={{ color: '#e9edef', fontSize: '13px', fontWeight: 700, marginBottom: '4px' }}>{headerComp.text}</div>}
-                      <div style={{ color: '#c8d1d9', fontSize: '13px', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                    <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '10px 12px', border: `1px solid ${colors.border}`, maxWidth: '480px' }}>
+                      <div style={{ color: colors.textMuted, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Vista previa</div>
+                      {headerComp?.text && <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 700, marginBottom: '4px' }}>{headerComp.text}</div>}
+                      <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
                         {previewTemplate(visible[0])}
                       </div>
-                      {footerComp?.text && <div style={{ color: '#8696a0', fontSize: '11px', marginTop: '6px' }}>{footerComp.text}</div>}
+                      {footerComp?.text && <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '6px' }}>{footerComp.text}</div>}
                     </div>
                   </div>
                 );
@@ -761,11 +729,11 @@ export default function ReengagementPanel() {
 
       {/* Barra de acciones */}
       {visible.length > 0 && !loading && (
-        <div style={{ padding: '8px 24px', backgroundColor: '#111b21', borderBottom: '1px solid #2a3942', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ padding: '8px 24px', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <button onClick={toggleAll}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', cursor: 'pointer', color: '#8696a0', fontSize: '13px' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, fontSize: '13px' }}>
             {selected.size === visible.length && visible.length > 0
-              ? <CheckSquare size={16} color="#00a884" />
+              ? <CheckSquare size={16} color={colors.green} />
               : <Square size={16} />}
             {selected.size === visible.length && visible.length > 0
               ? 'Deseleccionar todos'
@@ -776,14 +744,14 @@ export default function ReengagementPanel() {
 
           {!useTemplate && (
             <button onClick={generateAll}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#1a2530', color: '#00a884', padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500, border: '1px solid #00a88433', cursor: 'pointer' }}>
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.bgHover, color: colors.green, padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500, border: `1px solid ${colors.green}33`, cursor: 'pointer' }}>
               <Sparkles size={14} />
               Generar mensajes IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}
             </button>
           )}
 
           {useTemplate && !selectedTemplate && (
-            <span style={{ color: '#f0b429', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ color: colors.yellow, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <FileText size={13} /> Selecciona un template arriba para continuar
             </span>
           )}
@@ -794,9 +762,9 @@ export default function ReengagementPanel() {
               disabled={fillingAll}
               style={{
                 display: 'flex', alignItems: 'center', gap: '6px',
-                backgroundColor: '#1a2530', color: '#a78bfa',
+                backgroundColor: colors.bgHover, color: colors.purple,
                 padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
-                border: '1px solid #7c3aed44', cursor: fillingAll ? 'not-allowed' : 'pointer',
+                border: `1px solid ${colors.purple}44`, cursor: fillingAll ? 'not-allowed' : 'pointer',
                 opacity: fillingAll ? 0.7 : 1,
               }}>
               {fillingAll
@@ -809,10 +777,10 @@ export default function ReengagementPanel() {
             disabled={sendingBulk || selectedWithMsg === 0 || (useTemplate && !selectedTemplate)}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
-              backgroundColor: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? '#1a4060' : '#00a884') : '#2a3942',
-              color: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? '#4db6e8' : 'white') : '#8696a0',
+              backgroundColor: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? colors.bgAccent2 : colors.green) : colors.bgHover,
+              color: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? (useTemplate ? colors.purple : 'white') : colors.textSecondary,
               padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
-              border: useTemplate ? '1px solid #1e5a80' : 'none',
+              border: useTemplate ? `1px solid ${colors.purple}44` : 'none',
               cursor: (selectedWithMsg > 0 && (!useTemplate || selectedTemplate)) ? 'pointer' : 'not-allowed',
               opacity: sendingBulk ? 0.7 : 1,
             }}>
@@ -828,23 +796,23 @@ export default function ReengagementPanel() {
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 20px' }}>
 
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '80px 40px', color: '#8696a0' }}>
-            <div style={{ width: '40px', height: '40px', border: '3px solid #2a3942', borderTop: '3px solid #00a884', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 20px' }} />
-            <div style={{ fontSize: '15px', fontWeight: 500, color: '#e9edef', marginBottom: '8px' }}>{loadingStep}</div>
+          <div style={{ textAlign: 'center', padding: '80px 40px', color: colors.textSecondary }}>
+            <div style={{ width: '40px', height: '40px', border: `3px solid ${colors.border}`, borderTop: `3px solid ${colors.green}`, borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 20px' }} />
+            <div style={{ fontSize: '15px', fontWeight: 500, color: colors.textPrimary, marginBottom: '8px' }}>{loadingStep}</div>
             <div style={{ fontSize: '12px', opacity: 0.6, lineHeight: 1.6 }}>
               Claude analiza frecuencias, patrones semanales y tendencias de gasto<br/>para predecir cuándo comprará cada cliente
             </div>
           </div>
         ) : error ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#e57373' }}>
+          <div style={{ textAlign: 'center', padding: '60px', color: colors.red }}>
             <AlertCircle size={40} style={{ marginBottom: '12px', opacity: 0.7 }} />
             <div style={{ fontSize: '14px', marginBottom: '16px', maxWidth: '400px', margin: '0 auto 16px', lineHeight: 1.5 }}>{error}</div>
-            <button onClick={() => load(true)} style={{ backgroundColor: '#00a88422', color: '#00a884', border: '1px solid #00a88433', borderRadius: '8px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer' }}>
+            <button onClick={() => load(true)} style={{ backgroundColor: `${colors.green}22`, color: colors.green, border: `1px solid ${colors.green}33`, borderRadius: '8px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer' }}>
               Reintentar
             </button>
           </div>
         ) : totalCandidates === 0 ? (
-          <div style={{ textAlign: 'center', padding: '80px', color: '#8696a0' }}>
+          <div style={{ textAlign: 'center', padding: '80px', color: colors.textSecondary }}>
             <Brain size={48} style={{ marginBottom: '16px', opacity: 0.2 }} />
             <div style={{ fontSize: '15px', fontWeight: 500 }}>Sin datos suficientes</div>
             <div style={{ fontSize: '13px', marginTop: '8px', opacity: 0.7 }}>
@@ -852,7 +820,7 @@ export default function ReengagementPanel() {
             </div>
           </div>
         ) : visible.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#8696a0' }}>
+          <div style={{ textAlign: 'center', padding: '60px', color: colors.textSecondary }}>
             <UserCheck size={40} style={{ marginBottom: '12px', opacity: 0.3 }} />
             <div style={{ fontSize: '14px' }}>
               La IA no predice compras para esta ventana de tiempo
@@ -892,11 +860,11 @@ export default function ReengagementPanel() {
       {toast && (
         <div style={{
           position: 'fixed', bottom: '24px', right: '24px', zIndex: 1000,
-          backgroundColor: toast.type === 'error' ? '#2d1a1a' : toast.type === 'info' ? '#1a2535' : '#0d2e25',
-          border: `1px solid ${toast.type === 'error' ? '#5c2626' : toast.type === 'info' ? '#4a6fa5' : '#00a884'}`,
-          color: toast.type === 'error' ? '#e57373' : toast.type === 'info' ? '#90b8e8' : '#00a884',
+          backgroundColor: toast.type === 'error' ? `${colors.red}22` : toast.type === 'info' ? colors.bgHover : colors.greenTint,
+          border: `1px solid ${toast.type === 'error' ? `${colors.red}44` : toast.type === 'info' ? `${colors.purple}44` : colors.green}`,
+          color: toast.type === 'error' ? colors.red : toast.type === 'info' ? colors.purple : colors.green,
           padding: '12px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 500,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
           {toast.msg}
         </div>
@@ -908,9 +876,11 @@ export default function ReengagementPanel() {
 }
 
 function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenerating, isSending, isFilling, hasAiFill, onToggleSelect, onToggleExpand, onGenerate, onFillVars, onMessageChange, onSend, useTemplate, templatePreview }) {
+  const { colors } = useTheme();
+
   const hasMsg  = message?.trim().length > 0;
   const conf    = c.confidence || 0;
-  const cColor  = confColor(conf);
+  const cColor  = confColor(conf, colors);
   const overdue = c.avgFreqDays && c.daysInactive > c.avgFreqDays;
 
   const predDays  = c.predictedDays ?? 0;
@@ -920,13 +890,13 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
     : predDays === 1 ? 'compraría mañana'
     : `en ~${predDays}d`;
 
-  const predColor = predDays <= 0 ? '#e57373' : predDays <= 1 ? '#00c853' : predDays <= 7 ? '#00a884' : '#f0b429';
-  const predBg    = predDays <= 0 ? '#3a1a1a'  : predDays <= 1 ? '#0a2e15'  : predDays <= 7 ? '#0d2e25'  : '#2e2100';
+  const predColor = predDays <= 0 ? colors.red : predDays <= 1 ? colors.greenLight : predDays <= 7 ? colors.green : colors.yellow;
+  const predBg    = predDays <= 0 ? `${colors.red}22` : predDays <= 1 ? colors.greenTint : predDays <= 7 ? colors.greenTint : `${colors.yellow}22`;
 
   return (
     <div style={{
-      backgroundColor: isSelected ? '#162820' : '#182028',
-      border: `1px solid ${isSelected ? '#00a884' : '#2a3942'}`,
+      backgroundColor: isSelected ? colors.bgAccent : colors.bgSub,
+      border: `1px solid ${isSelected ? colors.green : colors.border}`,
       borderLeft: `3px solid ${predColor}`,
       borderRadius: '10px',
       overflow: 'hidden',
@@ -940,14 +910,14 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         <button onClick={onToggleSelect}
           style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, flexShrink: 0 }}>
           {isSelected
-            ? <CheckSquare size={15} color="#00a884" />
-            : <Square size={15} color="#374045" />}
+            ? <CheckSquare size={15} color={colors.green} />
+            : <Square size={15} color={colors.borderStrong} />}
         </button>
 
         {/* Avatar */}
         <div style={{
           width: '36px', height: '36px', borderRadius: '50%', flexShrink: 0,
-          backgroundColor: '#1e2d3a',
+          backgroundColor: colors.bgHover,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '14px', fontWeight: 700, color: cColor,
           border: `2px solid ${cColor}55`,
@@ -956,7 +926,7 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         </div>
 
         {/* Nombre */}
-        <span style={{ color: '#e9edef', fontWeight: 700, fontSize: '14px', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '14px', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {c.name}
         </span>
 
@@ -979,7 +949,7 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         {/* Confianza */}
         <Tooltip text={`Confianza de la predicción. ${conf >= 80 ? 'Alta — patrón de compra muy regular.' : conf >= 60 ? 'Media — patrón moderadamente consistente.' : 'Baja — pocos datos o compras irregulares.'}`}>
           <span style={{
-            backgroundColor: '#1e2d3a', color: cColor,
+            backgroundColor: colors.bgHover, color: cColor,
             borderRadius: '6px', padding: '3px 8px',
             fontSize: '11px', fontWeight: 700, flexShrink: 0,
           }}>
@@ -993,14 +963,14 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', padding: '6px 14px 0 55px' }}>
           {overdue && (
             <Tooltip text={`Lleva ${c.daysInactive - c.avgFreqDays} días más de lo habitual sin comprar. Su ciclo normal es cada ~${c.avgFreqDays} días.`} position="bottom">
-              <span style={{ backgroundColor: '#3a1a1a', color: '#e57373', borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
+              <span style={{ backgroundColor: `${colors.red}22`, color: colors.red, borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
                 ⚠ {c.daysInactive - c.avgFreqDays}d fuera de ciclo
               </span>
             </Tooltip>
           )}
           {c.spendTrend && c.spendTrend !== 'estable' && (
             <Tooltip text={c.spendTrend === 'creciente' ? 'Este cliente gasta más en sus compras recientes que en las anteriores.' : 'Este cliente gasta menos en sus compras recientes que antes.'} position="bottom">
-              <span style={{ backgroundColor: '#1e2d3a', color: c.spendTrend === 'creciente' ? '#00c853' : '#e57373', borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
+              <span style={{ backgroundColor: colors.bgHover, color: c.spendTrend === 'creciente' ? colors.greenLight : colors.red, borderRadius: '5px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>
                 {c.spendTrend === 'creciente' ? '↑' : '↓'} gasto {c.spendTrend}
               </span>
             </Tooltip>
@@ -1010,14 +980,14 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
 
       {/* ── FILA 3: razón / fuente de predicción ── */}
       {c.aiReason && (
-        <div style={{ margin: '8px 14px 0', backgroundColor: '#0f1e28', borderRadius: '7px', padding: '7px 10px', display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
+        <div style={{ margin: '8px 14px 0', backgroundColor: colors.bgInput, borderRadius: '7px', padding: '7px 10px', display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
           {c.predSource === 'heuristic'
-            ? <Zap size={13} color="#f0b429" style={{ flexShrink: 0, marginTop: '1px' }} />
-            : <Brain size={13} color="#00a884" style={{ flexShrink: 0, marginTop: '1px' }} />}
-          <span style={{ color: '#8696a0', fontSize: '12px', fontStyle: 'italic', lineHeight: 1.45 }}>
+            ? <Zap size={13} color={colors.yellow} style={{ flexShrink: 0, marginTop: '1px' }} />
+            : <Brain size={13} color={colors.green} style={{ flexShrink: 0, marginTop: '1px' }} />}
+          <span style={{ color: colors.textSecondary, fontSize: '12px', fontStyle: 'italic', lineHeight: 1.45 }}>
             {c.aiReason}
             {c.predSource === 'heuristic' && (
-              <span style={{ marginLeft: '6px', color: '#4a5568', fontSize: '10px', fontStyle: 'normal' }}>(matemático)</span>
+              <span style={{ marginLeft: '6px', color: colors.textMuted, fontSize: '10px', fontStyle: 'normal' }}>(matemático)</span>
             )}
           </span>
         </div>
@@ -1026,39 +996,39 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
       {/* ── FILA 4: stats ── */}
       <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'center', padding: '8px 14px' }}>
         <Tooltip text={`Días desde su última compra (${c.lastOrderDate || '—'}). ${overdue ? `Su ciclo habitual es ~${c.avgFreqDays}d, lleva ${c.daysInactive - c.avgFreqDays}d de retraso.` : ''}`}>
-          <span style={{ color: '#8696a0', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ color: colors.textSecondary, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <Clock size={11} />
-            <strong style={{ color: overdue ? '#e57373' : '#c8d1d9' }}>{c.daysInactive}d</strong>
-            <span style={{ color: '#4a5568' }}>inactivo</span>
+            <strong style={{ color: overdue ? colors.red : colors.textPrimary }}>{c.daysInactive}d</strong>
+            <span style={{ color: colors.textMuted }}>inactivo</span>
           </span>
         </Tooltip>
 
-        <Tooltip text={`Total de pedidos realizados en la tienda. Más pedidos = predicción más precisa.`}>
-          <span style={{ color: '#8696a0', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <Tooltip text="Total de pedidos realizados en la tienda. Más pedidos = predicción más precisa.">
+          <span style={{ color: colors.textSecondary, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <ShoppingBag size={11} />
-            <strong style={{ color: '#c8d1d9' }}>{c.totalOrders}</strong>
-            <span style={{ color: '#4a5568' }}>pedido{c.totalOrders !== 1 ? 's' : ''}</span>
+            <strong style={{ color: colors.textPrimary }}>{c.totalOrders}</strong>
+            <span style={{ color: colors.textMuted }}>pedido{c.totalOrders !== 1 ? 's' : ''}</span>
           </span>
         </Tooltip>
 
         {c.avgFreqDays && (
           <Tooltip text={`Frecuencia promedio de compra. Normalmente compra cada ~${c.avgFreqDays} días.`}>
-            <span style={{ color: '#8696a0', fontSize: '12px' }}>
-              🔁 <strong style={{ color: '#c8d1d9' }}>~{c.avgFreqDays}d</strong>
+            <span style={{ color: colors.textSecondary, fontSize: '12px' }}>
+              🔁 <strong style={{ color: colors.textPrimary }}>~{c.avgFreqDays}d</strong>
             </span>
           </Tooltip>
         )}
 
         {c.favDay && (
           <Tooltip text={`Día de la semana en que más compra. Ideal para contactar los días ${c.favDay}.`}>
-            <span style={{ color: '#8696a0', fontSize: '12px' }}>
-              📅 <strong style={{ color: '#c8d1d9' }}>{c.favDay}</strong>
+            <span style={{ color: colors.textSecondary, fontSize: '12px' }}>
+              📅 <strong style={{ color: colors.textPrimary }}>{c.favDay}</strong>
             </span>
           </Tooltip>
         )}
 
         <Tooltip text={`Total gastado histórico en la tienda. Ticket promedio: $${Math.round((c.avgOrderVal || 0)).toLocaleString('es-CL')}`}>
-          <span style={{ color: '#00a884', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ color: colors.green, fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
             <TrendingUp size={11} />
             ${Math.round(c.totalSpent || 0).toLocaleString('es-CL')}
           </span>
@@ -1066,7 +1036,7 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
 
         {c.lastProducts && (
           <Tooltip text={`Últimos productos comprados: ${c.lastProducts}`}>
-            <span style={{ color: '#374045', fontSize: '11px', fontStyle: 'italic', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ color: colors.borderStrong, fontSize: '11px', fontStyle: 'italic', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {c.lastProducts}
             </span>
           </Tooltip>
@@ -1079,10 +1049,10 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
           <button onClick={onGenerate} disabled={isGenerating}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
-              backgroundColor: hasMsg ? '#0d2419' : '#1e2d3a',
-              color: hasMsg ? '#00c853' : '#8696a0',
+              backgroundColor: hasMsg ? colors.greenTint : colors.bgHover,
+              color: hasMsg ? colors.greenLight : colors.textSecondary,
               padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500,
-              border: `1px solid ${hasMsg ? '#00c85333' : '#2a3942'}`,
+              border: `1px solid ${hasMsg ? `${colors.greenLight}33` : colors.border}`,
               cursor: isGenerating ? 'not-allowed' : 'pointer',
               opacity: isGenerating ? 0.6 : 1, flex: 1,
             }}>
@@ -1095,16 +1065,15 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
 
         {useTemplate && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {/* Botón rellenar con IA individual */}
             <button
               onClick={onFillVars}
               disabled={isFilling}
               style={{
                 display: 'flex', alignItems: 'center', gap: '5px',
-                backgroundColor: hasAiFill ? '#1a2040' : '#1a2530',
-                color: hasAiFill ? '#a78bfa' : '#8696a0',
+                backgroundColor: hasAiFill ? colors.bgAccent2 : colors.bgHover,
+                color: hasAiFill ? colors.purple : colors.textSecondary,
                 padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
-                border: `1px solid ${hasAiFill ? '#7c3aed44' : '#2a3942'}`,
+                border: `1px solid ${hasAiFill ? `${colors.purple}44` : colors.border}`,
                 cursor: isFilling ? 'not-allowed' : 'pointer',
                 opacity: isFilling ? 0.6 : 1, alignSelf: 'flex-start',
               }}>
@@ -1115,13 +1084,12 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
                 : <><Sparkles size={11} /> Rellenar con IA</>}
             </button>
 
-            {/* Preview del template con variables rellenadas */}
-            <div style={{ backgroundColor: '#0f1820', borderRadius: '7px', padding: '6px 10px', border: `1px solid ${hasAiFill ? '#1e3a50' : '#1a2530'}`, fontSize: '12px' }}>
+            <div style={{ backgroundColor: colors.bgInput, borderRadius: '7px', padding: '6px 10px', border: `1px solid ${hasAiFill ? colors.border : colors.bgSub}`, fontSize: '12px' }}>
               {templatePreview
-                ? <span style={{ color: hasAiFill ? '#c8d1d9' : '#8696a0' }}>
+                ? <span style={{ color: hasAiFill ? colors.textPrimary : colors.textSecondary }}>
                     {templatePreview.slice(0, 100)}{templatePreview.length > 100 ? '…' : ''}
                   </span>
-                : <span style={{ color: '#4a5568', fontStyle: 'italic' }}>Rellenar variables con IA para ver preview</span>}
+                : <span style={{ color: colors.textMuted, fontStyle: 'italic' }}>Rellenar variables con IA para ver preview</span>}
             </div>
           </div>
         )}
@@ -1129,10 +1097,10 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
         <button onClick={onSend} disabled={isSending || (useTemplate && !hasAiFill)}
           style={{
             display: 'flex', alignItems: 'center', gap: '6px',
-            backgroundColor: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? '#1a4060' : '#00a884') : '#1e2d3a',
-            color: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? '#4db6e8' : '#fff') : '#374045',
+            backgroundColor: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? colors.bgAccent2 : colors.green) : colors.bgHover,
+            color: (useTemplate ? hasAiFill : hasMsg) ? (useTemplate ? colors.purple : '#fff') : colors.textMuted,
             padding: '7px 18px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
-            border: useTemplate ? '1px solid #1e5a80' : 'none',
+            border: useTemplate ? `1px solid ${colors.purple}44` : 'none',
             cursor: (isSending || (useTemplate && !hasAiFill)) ? 'not-allowed' : (useTemplate ? hasAiFill : hasMsg) ? 'pointer' : 'not-allowed',
             opacity: isSending ? 0.7 : 1, flexShrink: 0,
           }}>
@@ -1146,8 +1114,8 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
           <button onClick={onToggleExpand}
             style={{
               display: 'flex', alignItems: 'center', gap: '4px',
-              padding: '7px 10px', backgroundColor: '#1e2d3a', border: 'none',
-              borderRadius: '7px', cursor: 'pointer', color: '#8696a0', fontSize: '11px', flexShrink: 0,
+              padding: '7px 10px', backgroundColor: colors.bgHover, border: 'none',
+              borderRadius: '7px', cursor: 'pointer', color: colors.textSecondary, fontSize: '11px', flexShrink: 0,
             }}>
             {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           </button>
@@ -1156,8 +1124,8 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
 
       {/* ── Área de mensaje expandible (solo modo texto libre) ── */}
       {!useTemplate && isExpanded && (
-        <div style={{ padding: '12px 14px 14px', borderTop: '1px solid #2a3942', backgroundColor: '#0f1820' }}>
-          <div style={{ color: '#4a5568', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' }}>
+        <div style={{ padding: '12px 14px 14px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgInput }}>
+          <div style={{ color: colors.textMuted, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' }}>
             Mensaje WhatsApp
           </div>
           <textarea
@@ -1166,17 +1134,17 @@ function CandidateCard({ candidate: c, isSelected, isExpanded, message, isGenera
             placeholder="Genera un mensaje con IA o escríbelo manualmente..."
             rows={4}
             style={{
-              width: '100%', backgroundColor: '#182028', color: '#e9edef',
-              border: '1px solid #2a3942', borderRadius: '8px',
+              width: '100%', backgroundColor: colors.bgSub, color: colors.textPrimary,
+              border: `1px solid ${colors.border}`, borderRadius: '8px',
               padding: '10px 12px', fontSize: '13px', lineHeight: 1.55,
               resize: 'vertical', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box',
             }}
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-            <span style={{ color: '#374045', fontSize: '11px' }}>{message.length} caracteres</span>
+            <span style={{ color: colors.borderStrong, fontSize: '11px' }}>{message.length} caracteres</span>
             {hasMsg && (
               <button onClick={onSend} disabled={isSending}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#00a884', color: 'white', padding: '7px 16px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer', opacity: isSending ? 0.7 : 1 }}>
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.green, color: 'white', padding: '7px 16px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer', opacity: isSending ? 0.7 : 1 }}>
                 <Send size={13} /> {isSending ? 'Enviando...' : 'Enviar por WhatsApp'}
               </button>
             )}
