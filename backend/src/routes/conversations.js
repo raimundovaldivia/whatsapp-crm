@@ -257,7 +257,7 @@ router.post('/:id/escalation-feedback', async (req, res) => {
  */
 router.post('/:id/send-template', async (req, res) => {
   try {
-    const { templateName, languageCode, components } = req.body;
+    const { templateName, languageCode, components, previewText } = req.body;
     if (!templateName?.trim()) {
       return res.status(400).json({ success: false, error: 'templateName requerido' });
     }
@@ -281,11 +281,15 @@ router.post('/:id/send-template', async (req, res) => {
       wc
     );
 
+    const savedContent = previewText
+      ? `[Template: ${templateName.trim()}]\n\n${previewText}`
+      : `[Template: ${templateName.trim()}]`;
+
     const message = await db.saveMessage({
       conversationId:    conv.id,
       whatsappMessageId: sentResult?.messages?.[0]?.id || null,
       direction:         'outbound',
-      content:           `[Template: ${templateName.trim()}]`,
+      content:           savedContent,
       sentBy:            'human',
       agentType:         null,
     });
