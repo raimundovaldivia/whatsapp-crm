@@ -9,9 +9,9 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   FileText, Plus, Trash2, RefreshCw, CheckCircle,
   Clock, XCircle, Loader, AlertCircle, ChevronDown, ChevronUp,
-  Info, Sparkles, Wand2,
+  Info, Sparkles, Wand2, Zap, Send, ToggleLeft, ToggleRight,
 } from 'lucide-react';
-import { templatesAPI } from '../utils/api.js';
+import { templatesAPI, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
 const LANGUAGES = [
@@ -29,14 +29,16 @@ const CATEGORIES = [
   { value: 'AUTHENTICATION',  label: 'Autenticación',   desc: 'Códigos de verificación, contraseñas' },
 ];
 
-const STATUS_CONFIG = {
-  APPROVED: { color: '#00c853', bg: '#0a2e15', icon: CheckCircle, label: 'Aprobado' },
-  PENDING:  { color: '#f0b429', bg: '#2e2100', icon: Clock,        label: 'Pendiente' },
-  REJECTED: { color: '#e57373', bg: '#3a1a1a', icon: XCircle,      label: 'Rechazado' },
-};
+function getStatusConfig(colors) {
+  return {
+    APPROVED: { color: colors.greenLight, bg: colors.greenTint, icon: CheckCircle, label: 'Aprobado' },
+    PENDING:  { color: colors.yellow,     bg: '#2e2100',        icon: Clock,        label: 'Pendiente' },
+    REJECTED: { color: colors.red,        bg: '#3a1a1a',        icon: XCircle,      label: 'Rechazado' },
+  };
+}
 
-function StatusBadge({ status }) {
-  const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.PENDING;
+function StatusBadge({ status, colors }) {
+  const cfg = getStatusConfig(colors)[status] || getStatusConfig(colors).PENDING;
   const Icon = cfg.icon;
   return (
     <span style={{
@@ -56,7 +58,6 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
   const headerComp = template.components?.find(c => c.type === 'HEADER');
   const footerComp = template.components?.find(c => c.type === 'FOOTER');
 
-  // Detectar variables {{N}} en el body
   const vars = bodyComp?.text
     ? [...new Set([...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
     : [];
@@ -69,23 +70,20 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
       overflow: 'hidden',
       transition: 'border-color 0.15s',
     }}>
-      {/* Header de la card */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px' }}>
         <FileText size={15} color={colors.textSecondary} style={{ flexShrink: 0 }} />
-
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '14px', fontFamily: 'monospace' }}>
               {template.name}
             </span>
-            <StatusBadge status={template.status} />
+            <StatusBadge status={template.status} colors={colors} />
           </div>
           <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '2px' }}>
             {template.language} · {template.category}
             {vars.length > 0 && <span style={{ color: colors.green }}> · {vars.length} variable{vars.length !== 1 ? 's' : ''}</span>}
           </div>
         </div>
-
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
           <button
             onClick={() => setExpanded(p => !p)}
@@ -109,7 +107,6 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
         </div>
       </div>
 
-      {/* Contenido expandible: preview del template */}
       {expanded && (
         <div style={{ padding: '0 14px 14px', borderTop: `1px solid ${colors.border}` }}>
           <div style={{ marginTop: '10px', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '10px 12px' }}>
@@ -127,13 +124,11 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
               </div>
             )}
           </div>
-
           {template.status === 'REJECTED' && template.rejectedReason && (
             <div style={{ marginTop: '8px', backgroundColor: '#3a1a1a', borderRadius: '6px', padding: '8px 10px', fontSize: '11px', color: colors.red }}>
               <strong>Motivo del rechazo:</strong> {template.rejectedReason}
             </div>
           )}
-
           {template.status === 'PENDING' && (
             <div style={{ marginTop: '8px', color: colors.yellow, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Clock size={11} /> Meta está revisando este template. Normalmente tarda entre 1 y 24 horas.
@@ -145,6 +140,410 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
   );
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   BulkGenerateTab — genera varios templates del catálogo Shopify de un solo click
+───────────────────────────────────────────────────────────────────────── */
+function BulkGenerateTab({ onSubmitted, colors }) {
+  const [generating, setGenerating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [cards, setCards]           = useState([]);       // templates generados editables
+  const [selected, setSelected]     = useState({});       // { index: bool }
+  const [results, setResults]       = useState([]);       // resultados del submit
+  const [error, setError]           = useState('');
+
+  const inputStyle = {
+    width: '100%', backgroundColor: colors.bgApp, color: colors.textPrimary,
+    border: `1px solid ${colors.borderStrong}`, borderRadius: '8px',
+    padding: '9px 12px', fontSize: '13px', outline: 'none',
+    boxSizing: 'border-box', fontFamily: 'inherit',
+  };
+
+  const handleGenerate = async () => {
+    setGenerating(true); setError(''); setCards([]); setSelected({}); setResults([]);
+    try {
+      const res = await reengagementAPI.generateBulkTemplates();
+      const templates = res.templates || res.data?.templates || [];
+      if (!templates.length) { setError('No se pudieron generar templates. Verifica que Shopify esté conectado.'); return; }
+      setCards(templates);
+      // Seleccionar todos por defecto
+      const sel = {};
+      templates.forEach((_, i) => { sel[i] = true; });
+      setSelected(sel);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Error generando templates');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const toggleCard = (i) => setSelected(prev => ({ ...prev, [i]: !prev[i] }));
+
+  const updateCard = (i, field, value) =>
+    setCards(prev => prev.map((c, idx) => idx === i ? { ...c, [field]: value } : c));
+
+  const handleSubmitAll = async () => {
+    const toSend = cards.filter((_, i) => selected[i]);
+    if (!toSend.length) { setError('Selecciona al menos un template'); return; }
+    setSubmitting(true); setError(''); setResults([]);
+    try {
+      const res = await reengagementAPI.submitTemplates(toSend);
+      setResults(res.results || []);
+      const anyOk = (res.results || []).some(r => r.success);
+      if (anyOk) onSubmitted?.();
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Error enviando templates a Meta');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const selectedCount = Object.values(selected).filter(Boolean).length;
+
+  // ── Estado vacío ────────────────────────────────────────────────────────
+  if (!cards.length && !results.length) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        {/* Hero */}
+        <div style={{
+          background: `linear-gradient(135deg, ${colors.bgSub} 0%, ${colors.bgAccent2} 100%)`,
+          border: `1px solid ${colors.purple}33`,
+          borderRadius: '14px', padding: '24px',
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '40px', marginBottom: '10px' }}>✨</div>
+          <h3 style={{ color: colors.textPrimary, fontSize: '16px', fontWeight: 700, margin: '0 0 8px' }}>
+            Genera varios templates de un solo click
+          </h3>
+          <p style={{ color: colors.textSecondary, fontSize: '13px', lineHeight: 1.6, margin: '0 0 20px' }}>
+            La IA analiza tu catálogo de Shopify y crea <strong style={{ color: colors.purple }}>5 templates</strong> listos
+            para Meta — distintos enfoques: re-enganche, oferta, recordatorio, nuevos productos y más.
+            Puedes editarlos antes de enviarlos.
+          </p>
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            style={{
+              backgroundColor: generating ? colors.bgHover : colors.purple,
+              color: generating ? colors.textSecondary : 'white',
+              border: 'none', borderRadius: '10px',
+              padding: '13px 28px', fontSize: '15px', fontWeight: 700,
+              cursor: generating ? 'not-allowed' : 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: '8px',
+              transition: 'all 0.15s',
+            }}>
+            {generating
+              ? <><Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> Analizando catálogo...</>
+              : <><Zap size={16} /> Generar 5 templates con IA</>}
+          </button>
+          {generating && (
+            <p style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '12px' }}>
+              Esto puede tardar 15-30 segundos mientras la IA lee tu catálogo Shopify...
+            </p>
+          )}
+        </div>
+
+        {error && (
+          <div style={{ backgroundColor: '#3a1a1a', border: `1px solid ${colors.red}44`, borderRadius: '8px', padding: '12px 14px', color: colors.red, fontSize: '13px', display: 'flex', gap: '8px' }}>
+            <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '1px' }} /> {error}
+          </div>
+        )}
+
+        {/* Info */}
+        <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.7, display: 'flex', gap: '8px' }}>
+          <Info size={14} color="#4db6e8" style={{ flexShrink: 0, marginTop: '1px' }} />
+          <span>
+            Los templates generados estarán en estado <strong style={{ color: colors.yellow }}>Pendiente</strong> hasta
+            que Meta los apruebe (1–24 h). Una vez <strong style={{ color: colors.greenLight }}>Aprobados</strong>,
+            aparecerán disponibles en la sección Re-enganche para enviarlos a tus clientes.
+          </span>
+        </div>
+
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  // ── Resultados post-submit ───────────────────────────────────────────────
+  if (results.length) {
+    const ok  = results.filter(r => r.success);
+    const bad = results.filter(r => !r.success);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ backgroundColor: ok.length ? colors.greenTint : '#3a1a1a', border: `1px solid ${ok.length ? colors.green : colors.red}44`, borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
+          <div style={{ fontSize: '32px', marginBottom: '8px' }}>{ok.length ? '🎉' : '⚠️'}</div>
+          <div style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 700, marginBottom: '4px' }}>
+            {ok.length}/{results.length} templates enviados a Meta
+          </div>
+          <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
+            {ok.length > 0 && `${ok.length} en revisión — Meta los aprueba en 1-24 horas.`}
+            {bad.length > 0 && ` ${bad.length} fallaron.`}
+          </div>
+        </div>
+
+        {results.map((r, i) => (
+          <div key={i} style={{
+            backgroundColor: colors.bgSub, borderRadius: '8px', padding: '10px 14px',
+            border: `1px solid ${r.success ? colors.green : colors.red}44`,
+            display: 'flex', alignItems: 'center', gap: '10px',
+          }}>
+            {r.success
+              ? <CheckCircle size={15} color={colors.greenLight} />
+              : <XCircle size={15} color={colors.red} />}
+            <div style={{ flex: 1 }}>
+              <span style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px', fontFamily: 'monospace' }}>{r.name}</span>
+              {!r.success && r.error && (
+                <div style={{ color: colors.red, fontSize: '11px', marginTop: '2px' }}>{r.error}</div>
+              )}
+              {r.success && (
+                <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '2px' }}>Pendiente de revisión por Meta</div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        <button
+          onClick={() => { setCards([]); setResults([]); setSelected({}); }}
+          style={{
+            backgroundColor: colors.bgHover, color: colors.textSecondary,
+            border: `1px solid ${colors.border}`, borderRadius: '8px',
+            padding: '10px', fontSize: '13px', cursor: 'pointer',
+          }}>
+          ← Generar más templates
+        </button>
+
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  // ── Cards editables ──────────────────────────────────────────────────────
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Header con acciones */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        backgroundColor: colors.bgSub, borderRadius: '10px', padding: '12px 16px',
+        border: `1px solid ${colors.purple}44`,
+      }}>
+        <div>
+          <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '14px' }}>
+            ✨ {cards.length} templates generados desde tu catálogo
+          </span>
+          <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '2px' }}>
+            Edita el nombre y cuerpo de cada uno si quieres personalizar. Luego selecciona los que quieres enviar.
+          </div>
+        </div>
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          style={{
+            backgroundColor: 'transparent', color: colors.purple,
+            border: `1px solid ${colors.purple}66`, borderRadius: '7px',
+            padding: '7px 12px', fontSize: '12px', fontWeight: 600,
+            cursor: generating ? 'not-allowed' : 'pointer',
+            display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+          }}>
+          {generating
+            ? <><Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> Regenerando...</>
+            : <><RefreshCw size={12} /> Regenerar</>}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ backgroundColor: '#3a1a1a', borderRadius: '8px', padding: '10px 12px', color: colors.red, fontSize: '13px', display: 'flex', gap: '8px' }}>
+          <AlertCircle size={14} style={{ flexShrink: 0 }} /> {error}
+        </div>
+      )}
+
+      {/* Template cards editables */}
+      {cards.map((card, i) => (
+        <BulkTemplateCard
+          key={i}
+          index={i}
+          card={card}
+          selected={!!selected[i]}
+          onToggle={() => toggleCard(i)}
+          onUpdate={(field, val) => updateCard(i, field, val)}
+          colors={colors}
+          result={results[i]}
+        />
+      ))}
+
+      {/* Botón submit */}
+      <div style={{
+        position: 'sticky', bottom: 0,
+        backgroundColor: colors.bgPanel,
+        borderTop: `1px solid ${colors.border}`,
+        padding: '14px 0 4px',
+        display: 'flex', flexDirection: 'column', gap: '8px',
+      }}>
+        {selectedCount === 0 && (
+          <div style={{ color: colors.yellow, fontSize: '12px', textAlign: 'center' }}>
+            ⚠️ Selecciona al menos un template para enviar
+          </div>
+        )}
+        <button
+          onClick={handleSubmitAll}
+          disabled={submitting || selectedCount === 0}
+          style={{
+            backgroundColor: (selectedCount > 0 && !submitting) ? colors.green : colors.bgHover,
+            color: (selectedCount > 0 && !submitting) ? 'white' : colors.textSecondary,
+            border: 'none', borderRadius: '10px',
+            padding: '13px', fontSize: '14px', fontWeight: 700,
+            cursor: (selectedCount > 0 && !submitting) ? 'pointer' : 'not-allowed',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            transition: 'all 0.15s',
+          }}>
+          {submitting
+            ? <><Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> Enviando a Meta...</>
+            : <><Send size={15} /> Enviar {selectedCount > 0 ? `${selectedCount} template${selectedCount !== 1 ? 's' : ''}` : 'templates'} a Meta →</>}
+        </button>
+        {submitting && (
+          <div style={{ color: colors.textSecondary, fontSize: '11px', textAlign: 'center' }}>
+            Enviando a Meta... esto puede tardar unos segundos por template.
+          </div>
+        )}
+      </div>
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   BulkTemplateCard — card editable individual dentro de BulkGenerateTab
+───────────────────────────────────────────────────────────────────────── */
+function BulkTemplateCard({ index, card, selected, onToggle, onUpdate, colors, result }) {
+  const [expanded, setExpanded] = useState(true);
+
+  const inputStyle = {
+    width: '100%', backgroundColor: colors.bgApp, color: colors.textPrimary,
+    border: `1px solid ${colors.borderStrong}`, borderRadius: '7px',
+    padding: '8px 10px', fontSize: '13px', outline: 'none',
+    boxSizing: 'border-box', fontFamily: 'inherit',
+  };
+
+  const isSelected = selected && !result;
+
+  return (
+    <div style={{
+      backgroundColor: colors.bgSub,
+      border: `2px solid ${isSelected ? colors.purple + '66' : result?.success ? colors.green + '66' : result ? colors.red + '66' : colors.border}`,
+      borderRadius: '12px', overflow: 'hidden',
+      opacity: (!selected && !result) ? 0.6 : 1,
+      transition: 'all 0.2s',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px',
+        backgroundColor: isSelected ? `${colors.purple}11` : 'transparent',
+      }}>
+        {/* Toggle selección */}
+        <button
+          onClick={onToggle}
+          disabled={!!result}
+          style={{ background: 'none', border: 'none', cursor: result ? 'default' : 'pointer', padding: 0, display: 'flex', flexShrink: 0 }}>
+          {result?.success
+            ? <CheckCircle size={20} color={colors.greenLight} />
+            : result
+              ? <XCircle size={20} color={colors.red} />
+              : selected
+                ? <ToggleRight size={22} color={colors.purple} />
+                : <ToggleLeft size={22} color={colors.textMuted} />}
+        </button>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: colors.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Template {index + 1} · {card.category || 'MARKETING'} · {card.language || 'es'}
+          </div>
+          <div style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {card.name || `template_${index + 1}`}
+          </div>
+        </div>
+
+        {result?.success && <StatusBadge status="PENDING" colors={colors} />}
+        {result && !result.success && (
+          <span style={{ color: colors.red, fontSize: '11px' }}>Error</span>
+        )}
+
+        <button
+          onClick={() => setExpanded(p => !p)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: '4px', display: 'flex', flexShrink: 0 }}>
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+      </div>
+
+      {/* Body expandible editable */}
+      {expanded && !result && (
+        <div style={{ padding: '0 14px 14px', borderTop: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ marginTop: '12px' }}>
+            <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
+              Nombre (solo letras, números, guiones bajos)
+            </label>
+            <input
+              value={card.name || ''}
+              onChange={e => onUpdate('name', e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+              style={inputStyle}
+            />
+          </div>
+
+          {card.header !== undefined && (
+            <div>
+              <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
+                Encabezado (opcional)
+              </label>
+              <input
+                value={card.header || ''}
+                onChange={e => onUpdate('header', e.target.value)}
+                style={inputStyle}
+                maxLength={60}
+              />
+            </div>
+          )}
+
+          <div>
+            <label style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
+              Cuerpo del mensaje *
+            </label>
+            <textarea
+              value={card.body || ''}
+              onChange={e => onUpdate('body', e.target.value)}
+              rows={4}
+              style={{ ...inputStyle, resize: 'vertical' }}
+              maxLength={1024}
+            />
+            <div style={{ color: colors.textMuted, fontSize: '11px', marginTop: '3px' }}>
+              {(card.body || '').length}/1024
+            </div>
+          </div>
+
+          {/* Preview */}
+          {card.body && (
+            <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '10px 12px', border: `1px solid ${colors.border}` }}>
+              <div style={{ color: colors.textMuted, fontSize: '10px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Vista previa</div>
+              {card.header && <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '4px' }}>{card.header}</div>}
+              <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{card.body}</div>
+              {card.footer && <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '6px' }}>{card.footer}</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Resultado de error */}
+      {result && !result.success && expanded && (
+        <div style={{ padding: '0 14px 14px', borderTop: `1px solid ${colors.border}` }}>
+          <div style={{ marginTop: '10px', backgroundColor: '#3a1a1a', borderRadius: '7px', padding: '8px 10px', fontSize: '12px', color: colors.red }}>
+            {result.error || 'Error al enviar'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   CreateTemplateForm — formulario manual de 1 template
+───────────────────────────────────────────────────────────────────────── */
 function CreateTemplateForm({ onCreated, colors }) {
   const [name,       setName]       = useState('');
   const [lang,       setLang]       = useState('es');
@@ -159,18 +558,16 @@ function CreateTemplateForm({ onCreated, colors }) {
   // ── IA ──
   const [goal,        setGoal]        = useState('');
   const [generating,  setGenerating]  = useState(false);
-  const [aiVarDescs,  setAiVarDescs]  = useState({});  // { "1": "nombre del cliente", ... }
+  const [aiVarDescs,  setAiVarDescs]  = useState({});
   const [aiUsed,      setAiUsed]      = useState(false);
 
   // ── Valores de muestra para Meta ──
-  const [varSamples,  setVarSamples]  = useState({});  // { "1": "Juan", "2": "14" }
+  const [varSamples,  setVarSamples]  = useState({});
 
-  // Detectar variables en el body en tiempo real
   const vars = body
     ? [...new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
     : [];
 
-  // ── Generar con IA ──────────────────────────────────────────────────────
   const handleGenerate = async () => {
     if (!goal.trim()) return;
     setGenerating(true); setError(''); setAiVarDescs({}); setAiUsed(false);
@@ -184,7 +581,6 @@ function CreateTemplateForm({ onCreated, colors }) {
       if (d.footer !== undefined) setFooter(d.footer || '');
       if (d.variables && Object.keys(d.variables).length) {
         setAiVarDescs(d.variables);
-        // Pre-llenar muestras con valores típicos según descripción
         const samples = {};
         Object.entries(d.variables).forEach(([n, desc]) => {
           const d2 = desc.toLowerCase();
@@ -203,12 +599,10 @@ function CreateTemplateForm({ onCreated, colors }) {
     }
   };
 
-  // ── Crear en Meta ───────────────────────────────────────────────────────
   const handleCreate = async () => {
     setError(''); setSuccess('');
     if (!name.trim()) { setError('El nombre es requerido'); return; }
     if (!body.trim()) { setError('El cuerpo del mensaje es requerido'); return; }
-
     setCreating(true);
     try {
       const res = await templatesAPI.create({ name, language: lang, category, header, body, footer, varSamples });
@@ -294,7 +688,6 @@ function CreateTemplateForm({ onCreated, colors }) {
           </button>
         </div>
 
-        {/* Descripciones de variables de la IA */}
         {aiUsed && Object.keys(aiVarDescs).length > 0 && (
           <div style={{ marginTop: '10px', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             <span style={{ color: colors.textMuted, fontSize: '11px', width: '100%', marginBottom: '2px' }}>Variables detectadas:</span>
@@ -397,11 +790,11 @@ function CreateTemplateForm({ onCreated, colors }) {
 
       {/* ── Valores de muestra — OBLIGATORIO si hay variables ────────────── */}
       {vars.length > 0 && (
-        <div style={{ backgroundColor: '#1a2010', border: '1px solid #3a5020', borderRadius: '10px', padding: '12px 14px' }}>
+        <div style={{ backgroundColor: colors.greenTint, border: `1px solid ${colors.green}44`, borderRadius: '10px', padding: '12px 14px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '10px' }}>
             <span style={{ fontSize: '13px' }}>📋</span>
-            <span style={{ color: '#a8d080', fontSize: '13px', fontWeight: 700 }}>Valores de muestra</span>
-            <span style={{ color: '#5a7040', fontSize: '11px' }}>— Meta los necesita para revisar el template</span>
+            <span style={{ color: colors.greenLight, fontSize: '13px', fontWeight: 700 }}>Valores de muestra</span>
+            <span style={{ color: colors.textSecondary, fontSize: '11px' }}>— Meta los necesita para revisar el template</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {vars.sort((a, b) => +a - +b).map(n => (
@@ -414,15 +807,15 @@ function CreateTemplateForm({ onCreated, colors }) {
                   {`{{${n}}}`}
                 </span>
                 {aiVarDescs[n] && (
-                  <span style={{ color: '#5a7040', fontSize: '11px', flexShrink: 0 }}>{aiVarDescs[n]}</span>
+                  <span style={{ color: colors.textSecondary, fontSize: '11px', flexShrink: 0 }}>{aiVarDescs[n]}</span>
                 )}
                 <input
                   value={varSamples[n] || ''}
                   onChange={e => setVarSamples(prev => ({ ...prev, [n]: e.target.value }))}
                   placeholder={aiVarDescs[n] ? `ej: ${aiVarDescs[n] === 'nombre del cliente' ? 'Juan' : aiVarDescs[n]}` : `valor de muestra para {{${n}}}`}
                   style={{
-                    flex: 1, backgroundColor: '#0f1a08', color: colors.textPrimary,
-                    border: `1px solid ${varSamples[n]?.trim() ? '#3a5020' : '#ff665544'}`,
+                    flex: 1, backgroundColor: colors.bgApp, color: colors.textPrimary,
+                    border: `1px solid ${varSamples[n]?.trim() ? colors.green + '66' : colors.red + '44'}`,
                     borderRadius: '7px', padding: '7px 10px', fontSize: '13px',
                     outline: 'none', fontFamily: 'inherit',
                   }}
@@ -430,7 +823,7 @@ function CreateTemplateForm({ onCreated, colors }) {
               </div>
             ))}
           </div>
-          <div style={{ marginTop: '8px', color: '#5a7040', fontSize: '11px' }}>
+          <div style={{ marginTop: '8px', color: colors.textSecondary, fontSize: '11px' }}>
             Sin estos valores Meta rechaza el template automáticamente. No serán enviados a clientes — son solo para revisión.
           </div>
         </div>
@@ -477,9 +870,8 @@ function CreateTemplateForm({ onCreated, colors }) {
       </div>
 
       {error   && <div style={{ backgroundColor: '#3a1a1a', color: colors.red,       borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{error}</div>}
-      {success && <div style={{ backgroundColor: '#0a2e15', color: colors.greenLight, borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{success}</div>}
+      {success && <div style={{ backgroundColor: colors.greenTint, color: colors.greenLight, borderRadius: '7px', padding: '10px 12px', fontSize: '13px' }}>{success}</div>}
 
-      {/* Advertencia si faltan muestras */}
       {vars.length > 0 && vars.some(n => !varSamples[n]?.trim()) && (
         <div style={{ backgroundColor: '#2a1a00', border: '1px solid #ff8c0044', borderRadius: '7px', padding: '9px 12px', fontSize: '12px', color: colors.yellow, display: 'flex', gap: '7px', alignItems: 'flex-start' }}>
           <span style={{ flexShrink: 0 }}>⚠️</span>
@@ -509,13 +901,16 @@ function CreateTemplateForm({ onCreated, colors }) {
   );
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   TemplateManager — componente raíz
+───────────────────────────────────────────────────────────────────────── */
 export default function TemplateManager() {
   const { colors } = useTheme();
-  const [tab, setTab]         = useState('list');   // 'list' | 'create'
+  const [tab, setTab]             = useState('list');   // 'list' | 'bulk' | 'create'
   const [templates, setTemplates] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const [deleting, setDeleting] = useState(null);   // nombre del template en borrado
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+  const [deleting, setDeleting]   = useState(null);
 
   const loadTemplates = useCallback(async () => {
     setLoading(true); setError('');
@@ -550,21 +945,31 @@ export default function TemplateManager() {
   const pending  = templates.filter(t => t.status === 'PENDING');
   const rejected = templates.filter(t => t.status === 'REJECTED');
 
+  const tabs = [
+    { key: 'list',   label: '📋 Mis Templates', count: templates.length },
+    { key: 'bulk',   label: '✨ Del Catálogo',   highlight: true },
+    { key: 'create', label: '+ Crear Template' },
+  ];
+
   return (
     <div style={{ color: colors.textPrimary }}>
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0', marginBottom: '16px', backgroundColor: colors.bgApp, borderRadius: '9px', padding: '3px' }}>
-        {[
-          { key: 'list',   label: 'Mis Templates', count: templates.length },
-          { key: 'create', label: '+ Crear Template' },
-        ].map(t => (
+        {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             style={{
-              flex: 1, padding: '8px 14px', border: 'none',
-              backgroundColor: tab === t.key ? colors.bgPanel : 'transparent',
-              color: tab === t.key ? colors.textPrimary : colors.textSecondary,
-              borderRadius: '7px', cursor: 'pointer', fontSize: '13px', fontWeight: tab === t.key ? 600 : 400,
+              flex: 1, padding: '8px 10px', border: 'none',
+              backgroundColor: tab === t.key
+                ? (t.highlight ? `${colors.purple}22` : colors.bgPanel)
+                : 'transparent',
+              color: tab === t.key
+                ? (t.highlight ? colors.purple : colors.textPrimary)
+                : colors.textSecondary,
+              borderRadius: '7px', cursor: 'pointer', fontSize: '13px',
+              fontWeight: tab === t.key ? 700 : 400,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+              outline: tab === t.key && t.highlight ? `1px solid ${colors.purple}44` : 'none',
+              transition: 'all 0.15s',
             }}>
             {t.label}
             {t.count != null && t.count > 0 && (
@@ -582,7 +987,7 @@ export default function TemplateManager() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
             <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
               {approved.length > 0 && <span style={{ color: colors.greenLight }}>{approved.length} aprobado{approved.length !== 1 ? 's' : ''}</span>}
-              {pending.length > 0 && <><span style={{ color: colors.textMuted }}> · </span><span style={{ color: colors.yellow }}>{pending.length} pendiente{pending.length !== 1 ? 's' : ''}</span></>}
+              {pending.length > 0  && <><span style={{ color: colors.textMuted }}> · </span><span style={{ color: colors.yellow }}>{pending.length} pendiente{pending.length !== 1 ? 's' : ''}</span></>}
               {rejected.length > 0 && <><span style={{ color: colors.textMuted }}> · </span><span style={{ color: colors.red }}>{rejected.length} rechazado{rejected.length !== 1 ? 's' : ''}</span></>}
               {templates.length === 0 && !loading && 'Sin templates creados aún'}
             </div>
@@ -605,11 +1010,17 @@ export default function TemplateManager() {
             <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>
               <FileText size={40} style={{ opacity: 0.2, marginBottom: '12px' }} />
               <div style={{ fontSize: '14px', fontWeight: 500 }}>Sin templates</div>
-              <div style={{ fontSize: '12px', marginTop: '6px', opacity: 0.7 }}>Crea tu primer template para poder enviarlo en Re-enganche</div>
-              <button onClick={() => setTab('create')}
-                style={{ marginTop: '16px', backgroundColor: colors.green, color: 'white', border: 'none', borderRadius: '8px', padding: '8px 18px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                + Crear Template
-              </button>
+              <div style={{ fontSize: '12px', marginTop: '6px', opacity: 0.7 }}>Crea templates para poder enviarlos en Re-enganche</div>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '16px' }}>
+                <button onClick={() => setTab('bulk')}
+                  style={{ backgroundColor: colors.purple, color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                  ✨ Generar del catálogo
+                </button>
+                <button onClick={() => setTab('create')}
+                  style={{ backgroundColor: colors.green, color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                  + Crear manualmente
+                </button>
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -621,10 +1032,17 @@ export default function TemplateManager() {
         </div>
       )}
 
-      {/* Crear template */}
+      {/* Generar del catálogo (bulk) */}
+      {tab === 'bulk' && (
+        <BulkGenerateTab onSubmitted={() => { setTimeout(() => setTab('list'), 1500); }} colors={colors} />
+      )}
+
+      {/* Crear template manual */}
       {tab === 'create' && (
         <CreateTemplateForm onCreated={() => { setTab('list'); loadTemplates(); }} colors={colors} />
       )}
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
