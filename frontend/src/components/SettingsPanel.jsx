@@ -83,11 +83,12 @@ function SaveBtn({ loading, onClick, label: lbl = 'Guardar cambios', colors }) {
 ══════════════════════════════════════════════ */
 function ShopifyTab() {
   const { colors } = useTheme();
-  const [status, setStatus]   = useState(null);
+  const [status, setStatus]       = useState(null);
+  const [statusLoading, setStatusLoading] = useState(true);   // ← mientras carga el estado real
   const [shopInput, setShopInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const [success, setSuccess] = useState('');
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+  const [success, setSuccess]     = useState('');
 
   const card = {
     backgroundColor: colors.bgPanel, borderRadius: '14px',
@@ -103,7 +104,7 @@ function ShopifyTab() {
     setupAPI.shopifyStatus().then(r => {
       setStatus(r);
       if (r.shop) setShopInput(r.shop.replace('.myshopify.com', ''));
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setStatusLoading(false));
 
     // Detectar retorno del OAuth de Shopify
     const params = new URLSearchParams(window.location.search);
@@ -156,12 +157,17 @@ function ShopifyTab() {
         <div style={{ padding: '16px 22px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
           <ShoppingBag size={17} color={colors.green} />
           <span style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 600 }}>Tienda Shopify</span>
-          <Badge ok={status?.connected} colors={colors} />
+          {!statusLoading && <Badge ok={status?.connected} colors={colors} />}
         </div>
         <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
-          {/* Conectado */}
-          {status?.connected ? (
+          {/* Cargando estado */}
+          {statusLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 0', color: colors.textSecondary, fontSize: '13px' }}>
+              <Loader size={15} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+              Verificando conexión con Shopify...
+            </div>
+          ) : /* Conectado */ status?.connected ? (
             <>
               <div style={{ backgroundColor: colors.bgAccent, borderRadius: '8px', padding: '12px 16px', border: `1px solid ${colors.green}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
