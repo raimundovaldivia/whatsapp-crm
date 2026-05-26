@@ -90,7 +90,7 @@ export default function AuthPage({ onAuth }) {
             <MessageSquare size={24} color="white" />
           </div>
           <div>
-            <div style={{ color: colors.textPrimary, fontSize: '18px', fontWeight: 700 }}>WhatsApp CRM</div>
+            <div style={{ color: colors.textPrimary, fontSize: '18px', fontWeight: 700 }}>Orbitality</div>
             <div style={{ color: colors.green, fontSize: '12px', fontWeight: 500 }}>powered by Claude AI</div>
           </div>
         </div>
@@ -162,7 +162,7 @@ export default function AuthPage({ onAuth }) {
               <MessageSquare size={28} color="white" />
             </div>
             <h1 style={{ color: colors.textPrimary, fontSize: '22px', fontWeight: 700, margin: '0 0 4px' }}>
-              WhatsApp CRM
+              Orbitality
             </h1>
             <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>
               Agente IA para tu tienda Shopify
