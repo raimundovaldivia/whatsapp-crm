@@ -30,7 +30,7 @@ export default function EmptyState({ orgName }) {
       {/* Texto principal */}
       <div style={{ textAlign: 'center', maxWidth: '400px' }}>
         <h2 style={{ color: colors.textPrimary, fontSize: '22px', fontWeight: 300, marginBottom: '12px' }}>
-          Orbitality
+          Resel
         </h2>
         <p style={{ color: colors.textSecondary, fontSize: '14px', lineHeight: '1.6' }}>
           Selecciona una conversación para comenzar.<br />
