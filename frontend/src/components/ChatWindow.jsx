@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI } from '../utils/api.js';
@@ -7,7 +7,7 @@ import { useTheme } from '../theme.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback, onDeleteMessages, currentUserEmail }) {
+export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -154,6 +154,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         templateName:  selectedTemplate.name,
         languageCode:  selectedTemplate.language,
         components:    buildTplComponents(),
+        previewText:   previewTpl(),
       });
       setShowTemplateModal(false);
       setError(null);
@@ -219,7 +220,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         minHeight: '60px',
         zIndex: 10,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {isMobile && onBack && (
+            <button onClick={onBack} style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '6px',
+              color: colors.textSecondary, display: 'flex', alignItems: 'center',
+              borderRadius: '8px', flexShrink: 0,
+            }}>
+              <ChevronLeft size={22} />
+            </button>
+          )}
           <div style={{
             width: '40px', height: '40px', borderRadius: '50%',
             backgroundColor: '#4db6ac',

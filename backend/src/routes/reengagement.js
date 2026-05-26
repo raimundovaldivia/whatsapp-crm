@@ -957,7 +957,7 @@ router.post('/submit-templates', async (req, res) => {
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message, templateName, languageCode, components } = req.body;
+    const { phone, message, templateName, languageCode, components, previewText } = req.body;
     if (!phone) return res.status(400).json({ success: false, error: 'phone requerido' });
 
     const isTemplate = !!templateName;
@@ -980,7 +980,9 @@ router.post('/send', async (req, res) => {
       sentResult = await kapsoService.sendTemplate(
         phone, templateName, languageCode || 'es', components || [], wc
       );
-      savedContent = `[Template: ${templateName}]`;
+      savedContent = previewText
+        ? `[Template: ${templateName}]\n\n${previewText}`
+        : `[Template: ${templateName}]`;
     } else {
       // ── Modo Texto libre ─────────────────────────────────────────
       if (wc.provider === 'twilio') {
@@ -1049,7 +1051,9 @@ router.post('/send-bulk', async (req, res) => {
         sentResult = await kapsoService.sendTemplate(
           item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
         );
-        savedContent = `[Template: ${item.templateName}]`;
+        savedContent = item.previewText
+          ? `[Template: ${item.templateName}]\n\n${item.previewText}`
+          : `[Template: ${item.templateName}]`;
       } else {
         if (wc.provider === 'twilio') {
           sentResult = await require('../services/twilio-whatsapp').sendTextMessage(item.phone, item.message, wc);

@@ -20,7 +20,15 @@ export default function App() {
   const [appState, setAppState] = useState('loading');
   const [user, setUser]         = useState(null);
   const [org, setOrg]           = useState(null);
-  const [view, setView]         = useState('chats'); // 'chats'|'catalogo'|'orders'|'dashboard'|'settings'|'templates'
+  const [view, setView]         = useState('chats');
+
+  // Responsive
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
 
   // Theme
   const [theme, setTheme] = useState(() => localStorage.getItem('crm_theme') || 'dark');
@@ -154,6 +162,9 @@ export default function App() {
 
   const { connected } = useSocket(org?.id, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated);
 
+  // En móvil, volver al sidebar limpiando la selección
+  const handleBackToSidebar = useCallback(() => setSelectedId(null), []);
+
   // ── Seleccionar conversación ────────────────────────────────────
   const handleSelectConversation = useCallback(async (id) => {
     setView('chats');
@@ -227,11 +238,21 @@ export default function App() {
   const selectedMsgs = messages[selectedId] || [];
   const totalUnread  = conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
 
+  // En móvil: mostrar sidebar solo si no hay conversación seleccionada
+  const showSidebar = !isMobile || (isMobile && !selectedId);
+  const showChat    = !isMobile || (isMobile && !!selectedId);
+
   return (
     <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
-    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', backgroundColor: colors.bgApp }}>
+    <div style={{
+      display: 'flex', height: '100vh', width: '100vw',
+      overflow: 'hidden', backgroundColor: colors.bgApp,
+      flexDirection: isMobile ? 'column' : 'row',
+      paddingBottom: isMobile ? '60px' : 0,
+      boxSizing: 'border-box',
+    }}>
 
-      {/* Barra de navegación vertical */}
+      {/* Barra de navegación (lateral desktop / inferior móvil) */}
       <NavBar
         view={view}
         onChangeView={handleChangeView}
@@ -241,41 +262,47 @@ export default function App() {
         unreadCount={totalUnread}
         pendingOrders={pendingOrders}
         colors={colors}
+        isMobile={isMobile}
       />
 
-      {/* Vista Chats: sidebar de conversaciones + chat */}
+      {/* Vista Chats */}
       {view === 'chats' && (
-        <>
-          <Sidebar
-            conversations={conversations}
-            selectedId={selectedId}
-            onSelect={handleSelectConversation}
-            loading={loadingConvs}
-            onRefresh={loadConversations}
-          />
-          {selectedConv ? (
-            <ChatWindow
-              conversation={selectedConv}
-              messages={selectedMsgs}
-              onSendMessage={handleSendMessage}
-              onToggleAgentMode={handleToggleAgentMode}
-              onEscalationFeedback={async (convId, feedback) => {
-                await conversationsAPI.sendEscalationFeedback(convId, feedback);
-              }}
-              currentUserEmail={user?.email}
-              onDeleteMessages={async (convId) => {
-                await conversationsAPI.deleteMessages(convId);
-                // Limpiar mensajes en el estado local
-                setMessages(prev => ({ ...prev, [convId]: [] }));
-                // Refrescar la conversación en el sidebar
-                const updated = await conversationsAPI.getAll();
-                setConversations(updated);
-              }}
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', height: isMobile ? '100%' : '100vh' }}>
+          {showSidebar && (
+            <Sidebar
+              conversations={conversations}
+              selectedId={selectedId}
+              onSelect={handleSelectConversation}
+              loading={loadingConvs}
+              onRefresh={loadConversations}
+              isMobile={isMobile}
             />
-          ) : (
-            <EmptyState orgName={org?.name} />
           )}
-        </>
+          {showChat && (
+            selectedConv ? (
+              <ChatWindow
+                conversation={selectedConv}
+                messages={selectedMsgs}
+                onSendMessage={handleSendMessage}
+                onToggleAgentMode={handleToggleAgentMode}
+                onEscalationFeedback={async (convId, feedback) => {
+                  await conversationsAPI.sendEscalationFeedback(convId, feedback);
+                }}
+                currentUserEmail={user?.email}
+                onBack={handleBackToSidebar}
+                isMobile={isMobile}
+                onDeleteMessages={async (convId) => {
+                  await conversationsAPI.deleteMessages(convId);
+                  setMessages(prev => ({ ...prev, [convId]: [] }));
+                  const updated = await conversationsAPI.getAll();
+                  setConversations(updated);
+                }}
+              />
+            ) : !isMobile ? (
+              <EmptyState orgName={org?.name} />
+            ) : null
+          )}
+        </div>
       )}
 
       {/* Vista Catálogo */}

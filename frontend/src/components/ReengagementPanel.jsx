@@ -326,6 +326,7 @@ export default function ReengagementPanel() {
           templateName:  selectedTemplate.name,
           languageCode:  selectedTemplate.language,
           components:    buildComponents(candidate),
+          previewText:   previewTemplate(candidate),
         });
         showToast('✅ Template enviado');
         setCandidates(prev => prev.filter(c => c.phone !== phone));
@@ -365,6 +366,7 @@ export default function ReengagementPanel() {
         templateName: selectedTemplate.name,
         languageCode: selectedTemplate.language,
         components:   buildComponents(c),
+        previewText:  previewTemplate(c),
       }));
     } else {
       targets = visible.filter(c => selected.has(c.phone) && messages[c.phone]?.trim());

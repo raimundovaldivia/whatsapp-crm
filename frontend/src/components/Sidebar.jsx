@@ -4,7 +4,7 @@ import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
-export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh }) {
+export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
   const [search, setSearch]       = useState('');
   const [activeTab, setActiveTab] = useState('all'); // 'all' | 'ai' | 'human'
@@ -107,8 +107,10 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     )}
 
     <div style={{
-      width: '320px', minWidth: '260px', height: '100vh',
-      backgroundColor: colors.bgSub, borderRight: `1px solid ${colors.border}`,
+      width: isMobile ? '100%' : '320px',
+      minWidth: isMobile ? 'unset' : '260px',
+      height: '100%',
+      backgroundColor: colors.bgSub, borderRight: isMobile ? 'none' : `1px solid ${colors.border}`,
       display: 'flex', flexDirection: 'column', flexShrink: 0,
     }}>
       {/* Header */}
