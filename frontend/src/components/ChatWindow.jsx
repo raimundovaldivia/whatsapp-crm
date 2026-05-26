@@ -202,7 +202,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       flex: 1,
       display: 'flex',
       flexDirection: 'column',
-      height: '100vh',
+      height: isMobile ? '100%' : '100vh',
+      overflow: 'hidden',
       position: 'relative',
       backgroundColor: isDark ? '#0b141a' : '#efeae2',
       backgroundImage: isDark
@@ -211,19 +212,21 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }}>
       {/* Header */}
       <div style={{
-        padding: '10px 16px',
+        padding: isMobile ? '8px 10px' : '10px 16px',
         backgroundColor: colors.bgPanel,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         borderBottom: `1px solid ${colors.border}`,
-        minHeight: '60px',
+        minHeight: '56px',
         zIndex: 10,
+        flexShrink: 0,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Left: back + avatar + contact info */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
           {isMobile && onBack && (
             <button onClick={onBack} style={{
-              background: 'none', border: 'none', cursor: 'pointer', padding: '6px',
+              background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
               color: colors.textSecondary, display: 'flex', alignItems: 'center',
               borderRadius: '8px', flexShrink: 0,
             }}>
@@ -231,32 +234,40 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             </button>
           )}
           <div style={{
-            width: '40px', height: '40px', borderRadius: '50%',
-            backgroundColor: '#4db6ac',
+            width: isMobile ? '34px' : '40px', height: isMobile ? '34px' : '40px',
+            borderRadius: '50%', backgroundColor: '#4db6ac', flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 600, color: 'white', fontSize: '14px',
+            fontWeight: 600, color: 'white', fontSize: '13px',
           }}>
             {initials}
           </div>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: '15px', color: colors.textPrimary }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontWeight: 600, fontSize: isMobile ? '14px' : '15px', color: colors.textPrimary,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              maxWidth: isMobile ? '110px' : 'none',
+            }}>
               {conversation.contact_name || conversation.phone_number}
             </div>
-            <div style={{ fontSize: '12px', color: colors.textSecondary }}>
-              {conversation.phone_number}
-            </div>
+            {!isMobile && (
+              <div style={{ fontSize: '12px', color: colors.textSecondary }}>
+                {conversation.phone_number}
+              </div>
+            )}
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+        {/* Right: action buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '4px' : '8px', flexShrink: 0 }}>
           {isDevUser && (
             <button
               onClick={handleDeleteMessages}
               disabled={deleting}
-              title="Borrar todos los mensajes (testing)"
+              title={deleting ? 'Borrando...' : 'Borrar todos los mensajes'}
               style={{
                 backgroundColor: 'transparent',
                 border: `1px solid ${colors.borderStrong}`,
-                borderRadius: '6px', padding: '5px 8px',
+                borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
                 color: deleting ? colors.textMuted : colors.red,
                 cursor: deleting ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', gap: '4px',
@@ -264,7 +275,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               }}
             >
               <Trash2 size={13} />
-              {deleting ? 'Borrando...' : 'Reset chat'}
+              {!isMobile && (deleting ? 'Borrando...' : 'Reset chat')}
             </button>
           )}
           <button
@@ -273,7 +284,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             style={{
               backgroundColor: 'transparent',
               border: `1px solid ${colors.borderStrong}`,
-              borderRadius: '6px', padding: '5px 8px',
+              borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
               color: '#4db6e8',
               cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: '4px',
@@ -281,11 +292,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             }}
           >
             <FileText size={13} />
-            Template
+            {!isMobile && 'Template'}
           </button>
           <AgentToggle
             mode={conversation.agent_mode}
             onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode)}
+            isMobile={isMobile}
           />
         </div>
       </div>

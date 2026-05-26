@@ -39,7 +39,7 @@ export default function MessageBubble({ message }) {
       marginBottom: '2px',
     }}>
       <div style={{
-        maxWidth: '65%',
+        maxWidth: templateData ? '85%' : '65%',
         display: 'flex',
         flexDirection: 'column',
         alignItems: isOutbound ? 'flex-end' : 'flex-start',
@@ -67,7 +67,7 @@ export default function MessageBubble({ message }) {
             ? (isAI ? 'none' : `1px solid ${isDark ? colors.border : colors.borderStrong}`)
             : templateData ? `1px solid ${colors.purple}33` : 'none',
           overflow: 'hidden',
-          minWidth: templateData ? '220px' : undefined,
+          minWidth: templateData ? '200px' : undefined,
         }}>
 
           {templateData ? (
@@ -87,6 +87,8 @@ export default function MessageBubble({ message }) {
                 <span style={{
                   marginLeft: 'auto', fontSize: '10px', color: colors.textMuted,
                   fontFamily: 'monospace', opacity: 0.8,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  maxWidth: '120px',
                 }}>
                   {templateData.name}
                 </span>
