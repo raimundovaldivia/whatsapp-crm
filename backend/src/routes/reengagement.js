@@ -657,7 +657,7 @@ router.get('/templates', async (req, res) => {
  */
 router.post('/generate-templates', async (req, res) => {
   try {
-    const orgId = req.user.orgId;
+    const orgId = req.orgId;
     const db    = require('../db/database.js');
     const shopifyApi = require('../services/shopify-api.js');
     const Anthropic  = require('@anthropic-ai/sdk');
@@ -762,7 +762,7 @@ Responde SOLO con JSON válido (sin markdown):
  */
 router.post('/submit-templates', async (req, res) => {
   try {
-    const orgId    = req.user.orgId;
+    const orgId    = req.orgId;
     const { templates } = req.body;
     if (!Array.isArray(templates) || templates.length === 0) {
       return res.status(400).json({ success: false, error: 'templates array requerido' });
@@ -771,7 +771,7 @@ router.post('/submit-templates', async (req, res) => {
     const db           = require('../db/database.js');
     const kapsoService = require('../services/kapso-whatsapp.js');
 
-    const wc = await db.getWhatsAppConfig(orgId);
+    const wc = await db.getWhatsappConfig(orgId);
     if (!wc || (wc.provider !== 'kapso' && wc.provider !== 'meta')) {
       return res.status(400).json({ success: false, error: 'Requiere proveedor Kapso o Meta' });
     }
@@ -804,15 +804,15 @@ router.post('/submit-templates', async (req, res) => {
         };
 
         const apiResult = await kapsoService.createTemplate(payload, wc);
-        results.push({ name: t.name, status: 'submitted', id: apiResult?.id });
+        results.push({ name: t.name, success: true, status: 'submitted', id: apiResult?.id });
       } catch (err) {
         const errMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-        results.push({ name: t.name, status: 'error', error: errMsg });
+        results.push({ name: t.name, success: false, status: 'error', error: errMsg });
       }
     }
 
-    const allOk    = results.every(r => r.status === 'submitted');
-    const someOk   = results.some(r => r.status === 'submitted');
+    const allOk    = results.every(r => r.success);
+    const someOk   = results.some(r => r.success);
     res.json({
       success: someOk,
       results,
