@@ -61,6 +61,7 @@ export const reengagementAPI = {
   sendBulk:             (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
   getTemplates:         () => api.get('/reengagement/templates').then(r => r.data),
   fillTemplateVars:     (phone, templateBody) => api.post('/reengagement/fill-template-vars', { phone, templateBody }).then(r => r.data),
+  aiPickTemplate:       (phone, templates)    => api.post('/reengagement/ai-pick-template', { phone, templates }, { timeout: 30000 }).then(r => r.data),
   calibrate:            () => api.post('/reengagement/calibrate', {}, { timeout: 120000 }).then(r => r.data),
   getCalibration:       () => api.get('/reengagement/calibration').then(r => r.data),
   getAccuracy:          () => api.get('/reengagement/accuracy').then(r => r.data),

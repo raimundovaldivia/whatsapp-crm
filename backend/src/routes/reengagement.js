@@ -618,6 +618,121 @@ Responde SOLO con un objeto JSON, sin explicaciones:
 });
 
 /* ─────────────────────────────────────────────────────────────────────
+   POST /api/reengagement/ai-pick-template
+   La IA elige el mejor template para el cliente Y rellena sus variables
+   en un solo paso.
+
+   Body:    { phone, templates: [{ name, language, components }] }
+   Returns: { templateName, languageCode, vars, previewText, reason }
+───────────────────────────────────────────────────────────────────── */
+router.post('/ai-pick-template', async (req, res) => {
+  try {
+    const { phone, templates } = req.body;
+    if (!phone || !Array.isArray(templates) || templates.length === 0) {
+      return res.status(400).json({ success: false, error: 'phone y templates requeridos' });
+    }
+
+    // Datos del cliente desde el caché de análisis
+    const cached = analysisCache.get(req.orgId);
+    const c = cached?.data?.find(x => x.phone === phone) || {};
+
+    // Construir descripción de cada template para el prompt
+    const tplDescriptions = templates.map((t, i) => {
+      const body = (t.components || []).find(comp => comp.type === 'BODY');
+      const header = (t.components || []).find(comp => comp.type === 'HEADER');
+      const footer = (t.components || []).find(comp => comp.type === 'FOOTER');
+      const parts = [];
+      if (header?.text) parts.push(`ENCABEZADO: "${header.text}"`);
+      if (body?.text)   parts.push(`CUERPO: "${body.text}"`);
+      if (footer?.text) parts.push(`PIE: "${footer.text}"`);
+      return `${i + 1}. Nombre: "${t.name}" (${t.category || 'MARKETING'})\n   ${parts.join(' | ')}`;
+    }).join('\n\n');
+
+    const daysLabel = c.daysInactive != null ? `${c.daysInactive} días sin comprar` : 'inactivo por un tiempo';
+    const freqLabel = c.avgFreqDays ? `compra cada ~${c.avgFreqDays} días` : 'frecuencia variable';
+    const predLabel = c.predictedDays != null
+      ? (c.predictedDays <= 0 ? `lleva ${Math.abs(c.predictedDays)}d de retraso en su ciclo` : `se predice que comprará en ~${c.predictedDays} días`)
+      : 'pronto';
+
+    const prompt =
+`Eres un experto en marketing de re-enganche para una tienda. Tu tarea es:
+1. Elegir el template de WhatsApp MÁS APROPIADO para este cliente específico.
+2. Rellenar TODAS sus variables {{N}} de forma natural y personalizada.
+
+PERFIL DEL CLIENTE:
+- Nombre: ${c.name || phone}
+- Teléfono: ${phone}
+- Estado: ${daysLabel} (${freqLabel})
+- Última compra: ${c.lastOrderDate || '—'}
+- Productos habituales: ${c.lastProducts || 'productos frescos'}
+- Historial: ${c.totalOrders || 0} pedidos, $${Math.round(c.totalSpent || 0).toLocaleString('es-CL')} total gastado
+- Predicción IA: ${predLabel}
+${c.aiReason ? `- Análisis IA: ${c.aiReason}` : ''}
+${c.favDay ? `- Día favorito de compra: ${c.favDay}` : ''}
+${c.spendTrend && c.spendTrend !== 'estable' ? `- Tendencia de gasto: ${c.spendTrend}` : ''}
+
+TEMPLATES DISPONIBLES:
+${tplDescriptions}
+
+REGLAS:
+- Elige el template que mejor conecte con el perfil de este cliente (urgencia, productos, historial)
+- {{1}} suele ser el nombre → usa solo su primer nombre
+- Las variables deben ser naturales, cortas (1-5 palabras) y relevantes para este cliente
+- Si no hay dato suficiente, usa un valor genérico apropiado pero creíble
+- NO inventes información que no esté en el perfil
+
+Responde SOLO con JSON válido (sin texto extra):
+{
+  "templateName": "nombre_exacto_del_template",
+  "reason": "por qué este template es el mejor para este cliente (1 oración)",
+  "vars": { "1": "valor", "2": "valor", ... }
+}`;
+
+    const response = await anthropic.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      messages:   [{ role: 'user', content: prompt }],
+    });
+
+    const raw   = response.content[0]?.text?.trim() || '{}';
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) {
+      console.error('[ai-pick-template] No JSON en respuesta:', raw);
+      return res.status(500).json({ success: false, error: 'La IA no devolvió JSON válido' });
+    }
+
+    const picked = JSON.parse(match[0]);
+    const chosenTpl = templates.find(t => t.name === picked.templateName);
+    if (!chosenTpl) {
+      // Fallback: usar el primer template
+      picked.templateName = templates[0].name;
+    }
+    const tplFinal = templates.find(t => t.name === picked.templateName) || templates[0];
+
+    // Construir previewText reemplazando variables en el body
+    const bodyComp = (tplFinal.components || []).find(comp => comp.type === 'BODY');
+    let previewText = bodyComp?.text || '';
+    const vars = picked.vars || {};
+    for (const [k, v] of Object.entries(vars)) {
+      previewText = previewText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
+    }
+
+    res.json({
+      success:      true,
+      templateName: tplFinal.name,
+      languageCode: tplFinal.language,
+      vars,
+      previewText,
+      reason:       picked.reason || '',
+    });
+
+  } catch (err) {
+    console.error('[ai-pick-template]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
    GET /api/reengagement/templates
    Lista los templates aprobados de WhatsApp Business para esta org.
 ───────────────────────────────────────────────────────────────────── */

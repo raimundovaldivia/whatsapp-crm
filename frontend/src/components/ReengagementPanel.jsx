@@ -77,16 +77,20 @@ export default function ReengagementPanel() {
   const [toast, setToast]             = useState(null);
   const [minConf, setMinConf]         = useState(65);
 
-  // ── Template mode (único modo válido para re-enganche) ────────
+  // ── Templates ─────────────────────────────────────────────────
   const [templates, setTemplates]           = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState(null);
-  const [selectedTemplate, setSelectedTemplate] = useState(null);
+
+  // Override manual de template (opcional — si está seteado fuerza ese template para todos)
+  const [overrideTemplate, setOverrideTemplate] = useState(null);
   const [varMap, setVarMap]                 = useState({});
   const [manualVars, setManualVars]         = useState({});
-  const [perCustomerVars, setPerCustomerVars] = useState({});
-  const [fillingVars, setFillingVars]       = useState(new Set());
-  const [fillingAll, setFillingAll]         = useState(false);
+
+  // Estado por cliente: IA eligió template + variables + preview
+  // { [phone]: { templateName, languageCode, vars, previewText, reason, loading } }
+  const [clientPicks, setClientPicks]       = useState({});
+  const [pickingAll, setPickingAll]         = useState(false);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -176,20 +180,25 @@ export default function ReengagementPanel() {
     return [...new Set(matches.map(m => m[1]))].sort();
   };
 
-  const handleSelectTemplate = (tpl) => {
-    setSelectedTemplate(tpl);
-    const vars = parseTemplateVars(tpl);
-    const defaultMap = {};
-    vars.forEach((v, i) => { defaultMap[v] = i === 0 ? 'name' : 'manual'; });
-    setVarMap(defaultMap);
+  const handleSelectOverride = (tpl) => {
+    setOverrideTemplate(tpl);
+    if (tpl) {
+      const vars = parseTemplateVars(tpl);
+      const defaultMap = {};
+      vars.forEach((v, i) => { defaultMap[v] = i === 0 ? 'name' : 'manual'; });
+      setVarMap(defaultMap);
+    }
     setManualVars({});
   };
 
+  // Construir components para envío usando pick de IA o override manual
   const buildComponents = (candidate) => {
-    if (!selectedTemplate) return [];
-    const vars = parseTemplateVars(selectedTemplate);
+    const pick = clientPicks[candidate.phone];
+    const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
+    if (!tpl) return [];
+    const vars = parseTemplateVars(tpl);
     if (vars.length === 0) return [];
-    const aiVars = perCustomerVars[candidate.phone] || {};
+    const aiVars = pick?.vars || {};
     const parameters = vars.map(v => {
       if (aiVars[v] != null) return { type: 'text', text: aiVars[v] };
       const mapping = varMap[v] || 'manual';
@@ -202,60 +211,64 @@ export default function ReengagementPanel() {
     return [{ type: 'body', parameters }];
   };
 
-  const previewTemplate = (candidate) => {
-    if (!selectedTemplate) return '';
-    const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
-    if (!bodyComp?.text) return `[Template: ${selectedTemplate.name}]`;
-    let text = bodyComp.text;
-    const vars = parseTemplateVars(selectedTemplate);
-    const aiVars = perCustomerVars[candidate?.phone] || {};
-    vars.forEach(v => {
-      let val = '';
-      if (aiVars[v] != null) {
-        val = aiVars[v];
-      } else {
-        const mapping = varMap[v] || 'manual';
-        if (mapping === 'name')       val = candidate?.name || candidate?.phone || `{{${v}}}`;
-        else if (mapping === 'phone') val = candidate?.phone || `{{${v}}}`;
-        else val = manualVars[v] || `{{${v}}}`;
-      }
-      text = text.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), val);
-    });
-    return text;
+  // Construir previewText para un cliente (usa pick IA o override)
+  const getPreviewText = (candidate) => {
+    const pick = clientPicks[candidate?.phone];
+    if (overrideTemplate) {
+      // Override manual: aplicar varMap/manualVars + aiVars del pick si hay
+      const bodyComp = overrideTemplate.components?.find(c => c.type === 'BODY');
+      if (!bodyComp?.text) return '';
+      let text = bodyComp.text;
+      const vars = parseTemplateVars(overrideTemplate);
+      const aiVars = pick?.vars || {};
+      vars.forEach(v => {
+        let val = aiVars[v] != null ? aiVars[v] : (varMap[v] === 'name' ? (candidate?.name || candidate?.phone || `{{${v}}}`) : varMap[v] === 'phone' ? candidate?.phone || `{{${v}}}` : manualVars[v] || `{{${v}}}`);
+        text = text.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), val);
+      });
+      return text;
+    }
+    return pick?.previewText || '';
   };
 
-  const fillVarsForOne = async (phone) => {
-    if (!selectedTemplate) return;
-    const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
-    if (!bodyComp?.text) return;
-    setFillingVars(prev => new Set(prev).add(phone));
+  // IA elige template + rellena variables para un cliente
+  const aiPickForOne = async (phone) => {
+    if (templates.length === 0) { showToast('No hay templates disponibles', 'error'); return; }
+    setClientPicks(prev => ({ ...prev, [phone]: { ...prev[phone], loading: true } }));
     try {
-      const res = await reengagementAPI.fillTemplateVars(phone, bodyComp.text);
-      if (res.success && res.vars) {
-        setPerCustomerVars(prev => ({ ...prev, [phone]: res.vars }));
+      const tplsToUse = overrideTemplate ? [overrideTemplate] : templates;
+      const res = await reengagementAPI.aiPickTemplate(phone, tplsToUse);
+      if (res.success) {
+        setClientPicks(prev => ({ ...prev, [phone]: {
+          templateName: res.templateName,
+          languageCode: res.languageCode,
+          vars:         res.vars,
+          previewText:  res.previewText,
+          reason:       res.reason,
+          loading:      false,
+        }}));
         setSelected(prev => new Set(prev).add(phone));
       }
     } catch (err) {
-      showToast('Error generando variables: ' + (err.response?.data?.error || err.message), 'error');
-    } finally {
-      setFillingVars(prev => { const n = new Set(prev); n.delete(phone); return n; });
+      showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
+      setClientPicks(prev => { const n = { ...prev }; if (n[phone]) n[phone] = { ...n[phone], loading: false }; return n; });
     }
   };
 
-  const fillVarsForAll = async () => {
-    if (!selectedTemplate) return;
+  // IA elige para todos (seleccionados o todos visibles)
+  const aiPickForAll = async () => {
+    if (templates.length === 0) { showToast('No hay templates disponibles', 'error'); return; }
     const targets = selected.size > 0
       ? visible.filter(c => selected.has(c.phone))
       : visible;
-    setFillingAll(true);
+    setPickingAll(true);
+    let done = 0;
     for (const c of targets) {
-      if (!perCustomerVars[c.phone]) {
-        await fillVarsForOne(c.phone);
-        await new Promise(r => setTimeout(r, 300));
-      }
+      await aiPickForOne(c.phone);
+      done++;
+      await new Promise(r => setTimeout(r, 400));
     }
-    setFillingAll(false);
-    showToast(`✅ Variables rellenadas para ${targets.length} clientes`);
+    setPickingAll(false);
+    showToast(`✅ IA eligió y personalizó templates para ${done} clientes`);
   };
 
   const relevanceScore = (c) => {
@@ -283,20 +296,23 @@ export default function ReengagementPanel() {
   };
 
   const sendOne = async (phone) => {
-    if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
     const candidate = candidates.find(c => c.phone === phone);
+    const pick = clientPicks[phone];
+    const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
+    if (!tpl) { showToast('Primero usa "IA elige template" para este cliente', 'error'); return; }
     setSending(prev => new Set(prev).add(phone));
     try {
       await reengagementAPI.send({
         phone,
-        templateName:  selectedTemplate.name,
-        languageCode:  selectedTemplate.language,
+        templateName:  tpl.name,
+        languageCode:  tpl.language,
         components:    buildComponents(candidate),
-        previewText:   previewTemplate(candidate),
+        previewText:   getPreviewText(candidate),
       });
       showToast('✅ Template enviado');
       setCandidates(prev => prev.filter(c => c.phone !== phone));
       setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
+      setClientPicks(prev => { const n = { ...prev }; delete n[phone]; return n; });
     } catch (err) {
       showToast(err.response?.data?.error || 'Error enviando template', 'error');
     } finally {
@@ -305,18 +321,30 @@ export default function ReengagementPanel() {
   };
 
   const sendBulk = async () => {
-    if (!selectedTemplate) { showToast('Selecciona un template primero', 'error'); return; }
     const targets = selected.size > 0
       ? visible.filter(c => selected.has(c.phone))
       : visible;
     if (!targets.length) { showToast('Selecciona al menos un cliente', 'error'); return; }
-    const items = targets.map(c => ({
-      phone:        c.phone,
-      templateName: selectedTemplate.name,
-      languageCode: selectedTemplate.language,
-      components:   buildComponents(c),
-      previewText:  previewTemplate(c),
-    }));
+    // Verificar que todos tengan template asignado
+    const sinTemplate = targets.filter(c => {
+      const pick = clientPicks[c.phone];
+      const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
+      return !tpl;
+    });
+    if (sinTemplate.length > 0) {
+      showToast(`${sinTemplate.length} cliente(s) sin template — usa "IA elige" primero`, 'error'); return;
+    }
+    const items = targets.map(c => {
+      const pick = clientPicks[c.phone];
+      const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
+      return {
+        phone:        c.phone,
+        templateName: tpl.name,
+        languageCode: tpl.language,
+        components:   buildComponents(c),
+        previewText:  getPreviewText(c),
+      };
+    });
     setSendingBulk(true);
     try {
       const res = await reengagementAPI.sendBulk(items);
@@ -331,7 +359,12 @@ export default function ReengagementPanel() {
     }
   };
 
-  const selectedWithMsg  = visible.filter(c => selected.has(c.phone)).length;
+  // Clientes seleccionados que tienen template listo para enviar
+  const selectedWithTemplate = visible.filter(c => {
+    if (!selected.has(c.phone)) return false;
+    const pick = clientPicks[c.phone];
+    return !!(overrideTemplate || templates.find(t => t.name === pick?.templateName));
+  }).length;
   const totalCandidates  = candidates.length;
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
   const hiddenByFilter   = totalCandidates - filteredTotal;
@@ -542,12 +575,12 @@ export default function ReengagementPanel() {
       )}
 
       {/* Panel de templates (siempre visible) */}
+      {/* Banner de templates */}
       {!loading && (
-        <div style={{ backgroundColor: colors.bgSub, borderBottom: `1px solid ${colors.border}`, padding: '12px 24px' }}>
+        <div style={{ backgroundColor: colors.bgSub, borderBottom: `1px solid ${colors.border}`, padding: '10px 24px' }}>
           {templatesLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: colors.textSecondary, fontSize: '13px' }}>
-              <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
-              Cargando templates aprobados...
+              <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Cargando templates...
             </div>
           ) : templatesError ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -557,94 +590,46 @@ export default function ReengagementPanel() {
             </div>
           ) : templates.length === 0 ? (
             <span style={{ color: colors.textSecondary, fontSize: '12px' }}>
-              No hay templates aprobados. Créalos en Meta Business Manager y espera la aprobación.
+              No hay templates aprobados. Créalos en la sección Templates.
             </span>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {/* Selector de template */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                <span style={{ color: colors.textSecondary, fontSize: '12px', flexShrink: 0 }}>Template:</span>
-                <div style={{ position: 'relative', flex: 1, maxWidth: '380px' }}>
-                  <select
-                    value={selectedTemplate?.name || ''}
-                    onChange={e => {
-                      const tpl = templates.find(t => t.name === e.target.value);
-                      if (tpl) handleSelectTemplate(tpl);
-                      else { setSelectedTemplate(null); setVarMap({}); }
-                    }}
-                    style={{
-                      width: '100%', backgroundColor: colors.bgSub, color: colors.textPrimary,
-                      border: `1px solid ${colors.border}`, borderRadius: '7px',
-                      padding: '7px 12px', fontSize: '13px', cursor: 'pointer', outline: 'none',
-                    }}
-                  >
-                    <option value="">— Selecciona un template —</option>
-                    {templates.map(t => (
-                      <option key={t.name} value={t.name}>
-                        {t.name} ({t.language})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              {/* Info: IA elige automáticamente */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: colors.textSecondary, fontSize: '12px' }}>
+                <Brain size={13} color={colors.green} />
+                <span>La IA elegirá el mejor template y lo personalizará por cliente</span>
+                <span style={{ color: colors.textMuted }}>·</span>
+                <span style={{ color: colors.textMuted }}>{templates.length} templates disponibles</span>
+              </div>
 
-                {selectedTemplate && (
-                  <span style={{
-                    backgroundColor: colors.greenTint, color: colors.greenLight,
-                    borderRadius: '5px', padding: '3px 8px', fontSize: '11px',
-                    border: `1px solid ${colors.greenLight}33`,
-                  }}>
-                    ✓ {selectedTemplate.category || 'MARKETING'}
+              {/* Override manual (opcional) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+                <span style={{ color: colors.textMuted, fontSize: '11px', flexShrink: 0 }}>Forzar template:</span>
+                <select
+                  value={overrideTemplate?.name || ''}
+                  onChange={e => {
+                    const tpl = templates.find(t => t.name === e.target.value);
+                    handleSelectOverride(tpl || null);
+                  }}
+                  style={{
+                    backgroundColor: overrideTemplate ? colors.bgAccent2 : colors.bgSub,
+                    color: overrideTemplate ? colors.green : colors.textSecondary,
+                    border: `1px solid ${overrideTemplate ? colors.green : colors.border}`,
+                    borderRadius: '6px', padding: '5px 10px', fontSize: '12px',
+                    cursor: 'pointer', outline: 'none', maxWidth: '220px',
+                  }}
+                >
+                  <option value="">— IA elige automáticamente —</option>
+                  {templates.map(t => (
+                    <option key={t.name} value={t.name}>{t.name}</option>
+                  ))}
+                </select>
+                {overrideTemplate && (
+                  <span style={{ backgroundColor: `${colors.yellow}22`, color: colors.yellow, borderRadius: '5px', padding: '2px 7px', fontSize: '11px', border: `1px solid ${colors.yellow}44` }}>
+                    override activo
                   </span>
                 )}
               </div>
-
-              {/* Preview del template */}
-              {selectedTemplate && (() => {
-                const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY');
-                const headerComp = selectedTemplate.components?.find(c => c.type === 'HEADER');
-                const footerComp = selectedTemplate.components?.find(c => c.type === 'FOOTER');
-                const vars = parseTemplateVars(selectedTemplate);
-                return (
-                  <div>
-                    {vars.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
-                        {vars.map(v => (
-                          <div key={v} style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.bgSub, borderRadius: '6px', padding: '5px 10px', border: `1px solid ${colors.border}` }}>
-                            <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700 }}>{'{{' + v + '}}'}</span>
-                            <span style={{ color: colors.textSecondary, fontSize: '11px' }}>→</span>
-                            <select
-                              value={varMap[v] || 'manual'}
-                              onChange={e => setVarMap(prev => ({ ...prev, [v]: e.target.value }))}
-                              style={{ backgroundColor: colors.bgInput, color: colors.textPrimary, border: 'none', fontSize: '11px', cursor: 'pointer', outline: 'none' }}
-                            >
-                              <option value="name">Nombre del cliente</option>
-                              <option value="phone">Teléfono</option>
-                              <option value="manual">Texto fijo</option>
-                            </select>
-                            {(varMap[v] || 'manual') === 'manual' && (
-                              <input
-                                value={manualVars[v] || ''}
-                                onChange={e => setManualVars(prev => ({ ...prev, [v]: e.target.value }))}
-                                placeholder="Escribe aquí..."
-                                style={{ backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '2px 6px', fontSize: '11px', width: '100px' }}
-                              />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '10px 12px', border: `1px solid ${colors.border}`, maxWidth: '480px' }}>
-                      <div style={{ color: colors.textMuted, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Vista previa</div>
-                      {headerComp?.text && <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 700, marginBottom: '4px' }}>{headerComp.text}</div>}
-                      <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-                        {previewTemplate(visible[0])}
-                      </div>
-                      {footerComp?.text && <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '6px' }}>{footerComp.text}</div>}
-                    </div>
-                  </div>
-                );
-              })()}
             </div>
           )}
         </div>
@@ -665,42 +650,36 @@ export default function ReengagementPanel() {
 
           <div style={{ flex: 1 }} />
 
-          {!selectedTemplate && (
-            <span style={{ color: colors.yellow, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <FileText size={13} /> Selecciona un template arriba para continuar
-            </span>
-          )}
-
-          {selectedTemplate && (
-            <button
-              onClick={fillVarsForAll}
-              disabled={fillingAll}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '6px',
-                backgroundColor: colors.bgHover, color: colors.purple,
-                padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
-                border: `1px solid ${colors.purple}44`, cursor: fillingAll ? 'not-allowed' : 'pointer',
-                opacity: fillingAll ? 0.7 : 1,
-              }}>
-              {fillingAll
-                ? <><Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Rellenando...</>
-                : <><Sparkles size={14} /> Generar mensajes IA {selected.size > 0 ? `(${selected.size})` : '(todos)'}</>}
-            </button>
-          )}
-
-          <button onClick={sendBulk}
-            disabled={sendingBulk || selectedWithMsg === 0 || !selectedTemplate}
+          {/* Botón principal: IA elige + personaliza en masa */}
+          <button
+            onClick={aiPickForAll}
+            disabled={pickingAll || templates.length === 0}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
-              backgroundColor: (selectedWithMsg > 0 && selectedTemplate) ? colors.green : colors.bgHover,
-              color: (selectedWithMsg > 0 && selectedTemplate) ? 'white' : colors.textSecondary,
+              backgroundColor: colors.bgAccent2, color: colors.green,
+              padding: '7px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 600,
+              border: `1px solid ${colors.green}44`,
+              cursor: (pickingAll || templates.length === 0) ? 'not-allowed' : 'pointer',
+              opacity: pickingAll ? 0.7 : 1,
+            }}>
+            {pickingAll
+              ? <><Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Analizando...</>
+              : <><Sparkles size={14} /> IA elige + personaliza {selected.size > 0 ? `(${selected.size})` : `(${visible.length})`}</>}
+          </button>
+
+          <button onClick={sendBulk}
+            disabled={sendingBulk || selectedWithTemplate === 0}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              backgroundColor: selectedWithTemplate > 0 ? colors.green : colors.bgHover,
+              color: selectedWithTemplate > 0 ? 'white' : colors.textSecondary,
               padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
               border: 'none',
-              cursor: (selectedWithMsg > 0 && selectedTemplate) ? 'pointer' : 'not-allowed',
+              cursor: selectedWithTemplate > 0 ? 'pointer' : 'not-allowed',
               opacity: sendingBulk ? 0.7 : 1,
             }}>
             {sendingBulk ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
-            {sendingBulk ? 'Enviando...' : `Enviar a ${selectedWithMsg} clientes`}
+            {sendingBulk ? 'Enviando...' : `Enviar a ${selectedWithTemplate} clientes`}
           </button>
         </div>
       )}
@@ -749,12 +728,10 @@ export default function ReengagementPanel() {
                 candidate={c}
                 isSelected={selected.has(c.phone)}
                 isSending={sending.has(c.phone)}
-                isFilling={fillingVars.has(c.phone)}
-                hasAiFill={!!(perCustomerVars[c.phone])}
+                pick={clientPicks[c.phone] || null}
                 onToggleSelect={() => toggleSelect(c.phone)}
-                onFillVars={() => fillVarsForOne(c.phone)}
+                onAiPick={() => aiPickForOne(c.phone)}
                 onSend={() => sendOne(c.phone)}
-                templatePreview={selectedTemplate ? previewTemplate(c) : null}
               />
             </div>
           ))
@@ -779,10 +756,11 @@ export default function ReengagementPanel() {
   );
 }
 
-function CandidateCard({ candidate: c, isSelected, isSending, isFilling, hasAiFill, onToggleSelect, onFillVars, onSend, templatePreview }) {
+function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSelect, onAiPick, onSend }) {
   const { colors } = useTheme();
 
   const conf    = c.confidence || 0;
+  const isPickLoading = pick?.loading;
   const cColor  = confColor(conf, colors);
   const overdue = c.avgFreqDays && c.daysInactive > c.avgFreqDays;
 
@@ -946,45 +924,67 @@ function CandidateCard({ candidate: c, isSelected, isSending, isFilling, hasAiFi
         )}
       </div>
 
-      {/* ── FILA 5: botones de acción ── */}
-      <div style={{ display: 'flex', gap: '8px', padding: '0 14px 12px', alignItems: 'center' }}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      {/* ── FILA 5: IA pick + envío ── */}
+      <div style={{ display: 'flex', gap: '8px', padding: '0 14px 12px', alignItems: 'flex-end' }}>
+
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '5px' }}>
+
+          {/* Resultado del pick de IA */}
+          {pick && !pick.loading && (
+            <div style={{
+              backgroundColor: colors.bgAccent2, borderRadius: '8px',
+              border: `1px solid ${colors.green}33`,
+              padding: '7px 10px',
+            }}>
+              {/* Template elegido + razón */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                <FileText size={11} color={colors.green} />
+                <span style={{ fontSize: '11px', fontWeight: 700, color: colors.green }}>{pick.templateName}</span>
+                {pick.reason && (
+                  <span style={{ fontSize: '11px', color: colors.textSecondary, fontStyle: 'italic' }}>
+                    — {pick.reason}
+                  </span>
+                )}
+              </div>
+              {/* Preview del mensaje */}
+              <p style={{
+                fontSize: '12px', color: colors.textPrimary, margin: 0,
+                lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}>
+                {pick.previewText?.slice(0, 140)}{(pick.previewText?.length || 0) > 140 ? '…' : ''}
+              </p>
+            </div>
+          )}
+
+          {/* Botón IA elige */}
           <button
-            onClick={onFillVars}
-            disabled={isFilling}
+            onClick={onAiPick}
+            disabled={isPickLoading}
             style={{
               display: 'flex', alignItems: 'center', gap: '5px',
-              backgroundColor: hasAiFill ? colors.bgAccent2 : colors.bgHover,
-              color: hasAiFill ? colors.purple : colors.textSecondary,
+              backgroundColor: pick && !pick.loading ? colors.bgHover : colors.bgAccent2,
+              color: pick && !pick.loading ? colors.textSecondary : colors.green,
               padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
-              border: `1px solid ${hasAiFill ? `${colors.purple}44` : colors.border}`,
-              cursor: isFilling ? 'not-allowed' : 'pointer',
-              opacity: isFilling ? 0.6 : 1, alignSelf: 'flex-start',
+              border: `1px solid ${pick && !pick.loading ? colors.border : `${colors.green}44`}`,
+              cursor: isPickLoading ? 'not-allowed' : 'pointer',
+              opacity: isPickLoading ? 0.6 : 1, alignSelf: 'flex-start',
             }}>
-            {isFilling
-              ? <><Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> Generando...</>
-              : hasAiFill
-              ? <><Sparkles size={11} /> ✓ Re-generar IA</>
-              : <><Sparkles size={11} /> Personalizar con IA</>}
+            {isPickLoading
+              ? <><Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> Analizando...</>
+              : pick
+              ? <><Sparkles size={11} /> Re-analizar</>
+              : <><Sparkles size={11} /> IA elige template</>}
           </button>
-
-          <div style={{ backgroundColor: colors.bgInput, borderRadius: '7px', padding: '6px 10px', border: `1px solid ${hasAiFill ? colors.border : colors.bgSub}`, fontSize: '12px' }}>
-            {templatePreview
-              ? <span style={{ color: hasAiFill ? colors.textPrimary : colors.textSecondary }}>
-                  {templatePreview.slice(0, 100)}{templatePreview.length > 100 ? '…' : ''}
-                </span>
-              : <span style={{ color: colors.textMuted, fontStyle: 'italic' }}>
-                  {templatePreview === null ? 'Selecciona un template arriba' : 'Variables con valores por defecto'}
-                </span>}
-          </div>
         </div>
 
-        <button onClick={onSend} disabled={isSending}
+        <button onClick={onSend} disabled={isSending || !pick || pick.loading}
           style={{
             display: 'flex', alignItems: 'center', gap: '6px',
-            backgroundColor: colors.green, color: 'white',
+            backgroundColor: (pick && !pick.loading) ? colors.green : colors.bgHover,
+            color: (pick && !pick.loading) ? 'white' : colors.textMuted,
             padding: '7px 18px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
-            border: 'none', cursor: isSending ? 'not-allowed' : 'pointer',
+            border: 'none',
+            cursor: (isSending || !pick || pick.loading) ? 'not-allowed' : 'pointer',
             opacity: isSending ? 0.7 : 1, flexShrink: 0,
           }}>
           {isSending
