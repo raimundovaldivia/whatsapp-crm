@@ -783,15 +783,16 @@ La pregunta debe ser:
 - Que conecte naturalmente con mostrar productos o hacer una venta
 Ejemplos buenos: "¿Te muestro lo nuevo?", "¿Quieres que te guarde uno?", "¿Cuándo fue la última vez que pediste?"
 
-REGLAS TÉCNICAS:
-- name: solo minúsculas, números y guiones bajos, máx 40 chars (ej: "reenganche_general")
+REGLAS TÉCNICAS — CRÍTICAS (Meta rechaza si no se cumplen):
+- name: SOLO letras a-z, números 0-9 y guiones bajos. SIN acentos, SIN ñ, SIN espacios. Máx 40 chars. Ejemplos válidos: "reenganche_general", "novedad_productos", "oferta_exclusiva"
 - category: siempre "MARKETING"
 - language: "es"
 - El BODY debe tener máximo 1024 caracteres
 - Usa {{1}} para nombre del cliente (siempre la primera variable)
 - Si mencionas un producto específico usa {{2}}
 - El footer siempre: "Responde STOP para no recibir mensajes"
-- NO incluir URLs ni emojis en el header (headerText)
+- NO incluir URLs ni emojis en el headerText
+- PROHIBIDO: el body NO puede empezar ni terminar con una variable {{N}}. Siempre debe haber texto antes y después de cualquier variable. Incorrecto: "{{1}}, tu pedido llegó". Correcto: "Hola {{1}}, tu pedido llegó"
 - Tono cálido, cercano, latinoamericano
 - Menciona productos reales del catálogo cuando sea posible
 
@@ -843,6 +844,36 @@ Responde SOLO con JSON válido (sin markdown ni texto extra):
 });
 
 /**
+ * Sanitiza el nombre del template para cumplir reglas de Meta:
+ * solo letras minúsculas a-z, números 0-9 y guiones bajos.
+ * Convierte ñ→n, á→a, é→e, etc. y reemplaza cualquier otro char inválido con _.
+ */
+function sanitizeTemplateName(name) {
+  return (name || 'template_reenganche')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')   // strip combining diacritics: ñ→n, á→a, é→e…
+    .replace(/[^a-z0-9_]/g, '_')       // any remaining invalid char → _
+    .replace(/_+/g, '_')               // collapse consecutive underscores
+    .replace(/^_+|_+$/g, '')           // trim leading/trailing underscores
+    .slice(0, 512) || 'template_reenganche';
+}
+
+/**
+ * Meta no permite que el body empiece o termine con una variable {{N}}.
+ * Si la IA genera eso, añadimos texto neutro para cumplir la regla.
+ */
+function fixBodyVariables(body) {
+  if (!body) return body;
+  let b = body.trim();
+  // Empieza con {{N}} → agregar saludo antes
+  if (/^\{\{\d+\}\}/.test(b)) b = 'Hola, ' + b;
+  // Termina con {{N}} o {{N}}. o {{N}}! → agregar texto después
+  if (/\{\{\d+\}\}[.!?]?\s*$/.test(b)) b = b.replace(/(\{\{\d+\}\}[.!?]?\s*)$/, '$1 ¿Te ayudamos?');
+  return b;
+}
+
+/**
  * POST /api/reengagement/submit-templates
  * Envía templates a Meta via Kapso para revisión.
  * Body: { templates: [{name, category, language, headerText, body, footer}] }
@@ -866,14 +897,19 @@ router.post('/submit-templates', async (req, res) => {
     const results = [];
     for (const t of templates) {
       try {
+        // ── Sanitizar nombre y body antes de enviar a Meta ───────────
+        const safeName = sanitizeTemplateName(t.name);
+        const safeBody = fixBodyVariables(t.body);
+
         // Construir componentes Meta
         const components = [];
-        if (t.headerText) {
-          components.push({ type: 'HEADER', format: 'TEXT', text: t.headerText });
+        const headerText = t.headerText || t.header || '';
+        if (headerText) {
+          components.push({ type: 'HEADER', format: 'TEXT', text: headerText });
         }
-        const bodyComp = { type: 'BODY', text: t.body };
+        const bodyComp = { type: 'BODY', text: safeBody };
         // Agregar ejemplos de variables si las hay
-        const varMatches = [...(t.body || '').matchAll(/\{\{(\d+)\}\}/g)];
+        const varMatches = [...(safeBody || '').matchAll(/\{\{(\d+)\}\}/g)];
         if (varMatches.length > 0) {
           const exampleValues = (t.variables || []).map((v, i) => v || `Ejemplo ${i+1}`);
           bodyComp.example = { body_text: [exampleValues.slice(0, varMatches.length)] };
@@ -884,17 +920,17 @@ router.post('/submit-templates', async (req, res) => {
         }
 
         const payload = {
-          name:       t.name,
+          name:       safeName,
           language:   t.language || 'es',
           category:   t.category || 'MARKETING',
           components,
         };
 
         const apiResult = await kapsoService.createTemplate(payload, wc);
-        results.push({ name: t.name, success: true, status: 'submitted', id: apiResult?.id });
+        results.push({ name: safeName, success: true, status: 'submitted', id: apiResult?.id });
       } catch (err) {
         const errMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-        results.push({ name: t.name, success: false, status: 'error', error: errMsg });
+        results.push({ name: sanitizeTemplateName(t.name), success: false, status: 'error', error: errMsg });
       }
     }
 
