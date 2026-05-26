@@ -665,14 +665,13 @@ router.get('/store-context', async (req, res) => {
       return res.json({ success: true, hasShopify: false, context: '', products: [], shopName: '' });
     }
 
-    const { shop } = shopifyApi.credentialsFrom(ds);
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
     const shopName = shop.replace('.myshopify.com', '').replace(/-/g, ' ');
 
-    let products = [];
-    let collections = [];
+    let productList = [];
     try {
-      const raw = await shopifyApi.getProducts(ds, { first: 20 });
-      products = (raw || []).slice(0, 15).map(p => p.title).filter(Boolean);
+      const raw = await shopifyApi.getProducts(shop, token, { limit: 20 });
+      productList = (raw?.products || []).slice(0, 15);
     } catch (e) {
       console.warn('[store-context] getProducts error:', e.message);
     }
@@ -680,17 +679,27 @@ router.get('/store-context', async (req, res) => {
     const org = await db.getOrgById(orgId);
     const orgName = org?.name || shopName;
 
+    // Construir contexto rico: nombre + precio por producto
+    const productLines = productList.map(p => {
+      const price = p.priceMin > 0
+        ? ` ($${p.priceMin.toLocaleString('es-CL')} ${p.currency})`
+        : '';
+      return `  - ${p.title}${price}`;
+    });
+
     const context = [
       `Tienda: ${orgName}`,
       `Dominio Shopify: ${shop}`,
-      products.length ? `Productos principales: ${products.join(', ')}` : '',
+      productList.length
+        ? `Productos del catálogo:\n${productLines.join('\n')}`
+        : 'Sin productos cargados aún',
     ].filter(Boolean).join('\n');
 
     return res.json({
       success: true,
       hasShopify: true,
       shopName: orgName,
-      products,
+      products: productList.map(p => p.title),
       context,
     });
   } catch (err) {
@@ -724,13 +733,25 @@ router.post('/generate-templates', async (req, res) => {
       const ds = await db.getPrimaryDataSource(orgId);
       if (ds) {
         try {
-          const { shop } = shopifyApi.credentialsFrom(ds);
+          const { shop, token } = shopifyApi.credentialsFrom(ds);
           shopName = shop.replace('.myshopify.com', '').replace(/-/g, ' ');
-          const products = await shopifyApi.getProducts(ds, { first: 15 });
-          const productNames = (products || []).slice(0, 10).map(p => p.title).filter(Boolean);
+          const raw = await shopifyApi.getProducts(shop, token, { limit: 15 });
+          const prods = (raw?.products || []).slice(0, 10);
           const org = await db.getOrgById(orgId);
           const orgName = org?.name || shopName;
-          storeContext = `Tienda: ${orgName}\nDominio Shopify: ${shop}\nProductos principales: ${productNames.join(', ') || 'varios productos'}`;
+          const productLines = prods.map(p => {
+            const price = p.priceMin > 0
+              ? ` ($${p.priceMin.toLocaleString('es-CL')} ${p.currency})`
+              : '';
+            return `  - ${p.title}${price}`;
+          });
+          storeContext = [
+            `Tienda: ${orgName}`,
+            `Dominio Shopify: ${shop}`,
+            prods.length
+              ? `Productos del catálogo:\n${productLines.join('\n')}`
+              : 'Sin productos cargados aún',
+          ].join('\n');
         } catch (e) {
           console.warn('[generate-templates] Error obteniendo datos Shopify:', e.message);
           storeContext = 'Tienda online latinoamericana';
