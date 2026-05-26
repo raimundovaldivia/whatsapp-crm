@@ -80,18 +80,29 @@ export default function AuthPage({ onAuth }) {
         }} />
 
         {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '48px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '48px' }}>
           <div style={{
-            width: '48px', height: '48px', borderRadius: '14px',
-            backgroundColor: colors.green,
+            width: '46px', height: '46px', borderRadius: '14px',
+            background: `linear-gradient(135deg, ${colors.green} 0%, ${colors.greenLight} 100%)`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: `0 8px 24px ${colors.green}44`,
+            boxShadow: `0 6px 20px ${colors.green}55`,
+            flexShrink: 0,
           }}>
-            <MessageSquare size={24} color="white" />
+            <MessageSquare size={22} color="white" strokeWidth={2.2} />
           </div>
-          <div>
-            <div style={{ color: colors.textPrimary, fontSize: '18px', fontWeight: 700 }}>Resel</div>
-            <div style={{ color: colors.green, fontSize: '12px', fontWeight: 500 }}>resel.ai</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <div style={{
+              color: colors.textPrimary, fontSize: '22px', fontWeight: 800,
+              letterSpacing: '-0.5px', lineHeight: 1,
+            }}>Resel</div>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+              color: colors.green, fontSize: '11px', fontWeight: 600,
+              letterSpacing: '0.4px', opacity: 0.85,
+            }}>
+              <span style={{ width: '5px', height: '5px', borderRadius: '50%', backgroundColor: colors.greenLight, display: 'inline-block' }} />
+              resel.ai
+            </div>
           </div>
         </div>
 
@@ -154,14 +165,14 @@ export default function AuthPage({ onAuth }) {
           <div style={{ textAlign: 'center', marginBottom: '32px' }} className="auth-mobile-logo">
             <div style={{
               width: '56px', height: '56px', borderRadius: '16px',
-              backgroundColor: colors.green,
+              background: `linear-gradient(135deg, ${colors.green} 0%, ${colors.greenLight} 100%)`,
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               marginBottom: '14px',
-              boxShadow: `0 8px 24px ${colors.green}44`,
+              boxShadow: `0 8px 24px ${colors.green}55`,
             }}>
-              <MessageSquare size={28} color="white" />
+              <MessageSquare size={26} color="white" strokeWidth={2.2} />
             </div>
-            <h1 style={{ color: colors.textPrimary, fontSize: '22px', fontWeight: 700, margin: '0 0 4px' }}>
+            <h1 style={{ color: colors.textPrimary, fontSize: '24px', fontWeight: 800, margin: '0 0 4px', letterSpacing: '-0.5px' }}>
               Resel
             </h1>
             <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>
