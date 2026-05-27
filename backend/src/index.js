@@ -59,6 +59,7 @@ twilioWebhookRouter.setSocketIO(io);
 kapsoWebhookRouter.setSocketIO(io);
 shopifyWebhookRouter.setSocketIO(io);
 conversationsRouter.setSocketIO(io);
+reengagementRouter.setSocketIO(io);
 
 io.on('connection', (socket) => {
   socket.on('join_org', (orgId) => {

@@ -19,6 +19,9 @@ const { runBacktesting, applyCalibration } = require('../services/reengagement-c
 
 router.use(requireAuth);
 
+let io;
+function setSocketIO(socketIO) { io = socketIO; }
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Cache en memoria: sesión actual (respaldo al cache de DB)
@@ -265,6 +268,17 @@ Incluir TODOS los ${customers.length} clientes. Ordenar por d ascendente.`;
    Set de orgs cuyo análisis corre en segundo plano
 ───────────────────────────────────────────────────────────────────── */
 const bgProcessing = new Set();
+
+/* ── Helper: convierte "JUAN PEREZ" → "Juan Perez", extrae primer nombre ── */
+function toTitleCase(s) {
+  return (s || '').trim().split(/\s+/).filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+function extractFirstName(rawName, phone) {
+  if (!rawName || rawName === phone) return '';
+  const titled = toTitleCase(rawName);
+  return titled.split(' ')[0] || '';
+}
 
 /* ─────────────────────────────────────────────────────────────────────
    ANÁLISIS COMPLETO — función standalone reutilizable
@@ -671,11 +685,16 @@ router.post('/ai-pick-template', async (req, res) => {
       ? (c.predictedDays <= 0 ? `lleva ${Math.abs(c.predictedDays)}d de retraso en su ciclo` : `se predice que comprará en ~${c.predictedDays} días`)
       : 'pronto';
 
+    // Preprocesar nombre: de "JUAN PEREZ" a "Juan", para evitar variables en mayúsculas
+    const clientFirstName = extractFirstName(c.name, phone);
+    const clientDisplayName = c.name ? toTitleCase(c.name) : phone;
+
     const prompt =
 `Eres un experto en marketing para una tienda. Debes elegir el mejor template de WhatsApp para este cliente y rellenar sus variables.
 
 PERFIL DEL CLIENTE:
-- Nombre: ${c.name || phone}
+- Nombre completo: ${clientDisplayName}
+- Primer nombre: ${clientFirstName || '(desconocido)'}
 - Estado: ${daysLabel} (${freqLabel})
 - Última compra: ${c.lastOrderDate || '—'}
 - Productos habituales: ${c.lastProducts || 'productos frescos'}
@@ -696,7 +715,7 @@ REGLAS CRÍTICAS para las variables:
 - Cada variable reemplaza EXACTAMENTE su marcador {{N}} — nada más, nada menos.
 - Lee las palabras que ya están ANTES y DESPUÉS de cada variable en el template para no repetirlas.
 - Si el template dice "Tenemos {{3}} frescos", el valor de {{3}} NO puede incluir "frescos".
-- {{1}} suele ser el nombre → primer nombre solamente.
+- {{1}} suele ser el saludo personal → usa el "Primer nombre" del perfil arriba (ej: "${clientFirstName || 'amigo/a'}"). NUNCA uses el nombre completo ni mayúsculas. Si el primer nombre parece un apellido o es inusual, usa "amigo/a".
 - Valores cortos y naturales (1-4 palabras máximo).
 
 Responde SOLO con JSON válido (sin texto extra, sin markdown):
@@ -1130,15 +1149,15 @@ router.post('/send', async (req, res) => {
       savedContent = message;
     }
 
-    // Guardar en conversación si existe
-    const { rows } = await getPool().query(
-      'SELECT id FROM conversations WHERE phone_number = $1 AND organization_id = $2 LIMIT 1',
-      [phone, req.orgId]
-    );
-    const convId = rows[0]?.id;
+    // Buscar o crear conversación para este contacto
+    const cached = analysisCache.get(req.orgId);
+    const clientData = cached?.data?.find(x => x.phone === phone);
+    const contactName = clientData?.name ? toTitleCase(clientData.name) : 'Cliente';
+    const conv = await db.upsertConversation(req.orgId, phone, contactName);
+    const convId = conv?.id;
 
     if (convId) {
-      await db.saveMessage({
+      const savedMsg = await db.saveMessage({
         conversationId:    convId,
         whatsappMessageId: sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
         content:           savedContent,
@@ -1146,8 +1165,10 @@ router.post('/send', async (req, res) => {
         type:              isTemplate ? 'template' : 'text',
         sentBy:            'ai',
       });
+      await db.updateConversationLastMessage(convId, savedContent);
+      const updated = await db.getConversationById(convId);
+      io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
       // Marcar conversación como "esperando respuesta a template"
-      // El pipeline lo detecta y activa modo warm lead cuando el cliente responda
       if (isTemplate) {
         await db.updatePipelineState(convId, 'template_sent');
       }
@@ -1200,14 +1221,14 @@ router.post('/send-bulk', async (req, res) => {
         savedContent = item.message;
       }
 
-      const { rows } = await getPool().query(
-        'SELECT id FROM conversations WHERE phone_number = $1 AND organization_id = $2 LIMIT 1',
-        [item.phone, req.orgId]
-      );
-      const convId = rows[0]?.id;
+      const bulkCached = analysisCache.get(req.orgId);
+      const bulkClientData = bulkCached?.data?.find(x => x.phone === item.phone);
+      const bulkContactName = bulkClientData?.name ? toTitleCase(bulkClientData.name) : 'Cliente';
+      const bulkConv = await db.upsertConversation(req.orgId, item.phone, bulkContactName);
+      const convId = bulkConv?.id;
 
       if (convId) {
-        await db.saveMessage({
+        const savedMsg = await db.saveMessage({
           conversationId:    convId,
           whatsappMessageId: sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
           content:           savedContent,
@@ -1215,6 +1236,9 @@ router.post('/send-bulk', async (req, res) => {
           type:              isTemplate ? 'template' : 'text',
           sentBy:            'ai',
         });
+        await db.updateConversationLastMessage(convId, savedContent);
+        const updated = await db.getConversationById(convId);
+        io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
         if (isTemplate) {
           await db.updatePipelineState(convId, 'template_sent');
         }
@@ -1323,3 +1347,4 @@ router.get('/accuracy', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.setSocketIO = setSocketIO;
