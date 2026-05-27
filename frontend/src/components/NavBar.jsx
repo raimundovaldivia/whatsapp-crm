@@ -2,13 +2,13 @@ import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi,
 import { useTheme } from '../theme.js';
 
 const NAV_ITEMS = [
+  { key: 'dashboard',    icon: BarChart2,     label: 'Victorias' },
   { key: 'chats',        icon: MessageSquare, label: 'Chats' },
   { key: 'reengagement', icon: UserCheck,     label: 'Re-enganche' },
+  { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
   { key: 'templates',    icon: FileText,      label: 'Templates' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'catalogo',     icon: Package,       label: 'Catálogo' },
-  { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
-  { key: 'dashboard',    icon: BarChart2,     label: 'Dashboard' },
 ];
 
 // Items visibles en la barra móvil (los más usados)

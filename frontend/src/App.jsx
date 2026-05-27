@@ -20,7 +20,7 @@ export default function App() {
   const [appState, setAppState] = useState('loading');
   const [user, setUser]         = useState(null);
   const [org, setOrg]           = useState(null);
-  const [view, setView]         = useState('chats');
+  const [view, setView]         = useState('dashboard');
 
   // Responsive
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -332,7 +332,7 @@ export default function App() {
       )}
 
       {/* Vista Dashboard */}
-      {view === 'dashboard' && <DashboardPanel />}
+      {view === 'dashboard' && <DashboardPanel onChangeView={setView} />}
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}

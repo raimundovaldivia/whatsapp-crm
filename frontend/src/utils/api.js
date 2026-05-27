@@ -96,5 +96,9 @@ export const catalogoAPI = {
   sync:    () => api.post('/catalogo/sync').then(r => r.data),
 };
 
+export const dashboardAPI = {
+  getWins: () => api.get('/dashboard/wins').then(r => r.data.data),
+};
+
 export { api };
 export default api;
