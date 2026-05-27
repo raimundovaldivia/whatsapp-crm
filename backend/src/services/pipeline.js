@@ -262,6 +262,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         ? `Recibí todos tus datos 📝${productInfo ? '\n\n' + productInfo : ''}\n\nHubo un problema técnico al generar tu link de pago 😔 Un asesor te lo enviará manualmente en unos minutos. ¡Gracias por tu paciencia!`
         : 'Recibí tu pedido pero hubo un problema técnico al generarlo 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
 
+      // Log detallado para debugging
+      console.error('[Pipeline] Error detail:', err.message);
+      console.error('[Pipeline] Shopify response:', JSON.stringify(err.response?.data));
+
       if (status === 401 || detail?.includes('Invalid API key') || detail?.includes('access token')) {
         console.error('[Pipeline] ⚠️  Token de Shopify inválido — reconecta Shopify desde Ajustes del CRM.');
       }
@@ -364,8 +368,11 @@ async function createShopifyOrder(orgId, conversationId, draft) {
   const customer = {
     name:       draft.customer_name,
     phone:      customerPhone,
-    email:      draft.customer_email || null,
-    customerId: draft.shopify_customer_id || null,  // linkear al cliente existente de Shopify
+    email:      draft.customer_email  || null,
+    customerId: draft.shopify_customer_id || null,
+    address1:   draft.address         || null,
+    city:       draft.city            || null,
+    country:    'CL',
   };
 
   if (draft.shopify_customer_id) {

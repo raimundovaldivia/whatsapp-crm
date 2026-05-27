@@ -387,6 +387,26 @@ const CREATE_DRAFT_ORDER_MUTATION = `
 async function createDraftOrder(shop, token, customer, items, note = '') {
   const client = graphqlClient(shop, token);
 
+  // Normalizar teléfono a E.164 (+56XXXXXXXXX) — Shopify rechaza sin prefijo +
+  const normalizePhone = (p) => {
+    if (!p) return undefined;
+    const digits = String(p).replace(/\D/g, '');
+    if (!digits) return undefined;
+    return digits.startsWith('+') ? p : `+${digits}`;
+  };
+
+  // Construir shippingAddress si tenemos datos
+  const shippingAddress = (customer.address1 || customer.city)
+    ? {
+        address1:  customer.address1  || '',
+        city:      customer.city      || '',
+        country:   customer.country   || 'CL',
+        firstName: (customer.name || '').split(' ')[0] || '',
+        lastName:  (customer.name || '').split(' ').slice(1).join(' ') || '',
+        phone:     normalizePhone(customer.phone),
+      }
+    : undefined;
+
   const input = {
     lineItems: items.map(item => {
       if (item.variantId) {
@@ -397,18 +417,20 @@ async function createDraftOrder(shop, token, customer, items, note = '') {
         };
       }
       // Custom line item — cuando no se encontró variantId por nombre
+      const unitPrice = parseFloat(item.price) || 0;
       return {
         title:             item.title || 'Producto',
-        originalUnitPrice: String(parseFloat(item.price) || 0),
+        originalUnitPrice: unitPrice.toFixed(2),
         quantity:          parseInt(item.quantity) || 1,
         requiresShipping:  true,
-        taxable:           true,
+        taxable:           false,
       };
     }),
-    note: note || undefined,
-    shippingAddress: customer.address || undefined,
-    email: customer.email || undefined,
-    phone: customer.phone || undefined,
+    note:            note || undefined,
+    shippingAddress: shippingAddress,
+    email:           customer.email  || undefined,
+    phone:           normalizePhone(customer.phone),
+    ...(customer.customerId ? { customerId: customer.customerId } : {}),
     customAttributes: [
       { key: 'whatsapp_crm', value: 'true' },
       { key: 'customer_name', value: customer.name || '' },
