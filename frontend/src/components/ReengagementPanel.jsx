@@ -400,189 +400,183 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.bgApp, overflow: 'hidden' }}>
 
-      {/* Header */}
-      <div style={{ padding: '14px 24px', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <UserCheck size={20} color={colors.green} />
-          <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600 }}>Re-enganche</h1>
-          <span style={{ backgroundColor: colors.greenTint, color: colors.green, borderRadius: '6px', padding: '2px 8px', fontSize: '11px', fontWeight: 600, border: `1px solid ${colors.green}33`, display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Brain size={11} /> Pronóstico IA
+      {/* Header — fila única */}
+      <div style={{
+        padding: '12px 20px', backgroundColor: colors.bgPanel,
+        borderBottom: `1px solid ${colors.border}`,
+        display: 'flex', alignItems: 'center', gap: '10px',
+      }}>
+        {/* Título + badges */}
+        <UserCheck size={18} color={colors.green} style={{ flexShrink: 0 }} />
+        <span style={{ color: colors.textPrimary, fontSize: '16px', fontWeight: 700 }}>Re-enganche</span>
+
+        <span style={{
+          backgroundColor: colors.greenTint, color: colors.green,
+          borderRadius: '5px', padding: '2px 7px', fontSize: '10px', fontWeight: 700,
+          border: `1px solid ${colors.green}33`, display: 'flex', alignItems: 'center', gap: '3px',
+          flexShrink: 0,
+        }}>
+          <Brain size={10} /> IA
+        </span>
+
+        {/* Stats inline compactos */}
+        {!loading && totalCandidates > 0 && (
+          <span style={{ color: colors.textMuted, fontSize: '12px' }}>
+            {totalCandidates} clientes
+            {hiddenByFilter > 0 && (
+              <Tooltip text={`${hiddenByFilter} ocultos por confianza < ${minConf}%`} position="bottom">
+                <span style={{ color: colors.borderStrong }}> · {hiddenByFilter} ocultos</span>
+              </Tooltip>
+            )}
+            {fromCache && <span style={{ color: colors.borderStrong }}> · {cacheDate || ''}</span>}
           </span>
-          {!loading && totalCandidates > 0 && (
-            <span style={{ backgroundColor: colors.bgHover, color: colors.textSecondary, borderRadius: '12px', padding: '2px 8px', fontSize: '12px' }}>
-              {totalCandidates} clientes analizados
-            </span>
-          )}
-          {!loading && hiddenByFilter > 0 && (
-            <Tooltip text={`${hiddenByFilter} clientes ocultos por tener menos de ${minConf}% de confianza`} position="bottom">
-              <span style={{ color: colors.textMuted, fontSize: '11px', cursor: 'default' }}>
-                · {hiddenByFilter} ocultos &lt;{minConf}%
-              </span>
-            </Tooltip>
-          )}
-          {fromCache && !loading && (
-            <span style={{ color: colors.borderStrong, fontSize: '11px' }}>
-              · caché {cacheSource === 'db' ? '📅' : '💾'} {cacheDate || ''}
-            </span>
-          )}
-          {calibration && !loading && (
-            <Tooltip text={`Factor calibración: ${calibration.calibrationFactor} · Accuracy histórica: ${Math.round((calibration.accuracyRate||0)*100)}% · ${calibration.totalPredictions} predicciones simuladas`} position="bottom">
-              <span style={{
-                backgroundColor: calibration.accuracyRate >= 0.70 ? colors.greenTint : calibration.accuracyRate >= 0.50 ? `${colors.yellow}22` : `${colors.red}22`,
-                color: calibration.accuracyRate >= 0.70 ? colors.greenLight : calibration.accuracyRate >= 0.50 ? colors.yellow : colors.red,
-                border: `1px solid ${calibration.accuracyRate >= 0.70 ? `${colors.greenLight}44` : calibration.accuracyRate >= 0.50 ? `${colors.yellow}44` : `${colors.red}44`}`,
-                borderRadius: '6px', padding: '2px 8px', fontSize: '11px', fontWeight: 600,
-                cursor: 'default', display: 'flex', alignItems: 'center', gap: '4px',
-              }}>
-                ⚖️ {Math.round((calibration.accuracyRate||0)*100)}% preciso
-              </span>
-            </Tooltip>
-          )}
-        </div>
+        )}
 
-        {/* Filtro de confianza mínima */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Tooltip text="Mostrar solo predicciones con este nivel mínimo de confianza" position="bottom">
-            <span style={{ color: colors.textMuted, fontSize: '11px' }}>Confianza mín.</span>
+        {calibration && !loading && (
+          <Tooltip text={`Accuracy histórica: ${Math.round((calibration.accuracyRate||0)*100)}% · ${calibration.totalPredictions} predicciones · factor ${calibration.calibrationFactor}`} position="bottom">
+            <span style={{
+              backgroundColor: calibration.accuracyRate >= 0.70 ? colors.greenTint : calibration.accuracyRate >= 0.50 ? `${colors.yellow}22` : `${colors.red}22`,
+              color: calibration.accuracyRate >= 0.70 ? colors.green : calibration.accuracyRate >= 0.50 ? colors.yellow : colors.red,
+              border: `1px solid currentColor`,
+              borderRadius: '5px', padding: '2px 7px', fontSize: '10px', fontWeight: 700,
+              cursor: 'default', flexShrink: 0,
+            }}>
+              {Math.round((calibration.accuracyRate||0)*100)}% preciso
+            </span>
           </Tooltip>
-          {[50, 65, 75, 85].map(val => (
-            <button key={val} onClick={() => setMinConf(val)}
-              style={{
-                padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                cursor: 'pointer', border: 'none',
-                backgroundColor: minConf === val ? colors.green : colors.bgHover,
-                color: minConf === val ? '#fff' : colors.textSecondary,
-                transition: 'all 0.15s',
-              }}>
-              {val}%+
-            </button>
-          ))}
-        </div>
+        )}
 
+        {testMode && (
+          <span style={{
+            backgroundColor: `${colors.yellow}22`, color: colors.yellow,
+            border: `1px solid ${colors.yellow}44`,
+            borderRadius: '5px', padding: '2px 7px', fontSize: '10px', fontWeight: 700,
+            flexShrink: 0,
+          }}>
+            🧪 Prueba ON
+          </span>
+        )}
+
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* Botón principal */}
         <button onClick={() => load(true)} disabled={loading}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: colors.bgHover, border: `1px solid ${colors.borderStrong}`, cursor: loading ? 'not-allowed' : 'pointer', color: colors.textSecondary, fontSize: '12px', opacity: loading ? 0.5 : 1 }}>
+          style={{
+            display: 'flex', alignItems: 'center', gap: '5px',
+            padding: '7px 14px', borderRadius: '8px',
+            backgroundColor: colors.green, color: 'white',
+            border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
+            fontSize: '12px', fontWeight: 600, opacity: loading ? 0.6 : 1,
+            flexShrink: 0,
+          }}>
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-          Nuevo análisis
+          {loading ? 'Analizando...' : 'Nuevo análisis'}
         </button>
 
-        {/* Menú 3 puntos — opciones secundarias */}
-        <div style={{ position: 'relative' }}>
+        {/* Menú ⋮ */}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
           <button
             onClick={() => setMenuOpen(o => !o)}
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              padding: '7px 10px', borderRadius: '8px',
+              width: '34px', height: '34px', borderRadius: '8px',
               backgroundColor: menuOpen ? colors.bgHover : 'transparent',
-              border: `1px solid ${colors.borderStrong}`,
+              border: `1px solid ${colors.border}`,
               color: colors.textSecondary, cursor: 'pointer',
             }}>
             <MoreVertical size={15} />
           </button>
           {menuOpen && (
             <div style={{
-              position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 100,
+              position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 200,
               backgroundColor: colors.bgPanel, borderRadius: '10px',
               border: `1px solid ${colors.border}`,
-              boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-              minWidth: '190px', overflow: 'hidden',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+              minWidth: '200px', overflow: 'hidden',
             }}
             onMouseLeave={() => setMenuOpen(false)}>
-              {/* Exportar Excel */}
-              <button
-                onClick={() => { exportToExcel(); setMenuOpen(false); }}
-                disabled={loading || !candidates.length}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                  padding: '10px 14px', background: 'none', border: 'none',
-                  color: (!candidates.length || loading) ? colors.textMuted : colors.green,
-                  fontSize: '13px', cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer',
-                  textAlign: 'left',
-                }}
+
+              <button onClick={() => { exportToExcel(); setMenuOpen(false); }} disabled={loading || !candidates.length}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'none', border: 'none', color: (!candidates.length || loading) ? colors.textMuted : colors.textPrimary, fontSize: '13px', cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer', textAlign: 'left' }}
                 onMouseEnter={e => { if (candidates.length && !loading) e.currentTarget.style.backgroundColor = colors.bgHover; }}
                 onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
-                <Download size={13} /> Exportar Excel
+                <Download size={14} color={colors.green} /> Exportar Excel
               </button>
 
-              {/* Calibrar IA */}
-              <button
-                onClick={async () => {
-                  setMenuOpen(false);
-                  setCalibrating(true);
+              <button onClick={async () => {
+                  setMenuOpen(false); setCalibrating(true);
                   try {
                     const res = await reengagementAPI.calibrate();
-                    if (res.success) {
-                      setCalibration(res.data);
-                      showToast(`✅ Calibración completa: ${Math.round((res.data.accuracyRate||0)*100)}% accuracy histórica · factor ${res.data.calibrationFactor}`);
-                      load(true);
-                    }
-                  } catch (err) {
-                    showToast('Error en calibración: ' + (err.response?.data?.error || err.message), 'error');
-                  } finally {
-                    setCalibrating(false);
-                  }
+                    if (res.success) { setCalibration(res.data); showToast(`✅ Calibración: ${Math.round((res.data.accuracyRate||0)*100)}% accuracy`); load(true); }
+                  } catch (err) { showToast('Error: ' + (err.response?.data?.error || err.message), 'error'); }
+                  finally { setCalibrating(false); }
                 }}
                 disabled={calibrating || loading}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                  padding: '10px 14px', background: 'none', border: 'none',
-                  color: (calibrating || loading) ? colors.textMuted : colors.purple,
-                  fontSize: '13px', cursor: (calibrating || loading) ? 'not-allowed' : 'pointer',
-                  textAlign: 'left',
-                }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'none', border: 'none', color: (calibrating || loading) ? colors.textMuted : colors.textPrimary, fontSize: '13px', cursor: (calibrating || loading) ? 'not-allowed' : 'pointer', textAlign: 'left' }}
                 onMouseEnter={e => { if (!calibrating && !loading) e.currentTarget.style.backgroundColor = colors.bgHover; }}
                 onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
-                {calibrating
-                  ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Calibrando...</>
-                  : <>⚖️ {calibration ? 'Recalibrar IA' : 'Calibrar IA'}</>}
+                {calibrating ? <><Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Calibrando...</> : <>⚖️ {calibration ? 'Recalibrar IA' : 'Calibrar IA'}</>}
               </button>
 
-              {/* Separador */}
               <div style={{ height: '1px', backgroundColor: colors.border, margin: '2px 0' }} />
 
-              {/* Modo prueba */}
-              <button
-                onClick={() => { setTestMode(t => !t); setMenuOpen(false); }}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                  padding: '10px 14px', background: 'none', border: 'none',
-                  color: testMode ? colors.yellow : colors.textSecondary,
-                  fontSize: '13px', fontWeight: testMode ? 600 : 400,
-                  cursor: 'pointer', textAlign: 'left',
-                }}
+              <button onClick={() => { setTestMode(t => !t); setMenuOpen(false); }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'none', border: 'none', color: testMode ? colors.yellow : colors.textSecondary, fontSize: '13px', fontWeight: testMode ? 600 : 400, cursor: 'pointer', textAlign: 'left' }}
                 onMouseEnter={e => e.currentTarget.style.backgroundColor = colors.bgHover}
                 onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
-                🧪 {testMode ? 'Prueba ON — desactivar' : 'Modo prueba'}
+                🧪 {testMode ? 'Desactivar prueba' : 'Modo prueba'}
               </button>
             </div>
           )}
         </div>
       </div>
 
-      {/* Tabs de ventanas de tiempo */}
+      {/* Tabs + filtro de confianza */}
       {!loading && !error && totalCandidates > 0 && (
-        <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}`, padding: '0 24px' }}>
-          {WINDOWS.map(w => {
-            const count   = byWindow(w.key).length;
-            const isActive = activeWindow === w.key;
-            return (
-              <button key={w.key} onClick={() => { setActiveWindow(w.key); setSelected(new Set()); }}
+        <div style={{ display: 'flex', alignItems: 'center', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}`, padding: '0 20px' }}>
+          {/* Tabs */}
+          <div style={{ display: 'flex', flex: 1 }}>
+            {WINDOWS.map(w => {
+              const count   = byWindow(w.key).length;
+              const isActive = activeWindow === w.key;
+              return (
+                <button key={w.key} onClick={() => { setActiveWindow(w.key); setSelected(new Set()); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '10px 16px', background: 'none', border: 'none', cursor: 'pointer',
+                    borderBottom: isActive ? `2px solid ${w.color}` : '2px solid transparent',
+                    color: isActive ? w.color : colors.textSecondary, fontSize: '13px', fontWeight: isActive ? 600 : 400,
+                    transition: 'all 0.15s', whiteSpace: 'nowrap',
+                  }}>
+                  {w.key === 'hoy' && <Zap size={12} />}
+                  {w.label}
+                  {count > 0 && (
+                    <span style={{ backgroundColor: isActive ? w.bg : colors.bgHover, color: isActive ? w.color : colors.textSecondary, borderRadius: '10px', padding: '1px 6px', fontSize: '11px', fontWeight: 700 }}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Filtro confianza — al lado derecho de los tabs */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '12px', borderLeft: `1px solid ${colors.border}` }}>
+            <span style={{ color: colors.textMuted, fontSize: '11px', whiteSpace: 'nowrap' }}>Mín.</span>
+            {[50, 65, 75, 85].map(val => (
+              <button key={val} onClick={() => setMinConf(val)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  padding: '12px 20px', background: 'none', border: 'none', cursor: 'pointer',
-                  borderBottom: isActive ? `2px solid ${w.color}` : '2px solid transparent',
-                  color: isActive ? w.color : colors.textSecondary, fontSize: '13px', fontWeight: isActive ? 600 : 400,
+                  padding: '3px 8px', borderRadius: '5px', fontSize: '11px', fontWeight: 700,
+                  cursor: 'pointer', border: 'none',
+                  backgroundColor: minConf === val ? colors.green : 'transparent',
+                  color: minConf === val ? '#fff' : colors.textMuted,
                   transition: 'all 0.15s',
                 }}>
-                {w.key === 'hoy' && <Zap size={13} />}
-                {w.label}
-                {count > 0 && (
-                  <span style={{ backgroundColor: isActive ? w.bg : colors.bgHover, color: isActive ? w.color : colors.textSecondary, borderRadius: '10px', padding: '1px 7px', fontSize: '11px', fontWeight: 700 }}>
-                    {count}
-                  </span>
-                )}
+                {val}%
               </button>
-            );
-          })}
+            ))}
+          </div>
         </div>
       )}
 
