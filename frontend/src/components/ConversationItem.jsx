@@ -97,7 +97,11 @@ export default function ConversationItem({ conversation, selected, onClick }) {
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             flex: 1,
+            display: 'flex', alignItems: 'center', gap: '4px',
           }}>
+            {agent_mode === 'ai' && last_message && (
+              <Bot size={10} color={colors.green} style={{ flexShrink: 0, opacity: 0.8 }} />
+            )}
             {last_message || 'Sin mensajes'}
           </span>
           {unread_count > 0 && (

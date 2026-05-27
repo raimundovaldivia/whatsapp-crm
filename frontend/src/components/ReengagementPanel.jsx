@@ -3,8 +3,7 @@ import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
   ShoppingBag, TrendingUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
-  FileText,
-  Download,
+  FileText, Download, MoreVertical, X,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { api, reengagementAPI } from '../utils/api.js';
@@ -57,7 +56,7 @@ const getWINDOWS = (colors) => [
 const confColor = (conf, colors) =>
   conf >= 80 ? colors.greenLight : conf >= 60 ? colors.green : conf >= 40 ? colors.yellow : colors.textSecondary;
 
-export default function ReengagementPanel() {
+export default function ReengagementPanel({ filterPhone = null, onClearFilter = null, testPhone = null }) {
   const { colors } = useTheme();
   const WINDOWS = getWINDOWS(colors);
 
@@ -77,7 +76,8 @@ export default function ReengagementPanel() {
   const [toast, setToast]             = useState(null);
   const [minConf, setMinConf]         = useState(65);
   const [testMode, setTestMode]       = useState(false);
-  const TEST_PHONE = '56954565558';
+  const [menuOpen, setMenuOpen]       = useState(false);
+  const TEST_PHONE = testPhone || '56954565558';
 
   // ── Templates ─────────────────────────────────────────────────
   const [templates, setTemplates]           = useState([]);
@@ -240,7 +240,7 @@ export default function ReengagementPanel() {
   };
 
   const byWindow = (window) => candidates
-    .filter(c => c.buyWindow === window && c.confidence >= minConf)
+    .filter(c => c.buyWindow === window && c.confidence >= minConf && (!filterPhone || c.phone === filterPhone))
     .sort((a, b) => relevanceScore(b) - relevanceScore(a));
 
   const visible = byWindow(activeWindow);
@@ -465,59 +465,97 @@ export default function ReengagementPanel() {
           Nuevo análisis
         </button>
 
-        <button onClick={exportToExcel} disabled={loading || !candidates.length}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', backgroundColor: colors.greenTint, border: `1px solid ${colors.green}44`, cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer', color: colors.green, fontSize: '12px', opacity: (!candidates.length || loading) ? 0.5 : 1 }}>
-          <Download size={13} />
-          Exportar Excel
-        </button>
-
-        <Tooltip text={calibration ? `Último backtesting: ${calibration.totalPredictions} predicciones simuladas · Accuracy ${Math.round((calibration.accuracyRate||0)*100)}%` : 'Calibrar el algoritmo con historial real de Shopify'} position="bottom">
+        {/* Menú 3 puntos — opciones secundarias */}
+        <div style={{ position: 'relative' }}>
           <button
-            onClick={async () => {
-              setCalibrating(true);
-              try {
-                const res = await reengagementAPI.calibrate();
-                if (res.success) {
-                  setCalibration(res.data);
-                  showToast(`✅ Calibración completa: ${Math.round((res.data.accuracyRate||0)*100)}% accuracy histórica · factor ${res.data.calibrationFactor}`);
-                  load(true);
-                }
-              } catch (err) {
-                showToast('Error en calibración: ' + (err.response?.data?.error || err.message), 'error');
-              } finally {
-                setCalibrating(false);
-              }
+            onClick={() => setMenuOpen(o => !o)}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '7px 10px', borderRadius: '8px',
+              backgroundColor: menuOpen ? colors.bgHover : 'transparent',
+              border: `1px solid ${colors.borderStrong}`,
+              color: colors.textSecondary, cursor: 'pointer',
+            }}>
+            <MoreVertical size={15} />
+          </button>
+          {menuOpen && (
+            <div style={{
+              position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 100,
+              backgroundColor: colors.bgPanel, borderRadius: '10px',
+              border: `1px solid ${colors.border}`,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+              minWidth: '190px', overflow: 'hidden',
             }}
-            disabled={calibrating || loading}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px',
-              borderRadius: '8px', fontSize: '12px', border: `1px solid ${colors.purple}44`,
-              backgroundColor: colors.bgAccent2,
-              color: calibrating ? colors.textMuted : colors.purple,
-              cursor: (calibrating || loading) ? 'not-allowed' : 'pointer',
-              opacity: (calibrating || loading) ? 0.6 : 1,
-            }}>
-            {calibrating
-              ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Calibrando...</>
-              : <>⚖️ {calibration ? 'Recalibrar' : 'Calibrar IA'}</>}
-          </button>
-        </Tooltip>
+            onMouseLeave={() => setMenuOpen(false)}>
+              {/* Exportar Excel */}
+              <button
+                onClick={() => { exportToExcel(); setMenuOpen(false); }}
+                disabled={loading || !candidates.length}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
+                  padding: '10px 14px', background: 'none', border: 'none',
+                  color: (!candidates.length || loading) ? colors.textMuted : colors.green,
+                  fontSize: '13px', cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={e => { if (candidates.length && !loading) e.currentTarget.style.backgroundColor = colors.bgHover; }}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                <Download size={13} /> Exportar Excel
+              </button>
 
-        {/* Toggle modo prueba */}
-        <Tooltip text={testMode ? `Modo prueba activo — todos los envíos van a ${TEST_PHONE}` : 'Activar para enviar a tu número en vez de los clientes reales'} position="bottom">
-          <button
-            onClick={() => setTestMode(t => !t)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px',
-              borderRadius: '8px', fontSize: '12px', fontWeight: testMode ? 600 : 400,
-              border: `1px solid ${testMode ? colors.yellow : colors.borderStrong}`,
-              backgroundColor: testMode ? `${colors.yellow}22` : colors.bgHover,
-              color: testMode ? colors.yellow : colors.textSecondary,
-              cursor: 'pointer', transition: 'all 0.15s',
-            }}>
-            🧪 {testMode ? 'Prueba ON' : 'Modo prueba'}
-          </button>
-        </Tooltip>
+              {/* Calibrar IA */}
+              <button
+                onClick={async () => {
+                  setMenuOpen(false);
+                  setCalibrating(true);
+                  try {
+                    const res = await reengagementAPI.calibrate();
+                    if (res.success) {
+                      setCalibration(res.data);
+                      showToast(`✅ Calibración completa: ${Math.round((res.data.accuracyRate||0)*100)}% accuracy histórica · factor ${res.data.calibrationFactor}`);
+                      load(true);
+                    }
+                  } catch (err) {
+                    showToast('Error en calibración: ' + (err.response?.data?.error || err.message), 'error');
+                  } finally {
+                    setCalibrating(false);
+                  }
+                }}
+                disabled={calibrating || loading}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
+                  padding: '10px 14px', background: 'none', border: 'none',
+                  color: (calibrating || loading) ? colors.textMuted : colors.purple,
+                  fontSize: '13px', cursor: (calibrating || loading) ? 'not-allowed' : 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={e => { if (!calibrating && !loading) e.currentTarget.style.backgroundColor = colors.bgHover; }}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                {calibrating
+                  ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Calibrando...</>
+                  : <>⚖️ {calibration ? 'Recalibrar IA' : 'Calibrar IA'}</>}
+              </button>
+
+              {/* Separador */}
+              <div style={{ height: '1px', backgroundColor: colors.border, margin: '2px 0' }} />
+
+              {/* Modo prueba */}
+              <button
+                onClick={() => { setTestMode(t => !t); setMenuOpen(false); }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
+                  padding: '10px 14px', background: 'none', border: 'none',
+                  color: testMode ? colors.yellow : colors.textSecondary,
+                  fontSize: '13px', fontWeight: testMode ? 600 : 400,
+                  cursor: 'pointer', textAlign: 'left',
+                }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = colors.bgHover}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                🧪 {testMode ? 'Prueba ON — desactivar' : 'Modo prueba'}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Tabs de ventanas de tiempo */}
@@ -648,6 +686,28 @@ export default function ReengagementPanel() {
             {sendingBulk ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
             {sendingBulk ? 'Enviando...' : `Enviar a ${selectedWithTemplate} clientes`}
           </button>
+        </div>
+      )}
+
+      {/* Banner filtro por teléfono */}
+      {filterPhone && (
+        <div style={{
+          backgroundColor: `${colors.green}12`, borderBottom: `1px solid ${colors.green}33`,
+          padding: '8px 24px', display: 'flex', alignItems: 'center', gap: '10px',
+        }}>
+          <UserCheck size={13} color={colors.green} />
+          <span style={{ color: colors.green, fontSize: '12px', fontWeight: 500 }}>
+            Filtrado por cliente: <strong>{filterPhone}</strong>
+          </span>
+          {onClearFilter && (
+            <button onClick={onClearFilter} style={{
+              display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto',
+              background: 'none', border: `1px solid ${colors.green}44`, borderRadius: '6px',
+              color: colors.green, fontSize: '11px', cursor: 'pointer', padding: '2px 8px',
+            }}>
+              <X size={11} /> Ver todos
+            </button>
+          )}
         </div>
       )}
 

@@ -119,7 +119,9 @@ router.post('/', async (req, res) => {
     }
 
     // 5. Ejecutar pipeline de 3 agentes
+    io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
     const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);
+    io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
 
     // 6. Enviar respuesta por WhatsApp via Kapso
     let sentResult = null;

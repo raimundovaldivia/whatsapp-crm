@@ -7,7 +7,7 @@ import { useTheme } from '../theme.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile }) {
+export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -445,6 +445,34 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             <MessageBubble key={msg.id} message={msg} />
           ))
         )}
+        {/* Typing indicator */}
+        {botTyping && (
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', padding: '4px 0' }}>
+            <div style={{
+              width: '28px', height: '28px', borderRadius: '50%',
+              backgroundColor: '#4db6ac', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', flexShrink: 0,
+            }}>
+              <Bot size={13} color="white" />
+            </div>
+            <div style={{
+              backgroundColor: colors.bgPanel,
+              borderRadius: '12px 12px 12px 2px',
+              padding: '10px 14px',
+              display: 'flex', alignItems: 'center', gap: '5px',
+              border: `1px solid ${colors.border}`,
+            }}>
+              {[0, 0.35, 0.7].map((delay, i) => (
+                <span key={i} style={{
+                  width: '7px', height: '7px', borderRadius: '50%',
+                  backgroundColor: colors.textSecondary,
+                  display: 'inline-block',
+                  animation: `typing-dot 1.2s ease-in-out ${delay}s infinite`,
+                }} />
+              ))}
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -606,7 +634,13 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
         />
-        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        <style>{`
+          @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+          @keyframes typing-dot {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-4px); opacity: 1; }
+          }
+        `}</style>
         <button
           onClick={handleSend}
           disabled={!inputText.trim() || sending}

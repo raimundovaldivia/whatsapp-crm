@@ -67,6 +67,70 @@ function Bar({ value, max, color, colors }) {
   );
 }
 
+/* ── Delta % vs semana anterior ── */
+function Delta({ current, prev, colors }) {
+  if (!prev || prev === 0) return null;
+  const pct = Math.round(((current - prev) / prev) * 100);
+  if (pct === 0) return null;
+  const up = pct > 0;
+  return (
+    <span style={{
+      fontSize: '11px', fontWeight: 700, marginLeft: '6px',
+      color: up ? colors.green : colors.red,
+      backgroundColor: up ? `${colors.green}18` : `${colors.red}18`,
+      padding: '2px 6px', borderRadius: '6px',
+    }}>
+      {up ? '↑' : '↓'}{Math.abs(pct)}% vs sem. ant.
+    </span>
+  );
+}
+
+/* ── Barra del sparkline con tooltip ── */
+function SparklineBar({ d, dayLabel, isToday, maxActivity, colors, isDark }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', position: 'relative' }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      {/* Tooltip */}
+      {hover && (d.bot > 0 || d.inbound > 0) && (
+        <div style={{
+          position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+          backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
+          borderRadius: '7px', padding: '6px 10px', zIndex: 100,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+          whiteSpace: 'nowrap', pointerEvents: 'none', marginBottom: '4px',
+          fontSize: '11px', color: colors.textSecondary, lineHeight: 1.6,
+          textAlign: 'center',
+        }}>
+          <div style={{ color: colors.green, fontWeight: 700 }}>🤖 {d.bot} bot</div>
+          <div>👤 {d.inbound} cliente</div>
+        </div>
+      )}
+      {/* Barras apiladas */}
+      <div style={{ height: '56px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: '1px' }}>
+        <div style={{
+          width: '100%', borderRadius: '3px',
+          height: `${maxActivity > 0 ? Math.max((d.inbound / maxActivity) * 28, d.inbound > 0 ? 4 : 0) : 0}px`,
+          backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)',
+          transition: 'height 0.5s ease',
+        }} />
+        <div style={{
+          width: '100%', borderRadius: '3px',
+          height: `${maxActivity > 0 ? Math.max((d.bot / maxActivity) * 28, d.bot > 0 ? 4 : 0) : 0}px`,
+          backgroundColor: d.bot > 0 ? (hover ? colors.greenLight : colors.green) : 'transparent',
+          transition: 'height 0.5s ease, background-color 0.15s',
+        }} />
+      </div>
+      <div style={{ textAlign: 'center', fontSize: '10px', color: isToday ? colors.green : colors.textMuted, fontWeight: isToday ? 700 : 400 }}>
+        {dayLabel}
+      </div>
+    </div>
+  );
+}
+
 /* ── Badge de estado de pedido ── */
 function StatusBadge({ status, colors }) {
   const map = {
@@ -183,10 +247,11 @@ export default function DashboardPanel({ onChangeView }) {
                       color: colors.green, lineHeight: 1, letterSpacing: '-1px', transition: 'font-size 0.3s' }}>
                       {loading ? '—' : clp(heroRevenue)}
                     </div>
-                    <div style={{ fontSize: '13px', color: colors.textSecondary, marginTop: '8px' }}>
+                    <div style={{ fontSize: '13px', color: colors.textSecondary, marginTop: '8px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
                       {loading ? '' : data?.week?.revenue > 0
                         ? 'El bot trabajó por ti esta semana 🤖'
                         : 'Aún sin ventas esta semana — ¡el re-enganche puede cambiar eso!'}
+                      {!loading && <Delta current={data?.week?.revenue || 0} prev={data?.lastWeek?.revenue || 0} colors={colors} />}
                     </div>
                   </div>
                   {!loading && data?.allTime?.revenue > 0 && (
@@ -213,6 +278,8 @@ export default function DashboardPanel({ onChangeView }) {
                   value: loading ? '—' : heroBotMsgs,
                   sub:   loading ? '' : `${data?.week?.clientMessages || 0} recibidos de clientes`,
                   accent: colors.green,
+                  prevKey: 'botMessages',
+                  currKey: 'botMessages',
                 },
                 {
                   icon: <Package size={18} color={colors.purple} />,
@@ -222,6 +289,8 @@ export default function DashboardPanel({ onChangeView }) {
                     ? `${data.allTime.orders} en total`
                     : 'esta semana',
                   accent: colors.purple,
+                  prevKey: 'orders',
+                  currKey: 'orders',
                 },
                 {
                   icon: <MessageSquare size={18} color={colors.yellow} />,
@@ -229,6 +298,8 @@ export default function DashboardPanel({ onChangeView }) {
                   value: loading ? '—' : heroNewConvs,
                   sub:   'conversaciones iniciadas',
                   accent: colors.yellow,
+                  prevKey: 'newConversations',
+                  currKey: 'newConversations',
                 },
               ].map((s, i) => (
                 <div key={i} style={{ ...card, padding: '18px 20px' }}>
@@ -244,7 +315,10 @@ export default function DashboardPanel({ onChangeView }) {
                   <div style={{ fontSize: '32px', fontWeight: 800, color: colors.textPrimary, lineHeight: 1 }}>
                     {s.value}
                   </div>
-                  <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '6px' }}>{s.sub}</div>
+                  <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '6px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
+                    {s.sub}
+                    {!loading && <Delta current={data?.week?.[s.currKey] || 0} prev={data?.lastWeek?.[s.prevKey] || 0} colors={colors} />}
+                  </div>
                 </div>
               ))}
             </div>
@@ -275,31 +349,7 @@ export default function DashboardPanel({ onChangeView }) {
                       const dayLabel = DAY_LABELS[date.getDay()];
                       const isToday = i === data.activityByDay.length - 1;
                       return (
-                        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          {/* Barras apiladas: inbound (gris) + bot (verde) */}
-                          <div style={{ height: '56px', display: 'flex', flexDirection: 'column',
-                            justifyContent: 'flex-end', gap: '1px' }}>
-                            {/* inbound */}
-                            <div style={{
-                              width: '100%', borderRadius: '3px',
-                              height: `${maxActivity > 0 ? Math.max((d.inbound / maxActivity) * 28, d.inbound > 0 ? 4 : 0) : 0}px`,
-                              backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)',
-                              transition: 'height 0.5s ease',
-                            }} />
-                            {/* bot */}
-                            <div style={{
-                              width: '100%', borderRadius: '3px',
-                              height: `${maxActivity > 0 ? Math.max((d.bot / maxActivity) * 28, d.bot > 0 ? 4 : 0) : 0}px`,
-                              backgroundColor: d.bot > 0 ? colors.green : 'transparent',
-                              transition: 'height 0.5s ease',
-                            }} />
-                          </div>
-                          <div style={{ textAlign: 'center', fontSize: '10px',
-                            color: isToday ? colors.green : colors.textMuted,
-                            fontWeight: isToday ? 700 : 400 }}>
-                            {dayLabel}
-                          </div>
-                        </div>
+                        <SparklineBar key={i} d={d} dayLabel={dayLabel} isToday={isToday} maxActivity={maxActivity} colors={colors} isDark={isDark} />
                       );
                     })}
                   </div>
@@ -363,12 +413,22 @@ export default function DashboardPanel({ onChangeView }) {
                       </div>
                       {/* Info */}
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <span style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary,
                             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {order.customerName}
                           </span>
                           <StatusBadge status={order.status} colors={colors} />
+                          {order.byBot && (
+                            <span style={{
+                              display: 'flex', alignItems: 'center', gap: '3px',
+                              fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '20px',
+                              backgroundColor: `${colors.green}18`, color: colors.green,
+                              border: `1px solid ${colors.green}33`, flexShrink: 0,
+                            }}>
+                              <Bot size={9} /> Bot
+                            </span>
+                          )}
                         </div>
                         <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '2px' }}>
                           {timeAgo(order.createdAt)}

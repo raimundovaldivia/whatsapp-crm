@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users, Search, RefreshCw, MessageSquare, ShoppingBag,
-  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft,
+  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, UserCheck,
 } from 'lucide-react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -21,7 +21,7 @@ function formatDate(dateStr) {
 
 const PAGE_SIZE = 50;
 
-export default function ClientesPanel({ onOpenConversation }) {
+export default function ClientesPanel({ onOpenConversation, onOpenReengagement }) {
   const { colors, isDark } = useTheme();
   const [allCustomers, setAllCustomers] = useState([]);   // todos los cargados desde Shopify
   const [loading, setLoading]           = useState(true);
@@ -256,6 +256,14 @@ export default function ClientesPanel({ onOpenConversation }) {
                               title="Abrir chat"
                               style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: colors.bgHover, color: colors.textSecondary, padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: 'none', cursor: 'pointer' }}>
                               <MessageSquare size={11} /> Chat
+                            </button>
+                          )}
+                          {c.phone && onOpenReengagement && (
+                            <button
+                              onClick={e => { e.stopPropagation(); onOpenReengagement(c.phone); }}
+                              title="Re-enganchar este cliente"
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: `${colors.green}18`, color: colors.green, padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: `1px solid ${colors.green}33`, cursor: 'pointer' }}>
+                              <UserCheck size={11} /> Reenganche
                             </button>
                           )}
                           <ChevronRight size={14} color={colors.borderStrong}

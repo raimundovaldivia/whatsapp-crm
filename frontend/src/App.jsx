@@ -44,6 +44,8 @@ export default function App() {
   const [messages, setMessages]           = useState({});
   const [loadingConvs, setLoadingConvs]   = useState(false);
   const [pendingOrders, setPendingOrders] = useState(0);
+  const [botTypingConvs, setBotTypingConvs] = useState(new Set());
+  const [reengagementPhone, setReengagementPhone] = useState(null);
 
   // Deduplicar mensajes entre optimistic update y socket event
   const seenMessageIds = useRef(new Set());
@@ -159,7 +161,15 @@ export default function App() {
     setPendingOrders(n => n + 1);
   }, []);
 
-  const { connected } = useSocket(org?.id, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated);
+  const handleBotTyping = useCallback(({ conversationId, typing }) => {
+    setBotTypingConvs(prev => {
+      const n = new Set(prev);
+      typing ? n.add(conversationId) : n.delete(conversationId);
+      return n;
+    });
+  }, []);
+
+  const { connected } = useSocket(org?.id, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated, handleBotTyping);
 
   // En móvil, volver al sidebar limpiando la selección
   const handleBackToSidebar = useCallback(() => setSelectedId(null), []);
@@ -284,6 +294,7 @@ export default function App() {
                 messages={selectedMsgs}
                 onSendMessage={handleSendMessage}
                 onToggleAgentMode={handleToggleAgentMode}
+                botTyping={botTypingConvs.has(selectedId)}
                 onEscalationFeedback={async (convId, feedback) => {
                   await conversationsAPI.sendEscalationFeedback(convId, feedback);
                 }}
@@ -298,7 +309,7 @@ export default function App() {
                 }}
               />
             ) : !isMobile ? (
-              <EmptyState orgName={org?.name} />
+              <EmptyState orgName={org?.name} onChangeView={handleChangeView} />
             ) : null
           )}
         </div>
@@ -317,11 +328,20 @@ export default function App() {
 
       {/* Vista Clientes */}
       {view === 'clientes' && (
-        <ClientesPanel onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }} />
+        <ClientesPanel
+          onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
+          onOpenReengagement={(phone) => { setReengagementPhone(phone); setView('reengagement'); }}
+        />
       )}
 
       {/* Vista Re-enganche */}
-      {view === 'reengagement' && <ReengagementPanel />}
+      {view === 'reengagement' && (
+        <ReengagementPanel
+          filterPhone={reengagementPhone}
+          onClearFilter={() => setReengagementPhone(null)}
+          testPhone={org?.display_phone_number}
+        />
+      )}
 
       {/* Vista Dashboard */}
       {view === 'dashboard' && <DashboardPanel onChangeView={setView} />}

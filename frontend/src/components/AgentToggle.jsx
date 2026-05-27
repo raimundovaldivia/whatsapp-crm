@@ -8,6 +8,7 @@ export default function AgentToggle({ mode, onToggle, isMobile }) {
   const isAI = mode === 'ai';
 
   const handleClick = async () => {
+    if (isAI && !window.confirm('¿Tomar control manual?\n\nEl bot dejará de responder hasta que lo reactives.')) return;
     setLoading(true);
     try {
       await onToggle();

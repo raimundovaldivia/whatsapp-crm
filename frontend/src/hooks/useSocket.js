@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
-export function useSocket(orgId, onNewMessage, onAgentModeChanged, onMessageStatus, onOrderCreated) {
+export function useSocket(orgId, onNewMessage, onAgentModeChanged, onMessageStatus, onOrderCreated, onBotTyping) {
   const socketRef = useRef(null);
   const [connected, setConnected] = useState(false);
 
@@ -25,6 +25,7 @@ export function useSocket(orgId, onNewMessage, onAgentModeChanged, onMessageStat
     socket.on(`agent_mode_changed_${orgId}`, data => onAgentModeChanged?.(data));
     socket.on(`status_update_${orgId}`,     data => onMessageStatus?.(data));
     socket.on(`order_created_${orgId}`,     data => onOrderCreated?.(data));
+    socket.on(`bot_typing_${orgId}`,        data => onBotTyping?.(data));
 
     return () => socket.disconnect();
   }, [orgId]);

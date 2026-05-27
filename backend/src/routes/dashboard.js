@@ -31,6 +31,10 @@ router.get('/wins', async (req, res) => {
       recentOrderRows,
       allTimeRevenueRow,
       allTimeOrdersRow,
+      lastWeekRevenueRow,
+      lastWeekOrdersRow,
+      lastWeekNewConvsRow,
+      lastWeekBotMsgsRow,
     ] = await Promise.all([
 
       // Ingresos esta semana (todos los estados — incluye pendientes)
@@ -92,10 +96,11 @@ router.get('/wins', async (req, res) => {
         ORDER BY day ASC
       `, [orgId]),
 
-      // Últimas 6 órdenes (feed de victorias)
+      // Últimas 6 órdenes (feed de victorias) + si fue creada por el bot
       pool.query(`
         SELECT id, customer_name, customer_phone, total_price::numeric AS total_price,
-               status, created_at
+               status, created_at,
+               (conversation_id IS NOT NULL) AS by_bot
         FROM orders
         WHERE organization_id = $1
         ORDER BY created_at DESC
@@ -114,6 +119,39 @@ router.get('/wins', async (req, res) => {
         SELECT COUNT(*) AS n
         FROM orders
         WHERE organization_id = $1
+      `, [orgId]),
+
+      // ── Semana PASADA (lunes anterior → domingo) ─────────────────────────
+      pool.query(`
+        SELECT COALESCE(SUM(total_price::numeric), 0) AS revenue
+        FROM orders
+        WHERE organization_id = $1
+          AND created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
+          AND created_at <  date_trunc('week', NOW())
+      `, [orgId]),
+
+      pool.query(`
+        SELECT COUNT(*) AS n FROM orders
+        WHERE organization_id = $1
+          AND created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
+          AND created_at <  date_trunc('week', NOW())
+      `, [orgId]),
+
+      pool.query(`
+        SELECT COUNT(*) AS n FROM conversations
+        WHERE organization_id = $1
+          AND created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
+          AND created_at <  date_trunc('week', NOW())
+      `, [orgId]),
+
+      pool.query(`
+        SELECT COUNT(*) AS n
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.organization_id = $1
+          AND m.direction = 'outbound' AND m.sent_by = 'ai'
+          AND m.created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
+          AND m.created_at <  date_trunc('week', NOW())
       `, [orgId]),
     ]);
 
@@ -147,6 +185,12 @@ router.get('/wins', async (req, res) => {
           botMessages:      parseInt(botMsgsRow.rows[0].n)           || 0,
           clientMessages:   parseInt(totalMsgsRow.rows[0].n)         || 0,
         },
+        lastWeek: {
+          revenue:          parseFloat(lastWeekRevenueRow.rows[0].revenue)   || 0,
+          orders:           parseInt(lastWeekOrdersRow.rows[0].n)            || 0,
+          newConversations: parseInt(lastWeekNewConvsRow.rows[0].n)          || 0,
+          botMessages:      parseInt(lastWeekBotMsgsRow.rows[0].n)           || 0,
+        },
         allTime: {
           revenue: parseFloat(allTimeRevenueRow.rows[0].revenue) || 0,
           orders:  parseInt(allTimeOrdersRow.rows[0].n)          || 0,
@@ -158,6 +202,7 @@ router.get('/wins', async (req, res) => {
           totalPrice:   parseFloat(o.total_price) || 0,
           status:       o.status,
           createdAt:    o.created_at,
+          byBot:        o.by_bot === true || o.by_bot === 't',
         })),
       },
     });

@@ -650,6 +650,26 @@ router.post('/ai-pick-template', async (req, res) => {
     const cached = analysisCache.get(req.orgId);
     const c = cached?.data?.find(x => x.phone === phone) || {};
 
+    // Contexto de la tienda (catálogo + info de entrega) para mejorar las variables
+    const storeCtx = await db.getSetting(req.orgId, 'store_context') || '';
+    const deliveryRaw = await db.getSetting(req.orgId, 'delivery_info');
+    let catalogSection = '';
+    if (storeCtx) {
+      // Solo usar las primeras 800 chars para no sobrepasar tokens
+      catalogSection = `\nCATÁLOGO / CONTEXTO DE LA TIENDA (usa para rellenar variables con productos reales):\n${storeCtx.slice(0, 800)}`;
+    }
+    if (deliveryRaw) {
+      try {
+        const d = JSON.parse(deliveryRaw);
+        const lines = [];
+        if (d.schedule)       lines.push(`Horarios: ${d.schedule}`);
+        if (d.zone)           lines.push(`Zona: ${d.zone}`);
+        if (d.minimum)        lines.push(`Mínimo: ${d.minimum}`);
+        if (d.paymentMethods) lines.push(`Pagos: ${d.paymentMethods}`);
+        if (lines.length) catalogSection += `\nINFO DE ENTREGA: ${lines.join(' · ')}`;
+      } catch {}
+    }
+
     // Construir descripción de cada template con contexto completo por variable
     const tplDescriptions = templates.map((t, i) => {
       const body   = (t.components || []).find(comp => comp.type === 'BODY');
@@ -691,6 +711,7 @@ router.post('/ai-pick-template', async (req, res) => {
 
     const prompt =
 `Eres un experto en marketing para una tienda. Debes elegir el mejor template de WhatsApp para este cliente y rellenar sus variables.
+${catalogSection}
 
 PERFIL DEL CLIENTE:
 - Nombre completo: ${clientDisplayName}
