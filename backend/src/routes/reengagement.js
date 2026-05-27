@@ -636,16 +636,33 @@ router.post('/ai-pick-template', async (req, res) => {
     const cached = analysisCache.get(req.orgId);
     const c = cached?.data?.find(x => x.phone === phone) || {};
 
-    // Construir descripción de cada template para el prompt
+    // Construir descripción de cada template con contexto completo por variable
     const tplDescriptions = templates.map((t, i) => {
-      const body = (t.components || []).find(comp => comp.type === 'BODY');
+      const body   = (t.components || []).find(comp => comp.type === 'BODY');
       const header = (t.components || []).find(comp => comp.type === 'HEADER');
       const footer = (t.components || []).find(comp => comp.type === 'FOOTER');
+
+      // Extraer variables con su contexto (palabras antes y después)
+      let varContexts = '';
+      if (body?.text) {
+        const varNums = [...new Set([...body.text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))].sort();
+        if (varNums.length > 0) {
+          varContexts = '\n   Variables con contexto:\n' + varNums.map(v => {
+            // Extraer ~5 palabras antes y después de la variable para mostrar contexto
+            const regex = new RegExp(`(.{0,40})\\{\\{${v}\\}\\}(.{0,40})`);
+            const m = body.text.match(regex);
+            const before = m?.[1]?.replace(/.*\n/,'').trim() || '';
+            const after  = m?.[2]?.split('\n')[0].trim() || '';
+            return `     {{${v}}} → "...${before}[AQUÍ]${after}..." (el valor reemplazará [AQUÍ])`;
+          }).join('\n');
+        }
+      }
+
       const parts = [];
-      if (header?.text) parts.push(`ENCABEZADO: "${header.text}"`);
-      if (body?.text)   parts.push(`CUERPO: "${body.text}"`);
-      if (footer?.text) parts.push(`PIE: "${footer.text}"`);
-      return `${i + 1}. Nombre: "${t.name}" (${t.category || 'MARKETING'})\n   ${parts.join(' | ')}`;
+      if (header?.text) parts.push(`Encabezado: "${header.text}"`);
+      if (body?.text)   parts.push(`Cuerpo completo: "${body.text}"`);
+      if (footer?.text) parts.push(`Pie: "${footer.text}"`);
+      return `${i + 1}. Template: "${t.name}" (${t.category || 'MARKETING'})\n   ${parts.join('\n   ')}${varContexts}`;
     }).join('\n\n');
 
     const daysLabel = c.daysInactive != null ? `${c.daysInactive} días sin comprar` : 'inactivo por un tiempo';
@@ -655,42 +672,44 @@ router.post('/ai-pick-template', async (req, res) => {
       : 'pronto';
 
     const prompt =
-`Eres un experto en marketing de re-enganche para una tienda. Tu tarea es:
-1. Elegir el template de WhatsApp MÁS APROPIADO para este cliente específico.
-2. Rellenar TODAS sus variables {{N}} de forma natural y personalizada.
+`Eres un experto en marketing para una tienda. Debes elegir el mejor template de WhatsApp para este cliente y rellenar sus variables.
 
 PERFIL DEL CLIENTE:
 - Nombre: ${c.name || phone}
-- Teléfono: ${phone}
 - Estado: ${daysLabel} (${freqLabel})
 - Última compra: ${c.lastOrderDate || '—'}
 - Productos habituales: ${c.lastProducts || 'productos frescos'}
 - Historial: ${c.totalOrders || 0} pedidos, $${Math.round(c.totalSpent || 0).toLocaleString('es-CL')} total gastado
-- Predicción IA: ${predLabel}
-${c.aiReason ? `- Análisis IA: ${c.aiReason}` : ''}
-${c.favDay ? `- Día favorito de compra: ${c.favDay}` : ''}
-${c.spendTrend && c.spendTrend !== 'estable' ? `- Tendencia de gasto: ${c.spendTrend}` : ''}
+- Predicción: ${predLabel}
+${c.aiReason ? `- Análisis: ${c.aiReason}` : ''}
 
 TEMPLATES DISPONIBLES:
 ${tplDescriptions}
 
-REGLAS:
-- Elige el template que mejor conecte con el perfil de este cliente (urgencia, productos, historial)
-- {{1}} suele ser el nombre → usa solo su primer nombre
-- Las variables deben ser naturales, cortas (1-5 palabras) y relevantes para este cliente
-- Si no hay dato suficiente, usa un valor genérico apropiado pero creíble
-- NO inventes información que no esté en el perfil
+PROCESO OBLIGATORIO:
+1. Elige el template más apropiado para este cliente.
+2. Escribe el MENSAJE COMPLETO final en "rendered_message" — exactamente cómo quedará cuando se envíe, con todas las variables reemplazadas.
+3. Lee "rendered_message" y verifica que NO tenga palabras repetidas ni frases sin sentido.
+4. Extrae los valores de cada variable comparando "rendered_message" con el cuerpo del template.
 
-Responde SOLO con JSON válido (sin texto extra):
+REGLAS CRÍTICAS para las variables:
+- Cada variable reemplaza EXACTAMENTE su marcador {{N}} — nada más, nada menos.
+- Lee las palabras que ya están ANTES y DESPUÉS de cada variable en el template para no repetirlas.
+- Si el template dice "Tenemos {{3}} frescos", el valor de {{3}} NO puede incluir "frescos".
+- {{1}} suele ser el nombre → primer nombre solamente.
+- Valores cortos y naturales (1-4 palabras máximo).
+
+Responde SOLO con JSON válido (sin texto extra, sin markdown):
 {
   "templateName": "nombre_exacto_del_template",
-  "reason": "por qué este template es el mejor para este cliente (1 oración)",
+  "reason": "por qué este template es el mejor (1 oración corta)",
+  "rendered_message": "el mensaje completo final tal como lo recibirá el cliente",
   "vars": { "1": "valor", "2": "valor", ... }
 }`;
 
     const response = await anthropic.messages.create({
       model:      'claude-haiku-4-5-20251001',
-      max_tokens: 400,
+      max_tokens: 600,
       messages:   [{ role: 'user', content: prompt }],
     });
 
@@ -702,19 +721,20 @@ Responde SOLO con JSON válido (sin texto extra):
     }
 
     const picked = JSON.parse(match[0]);
-    const chosenTpl = templates.find(t => t.name === picked.templateName);
-    if (!chosenTpl) {
-      // Fallback: usar el primer template
-      picked.templateName = templates[0].name;
-    }
     const tplFinal = templates.find(t => t.name === picked.templateName) || templates[0];
+    picked.templateName = tplFinal.name; // normalizar por si la IA devolvió nombre incorrecto
 
-    // Construir previewText reemplazando variables en el body
-    const bodyComp = (tplFinal.components || []).find(comp => comp.type === 'BODY');
-    let previewText = bodyComp?.text || '';
     const vars = picked.vars || {};
-    for (const [k, v] of Object.entries(vars)) {
-      previewText = previewText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
+
+    // Usar rendered_message de la IA si existe (ya verificado por ella misma)
+    // Si no, reconstruir desde las variables como fallback
+    let previewText = picked.rendered_message || '';
+    if (!previewText) {
+      const bodyComp = (tplFinal.components || []).find(comp => comp.type === 'BODY');
+      previewText = bodyComp?.text || '';
+      for (const [k, v] of Object.entries(vars)) {
+        previewText = previewText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
+      }
     }
 
     res.json({
