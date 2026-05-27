@@ -38,6 +38,7 @@ export const setupAPI = {
   connectWhatsApp: (data) => api.post('/setup/whatsapp', data).then(r => r.data),
   connectShopify: (data) => api.post('/setup/shopify', data).then(r => r.data),
   shopifyStatus: () => api.get('/setup/shopify-status').then(r => r.data),
+  whatsappStatus: () => api.get('/setup/whatsapp-status').then(r => r.data),
   complete: () => api.post('/setup/complete').then(r => r.data),
 };
 

@@ -636,16 +636,17 @@ function IATab({ onSwitchTab }) {
     Promise.all([
       api.get('/settings'),
       reengagementAPI.getStoreContext(),
-      setupAPI.status().catch(() => null),
+      setupAPI.shopifyStatus().catch(() => null),
+      setupAPI.whatsappStatus().catch(() => null),
       reengagementAPI.getTemplates().catch(() => ({ data: [] })),
-    ]).then(([settings, ctx, status, tpls]) => {
+    ]).then(([settings, ctx, shopify, whatsapp, tpls]) => {
       const d = settings.data?.data;
       if (d) {
         setAiEnabled(d.ai_enabled_global !== false);
         setExtraPrompt(d.ai_system_prompt_extra || '');
       }
       setStoreContext(ctx.context || '');
-      setSetupStatus(status?.data || status);
+      setSetupStatus({ shopify, whatsapp });
       setTemplateCount((tpls.data || []).length);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
@@ -689,8 +690,8 @@ function IATab({ onSwitchTab }) {
     </div>
   );
 
-  const shopifyOk = setupStatus?.shopify?.done;
-  const waOk      = setupStatus?.whatsapp?.done;
+  const shopifyOk = setupStatus?.shopify?.connected;
+  const waOk      = setupStatus?.whatsapp?.connected;
 
   /* ── Tarjetas de acceso rápido ─────────────────────────────── */
   const quickCards = [
@@ -698,7 +699,7 @@ function IATab({ onSwitchTab }) {
       key:   'shopify',
       icon:  ShoppingBag,
       label: 'Tienda Shopify',
-      desc:  shopifyOk ? (setupStatus?.shopify?.storeName || 'Conectada') : 'Sin conectar',
+      desc:  shopifyOk ? (setupStatus?.shopify?.storeName || setupStatus?.shopify?.storeUrl || 'Conectada') : 'Sin conectar',
       ok:    shopifyOk,
       color: '#96bf48',
     },
@@ -706,7 +707,7 @@ function IATab({ onSwitchTab }) {
       key:   'whatsapp',
       icon:  MessageCircle,
       label: 'WhatsApp',
-      desc:  waOk ? (setupStatus?.whatsapp?.phoneNumberId ? `ID: ${setupStatus.whatsapp.phoneNumberId}` : 'Conectado') : 'Sin conectar',
+      desc:  waOk ? (setupStatus?.whatsapp?.provider ? `via ${setupStatus.whatsapp.provider}` : 'Conectado') : 'Sin conectar',
       ok:    waOk,
       color: '#25d366',
     },

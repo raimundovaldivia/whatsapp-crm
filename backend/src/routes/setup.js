@@ -189,6 +189,24 @@ router.get('/shopify-status', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/setup/whatsapp-status
+ * Devuelve si WhatsApp está configurado para esta organización.
+ */
+router.get('/whatsapp-status', requireAuth, async (req, res) => {
+  try {
+    const wc = await db.getWhatsappConfig(req.orgId);
+    res.json({
+      success:       true,
+      connected:     !!wc,
+      provider:      wc?.provider || null,
+      phoneNumberId: wc?.phone_number_id || null,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 /* ─────────────────────────────────────────────────────────────
    COMPLETAR SETUP
 ───────────────────────────────────────────────────────────── */
