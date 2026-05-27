@@ -612,13 +612,15 @@ function IATab({ onSwitchTab }) {
   const [storeContext,  setStoreContext]   = useState('');
   const [extraPrompt,   setExtraPrompt]   = useState('');
 
-  const [loading,   setLoading]   = useState(true);
-  const [syncing,   setSyncing]   = useState(false);
-  const [ctxSaved,  setCtxSaved]  = useState(false);
-  const [saving,    setSaving]    = useState(false);
-  const [success,   setSuccess]   = useState('');
-  const [error,     setError]     = useState('');
-  const saveTimer = useRef(null);
+  const [loading,    setLoading]   = useState(true);
+  const [syncing,    setSyncing]   = useState(false);
+  const [syncMsg,    setSyncMsg]   = useState('');   // mensaje inline junto al botón
+  const [ctxSaved,   setCtxSaved]  = useState(false);
+  const [saving,     setSaving]    = useState(false);
+  const [success,    setSuccess]   = useState('');
+  const [error,      setError]     = useState('');
+  const saveTimer  = useRef(null);
+  const syncMsgTimer = useRef(null);
 
   const card = {
     backgroundColor: colors.bgPanel, borderRadius: '14px',
@@ -662,13 +664,31 @@ function IATab({ onSwitchTab }) {
     }, 1500);
   };
 
+  const showSyncMsg = (msg, isErr = false) => {
+    if (syncMsgTimer.current) clearTimeout(syncMsgTimer.current);
+    setSyncMsg({ text: msg, err: isErr });
+    syncMsgTimer.current = setTimeout(() => setSyncMsg(''), 4000);
+  };
+
   const syncFromShopify = async () => {
     setSyncing(true);
+    setSyncMsg('');
     try {
       const res = await reengagementAPI.syncStoreContext();
-      if (res.context) { setStoreContext(res.context); setCtxSaved(true); setTimeout(() => setCtxSaved(false), 2500); }
-    } catch { setError('Error sincronizando desde Shopify'); }
-    finally { setSyncing(false); }
+      // Always update textarea — even if empty, so the user sees sync ran
+      setStoreContext(res.context ?? '');
+      if (res.context) {
+        showSyncMsg('✓ Contexto actualizado desde Shopify');
+      } else {
+        showSyncMsg('Shopify no devolvió contenido — verifica que tengas páginas publicadas', true);
+      }
+    } catch (err) {
+      const detail = err.response?.data?.error || err.message || 'Error desconocido';
+      showSyncMsg(`Error: ${detail}`, true);
+      setError(`Error sincronizando desde Shopify: ${detail}`);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const save = async () => {
@@ -794,9 +814,17 @@ function IATab({ onSwitchTab }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
               <label style={labelStyle}>Contexto de la tienda</label>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {ctxSaved && <span style={{ fontSize: '11px', color: colors.green }}>✓ Guardado</span>}
+                {ctxSaved && !syncMsg && <span style={{ fontSize: '11px', color: colors.green }}>✓ Guardado</span>}
+                {syncMsg && (
+                  <span style={{ fontSize: '11px', color: syncMsg.err ? colors.red : colors.green, maxWidth: '260px', textAlign: 'right' }}>
+                    {syncMsg.text}
+                  </span>
+                )}
                 <button onClick={syncFromShopify} disabled={syncing}
-                  style={{ background: 'none', border: 'none', cursor: syncing ? 'not-allowed' : 'pointer', color: colors.textMuted, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', opacity: syncing ? 0.6 : 1 }}>
+                  style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 9px',
+                    cursor: syncing ? 'not-allowed' : 'pointer', color: syncing ? colors.textMuted : colors.textSecondary,
+                    fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', opacity: syncing ? 0.7 : 1,
+                    whiteSpace: 'nowrap', flexShrink: 0 }}>
                   <RefreshCw size={11} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
                   {syncing ? 'Sincronizando...' : 'Recargar desde Shopify'}
                 </button>
