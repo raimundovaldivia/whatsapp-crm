@@ -475,6 +475,147 @@ function formatProductsForAI(products, shop = null) {
   }).join('\n\n');
 }
 
+// ─── Información de la tienda (REST) ───────────────────────────
+
+/** Quita etiquetas HTML y decodifica entidades básicas */
+function stripHtml(html) {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<\/h[1-6]>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function restClient(shop, token) {
+  return axios.create({
+    baseURL: `https://${shop}/admin/api/${API_VERSION}`,
+    headers: { 'X-Shopify-Access-Token': token },
+    timeout: 20000,
+  });
+}
+
+/**
+ * Obtiene información básica de la tienda.
+ * Incluye: nombre, email, descripción, dirección, moneda.
+ */
+async function getShopInfo(shop, token) {
+  try {
+    const res = await restClient(shop, token).get('/shop.json');
+    const s = res.data?.shop || {};
+    return {
+      name:        s.name        || '',
+      email:       s.email       || s.customer_email || '',
+      description: s.description || '',
+      address:     [s.address1, s.city, s.country].filter(Boolean).join(', '),
+      phone:       s.phone       || '',
+      currency:    s.currency    || '',
+      domain:      s.myshopify_domain || shop,
+    };
+  } catch (e) {
+    console.warn('[shopify-api] getShopInfo error:', e.message);
+    return {};
+  }
+}
+
+/**
+ * Obtiene todas las páginas publicadas de la tienda (About, FAQ, etc.)
+ * Retorna array de { title, content } con HTML ya limpiado.
+ */
+async function getPages(shop, token) {
+  try {
+    const res = await restClient(shop, token).get('/pages.json', {
+      params: { limit: 50, published_status: 'published' },
+    });
+    return (res.data?.pages || []).map(p => ({
+      title:   p.title || '',
+      content: stripHtml(p.body_html || ''),
+    })).filter(p => p.content.length > 20);
+  } catch (e) {
+    console.warn('[shopify-api] getPages error:', e.message);
+    return [];
+  }
+}
+
+/**
+ * Obtiene las políticas de la tienda (envío, devolución, privacidad, etc.)
+ * Retorna array de { title, content } con HTML limpiado.
+ */
+async function getPolicies(shop, token) {
+  try {
+    const res = await restClient(shop, token).get('/policies.json');
+    return (res.data?.policies || []).map(p => ({
+      title:   p.title || '',
+      content: stripHtml(p.body || ''),
+    })).filter(p => p.content.length > 20);
+  } catch (e) {
+    console.warn('[shopify-api] getPolicies error:', e.message);
+    return [];
+  }
+}
+
+/**
+ * Construye un contexto completo de la tienda combinando:
+ * shop info + productos + páginas + políticas.
+ * Listo para usar como system prompt del agente IA.
+ */
+async function buildFullStoreContext(shop, token, orgName = '') {
+  const [shopInfo, pages, policies, productsRes] = await Promise.all([
+    getShopInfo(shop, token),
+    getPages(shop, token),
+    getPolicies(shop, token),
+    getProducts(shop, token, { limit: 20 }).catch(() => ({ products: [] })),
+  ]);
+
+  const displayName = orgName || shopInfo.name || shop.replace('.myshopify.com', '');
+  const parts = [];
+
+  // ── Info básica ──────────────────────────────────────────────────
+  parts.push(`Tienda: ${displayName}`);
+  if (shopInfo.description) parts.push(`Descripción: ${shopInfo.description}`);
+  if (shopInfo.address)     parts.push(`Dirección: ${shopInfo.address}`);
+  if (shopInfo.phone)       parts.push(`Teléfono: ${shopInfo.phone}`);
+  if (shopInfo.email)       parts.push(`Email: ${shopInfo.email}`);
+  if (shopInfo.currency)    parts.push(`Moneda: ${shopInfo.currency}`);
+
+  // ── Productos ────────────────────────────────────────────────────
+  const productList = (productsRes.products || []).slice(0, 15);
+  if (productList.length) {
+    const lines = productList.map(p => {
+      const price = p.priceMin > 0 ? ` ($${p.priceMin.toLocaleString('es-CL')} ${p.currency || ''})` : '';
+      return `  - ${p.title}${price}`;
+    });
+    parts.push(`\nProductos del catálogo:\n${lines.join('\n')}`);
+  }
+
+  // ── Páginas personalizadas ───────────────────────────────────────
+  if (pages.length) {
+    for (const page of pages) {
+      const content = page.content.slice(0, 1500); // limitar para no exceder tokens
+      parts.push(`\n--- ${page.title} ---\n${content}`);
+    }
+  }
+
+  // ── Políticas ────────────────────────────────────────────────────
+  if (policies.length) {
+    for (const pol of policies) {
+      const content = pol.content.slice(0, 800);
+      parts.push(`\n--- ${pol.title} ---\n${content}`);
+    }
+  }
+
+  return parts.join('\n');
+}
+
 module.exports = {
   credentialsFrom,
   getProducts,
@@ -485,4 +626,9 @@ module.exports = {
   getOrders,
   createDraftOrder,
   formatProductsForAI,
+  getShopInfo,
+  getPages,
+  getPolicies,
+  buildFullStoreContext,
+  stripHtml,
 };

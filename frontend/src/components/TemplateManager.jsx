@@ -316,13 +316,11 @@ function BulkGenerateTab({ onSubmitted, colors }) {
               )}
               <button
                 onClick={async () => {
-                  // Forzar recarga desde Shopify (ignora DB)
                   try {
-                    const ds = await reengagementAPI.getStoreContext();
-                    // Si tiene Shopify, reconstruir desde productos frescos
-                    if (ds.hasShopify && ds.context) {
-                      setStoreContext(ds.context);
-                      await reengagementAPI.saveStoreContext(ds.context);
+                    // Sincroniza desde Shopify: shop info + páginas + políticas + productos
+                    const res = await reengagementAPI.syncStoreContext();
+                    if (res.context) {
+                      setStoreContext(res.context);
                       setCtxSaved(true);
                       setTimeout(() => setCtxSaved(false), 2500);
                     }

@@ -828,46 +828,26 @@ router.get('/store-context', async (req, res) => {
       });
     }
 
-    // ── 2. Sin contexto guardado → cargar desde Shopify ─────────────
+    // ── 2. Sin contexto guardado → construir desde Shopify y guardar ─
     const ds = await db.getPrimaryDataSource(orgId);
     if (!ds) {
       return res.json({ success: true, hasShopify: false, context: '', products: [], shopName: '' });
     }
 
     const { shop, token } = shopifyApi.credentialsFrom(ds);
-    const shopName = shop.replace('.myshopify.com', '').replace(/-/g, ' ');
-
-    let productList = [];
-    try {
-      const raw = await shopifyApi.getProducts(shop, token, { limit: 20 });
-      productList = (raw?.products || []).slice(0, 15);
-    } catch (e) {
-      console.warn('[store-context] getProducts error:', e.message);
-    }
-
     const org = await db.getOrgById(orgId);
-    const orgName = org?.name || shopName;
+    const orgName = org?.name || shop.replace('.myshopify.com', '').replace(/-/g, ' ');
 
-    const productLines = productList.map(p => {
-      const price = p.priceMin > 0
-        ? ` ($${p.priceMin.toLocaleString('es-CL')} ${p.currency})`
-        : '';
-      return `  - ${p.title}${price}`;
-    });
+    const context = await shopifyApi.buildFullStoreContext(shop, token, orgName);
 
-    const context = [
-      `Tienda: ${orgName}`,
-      `Dominio Shopify: ${shop}`,
-      productList.length
-        ? `Productos del catálogo:\n${productLines.join('\n')}`
-        : 'Sin productos cargados aún',
-    ].filter(Boolean).join('\n');
+    // Guardar en DB para la próxima carga
+    if (context) await db.setSetting(orgId, 'store_context', context);
 
     return res.json({
       success: true,
       hasShopify: true,
       shopName: orgName,
-      products: productList.map(p => p.title),
+      products: [],
       context,
     });
   } catch (err) {
@@ -891,6 +871,32 @@ router.post('/store-context', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('[store-context POST]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/reengagement/store-context/sync
+ * Re-sincroniza el contexto completo desde Shopify:
+ * shop info + todas las páginas publicadas + todas las políticas + productos.
+ * Sobreescribe cualquier edición manual en DB.
+ */
+router.post('/store-context/sync', async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ds    = await db.getPrimaryDataSource(orgId);
+    if (!ds) return res.status(400).json({ success: false, error: 'Shopify no conectado' });
+
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const org = await db.getOrgById(orgId);
+    const orgName = org?.name || shop.replace('.myshopify.com', '').replace(/-/g, ' ');
+
+    const context = await shopifyApi.buildFullStoreContext(shop, token, orgName);
+    await db.setSetting(orgId, 'store_context', context);
+
+    res.json({ success: true, context });
+  } catch (err) {
+    console.error('[store-context/sync]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
