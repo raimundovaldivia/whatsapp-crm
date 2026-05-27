@@ -255,6 +255,57 @@ Predice qué clientes van a comprar próximamente y permite enviarles mensajes.
 
 ---
 
+## Filosofía de producto — Modelo Hooked (Nir Eyal)
+
+Esta app debe crear hábito en el dueño de la tienda. El objetivo no es que la use cuando tiene un problema — es que la abra todos los días porque siente que algo puede estar pasando sin él.
+
+### El ciclo que hay que construir
+
+```
+TRIGGER → ACCIÓN → RECOMPENSA VARIABLE → INVERSIÓN → (repite)
+```
+
+**Triggers externos** (lo traen de vuelta):
+- Notificación: "Juan escribió y el bot lo está atendiendo"
+- Digest diario: "Tienes 3 clientes listos para comprar hoy"
+- Badge con conversaciones sin leer
+
+**Triggers internos** (el miedo que ya tiene):
+- Ansiedad de perder una venta mientras no está mirando el teléfono
+- Deseo de saber si el bot está respondiendo bien
+- Curiosidad por cuánto vendió esta semana
+
+**Acciones — deben ser mínimas (1-2 clicks):**
+- Ver candidatos de re-enganche y enviar con un click
+- Aprobar o corregir una respuesta del bot
+- Ver el resumen de ventas del día
+
+**Recompensa variable (lo que hace que vuelva):**
+- *Tribal*: ver respuestas positivas de clientes ("gracias! perfecto! ya te transfiero")
+- *Caza*: descubrir qué clientes están a punto de comprar (lista con predicciones)
+- *Logro propio*: ver que el bot cerró una venta completa solo, sin intervención
+
+**Inversión (hace el producto más valioso para la próxima vez):**
+- Completar los campos de entrega → el bot mejora
+- Aprobar/rechazar respuestas del bot → retroalimentación
+- Agregar templates → más herramientas para re-enganche
+
+### Lo que falta implementar para cerrar el ciclo
+
+1. **Dashboard de victorias** — número claro de ventas recuperadas, conversaciones manejadas por el bot, dinero generado esta semana. Sin este número no hay recompensa visible.
+2. **Flujo de re-enganche en 2 clicks** — actualmente son 5+ pasos. El template debe pre-seleccionarse con IA, las variables pre-llenarse, y el usuario solo confirma.
+3. **Momento "wow" cuando el bot cierra una venta** — algún indicador visual que muestre que fue el bot, no el dueño, quien hizo el trabajo.
+4. **Digest push/email** — algo que traiga al usuario de vuelta cuando no está en la app.
+
+### Principio de diseño para cada feature nuevo
+
+Antes de construir algo, preguntar:
+- ¿En qué punto del ciclo Hooked entra esto?
+- ¿Reduce la fricción de una acción o aumenta la recompensa?
+- ¿Le hace al usuario sentir que perdería algo si no vuelve mañana?
+
+---
+
 ## Lo que NO hacer
 
 - No llamar a raigentic para datos de Shopify (usa shopify-api.js directo)
