@@ -226,8 +226,54 @@ export default function App() {
   // ── Render ──────────────────────────────────────────────────────
   if (appState === 'loading') return (
     <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
-      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgApp }}>
-        <div style={{ color: colors.green, fontSize: '14px' }}>Cargando...</div>
+      <div style={{
+        height: '100vh', width: '100vw',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        backgroundColor: colors.bgApp, gap: '28px',
+      }}>
+        {/* Logo / ícono */}
+        <div style={{
+          width: '64px', height: '64px', borderRadius: '18px',
+          backgroundColor: `${colors.green}18`,
+          border: `1.5px solid ${colors.green}44`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <path d="M16 2C8.268 2 2 8.268 2 16c0 2.4.625 4.656 1.72 6.613L2 30l7.613-1.72A13.94 13.94 0 0016 30c7.732 0 14-6.268 14-14S23.732 2 16 2z" fill={colors.green} opacity="0.15"/>
+            <path d="M16 3.5C9.096 3.5 3.5 9.096 3.5 16c0 2.22.574 4.307 1.584 6.12L3.5 28.5l6.38-1.584A12.44 12.44 0 0016 28.5c6.904 0 12.5-5.596 12.5-12.5S22.904 3.5 16 3.5z" stroke={colors.green} strokeWidth="1.5" fill="none"/>
+            <path d="M11 13.5c0-.828.672-1.5 1.5-1.5h7c.828 0 1.5.672 1.5 1.5v.5H11v-.5zM11 16.5h10M11 19.5h7" stroke={colors.green} strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </div>
+
+        {/* Nombre */}
+        <div style={{ textAlign: 'center', lineHeight: 1.4 }}>
+          <div style={{ color: colors.textPrimary, fontSize: '20px', fontWeight: 700, letterSpacing: '-0.3px' }}>
+            WhatsApp CRM
+          </div>
+          <div style={{ color: colors.textMuted, fontSize: '12px', marginTop: '4px' }}>
+            Agente IA para tu tienda Shopify
+          </div>
+        </div>
+
+        {/* Spinner animado */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {[0, 0.2, 0.4].map((delay, i) => (
+            <div key={i} style={{
+              width: '7px', height: '7px', borderRadius: '50%',
+              backgroundColor: colors.green,
+              animation: `loading-pulse 1.2s ease-in-out ${delay}s infinite`,
+              opacity: 0.4,
+            }} />
+          ))}
+        </div>
+
+        <style>{`
+          @keyframes loading-pulse {
+            0%, 80%, 100% { transform: scale(0.7); opacity: 0.3; }
+            40% { transform: scale(1); opacity: 1; }
+          }
+        `}</style>
       </div>
     </ThemeCtx.Provider>
   );
