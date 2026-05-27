@@ -84,10 +84,6 @@ export default function ReengagementPanel() {
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState(null);
 
-  // Override manual de template (opcional — si está seteado fuerza ese template para todos)
-  const [overrideTemplate, setOverrideTemplate] = useState(null);
-  const [varMap, setVarMap]                 = useState({});
-  const [manualVars, setManualVars]         = useState({});
 
   // Estado por cliente: IA eligió template + variables + preview
   // { [phone]: { templateName, languageCode, vars, previewText, reason, loading } }
@@ -182,63 +178,26 @@ export default function ReengagementPanel() {
     return [...new Set(matches.map(m => m[1]))].sort();
   };
 
-  const handleSelectOverride = (tpl) => {
-    setOverrideTemplate(tpl);
-    if (tpl) {
-      const vars = parseTemplateVars(tpl);
-      const defaultMap = {};
-      vars.forEach((v, i) => { defaultMap[v] = i === 0 ? 'name' : 'manual'; });
-      setVarMap(defaultMap);
-    }
-    setManualVars({});
-  };
-
-  // Construir components para envío usando pick de IA o override manual
+  // Construir components para envío usando el pick de IA
   const buildComponents = (candidate) => {
     const pick = clientPicks[candidate.phone];
-    const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
+    if (!pick?.vars) return [];
+    const tpl = templates.find(t => t.name === pick.templateName);
     if (!tpl) return [];
     const vars = parseTemplateVars(tpl);
     if (vars.length === 0) return [];
-    const aiVars = pick?.vars || {};
-    const parameters = vars.map(v => {
-      if (aiVars[v] != null) return { type: 'text', text: aiVars[v] };
-      const mapping = varMap[v] || 'manual';
-      let text = '';
-      if (mapping === 'name')       text = candidate.name || candidate.phone;
-      else if (mapping === 'phone') text = candidate.phone;
-      else text = manualVars[v] || '';
-      return { type: 'text', text };
-    });
+    const parameters = vars.map(v => ({ type: 'text', text: pick.vars[v] ?? '' }));
     return [{ type: 'body', parameters }];
   };
 
-  // Construir previewText para un cliente (usa pick IA o override)
-  const getPreviewText = (candidate) => {
-    const pick = clientPicks[candidate?.phone];
-    if (overrideTemplate) {
-      // Override manual: aplicar varMap/manualVars + aiVars del pick si hay
-      const bodyComp = overrideTemplate.components?.find(c => c.type === 'BODY');
-      if (!bodyComp?.text) return '';
-      let text = bodyComp.text;
-      const vars = parseTemplateVars(overrideTemplate);
-      const aiVars = pick?.vars || {};
-      vars.forEach(v => {
-        let val = aiVars[v] != null ? aiVars[v] : (varMap[v] === 'name' ? (candidate?.name || candidate?.phone || `{{${v}}}`) : varMap[v] === 'phone' ? candidate?.phone || `{{${v}}}` : manualVars[v] || `{{${v}}}`);
-        text = text.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), val);
-      });
-      return text;
-    }
-    return pick?.previewText || '';
-  };
+  const getPreviewText = (candidate) => clientPicks[candidate?.phone]?.previewText || '';
 
   // IA elige template + rellena variables para un cliente
   const aiPickForOne = async (phone) => {
     if (templates.length === 0) { showToast('No hay templates disponibles', 'error'); return; }
     setClientPicks(prev => ({ ...prev, [phone]: { ...prev[phone], loading: true } }));
     try {
-      const tplsToUse = overrideTemplate ? [overrideTemplate] : templates;
-      const res = await reengagementAPI.aiPickTemplate(phone, tplsToUse);
+      const res = await reengagementAPI.aiPickTemplate(phone, templates);
       if (res.success) {
         setClientPicks(prev => ({ ...prev, [phone]: {
           templateName: res.templateName,
@@ -300,7 +259,7 @@ export default function ReengagementPanel() {
   const sendOne = async (phone) => {
     const candidate = candidates.find(c => c.phone === phone);
     const pick = clientPicks[phone];
-    const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
+    const tpl = templates.find(t => t.name === pick?.templateName);
     if (!tpl) { showToast('Primero usa "IA elige template" para este cliente', 'error'); return; }
     const destPhone = testMode ? TEST_PHONE : phone;
     setSending(prev => new Set(prev).add(phone));
@@ -333,15 +292,14 @@ export default function ReengagementPanel() {
     // Verificar que todos tengan template asignado
     const sinTemplate = targets.filter(c => {
       const pick = clientPicks[c.phone];
-      const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
-      return !tpl;
+      return !templates.find(t => t.name === pick?.templateName);
     });
     if (sinTemplate.length > 0) {
       showToast(`${sinTemplate.length} cliente(s) sin template — usa "IA elige" primero`, 'error'); return;
     }
     const items = targets.map(c => {
       const pick = clientPicks[c.phone];
-      const tpl = overrideTemplate || templates.find(t => t.name === pick?.templateName);
+      const tpl = templates.find(t => t.name === pick?.templateName);
       return {
         phone:        testMode ? TEST_PHONE : c.phone,
         templateName: tpl.name,
@@ -372,7 +330,7 @@ export default function ReengagementPanel() {
   const selectedWithTemplate = visible.filter(c => {
     if (!selected.has(c.phone)) return false;
     const pick = clientPicks[c.phone];
-    return !!(overrideTemplate || templates.find(t => t.name === pick?.templateName));
+    return !!templates.find(t => t.name === pick?.templateName);
   }).length;
   const totalCandidates  = candidates.length;
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
@@ -634,43 +592,11 @@ export default function ReengagementPanel() {
               No hay templates aprobados. Créalos en la sección Templates.
             </span>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-              {/* Info: IA elige automáticamente */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: colors.textSecondary, fontSize: '12px' }}>
-                <Brain size={13} color={colors.green} />
-                <span>La IA elegirá el mejor template y lo personalizará por cliente</span>
-                <span style={{ color: colors.textMuted }}>·</span>
-                <span style={{ color: colors.textMuted }}>{templates.length} templates disponibles</span>
-              </div>
-
-              {/* Override manual (opcional) */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
-                <span style={{ color: colors.textMuted, fontSize: '11px', flexShrink: 0 }}>Forzar template:</span>
-                <select
-                  value={overrideTemplate?.name || ''}
-                  onChange={e => {
-                    const tpl = templates.find(t => t.name === e.target.value);
-                    handleSelectOverride(tpl || null);
-                  }}
-                  style={{
-                    backgroundColor: overrideTemplate ? colors.bgAccent2 : colors.bgSub,
-                    color: overrideTemplate ? colors.green : colors.textSecondary,
-                    border: `1px solid ${overrideTemplate ? colors.green : colors.border}`,
-                    borderRadius: '6px', padding: '5px 10px', fontSize: '12px',
-                    cursor: 'pointer', outline: 'none', maxWidth: '220px',
-                  }}
-                >
-                  <option value="">— IA elige automáticamente —</option>
-                  {templates.map(t => (
-                    <option key={t.name} value={t.name}>{t.name}</option>
-                  ))}
-                </select>
-                {overrideTemplate && (
-                  <span style={{ backgroundColor: `${colors.yellow}22`, color: colors.yellow, borderRadius: '5px', padding: '2px 7px', fontSize: '11px', border: `1px solid ${colors.yellow}44` }}>
-                    override activo
-                  </span>
-                )}
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: colors.textSecondary, fontSize: '12px' }}>
+              <Brain size={13} color={colors.green} />
+              <span>La IA elegirá el mejor template y lo personalizará por cliente</span>
+              <span style={{ color: colors.textMuted }}>·</span>
+              <span style={{ color: colors.textMuted }}>{templates.length} template{templates.length !== 1 ? 's' : ''} disponible{templates.length !== 1 ? 's' : ''}</span>
             </div>
           )}
         </div>

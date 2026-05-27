@@ -1,4 +1,4 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, FileText, Sun, Moon } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 const NAV_ITEMS = [
@@ -6,7 +6,6 @@ const NAV_ITEMS = [
   { key: 'chats',        icon: MessageSquare, label: 'Chats' },
   { key: 'reengagement', icon: UserCheck,     label: 'Re-enganche' },
   { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
-  { key: 'templates',    icon: FileText,      label: 'Templates' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'catalogo',     icon: Package,       label: 'Catálogo' },
 ];

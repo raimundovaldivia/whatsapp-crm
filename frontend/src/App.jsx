@@ -11,7 +11,6 @@ import DashboardPanel     from './components/DashboardPanel.jsx';
 import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
-import TemplateManager  from './components/TemplateManager.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
@@ -323,13 +322,6 @@ export default function App() {
 
       {/* Vista Re-enganche */}
       {view === 'reengagement' && <ReengagementPanel />}
-
-      {/* Vista Templates */}
-      {view === 'templates' && (
-        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: colors.bgApp, padding: '24px' }}>
-          <TemplateManager />
-        </div>
-      )}
 
       {/* Vista Dashboard */}
       {view === 'dashboard' && <DashboardPanel onChangeView={setView} />}
