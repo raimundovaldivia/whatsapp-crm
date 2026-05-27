@@ -41,8 +41,10 @@ async function processMessage(orgId, conversationId, userMessage) {
   const currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
 
-  // Contexto personalizado de la tienda (editado por el usuario en TemplateManager)
-  const storeCustomPrompt = await db.getSetting(orgId, 'store_context') || '';
+  // Contexto de la tienda + instrucciones adicionales → pasados juntos al agente
+  const storeContext  = await db.getSetting(orgId, 'store_context') || '';
+  const extraPrompt   = await db.getSetting(orgId, 'ai_system_prompt_extra') || '';
+  const storeCustomPrompt = [storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
   // ── Detectar respuesta a template de re-engagement ─────────────────
   // Si el último estado era 'template_sent', el cliente acaba de responder

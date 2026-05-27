@@ -3,13 +3,14 @@
  * Tabs: Shopify · WhatsApp · IA
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   CheckCircle, AlertCircle, ExternalLink, Loader,
   ShoppingBag, RefreshCw, MessageCircle, Phone, Brain,
-  Eye, EyeOff, Save, Zap, FileText,
+  Eye, EyeOff, Save, Zap, FileText, ChevronRight,
+  Sparkles, ArrowRight,
 } from 'lucide-react';
-import { setupAPI, api } from '../utils/api.js';
+import { setupAPI, api, reengagementAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
 import { useTheme } from '../theme.js';
 
@@ -599,14 +600,25 @@ function WhatsAppTab() {
 /* ══════════════════════════════════════════════
    TAB IA & BOT
 ══════════════════════════════════════════════ */
-function IATab() {
-  const { colors } = useTheme();
-  const [aiEnabled, setAiEnabled] = useState(true);
-  const [extraPrompt, setExtraPrompt] = useState('');
-  const [loading, setLoading]  = useState(true);
-  const [saving, setSaving]    = useState(false);
-  const [success, setSuccess]  = useState('');
-  const [error, setError]      = useState('');
+function IATab({ onSwitchTab }) {
+  const { colors, isDark } = useTheme();
+
+  // Estado de conexiones (para tarjetas de acceso rápido)
+  const [setupStatus,    setSetupStatus]    = useState(null);
+  const [templateCount,  setTemplateCount]  = useState(null);
+
+  // Configuración del bot
+  const [aiEnabled,     setAiEnabled]     = useState(true);
+  const [storeContext,  setStoreContext]   = useState('');
+  const [extraPrompt,   setExtraPrompt]   = useState('');
+
+  const [loading,   setLoading]   = useState(true);
+  const [syncing,   setSyncing]   = useState(false);
+  const [ctxSaved,  setCtxSaved]  = useState(false);
+  const [saving,    setSaving]    = useState(false);
+  const [success,   setSuccess]   = useState('');
+  const [error,     setError]     = useState('');
+  const saveTimer = useRef(null);
 
   const card = {
     backgroundColor: colors.bgPanel, borderRadius: '14px',
@@ -617,23 +629,55 @@ function IATab() {
     borderRadius: '8px', padding: '10px 14px', color: colors.textPrimary, fontSize: '14px',
     outline: 'none', boxSizing: 'border-box',
   };
-  const labelStyle = { fontSize: '12px', color: colors.textSecondary, marginBottom: '5px', display: 'block' };
-  const hintStyle  = { fontSize: '11px', color: colors.textMuted, margin: '4px 0 0' };
+  const labelStyle = { fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '6px', display: 'block', textTransform: 'uppercase', letterSpacing: '0.4px' };
+  const hintStyle  = { fontSize: '11px', color: colors.textMuted, margin: '5px 0 0', lineHeight: 1.5 };
 
   useEffect(() => {
-    api.get('/settings').then(r => {
-      const d = r.data?.data;
-      if (!d) return;
-      setAiEnabled(d.ai_enabled_global !== false);
-      setExtraPrompt(d.ai_system_prompt_extra || '');
+    Promise.all([
+      api.get('/settings'),
+      reengagementAPI.getStoreContext(),
+      setupAPI.status().catch(() => null),
+      reengagementAPI.getTemplates().catch(() => ({ data: [] })),
+    ]).then(([settings, ctx, status, tpls]) => {
+      const d = settings.data?.data;
+      if (d) {
+        setAiEnabled(d.ai_enabled_global !== false);
+        setExtraPrompt(d.ai_system_prompt_extra || '');
+      }
+      setStoreContext(ctx.context || '');
+      setSetupStatus(status?.data || status);
+      setTemplateCount((tpls.data || []).length);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
+
+  // Auto-guardar contexto en DB con debounce 1.5s
+  const handleContextChange = (val) => {
+    setStoreContext(val);
+    setCtxSaved(false);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try { await reengagementAPI.saveStoreContext(val); setCtxSaved(true); setTimeout(() => setCtxSaved(false), 2500); }
+      catch {}
+    }, 1500);
+  };
+
+  const syncFromShopify = async () => {
+    setSyncing(true);
+    try {
+      const res = await reengagementAPI.syncStoreContext();
+      if (res.context) { setStoreContext(res.context); setCtxSaved(true); setTimeout(() => setCtxSaved(false), 2500); }
+    } catch { setError('Error sincronizando desde Shopify'); }
+    finally { setSyncing(false); }
+  };
 
   const save = async () => {
     setSaving(true); setError(''); setSuccess('');
     try {
-      await api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt });
-      setSuccess('✅ Configuración de IA guardada');
+      await Promise.all([
+        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt }),
+        reengagementAPI.saveStoreContext(storeContext),
+      ]);
+      setSuccess('✅ Configuración guardada correctamente');
     } catch (err) {
       setError(err.response?.data?.error || 'Error al guardar');
     } finally { setSaving(false); }
@@ -645,46 +689,143 @@ function IATab() {
     </div>
   );
 
+  const shopifyOk = setupStatus?.shopify?.done;
+  const waOk      = setupStatus?.whatsapp?.done;
+
+  /* ── Tarjetas de acceso rápido ─────────────────────────────── */
+  const quickCards = [
+    {
+      key:   'shopify',
+      icon:  ShoppingBag,
+      label: 'Tienda Shopify',
+      desc:  shopifyOk ? (setupStatus?.shopify?.storeName || 'Conectada') : 'Sin conectar',
+      ok:    shopifyOk,
+      color: '#96bf48',
+    },
+    {
+      key:   'whatsapp',
+      icon:  MessageCircle,
+      label: 'WhatsApp',
+      desc:  waOk ? (setupStatus?.whatsapp?.phoneNumberId ? `ID: ${setupStatus.whatsapp.phoneNumberId}` : 'Conectado') : 'Sin conectar',
+      ok:    waOk,
+      color: '#25d366',
+    },
+    {
+      key:   'templates',
+      icon:  FileText,
+      label: 'Templates',
+      desc:  templateCount !== null ? `${templateCount} aprobado${templateCount !== 1 ? 's' : ''}` : 'Ver templates',
+      ok:    templateCount > 0,
+      color: colors.purple,
+    },
+  ];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+      {/* ── Acceso rápido ─────────────────────────────────────── */}
       <div style={card}>
-        <div style={{ padding: '16px 22px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Brain size={17} color={colors.green} />
-          <span style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 600 }}>Agente IA</span>
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Zap size={15} color={colors.yellow} />
+          <span style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>Configuración rápida</span>
+          <span style={{ marginLeft: 4, color: colors.textMuted, fontSize: '12px' }}>— conecta los servicios que necesita el agente</span>
         </div>
-        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+          {quickCards.map(c => (
+            <button key={c.key} onClick={() => onSwitchTab(c.key)}
+              style={{
+                backgroundColor: colors.bgApp, border: `1px solid ${c.ok ? c.color + '55' : colors.border}`,
+                borderRadius: '12px', padding: '14px 12px', cursor: 'pointer', textAlign: 'left',
+                display: 'flex', flexDirection: 'column', gap: '8px',
+                transition: 'border-color 0.15s, box-shadow 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = c.color; e.currentTarget.style.boxShadow = `0 0 0 3px ${c.color}22`; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = c.ok ? c.color + '55' : colors.border; e.currentTarget.style.boxShadow = 'none'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ width: '30px', height: '30px', borderRadius: '8px', backgroundColor: c.color + '22', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <c.icon size={15} color={c.color} />
+                </div>
+                {c.ok !== null && c.ok !== undefined && (
+                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '20px',
+                    backgroundColor: c.ok ? colors.bgAccent : isDark ? '#2d1a1a' : '#fff3f3',
+                    color: c.ok ? colors.green : colors.red, border: `1px solid ${c.ok ? colors.green + '44' : colors.red + '44'}` }}>
+                    {c.ok ? '✓ OK' : '!'}
+                  </span>
+                )}
+              </div>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  {c.label} <ArrowRight size={11} color={colors.textMuted} />
+                </div>
+                <div style={{ fontSize: '11px', color: colors.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.desc}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Agente IA ──────────────────────────────────────────── */}
+      <div style={card}>
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Brain size={15} color={colors.green} />
+          <span style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>Agente IA</span>
+        </div>
+        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
           {/* Toggle IA global */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.bgApp, borderRadius: '10px', padding: '14px 16px' }}>
             <div>
               <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>IA activada globalmente</div>
-              <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px' }}>El bot responde automáticamente a nuevos mensajes</div>
+              <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px' }}>El bot responde automáticamente a nuevos mensajes de WhatsApp</div>
             </div>
             <button onClick={() => setAiEnabled(v => !v)}
-              style={{
-                width: '44px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
+              style={{ width: '44px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
                 backgroundColor: aiEnabled ? colors.green : colors.borderStrong,
-                position: 'relative', transition: 'background-color 0.2s', flexShrink: 0,
-              }}>
-              <span style={{
-                position: 'absolute', top: '2px', left: aiEnabled ? '22px' : '2px',
-                width: '20px', height: '20px', borderRadius: '50%', backgroundColor: 'white',
-                transition: 'left 0.2s',
-              }} />
+                position: 'relative', transition: 'background-color 0.2s', flexShrink: 0 }}>
+              <span style={{ position: 'absolute', top: '2px', left: aiEnabled ? '22px' : '2px',
+                width: '20px', height: '20px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
             </button>
           </div>
 
-          {/* Prompt extra */}
+          {/* Contexto de la tienda */}
           <div>
-            <label style={labelStyle}>Instrucciones adicionales para el bot</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <label style={labelStyle}>Contexto de la tienda</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {ctxSaved && <span style={{ fontSize: '11px', color: colors.green }}>✓ Guardado</span>}
+                <button onClick={syncFromShopify} disabled={syncing}
+                  style={{ background: 'none', border: 'none', cursor: syncing ? 'not-allowed' : 'pointer', color: colors.textMuted, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', opacity: syncing ? 0.6 : 1 }}>
+                  <RefreshCw size={11} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
+                  {syncing ? 'Sincronizando...' : 'Recargar desde Shopify'}
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={storeContext}
+              onChange={e => handleContextChange(e.target.value)}
+              rows={8}
+              placeholder="Carga el contexto desde Shopify con el botón de arriba, o escribe aquí información sobre tu tienda: nombre, productos, horarios de entrega, zona de reparto, mínimo de pedido, formas de pago..."
+              style={{ ...inp, resize: 'vertical', lineHeight: 1.55, fontFamily: 'inherit',
+                borderColor: storeContext.trim() ? colors.green + '55' : colors.borderStrong }}
+            />
+            <p style={hintStyle}>
+              El agente usa este contexto para responder preguntas sobre tu tienda, productos, políticas y entregas.
+              Se sincroniza automáticamente desde tus páginas de Shopify (Sobre nosotros, FAQ, Políticas de envío, etc.)
+            </p>
+          </div>
+
+          {/* Instrucciones adicionales */}
+          <div>
+            <label style={labelStyle}>Instrucciones adicionales</label>
             <textarea
               value={extraPrompt}
               onChange={e => setExtraPrompt(e.target.value)}
-              rows={5}
-              placeholder="Ej: Siempre saluda con el nombre del cliente. No ofrezcas descuentos sin aprobación previa. Si preguntan por envíos, decir que demoran 24-48h..."
+              rows={4}
+              placeholder="Reglas específicas para el bot. Ej: Nunca ofrecer descuentos sin aprobación previa. Siempre confirmar disponibilidad antes de cerrar una venta. Saludar por el nombre del cliente."
               style={{ ...inp, resize: 'vertical', lineHeight: 1.55, fontFamily: 'inherit' }}
             />
-            <p style={hintStyle}>Estas instrucciones se agregan al prompt del agente en cada conversación</p>
+            <p style={hintStyle}>Reglas de comportamiento y restricciones que el bot debe seguir siempre.</p>
           </div>
 
           <SaveBtn loading={saving} onClick={save} colors={colors} />
@@ -738,7 +879,7 @@ export default function SettingsPanel({ successMessage, onClearMessage }) {
         {/* Contenido del tab */}
         {activeTab === 'shopify'   && <ShopifyTab />}
         {activeTab === 'whatsapp'  && <WhatsAppTab />}
-        {activeTab === 'ia'        && <IATab />}
+        {activeTab === 'ia'        && <IATab onSwitchTab={setActiveTab} />}
         {activeTab === 'templates' && (
           <div style={{ padding: '20px 24px' }}>
             <div style={{ marginBottom: '16px' }}>
