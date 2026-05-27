@@ -876,6 +876,38 @@ router.post('/store-context', async (req, res) => {
 });
 
 /**
+ * GET /api/reengagement/delivery-info
+ * Devuelve la info de entrega estructurada (horarios, zona, mínimo, pagos).
+ */
+router.get('/delivery-info', async (req, res) => {
+  try {
+    const raw  = await db.getSetting(req.orgId, 'delivery_info');
+    const info = raw ? JSON.parse(raw) : {};
+    res.json({ success: true, info });
+  } catch (err) {
+    console.error('[delivery-info GET]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/reengagement/delivery-info
+ * Guarda la info de entrega estructurada.
+ * Body: { schedule, zone, minimum, paymentMethods }
+ */
+router.post('/delivery-info', async (req, res) => {
+  try {
+    const { schedule = '', zone = '', minimum = '', paymentMethods = '' } = req.body;
+    const info = { schedule, zone, minimum, paymentMethods };
+    await db.setSetting(req.orgId, 'delivery_info', JSON.stringify(info));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[delivery-info POST]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/reengagement/store-context/sync
  * Re-sincroniza el contexto completo desde Shopify:
  * shop info + todas las páginas publicadas + todas las políticas + productos.

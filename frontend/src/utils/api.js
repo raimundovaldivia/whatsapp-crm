@@ -72,6 +72,8 @@ export const reengagementAPI = {
   syncStoreContext:      () => api.post('/reengagement/store-context/sync', {}, { timeout: 30000 }).then(r => r.data),
   generateBulkTemplates: (storeContext) => api.post('/reengagement/generate-templates', { storeContext }, { timeout: 60000 }).then(r => r.data),
   submitTemplates:       (templates) => api.post('/reengagement/submit-templates', { templates }, { timeout: 60000 }).then(r => r.data),
+  getDeliveryInfo:       () => api.get('/reengagement/delivery-info').then(r => r.data),
+  saveDeliveryInfo:      (info) => api.post('/reengagement/delivery-info', info).then(r => r.data),
 };
 
 export const templatesAPI = {

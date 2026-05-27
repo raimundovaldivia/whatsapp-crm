@@ -8,7 +8,7 @@ import {
   CheckCircle, AlertCircle, ExternalLink, Loader,
   ShoppingBag, RefreshCw, MessageCircle, Phone, Brain,
   Eye, EyeOff, Save, Zap, FileText, ChevronRight,
-  Sparkles, ArrowRight,
+  Sparkles, ArrowRight, Clock, MapPin, DollarSign, CreditCard,
 } from 'lucide-react';
 import { setupAPI, api, reengagementAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
@@ -612,6 +612,14 @@ function IATab({ onSwitchTab }) {
   const [storeContext,  setStoreContext]   = useState('');
   const [extraPrompt,   setExtraPrompt]   = useState('');
 
+  // Info de entrega estructurada
+  const [schedule,       setSchedule]       = useState('');
+  const [zone,           setZone]           = useState('');
+  const [minimum,        setMinimum]        = useState('');
+  const [paymentMethods, setPaymentMethods] = useState('');
+  const [deliverySaved,  setDeliverySaved]  = useState(false);
+  const deliveryTimer = useRef(null);
+
   const [loading,    setLoading]   = useState(true);
   const [syncing,    setSyncing]   = useState(false);
   const [syncMsg,    setSyncMsg]   = useState('');   // mensaje inline junto al botón
@@ -641,7 +649,8 @@ function IATab({ onSwitchTab }) {
       setupAPI.shopifyStatus().catch(() => null),
       setupAPI.whatsappStatus().catch(() => null),
       reengagementAPI.getTemplates().catch(() => ({ data: [] })),
-    ]).then(([settings, ctx, shopify, whatsapp, tpls]) => {
+      reengagementAPI.getDeliveryInfo().catch(() => ({ info: {} })),
+    ]).then(([settings, ctx, shopify, whatsapp, tpls, delivery]) => {
       const d = settings.data?.data;
       if (d) {
         setAiEnabled(d.ai_enabled_global !== false);
@@ -650,6 +659,11 @@ function IATab({ onSwitchTab }) {
       setStoreContext(ctx.context || '');
       setSetupStatus({ shopify, whatsapp });
       setTemplateCount((tpls.data || []).length);
+      const di = delivery.info || {};
+      setSchedule(di.schedule || '');
+      setZone(di.zone || '');
+      setMinimum(di.minimum || '');
+      setPaymentMethods(di.paymentMethods || '');
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -662,6 +676,22 @@ function IATab({ onSwitchTab }) {
       try { await reengagementAPI.saveStoreContext(val); setCtxSaved(true); setTimeout(() => setCtxSaved(false), 2500); }
       catch {}
     }, 1500);
+  };
+
+  // Auto-guardar delivery info con debounce 1s
+  const handleDeliveryChange = (field, val) => {
+    const setters = { schedule: setSchedule, zone: setZone, minimum: setMinimum, paymentMethods: setPaymentMethods };
+    setters[field]?.(val);
+    setDeliverySaved(false);
+    if (deliveryTimer.current) clearTimeout(deliveryTimer.current);
+    deliveryTimer.current = setTimeout(async () => {
+      const current = { schedule, zone, minimum, paymentMethods, [field]: val };
+      try {
+        await reengagementAPI.saveDeliveryInfo(current);
+        setDeliverySaved(true);
+        setTimeout(() => setDeliverySaved(false), 2500);
+      } catch {}
+    }, 1000);
   };
 
   const showSyncMsg = (msg, isErr = false) => {
@@ -697,6 +727,7 @@ function IATab({ onSwitchTab }) {
       await Promise.all([
         api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt }),
         reengagementAPI.saveStoreContext(storeContext),
+        reengagementAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
       setSuccess('✅ Configuración guardada correctamente');
     } catch (err) {
@@ -807,6 +838,72 @@ function IATab({ onSwitchTab }) {
               <span style={{ position: 'absolute', top: '2px', left: aiEnabled ? '22px' : '2px',
                 width: '20px', height: '20px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
             </button>
+          </div>
+
+          {/* ── Info de entrega estructurada ──────────────────────── */}
+          <div style={{ backgroundColor: colors.bgApp, borderRadius: '12px', padding: '16px', border: `1px solid ${colors.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                <span style={{ fontSize: '13px' }}>🚚</span>
+                <span style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 700 }}>Información de entrega</span>
+              </div>
+              {deliverySaved && (
+                <span style={{ fontSize: '11px', color: colors.green }}>✓ Guardado</span>
+              )}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              {/* Horarios */}
+              <div>
+                <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <Clock size={11} color={colors.textMuted} /> Horarios de entrega
+                </label>
+                <input
+                  value={schedule}
+                  onChange={e => handleDeliveryChange('schedule', e.target.value)}
+                  placeholder="Lun–Vie 9am–6pm, Sáb 9am–1pm"
+                  style={{ ...inp, borderColor: schedule ? `${colors.green}44` : colors.borderStrong }}
+                />
+              </div>
+              {/* Zona */}
+              <div>
+                <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <MapPin size={11} color={colors.textMuted} /> Zona de reparto
+                </label>
+                <input
+                  value={zone}
+                  onChange={e => handleDeliveryChange('zone', e.target.value)}
+                  placeholder="Santiago centro, Providencia, Ñuñoa"
+                  style={{ ...inp, borderColor: zone ? `${colors.green}44` : colors.borderStrong }}
+                />
+              </div>
+              {/* Mínimo */}
+              <div>
+                <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <DollarSign size={11} color={colors.textMuted} /> Pedido mínimo
+                </label>
+                <input
+                  value={minimum}
+                  onChange={e => handleDeliveryChange('minimum', e.target.value)}
+                  placeholder="$15.000 o sin mínimo"
+                  style={{ ...inp, borderColor: minimum ? `${colors.green}44` : colors.borderStrong }}
+                />
+              </div>
+              {/* Métodos de pago */}
+              <div>
+                <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <CreditCard size={11} color={colors.textMuted} /> Métodos de pago
+                </label>
+                <input
+                  value={paymentMethods}
+                  onChange={e => handleDeliveryChange('paymentMethods', e.target.value)}
+                  placeholder="Transferencia, efectivo, Webpay"
+                  style={{ ...inp, borderColor: paymentMethods ? `${colors.green}44` : colors.borderStrong }}
+                />
+              </div>
+            </div>
+            <p style={{ ...hintStyle, marginTop: '10px' }}>
+              El bot usa estos datos para responder preguntas de clientes sobre entregas y pagos. Se guardan automáticamente.
+            </p>
           </div>
 
           {/* Contexto de la tienda */}

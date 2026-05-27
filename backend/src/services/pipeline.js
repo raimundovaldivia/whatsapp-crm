@@ -41,10 +41,23 @@ async function processMessage(orgId, conversationId, userMessage) {
   const currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
 
-  // Contexto de la tienda + instrucciones adicionales → pasados juntos al agente
+  // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
   const extraPrompt   = await db.getSetting(orgId, 'ai_system_prompt_extra') || '';
-  const storeCustomPrompt = [storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
+  const deliveryRaw   = await db.getSetting(orgId, 'delivery_info');
+  let deliverySection = '';
+  if (deliveryRaw) {
+    try {
+      const d = JSON.parse(deliveryRaw);
+      const lines = [];
+      if (d.schedule)       lines.push(`📅 Horarios de entrega: ${d.schedule}`);
+      if (d.zone)           lines.push(`📍 Zona de reparto: ${d.zone}`);
+      if (d.minimum)        lines.push(`💰 Pedido mínimo: ${d.minimum}`);
+      if (d.paymentMethods) lines.push(`💳 Métodos de pago: ${d.paymentMethods}`);
+      if (lines.length) deliverySection = `## Información de Entrega\n${lines.join('\n')}`;
+    } catch { /* JSON inválido — ignorar */ }
+  }
+  const storeCustomPrompt = [deliverySection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
   // ── Detectar respuesta a template de re-engagement ─────────────────
   // Si el último estado era 'template_sent', el cliente acaba de responder
