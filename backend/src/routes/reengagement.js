@@ -808,13 +808,28 @@ router.get('/templates', async (req, res) => {
 /**
 /**
  * GET /api/reengagement/store-context
- * Devuelve el contexto de la tienda (Shopify o vacío para que el usuario lo llene).
+ * Devuelve el contexto de la tienda.
+ * Prioridad: 1) DB (edits del usuario) → 2) Shopify en tiempo real
  */
 router.get('/store-context', async (req, res) => {
   try {
     const orgId = req.orgId;
-    const ds    = await db.getPrimaryDataSource(orgId);
 
+    // ── 1. Contexto guardado por el usuario en DB ────────────────────
+    const savedContext = await db.getSetting(orgId, 'store_context');
+    if (savedContext) {
+      return res.json({
+        success: true,
+        hasShopify: false,
+        context: savedContext,
+        products: [],
+        shopName: '',
+        fromDb: true,
+      });
+    }
+
+    // ── 2. Sin contexto guardado → cargar desde Shopify ─────────────
+    const ds = await db.getPrimaryDataSource(orgId);
     if (!ds) {
       return res.json({ success: true, hasShopify: false, context: '', products: [], shopName: '' });
     }
@@ -833,7 +848,6 @@ router.get('/store-context', async (req, res) => {
     const org = await db.getOrgById(orgId);
     const orgName = org?.name || shopName;
 
-    // Construir contexto rico: nombre + precio por producto
     const productLines = productList.map(p => {
       const price = p.priceMin > 0
         ? ` ($${p.priceMin.toLocaleString('es-CL')} ${p.currency})`
@@ -859,6 +873,25 @@ router.get('/store-context', async (req, res) => {
   } catch (err) {
     console.error('[store-context]', err.message);
     res.json({ success: false, hasShopify: false, context: '', products: [], shopName: '' });
+  }
+});
+
+/**
+ * POST /api/reengagement/store-context
+ * Guarda el contexto editado de la tienda en DB.
+ * Este contexto se usa para: generación de templates + agente de conversaciones.
+ */
+router.post('/store-context', async (req, res) => {
+  try {
+    const { context } = req.body;
+    if (typeof context !== 'string') {
+      return res.status(400).json({ success: false, error: 'context (string) requerido' });
+    }
+    await db.setSetting(req.orgId, 'store_context', context.trim());
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[store-context POST]', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

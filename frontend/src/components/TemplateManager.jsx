@@ -5,7 +5,7 @@
  * Los templates deben ser aprobados por Meta antes de poder usarse.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FileText, Plus, Trash2, RefreshCw, CheckCircle,
   Clock, XCircle, Loader, AlertCircle, ChevronDown, ChevronUp,
@@ -150,6 +150,8 @@ function BulkGenerateTab({ onSubmitted, colors }) {
   const [shopName,    setShopName]    = useState('');
   const [shopProducts,setShopProducts]= useState([]);
   const [storeContext,setStoreContext]= useState('');   // textarea editable
+  const [ctxSaved,    setCtxSaved]    = useState(false); // feedback visual "guardado"
+  const saveTimerRef = useRef(null);
 
   // ── Estado de generación ─────────────────────────────────────────────────
   const [generating, setGenerating] = useState(false);
@@ -167,7 +169,7 @@ function BulkGenerateTab({ onSubmitted, colors }) {
     lineHeight: 1.6,
   };
 
-  // Cargar contexto al montar
+  // Cargar contexto al montar — DB primero, luego Shopify como fallback
   useEffect(() => {
     (async () => {
       try {
@@ -184,6 +186,21 @@ function BulkGenerateTab({ onSubmitted, colors }) {
       }
     })();
   }, []);
+
+  // Auto-guardar contexto en DB con debounce de 1.5s
+  const handleContextChange = (e) => {
+    const val = e.target.value;
+    setStoreContext(val);
+    setCtxSaved(false);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await reengagementAPI.saveStoreContext(val);
+        setCtxSaved(true);
+        setTimeout(() => setCtxSaved(false), 2500);
+      } catch { /* silencioso */ }
+    }, 1500);
+  };
 
   const handleGenerate = async () => {
     if (!storeContext.trim()) { setError('Agrega contexto de tu tienda antes de generar'); return; }
@@ -291,17 +308,34 @@ function BulkGenerateTab({ onSubmitted, colors }) {
             <label style={{ color: colors.textSecondary, fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {hasShopify ? 'Contexto de tu tienda (editable)' : '¿Qué vendes? Cuéntanos sobre tu tienda *'}
             </label>
-            {hasShopify && storeContext !== '' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {ctxSaved && (
+                <span style={{ fontSize: '11px', color: colors.green, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  ✓ Guardado
+                </span>
+              )}
               <button
-                onClick={() => reengagementAPI.getStoreContext().then(r => setStoreContext(r.context || ''))}
+                onClick={async () => {
+                  // Forzar recarga desde Shopify (ignora DB)
+                  try {
+                    const ds = await reengagementAPI.getStoreContext();
+                    // Si tiene Shopify, reconstruir desde productos frescos
+                    if (ds.hasShopify && ds.context) {
+                      setStoreContext(ds.context);
+                      await reengagementAPI.saveStoreContext(ds.context);
+                      setCtxSaved(true);
+                      setTimeout(() => setCtxSaved(false), 2500);
+                    }
+                  } catch { /* silencioso */ }
+                }}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textMuted, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <RefreshCw size={11} /> Recargar desde Shopify
               </button>
-            )}
+            </div>
           </div>
           <textarea
             value={storeContext}
-            onChange={e => setStoreContext(e.target.value)}
+            onChange={handleContextChange}
             rows={hasShopify ? 4 : 5}
             placeholder={hasShopify
               ? 'Tienda: ...\nProductos principales: ...\nAgregar más contexto si quieres...'
@@ -315,9 +349,8 @@ function BulkGenerateTab({ onSubmitted, colors }) {
             }}
           />
           <div style={{ color: colors.textMuted, fontSize: '11px', marginTop: '4px' }}>
-            {hasShopify
-              ? 'Puedes añadir info adicional: promociones actuales, nicho, tipo de cliente...'
-              : 'Mientras más detalles des (productos, precios, nicho, tipo de cliente), mejores serán los templates generados.'}
+            El agente IA usa este contexto para responder conversaciones y generar templates.
+            Añade horarios, zona de reparto, promociones, tipo de clientes...
           </div>
         </div>
 

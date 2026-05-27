@@ -67,6 +67,7 @@ export const reengagementAPI = {
   getAccuracy:          () => api.get('/reengagement/accuracy').then(r => r.data),
   // Bulk template generation from Shopify catalog
   getStoreContext:       () => api.get('/reengagement/store-context', { timeout: 20000 }).then(r => r.data),
+  saveStoreContext:      (context) => api.post('/reengagement/store-context', { context }).then(r => r.data),
   generateBulkTemplates: (storeContext) => api.post('/reengagement/generate-templates', { storeContext }, { timeout: 60000 }).then(r => r.data),
   submitTemplates:       (templates) => api.post('/reengagement/submit-templates', { templates }, { timeout: 60000 }).then(r => r.data),
 };

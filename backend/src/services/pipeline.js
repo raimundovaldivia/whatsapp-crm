@@ -41,6 +41,9 @@ async function processMessage(orgId, conversationId, userMessage) {
   const currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
 
+  // Contexto personalizado de la tienda (editado por el usuario en TemplateManager)
+  const storeCustomPrompt = await db.getSetting(orgId, 'store_context') || '';
+
   // ── Detectar respuesta a template de re-engagement ─────────────────
   // Si el último estado era 'template_sent', el cliente acaba de responder
   // a uno de nuestros templates → lead caliente, ir directo a venta
@@ -114,7 +117,7 @@ async function processMessage(orgId, conversationId, userMessage) {
 
   // Lead caliente (respuesta a template) o cliente quiere ordenar → Agente de ventas en modo warm
   if (isTemplateReply || intent === 'wants_to_order' || (intent === 'interested' && confidence > 0.85)) {
-    const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, '', salesOpts);
+    const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
     const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
     await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
     return { response: salesResponse, agentType: 'sales', newState };
@@ -122,14 +125,14 @@ async function processMessage(orgId, conversationId, userMessage) {
 
   // Cliente muestra interés o tiene objeción → Agente de ventas
   if (intent === 'interested' || intent === 'objection') {
-    const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, '', salesOpts);
+    const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
     const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
     await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
     return { response: salesResponse, agentType: 'sales', newState };
   }
 
   // Exploración general o soporte → Agente de ventas en modo informativo
-  const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, '', salesOpts);
+  const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
   return { response: salesResponse, agentType: 'sales', newState: 'exploring' };
 }
 
