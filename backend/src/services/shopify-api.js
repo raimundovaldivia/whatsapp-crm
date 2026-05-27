@@ -528,18 +528,30 @@ async function getShopInfo(shop, token) {
 }
 
 /**
- * Obtiene todas las páginas publicadas de la tienda (About, FAQ, etc.)
- * Retorna array de { title, content } con HTML ya limpiado.
+ * Detecta si un texto es una plantilla genérica de Shopify sin personalizar.
+ * Criterios: contiene variables Liquid ({{ }}), es muy corto o es texto boilerplate.
+ */
+function isBoilerplateContent(text) {
+  if (!text || text.length < 30) return true;
+  // Contiene variables Liquid sin reemplazar → es plantilla genérica de Shopify
+  if (/\{\{[^}]+\}\}/.test(text)) return true;
+  // Contiene tags Liquid
+  if (/\{%-?\s*(if|for|assign|unless|endif|endfor)\s/.test(text)) return true;
+  return false;
+}
+
+/**
+ * Obtiene páginas personalizadas publicadas (About, FAQ, etc.)
+ * Filtra plantillas genéricas de Shopify sin contenido real.
  */
 async function getPages(shop, token) {
   try {
     const res = await restClient(shop, token).get('/pages.json', {
       params: { limit: 50, published_status: 'published' },
     });
-    return (res.data?.pages || []).map(p => ({
-      title:   p.title || '',
-      content: stripHtml(p.body_html || ''),
-    })).filter(p => p.content.length > 20);
+    return (res.data?.pages || [])
+      .map(p => ({ title: p.title || '', content: stripHtml(p.body_html || '') }))
+      .filter(p => p.content.length > 50 && !isBoilerplateContent(p.content));
   } catch (e) {
     console.warn('[shopify-api] getPages error:', e.message);
     return [];
@@ -547,16 +559,23 @@ async function getPages(shop, token) {
 }
 
 /**
- * Obtiene las políticas de la tienda (envío, devolución, privacidad, etc.)
- * Retorna array de { title, content } con HTML limpiado.
+ * Obtiene políticas de la tienda (envío, devolución, etc.)
+ * Excluye políticas que son plantillas genéricas sin personalizar.
  */
 async function getPolicies(shop, token) {
   try {
     const res = await restClient(shop, token).get('/policies.json');
-    return (res.data?.policies || []).map(p => ({
-      title:   p.title || '',
-      content: stripHtml(p.body || ''),
-    })).filter(p => p.content.length > 20);
+    // Excluir la política de privacidad genérica de Shopify (casi siempre boilerplate)
+    const SKIP_TITLES = ['privacy policy', 'política de privacidad', 'privacy'];
+    return (res.data?.policies || [])
+      .map(p => ({ title: p.title || '', content: stripHtml(p.body || '') }))
+      .filter(p => {
+        if (p.content.length < 50) return false;
+        if (isBoilerplateContent(p.content)) return false;
+        // Saltar políticas de privacidad — suelen ser texto legal genérico inútil para el bot
+        if (SKIP_TITLES.some(s => p.title.toLowerCase().includes(s))) return false;
+        return true;
+      });
   } catch (e) {
     console.warn('[shopify-api] getPolicies error:', e.message);
     return [];
@@ -565,8 +584,8 @@ async function getPolicies(shop, token) {
 
 /**
  * Construye un contexto completo de la tienda combinando:
- * shop info + productos + páginas + políticas.
- * Listo para usar como system prompt del agente IA.
+ * shop info + productos + páginas reales + políticas relevantes.
+ * Filtra automáticamente contenido genérico de Shopify.
  */
 async function buildFullStoreContext(shop, token, orgName = '') {
   const [shopInfo, pages, policies, productsRes] = await Promise.all([
@@ -581,11 +600,19 @@ async function buildFullStoreContext(shop, token, orgName = '') {
 
   // ── Info básica ──────────────────────────────────────────────────
   parts.push(`Tienda: ${displayName}`);
-  if (shopInfo.description) parts.push(`Descripción: ${shopInfo.description}`);
-  if (shopInfo.address)     parts.push(`Dirección: ${shopInfo.address}`);
-  if (shopInfo.phone)       parts.push(`Teléfono: ${shopInfo.phone}`);
-  if (shopInfo.email)       parts.push(`Email: ${shopInfo.email}`);
-  if (shopInfo.currency)    parts.push(`Moneda: ${shopInfo.currency}`);
+  if (shopInfo.description && !isBoilerplateContent(shopInfo.description))
+    parts.push(`Descripción: ${shopInfo.description}`);
+  if (shopInfo.address)  parts.push(`Dirección: ${shopInfo.address}`);
+  if (shopInfo.phone)    parts.push(`Teléfono: ${shopInfo.phone}`);
+  if (shopInfo.email)    parts.push(`Email de contacto: ${shopInfo.email}`);
+  if (shopInfo.currency) parts.push(`Moneda: ${shopInfo.currency}`);
+
+  // ── Instrucciones para el agente (sugeridas) ─────────────────────
+  parts.push(`\n[Completa esta sección con instrucciones para el bot:]`);
+  parts.push(`Horarios de entrega: `);
+  parts.push(`Zona de despacho: `);
+  parts.push(`Pedido mínimo: `);
+  parts.push(`Formas de pago: `);
 
   // ── Productos ────────────────────────────────────────────────────
   const productList = (productsRes.products || []).slice(0, 15);
@@ -597,19 +624,17 @@ async function buildFullStoreContext(shop, token, orgName = '') {
     parts.push(`\nProductos del catálogo:\n${lines.join('\n')}`);
   }
 
-  // ── Páginas personalizadas ───────────────────────────────────────
+  // ── Páginas personalizadas (solo contenido real) ─────────────────
   if (pages.length) {
     for (const page of pages) {
-      const content = page.content.slice(0, 1500); // limitar para no exceder tokens
-      parts.push(`\n--- ${page.title} ---\n${content}`);
+      parts.push(`\n--- ${page.title} ---\n${page.content.slice(0, 1200)}`);
     }
   }
 
-  // ── Políticas ────────────────────────────────────────────────────
+  // ── Políticas relevantes (sin boilerplate) ───────────────────────
   if (policies.length) {
     for (const pol of policies) {
-      const content = pol.content.slice(0, 800);
-      parts.push(`\n--- ${pol.title} ---\n${content}`);
+      parts.push(`\n--- ${pol.title} ---\n${pol.content.slice(0, 600)}`);
     }
   }
 
