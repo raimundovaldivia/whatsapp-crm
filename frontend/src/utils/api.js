@@ -55,6 +55,10 @@ export const conversationsAPI = {
   sendTemplate: (id, data) => api.post(`/conversations/${id}/send-template`, data).then(r => r.data),
 };
 
+export const settingsAPI = {
+  testBot: (data) => api.post('/settings/test-bot', data, { timeout: 30000 }).then(r => r.data),
+};
+
 export const reengagementAPI = {
   getCandidates:        (refresh = false) => api.get(`/reengagement/candidates${refresh ? '?refresh=true' : ''}`, { timeout: 180000 }).then(r => r.data),
   generate:             (phone) => api.post('/reengagement/generate', { phone }).then(r => r.data),

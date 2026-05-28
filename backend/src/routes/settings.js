@@ -7,10 +7,13 @@
  * GET  /api/settings/products         → Listar productos desde Shopify directo
  */
 
-const express    = require('express');
-const router     = express.Router();
-const db         = require('../db/database');
-const shopifyApi = require('../services/shopify-api');
+const express      = require('express');
+const router       = express.Router();
+const db           = require('../db/database');
+const shopifyApi   = require('../services/shopify-api');
+const orchestrator = require('../services/agents/orchestrator');
+const salesAgent   = require('../services/agents/sales');
+const ordersAgent  = require('../services/agents/orders');
 const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -47,6 +50,90 @@ router.put('/', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/settings/test-bot
+ * Simula una conversación con el bot SIN guardar nada en DB.
+ * El cliente pasa el historial completo en cada request (stateless).
+ *
+ * Body: { message, history: [{role, content}], orderDraft: {}, pipelineState: 'exploring' }
+ * Response: { response, agentType, newState, orderDraft }
+ */
+router.post('/test-bot', async (req, res) => {
+  try {
+    const { message, history = [], orderDraft = {}, pipelineState = 'exploring' } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: 'Mensaje vacío' });
+
+    // ── Cargar catálogo y configuración ──────────────────────────
+    const ds = await db.getPrimaryDataSource(req.orgId);
+    let productosTexto = '';
+    if (ds?.config?.accessToken) {
+      try {
+        const { shop, token } = shopifyApi.credentialsFrom(ds);
+        const r = await shopifyApi.getProducts(shop, token, { limit: 250 });
+        productosTexto = shopifyApi.formatProductsForAI(r.products || [], shop);
+      } catch {}
+    }
+
+    const storeContext = await db.getSetting(req.orgId, 'store_context') || '';
+    const extraPrompt  = await db.getSetting(req.orgId, 'ai_system_prompt_extra') || '';
+    const deliveryRaw  = await db.getSetting(req.orgId, 'delivery_info');
+    let deliverySection = '';
+    if (deliveryRaw) {
+      try {
+        const d = JSON.parse(deliveryRaw);
+        const lines = [];
+        if (d.schedule)       lines.push(`📅 Horarios: ${d.schedule}`);
+        if (d.zone)           lines.push(`📍 Zona: ${d.zone}`);
+        if (d.minimum)        lines.push(`💰 Mínimo: ${d.minimum}`);
+        if (d.paymentMethods) lines.push(`💳 Pago: ${d.paymentMethods}`);
+        if (lines.length) deliverySection = `## Entrega\n${lines.join('\n')}`;
+      } catch {}
+    }
+    const storeCustomPrompt = [deliverySection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
+
+    // Convertir historial al formato interno del pipeline
+    const convHistory = history.map(m => ({
+      direction: m.role === 'user' ? 'inbound' : 'outbound',
+      content:   m.content,
+    }));
+
+    let response, agentType, newState = pipelineState, newOrderDraft = { ...orderDraft };
+
+    // ── Agente de órdenes (recopilando datos) ─────────────────────
+    if (pipelineState === 'collecting_order') {
+      newOrderDraft = await ordersAgent.extractOrderData(convHistory, orderDraft);
+      const agentResponse = await ordersAgent.generateOrderResponse(convHistory, message, newOrderDraft, productosTexto);
+      const confirmed = ordersAgent.isOrderConfirmed(agentResponse, message);
+
+      if (confirmed && ordersAgent.hasRequiredData(newOrderDraft)) {
+        const paymentMode = (await db.getSetting(req.orgId, 'payment_mode')) || 'link';
+        const payMsg = paymentMode === 'cod'
+          ? 'confirmaría el pedido con despacho por pagar (sin link de pago).'
+          : 'generaría el link de pago de Shopify y lo enviaría al cliente.';
+        response = `✅ *(Modo prueba — pedido no procesado)*\n\nEn producción, el bot ${payMsg}\n\n📦 *${newOrderDraft.product_name}* x${newOrderDraft.quantity}\n👤 ${newOrderDraft.customer_name}\n📍 ${newOrderDraft.address}, ${newOrderDraft.city}`;
+        newState = 'test_complete';
+      } else {
+        response = agentResponse.replace(/ORDEN_CONFIRMADA/g, '').trim() || '¡Déjame verificar los datos!';
+        newState = 'collecting_order';
+      }
+      agentType = 'orders';
+
+    // ── Agente de ventas + orquestador ───────────────────────────
+    } else {
+      const { intent } = await orchestrator.classifyIntent(message, convHistory, pipelineState);
+      const salesResponse = await salesAgent.generateSalesResponse(convHistory, message, productosTexto, storeCustomPrompt);
+      response  = salesResponse;
+      agentType = 'sales';
+      newState  = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : pipelineState;
+    }
+
+    res.json({ response, agentType, newState, orderDraft: newOrderDraft });
+  } catch (err) {
+    console.error('[TestBot]', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

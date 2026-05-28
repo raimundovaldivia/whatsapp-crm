@@ -9,8 +9,9 @@ import {
   ShoppingBag, RefreshCw, MessageCircle, Phone, Brain,
   Eye, EyeOff, Save, Zap, FileText, ChevronRight,
   Sparkles, ArrowRight, Clock, MapPin, DollarSign, CreditCard,
+  Bot, X, Send, RotateCcw, FlaskConical,
 } from 'lucide-react';
-import { setupAPI, api, reengagementAPI } from '../utils/api.js';
+import { setupAPI, api, reengagementAPI, settingsAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
 import { useTheme } from '../theme.js';
 
@@ -621,6 +622,15 @@ function IATab({ onSwitchTab }) {
 
   // Modo de pago: 'link' (link Shopify) | 'cod' (despacho por pagar)
   const [paymentMode, setPaymentMode] = useState('link');
+
+  // Test bot
+  const [testOpen,         setTestOpen]         = useState(false);
+  const [testMessages,     setTestMessages]     = useState([]);
+  const [testInput,        setTestInput]        = useState('');
+  const [testState,        setTestState]        = useState('exploring');
+  const [testDraft,        setTestDraft]        = useState({});
+  const [testLoading,      setTestLoading]      = useState(false);
+  const testChatRef = useRef(null);
   const deliveryTimer = useRef(null);
 
   const [loading,    setLoading]   = useState(true);
@@ -722,6 +732,49 @@ function IATab({ onSwitchTab }) {
       setError(`Error sincronizando desde Shopify: ${detail}`);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const resetTest = () => {
+    setTestMessages([]);
+    setTestState('exploring');
+    setTestDraft({});
+    setTestInput('');
+  };
+
+  const sendTestMessage = async () => {
+    const msg = testInput.trim();
+    if (!msg || testLoading) return;
+
+    const userMsg = { role: 'user', content: msg };
+    const newHistory = [...testMessages, userMsg];
+    setTestMessages(newHistory);
+    setTestInput('');
+    setTestLoading(true);
+
+    setTimeout(() => {
+      if (testChatRef.current) testChatRef.current.scrollTop = testChatRef.current.scrollHeight;
+    }, 50);
+
+    try {
+      const res = await settingsAPI.testBot({
+        message:       msg,
+        history:       testMessages,
+        orderDraft:    testDraft,
+        pipelineState: testState,
+      });
+      const botMsg = { role: 'bot', content: res.response, agentType: res.agentType };
+      setTestMessages(prev => [...prev, botMsg]);
+      setTestState(res.newState || 'exploring');
+      setTestDraft(res.orderDraft || {});
+    } catch (err) {
+      const errMsg = err.response?.data?.error || 'Error al conectar con el bot';
+      setTestMessages(prev => [...prev, { role: 'bot', content: `⚠️ ${errMsg}`, agentType: 'error' }]);
+    } finally {
+      setTestLoading(false);
+      setTimeout(() => {
+        if (testChatRef.current) testChatRef.current.scrollTop = testChatRef.current.scrollHeight;
+      }, 100);
     }
   };
 
@@ -989,11 +1042,166 @@ function IATab({ onSwitchTab }) {
             <p style={hintStyle}>Reglas de comportamiento y restricciones que el bot debe seguir siempre.</p>
           </div>
 
-          <SaveBtn loading={saving} onClick={save} colors={colors} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <SaveBtn loading={saving} onClick={save} colors={colors} />
+            <button
+              onClick={() => setTestOpen(true)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '7px',
+                padding: '10px 18px', borderRadius: '9px', cursor: 'pointer',
+                border: `1.5px solid ${colors.green}55`,
+                backgroundColor: `${colors.green}12`,
+                color: colors.green, fontSize: '14px', fontWeight: 600,
+              }}
+            >
+              <FlaskConical size={15} />
+              Probar bot
+            </button>
+          </div>
           {error   && <Alert type="error"   msg={error}   colors={colors} />}
           {success && <Alert type="success" msg={success} colors={colors} />}
         </div>
       </div>
+
+      {/* ── Panel de prueba del bot ── */}
+      {testOpen && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
+          padding: '20px',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            width: '380px', height: '580px',
+            backgroundColor: colors.bgPanel,
+            border: `1px solid ${colors.border}`,
+            borderRadius: '16px',
+            boxShadow: `0 20px 60px ${isDark ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.18)'}`,
+            display: 'flex', flexDirection: 'column',
+            overflow: 'hidden',
+            pointerEvents: 'all',
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '14px 16px', borderBottom: `1px solid ${colors.border}`,
+              display: 'flex', alignItems: 'center', gap: '10px',
+              backgroundColor: colors.bgApp,
+            }}>
+              <div style={{
+                width: '34px', height: '34px', borderRadius: '50%',
+                backgroundColor: `${colors.green}22`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <Bot size={16} color={colors.green} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: colors.textPrimary }}>Probar bot</div>
+                <div style={{ fontSize: '11px', color: colors.textMuted }}>Modo prueba · no se guardan datos</div>
+              </div>
+              <button onClick={resetTest} title="Reiniciar conversación"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textMuted, padding: '4px', borderRadius: '6px' }}>
+                <RotateCcw size={14} />
+              </button>
+              <button onClick={() => setTestOpen(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textMuted, padding: '4px', borderRadius: '6px' }}>
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Mensajes */}
+            <div ref={testChatRef} style={{
+              flex: 1, overflowY: 'auto', padding: '16px',
+              display: 'flex', flexDirection: 'column', gap: '10px',
+            }}>
+              {testMessages.length === 0 && (
+                <div style={{ textAlign: 'center', color: colors.textMuted, fontSize: '12px', marginTop: '40px', lineHeight: 1.6 }}>
+                  <div style={{ fontSize: '28px', marginBottom: '12px' }}>👋</div>
+                  <div style={{ fontWeight: 600, color: colors.textSecondary, marginBottom: '6px' }}>Escribe como si fueras un cliente</div>
+                  <div>Prueba cómo responde el bot con tu catálogo y configuración actual.</div>
+                </div>
+              )}
+              {testMessages.map((m, i) => (
+                <div key={i} style={{
+                  display: 'flex',
+                  justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
+                }}>
+                  <div style={{
+                    maxWidth: '82%',
+                    padding: '9px 13px',
+                    borderRadius: m.role === 'user' ? '14px 14px 2px 14px' : '14px 14px 14px 2px',
+                    backgroundColor: m.role === 'user' ? colors.green : colors.bgApp,
+                    color: m.role === 'user' ? '#fff' : colors.textPrimary,
+                    fontSize: '13px', lineHeight: 1.5,
+                    border: m.role === 'bot' ? `1px solid ${colors.border}` : 'none',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  }}>
+                    {m.content}
+                    {m.agentType && m.role === 'bot' && (
+                      <div style={{ fontSize: '10px', color: m.role === 'user' ? 'rgba(255,255,255,0.6)' : colors.textMuted, marginTop: '4px' }}>
+                        {m.agentType === 'sales' ? '🛒 ventas' : m.agentType === 'orders' ? '📦 pedidos' : m.agentType === 'error' ? '⚠️' : m.agentType}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {testLoading && (
+                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                  <div style={{
+                    padding: '10px 14px', borderRadius: '14px 14px 14px 2px',
+                    backgroundColor: colors.bgApp, border: `1px solid ${colors.border}`,
+                    display: 'flex', gap: '5px', alignItems: 'center',
+                  }}>
+                    {[0, 0.3, 0.6].map((d, i) => (
+                      <span key={i} style={{
+                        width: '6px', height: '6px', borderRadius: '50%',
+                        backgroundColor: colors.textMuted,
+                        animation: `typing-dot 1.2s ease-in-out ${d}s infinite`,
+                        display: 'inline-block',
+                      }} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Input */}
+            <div style={{
+              padding: '12px 14px', borderTop: `1px solid ${colors.border}`,
+              display: 'flex', gap: '8px', alignItems: 'flex-end',
+            }}>
+              <textarea
+                value={testInput}
+                onChange={e => setTestInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTestMessage(); } }}
+                placeholder="Escribe un mensaje..."
+                disabled={testLoading || testState === 'test_complete'}
+                rows={1}
+                style={{
+                  flex: 1, resize: 'none', padding: '9px 12px',
+                  backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
+                  borderRadius: '10px', color: colors.textPrimary, fontSize: '13px',
+                  outline: 'none', fontFamily: 'inherit', lineHeight: 1.4,
+                  maxHeight: '80px', overflowY: 'auto',
+                  opacity: (testLoading || testState === 'test_complete') ? 0.5 : 1,
+                }}
+              />
+              <button
+                onClick={sendTestMessage}
+                disabled={testLoading || !testInput.trim() || testState === 'test_complete'}
+                style={{
+                  width: '36px', height: '36px', borderRadius: '50%', flexShrink: 0,
+                  backgroundColor: (!testInput.trim() || testLoading || testState === 'test_complete') ? colors.borderStrong : colors.green,
+                  border: 'none', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background-color 0.15s',
+                }}
+              >
+                <Send size={14} color="white" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
