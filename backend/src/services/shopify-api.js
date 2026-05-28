@@ -459,6 +459,57 @@ async function createDraftOrder(shop, token, customer, items, note = '') {
   };
 }
 
+// ─── Completar Draft Order → Orden real (COD) ──────────────────
+
+const COMPLETE_DRAFT_ORDER_MUTATION = `
+  mutation DraftOrderComplete($id: ID!, $paymentPending: Boolean) {
+    draftOrderComplete(id: $id, paymentPending: $paymentPending) {
+      draftOrder {
+        id
+        order {
+          id
+          name
+          displayFinancialStatus
+          displayFulfillmentStatus
+        }
+      }
+      userErrors { field message }
+    }
+  }
+`;
+
+/**
+ * Convierte un draft order en orden real.
+ * paymentPending=true → orden con estado "Pago pendiente" (COD).
+ *
+ * @param {string} shop
+ * @param {string} token
+ * @param {string} draftOrderId  - GID: gid://shopify/DraftOrder/xxxxx
+ */
+async function completeDraftOrder(shop, token, draftOrderId) {
+  const client = graphqlClient(shop, token);
+
+  const { data } = await client.post('/graphql.json', {
+    query:     COMPLETE_DRAFT_ORDER_MUTATION,
+    variables: { id: draftOrderId, paymentPending: true },
+  });
+
+  if (data.errors) throw new Error('Shopify GraphQL error: ' + JSON.stringify(data.errors));
+
+  const result     = data.data.draftOrderComplete;
+  const userErrors = result.userErrors || [];
+  if (userErrors.length) throw new Error('Error completando pedido: ' + userErrors.map(e => e.message).join(', '));
+
+  const order = result.draftOrder?.order;
+  return {
+    success:           true,
+    orderId:           order?.id,
+    orderName:         order?.name,
+    financialStatus:   order?.displayFinancialStatus,
+    fulfillmentStatus: order?.displayFulfillmentStatus,
+  };
+}
+
 // ─── Formato para el agente IA ──────────────────────────────────
 
 /**
@@ -672,6 +723,7 @@ module.exports = {
   getCustomerByPhone,
   getOrders,
   createDraftOrder,
+  completeDraftOrder,
   formatProductsForAI,
   getShopInfo,
   getPages,

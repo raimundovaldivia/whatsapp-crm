@@ -245,7 +245,19 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
       let successMsg;
       if (paymentMode === 'cod') {
-        // Despacho por pagar — no enviar link de pago
+        // Despacho por pagar — completar el draft inmediatamente como orden real
+        try {
+          const ds = await db.getPrimaryDataSource(orgId);
+          await shopifyApi.completeDraftOrder(
+            ds.config?.storeUrl,
+            ds.config?.accessToken,
+            result.orderId,
+          );
+          console.log(`[Pipeline] ✅ Draft completado como orden real COD: ${result.orderId}`);
+        } catch (completeErr) {
+          // No es fatal — el draft existe igual, solo queda en Borradores
+          console.warn('[Pipeline] No se pudo completar el draft como orden real:', completeErr.message);
+        }
         await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
         successMsg = `✅ ¡Pedido confirmado!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\n💵 El pago se realiza al momento del despacho.\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
         return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: result };
