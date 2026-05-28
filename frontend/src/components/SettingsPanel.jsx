@@ -618,6 +618,9 @@ function IATab({ onSwitchTab }) {
   const [minimum,        setMinimum]        = useState('');
   const [paymentMethods, setPaymentMethods] = useState('');
   const [deliverySaved,  setDeliverySaved]  = useState(false);
+
+  // Modo de pago: 'link' (link Shopify) | 'cod' (despacho por pagar)
+  const [paymentMode, setPaymentMode] = useState('link');
   const deliveryTimer = useRef(null);
 
   const [loading,    setLoading]   = useState(true);
@@ -664,6 +667,7 @@ function IATab({ onSwitchTab }) {
       setZone(di.zone || '');
       setMinimum(di.minimum || '');
       setPaymentMethods(di.paymentMethods || '');
+      if (d?.payment_mode) setPaymentMode(d.payment_mode);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -725,7 +729,7 @@ function IATab({ onSwitchTab }) {
     setSaving(true); setError(''); setSuccess('');
     try {
       await Promise.all([
-        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt }),
+        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode }),
         reengagementAPI.saveStoreContext(storeContext),
         reengagementAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
@@ -903,6 +907,37 @@ function IATab({ onSwitchTab }) {
             </div>
             <p style={{ ...hintStyle, marginTop: '10px' }}>
               El bot usa estos datos para responder preguntas de clientes sobre entregas y pagos. Se guardan automáticamente.
+            </p>
+          </div>
+
+          {/* Modo de pago */}
+          <div>
+            <label style={labelStyle}>Modo de cobro al confirmar pedido</label>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              {[
+                { value: 'link',  icon: '💳', title: 'Link de pago',        desc: 'Shopify genera un link de pago que el bot envía al cliente' },
+                { value: 'cod',   icon: '💵', title: 'Despacho por pagar',  desc: 'El bot confirma el pedido sin link. El cliente paga al recibir' },
+              ].map(opt => {
+                const active = paymentMode === opt.value;
+                return (
+                  <button key={opt.value} onClick={() => setPaymentMode(opt.value)}
+                    style={{
+                      flex: 1, padding: '12px 14px', borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
+                      border: `1.5px solid ${active ? colors.green : colors.border}`,
+                      backgroundColor: active ? `${colors.green}12` : colors.bgApp,
+                      transition: 'all 0.15s',
+                    }}>
+                    <div style={{ fontSize: '15px', marginBottom: '4px' }}>{opt.icon}</div>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: active ? colors.green : colors.textPrimary, marginBottom: '3px' }}>{opt.title}</div>
+                    <div style={{ fontSize: '11px', color: colors.textMuted, lineHeight: 1.4 }}>{opt.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <p style={{ ...hintStyle, marginTop: '8px' }}>
+              {paymentMode === 'cod'
+                ? '✓ El bot enviará confirmación del pedido sin link de pago. Ideal para tiendas con pago contra entrega.'
+                : '✓ El bot generará un link de pago de Shopify al confirmar el pedido.'}
             </p>
           </div>
 

@@ -239,13 +239,22 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft)) {
     // ── CREAR ORDEN EN SHOPIFY ─────────────────────────────────
+    const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'link';
     try {
       const result = await createShopifyOrder(orgId, conversationId, updatedDraft);
-      await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
 
-      const successMsg = `✅ ¡Pedido creado exitosamente!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
-
-      return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
+      let successMsg;
+      if (paymentMode === 'cod') {
+        // Despacho por pagar — no enviar link de pago
+        await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
+        successMsg = `✅ ¡Pedido confirmado!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\n💵 El pago se realiza al momento del despacho.\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
+        return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: result };
+      } else {
+        // Link de pago (comportamiento por defecto)
+        await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
+        successMsg = `✅ ¡Pedido creado exitosamente!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
+        return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
+      }
     } catch (err) {
       const status  = err.response?.status;
       const resData = err.response?.data;

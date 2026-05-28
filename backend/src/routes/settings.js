@@ -23,6 +23,7 @@ router.get('/', async (req, res) => {
     const settings = {
       ai_enabled_global:      (await db.getSetting(req.orgId, 'ai_enabled_global')) === 'true',
       ai_system_prompt_extra: (await db.getSetting(req.orgId, 'ai_system_prompt_extra')) || '',
+      payment_mode:           (await db.getSetting(req.orgId, 'payment_mode')) || 'link',
     };
     res.json({ success: true, data: settings });
   } catch (err) {
@@ -35,11 +36,13 @@ router.get('/', async (req, res) => {
  */
 router.put('/', async (req, res) => {
   try {
-    const { ai_enabled_global, ai_system_prompt_extra } = req.body;
+    const { ai_enabled_global, ai_system_prompt_extra, payment_mode } = req.body;
     if (ai_enabled_global !== undefined)
       await db.setSetting(req.orgId, 'ai_enabled_global', ai_enabled_global ? 'true' : 'false');
     if (ai_system_prompt_extra !== undefined)
       await db.setSetting(req.orgId, 'ai_system_prompt_extra', ai_system_prompt_extra);
+    if (payment_mode !== undefined)
+      await db.setSetting(req.orgId, 'payment_mode', payment_mode);
 
     res.json({ success: true });
   } catch (err) {
