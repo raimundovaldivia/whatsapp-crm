@@ -147,8 +147,7 @@ setupDatabase().then(() => {
     console.log(`   WhatsApp Twilio : POST /twilio-webhook`);
     console.log(`   WhatsApp Kapso  : POST /kapso-webhook`);
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
-    console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
-    console.log(`   Shopify app     : ${process.env.RAIGENTIC_URL || 'https://raigentic.onrender.com'}\n`);
+    console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
   });
 }).catch(err => {
   console.error('Error iniciando DB:', err);

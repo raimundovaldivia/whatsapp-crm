@@ -49,7 +49,7 @@ CONTEXTO DEL TEMPLATE QUE RECIBIÓ: {TEMPLATE_NAME}`;
  * Agente de Ventas — recibe el catálogo ya formateado como texto
  * @param {Array}  conversationHistory
  * @param {string} userMessage
- * @param {string} productosTexto - catálogo formateado por raigentic.formatProductosParaIA()
+ * @param {string} productosTexto - catálogo formateado por shopifyApi.formatProductsForAI()
  * @param {string} customPrompt
  * @param {object} opts - { isWarmLead: bool, templateName: string }
  */

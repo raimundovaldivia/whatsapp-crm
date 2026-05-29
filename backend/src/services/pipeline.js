@@ -5,7 +5,7 @@
  *   1. Orquestador → clasifica la intención del mensaje
  *   2. Agente de Ventas → responde con info de productos, persuade
  *   3. Agente de Órdenes → recopila datos del pedido
- *   4. raigentic API → crea el Draft Order en Shopify + devuelve link de pago
+ *   4. Shopify Admin GraphQL → crea el Draft Order + devuelve link de pago (o completa como orden COD)
  */
 
 const db          = require('../db/database');
@@ -22,7 +22,7 @@ const ordersAgent  = require('./agents/orders');
 async function processMessage(orgId, conversationId, userMessage) {
   const conversation = await db.getConversationById(conversationId);
   const history = await db.getLastMessages(conversationId, 12);
-  // Obtener catálogo desde raigentic (DB local, sin llamar a Shopify en cada mensaje)
+  // Obtener catálogo desde Shopify Admin GraphQL directo
   const ds = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
   let products = [];
@@ -154,7 +154,7 @@ async function processMessage(orgId, conversationId, userMessage) {
 /**
  * Busca datos de un cliente por teléfono en dos fuentes:
  * 1. Órdenes previas en la DB local del CRM (bot)
- * 2. Base de clientes de Shopify via raigentic
+ * 2. Base de clientes de Shopify via Admin GraphQL directo
  *
  * Si se encuentra en Shopify, guarda el customerId para linkear la nueva orden.
  */

@@ -190,8 +190,7 @@ router.post('/:id/resend-link', async (req, res) => {
 
 /**
  * POST /api/orders/:id/sync-shopify
- * El estado de las órdenes llega automáticamente via webhooks de Shopify → raigentic.
- * Este endpoint devuelve el estado actual en la DB local.
+ * Este endpoint devuelve el estado actual de la orden en la DB local.
  */
 router.post('/:id/sync-shopify', async (req, res) => {
   try {
