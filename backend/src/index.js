@@ -25,6 +25,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const webhookRouter        = require('./routes/webhook');         // WhatsApp (Meta)
 const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Twilio)
 const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
+const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follow-up
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
 const shopifyOAuthRouter   = require('./routes/shopify-oauth');   // Shopify OAuth flow
 const authRouter           = require('./routes/auth');
@@ -148,6 +149,7 @@ setupDatabase().then(() => {
     console.log(`   WhatsApp Kapso  : POST /kapso-webhook`);
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
+    startFollowUpJob(io);
   });
 }).catch(err => {
   console.error('Error iniciando DB:', err);

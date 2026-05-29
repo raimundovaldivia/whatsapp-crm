@@ -245,6 +245,44 @@ async function updateConversationLastMessage(id, message, incrementUnread = fals
   }
 }
 
+async function updateLastInbound(id) {
+  await pool.query(
+    'UPDATE conversations SET last_inbound_at = CURRENT_TIMESTAMP WHERE id = $1',
+    [id]
+  );
+}
+
+async function updateFollowUpSent(id) {
+  await pool.query(
+    'UPDATE conversations SET follow_up_sent_at = CURRENT_TIMESTAMP WHERE id = $1',
+    [id]
+  );
+}
+
+/**
+ * Busca conversaciones abandonadas dentro de la ventana de 24h.
+ * Criterios: cliente escribió hace 2-22h, bot estaba activo, sin follow-up reciente.
+ */
+async function getStalledConversations() {
+  const { rows } = await pool.query(`
+    SELECT
+      c.id, c.organization_id, c.phone_number, c.contact_name,
+      c.pipeline_state, c.order_draft, c.last_inbound_at,
+      c.follow_up_sent_at, c.agent_mode,
+      o.name AS org_name
+    FROM conversations c
+    JOIN organizations o ON o.id = c.organization_id
+    WHERE
+      c.agent_mode    = 'ai'
+      AND c.pipeline_state IN ('interested', 'collecting_order')
+      AND c.last_inbound_at IS NOT NULL
+      AND c.last_inbound_at < NOW() - INTERVAL '2 hours'
+      AND c.last_inbound_at > NOW() - INTERVAL '22 hours'
+      AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '8 hours')
+  `);
+  return rows;
+}
+
 async function markConversationAsRead(id) {
   await pool.query('UPDATE conversations SET unread_count = 0 WHERE id = $1', [id]);
 }
@@ -591,6 +629,7 @@ module.exports = {
   upsertConversation, getAllConversations, getConversationById,
   updateConversationLastMessage, markConversationAsRead, setAgentMode,
   updatePipelineState, getOrderDraft,
+  updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
   saveMessage, getMessagesByConversation, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   // Products

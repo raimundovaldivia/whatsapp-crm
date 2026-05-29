@@ -204,6 +204,10 @@ async function setupDatabase() {
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_reason TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_at TIMESTAMP;
 
+      -- Migración: ventana 24h y follow-up automático
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_inbound_at TIMESTAMP;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS follow_up_sent_at TIMESTAMP;
+
       -- ─── RE-ENGANCHE: calibración, caché y predicciones ──────────
 
       -- Calibración por organización (backtesting histórico)

@@ -97,6 +97,7 @@ router.post('/', async (req, res) => {
     // pero no puede responder (null token). Kapso sí puede, así que seguimos.
 
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
+    await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig);
 
     // 3. Emitir al CRM en tiempo real (usar savedMsg o buscarlo si fue duplicado)

@@ -599,6 +599,207 @@ function WhatsAppTab() {
 }
 
 /* ══════════════════════════════════════════════
+   WIZARD DE PERSONALIDAD DEL BOT
+══════════════════════════════════════════════ */
+
+const PERSONALITY_QUESTIONS = [
+  {
+    key: 'tone',
+    question: '¿Cómo te gustaría que hablara con tus clientes?',
+    options: [
+      { value: 'casual',       label: 'Muy casual 🤙',     desc: 'Como un amigo del barrio. Emojis, tuteo, directo al grano.' },
+      { value: 'warm',         label: 'Cercano y cálido 😊', desc: 'Amigable y profesional. Hace sentir bien al cliente sin ser informal.' },
+      { value: 'professional', label: 'Formal y serio 🎩',  desc: 'Sin emojis, muy correcto. Ideal para públicos más exigentes.' },
+    ],
+  },
+  {
+    key: 'pressure',
+    question: 'Cuando el cliente duda en comprar, ¿qué hace?',
+    options: [
+      { value: 'persuade',     label: 'Lo convence suavemente 💪', desc: 'Menciona stock limitado, beneficios y crea urgencia real.' },
+      { value: 'wait',         label: 'Respeta su ritmo 🌿',       desc: 'Informa sin presionar. Deja que el cliente decida solo.' },
+      { value: 'alternatives', label: 'Ofrece opciones 🔄',        desc: 'Si no le convence uno, sugiere otro tamaño o producto.' },
+    ],
+  },
+  {
+    key: 'unknown',
+    question: 'Cuando no sabe algo, ¿qué hace?',
+    options: [
+      { value: 'honest',    label: 'Es honesto 🙋',         desc: '"No tengo esa info, pero te averiguo de inmediato."' },
+      { value: 'delegate',  label: 'Lo deriva al dueño 👤', desc: 'Pasa la consulta a un asesor humano sin improvisar.' },
+      { value: 'creative',  label: 'Responde con lo que sabe 💡', desc: 'Usa contexto disponible para dar la mejor respuesta posible.' },
+    ],
+  },
+  {
+    key: 'emojis',
+    question: '¿Cuántos emojis usa?',
+    options: [
+      { value: 'many', label: 'Bastantes 🎉🥳✅', desc: 'Hace el chat más vivo y dinámico.' },
+      { value: 'some', label: 'Algunos 😊',       desc: 'Uno o dos por mensaje, sin exagerar.' },
+      { value: 'none', label: 'Sin emojis',       desc: 'Más serio y directo.' },
+    ],
+  },
+  {
+    key: 'intro',
+    question: '¿Cómo se presenta al inicio?',
+    options: [
+      { value: 'named',   label: 'Con nombre propio',   desc: 'Ej: "Hola! Soy Valentina de [tu tienda] 👋"' },
+      { value: 'team',    label: 'Como parte del equipo', desc: 'Ej: "Hola! Te escribimos desde [tu tienda]"' },
+      { value: 'nodesc',  label: 'Sin presentación',     desc: 'Va directo al cliente sin nombrar quién es.' },
+    ],
+  },
+];
+
+function buildPromptFromPersonality(answers) {
+  const lines = [];
+
+  const tone = {
+    casual:       'Habla de forma muy casual y amigable, como un amigo. Tutea siempre, usa expresiones cotidianas y emojis generosamente.',
+    warm:         'Habla de forma cálida y cercana, siendo amigable pero profesional. Usa emojis con moderación.',
+    professional: 'Habla de forma formal y seria. Usa "usted". No uses emojis. Sé muy correcto y educado en todo momento.',
+  };
+  const pressure = {
+    persuade:     'Cuando el cliente duda, persuade suavemente: menciona disponibilidad limitada, los beneficios del producto y crea cierta urgencia natural sin ser agresivo.',
+    wait:         'Respeta siempre el ritmo del cliente. Informa con claridad pero nunca presiones ni insistas si ya respondió.',
+    alternatives: 'Cuando el cliente duda, ofrece alternativas: otro tamaño, otra presentación, otro producto complementario.',
+  };
+  const unknown = {
+    honest:   'Si no sabes algo, sé honesto: "No tengo esa información ahora mismo, pero te la averiguo". No inventes.',
+    delegate: 'Si no sabes algo, deriva al equipo: "Te voy a pasar con alguien que te puede ayudar mejor con eso".',
+    creative: 'Si no sabes algo exacto, usa el contexto disponible para dar la mejor respuesta posible y aclara que confirmarás si es necesario.',
+  };
+  const emojis = {
+    many: 'Usa emojis libremente en tus respuestas (varios por mensaje).',
+    some: 'Usa emojis con moderación (uno o dos por mensaje).',
+    none: 'No uses emojis bajo ninguna circunstancia.',
+  };
+  const intro = {
+    named:  'Al iniciar una conversación, preséntate con un nombre amigable y el nombre de la tienda. Ejemplo: "Hola! Soy [nombre] de [tienda] 👋"',
+    team:   'Al iniciar, identifícate como parte del equipo de la tienda. Ejemplo: "Hola! Te escribimos desde [tienda]"',
+    nodesc: 'No te presentes formalmente. Ve directo a atender al cliente.',
+  };
+
+  if (answers.tone)     lines.push(tone[answers.tone]);
+  if (answers.pressure) lines.push(pressure[answers.pressure]);
+  if (answers.unknown)  lines.push(unknown[answers.unknown]);
+  if (answers.emojis)   lines.push(emojis[answers.emojis]);
+  if (answers.intro)    lines.push(intro[answers.intro]);
+
+  return lines.join('\n');
+}
+
+function parsePersonalityFromPrompt(prompt) {
+  // Detecta selecciones previas a partir del prompt guardado
+  const answers = {};
+  if (!prompt) return answers;
+  if (prompt.includes('muy casual'))      answers.tone = 'casual';
+  else if (prompt.includes('cálida y cercana')) answers.tone = 'warm';
+  else if (prompt.includes('forma formal'))    answers.tone = 'professional';
+
+  if (prompt.includes('persuade suavemente'))  answers.pressure = 'persuade';
+  else if (prompt.includes('ritmo del cliente')) answers.pressure = 'wait';
+  else if (prompt.includes('ofrece alternativas')) answers.pressure = 'alternatives';
+
+  if (prompt.includes('sé honesto'))    answers.unknown = 'honest';
+  else if (prompt.includes('deriva al equipo')) answers.unknown = 'delegate';
+  else if (prompt.includes('contexto disponible')) answers.unknown = 'creative';
+
+  if (prompt.includes('libremente'))    answers.emojis = 'many';
+  else if (prompt.includes('moderación')) answers.emojis = 'some';
+  else if (prompt.includes('ninguna circunstancia')) answers.emojis = 'none';
+
+  if (prompt.includes('nombre amigable'))   answers.intro = 'named';
+  else if (prompt.includes('parte del equipo')) answers.intro = 'team';
+  else if (prompt.includes('directo a atender')) answers.intro = 'nodesc';
+
+  return answers;
+}
+
+function PersonalityWizard({ value, onChange, colors, labelStyle, hintStyle, inp }) {
+  const [answers, setAnswers]   = useState(() => parsePersonalityFromPrompt(value));
+  const [showRaw, setShowRaw]   = useState(false);
+
+  const handleSelect = (key, val) => {
+    const newAnswers = { ...answers, [key]: val };
+    setAnswers(newAnswers);
+    onChange(buildPromptFromPersonality(newAnswers));
+  };
+
+  const totalAnswered = Object.keys(answers).length;
+  const totalQuestions = PERSONALITY_QUESTIONS.length;
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+        <div>
+          <label style={labelStyle}>Personalidad del agente</label>
+          <p style={{ ...hintStyle, margin: 0 }}>
+            Si fueras a contratar a alguien para manejar tu WhatsApp, ¿cómo te gustaría que fuera?
+          </p>
+        </div>
+        {totalAnswered > 0 && (
+          <span style={{ fontSize: '11px', color: colors.green, fontWeight: 700, flexShrink: 0 }}>
+            {totalAnswered}/{totalQuestions} definidas
+          </span>
+        )}
+      </div>
+
+      {/* Preguntas */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {PERSONALITY_QUESTIONS.map(q => (
+          <div key={q.key}>
+            <p style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary, margin: '0 0 8px' }}>
+              {q.question}
+            </p>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {q.options.map(opt => {
+                const selected = answers[q.key] === opt.value;
+                return (
+                  <button key={opt.value} onClick={() => handleSelect(q.key, opt.value)}
+                    style={{
+                      flex: '1 1 0', minWidth: '120px', padding: '10px 12px',
+                      borderRadius: '10px', cursor: 'pointer', textAlign: 'left',
+                      border: `1.5px solid ${selected ? colors.green : colors.border}`,
+                      backgroundColor: selected ? `${colors.green}14` : colors.bgApp,
+                      transition: 'all 0.15s',
+                    }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: selected ? colors.green : colors.textPrimary, marginBottom: '3px' }}>
+                      {opt.label}
+                    </div>
+                    <div style={{ fontSize: '11px', color: colors.textMuted, lineHeight: 1.35 }}>
+                      {opt.desc}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Toggle para ver/editar el prompt raw */}
+      <div style={{ marginTop: '12px' }}>
+        <button onClick={() => setShowRaw(v => !v)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textMuted,
+            fontSize: '11px', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' }}>
+          {showRaw ? '▲' : '▼'} {showRaw ? 'Ocultar prompt generado' : 'Ver / editar prompt avanzado'}
+        </button>
+        {showRaw && (
+          <textarea
+            value={value}
+            onChange={e => { onChange(e.target.value); setAnswers(parsePersonalityFromPrompt(e.target.value)); }}
+            rows={5}
+            style={{ ...inp, resize: 'vertical', lineHeight: 1.55, fontFamily: 'inherit', marginTop: '8px' }}
+            placeholder="El prompt se genera automáticamente al responder las preguntas. También puedes editarlo aquí directamente."
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
    TAB IA & BOT
 ══════════════════════════════════════════════ */
 function IATab({ onSwitchTab }) {
@@ -1029,18 +1230,15 @@ function IATab({ onSwitchTab }) {
             </p>
           </div>
 
-          {/* Instrucciones adicionales */}
-          <div>
-            <label style={labelStyle}>Instrucciones adicionales</label>
-            <textarea
-              value={extraPrompt}
-              onChange={e => setExtraPrompt(e.target.value)}
-              rows={4}
-              placeholder="Reglas específicas para el bot. Ej: Nunca ofrecer descuentos sin aprobación previa. Siempre confirmar disponibilidad antes de cerrar una venta. Saludar por el nombre del cliente."
-              style={{ ...inp, resize: 'vertical', lineHeight: 1.55, fontFamily: 'inherit' }}
-            />
-            <p style={hintStyle}>Reglas de comportamiento y restricciones que el bot debe seguir siempre.</p>
-          </div>
+          {/* Personalidad del bot — wizard de preguntas */}
+          <PersonalityWizard
+            value={extraPrompt}
+            onChange={setExtraPrompt}
+            colors={colors}
+            labelStyle={labelStyle}
+            hintStyle={hintStyle}
+            inp={inp}
+          />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <SaveBtn loading={saving} onClick={save} colors={colors} />
