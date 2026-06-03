@@ -258,8 +258,8 @@ export default function SetupWizard({ org, onComplete }) {
     setLoading(true); setError('');
     try {
       const { api } = await import('../utils/api.js');
-      const shop = shopUrl.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
-      const { data } = await api.get('/shopify-oauth/auth-url', { params: { shop } });
+      // Pasar el input tal cual — el backend normaliza cualquier formato de URL
+      const { data } = await api.get('/shopify-oauth/auth-url', { params: { shop: shopUrl.trim() } });
       if (data.url) {
         window.location.href = data.url;
       } else {
@@ -607,17 +607,14 @@ export default function SetupWizard({ org, onComplete }) {
                 </div>
               </div>
 
-              <Field label="Dominio de tu tienda" hint="Solo la parte del dominio · Ej: mi-tienda" colors={colors}>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input
-                    style={{ ...inp, flex: 1 }}
-                    value={shopUrl}
-                    onChange={e => setShopUrl(e.target.value)}
-                    placeholder="mi-tienda"
-                    onKeyDown={e => e.key === 'Enter' && connectShopify()}
-                  />
-                  <span style={{ color: colors.textMuted, fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>.myshopify.com</span>
-                </div>
+              <Field label="Tu tienda Shopify" hint="Pega la URL de tu admin · Ej: admin.shopify.com/store/szc7zd-ip" colors={colors}>
+                <input
+                  style={{ ...inp }}
+                  value={shopUrl}
+                  onChange={e => setShopUrl(e.target.value)}
+                  placeholder="admin.shopify.com/store/szc7zd-ip"
+                  onKeyDown={e => e.key === 'Enter' && connectShopify()}
+                />
               </Field>
 
             </div>

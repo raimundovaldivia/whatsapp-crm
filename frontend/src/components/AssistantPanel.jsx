@@ -75,16 +75,16 @@ export default function AssistantPanel({ org, onSetupComplete, onClose }) {
     }
   }, []);
 
-  const connectShopify = useCallback(async (shopName) => {
-    if (!shopName.trim()) return;
+  const connectShopify = useCallback(async (shopInput) => {
+    if (!shopInput.trim()) return;
     try {
-      const shop = shopName.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
-      const { url } = await setupAPI.getShopifyAuthUrl(shop);
+      // Pasar el input tal cual — el backend normaliza cualquier formato
+      const { url } = await setupAPI.getShopifyAuthUrl(encodeURIComponent(shopInput.trim()));
       window.location.href = url;
     } catch (err) {
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `⚠️ No pude generar el link de Shopify: ${err.response?.data?.error || err.message}`,
+        content: `⚠️ ${err.response?.data?.error || 'No pude generar el link de Shopify. Intenta pegar la URL completa de tu admin.'}`,
       }]);
     }
   }, []);
@@ -333,23 +333,21 @@ function ShopifyInputCard({ colors, isDark, onConnect }) {
       <div style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>
         🛍️ Conectar Shopify
       </div>
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-        <input
-          value={shop}
-          onChange={e => setShop(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && onConnect(shop)}
-          placeholder="mi-tienda"
-          autoFocus
-          style={{
-            flex: 1, padding: '8px 12px', borderRadius: '8px',
-            backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
-            color: colors.textPrimary, fontSize: '13px', outline: 'none',
-          }}
-        />
-        <span style={{ fontSize: '12px', color: colors.textMuted, whiteSpace: 'nowrap' }}>
-          .myshopify.com
-        </span>
-      </div>
+      <input
+        value={shop}
+        onChange={e => setShop(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && onConnect(shop)}
+        placeholder="Pega la URL de tu admin de Shopify"
+        autoFocus
+        style={{
+          width: '100%', padding: '8px 12px', borderRadius: '8px', boxSizing: 'border-box',
+          backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
+          color: colors.textPrimary, fontSize: '13px', outline: 'none',
+        }}
+      />
+      <p style={{ fontSize: '11px', color: colors.textMuted, margin: 0, lineHeight: 1.4 }}>
+        Pega cualquier URL de tu admin: <code style={{ color: colors.textSecondary }}>admin.shopify.com/store/szc7zd-ip</code> o solo el ID <code style={{ color: colors.textSecondary }}>szc7zd-ip</code>
+      </p>
       <button
         onClick={() => onConnect(shop)}
         disabled={!shop.trim()}

@@ -33,6 +33,28 @@ const FRONTEND   = process.env.FRONTEND_URL   || 'http://localhost:5173';
 
 const REDIRECT_URI = `${CRM_URL}/shopify-oauth/callback`;
 
+/**
+ * Normaliza cualquier input del usuario a formato store.myshopify.com
+ * Acepta: "szc7zd-ip", "diezrios", "admin.shopify.com/store/szc7zd-ip",
+ *         "https://admin.shopify.com/store/szc7zd-ip", "diezrios.myshopify.com"
+ */
+function normalizeShopInput(input) {
+  const s = (input || '').trim().toLowerCase();
+
+  // admin.shopify.com/store/STORE-ID (nuevo formato de Shopify)
+  const adminMatch = s.match(/admin\.shopify\.com\/store\/([a-z0-9][a-z0-9-]*)/);
+  if (adminMatch) return `${adminMatch[1]}.myshopify.com`;
+
+  // Quitar protocolo y paths
+  const clean = s.replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
+
+  // Ya tiene .myshopify.com
+  if (clean.endsWith('.myshopify.com')) return clean;
+
+  // Solo el nombre/ID de la tienda
+  return `${clean}.myshopify.com`;
+}
+
 // ─── Almacén en memoria de nonces pendientes (state) ──────────────
 // Clave: state (nonce) → { shop, orgId, expiresAt }
 const pendingStates = new Map();
@@ -52,14 +74,13 @@ setInterval(() => {
  * El frontend llama esto via api.get() (que ya sabe la URL del backend).
  */
 router.get('/auth-url', requireAuth, (req, res) => {
-  let { shop } = req.query;
-  if (!shop) return res.status(400).json({ error: 'Falta el parámetro "shop"' });
+  const raw = req.query.shop;
+  if (!raw) return res.status(400).json({ error: 'Falta el parámetro "shop"' });
 
-  shop = shop.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
-  if (!shop.includes('.')) shop += '.myshopify.com';
+  const shop = normalizeShopInput(raw);
 
-  if (!/^[a-z0-9-]+\.myshopify\.com$/.test(shop)) {
-    return res.status(400).json({ error: 'Dominio inválido. Ej: mi-tienda.myshopify.com' });
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop)) {
+    return res.status(400).json({ error: 'No pude identificar tu tienda Shopify. Pega la URL de tu admin (ej: admin.shopify.com/store/szc7zd-ip)' });
   }
 
   const state = crypto.randomBytes(16).toString('hex');
@@ -87,16 +108,13 @@ router.get('/auth-url', requireAuth, (req, res) => {
  * Redirige al usuario a la pantalla de instalación/autorización de Shopify.
  */
 router.get('/connect', requireAuth, (req, res) => {
-  let { shop } = req.query;
-  if (!shop) return res.status(400).json({ error: 'Falta el parámetro "shop"' });
+  const raw = req.query.shop;
+  if (!raw) return res.status(400).json({ error: 'Falta el parámetro "shop"' });
 
-  // Normalizar: quitar https://, trailing slash, etc.
-  shop = shop.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
-  if (!shop.includes('.')) shop += '.myshopify.com';
+  const shop = normalizeShopInput(raw);
 
-  // Validar formato (solo letras, números, guiones + .myshopify.com)
-  if (!/^[a-z0-9-]+\.myshopify\.com$/.test(shop)) {
-    return res.status(400).json({ error: 'Dominio de tienda inválido. Debe ser algo como mi-tienda.myshopify.com' });
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop)) {
+    return res.status(400).json({ error: 'No pude identificar tu tienda Shopify. Pega la URL de tu admin.' });
   }
 
   // Generar nonce único para CSRF protection
