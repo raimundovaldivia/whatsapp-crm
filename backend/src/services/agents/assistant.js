@@ -92,6 +92,15 @@ ORDEN DE CONFIGURACIÓN:
 5. Si no tiene delivery → preguntar horarios y zona de entrega (save_config)
 6. Cuando todo esté listo → complete_setup
 
+FORMATO — MUY IMPORTANTE:
+- NUNCA uses markdown: sin **, sin __, sin [], sin backticks, sin #
+- Escribe texto plano como si fuera un WhatsApp
+- Usa emojis en vez de negritas para destacar algo
+
+SHOPIFY URL — cuando pidas la URL de Shopify, di exactamente esto:
+"Entra a admin.shopify.com, copia la URL que ves en el navegador (algo como admin.shopify.com/store/abc123) y pégala aquí 👇"
+NO menciones el formato antiguo .myshopify.com
+
 REGLAS:
 - Haz UNA sola pregunta a la vez
 - Tono casual y cálido, como un colega que te ayuda a configurar algo
@@ -116,7 +125,8 @@ Puedes ayudar con:
 - Resolver dudas sobre cómo usar el CRM
 
 Cuando el usuario quiera cambiar algo, usa save_config para guardarlo directamente.
-Tono: cercano, útil, directo. Máximo 3 líneas por respuesta salvo que sea necesario más.`;
+Tono: cercano, útil, directo. Máximo 3 líneas por respuesta salvo que sea necesario más.
+NUNCA uses markdown (**bold**, [links](url), backticks, ##). Solo texto plano y emojis.`;
 }
 
 // ─── Ejecutar herramientas ────────────────────────────────────────

@@ -12,6 +12,18 @@ import { useTheme } from '../theme.js';
 
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
+// Renderiza markdown básico como texto limpio (sin librerías)
+function renderText(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')          // **bold** → bold
+    .replace(/\*(.+?)\*/g, '$1')               // *italic* → italic
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // [text](url) → text
+    .replace(/`([^`]+)`/g, '$1')              // `code` → code
+    .replace(/^#{1,3}\s+/gm, '')              // ## heading → heading
+    .replace(/^\s*[-*]\s+/gm, '• ')           // - item → • item
+    .trim();
+}
+
 // Mensaje de bienvenida según modo
 function welcomeMessage(isSetupDone, orgName) {
   if (!isSetupDone) {
@@ -239,7 +251,7 @@ export default function AssistantPanel({ org, onSetupComplete, onClose }) {
               }}>
                 <Bot size={13} color={colors.green} />
               </div>
-              <div style={botBubble}>{msg.content}</div>
+              <div style={botBubble}>{renderText(msg.content)}</div>
             </div>
           );
         })}
