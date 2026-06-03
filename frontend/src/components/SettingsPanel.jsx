@@ -969,7 +969,9 @@ function IATab({ onSwitchTab }) {
       setTestState(res.newState || 'exploring');
       setTestDraft(res.orderDraft || {});
     } catch (err) {
-      const errMsg = err.response?.data?.error || 'Error al conectar con el bot';
+      const errMsg = !err.response
+        ? '📶 Sin conexión a internet.'
+        : err.response?.data?.error || 'Algo salió mal, intenta de nuevo.';
       setTestMessages(prev => [...prev, { role: 'bot', content: `⚠️ ${errMsg}`, agentType: 'error' }]);
     } finally {
       setTestLoading(false);

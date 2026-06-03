@@ -125,10 +125,11 @@ export default function AssistantPanel({ org, onSetupComplete }) {
         }
       }
     } catch (err) {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `⚠️ ${err.response?.data?.error || 'Error al conectar con el asistente'}`,
-      }]);
+      const noInternet = !err.response;
+      const errContent = noInternet
+        ? '📶 Sin conexión a internet. Revisa tu señal y vuelve a intentarlo.'
+        : `⚠️ ${err.response?.data?.error || 'Algo salió mal, intenta de nuevo.'}`;
+      setMessages(prev => [...prev, { role: 'assistant', content: errContent }]);
     } finally {
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 100);
