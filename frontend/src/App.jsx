@@ -401,6 +401,7 @@ export default function App() {
         <AssistantPanel
           org={org}
           onSetupComplete={handleSetupComplete}
+          onClose={() => setView('dashboard')}
         />
       )}
     </div>

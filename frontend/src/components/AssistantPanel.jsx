@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Bot, Send, RotateCcw, Sparkles, ExternalLink } from 'lucide-react';
+import { Bot, Send, RotateCcw, Sparkles, ExternalLink, X } from 'lucide-react';
 import { assistantAPI, setupAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
@@ -26,7 +26,7 @@ function welcomeMessage(isSetupDone, orgName) {
   };
 }
 
-export default function AssistantPanel({ org, onSetupComplete }) {
+export default function AssistantPanel({ org, onSetupComplete, onClose }) {
   const { colors, isDark } = useTheme();
   const isSetupDone = !!(org?.setup_done);
 
@@ -196,6 +196,13 @@ export default function AssistantPanel({ org, onSetupComplete }) {
             color: colors.textMuted, padding: '6px', borderRadius: '8px' }}>
           <RotateCcw size={15} />
         </button>
+        {onClose && (
+          <button onClick={onClose} title="Cerrar"
+            style={{ background: 'none', border: 'none', cursor: 'pointer',
+              color: colors.textMuted, padding: '6px', borderRadius: '8px' }}>
+            <X size={16} />
+          </button>
+        )}
       </div>
 
       {/* Mensajes */}
