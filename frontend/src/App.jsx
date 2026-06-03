@@ -11,6 +11,7 @@ import DashboardPanel     from './components/DashboardPanel.jsx';
 import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
+import AssistantPanel   from './components/AssistantPanel.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
@@ -394,6 +395,14 @@ export default function App() {
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}
+
+      {/* Vista Asistente IA */}
+      {view === 'asistente' && (
+        <AssistantPanel
+          org={org}
+          onSetupComplete={handleSetupComplete}
+        />
+      )}
     </div>
     </ThemeCtx.Provider>
   );

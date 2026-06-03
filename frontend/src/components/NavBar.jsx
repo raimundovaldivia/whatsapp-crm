@@ -1,4 +1,4 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon, Sparkles } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 const NAV_ITEMS = [
@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'catalogo',     icon: Package,       label: 'Catálogo' },
+  { key: 'asistente',    icon: Sparkles,      label: 'Asistente' },
 ];
 
 // Items visibles en la barra móvil (los más usados)

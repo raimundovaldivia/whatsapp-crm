@@ -38,6 +38,7 @@ const reengagementRouter   = require('./routes/reengagement');
 const clientesRouter       = require('./routes/clientes');
 const templatesRouter      = require('./routes/templates');
 const dashboardRouter      = require('./routes/dashboard');
+const assistantRouter      = require('./routes/assistant');    // Asistente IA del CRM
 
 const app    = express();
 const server = http.createServer(app);
@@ -135,6 +136,7 @@ app.use('/api/reengagement',  reengagementRouter);  // Re-enganche de clientes d
 app.use('/api/clientes',      clientesRouter);      // Lista completa de clientes
 app.use('/api/templates',     templatesRouter);     // WhatsApp Message Templates
 app.use('/api/dashboard',     dashboardRouter);     // Dashboard de victorias
+app.use('/api/assistant',    assistantRouter);     // Asistente IA del CRM
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;

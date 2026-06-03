@@ -40,6 +40,7 @@ export const setupAPI = {
   shopifyStatus: () => api.get('/setup/shopify-status').then(r => r.data),
   whatsappStatus: () => api.get('/setup/whatsapp-status').then(r => r.data),
   complete: () => api.post('/setup/complete').then(r => r.data),
+  getShopifyAuthUrl: (shop) => api.get(`/shopify-oauth/auth-url?shop=${shop}`).then(r => r.data),
 };
 
 export const conversationsAPI = {
@@ -57,6 +58,12 @@ export const conversationsAPI = {
 
 export const settingsAPI = {
   testBot: (data) => api.post('/settings/test-bot', data, { timeout: 30000 }).then(r => r.data),
+};
+
+export const assistantAPI = {
+  chat:           (data) => api.post('/assistant/chat', data, { timeout: 40000 }).then(r => r.data),
+  getHistory:     ()     => api.get('/assistant/history').then(r => r.data),
+  clearHistory:   ()     => api.delete('/assistant/history').then(r => r.data),
 };
 
 export const reengagementAPI = {
