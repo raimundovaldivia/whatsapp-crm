@@ -258,12 +258,19 @@ async function chat(orgId, isSetupDone, history, userMessage) {
   const isOnboarding = !isSetupDone;
   const system = buildSystemPrompt(orgState, isOnboarding);
 
-  // Construir mensajes
-  const messages = [
-    ...history.slice(-12).map(m => ({
-      role:    m.role,
-      content: m.content,
-    })),
+  // Construir mensajes — siempre deben empezar con rol 'user'
+  const historyMsgs = history.slice(-12).map(m => ({
+    role:    m.role,
+    content: m.content || '',
+  })).filter(m => m.role === 'user' || m.role === 'assistant');
+
+  // Si el historial empieza con 'assistant', lo descartamos para no violar la API
+  const safeHistory = historyMsgs.length > 0 && historyMsgs[0].role === 'assistant'
+    ? historyMsgs.slice(1)
+    : historyMsgs;
+
+  let currentMessages = [
+    ...safeHistory,
     { role: 'user', content: userMessage },
   ];
 
@@ -273,23 +280,22 @@ async function chat(orgId, isSetupDone, history, userMessage) {
     max_tokens: 400,
     system,
     tools:      TOOLS,
-    messages,
+    messages:   currentMessages,
   });
 
-  // Procesar tool calls en loop (agentic loop)
-  const toolResults = [];
-  let finalText     = '';
-  let clientAction  = null; // Acción que el frontend debe ejecutar
+  // Agentic loop — cada iteración actualiza currentMessages correctamente
+  let finalText    = '';
+  let clientAction = null;
 
   while (response.stop_reason === 'tool_use') {
-    const assistantMsg = { role: 'assistant', content: response.content };
+    const assistantMsg          = { role: 'assistant', content: response.content };
+    const iterationToolResults  = []; // fresco en cada iteración
 
     for (const block of response.content) {
       if (block.type !== 'tool_use') continue;
 
       const result = await executeTool(block.name, block.input, orgId);
 
-      // Si es trigger_oauth, guardamos la acción para el frontend
       if (block.name === 'trigger_oauth') {
         clientAction = { type: 'oauth', service: result.service };
       }
@@ -297,24 +303,26 @@ async function chat(orgId, isSetupDone, history, userMessage) {
         clientAction = { type: 'setup_complete' };
       }
 
-      toolResults.push({
+      iterationToolResults.push({
         type:        'tool_result',
         tool_use_id: block.id,
         content:     JSON.stringify(result),
       });
     }
 
-    // Segunda llamada con resultados de tools
+    // Acumular la conversación para la próxima llamada
+    currentMessages = [
+      ...currentMessages,
+      assistantMsg,
+      { role: 'user', content: iterationToolResults },
+    ];
+
     response = await client.messages.create({
       model:      'claude-sonnet-4-6',
       max_tokens: 400,
       system,
       tools:      TOOLS,
-      messages:   [
-        ...messages,
-        assistantMsg,
-        { role: 'user', content: toolResults },
-      ],
+      messages:   currentMessages,
     });
   }
 
