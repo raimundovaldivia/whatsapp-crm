@@ -59,7 +59,8 @@ export default function App() {
       .then(data => {
         setUser(data.user);
         setOrg(data.organization);
-        setAppState(data.organization.setup_done ? 'crm' : 'setup');
+        if (!data.organization.setup_done) setView('asistente');
+        setAppState('crm');
       })
       .catch(() => { localStorage.removeItem('crm_token'); setAppState('auth'); });
   }, []);
@@ -67,18 +68,21 @@ export default function App() {
   const handleAuth = useCallback((data) => {
     setUser(data.user);
     setOrg(data.organization);
-    setAppState(data.organization.setup_done ? 'crm' : 'setup');
+    if (!data.organization.setup_done) setView('asistente');
+    setAppState('crm');
   }, []);
 
   const handleSetupComplete = useCallback(() => {
     setOrg(o => ({ ...o, setup_done: 1 }));
-    setAppState('crm');
+    setView('dashboard');
   }, []);
 
-  // ── Retorno de Kapso (reconexión desde Settings) ───────────────
+  // ── Retorno de OAuth (Kapso / Shopify) ────────────────────────
   useEffect(() => {
     if (appState !== 'crm') return;
     const params = new URLSearchParams(window.location.search);
+
+    // Kapso WhatsApp
     if (params.get('kapso_success') === '1') {
       const phoneNumberId      = params.get('phone_number_id');
       const displayPhoneNumber = params.get('display_phone_number');
@@ -86,13 +90,27 @@ export default function App() {
       window.history.replaceState({}, '', window.location.pathname);
       if (phoneNumberId) {
         api.post('/setup/kapso/save', { phoneNumberId, displayPhoneNumber, businessAccountId })
-          .then(() => setView('settings'))
+          .then(() => {
+            // Si está en onboarding → volver al asistente para continuar el flujo
+            setOrg(o => ({ ...o, display_phone_number: displayPhoneNumber }));
+            setView(org?.setup_done ? 'settings' : 'asistente');
+          })
           .catch(console.error);
       }
     }
     if (params.get('kapso_error') === '1') {
       window.history.replaceState({}, '', window.location.pathname);
-      setView('settings');
+      setView(org?.setup_done ? 'settings' : 'asistente');
+    }
+
+    // Shopify OAuth
+    if (params.get('shopify_success') === '1') {
+      window.history.replaceState({}, '', window.location.pathname);
+      setView(org?.setup_done ? 'settings' : 'asistente');
+    }
+    if (params.get('shopify_error')) {
+      window.history.replaceState({}, '', window.location.pathname);
+      setView(org?.setup_done ? 'settings' : 'asistente');
     }
   }, [appState]);
 
@@ -284,11 +302,7 @@ export default function App() {
       <AuthPage onAuth={handleAuth} />
     </ThemeCtx.Provider>
   );
-  if (appState === 'setup') return (
-    <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
-      <SetupWizard org={org} onComplete={handleSetupComplete} />
-    </ThemeCtx.Provider>
-  );
+  // setup state ya no existe — el asistente maneja el onboarding desde el CRM
 
   const selectedConv = conversations.find(c => c.id === selectedId);
   const selectedMsgs = messages[selectedId] || [];
