@@ -89,11 +89,13 @@ export default function AssistantPanel({ org, onSetupComplete, onClose }) {
 
   const connectShopify = useCallback(async (shopInput) => {
     if (!shopInput.trim()) return;
+    // Abrir ventana antes del await para evitar que el browser la bloquee como popup
+    const win = window.open('', '_blank');
     try {
-      // Pasar el input tal cual — el backend normaliza cualquier formato
       const { url } = await setupAPI.getShopifyAuthUrl(encodeURIComponent(shopInput.trim()));
-      window.open(url, '_blank');
+      win.location.href = url;
     } catch (err) {
+      win.close();
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: `⚠️ ${err.response?.data?.error || 'No pude generar el link de Shopify. Intenta pegar la URL completa de tu admin.'}`,
