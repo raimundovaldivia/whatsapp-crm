@@ -92,7 +92,7 @@ export default function AssistantPanel({ org, onSetupComplete, onClose }) {
     try {
       // Pasar el input tal cual — el backend normaliza cualquier formato
       const { url } = await setupAPI.getShopifyAuthUrl(encodeURIComponent(shopInput.trim()));
-      window.location.href = url;
+      window.open(url, '_blank');
     } catch (err) {
       setMessages(prev => [...prev, {
         role: 'assistant',
