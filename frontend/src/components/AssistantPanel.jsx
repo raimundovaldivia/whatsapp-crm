@@ -73,17 +73,29 @@ export default function AssistantPanel({ org, onSetupComplete, onClose }) {
     }
   }, [messages, loading]);
 
-  const handleOAuth = useCallback((service) => {
+  const handleOAuth = useCallback(async (service) => {
     const token = localStorage.getItem('crm_token');
     if (service === 'shopify') {
-      // Mostrar input de nombre de tienda inline
       setMessages(prev => [...prev, {
         role: 'action',
         actionType: 'shopify_input',
       }]);
     } else if (service === 'whatsapp') {
-      const kapsoUrl = `${BASE_URL}/api/setup/kapso/connect?token=${token}`;
-      window.location.href = kapsoUrl;
+      try {
+        const { data } = await import('axios').then(m => m.default.post(
+          `${BASE_URL}/api/setup/kapso/connect`,
+          {},
+          { headers: { Authorization: `Bearer ${token}` } }
+        ));
+        if (data.setupLink) {
+          window.open(data.setupLink, '_blank');
+        }
+      } catch (err) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `⚠️ ${err.response?.data?.error || 'No pude iniciar la conexión de WhatsApp. Intenta de nuevo.'}`,
+        }]);
+      }
     }
   }, []);
 
