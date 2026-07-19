@@ -49,6 +49,7 @@ const io = new Server(server, {
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       if (origin.endsWith('.onrender.com')) return callback(null, true);
+      if (origin.endsWith('.railway.app')) return callback(null, true);
       if (!isProd && origin.startsWith('http://localhost')) return callback(null, true);
       callback(new Error(`CORS: origin ${origin} not allowed`));
     },
@@ -82,7 +83,7 @@ app.use(cors({
     // Permitir requests sin origin (curl, Postman, SSR)
     if (!origin) return callback(null, true);
     // Permitir cualquier subdominio de onrender.com en producción
-    if (origin.endsWith('.onrender.com') || allowedOrigins.includes(origin)) {
+    if (origin.endsWith('.onrender.com') || origin.endsWith('.railway.app') || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
     // En desarrollo local permitir cualquier localhost
