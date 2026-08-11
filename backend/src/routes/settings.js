@@ -7,13 +7,14 @@
  * GET  /api/settings/products         → Listar productos desde Shopify directo
  */
 
-const express      = require('express');
-const router       = express.Router();
-const db           = require('../db/database');
-const shopifyApi   = require('../services/shopify-api');
-const orchestrator = require('../services/agents/orchestrator');
-const salesAgent   = require('../services/agents/sales');
-const ordersAgent  = require('../services/agents/orders');
+const express         = require('express');
+const router          = express.Router();
+const db              = require('../db/database');
+const shopifyApi      = require('../services/shopify-api');
+const orchestrator    = require('../services/agents/orchestrator');
+const salesAgent      = require('../services/agents/sales');
+const ordersAgent     = require('../services/agents/orders');
+const kapsoPlatform   = require('../services/kapso-platform');
 const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -348,6 +349,64 @@ router.put('/whatsapp', async (req, res) => {
     res.json({ success: true, message: `WhatsApp (${provider}) actualizado correctamente` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/settings/kapso/reregister-webhook
+ * Re-registra el webhook de Kapso apuntando al backend actual (PUBLIC_URL).
+ * Útil cuando el webhook no se registró durante el setup o apuntaba a una URL antigua.
+ */
+router.post('/kapso/reregister-webhook', async (req, res) => {
+  try {
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc || wc.provider !== 'kapso') {
+      return res.status(400).json({ success: false, error: 'WhatsApp no está configurado con Kapso' });
+    }
+
+    const phoneNumberId = wc.phone_number_id;
+    if (!phoneNumberId) {
+      return res.status(400).json({ success: false, error: 'No hay phone_number_id guardado. Reconecta WhatsApp desde el asistente.' });
+    }
+
+    if (!process.env.KAPSO_API_KEY) {
+      return res.status(400).json({ success: false, error: 'KAPSO_API_KEY no configurada en las variables de entorno de Railway.' });
+    }
+
+    const backendUrl = process.env.PUBLIC_URL || process.env.BACKEND_URL;
+    if (!backendUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'PUBLIC_URL no configurada en Railway. Agrégala en Variables → PUBLIC_URL = https://whatsapp-crm-api-production-f804.up.railway.app',
+      });
+    }
+
+    const webhookUrl = `${backendUrl}/kapso-webhook`;
+    const result = await kapsoPlatform.registerNumberWebhook(phoneNumberId, webhookUrl);
+
+    // Guardar el nuevo secret en DB
+    if (result.generatedSecret) {
+      await db.upsertWhatsappConfig(req.orgId, {
+        provider:           'kapso',
+        phoneNumberId,
+        businessAccountId:  wc.business_account_id || null,
+        kapsoCustomerId:    wc.kapso_customer_id    || null,
+        kapsoApiKey:        wc.kapso_api_key        || null,
+        webhookSecret:      result.generatedSecret,
+      });
+    }
+
+    console.log(`[Settings] ✅ Webhook re-registrado → ${webhookUrl} (phone_number_id: ${phoneNumberId})`);
+
+    res.json({
+      success: true,
+      message: `✅ Webhook registrado correctamente`,
+      data: { webhookUrl, phoneNumberId, webhookId: result.id },
+    });
+  } catch (err) {
+    const detail = err.response?.data?.error || err.response?.data?.message || err.message;
+    console.error('[Settings] Error re-registrando webhook:', detail);
+    res.status(500).json({ success: false, error: detail });
   }
 });
 

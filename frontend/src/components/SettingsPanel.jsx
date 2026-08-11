@@ -232,11 +232,13 @@ function ShopifyTab() {
    KAPSO RECONNECT PANEL
 ══════════════════════════════════════════════ */
 function KapsoReconnectPanel({ colors }) {
-  const [connecting, setConnecting] = useState(false);
-  const [error, setError]           = useState('');
+  const [connecting,    setConnecting]    = useState(false);
+  const [reregistering, setReregistering] = useState(false);
+  const [error,         setError]         = useState('');
+  const [webhookOk,     setWebhookOk]     = useState('');
 
   const reconnect = async () => {
-    setConnecting(true); setError('');
+    setConnecting(true); setError(''); setWebhookOk('');
     try {
       const r = await api.post('/setup/kapso/connect');
       if (r.data?.setupUrl) {
@@ -248,6 +250,22 @@ function KapsoReconnectPanel({ colors }) {
     } catch (err) {
       setError(err.response?.data?.error || 'Error al conectar con Kapso. ¿Está KAPSO_API_KEY configurada?');
       setConnecting(false);
+    }
+  };
+
+  const reregisterWebhook = async () => {
+    setReregistering(true); setError(''); setWebhookOk('');
+    try {
+      const r = await api.post('/settings/kapso/reregister-webhook');
+      if (r.data?.success) {
+        setWebhookOk(`✅ Webhook registrado → ${r.data.data?.webhookUrl}`);
+      } else {
+        setError(r.data?.error || 'No se pudo registrar el webhook');
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error registrando webhook');
+    } finally {
+      setReregistering(false);
     }
   };
 
@@ -264,11 +282,11 @@ function KapsoReconnectPanel({ colors }) {
 
       <button
         onClick={reconnect}
-        disabled={connecting}
+        disabled={connecting || reregistering}
         style={{
           width: '100%', padding: '14px', borderRadius: '9px', fontSize: '14px', fontWeight: 700,
-          backgroundColor: connecting ? colors.borderStrong : colors.green,
-          color: 'white', cursor: connecting ? 'not-allowed' : 'pointer',
+          backgroundColor: (connecting || reregistering) ? colors.borderStrong : colors.green,
+          color: 'white', cursor: (connecting || reregistering) ? 'not-allowed' : 'pointer',
           border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
         }}>
         {connecting
@@ -277,10 +295,34 @@ function KapsoReconnectPanel({ colors }) {
         }
       </button>
 
+      {/* Re-registrar webhook — para cuando el bot no responde */}
+      <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px', border: `1px solid ${colors.border}` }}>
+        <p style={{ color: colors.textSecondary, fontSize: '12px', margin: '0 0 8px', lineHeight: 1.5 }}>
+          <strong style={{ color: colors.textPrimary }}>¿El bot no responde?</strong> El webhook puede no estar apuntando al servidor correcto.
+          Haz clic para re-registrarlo automáticamente.
+        </p>
+        <button
+          onClick={reregisterWebhook}
+          disabled={reregistering || connecting}
+          style={{
+            padding: '8px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
+            backgroundColor: (reregistering || connecting) ? colors.borderStrong : colors.bgHover,
+            color: (reregistering || connecting) ? colors.textMuted : colors.textPrimary,
+            border: `1px solid ${colors.border}`,
+            cursor: (reregistering || connecting) ? 'not-allowed' : 'pointer',
+            display: 'flex', alignItems: 'center', gap: '6px',
+          }}>
+          {reregistering
+            ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Registrando...</>
+            : '🔗 Re-registrar webhook'}
+        </button>
+        {webhookOk && <div style={{ color: colors.greenLight, fontSize: '12px', marginTop: '8px' }}>{webhookOk}</div>}
+      </div>
+
       {error && <Alert type="error" msg={error} colors={colors} />}
 
       <p style={{ color: colors.textMuted, fontSize: '11px', textAlign: 'center', margin: 0 }}>
-        Requiere <code style={{ color: colors.textMuted }}>KAPSO_API_KEY</code> en variables de entorno del backend.
+        Requiere <code style={{ color: colors.textMuted }}>KAPSO_API_KEY</code> y <code style={{ color: colors.textMuted }}>PUBLIC_URL</code> en variables de entorno del backend.
       </p>
     </div>
   );
