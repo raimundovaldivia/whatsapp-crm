@@ -56,7 +56,7 @@ const getWINDOWS = (colors) => [
 const confColor = (conf, colors) =>
   conf >= 80 ? colors.greenLight : conf >= 60 ? colors.green : conf >= 40 ? colors.yellow : colors.textSecondary;
 
-export default function ReengagementPanel({ filterPhone = null, onClearFilter = null, testPhone = null }) {
+export default function ReengagementPanel({ filterPhone = null, onClearFilter = null, testPhone = null, onNavigateToSettings = null }) {
   const { colors } = useTheme();
   const WINDOWS = getWINDOWS(colors);
 
@@ -614,11 +614,35 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Cargando templates...
             </div>
           ) : templatesError ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <AlertCircle size={14} color={colors.red} />
-              <span style={{ color: colors.red, fontSize: '12px' }}>{templatesError}</span>
-              <button onClick={loadTemplates} style={{ color: colors.green, fontSize: '12px', background: 'none', border: 'none', cursor: 'pointer' }}>Reintentar</button>
-            </div>
+            templatesError.toLowerCase().includes('waba') ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <AlertCircle size={14} color={colors.yellow} style={{ flexShrink: 0 }} />
+                <span style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 600 }}>Falta configurar el WABA ID</span>
+                <span style={{ color: colors.textSecondary, fontSize: '12px' }}>
+                  Para enviar templates necesitas ingresar tu WhatsApp Business Account ID.
+                </span>
+                {onNavigateToSettings ? (
+                  <button
+                    onClick={onNavigateToSettings}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '5px',
+                      backgroundColor: colors.green, color: 'white',
+                      padding: '5px 12px', borderRadius: '7px',
+                      border: 'none', cursor: 'pointer',
+                      fontSize: '12px', fontWeight: 600, flexShrink: 0,
+                    }}
+                  >
+                    Ir a Configuración → WhatsApp
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertCircle size={14} color={colors.red} />
+                <span style={{ color: colors.red, fontSize: '12px' }}>{templatesError}</span>
+                <button onClick={loadTemplates} style={{ color: colors.green, fontSize: '12px', background: 'none', border: 'none', cursor: 'pointer' }}>Reintentar</button>
+              </div>
+            )
           ) : templates.length === 0 ? (
             <span style={{ color: colors.textSecondary, fontSize: '12px' }}>
               No hay templates aprobados. Créalos en la sección Templates.

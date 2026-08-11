@@ -496,11 +496,21 @@ function WhatsAppTab() {
               <KapsoReconnectPanel colors={colors} />
 
               {/* WABA ID — necesario para enviar templates */}
-              <div style={{ marginTop: '4px', backgroundColor: colors.bgApp, borderRadius: '9px', padding: '14px 16px', border: `1px solid ${colors.border}` }}>
+              <div style={{
+                marginTop: '4px', backgroundColor: colors.bgApp, borderRadius: '9px', padding: '14px 16px',
+                border: kapsoWabaId ? `1px solid ${colors.border}` : `1.5px solid ${colors.yellow}88`,
+                boxShadow: kapsoWabaId ? 'none' : `0 0 0 3px ${colors.yellow}11`,
+              }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                  {!kapsoWabaId && <span style={{ fontSize: '14px' }}>⚠️</span>}
                   <span style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 600 }}>WABA ID — para Templates WhatsApp</span>
                   <span style={{ backgroundColor: '#1a4060', color: '#4db6e8', fontSize: '10px', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>Templates</span>
                 </div>
+                {!kapsoWabaId && (
+                  <div style={{ backgroundColor: `${colors.yellow}18`, border: `1px solid ${colors.yellow}44`, borderRadius: '6px', padding: '8px 10px', marginBottom: '10px', fontSize: '12px', color: colors.yellow, lineHeight: 1.5 }}>
+                    Sin el WABA ID no podrás usar templates ni enviar mensajes masivos. Agrégalo abajo para habilitarlos.
+                  </div>
+                )}
                 <p style={{ color: colors.textSecondary, fontSize: '11px', margin: '0 0 10px', lineHeight: 1.6 }}>
                   El WhatsApp Business Account ID es necesario para listar y enviar templates cuando la ventana de 24h ha expirado.
                   Encuéntralo en <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#4db6e8' }}>app.kapso.ai</a> → tu número → Account ID.

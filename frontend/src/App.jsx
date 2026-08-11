@@ -401,6 +401,7 @@ export default function App() {
           filterPhone={reengagementPhone}
           onClearFilter={() => setReengagementPhone(null)}
           testPhone={org?.display_phone_number}
+          onNavigateToSettings={() => setView('settings')}
         />
       )}
 
