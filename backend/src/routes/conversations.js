@@ -1,10 +1,11 @@
 const express = require('express');
-const router = express.Router();
+const router = require('express').Router();
 const db = require('../db/database');
 const { getPool } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 const twilioService   = require('../services/twilio-whatsapp');
 const kapsoService    = require('../services/kapso-whatsapp');
+const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth } = require('../middleware/auth');
 
 let io;
@@ -107,6 +108,11 @@ router.patch('/:id/agent-mode', async (req, res) => {
 
     await db.setAgentMode(conv.id, mode);
     io?.emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode });
+
+    // Notificar al admin si se cambia a modo humano manualmente desde el CRM
+    if (mode === 'human') {
+      notifyAdminHandoff(req.orgId, conv, 'Cambio manual desde el CRM');
+    }
 
     res.json({ success: true, data: await db.getConversationById(conv.id) });
   } catch (err) {

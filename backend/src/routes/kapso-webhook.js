@@ -16,6 +16,7 @@ const router         = express.Router();
 const db             = require('../db/database');
 const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
+const { notifyAdminHandoff } = require('../services/notifications');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -162,6 +163,8 @@ router.post('/', async (req, res) => {
     // 8. Si el pipeline indica cambiar a modo humano
     if (result.switchToHuman) {
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
+      const reason = result.escalationReason || 'El cliente solicitó hablar con un asesor';
+      notifyAdminHandoff(org.id, conversation, reason);
     }
 
     const finalConv = await db.getConversationById(conversation.id);

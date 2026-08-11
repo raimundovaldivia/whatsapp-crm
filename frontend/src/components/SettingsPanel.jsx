@@ -876,6 +876,9 @@ function IATab({ onSwitchTab }) {
   // Modo de pago: 'link' (link Shopify) | 'cod' (despacho por pagar)
   const [paymentMode, setPaymentMode] = useState('link');
 
+  // Teléfono del admin para alertas de modo humano
+  const [adminAlertPhone, setAdminAlertPhone] = useState('');
+
   // Test bot
   const [testOpen,         setTestOpen]         = useState(false);
   const [testMessages,     setTestMessages]     = useState([]);
@@ -931,6 +934,7 @@ function IATab({ onSwitchTab }) {
       setMinimum(di.minimum || '');
       setPaymentMethods(di.paymentMethods || '');
       if (d?.payment_mode) setPaymentMode(d.payment_mode);
+      if (d?.admin_alert_phone) setAdminAlertPhone(d.admin_alert_phone);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -1037,7 +1041,7 @@ function IATab({ onSwitchTab }) {
     setSaving(true); setError(''); setSuccess('');
     try {
       await Promise.all([
-        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode }),
+        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, admin_alert_phone: adminAlertPhone }),
         reengagementAPI.saveStoreContext(storeContext),
         reengagementAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
@@ -1246,6 +1250,26 @@ function IATab({ onSwitchTab }) {
               {paymentMode === 'cod'
                 ? '✓ El bot enviará confirmación del pedido sin link de pago. Ideal para tiendas con pago contra entrega.'
                 : '✓ El bot generará un link de pago de Shopify al confirmar el pedido.'}
+            </p>
+          </div>
+
+          {/* Alerta al admin cuando cambia a modo humano */}
+          <div>
+            <label style={labelStyle}>📲 WhatsApp de alerta al administrador</label>
+            <input
+              value={adminAlertPhone}
+              onChange={e => setAdminAlertPhone(e.target.value.replace(/\D/g, ''))}
+              placeholder="56912345678"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
+                borderRadius: '8px', padding: '10px 14px',
+                color: colors.textPrimary, fontSize: '14px', outline: 'none',
+                fontFamily: 'monospace',
+              }}
+            />
+            <p style={{ ...hintStyle, marginTop: '6px' }}>
+              Cuando una conversación pase a modo humano (por el bot o manualmente), este número recibirá un WhatsApp de alerta. Sin código +, con código de país (ej: 56912345678).
             </p>
           </div>
 
