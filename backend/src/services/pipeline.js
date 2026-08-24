@@ -22,19 +22,47 @@ const ordersAgent  = require('./agents/orders');
 async function processMessage(orgId, conversationId, userMessage) {
   const conversation = await db.getConversationById(conversationId);
   const history = await db.getLastMessages(conversationId, 12);
-  // Obtener catálogo desde Shopify Admin GraphQL directo
+  // Obtener catálogo — caché local primero (TTL 30 min), Shopify como fallback
   const ds = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
   let products = [];
   let productosTexto = '';
   if (ds?.config?.accessToken) {
     try {
-      const { shop: s, token } = shopifyApi.credentialsFrom(ds);
-      const res = await shopifyApi.getProducts(s, token, { limit: 250 });
-      products = res.products || [];
-      productosTexto = shopifyApi.formatProductsForAI(products, s);
+      const CACHE_TTL_MINUTES = 30;
+      const cacheAgeMinutes = await db.getProductsCacheAge(orgId);
+
+      if (cacheAgeMinutes < CACHE_TTL_MINUTES) {
+        // Usar caché local — sin llamada a Shopify
+        const cached = await db.getCachedProducts(orgId);
+        products = cached.map(p => ({
+          id: p.external_id, title: p.title, description: p.description,
+          price: p.price, sku: p.sku, inventoryQuantity: p.inventory_quantity,
+          imageUrl: p.image_url, tags: p.tags, productType: p.product_type,
+          handle: p.handle,
+        }));
+        productosTexto = shopifyApi.formatProductsForAI(products, shop);
+        console.log(`[Pipeline] 📦 Productos desde caché (${Math.round(cacheAgeMinutes)}min de antigüedad)`);
+      } else {
+        // Caché expirado o vacío → llamar a Shopify y actualizar caché
+        const { shop: s, token } = shopifyApi.credentialsFrom(ds);
+        const res = await shopifyApi.getProducts(s, token, { limit: 250 });
+        products = res.products || [];
+        productosTexto = shopifyApi.formatProductsForAI(products, s);
+        console.log(`[Pipeline] 🛍️ Productos desde Shopify (${products.length} items), actualizando caché...`);
+        // Guardar en caché en background (no bloquea la respuesta)
+        if (products.length && ds?.id) {
+          db.cacheProducts(orgId, ds.id, products.map(p => ({
+            externalId: String(p.id), title: p.title || '', description: p.description || '',
+            price: String(p.price || ''), compareAtPrice: String(p.compare_at_price || ''),
+            sku: p.sku || '', inventoryQuantity: p.inventory_quantity ?? 0,
+            imageUrl: p.image_url || '', tags: p.tags || '', productType: p.product_type || '',
+            handle: p.handle || '', rawJson: JSON.stringify(p),
+          }))).catch(e => console.warn('[Pipeline] Error guardando caché de productos:', e.message));
+        }
+      }
     } catch (err) {
-      console.warn('[Pipeline] No se pudieron cargar productos de Shopify:', err.message);
+      console.warn('[Pipeline] No se pudieron cargar productos:', err.message);
     }
   }
 
