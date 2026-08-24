@@ -161,48 +161,47 @@ async function processMessage(orgId, conversationId, userMessage) {
 async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
   const result = {};
 
-  // ── Fuente 1: órdenes previas del bot ──────────────────────────
+  // ── Fuente 1: tabla contacts (perfil unificado, la más rápida) ──
   try {
-    const { rows } = await getPool().query(
-      `SELECT o.customer_name, o.shipping_address
-       FROM orders o
-       JOIN conversations c ON o.conversation_id = c.id
-       WHERE c.phone_number = $1
-         AND o.organization_id = $2
-         AND o.status NOT IN ('cancelled')
-       ORDER BY o.created_at DESC
-       LIMIT 1`,
-      [phoneNumber, orgId]
-    );
-    const row = rows[0];
-    if (row) {
-      const addr = (() => { try { return JSON.parse(row.shipping_address || '{}'); } catch { return {}; } })();
-      if (row.customer_name) result.customer_name = row.customer_name;
-      if (addr.address)      result.address       = addr.address;
-      if (addr.city)         result.city          = addr.city;
+    const contact = await db.getContact(orgId, phoneNumber);
+    if (contact) {
+      if (contact.name)       result.customer_name  = contact.name;
+      if (contact.address)    result.address        = contact.address;
+      if (contact.city)       result.city           = contact.city;
+      if (contact.region)     result.region         = contact.region;
+      if (contact.email)      result.customer_email = contact.email;
+      if (contact.shopify_id) result.shopify_customer_id = contact.shopify_id;
+      result.found_in_contacts = true;
+      console.log(`[Pipeline] ✅ Contacto conocido: ${contact.name || phoneNumber} (${contact.total_orders} pedidos previos)`);
+      return result; // ya tenemos todo, no hace falta consultar más
     }
   } catch (err) {
-    console.warn('[Pipeline] Error buscando en DB local:', err.message);
+    console.warn('[Pipeline] Error buscando en contacts:', err.message);
   }
 
-  // ── Fuente 2: clientes de Shopify vía GraphQL directo ───────────
+  // ── Fuente 2: Shopify vía GraphQL (solo si no está en contacts) ──
   if (ds?.config?.accessToken) {
     try {
       const { shop: s, token } = shopifyApi.credentialsFrom(ds);
       const shopifyCustomer = await shopifyApi.getCustomerByPhone(s, token, phoneNumber);
       if (shopifyCustomer) {
         const addr = shopifyCustomer.address;
-        if (!result.customer_name && shopifyCustomer.name) {
-          result.customer_name = shopifyCustomer.name;
-        }
-        if (addr) {
-          if (!result.address && addr.address1) result.address = addr.address1;
-          if (!result.city   && addr.city)      result.city    = addr.city;
-        }
-        if (shopifyCustomer.email) result.customer_email = shopifyCustomer.email;
+        if (shopifyCustomer.name)  result.customer_name       = shopifyCustomer.name;
+        if (addr?.address1)        result.address             = addr.address1;
+        if (addr?.city)            result.city                = addr.city;
+        if (shopifyCustomer.email) result.customer_email      = shopifyCustomer.email;
         result.shopify_customer_id = shopifyCustomer.id;
         result.found_in_shopify    = true;
         console.log(`[Pipeline] ✅ Cliente en Shopify: ${result.customer_name} (${shopifyCustomer.id})`);
+        // Guardar en contacts para la próxima vez
+        db.upsertContact(orgId, {
+          phone:     phoneNumber,
+          name:      result.customer_name,
+          email:     result.customer_email,
+          address:   result.address,
+          city:      result.city,
+          shopifyId: shopifyCustomer.id,
+        }).catch(() => {});
       }
     } catch (err) {
       console.warn('[Pipeline] No se pudo buscar cliente en Shopify:', err.message);
@@ -258,11 +257,31 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           // No es fatal — el draft existe igual, solo queda en Borradores
           console.warn('[Pipeline] No se pudo completar el draft como orden real:', completeErr.message);
         }
-        await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
+        // ── Guardar/actualizar contacto con los datos del pedido confirmado ──
+      db.upsertContact(orgId, {
+        phone:   conversation.phone_number,
+        name:    updatedDraft.customer_name  || null,
+        email:   updatedDraft.customer_email || null,
+        address: updatedDraft.address        || null,
+        city:    updatedDraft.city           || null,
+        region:  updatedDraft.region         || null,
+        shopifyId: updatedDraft.shopify_customer_id || null,
+      }).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
+
+      await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
         successMsg = `✅ ¡Pedido confirmado!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\n💵 El pago se realiza al momento del despacho.\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
         return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: result };
       } else {
         // Link de pago (comportamiento por defecto)
+        db.upsertContact(orgId, {
+          phone:   conversation.phone_number,
+          name:    updatedDraft.customer_name  || null,
+          email:   updatedDraft.customer_email || null,
+          address: updatedDraft.address        || null,
+          city:    updatedDraft.city           || null,
+          shopifyId: updatedDraft.shopify_customer_id || null,
+        }).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
+
         await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
         successMsg = `✅ ¡Pedido creado exitosamente!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
         return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };

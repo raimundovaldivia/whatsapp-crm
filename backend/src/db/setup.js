@@ -267,6 +267,29 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_reeng_cache_org_date ON reengagement_daily_cache(organization_id, cache_date);
       CREATE INDEX IF NOT EXISTS idx_reeng_pred_org_date  ON reengagement_predictions(organization_id, prediction_date);
       CREATE INDEX IF NOT EXISTS idx_reeng_pred_outcome   ON reengagement_predictions(outcome_checked, prediction_date);
+
+      -- ─── CONTACTOS (perfil unificado por teléfono) ──────────────
+      -- Se actualiza automáticamente al confirmar cada pedido.
+      -- El bot consulta aquí antes de preguntar datos al cliente.
+      CREATE TABLE IF NOT EXISTS contacts (
+        id              SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL,
+        phone           VARCHAR(30) NOT NULL,
+        name            TEXT,
+        email           TEXT,
+        address         TEXT,
+        city            TEXT,
+        region          TEXT,
+        notes           TEXT,           -- info extra que el bot haya captado
+        shopify_id      TEXT,           -- customer ID en Shopify (si existe)
+        total_orders    INTEGER DEFAULT 0,
+        last_order_at   TIMESTAMP,
+        created_at      TIMESTAMP DEFAULT NOW(),
+        updated_at      TIMESTAMP DEFAULT NOW(),
+        UNIQUE(organization_id, phone),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_contacts_org_phone ON contacts(organization_id, phone);
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

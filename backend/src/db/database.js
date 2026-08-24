@@ -459,6 +459,47 @@ async function clearLastEscalation(conversationId) {
   );
 }
 
+// ─── CONTACTS ─────────────────────────────────────────────────────
+
+/**
+ * Obtiene el perfil de un contacto por teléfono.
+ * Devuelve null si no existe.
+ */
+async function getContact(orgId, phone) {
+  return queryOne(
+    'SELECT * FROM contacts WHERE organization_id = $1 AND phone = $2',
+    [orgId, phone]
+  );
+}
+
+/**
+ * Crea o actualiza el perfil de un contacto.
+ * Solo actualiza los campos que vienen con valor (no pisa datos existentes con null).
+ *
+ * @param {number} orgId
+ * @param {object} data - { phone, name?, email?, address?, city?, region?, notes?, shopifyId? }
+ */
+async function upsertContact(orgId, { phone, name, email, address, city, region, notes, shopifyId } = {}) {
+  if (!phone) return null;
+  await pool.query(
+    `INSERT INTO contacts (organization_id, phone, name, email, address, city, region, notes, shopify_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+     ON CONFLICT (organization_id, phone) DO UPDATE SET
+       name       = COALESCE(EXCLUDED.name,       contacts.name),
+       email      = COALESCE(EXCLUDED.email,      contacts.email),
+       address    = COALESCE(EXCLUDED.address,    contacts.address),
+       city       = COALESCE(EXCLUDED.city,       contacts.city),
+       region     = COALESCE(EXCLUDED.region,     contacts.region),
+       notes      = COALESCE(EXCLUDED.notes,      contacts.notes),
+       shopify_id = COALESCE(EXCLUDED.shopify_id, contacts.shopify_id),
+       total_orders = contacts.total_orders + CASE WHEN EXCLUDED.address IS NOT NULL THEN 1 ELSE 0 END,
+       last_order_at = CASE WHEN EXCLUDED.address IS NOT NULL THEN NOW() ELSE contacts.last_order_at END,
+       updated_at = NOW()`,
+    [orgId, phone, name || null, email || null, address || null, city || null, region || null, notes || null, shopifyId || null]
+  );
+  return getContact(orgId, phone);
+}
+
 // ─── SETTINGS ─────────────────────────────────────────────────────
 
 async function getSetting(orgId, key) {
@@ -636,6 +677,8 @@ module.exports = {
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Orders
   createOrder, updateOrder, getOrdersByOrg,
+  // Contacts — definidas justo arriba
+  getContact, upsertContact,
   // Settings
   getSetting, setSetting,
   // Escalation feedback
