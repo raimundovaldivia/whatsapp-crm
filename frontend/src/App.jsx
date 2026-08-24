@@ -11,9 +11,10 @@ import DashboardPanel     from './components/DashboardPanel.jsx';
 import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
-import AssistantPanel   from './components/AssistantPanel.jsx';
+import AssistantPanel       from './components/AssistantPanel.jsx';
+import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
 import { useSocket }  from './hooks/useSocket.js';
-import { conversationsAPI, authAPI, ordersAPI, api } from './utils/api.js';
+import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
 
 export default function App() {
@@ -44,7 +45,8 @@ export default function App() {
   const [selectedId, setSelectedId]       = useState(null);
   const [messages, setMessages]           = useState({});
   const [loadingConvs, setLoadingConvs]   = useState(false);
-  const [pendingOrders, setPendingOrders] = useState(0);
+  const [pendingOrders, setPendingOrders]   = useState(0);
+  const [pendingProofs, setPendingProofs]   = useState(0);
   const [botTypingConvs, setBotTypingConvs] = useState(new Set());
   const [reengagementPhone, setReengagementPhone] = useState(null);
 
@@ -132,10 +134,18 @@ export default function App() {
     } catch { /* silencioso */ }
   }, []);
 
+  const loadProofStats = useCallback(async () => {
+    try {
+      const proofs = await paymentProofsAPI.getAll('pending');
+      setPendingProofs(proofs?.length || 0);
+    } catch { /* silencioso */ }
+  }, []);
+
   useEffect(() => {
     if (appState === 'crm') {
       loadConversations();
       loadOrderStats();
+      loadProofStats();
     }
   }, [appState]);
 
@@ -188,7 +198,11 @@ export default function App() {
     });
   }, []);
 
-  const { connected } = useSocket(org?.id, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated, handleBotTyping);
+  const handlePaymentProof = useCallback(() => {
+    setPendingProofs(n => n + 1);
+  }, []);
+
+  const { connected } = useSocket(org?.id, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated, handleBotTyping, handlePaymentProof);
 
   // En móvil, volver al sidebar limpiando la selección
   const handleBackToSidebar = useCallback(() => setSelectedId(null), []);
@@ -331,6 +345,7 @@ export default function App() {
         onLogout={handleLogout}
         unreadCount={totalUnread}
         pendingOrders={pendingOrders}
+        pendingProofs={pendingProofs}
         colors={colors}
         isMobile={isMobile}
       />
@@ -407,6 +422,13 @@ export default function App() {
 
       {/* Vista Dashboard */}
       {view === 'dashboard' && <DashboardPanel onChangeView={setView} />}
+
+      {/* Vista Comprobantes de pago */}
+      {view === 'pagos' && (
+        <PaymentProofsPanel
+          onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
+        />
+      )}
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}

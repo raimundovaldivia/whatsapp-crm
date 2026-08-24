@@ -290,6 +290,38 @@ async function setupDatabase() {
         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_contacts_org_phone ON contacts(organization_id, phone);
+
+      -- Migración: ampliar estados de pedidos para incluir 'payment_received'
+      DO $$
+      BEGIN
+        ALTER TABLE orders DROP CONSTRAINT orders_status_check;
+      EXCEPTION WHEN undefined_object THEN NULL;
+      END $$;
+      ALTER TABLE orders ADD CONSTRAINT orders_status_check
+        CHECK(status IN ('draft','sent','payment_received','paid','cancelled'))
+        NOT VALID;
+
+      -- ─── COMPROBANTES DE PAGO ────────────────────────────────────────
+      -- Se crea automáticamente cuando el cliente envía una foto de transferencia.
+      -- El admin verifica desde el panel y marca como verificado/rechazado.
+      CREATE TABLE IF NOT EXISTS payment_proofs (
+        id              SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL,
+        conversation_id INTEGER NOT NULL,
+        order_id        INTEGER,
+        media_id        TEXT NOT NULL,
+        customer_phone  VARCHAR(30),
+        customer_name   TEXT,
+        order_summary   TEXT,
+        status          TEXT DEFAULT 'pending' CHECK(status IN ('pending','verified','rejected')),
+        notes           TEXT,
+        created_at      TIMESTAMP DEFAULT NOW(),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_payment_proofs_org    ON payment_proofs(organization_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_payment_proofs_status ON payment_proofs(organization_id, status);
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

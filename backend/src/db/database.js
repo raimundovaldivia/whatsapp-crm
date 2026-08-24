@@ -421,6 +421,45 @@ async function getOrdersByOrg(orgId) {
   return query('SELECT * FROM orders WHERE organization_id = $1 ORDER BY created_at DESC', [orgId]);
 }
 
+async function getLatestPendingOrderByConversation(conversationId) {
+  return queryOne(
+    `SELECT * FROM orders WHERE conversation_id = $1 AND status IN ('sent','draft','payment_received')
+     ORDER BY created_at DESC LIMIT 1`,
+    [conversationId]
+  );
+}
+
+// ─── PAYMENT PROOFS ────────────────────────────────────────────────
+
+async function savePaymentProof({ orgId, conversationId, orderId, mediaId, customerPhone, customerName, orderSummary }) {
+  return queryOne(
+    `INSERT INTO payment_proofs
+       (organization_id, conversation_id, order_id, media_id, customer_phone, customer_name, order_summary)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [orgId, conversationId, orderId || null, mediaId, customerPhone || null, customerName || null, orderSummary || null]
+  );
+}
+
+async function getPaymentProofs(orgId, statusFilter = null) {
+  const cond = statusFilter ? 'AND pp.status = $2' : '';
+  const args = statusFilter ? [orgId, statusFilter] : [orgId];
+  return query(
+    `SELECT pp.*, c.phone_number, c.contact_name
+     FROM payment_proofs pp
+     LEFT JOIN conversations c ON pp.conversation_id = c.id
+     WHERE pp.organization_id = $1 ${cond}
+     ORDER BY pp.created_at DESC`,
+    args
+  );
+}
+
+async function updatePaymentProof(id, { status, notes }) {
+  return queryOne(
+    `UPDATE payment_proofs SET status = $1, notes = $2 WHERE id = $3 RETURNING *`,
+    [status, notes || null, id]
+  );
+}
+
 // ─── ESCALATION FEEDBACK ──────────────────────────────────────
 
 async function saveEscalationFeedback(orgId, conversationId, messageContent, escalationReason, feedback) {
@@ -676,7 +715,9 @@ module.exports = {
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Orders
-  createOrder, updateOrder, getOrdersByOrg,
+  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation,
+  // Payment proofs
+  savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts — definidas justo arriba
   getContact, upsertContact,
   // Settings

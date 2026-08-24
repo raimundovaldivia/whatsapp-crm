@@ -149,14 +149,21 @@ function parseWebhookMessage(body, event) {
     // Para audio Kapso genera transcript en message.kapso.transcript
     // Para otros tipos usa message.kapso.content como fallback
     let text = null;
+    let mediaId = null;
+
     if (message.type === 'text') {
       text = message.text?.body;
     } else if (message.type === 'audio' && message.kapso?.transcript?.text) {
       text = `🎤 ${message.kapso.transcript.text}`;
+    } else if (message.type === 'image') {
+      // Las imágenes no tienen texto — se manejan como comprobantes de pago
+      mediaId = message.image?.id || message.media?.id || null;
+      text = null; // se maneja por separado en el webhook
     } else {
       text = message.kapso?.content || null;
     }
-    if (!text) return null;
+    // Solo retornar null si no hay texto NI es una imagen con mediaId
+    if (!text && !mediaId) return null;
 
     // Número del remitente: v2 usa conversation.phone_number (con +)
     // Fallback a message.from (también presente en v2)
@@ -170,6 +177,7 @@ function parseWebhookMessage(body, event) {
       timestamp:   message.timestamp,
       type:        message.type,
       text,
+      mediaId,
     };
   } catch { return null; }
 }
@@ -343,4 +351,29 @@ async function createTemplate(templateData, config) {
   }
 }
 
-module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createTemplate };
+/**
+ * Obtiene la URL de descarga de un media de WhatsApp.
+ * La URL expira, pero el media_id es permanente.
+ */
+async function getMediaUrl(mediaId, config) {
+  const { kapso_api_key } = config;
+  const resp = await axios.get(
+    `${BASE_URL}/${API_VER}/${mediaId}`,
+    { headers: { Authorization: `Bearer ${kapso_api_key}` } }
+  );
+  return resp.data; // { url, mime_type, file_size, id }
+}
+
+/**
+ * Descarga el binario de un media dado su URL (obtenida con getMediaUrl).
+ */
+async function downloadMedia(url, config) {
+  const { kapso_api_key } = config;
+  const resp = await axios.get(url, {
+    headers: { Authorization: `Bearer ${kapso_api_key}` },
+    responseType: 'arraybuffer',
+  });
+  return { data: resp.data, contentType: resp.headers['content-type'] || 'image/jpeg' };
+}
+
+module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createTemplate, getMediaUrl, downloadMedia };

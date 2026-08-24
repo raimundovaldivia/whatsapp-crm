@@ -113,5 +113,13 @@ export const dashboardAPI = {
   getWins: () => api.get('/dashboard/wins').then(r => r.data.data),
 };
 
+export const paymentProofsAPI = {
+  getAll:  (status) => api.get('/payment-proofs', { params: status ? { status } : {} }).then(r => r.data.proofs),
+  imageUrl: (id)   => `${BASE_URL}/api/payment-proofs/${id}/image`,
+  update:  (id, data) => api.patch(`/payment-proofs/${id}`, data).then(r => r.data.proof),
+};
+
+export const API_BASE = BASE_URL;
+
 export { api };
 export default api;

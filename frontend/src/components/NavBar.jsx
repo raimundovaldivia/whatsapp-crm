@@ -1,4 +1,4 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon, Sparkles } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon, Sparkles, Receipt } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 const NAV_ITEMS = [
@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { key: 'chats',        icon: MessageSquare, label: 'Chats' },
   { key: 'reengagement', icon: UserCheck,     label: 'Re-enganche' },
   { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
+  { key: 'pagos',        icon: Receipt,       label: 'Pagos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'catalogo',     icon: Package,       label: 'Catálogo' },
   { key: 'asistente',    icon: Sparkles,      label: 'Asistente' },
@@ -14,7 +15,7 @@ const NAV_ITEMS = [
 // Items visibles en la barra móvil (los más usados)
 const MOBILE_ITEMS = ['chats', 'reengagement', 'orders', 'clientes', 'settings'];
 
-export default function NavBar({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, isMobile }) {
+export default function NavBar({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, pendingProofs, isMobile }) {
   const { colors, isDark, toggle } = useTheme();
   const initial = (orgName || 'W')[0].toUpperCase();
 
@@ -36,7 +37,7 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
       }}>
         {mobileItems.map(({ key, icon: Icon, label }) => {
           const active = view === key;
-          const badge = key === 'chats' ? unreadCount : key === 'orders' ? pendingOrders : 0;
+          const badge = key === 'chats' ? unreadCount : key === 'orders' ? pendingOrders : key === 'pagos' ? (pendingProofs || 0) : 0;
           return (
             <button key={key} onClick={() => onChangeView(key)}
               style={{

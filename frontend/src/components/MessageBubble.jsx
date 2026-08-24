@@ -1,6 +1,7 @@
 import { formatTime } from '../utils/dates.js';
-import { Bot, User, Check, CheckCheck, FileText } from 'lucide-react';
+import { Bot, User, Check, CheckCheck, FileText, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
+import { API_BASE } from '../utils/api.js';
 
 /** Detecta si el contenido es un template y separa nombre + body */
 function parseTemplateContent(content) {
@@ -70,7 +71,31 @@ export default function MessageBubble({ message }) {
           minWidth: templateData ? '200px' : undefined,
         }}>
 
-          {templateData ? (
+          {message.type === 'image' ? (
+            /* ── Comprobante de pago (imagen) ── */
+            <div style={{ padding: '8px 10px 6px' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '10px 12px', borderRadius: '8px',
+                backgroundColor: isDark ? `${colors.yellow}18` : `${colors.yellow}15`,
+                border: `1px solid ${colors.yellow}44`,
+              }}>
+                <Image size={20} color={colors.yellow} />
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>
+                    Comprobante de pago
+                  </div>
+                  <div style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '2px' }}>
+                    Ver en Pedidos → Comprobantes
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+                <span style={{ fontSize: '11px', color: colors.textSecondary }}>{time}</span>
+              </div>
+            </div>
+          ) : templateData ? (
+
             /* ── Renderizado especial para templates ── */
             <>
               {/* Header del template card */}

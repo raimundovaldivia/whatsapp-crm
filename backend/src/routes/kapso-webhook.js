@@ -78,7 +78,15 @@ router.post('/', async (req, res) => {
 
   // ── Parsear mensaje entrante ─────────────────────────────────────────
   const parsed = kapsoService.parseWebhookMessage(body, event);
-  if (!parsed || !parsed.text) return;
+  if (!parsed) return;
+
+  // ── Imagen entrante → posible comprobante de pago ─────────────────
+  if (parsed.type === 'image' && parsed.mediaId) {
+    await handlePaymentProof(org, whatsappConfig, parsed);
+    return;
+  }
+
+  if (!parsed.text) return;
 
   console.log(`[KapsoWebhook] [Org:${org.name}] 📩 ${parsed.from}: ${parsed.text}`);
 
@@ -189,6 +197,93 @@ router.post('/', async (req, res) => {
     }
   }
 });
+
+/**
+ * Maneja una imagen entrante como posible comprobante de pago.
+ * Guarda el comprobante, responde al cliente y notifica al admin.
+ */
+async function handlePaymentProof(org, whatsappConfig, parsed) {
+  try {
+    console.log(`[KapsoWebhook] 📸 Imagen de ${parsed.from} — posible comprobante de pago`);
+
+    const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
+
+    // Guardar imagen como mensaje en el chat
+    await db.saveMessage({
+      conversationId:    conversation.id,
+      whatsappMessageId: parsed.messageId,
+      direction:         'inbound',
+      content:           '📸 [Comprobante de pago]',
+      type:              'image',
+      sentBy:            'client',
+    });
+    await db.updateConversationLastMessage(conversation.id, '📸 [Comprobante de pago]', true);
+    await db.updateLastInbound(conversation.id);
+    await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
+
+    // Buscar pedido pendiente de esta conversación
+    const pendingOrder = await db.getLatestPendingOrderByConversation(conversation.id);
+
+    // Guardar comprobante en DB
+    const proof = await db.savePaymentProof({
+      orgId:         org.id,
+      conversationId: conversation.id,
+      orderId:       pendingOrder?.id || null,
+      mediaId:       parsed.mediaId,
+      customerPhone: parsed.from,
+      customerName:  conversation.contact_name || parsed.contactName,
+      orderSummary:  pendingOrder
+        ? `${pendingOrder.customer_name || ''} — $${pendingOrder.total_price || '?'}`
+        : null,
+    });
+
+    // Actualizar estado del pedido a "pago recibido"
+    if (pendingOrder) {
+      await db.updateOrder(pendingOrder.id, { status: 'payment_received' }).catch(() => {});
+    }
+
+    // Responder al cliente
+    const reply = pendingOrder
+      ? `✅ ¡Recibimos tu comprobante de pago! Lo verificaremos a la brevedad y te avisaremos cuando tu pedido esté listo para despacho 🚀`
+      : `✅ Recibimos tu imagen. Si es un comprobante de pago, un asesor lo revisará pronto y se pondrá en contacto contigo.`;
+
+    const sentMsg = await kapsoService.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
+    await db.saveMessage({
+      conversationId:    conversation.id,
+      whatsappMessageId: sentMsg?.messages?.[0]?.id || null,
+      direction:         'outbound',
+      content:           reply,
+      sentBy:            'ai',
+      agentType:         'system',
+    });
+    await db.updateConversationLastMessage(conversation.id, reply);
+
+    // Notificar al admin por WhatsApp
+    const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
+    if (adminPhone) {
+      const wc = await db.getWhatsappConfig(org.id);
+      if (wc) {
+        const clientName = conversation.contact_name || parsed.from;
+        const orderLine  = pendingOrder
+          ? `\n📦 *Pedido:* ${pendingOrder.customer_name || ''} — $${pendingOrder.total_price || '?'}`
+          : '';
+        const adminMsg = `📸 *Comprobante de pago recibido*\n\n👤 *Cliente:* ${clientName} (${parsed.from})${orderLine}\n\nRevísalo en el CRM → Pedidos → Comprobantes.`;
+        await kapsoService.sendTextMessage(adminPhone, adminMsg, wc).catch(() => {});
+      }
+    }
+
+    // Emitir al CRM en tiempo real
+    const updatedConv = await db.getConversationById(conversation.id);
+    io?.emit(`new_message_${org.id}`, {
+      message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image' },
+      conversation: updatedConv,
+    });
+    io?.emit(`payment_proof_${org.id}`, { proof, conversationId: conversation.id });
+
+  } catch (err) {
+    console.error('[KapsoWebhook] Error procesando comprobante:', err.message);
+  }
+}
 
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;
