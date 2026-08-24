@@ -136,8 +136,11 @@ export default function App() {
 
   const loadProofStats = useCallback(async () => {
     try {
-      const proofs = await paymentProofsAPI.getAll('pending');
-      setPendingProofs(proofs?.length || 0);
+      const [pending, preVerified] = await Promise.all([
+        paymentProofsAPI.getAll('pending'),
+        paymentProofsAPI.getAll('pre_verified'),
+      ]);
+      setPendingProofs((pending?.length || 0) + (preVerified?.length || 0));
     } catch { /* silencioso */ }
   }, []);
 

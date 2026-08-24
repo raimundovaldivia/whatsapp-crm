@@ -322,6 +322,24 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_payment_proofs_org    ON payment_proofs(organization_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_payment_proofs_status ON payment_proofs(organization_id, status);
+
+      -- Migración: columnas de análisis IA en comprobantes
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS extracted_amount    DECIMAL(12,2);
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS extracted_date      TEXT;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS extracted_bank      TEXT;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS extracted_reference TEXT;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS ai_confidence       TEXT;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS amount_matches      BOOLEAN;
+
+      -- Migración: status pre_verified para comprobantes auto-validados
+      DO $$
+      BEGIN
+        ALTER TABLE payment_proofs DROP CONSTRAINT payment_proofs_status_check;
+      EXCEPTION WHEN undefined_object THEN NULL;
+      END $$;
+      ALTER TABLE payment_proofs ADD CONSTRAINT payment_proofs_status_check
+        CHECK(status IN ('pending','pre_verified','verified','rejected'))
+        NOT VALID;
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

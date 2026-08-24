@@ -431,12 +431,16 @@ async function getLatestPendingOrderByConversation(conversationId) {
 
 // ─── PAYMENT PROOFS ────────────────────────────────────────────────
 
-async function savePaymentProof({ orgId, conversationId, orderId, mediaId, customerPhone, customerName, orderSummary }) {
+async function savePaymentProof({ orgId, conversationId, orderId, mediaId, customerPhone, customerName, orderSummary,
+                                   extractedAmount, extractedDate, extractedBank, extractedReference, aiConfidence, amountMatches, status }) {
   return queryOne(
     `INSERT INTO payment_proofs
-       (organization_id, conversation_id, order_id, media_id, customer_phone, customer_name, order_summary)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [orgId, conversationId, orderId || null, mediaId, customerPhone || null, customerName || null, orderSummary || null]
+       (organization_id, conversation_id, order_id, media_id, customer_phone, customer_name, order_summary,
+        extracted_amount, extracted_date, extracted_bank, extracted_reference, ai_confidence, amount_matches, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, 'pending')) RETURNING *`,
+    [orgId, conversationId, orderId || null, mediaId, customerPhone || null, customerName || null, orderSummary || null,
+     extractedAmount || null, extractedDate || null, extractedBank || null, extractedReference || null,
+     aiConfidence || null, amountMatches ?? null, status || null]
   );
 }
 

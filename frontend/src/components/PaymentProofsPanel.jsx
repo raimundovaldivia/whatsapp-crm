@@ -11,16 +11,17 @@ import { paymentProofsAPI } from '../utils/api.js';
 import { formatDateTime } from '../utils/dates.js';
 
 const STATUS_LABELS = {
-  pending:  { label: 'Pendiente',   color: '#f59e0b', Icon: Clock },
-  verified: { label: 'Verificado',  color: '#22c55e', Icon: CheckCircle },
-  rejected: { label: 'Rechazado',   color: '#ef4444', Icon: XCircle },
+  pending:       { label: 'Pendiente',      color: '#f59e0b', Icon: Clock },
+  pre_verified:  { label: 'Pre-verificado', color: '#3b82f6', Icon: CheckCircle },
+  verified:      { label: 'Verificado',     color: '#22c55e', Icon: CheckCircle },
+  rejected:      { label: 'Rechazado',      color: '#ef4444', Icon: XCircle },
 };
 
 export default function PaymentProofsPanel({ onOpenConversation }) {
   const { colors, isDark } = useTheme();
   const [proofs, setProofs]     = useState([]);
   const [loading, setLoading]   = useState(true);
-  const [filter, setFilter]     = useState('pending');
+  const [filter, setFilter]     = useState('');
   const [selected, setSelected] = useState(null); // proof con imagen abierta
   const [imageUrl, setImageUrl] = useState(null);
   const [imageLoading, setImageLoading] = useState(false);
@@ -129,10 +130,11 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
         display: 'flex', gap: '8px', flexShrink: 0,
       }}>
         {[
-          { key: 'pending',  label: 'Pendientes' },
-          { key: 'verified', label: 'Verificados' },
-          { key: 'rejected', label: 'Rechazados' },
-          { key: '',         label: 'Todos' },
+          { key: '',              label: 'Todos' },
+          { key: 'pending',       label: 'Pendientes' },
+          { key: 'pre_verified',  label: 'Pre-verificados' },
+          { key: 'verified',      label: 'Verificados' },
+          { key: 'rejected',      label: 'Rechazados' },
         ].map(({ key, label }) => (
           <button key={key} onClick={() => setFilter(key)} style={{
             padding: '5px 14px', borderRadius: '20px', fontSize: '13px',
@@ -194,6 +196,16 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
                         ? `Pedido: ${proof.order_summary}`
                         : 'Sin pedido asociado'}
                     </div>
+                    {proof.extracted_amount && (
+                      <div style={{ fontSize: '12px', marginTop: '3px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{ color: proof.amount_matches === true ? '#22c55e' : proof.amount_matches === false ? '#ef4444' : colors.textSecondary }}>
+                          💵 ${Number(proof.extracted_amount).toLocaleString('es-CL')}
+                          {proof.amount_matches === true && ' ✓ monto OK'}
+                          {proof.amount_matches === false && ' ⚠ monto difiere'}
+                        </span>
+                        {proof.extracted_bank && <span style={{ color: colors.textMuted }}>🏦 {proof.extracted_bank}</span>}
+                      </div>
+                    )}
                     {proof.notes && (
                       <div style={{ fontSize: '12px', color: colors.textMuted, marginTop: '3px', fontStyle: 'italic' }}>
                         {proof.notes}
@@ -252,17 +264,37 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
               </button>
             </div>
 
-            {/* Info cliente */}
+            {/* Info cliente + datos extraídos */}
             <div style={{
               backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px',
-              fontSize: '13px', lineHeight: 1.6, color: colors.textPrimary,
+              fontSize: '13px', lineHeight: 1.7, color: colors.textPrimary,
             }}>
               <b>Cliente:</b> {selected.customer_name || selected.customer_phone}<br />
               {selected.customer_phone && selected.customer_name && (
                 <><b>Teléfono:</b> {selected.customer_phone}<br /></>
               )}
               {selected.order_summary && (
-                <><b>Pedido:</b> {selected.order_summary}</>
+                <><b>Pedido:</b> {selected.order_summary}<br /></>
+              )}
+              {selected.extracted_amount && (
+                <>
+                  <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: `1px solid ${colors.border}` }}>
+                    <span style={{ fontWeight: 600, color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Extraído por IA
+                    </span>
+                    <br />
+                    {selected.extracted_amount && (
+                      <span style={{ color: selected.amount_matches === true ? '#22c55e' : selected.amount_matches === false ? '#ef4444' : colors.textPrimary }}>
+                        <b>Monto:</b> ${Number(selected.extracted_amount).toLocaleString('es-CL')}
+                        {selected.amount_matches === true && ' ✅ coincide con pedido'}
+                        {selected.amount_matches === false && ' ⚠️ NO coincide con pedido'}
+                      </span>
+                    )}
+                    {selected.extracted_bank && <><br /><b>Banco:</b> {selected.extracted_bank}</>}
+                    {selected.extracted_date && <><br /><b>Fecha:</b> {selected.extracted_date}</>}
+                    {selected.extracted_reference && <><br /><b>Referencia:</b> {selected.extracted_reference}</>}
+                  </div>
+                </>
               )}
             </div>
 
