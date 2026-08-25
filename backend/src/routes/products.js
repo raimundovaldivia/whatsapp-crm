@@ -12,6 +12,7 @@ const express    = require('express');
 const router     = express.Router();
 const db         = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
+const r2         = require('../services/r2-storage');
 const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -103,7 +104,18 @@ router.post('/import-shopify', async (req, res) => {
       const active      = sp.status === 'ACTIVE' || sp.status === 'active';
 
       // imageUrl viene directamente como URL (GraphQL) — no como { src }
-      const imageUrl = sp.imageUrl || sp.image || null;
+      const shopifyImageUrl = sp.imageUrl || sp.image || null;
+
+      // Si R2 está configurado, migrar la imagen para independencia de Shopify
+      let imageUrl = shopifyImageUrl;
+      if (shopifyImageUrl && r2.isConfigured()) {
+        try {
+          imageUrl = await r2.uploadFromUrl(shopifyImageUrl, 'products');
+        } catch (imgErr) {
+          console.warn(`[Products] No se pudo subir imagen a R2 (usando link Shopify): ${imgErr.message}`);
+          imageUrl = shopifyImageUrl; // fallback al link de Shopify
+        }
+      }
 
       const existingProduct = existingTitles.get(title.toLowerCase());
       if (existingProduct) {
@@ -120,7 +132,7 @@ router.post('/import-shopify', async (req, res) => {
       }
     }
 
-    res.json({ success: true, imported, updated, total: imported + updated });
+    res.json({ success: true, imported, updated, total: imported + updated, imagesHostedOnR2: r2.isConfigured() });
   } catch (err) {
     console.error('[Products] Error importando desde Shopify:', err.message);
     res.status(500).json({ error: err.message });

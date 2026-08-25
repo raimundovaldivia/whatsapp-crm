@@ -149,7 +149,8 @@ export default function ProductsPanel({ orgSlug }) {
         {importResult && (
           <div style={{ marginTop: '12px', padding: '10px 14px', borderRadius: '8px',
             backgroundColor: isDark ? '#22c55e18' : '#dcfce7', border: `1px solid #22c55e44`, fontSize: '13px', color: '#16a34a' }}>
-            ✅ Importación completa: {importResult.imported} nuevos, {importResult.updated} actualizados (imágenes y estado incluidos)
+            ✅ Importación completa: {importResult.imported} nuevos, {importResult.updated} actualizados
+            {' · '}{importResult.imagesHostedOnR2 ? '📦 Imágenes guardadas en R2 (independiente de Shopify)' : '⚠️ Imágenes aún en CDN de Shopify — configura R2 para independizarte'}
             <button onClick={() => setImportResult(null)} style={{ marginLeft: '12px', background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a' }}>✕</button>
           </div>
         )}
