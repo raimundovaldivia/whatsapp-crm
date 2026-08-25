@@ -97,14 +97,37 @@ export default function Tienda({ slug }) {
   const cartCount = cart.reduce((s, i) => s + i.quantity, 0);
   const cartTotal = cart.reduce((s, i) => s + parseFloat(i.product.price) * i.quantity, 0);
 
-  // Categorías únicas (ignora null/vacías)
+  // Categorías únicas ordenadas
   const categories = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
+  const hasCategories = categories.length > 0;
 
-  const filtered = products.filter(p => {
-    const matchSearch = !search || p.title.toLowerCase().includes(search.toLowerCase());
-    const matchCat    = !activeCategory || p.category === activeCategory;
-    return matchSearch && matchCat;
-  });
+  // Filtrado por búsqueda (el filtro de categoría lo maneja el scroll/anchor)
+  const searchFiltered = !search
+    ? products
+    : products.filter(p => p.title.toLowerCase().includes(search.toLowerCase()));
+
+  // Agrupado por categoría para mostrar secciones
+  const grouped = (() => {
+    if (!hasCategories || search) return null; // sin categorías o buscando → grid plano
+    const g = {};
+    categories.forEach(cat => { g[cat] = []; });
+    const sinCat = [];
+    products.forEach(p => {
+      if (p.category && g[p.category]) g[p.category].push(p);
+      else sinCat.push(p);
+    });
+    const result = categories.map(cat => ({ cat, items: g[cat] })).filter(s => s.items.length > 0);
+    if (sinCat.length) result.push({ cat: null, items: sinCat });
+    return result;
+  })();
+
+  const filtered = searchFiltered; // solo usado en modo búsqueda
+
+  const scrollToCategory = (cat) => {
+    const id = cat ? `cat-${cat.replace(/\s+/g, '-')}` : 'cat-sin';
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setCatMenuOpen(false);
+  };
 
   const addToCart  = useCallback((p) => setCart(prev => {
     const ex = prev.find(i => i.product.id === p.id);
@@ -254,8 +277,8 @@ export default function Tienda({ slug }) {
                 <button
                   onMouseEnter={() => setCatMenuOpen(true)}
                   onMouseLeave={() => setCatMenuOpen(false)}
-                  onClick={() => { setActiveCategory(null); setCatMenuOpen(false); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: activeCategory ? '#374151' : PRIMARY, borderBottom: activeCategory ? '2px solid transparent' : `2px solid ${PRIMARY}` }}>
+                  onClick={() => { setCatMenuOpen(false); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: PRIMARY, borderBottom: `2px solid ${PRIMARY}` }}>
                   Productos
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                 </button>
@@ -264,14 +287,14 @@ export default function Tienda({ slug }) {
                     onMouseEnter={() => setCatMenuOpen(true)}
                     onMouseLeave={() => setCatMenuOpen(false)}
                     style={{ position: 'absolute', top: '100%', left: 0, backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', minWidth: 200, zIndex: 300, padding: '8px 0' }}>
-                    <button onClick={() => { setActiveCategory(null); setCatMenuOpen(false); }}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: !activeCategory ? 700 : 400, color: !activeCategory ? PRIMARY : '#374151' }}>
+                    <button onClick={() => { setCatMenuOpen(false); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 500, color: '#374151' }}>
                       Ver todos los productos
                     </button>
                     <div style={{ height: 1, backgroundColor: '#f3f4f6', margin: '4px 0' }} />
                     {categories.map(cat => (
-                      <button key={cat} onClick={() => { setActiveCategory(cat); setCatMenuOpen(false); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
-                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 18px', border: 'none', background: activeCategory === cat ? '#f0fdf4' : 'none', cursor: 'pointer', fontSize: 14, fontWeight: activeCategory === cat ? 700 : 400, color: activeCategory === cat ? PRIMARY : '#374151' }}>
+                      <button key={cat} onClick={() => scrollToCategory(cat)}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 400, color: '#374151' }}>
                         {cat}
                       </button>
                     ))}
@@ -288,8 +311,8 @@ export default function Tienda({ slug }) {
                   Todos
                 </button>
                 {categories.map(cat => (
-                  <button key={cat} onClick={() => { setActiveCategory(cat); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
-                    style={{ flexShrink: 0, padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${activeCategory === cat ? PRIMARY : '#e5e7eb'}`, background: activeCategory === cat ? PRIMARY : 'white', color: activeCategory === cat ? 'white' : '#374151', fontSize: 12, fontWeight: activeCategory === cat ? 700 : 400, cursor: 'pointer' }}>
+                  <button key={cat} onClick={() => scrollToCategory(cat)}
+                    style={{ flexShrink: 0, padding: '5px 14px', borderRadius: 20, border: `1.5px solid #e5e7eb`, background: 'white', color: '#374151', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>
                     {cat}
                   </button>
                 ))}
@@ -364,34 +387,23 @@ export default function Tienda({ slug }) {
 
           {/* Catálogo */}
           <section id="catalogo" style={{ maxWidth: 1200, margin: '0 auto', padding: isMobile ? '32px 16px' : '48px 24px' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 8 }}>
-              <h2 style={{ margin: 0, fontSize: isMobile ? 22 : 26, fontWeight: 800 }}>
-                {search ? `"${search}"` : activeCategory || 'Todos los productos'}
-              </h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {activeCategory && (
-                  <button onClick={() => setActiveCategory(null)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, border: `1px solid ${PRIMARY}`, background: `${PRIMARY}15`, color: PRIMARY, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                    {activeCategory} <X size={11} />
-                  </button>
-                )}
-                <span style={{ fontSize: 13, color: '#9ca3af' }}>{filtered.length} producto{filtered.length !== 1 ? 's' : ''}</span>
-              </div>
-            </div>
 
-            {filtered.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 0', color: '#9ca3af' }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>🔍</div>
-                <p>No encontramos "{search}"</p>
-                <button onClick={() => setSearch('')} style={{ marginTop: 12, padding: '8px 18px', borderRadius: 8, border: `1px solid ${PRIMARY}`, background: 'white', color: PRIMARY, cursor: 'pointer', fontWeight: 600 }}>Ver todos</button>
-              </div>
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : isTablet ? 'repeat(3, 1fr)' : 'repeat(auto-fill, minmax(220px,1fr))',
-                gap: isMobile ? 12 : 18,
-              }}>
-                {filtered.map(product => {
+            {/* Modo búsqueda — grid plano */}
+            {search && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 8 }}>
+                  <h2 style={{ margin: 0, fontSize: isMobile ? 22 : 26, fontWeight: 800 }}>"{search}"</h2>
+                  <span style={{ fontSize: 13, color: '#9ca3af' }}>{filtered.length} resultado{filtered.length !== 1 ? 's' : ''}</span>
+                </div>
+                {filtered.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '60px 0', color: '#9ca3af' }}>
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>🔍</div>
+                    <p>No encontramos "{search}"</p>
+                    <button onClick={() => setSearch('')} style={{ marginTop: 12, padding: '8px 18px', borderRadius: 8, border: `1px solid ${PRIMARY}`, background: 'white', color: PRIMARY, cursor: 'pointer', fontWeight: 600 }}>Ver todos</button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : isTablet ? 'repeat(3, 1fr)' : 'repeat(auto-fill, minmax(220px,1fr))', gap: isMobile ? 12 : 18 }}>
+                    {filtered.map(product => {
                   const qty        = getQty(product.id);
                   const hasDiscount = product.compare_price && parseFloat(product.compare_price) > parseFloat(product.price);
                   const outOfStock  = product.stock === 0;
@@ -447,9 +459,107 @@ export default function Tienda({ slug }) {
                       </div>
                     </div>
                   );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Modo categorías — secciones con anclas */}
+            {!search && grouped && grouped.map(({ cat, items }) => {
+              const anchorId = cat ? `cat-${cat.replace(/\s+/g, '-')}` : 'cat-sin';
+              return (
+                <div key={cat || '__sin__'} id={anchorId} style={{ marginBottom: isMobile ? 36 : 48, scrollMarginTop: 120 }}>
+                  {/* Encabezado de sección */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: isMobile ? 16 : 20 }}>
+                    <h2 style={{ margin: 0, fontSize: isMobile ? 20 : 24, fontWeight: 800, color: '#111827' }}>
+                      {cat || 'Otros productos'}
+                    </h2>
+                    <span style={{ fontSize: 12, color: '#9ca3af', backgroundColor: '#f3f4f6', borderRadius: 20, padding: '2px 10px' }}>
+                      {items.length}
+                    </span>
+                    <div style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
+                  </div>
+                  {/* Grid de productos de esta categoría */}
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : isTablet ? 'repeat(3, 1fr)' : 'repeat(auto-fill, minmax(220px,1fr))', gap: isMobile ? 12 : 18 }}>
+                    {items.map(product => {
+                      const qty         = getQty(product.id);
+                      const hasDiscount = product.compare_price && parseFloat(product.compare_price) > parseFloat(product.price);
+                      const outOfStock  = product.stock === 0;
+                      return (
+                        <div key={product.id} style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden', border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column' }}>
+                          <div style={{ position: 'relative', height: isMobile ? 140 : 200, backgroundColor: '#f9fafb', overflow: 'hidden', flexShrink: 0 }}>
+                            {product.image_url
+                              ? <img src={product.image_url} alt={product.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>🥚</div>}
+                            {outOfStock && <div style={{ position: 'absolute', top: 8, left: 8, background: '#111827', color: 'white', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20 }}>Agotado</div>}
+                            {hasDiscount && !outOfStock && <div style={{ position: 'absolute', top: 8, left: 8, background: '#ef4444', color: 'white', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20 }}>-{Math.round((1 - product.price / product.compare_price) * 100)}%</div>}
+                          </div>
+                          <div style={{ padding: isMobile ? '10px 12px 12px' : '14px 16px 16px', display: 'flex', flexDirection: 'column', flex: 1 }}>
+                            <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, lineHeight: 1.35, marginBottom: 4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{product.title}</div>
+                            {!isMobile && product.description && <div style={{ fontSize: 12, color: '#9ca3af', lineHeight: 1.5, marginBottom: 8, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{product.description}</div>}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: isMobile ? 10 : 12, marginTop: 'auto' }}>
+                              <span style={{ fontSize: isMobile ? 15 : 17, fontWeight: 800 }}>{fmt(product.price)}</span>
+                              {hasDiscount && <span style={{ fontSize: 11, color: '#9ca3af', textDecoration: 'line-through' }}>{fmt(product.compare_price)}</span>}
+                            </div>
+                            {outOfStock ? (
+                              <div style={{ textAlign: 'center', padding: '8px', borderRadius: 8, backgroundColor: '#f3f4f6', color: '#9ca3af', fontSize: 12, fontWeight: 600 }}>Sin stock</div>
+                            ) : qty === 0 ? (
+                              <button onClick={() => addToCart(product)} style={{ width: '100%', padding: isMobile ? '9px 0' : '10px', borderRadius: 9, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: isMobile ? 13 : 14 }}>Añadir</button>
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', borderRadius: 9, padding: '3px 5px', border: `1.5px solid ${PRIMARY}` }}>
+                                <button onClick={() => removeOne(product.id)} style={{ width: 32, height: 32, borderRadius: 7, border: 'none', background: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 18, color: '#374151', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                                <span style={{ fontWeight: 800, fontSize: 15, minWidth: 20, textAlign: 'center' }}>{qty}</span>
+                                <button onClick={() => addToCart(product)} style={{ width: 32, height: 32, borderRadius: 7, border: 'none', background: PRIMARY, color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Modo sin categorías — grid plano */}
+            {!search && !grouped && (
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : isTablet ? 'repeat(3, 1fr)' : 'repeat(auto-fill, minmax(220px,1fr))', gap: isMobile ? 12 : 18 }}>
+                {products.map(product => {
+                  const qty         = getQty(product.id);
+                  const hasDiscount = product.compare_price && parseFloat(product.compare_price) > parseFloat(product.price);
+                  const outOfStock  = product.stock === 0;
+                  return (
+                    <div key={product.id} style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden', border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ position: 'relative', height: isMobile ? 140 : 200, backgroundColor: '#f9fafb', overflow: 'hidden', flexShrink: 0 }}>
+                        {product.image_url ? <img src={product.image_url} alt={product.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>🥚</div>}
+                        {outOfStock && <div style={{ position: 'absolute', top: 8, left: 8, background: '#111827', color: 'white', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20 }}>Agotado</div>}
+                        {hasDiscount && !outOfStock && <div style={{ position: 'absolute', top: 8, left: 8, background: '#ef4444', color: 'white', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20 }}>-{Math.round((1 - product.price / product.compare_price) * 100)}%</div>}
+                      </div>
+                      <div style={{ padding: isMobile ? '10px 12px 12px' : '14px 16px 16px', display: 'flex', flexDirection: 'column', flex: 1 }}>
+                        <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, lineHeight: 1.35, marginBottom: 4 }}>{product.title}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: isMobile ? 10 : 12, marginTop: 'auto' }}>
+                          <span style={{ fontSize: isMobile ? 15 : 17, fontWeight: 800 }}>{fmt(product.price)}</span>
+                          {hasDiscount && <span style={{ fontSize: 11, color: '#9ca3af', textDecoration: 'line-through' }}>{fmt(product.compare_price)}</span>}
+                        </div>
+                        {outOfStock ? (
+                          <div style={{ textAlign: 'center', padding: '8px', borderRadius: 8, backgroundColor: '#f3f4f6', color: '#9ca3af', fontSize: 12, fontWeight: 600 }}>Sin stock</div>
+                        ) : qty === 0 ? (
+                          <button onClick={() => addToCart(product)} style={{ width: '100%', padding: isMobile ? '9px 0' : '10px', borderRadius: 9, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: isMobile ? 13 : 14 }}>Añadir</button>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', borderRadius: 9, padding: '3px 5px', border: `1.5px solid ${PRIMARY}` }}>
+                            <button onClick={() => removeOne(product.id)} style={{ width: 32, height: 32, borderRadius: 7, border: 'none', background: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                            <span style={{ fontWeight: 800, fontSize: 15, minWidth: 20, textAlign: 'center' }}>{qty}</span>
+                            <button onClick={() => addToCart(product)} style={{ width: 32, height: 32, borderRadius: 7, border: 'none', background: PRIMARY, color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
                 })}
               </div>
             )}
+
           </section>
 
           {/* Cómo funciona */}
