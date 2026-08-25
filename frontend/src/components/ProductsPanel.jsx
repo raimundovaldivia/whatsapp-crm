@@ -317,75 +317,100 @@ export default function ProductsPanel({ orgSlug }) {
               Agregar primer producto
             </button>
           </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
-            {products.map(p => (
-              <div key={p.id} style={{
-                backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
-                borderRadius: '12px', overflow: 'hidden',
-                opacity: p.active ? 1 : 0.55,
-                transition: 'transform 0.15s, box-shadow 0.15s',
-              }}>
-                {/* Imagen */}
-                {p.image_url ? (
-                  <div style={{ width: '100%', height: '160px', overflow: 'hidden', backgroundColor: colors.bgApp }}>
-                    <img src={p.image_url} alt={p.title}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                ) : (
-                  <div style={{ width: '100%', height: '100px', backgroundColor: colors.bgApp,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Package size={32} style={{ opacity: 0.2 }} />
+        ) : (() => {
+          // Agrupar por categoría
+          const groups = {};
+          products.forEach(p => {
+            const key = p.category || '—';
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(p);
+          });
+          const sorted = Object.keys(groups).sort((a, b) => a === '—' ? 1 : b === '—' ? -1 : a.localeCompare(b));
+
+          const ProductCard = ({ p }) => (
+            <div key={p.id} style={{
+              backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
+              borderRadius: '12px', overflow: 'hidden', opacity: p.active ? 1 : 0.55,
+            }}>
+              {p.image_url ? (
+                <div style={{ width: '100%', height: '160px', overflow: 'hidden', backgroundColor: colors.bgApp }}>
+                  <img src={p.image_url} alt={p.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              ) : (
+                <div style={{ width: '100%', height: '80px', backgroundColor: colors.bgApp, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Package size={28} style={{ opacity: 0.2 }} />
+                </div>
+              )}
+              <div style={{ padding: '12px 14px' }}>
+                <div style={{ fontWeight: 700, fontSize: '14px', color: colors.textPrimary, marginBottom: '4px' }}>{p.title}</div>
+                {p.description && (
+                  <div style={{ fontSize: '12px', color: colors.textSecondary, marginBottom: '8px',
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {p.description}
                   </div>
                 )}
-                {/* Info */}
-                <div style={{ padding: '12px 14px' }}>
-                  <div style={{ fontWeight: 700, fontSize: '14px', color: colors.textPrimary, marginBottom: '4px' }}>{p.title}</div>
-                  {p.description && (
-                    <div style={{ fontSize: '12px', color: colors.textSecondary, marginBottom: '8px',
-                      display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                      {p.description}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                    <span style={{ fontSize: '16px', fontWeight: 700, color: colors.textPrimary }}>
-                      ${Number(p.price).toLocaleString('es-CL')}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                  <span style={{ fontSize: '16px', fontWeight: 700, color: colors.textPrimary }}>
+                    ${Number(p.price).toLocaleString('es-CL')}
+                  </span>
+                  {p.compare_price && parseFloat(p.compare_price) > parseFloat(p.price) && (
+                    <span style={{ fontSize: '12px', color: colors.textMuted, textDecoration: 'line-through' }}>
+                      ${Number(p.compare_price).toLocaleString('es-CL')}
                     </span>
-                    {p.compare_price && parseFloat(p.compare_price) > parseFloat(p.price) && (
-                      <span style={{ fontSize: '12px', color: colors.textMuted, textDecoration: 'line-through' }}>
-                        ${Number(p.compare_price).toLocaleString('es-CL')}
-                      </span>
-                    )}
-                    {p.stock >= 0 && (
-                      <span style={{ fontSize: '11px', color: p.stock > 0 ? colors.green : colors.red, marginLeft: 'auto' }}>
-                        {p.stock > 0 ? `${p.stock} en stock` : 'Sin stock'}
-                      </span>
-                    )}
-                  </div>
-                  {/* Acciones */}
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => handleToggle(p)} title={p.active ? 'Desactivar' : 'Activar'}
-                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
-                        backgroundColor: 'transparent', cursor: 'pointer', color: p.active ? colors.green : colors.textMuted }}>
-                      {p.active ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                    </button>
-                    <button onClick={() => openEdit(p)} title="Editar"
-                      style={{ flex: 1, padding: '6px', borderRadius: '7px', border: `1px solid ${colors.border}`,
-                        backgroundColor: 'transparent', cursor: 'pointer', color: colors.textSecondary,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', fontSize: '13px' }}>
-                      <Edit2 size={13} /> Editar
-                    </button>
-                    <button onClick={() => handleDelete(p.id, p.title)} title="Eliminar"
-                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
-                        backgroundColor: 'transparent', cursor: 'pointer', color: colors.red }}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                  )}
+                  {p.stock >= 0 && (
+                    <span style={{ fontSize: '11px', color: p.stock > 0 ? colors.green : colors.red, marginLeft: 'auto' }}>
+                      {p.stock > 0 ? `${p.stock} en stock` : 'Sin stock'}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => handleToggle(p)} title={p.active ? 'Desactivar' : 'Activar'}
+                    style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
+                      backgroundColor: 'transparent', cursor: 'pointer', color: p.active ? colors.green : colors.textMuted }}>
+                    {p.active ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                  </button>
+                  <button onClick={() => openEdit(p)} title="Editar"
+                    style={{ flex: 1, padding: '6px', borderRadius: '7px', border: `1px solid ${colors.border}`,
+                      backgroundColor: 'transparent', cursor: 'pointer', color: colors.textSecondary,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', fontSize: '13px' }}>
+                    <Edit2 size={13} /> Editar
+                  </button>
+                  <button onClick={() => handleDelete(p.id, p.title)} title="Eliminar"
+                    style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
+                      backgroundColor: 'transparent', cursor: 'pointer', color: colors.red }}>
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          );
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+              {sorted.map(cat => (
+                <div key={cat}>
+                  {/* Encabezado de categoría */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                    <span style={{ fontSize: '15px', fontWeight: 700, color: colors.textPrimary }}>
+                      {cat === '—' ? 'Sin categoría' : cat}
+                    </span>
+                    <span style={{ fontSize: '12px', color: colors.textMuted,
+                      backgroundColor: colors.bgApp, border: `1px solid ${colors.border}`,
+                      borderRadius: '20px', padding: '2px 10px' }}>
+                      {groups[cat].length} producto{groups[cat].length !== 1 ? 's' : ''}
+                    </span>
+                    <div style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+                  </div>
+                  {/* Grid de productos */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '14px' }}>
+                    {groups[cat].map(p => <ProductCard key={p.id} p={p} />)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>}
 
       {/* Formulario modal */}
