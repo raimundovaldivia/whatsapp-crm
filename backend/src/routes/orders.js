@@ -87,12 +87,11 @@ router.get('/shopify', async (req, res) => {
     if (!ds) return res.json({ success: true, orders: [], total: 0 });
 
     const { shop, token } = shopifyApi.credentialsFrom(ds);
-    const limit  = Math.min(parseInt(req.query.limit) || 50, 250);
-    const cursor = req.query.cursor || null;
     const status = req.query.status || 'any';
 
-    const result = await shopifyApi.getOrders(shop, token, { limit, cursor, status });
-    res.json(result);
+    // Traer TODAS las órdenes paginando automáticamente (hasta 10.000)
+    const orders = await shopifyApi.getAllOrders(shop, token, { status });
+    res.json({ success: true, orders, total: orders.length });
   } catch (err) {
     console.error('[Orders/Shopify]', err.message);
     if (err.message.includes('accessToken') || err.message.includes('401')) {

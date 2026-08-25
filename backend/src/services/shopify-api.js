@@ -311,7 +311,8 @@ async function getOrders(shop, token, opts = {}) {
   const { limit = 50, cursor = null, status = 'any' } = opts;
   const client = graphqlClient(shop, token);
 
-  const query = status === 'any' ? null : `financial_status:${status}`;
+  // Sin filtro de query devuelve todas las órdenes (abiertas, cerradas, canceladas)
+  const query = (status && status !== 'any') ? `financial_status:${status}` : null;
 
   const { data } = await client.post('/graphql.json', {
     query:     ORDERS_QUERY,
@@ -358,6 +359,26 @@ async function getOrders(shop, token, opts = {}) {
     hasNextPage: conn.pageInfo.hasNextPage,
     endCursor:   conn.pageInfo.endCursor,
   };
+}
+
+/**
+ * Obtiene TODAS las órdenes de Shopify paginando automáticamente.
+ * @param {string} shop
+ * @param {string} token
+ * @param {object} opts - { status, maxPages }
+ */
+async function getAllOrders(shop, token, opts = {}) {
+  const { status = 'any', maxPages = 40 } = opts; // hasta 40 × 250 = 10.000 órdenes
+  let all = [], cursor = null, page = 0;
+  do {
+    const result = await getOrders(shop, token, { limit: 250, cursor, status });
+    all = all.concat(result.orders);
+    if (!result.hasNextPage || page >= maxPages) break;
+    cursor = result.endCursor;
+    page++;
+  } while (true);
+  console.log(`[ShopifyAPI] getAllOrders: ${all.length} órdenes en ${page + 1} páginas`);
+  return all;
 }
 
 // ─── Draft Orders (crear pedido desde el bot) ───────────────────
@@ -732,7 +753,7 @@ module.exports = {
   getCustomers,
   getAllCustomers,
   getCustomerByPhone,
-  getOrders,
+  getOrders, getAllOrders,
   createDraftOrder,
   completeDraftOrder,
   formatProductsForAI,
