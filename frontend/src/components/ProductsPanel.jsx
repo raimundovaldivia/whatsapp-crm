@@ -5,14 +5,144 @@
  * Botón "Importar desde Shopify" para migración con un clic.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink, Copy, Check } from 'lucide-react';
+import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink, Copy, Check, Settings, Store, Phone, Sparkles, Save, Loader } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
 const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true };
 
+/* ── Configuración de tienda ──────────────────────────────────────── */
+function StoreConfigTab({ orgSlug, colors }) {
+  const [loading,  setLoading]  = useState(true);
+  const [saving,   setSaving]   = useState(false);
+  const [error,    setError]    = useState('');
+  const [success,  setSuccess]  = useState('');
+  const [form, setForm] = useState({
+    store_name: '', store_logo: '', store_color: '#22c55e',
+    store_announcement: '', store_hero_title: '', store_hero_subtitle: '',
+    store_hero_tags: '', store_whatsapp_phone: '', store_free_shipping: '10000',
+    admin_alert_phone: '',
+  });
+
+  useEffect(() => {
+    api.get('/store-settings')
+      .then(({ data }) => {
+        const s = data.settings || {};
+        let tagsStr = '';
+        try { tagsStr = JSON.parse(s.store_hero_tags || '[]').join(', '); } catch { tagsStr = s.store_hero_tags || ''; }
+        setForm({
+          store_name: s.store_name || '', store_logo: s.store_logo || '',
+          store_color: s.store_color || '#22c55e',
+          store_announcement: s.store_announcement || '', store_hero_title: s.store_hero_title || '',
+          store_hero_subtitle: s.store_hero_subtitle || '', store_hero_tags: tagsStr,
+          store_whatsapp_phone: s.store_whatsapp_phone || '',
+          store_free_shipping: s.store_free_shipping || '10000',
+          admin_alert_phone: s.admin_alert_phone || '',
+        });
+      })
+      .catch(() => setError('Error cargando configuración'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }));
+
+  const save = async () => {
+    setSaving(true); setError(''); setSuccess('');
+    try {
+      const tagsArray = form.store_hero_tags.split(',').map(t => t.trim()).filter(Boolean);
+      await api.put('/store-settings', {
+        ...form,
+        store_hero_tags: JSON.stringify(tagsArray),
+        store_free_shipping: String(parseInt(form.store_free_shipping) || 0),
+      });
+      setSuccess('✅ Configuración guardada');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error guardando');
+    } finally { setSaving(false); }
+  };
+
+  const inp = {
+    width: '100%', backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
+    borderRadius: '8px', padding: '9px 13px', color: colors.textPrimary, fontSize: '14px',
+    outline: 'none', boxSizing: 'border-box',
+  };
+  const lbl = { fontSize: '12px', color: colors.textSecondary, marginBottom: '5px', display: 'block', fontWeight: 500 };
+  const hint = { fontSize: '11px', color: colors.textMuted, marginTop: '3px' };
+  const section = {
+    backgroundColor: colors.bgPanel, borderRadius: '12px',
+    border: `1px solid ${colors.border}`, marginBottom: '14px',
+  };
+  const secHead = {
+    padding: '12px 18px', borderBottom: `1px solid ${colors.border}`,
+    display: 'flex', alignItems: 'center', gap: '8px',
+    fontSize: '14px', fontWeight: 600, color: colors.textPrimary,
+  };
+  const secBody = { padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' };
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '40px 24px', color: colors.textSecondary, fontSize: 13 }}>
+      <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> Cargando configuración...
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+      {error   && <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, backgroundColor: '#2d1a1a', color: '#f87171', fontSize: 13 }}>{error}</div>}
+      {success && <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, backgroundColor: colors.bgAccent, color: colors.green, fontSize: 13 }}>{success}</div>}
+
+      {/* Identidad */}
+      <div style={section}>
+        <div style={secHead}><Store size={15} color={colors.green} /> Identidad</div>
+        <div style={secBody}>
+          <div><label style={lbl}>Nombre de la tienda</label><input style={inp} value={form.store_name} onChange={set('store_name')} placeholder="Diezrios" /></div>
+          <div><label style={lbl}>URL del logo</label><input style={inp} value={form.store_logo} onChange={set('store_logo')} placeholder="https://..." /><p style={hint}>Sube la imagen a un hosting y pega la URL aquí</p></div>
+          <div><label style={lbl}>Color principal</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input type="color" value={form.store_color} onChange={set('store_color')}
+                style={{ width: 44, height: 36, borderRadius: 8, border: `1px solid ${colors.borderStrong}`, cursor: 'pointer', padding: 2, backgroundColor: colors.bgApp }} />
+              <input style={{ ...inp, flex: 1 }} value={form.store_color} onChange={set('store_color')} placeholder="#22c55e" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Portada */}
+      <div style={section}>
+        <div style={secHead}><Sparkles size={15} color={colors.green} /> Portada</div>
+        <div style={secBody}>
+          <div><label style={lbl}>Texto del banner superior</label><input style={inp} value={form.store_announcement} onChange={set('store_announcement')} placeholder="🚚 Delivery gratis en compras sobre $10.000" /></div>
+          <div><label style={lbl}>Título principal</label><input style={inp} value={form.store_hero_title} onChange={set('store_hero_title')} placeholder="Productos frescos directo al hogar" /></div>
+          <div><label style={lbl}>Subtítulo</label><input style={inp} value={form.store_hero_subtitle} onChange={set('store_hero_subtitle')} placeholder="Sin intermediarios..." /></div>
+          <div><label style={lbl}>Tags (separados por coma)</label><input style={inp} value={form.store_hero_tags} onChange={set('store_hero_tags')} placeholder="🥚 Huevos libres, 🫒 Aceitunas, 🧀 Quesos" /><p style={hint}>Aparecen como pills debajo del subtítulo</p></div>
+        </div>
+      </div>
+
+      {/* Entrega */}
+      <div style={section}>
+        <div style={secHead}><Phone size={15} color={colors.green} /> Entrega y contacto</div>
+        <div style={secBody}>
+          <div><label style={lbl}>Umbral envío gratis ($)</label><input style={inp} type="number" min="0" value={form.store_free_shipping} onChange={set('store_free_shipping')} placeholder="10000" /><p style={hint}>Pon 0 para desactivar</p></div>
+          <div><label style={lbl}>WhatsApp de contacto (botón flotante)</label><input style={inp} value={form.store_whatsapp_phone} onChange={set('store_whatsapp_phone')} placeholder="56912345678" /><p style={hint}>Vacío = botón no aparece</p></div>
+          <div><label style={lbl}>Teléfono admin (alertas de pedidos)</label><input style={inp} value={form.admin_alert_phone} onChange={set('admin_alert_phone')} placeholder="56912345678" /><p style={hint}>Recibe un WhatsApp por cada pedido nuevo</p></div>
+        </div>
+      </div>
+
+      <button onClick={save} disabled={saving}
+        style={{ width: '100%', padding: '12px', borderRadius: '10px', border: 'none',
+          backgroundColor: saving ? colors.borderStrong : colors.green, color: 'white',
+          fontWeight: 700, fontSize: '14px', cursor: saving ? 'not-allowed' : 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+        {saving ? <><Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> Guardando...</> : <><Save size={15} /> Guardar configuración</>}
+      </button>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+}
+
 export default function ProductsPanel({ orgSlug }) {
   const { colors, isDark } = useTheme();
+  const [activeTab, setActiveTab] = useState('productos');
   const [products, setProducts]   = useState([]);
   const [loading, setLoading]     = useState(true);
   const [showForm, setShowForm]   = useState(false);
@@ -156,8 +286,25 @@ export default function ProductsPanel({ orgSlug }) {
         )}
       </div>
 
-      {/* Lista */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+      {/* Tabs */}
+      <div style={{ display: 'flex', borderBottom: `1px solid ${colors.border}`, padding: '0 24px', gap: '2px', flexShrink: 0 }}>
+        {[{ key: 'productos', label: 'Productos', icon: Package }, { key: 'configuracion', label: 'Configuración', icon: Settings }].map(t => (
+          <button key={t.key} onClick={() => setActiveTab(t.key)}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 14px', border: 'none',
+              backgroundColor: 'transparent', cursor: 'pointer', fontSize: '13px', fontWeight: activeTab === t.key ? 600 : 400,
+              color: activeTab === t.key ? colors.green : colors.textSecondary,
+              borderBottom: activeTab === t.key ? `2px solid ${colors.green}` : '2px solid transparent',
+              marginBottom: -1 }}>
+            <t.icon size={14} />{t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab: Configuración */}
+      {activeTab === 'configuracion' && <StoreConfigTab orgSlug={orgSlug} colors={colors} />}
+
+      {/* Tab: Productos — Lista */}
+      {activeTab === 'productos' && <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
         {loading ? (
           <div style={{ textAlign: 'center', color: colors.textSecondary, padding: '40px' }}>Cargando...</div>
         ) : products.length === 0 ? (
@@ -237,7 +384,7 @@ export default function ProductsPanel({ orgSlug }) {
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Formulario modal */}
       {showForm && (

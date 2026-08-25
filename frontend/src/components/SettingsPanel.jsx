@@ -16,7 +16,6 @@ import TemplateManager from './TemplateManager.jsx';
 import { useTheme } from '../theme.js';
 
 const TABS = [
-  { key: 'tienda',    label: 'Tienda',     icon: Store },
   { key: 'shopify',   label: 'Shopify',    icon: ShoppingBag },
   { key: 'whatsapp',  label: 'WhatsApp',   icon: MessageCircle },
   { key: 'ia',        label: 'IA & Bot',   icon: Brain },
@@ -1679,7 +1678,7 @@ function TiendaTab() {
 ══════════════════════════════════════════════ */
 export default function SettingsPanel({ successMessage, onClearMessage }) {
   const { colors } = useTheme();
-  const [activeTab, setActiveTab] = useState('tienda');
+  const [activeTab, setActiveTab] = useState('shopify');
 
   useEffect(() => {
     if (successMessage) onClearMessage?.();
@@ -1714,7 +1713,6 @@ export default function SettingsPanel({ successMessage, onClearMessage }) {
         </div>
 
         {/* Contenido del tab */}
-        {activeTab === 'tienda'    && <TiendaTab />}
         {activeTab === 'shopify'   && <ShopifyTab />}
         {activeTab === 'whatsapp'  && <WhatsAppTab />}
         {activeTab === 'ia'        && <IATab onSwitchTab={setActiveTab} />}
