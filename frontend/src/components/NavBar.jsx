@@ -10,7 +10,6 @@ const NAV_ITEMS = [
   { key: 'contacts',     icon: Users,         label: 'Contactos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'productos',    icon: Store,         label: 'Mi Tienda' },
-  { key: 'catalogo',     icon: Package,       label: 'Catálogo' },
   { key: 'asistente',    icon: Sparkles,      label: 'Asistente' },
 ];
 
