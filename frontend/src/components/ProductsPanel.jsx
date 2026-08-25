@@ -5,7 +5,7 @@
  * Botón "Importar desde Shopify" para migración con un clic.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink } from 'lucide-react';
+import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink, Copy, Check } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
@@ -21,6 +21,7 @@ export default function ProductsPanel({ orgSlug }) {
   const [saving, setSaving]       = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [copied, setCopied]             = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -126,10 +127,29 @@ export default function ProductsPanel({ orgSlug }) {
             </button>
           </div>
         </div>
+        {/* Link de tienda pública */}
+        {storeUrl && (
+          <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '8px',
+            backgroundColor: colors.bgApp, border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '10px 14px' }}>
+            <span style={{ fontSize: '12px', color: colors.textSecondary, flexShrink: 0 }}>🔗 Link de tu tienda:</span>
+            <span style={{ flex: 1, fontSize: '13px', color: colors.textPrimary, fontFamily: 'monospace',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{storeUrl}</span>
+            <button onClick={() => { navigator.clipboard.writeText(storeUrl); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+              title="Copiar link" style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied ? colors.green : colors.textSecondary,
+                display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', flexShrink: 0 }}>
+              {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}
+            </button>
+            <a href={storeUrl} target="_blank" rel="noreferrer"
+              style={{ color: colors.green, textDecoration: 'none', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+              <ExternalLink size={14} />
+            </a>
+          </div>
+        )}
+
         {importResult && (
           <div style={{ marginTop: '12px', padding: '10px 14px', borderRadius: '8px',
             backgroundColor: isDark ? '#22c55e18' : '#dcfce7', border: `1px solid #22c55e44`, fontSize: '13px', color: '#16a34a' }}>
-            ✅ Importación completa: {importResult.imported} nuevos, {importResult.updated} actualizados
+            ✅ Importación completa: {importResult.imported} nuevos, {importResult.updated} actualizados (imágenes y estado incluidos)
             <button onClick={() => setImportResult(null)} style={{ marginLeft: '12px', background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a' }}>✕</button>
           </div>
         )}

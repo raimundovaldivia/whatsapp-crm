@@ -83,35 +83,38 @@ router.post('/import-shopify', async (req, res) => {
     }
 
     const { shop, token } = shopifyApi.credentialsFrom(ds);
-    const { products: shopifyProducts } = await shopifyApi.getProducts(shop, token, { limit: 250 });
+
+    // Traer TODOS los productos con paginación completa
+    const shopifyProducts = await shopifyApi.getAllProducts(shop, token);
 
     let imported = 0, updated = 0;
     const existing = await db.getProducts(req.orgId);
     const existingTitles = new Map(existing.map(p => [p.title.toLowerCase(), p]));
 
     for (const sp of shopifyProducts) {
-      const variant = sp.variants?.[0] || {};
-      const price   = parseFloat(variant.price || sp.price || 0);
-      const title   = sp.title || '';
-      const imageUrl = sp.image?.src || sp.images?.[0]?.src || null;
-      const description = shopifyApi.stripHtml ? shopifyApi.stripHtml(sp.body_html || '') : (sp.body_html || '');
+      // El objeto ya viene procesado por shopify-api.js (GraphQL)
+      const variant     = sp.variants?.[0] || {};
+      const price       = parseFloat(variant.price || sp.priceMin || 0);
+      const comparePrice = parseFloat(variant.compareAt || 0) || null;
+      const title       = sp.title || '';
+      const description = sp.description || '';
+      const sku         = variant.sku || null;
+      const stock       = variant.stock ?? variant.inventoryQuantity ?? -1;
+      const active      = sp.status === 'ACTIVE' || sp.status === 'active';
+
+      // imageUrl viene directamente como URL (GraphQL) — no como { src }
+      const imageUrl = sp.imageUrl || sp.image || null;
 
       const existingProduct = existingTitles.get(title.toLowerCase());
       if (existingProduct) {
         await db.updateProduct(req.orgId, existingProduct.id, {
-          price, image_url: imageUrl, description,
-          sku: variant.sku || null,
-          stock: variant.inventory_quantity ?? -1,
+          price, compare_price: comparePrice, image_url: imageUrl,
+          description, sku, stock, active,  // también actualiza active e imagen
         });
         updated++;
       } else {
         await db.createProduct(req.orgId, {
-          title, description, price,
-          comparePrice: parseFloat(variant.compare_at_price || 0) || null,
-          sku:          variant.sku || null,
-          stock:        variant.inventory_quantity ?? -1,
-          imageUrl,
-          active: sp.status === 'active',
+          title, description, price, comparePrice, sku, stock, imageUrl, active,
         });
         imported++;
       }
