@@ -79,7 +79,8 @@ router.get('/orders', async (req, res) => {
                total_price,
                crm_status
         FROM shopify_orders
-        WHERE organization_id = $1 AND crm_status IN ('nuevo', 'por_despachar')
+        WHERE organization_id = $1
+          AND crm_status NOT IN ('en_camino', 'entregado', 'cancelled')
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
@@ -92,7 +93,7 @@ router.get('/orders', async (req, res) => {
                status                AS crm_status
         FROM orders
         WHERE organization_id = $1
-          AND status IN ('nuevo', 'por_despachar', 'payment_received', 'paid')
+          AND status NOT IN ('draft', 'en_camino', 'entregado', 'cancelled')
         ORDER BY created_at ASC
       `, [req.orgId]),
     ]);
