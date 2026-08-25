@@ -28,11 +28,37 @@ router.get('/:slug/info', async (req, res) => {
     const org = await getOrgBySlug(req.params.slug);
     if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
 
-    const storeName = await db.getSetting(org.id, 'store_name') || org.name;
-    const storeLogo = await db.getSetting(org.id, 'store_logo') || null;
-    const storeColor = await db.getSetting(org.id, 'store_color') || '#22c55e';
+    const [
+      storeName, storeLogo, storeColor,
+      announcement, heroTitle, heroSubtitle, heroTagsRaw,
+      whatsappPhone, freeShippingRaw,
+    ] = await Promise.all([
+      db.getSetting(org.id, 'store_name'),
+      db.getSetting(org.id, 'store_logo'),
+      db.getSetting(org.id, 'store_color'),
+      db.getSetting(org.id, 'store_announcement'),
+      db.getSetting(org.id, 'store_hero_title'),
+      db.getSetting(org.id, 'store_hero_subtitle'),
+      db.getSetting(org.id, 'store_hero_tags'),
+      db.getSetting(org.id, 'store_whatsapp_phone'),
+      db.getSetting(org.id, 'store_free_shipping'),
+    ]);
 
-    res.json({ name: storeName, logo: storeLogo, color: storeColor, slug: org.slug });
+    let heroTags = ['🥚 Huevos libres', '🫒 Aceitunas', '🧀 Quesos', '🚚 Lun – Sáb'];
+    try { if (heroTagsRaw) heroTags = JSON.parse(heroTagsRaw); } catch {}
+
+    res.json({
+      name:         storeName  || org.name,
+      logo:         storeLogo  || null,
+      color:        storeColor || '#22c55e',
+      slug:         org.slug,
+      announcement: announcement || '🚚 Delivery gratis en compras sobre el mínimo',
+      heroTitle:    heroTitle    || 'Productos frescos directo al hogar',
+      heroSubtitle: heroSubtitle || 'Sin intermediarios. Animales criados en libertad, productos que llegan frescos a tu puerta.',
+      heroTags,
+      whatsappPhone: whatsappPhone || null,
+      freeShipping:  freeShippingRaw ? parseInt(freeShippingRaw) : 10000,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

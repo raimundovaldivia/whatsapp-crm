@@ -84,8 +84,13 @@ export default function Tienda({ slug }) {
     })();
   }, [slug]);
 
-  const PRIMARY   = store?.color || '#22c55e';
-  const FREE_SHIP = 10000;
+  const PRIMARY      = store?.color        || '#22c55e';
+  const FREE_SHIP    = store?.freeShipping  ?? 10000;
+  const ANNOUNCEMENT = store?.announcement  || `🚚 Delivery gratis en compras sobre ${fmt(FREE_SHIP)}`;
+  const HERO_TITLE   = store?.heroTitle     || 'Productos frescos directo al hogar';
+  const HERO_SUB     = store?.heroSubtitle  || 'Sin intermediarios. Animales criados en libertad, productos que llegan frescos a tu puerta.';
+  const HERO_TAGS    = store?.heroTags      || ['🥚 Huevos libres', '🫒 Aceitunas', '🧀 Quesos', '🚚 Lun – Sáb'];
+  const WA_PHONE     = store?.whatsappPhone || null;
 
   const cartCount = cart.reduce((s, i) => s + i.quantity, 0);
   const cartTotal = cart.reduce((s, i) => s + parseFloat(i.product.price) * i.quantity, 0);
@@ -173,7 +178,7 @@ export default function Tienda({ slug }) {
 
       {/* Announcement bar */}
       <div style={{ backgroundColor: '#111827', color: 'white', textAlign: 'center', padding: '9px 16px', fontSize: isMobile ? 12 : 13, fontWeight: 500 }}>
-        🚚 Delivery gratis en compras sobre {fmt(FREE_SHIP)}
+        {ANNOUNCEMENT}
       </div>
 
       {/* Header */}
@@ -256,15 +261,14 @@ export default function Tienda({ slug }) {
                 {/* Copy */}
                 <div style={{ flex: 1, minWidth: 260 }}>
                   <h1 style={{ margin: '0 0 14px', fontSize: isMobile ? 30 : 'clamp(28px,4vw,46px)', fontWeight: 900, lineHeight: 1.12, letterSpacing: -1 }}>
-                    Productos frescos<br />
-                    <span style={{ color: PRIMARY }}>directo al hogar</span>
+                    <span style={{ color: PRIMARY }}>{HERO_TITLE}</span>
                   </h1>
                   <p style={{ margin: '0 0 20px', fontSize: isMobile ? 14 : 16, color: '#6b7280', lineHeight: 1.7, maxWidth: 420 }}>
-                    Sin intermediarios. Animales criados en libertad, productos que llegan frescos a tu puerta.
+                    {HERO_SUB}
                   </p>
                   {/* Tags */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
-                    {['🥚 Huevos libres', '🫒 Aceitunas', '🧀 Quesos', '🚚 Lun – Sáb'].map(t => (
+                    {HERO_TAGS.map(t => (
                       <span key={t} style={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: 20, padding: '4px 12px', fontSize: isMobile ? 12 : 13, fontWeight: 500, color: '#374151' }}>{t}</span>
                     ))}
                   </div>
@@ -385,7 +389,7 @@ export default function Tienda({ slug }) {
                   { n: '1', icon: '🛒', t: 'Elige', d: 'Arma tu pedido.' },
                   { n: '2', icon: '📅', t: 'Pide', d: 'Lun a sáb hasta las 11 AM.' },
                   { n: '3', icon: '🌿', t: 'Preparamos', d: 'Directo del campo.' },
-                  { n: '4', icon: '🚚', t: 'Llega', d: `Gratis sobre ${fmt(FREE_SHIP)}.` },
+                  { n: '4', icon: '🚚', t: 'Llega', d: FREE_SHIP > 0 ? `Gratis sobre ${fmt(FREE_SHIP)}.` : 'A coordinar.' },
                 ].map(s => (
                   <div key={s.n} style={{ background: 'white', borderRadius: 12, padding: isMobile ? '18px 12px' : '24px 16px', border: '1px solid #e5e7eb' }}>
                     <div style={{ width: 36, height: 36, borderRadius: '50%', background: `${PRIMARY}20`, color: PRIMARY, fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>{s.n}</div>
@@ -551,13 +555,14 @@ export default function Tienda({ slug }) {
       )}
 
       {/* WhatsApp flotante */}
-      <a href="https://wa.me/56942876413" target="_blank" rel="noreferrer"
+      {WA_PHONE && <a href={`https://wa.me/${WA_PHONE.replace(/\D/g, '')}`} target="_blank" rel="noreferrer"
         style={{ position: 'fixed', bottom: isMobile ? 20 : 24, right: isMobile ? 16 : 24,
           width: isMobile ? 50 : 56, height: isMobile ? 50 : 56, borderRadius: '50%',
           backgroundColor: '#25d366', display: 'flex', alignItems: 'center', justifyContent: 'center',
           boxShadow: '0 4px 20px rgba(37,211,102,0.45)', zIndex: 150, textDecoration: 'none' }}>
         <MessageCircle size={isMobile ? 24 : 28} color="white" fill="white" />
-      </a>
+      </a>}
+
     </div>
   );
 }

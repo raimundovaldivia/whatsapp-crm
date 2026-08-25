@@ -42,6 +42,7 @@ const assistantRouter      = require('./routes/assistant');    // Asistente IA d
 const paymentProofsRouter  = require('./routes/payment-proofs'); // Comprobantes de pago
 const productsRouter       = require('./routes/products');       // Productos propios
 const storeRouter          = require('./routes/store');          // Tienda pública
+const storeSettingsRouter  = require('./routes/store-settings'); // Ajustes editables de la tienda
 
 const app    = express();
 const server = http.createServer(app);
@@ -131,6 +132,7 @@ app.use('/api/dashboard',     dashboardRouter);     // Dashboard de victorias
 app.use('/api/assistant',     assistantRouter);     // Asistente IA del CRM
 app.use('/api/payment-proofs', paymentProofsRouter); // Comprobantes de pago
 app.use('/api/products',      productsRouter);       // Productos propios
+app.use('/api/store-settings', storeSettingsRouter); // Ajustes editables de la tienda (con auth)
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 // ─── ARRANCAR ────────────────────────────────────────────────────

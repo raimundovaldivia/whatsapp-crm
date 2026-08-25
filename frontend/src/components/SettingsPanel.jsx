@@ -9,13 +9,14 @@ import {
   ShoppingBag, RefreshCw, MessageCircle, Phone, Brain,
   Eye, EyeOff, Save, Zap, FileText, ChevronRight,
   Sparkles, ArrowRight, Clock, MapPin, DollarSign, CreditCard,
-  Bot, X, Send, RotateCcw, FlaskConical,
+  Bot, X, Send, RotateCcw, FlaskConical, Store,
 } from 'lucide-react';
 import { setupAPI, api, reengagementAPI, settingsAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
 import { useTheme } from '../theme.js';
 
 const TABS = [
+  { key: 'tienda',    label: 'Tienda',     icon: Store },
   { key: 'shopify',   label: 'Shopify',    icon: ShoppingBag },
   { key: 'whatsapp',  label: 'WhatsApp',   icon: MessageCircle },
   { key: 'ia',        label: 'IA & Bot',   icon: Brain },
@@ -1502,11 +1503,183 @@ function IATab({ onSwitchTab }) {
 }
 
 /* ══════════════════════════════════════════════
+   TAB MI TIENDA
+══════════════════════════════════════════════ */
+function TiendaTab() {
+  const { colors } = useTheme();
+  const [loading,  setLoading]  = useState(true);
+  const [saving,   setSaving]   = useState(false);
+  const [error,    setError]    = useState('');
+  const [success,  setSuccess]  = useState('');
+  const [form, setForm] = useState({
+    store_name:          '',
+    store_logo:          '',
+    store_color:         '#22c55e',
+    store_announcement:  '',
+    store_hero_title:    '',
+    store_hero_subtitle: '',
+    store_hero_tags:     '',   // CSV string para edición
+    store_whatsapp_phone: '',
+    store_free_shipping: '10000',
+    admin_alert_phone:   '',
+  });
+
+  const card = {
+    backgroundColor: colors.bgPanel, borderRadius: '14px',
+    border: `1px solid ${colors.border}`, overflow: 'hidden', marginBottom: '16px',
+  };
+  const cardHeader = {
+    padding: '14px 20px', borderBottom: `1px solid ${colors.border}`,
+    display: 'flex', alignItems: 'center', gap: '10px',
+  };
+  const cardBody = { padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' };
+  const inp = {
+    width: '100%', backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
+    borderRadius: '8px', padding: '9px 13px', color: colors.textPrimary, fontSize: '14px',
+    outline: 'none', boxSizing: 'border-box',
+  };
+  const lbl = { fontSize: '12px', color: colors.textSecondary, marginBottom: '5px', display: 'block' };
+  const hint = { fontSize: '11px', color: colors.textMuted, marginTop: '3px' };
+
+  const set = (key) => (val) => setForm(f => ({ ...f, [key]: val }));
+
+  useEffect(() => {
+    api.get('/store-settings')
+      .then(({ data }) => {
+        const s = data.settings || {};
+        // heroTags viene como JSON array, mostrar como CSV
+        let tagsStr = '';
+        try { tagsStr = JSON.parse(s.store_hero_tags || '[]').join(', '); } catch { tagsStr = s.store_hero_tags || ''; }
+        setForm({
+          store_name:          s.store_name          || '',
+          store_logo:          s.store_logo          || '',
+          store_color:         s.store_color         || '#22c55e',
+          store_announcement:  s.store_announcement  || '',
+          store_hero_title:    s.store_hero_title    || '',
+          store_hero_subtitle: s.store_hero_subtitle || '',
+          store_hero_tags:     tagsStr,
+          store_whatsapp_phone: s.store_whatsapp_phone || '',
+          store_free_shipping: s.store_free_shipping || '10000',
+          admin_alert_phone:   s.admin_alert_phone   || '',
+        });
+      })
+      .catch(err => setError(err.response?.data?.error || 'Error cargando configuración'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    setSaving(true); setError(''); setSuccess('');
+    try {
+      // Convertir tags CSV → JSON array
+      const tagsArray = form.store_hero_tags
+        .split(',').map(t => t.trim()).filter(Boolean);
+      await api.put('/store-settings', {
+        ...form,
+        store_hero_tags: JSON.stringify(tagsArray),
+        store_free_shipping: String(parseInt(form.store_free_shipping) || 0),
+      });
+      setSuccess('✅ Configuración guardada');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error guardando');
+    } finally { setSaving(false); }
+  };
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '32px 0', color: colors.textSecondary, fontSize: 13 }}>
+      <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> Cargando configuración...
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+      {error   && <Alert type="error" msg={error}   colors={colors} />}
+      {success && <Alert type="ok"    msg={success} colors={colors} />}
+
+      {/* Identidad */}
+      <div style={card}>
+        <div style={cardHeader}>
+          <Store size={16} color={colors.green} />
+          <span style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 600 }}>Identidad de la tienda</span>
+        </div>
+        <div style={cardBody}>
+          <div><label style={lbl}>Nombre de la tienda</label>
+            <input style={inp} value={form.store_name} onChange={e => set('store_name')(e.target.value)} placeholder="Diezrios" />
+          </div>
+          <div><label style={lbl}>URL del logo (imagen)</label>
+            <input style={inp} value={form.store_logo} onChange={e => set('store_logo')(e.target.value)} placeholder="https://..." />
+            <p style={hint}>Sube la imagen a un hosting (ej: Cloudinary, R2) y pega la URL</p>
+          </div>
+          <div><label style={lbl}>Color principal</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input type="color" value={form.store_color} onChange={e => set('store_color')(e.target.value)}
+                style={{ width: 48, height: 38, borderRadius: 8, border: `1px solid ${colors.borderStrong}`, cursor: 'pointer', padding: 2, backgroundColor: colors.bgApp }} />
+              <input style={{ ...inp, flex: 1 }} value={form.store_color} onChange={e => set('store_color')(e.target.value)} placeholder="#22c55e" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Banner y hero */}
+      <div style={card}>
+        <div style={cardHeader}>
+          <Sparkles size={16} color={colors.green} />
+          <span style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 600 }}>Contenido de la portada</span>
+        </div>
+        <div style={cardBody}>
+          <div><label style={lbl}>Texto del banner superior</label>
+            <input style={inp} value={form.store_announcement} onChange={e => set('store_announcement')(e.target.value)} placeholder="🚚 Delivery gratis en compras sobre $10.000" />
+          </div>
+          <div><label style={lbl}>Título principal</label>
+            <input style={inp} value={form.store_hero_title} onChange={e => set('store_hero_title')(e.target.value)} placeholder="Productos frescos directo al hogar" />
+          </div>
+          <div><label style={lbl}>Subtítulo</label>
+            <input style={inp} value={form.store_hero_subtitle} onChange={e => set('store_hero_subtitle')(e.target.value)} placeholder="Sin intermediarios. Animales criados en libertad..." />
+          </div>
+          <div><label style={lbl}>Tags / etiquetas (separados por coma)</label>
+            <input style={inp} value={form.store_hero_tags} onChange={e => set('store_hero_tags')(e.target.value)} placeholder="🥚 Huevos libres, 🫒 Aceitunas, 🧀 Quesos" />
+            <p style={hint}>Aparecen como pills debajo del subtítulo</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Entrega y contacto */}
+      <div style={card}>
+        <div style={cardHeader}>
+          <Phone size={16} color={colors.green} />
+          <span style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 600 }}>Entrega y contacto</span>
+        </div>
+        <div style={cardBody}>
+          <div><label style={lbl}>Umbral envío gratis ($)</label>
+            <input style={inp} type="number" min="0" value={form.store_free_shipping} onChange={e => set('store_free_shipping')(e.target.value)} placeholder="10000" />
+            <p style={hint}>Pon 0 para desactivar el progreso de envío gratis</p>
+          </div>
+          <div><label style={lbl}>WhatsApp de contacto (botón flotante)</label>
+            <input style={inp} value={form.store_whatsapp_phone} onChange={e => set('store_whatsapp_phone')(e.target.value)} placeholder="56912345678" />
+            <p style={hint}>Si está vacío, el botón flotante no aparece</p>
+          </div>
+          <div><label style={lbl}>Teléfono admin (alertas de pedidos)</label>
+            <input style={inp} value={form.admin_alert_phone} onChange={e => set('admin_alert_phone')(e.target.value)} placeholder="56912345678" />
+            <p style={hint}>Recibe un mensaje de WhatsApp cada vez que entra un pedido</p>
+          </div>
+        </div>
+      </div>
+
+      <SaveBtn loading={saving} onClick={save} label="Guardar configuración de tienda" colors={colors} />
+
+      <div style={{ marginTop: 8, fontSize: 12, color: colors.textMuted, textAlign: 'center' }}>
+        Los cambios se reflejan de inmediato en la tienda pública
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
    PANEL PRINCIPAL
 ══════════════════════════════════════════════ */
 export default function SettingsPanel({ successMessage, onClearMessage }) {
   const { colors } = useTheme();
-  const [activeTab, setActiveTab] = useState('shopify');
+  const [activeTab, setActiveTab] = useState('tienda');
 
   useEffect(() => {
     if (successMessage) onClearMessage?.();
@@ -1541,6 +1714,7 @@ export default function SettingsPanel({ successMessage, onClearMessage }) {
         </div>
 
         {/* Contenido del tab */}
+        {activeTab === 'tienda'    && <TiendaTab />}
         {activeTab === 'shopify'   && <ShopifyTab />}
         {activeTab === 'whatsapp'  && <WhatsAppTab />}
         {activeTab === 'ia'        && <IATab onSwitchTab={setActiveTab} />}
