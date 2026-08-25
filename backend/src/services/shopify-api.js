@@ -56,6 +56,7 @@ const PRODUCTS_QUERY = `
           vendor
           productType
           status
+          collections(first: 5) { edges { node { title } } }
           images(first: 1) { edges { node { url altText } } }
           variants(first: 100) {
             edges {
@@ -110,9 +111,10 @@ async function getProducts(shop, token, opts = {}) {
     handle:      node.handle,
     description: node.descriptionHtml?.replace(/<[^>]*>/g, '').slice(0, 300) || '',
     vendor:      node.vendor,
-    productType: node.productType,
-    status:      node.status,
-    image:       node.images?.edges?.[0]?.node?.url || null,
+    productType:  node.productType || node.collections?.edges?.[0]?.node?.title || null,
+    collections:  node.collections?.edges?.map(e => e.node.title) || [],
+    status:       node.status,
+    image:        node.images?.edges?.[0]?.node?.url || null,
     imageUrl:    node.images?.edges?.[0]?.node?.url || null,
     priceMin:    parseFloat(node.priceRangeV2?.minVariantPrice?.amount || 0),
     priceMax:    parseFloat(node.priceRangeV2?.maxVariantPrice?.amount || 0),
