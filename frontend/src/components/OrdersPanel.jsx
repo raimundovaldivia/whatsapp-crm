@@ -214,9 +214,9 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
     next.has(key) ? next.delete(key) : next.add(key);
     return next;
   });
-  const selectAllPage  = () => setSelected(prev => { const next = new Set(prev); paginated.forEach(o => next.add(o._key)); return next; });
-  const deselectAll    = () => setSelected(new Set());
-  const allPageSelected = paginated.length > 0 && paginated.every(o => selected.has(o._key));
+  const selectAll   = () => setSelected(new Set(filtered.map(o => o._key)));
+  const deselectAll = () => setSelected(new Set());
+  const allSelected = filtered.length > 0 && filtered.every(o => selected.has(o._key));
 
   // Aplicar cambio masivo
   const handleBulkApply = async () => {
@@ -373,10 +373,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
 
         {/* Barra de selección masiva */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <button onClick={allPageSelected ? deselectAll : selectAllPage}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: allPageSelected ? colors.green : colors.bgPanel, color: allPageSelected ? 'white' : colors.textSecondary, cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
-            <span style={{ width: 14, height: 14, borderRadius: 3, border: `2px solid ${allPageSelected ? 'white' : colors.border}`, backgroundColor: allPageSelected ? 'white' : 'transparent', display: 'inline-block', flexShrink: 0 }} />
-            {allPageSelected ? 'Deseleccionar página' : 'Seleccionar página'}
+          <button onClick={allSelected ? deselectAll : selectAll}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: `1px solid ${allSelected ? colors.green : colors.border}`, backgroundColor: allSelected ? colors.green : colors.bgPanel, color: allSelected ? 'white' : colors.textSecondary, cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
+            <span style={{ width: 14, height: 14, borderRadius: 3, border: `2px solid ${allSelected ? 'white' : colors.border}`, backgroundColor: allSelected ? 'white' : 'transparent', display: 'inline-block', flexShrink: 0 }} />
+            {allSelected ? `Deseleccionar todos (${filtered.length})` : `Seleccionar todos (${filtered.length})`}
           </button>
 
           {selected.size > 0 && (
