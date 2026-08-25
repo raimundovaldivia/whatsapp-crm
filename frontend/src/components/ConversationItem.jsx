@@ -8,6 +8,11 @@ export default function ConversationItem({ conversation, selected, onClick }) {
 
   const timeAgoStr = timeAgo(last_message_at);
 
+  // Si el nombre es genérico, mostrar el teléfono como identificador principal
+  const isDefaultName = !contact_name || contact_name === 'Cliente' || contact_name === phone_number;
+  const displayName   = isDefaultName ? (phone_number || '?') : contact_name;
+  const displayPhone  = isDefaultName ? null : phone_number;   // subtitle solo cuando hay nombre real
+
   const initials = (contact_name || phone_number || '?')
     .split(' ')
     .map(w => w[0])
@@ -74,17 +79,25 @@ export default function ConversationItem({ conversation, selected, onClick }) {
       {/* Info */}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span style={{
-            fontSize: '15px',
-            fontWeight: unread_count > 0 ? 600 : 400,
-            color: colors.textPrimary,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            maxWidth: '180px',
-          }}>
-            {contact_name || phone_number}
-          </span>
+          <div style={{ overflow: 'hidden' }}>
+            <span style={{
+              fontSize: '14px',
+              fontWeight: unread_count > 0 ? 600 : 500,
+              color: colors.textPrimary,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              display: 'block',
+              maxWidth: '175px',
+            }}>
+              {displayName}
+            </span>
+            {displayPhone && (
+              <span style={{ fontSize: '11px', color: colors.textSecondary, display: 'block' }}>
+                {displayPhone}
+              </span>
+            )}
+          </div>
           <span style={{ fontSize: '11px', color: unread_count > 0 ? colors.green : colors.textSecondary, flexShrink: 0 }}>
             {timeAgoStr}
           </span>

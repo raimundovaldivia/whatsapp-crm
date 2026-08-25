@@ -117,16 +117,23 @@ router.post('/', async (req, res) => {
 
     // 4. Si está en modo humano, verificar si hace mucho que no responde un humano
     if (updatedConv.agent_mode !== 'ai') {
-      const AUTO_RESET_MINUTES = 120; // 2 horas sin respuesta humana → vuelve a IA
+      const AUTO_RESET_MINUTES = 1440; // 24 horas sin respuesta humana → vuelve a IA
       const mins = await db.minutesSinceLastHumanReply(conversation.id);
       if (mins < AUTO_RESET_MINUTES) {
         console.log(`[KapsoWebhook] Modo humano activo (último humano hace ${Math.round(mins)}min), sin respuesta IA`);
         return;
       }
-      // Auto-reset a modo IA
+      // Auto-reset a modo IA — pero NO responder en este turno para evitar loops
+      // El próximo mensaje del cliente ya recibirá respuesta normal de IA
       console.log(`[KapsoWebhook] Auto-reset a modo IA (sin respuesta humana en ${Math.round(mins)}min)`);
       await db.setAgentMode(conversation.id, 'ai');
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
+      // Limpiar el estado de escalación para que el pipeline trate el próximo mensaje como nuevo
+      if (typeof db.clearLastEscalation === 'function') {
+        await db.clearLastEscalation(conversation.id).catch(() => {});
+      }
+      // No responder ahora — el próximo mensaje del cliente activará la IA limpia
+      return;
     }
 
     // 5. Ejecutar pipeline de 3 agentes

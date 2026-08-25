@@ -58,8 +58,19 @@ Nada más. Solo el JSON.`;
  * @returns {{ escalate: boolean, reason: string, urgency: 'low'|'medium'|'high' }}
  */
 async function checkEscalation(userMessage, conversationHistory, pipelineState, orgId = null) {
+  // ── 0. Romper bucle de escalación ────────────────────────────────
+  // Si el bot ya respondió 2+ veces con mensajes de escalación, no escalar de nuevo
+  const ESCALATION_PHRASES = ['voy a conectarte', 'te voy a conectar', 'ya te atienden', 'pasarte con', 'asesor para que te ayude', 'conectarte ahora mismo'];
+  const recentBotMsgs = (conversationHistory || []).filter(m => m.direction === 'outbound').slice(-4);
+  const escalationLoopCount = recentBotMsgs.filter(m =>
+    ESCALATION_PHRASES.some(phrase => m.content?.toLowerCase().includes(phrase))
+  ).length;
+  if (escalationLoopCount >= 2) {
+    return { escalate: false, reason: 'Rompiendo bucle — bot ya escaló múltiples veces, retomando como IA', urgency: 'low' };
+  }
+
   // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────
-  const simpleGreetings = /^(hola|hi|hello|hey|buenas?|buen[oa]s? (días?|tardes?|noches?)|como estas?|qué tal|cómo estás?|saludos?|holis?|que tal|ke tal)\s*[!?\.]*$/i;
+  const simpleGreetings = /^(hola|hi|hello|hey|buenas?|buen[oa]s? (días?|tardes?|noches?)|como estas?|qué tal|cómo estás?|saludos?|holis?|que tal|ke tal|bien|gracias?|ok|okay|si|no|claro|dale|perfecto)\s*[!?\.]*$/i;
   if (simpleGreetings.test(userMessage.trim())) {
     return { escalate: false, reason: 'Saludo simple', urgency: 'low' };
   }
