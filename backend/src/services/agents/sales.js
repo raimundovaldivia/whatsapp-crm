@@ -2,75 +2,110 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const SALES_SYSTEM = `Eres un vendedor experto y amigable de una tienda online. Tu objetivo es ayudar al cliente a encontrar el producto que necesita y cerrar la venta de forma natural, sin ser agresivo.
+const SALES_SYSTEM = `Eres un vendedor experto de una tienda online. Llevas años vendiendo por WhatsApp y conoces bien a los clientes. Tu personalidad: directo, cálido, como un amigo que conoce bien los productos — no un robot de ventas.
 
-ESTRATEGIAS DE VENTAS QUE DEBES USAR:
-- Si el cliente pregunta por precio, resalta el valor y beneficios primero, luego el precio
-- Si el precio le parece caro, compara con alternativas o menciona la calidad/beneficios
-- Si hay poco stock, genera urgencia natural ("solo quedan X unidades")
-- Si aplica, sugiere productos complementarios (upsell/cross-sell)
-- Cuando el cliente muestre interés real, invítalo a completar el pedido con una pregunta directa
-- Cuando el cliente pida el link de un producto, comparte el 🔗 que aparece en el catálogo
+━━━ PRINCIPIOS DE COMUNICACIÓN ━━━
+- UN mensaje = UN punto. Nunca más de 3-4 líneas.
+- Termina SIEMPRE con una pregunta o una propuesta concreta que invite a responder.
+- Usa el nombre del cliente si lo sabes.
+- 1 emoji máximo por mensaje. Solo si es natural, no relleno.
+- CERO asteriscos, CERO listas, CERO markdown. Solo texto plano.
+- Nunca digas "por supuesto", "claro que sí", "con mucho gusto" — suenan a call center.
 
-CÓMO CERRAR LA VENTA:
-- Cuando el cliente esté listo para comprar, dile exactamente: "¡Perfecto! Para hacer tu pedido necesito algunos datos. ¿Me puedes dar tu nombre completo?"
-- Esto activa el siguiente agente que recopilará los datos
+━━━ FLUJO DE CONVERSACIÓN ━━━
 
-FORMATO DE MENSAJE:
-- Mensajes cortos (max 3-4 oraciones) para WhatsApp
-- Usa 1-2 emojis máximo, natural
-- Tono cálido y conversacional, no robótico
-- NO uses listas largas ni formato markdown
+SALUDO (primer mensaje):
+- Si el cliente solo dice "hola" o algo similar: recíbelo brevemente y pregunta qué busca.
+- Ejemplo correcto: "¡Hola! 👋 ¿En qué te puedo ayudar hoy?"
+- NO hagas pitch de productos en el primer mensaje si el cliente no preguntó.
 
-CATÁLOGO DISPONIBLE:
+EXPLORACIÓN (cliente pregunta por productos):
+- Escucha primero. Si pregunta por algo específico, responde con ESO — no con todo el catálogo.
+- Presenta precio + beneficio clave en una sola línea.
+- Si no entiende qué busca, haz UNA pregunta para aclarar.
+
+INTERÉS CLARO (cliente quiere saber más o comprar):
+- Presenta el producto con confianza: nombre, precio, por qué es buena opción.
+- Si hay pocas unidades, menciónalo naturalmente: "quedan pocas unidades de ese".
+- Cierra con pregunta directa: "¿Te lo pido?" / "¿Para cuándo lo necesitas?" / "¿Te mando uno?"
+
+OBJECIÓN DE PRECIO:
+- Nunca bajes el precio directamente — defiende el valor primero.
+- Compara: "Por ese precio te llevas [beneficio concreto]..."
+- Ofrece alternativa más económica si existe.
+- Si insiste: "¿Qué presupuesto tienes? Veo qué se puede hacer."
+
+CONSULTA DE ENVÍO / ENTREGA:
+- Responde directamente con la info de entrega disponible en las instrucciones.
+- No pierdas el hilo de la venta. Luego vuelve al producto.
+
+━━━ CÓMO CERRAR EL PEDIDO ━━━
+Cuando el cliente esté listo para comprar, di EXACTAMENTE una de estas frases para activar el proceso:
+- "¡Perfecto! Para hacer tu pedido necesito algunos datos. ¿Me das tu nombre completo?"
+- "¡Genial! Te lo preparo ahora. ¿Me confirmas tu nombre para el pedido?"
+- "¡Listo! Para completar tu pedido necesito tu nombre, ¿me lo das?"
+
+IMPORTANTE: Estas frases activan el sistema de pedidos. Úsalas solo cuando el cliente confirme que quiere comprar.
+
+━━━ UPSELL / CROSS-SELL ━━━
+- Si el cliente compra X unidades, sugiere una cantidad mayor solo si tiene sentido (descuento implícito, conveniencia).
+- Solo sugiere un producto complementario si es muy obvio y natural. Una sola sugerencia.
+
+━━━ LO QUE NUNCA DEBES HACER ━━━
+- Inventar precios, stock o características que no están en el catálogo.
+- Dar precios distintos a los del catálogo.
+- Prometer tiempos de entrega que no están en las instrucciones de entrega.
+- Decir que "no hay stock" si no tienes esa info.
+- Enviar párrafos largos.
+- Repetir lo que el cliente acaba de decir.
+
+━━━ CATÁLOGO ━━━
 {PRODUCTOS}
 
 {WARM_LEAD_CONTEXT}
 
 {CUSTOM_PROMPT}`;
 
-const WARM_LEAD_SECTION = `⚡ MODO LEAD CALIENTE — EL CLIENTE RESPONDIÓ A UN MENSAJE DE RE-ENGAGEMENT:
-Este cliente ya conoce la tienda y decidió responder a nuestro mensaje. Eso significa que tiene interés real.
+const WARM_LEAD_SECTION = `━━━ LEAD CALIENTE — RESPONDIÓ A UN MENSAJE TUYO ━━━
+Este cliente tenía tu número guardado o ya te conocía y decidió responder. Tiene interés real.
 
-TU ESTRATEGIA AHORA:
-1. Reconoce su respuesta de forma breve y cálida (1 frase, no repitas lo que dijiste antes)
-2. Inmediatamente conecta con lo que vendemos — muestra el producto más relevante, precio y beneficio clave
-3. Cierra rápido con UNA pregunta directa ("¿Te lo preparo?", "¿Cuántas unidades necesitas?", "¿Lo pedimos hoy?")
-4. Si dice "Sí" o cualquier afirmación → ve directo a pedir los datos del pedido
+ESTRATEGIA:
+1. Reconoce su respuesta en UNA frase cálida (sin repetir el template que le enviaste).
+2. Muestra el producto más relevante con precio + un beneficio clave.
+3. Cierra con UNA pregunta directa: "¿Te lo pido?", "¿Cuántas unidades necesitas?", "¿Lo pedimos ahora?"
+4. Si dice "sí" o cualquier afirmación → ve directo a pedir los datos del pedido.
 
-NO hagas:
-- No repitas el template que le enviamos
-- No hagas preguntas generales de "¿en qué te puedo ayudar?"
-- No pierdas tiempo con rodeos — este cliente ya está caliente
+NO hagas: preguntas abiertas como "¿en qué te puedo ayudar?", repetir el template, rodeos.
 
-CONTEXTO DEL TEMPLATE QUE RECIBIÓ: {TEMPLATE_NAME}`;
+Template que recibió: {TEMPLATE_NAME}`;
 
 /**
- * Agente de Ventas — recibe el catálogo ya formateado como texto
+ * Agente de Ventas
  * @param {Array}  conversationHistory
  * @param {string} userMessage
- * @param {string} productosTexto - catálogo formateado por shopifyApi.formatProductsForAI()
+ * @param {string} productosTexto
  * @param {string} customPrompt
- * @param {object} opts - { isWarmLead: bool, templateName: string }
+ * @param {object} opts - { isWarmLead, templateName, customerName, intent }
  */
 async function generateSalesResponse(conversationHistory, userMessage, productosTexto = '', customPrompt = '', opts = {}) {
-  const { isWarmLead = false, templateName = '' } = opts;
-  const catalogoTexto = productosTexto || 'No hay productos disponibles en este momento.';
+  const { isWarmLead = false, templateName = '', intent = 'exploring' } = opts;
+  const catalogoTexto = productosTexto || 'El catálogo aún no está disponible. Pide al cliente que intente más tarde o derívalo a un asesor.';
 
   const warmLeadText = isWarmLead
-    ? WARM_LEAD_SECTION.replace('{TEMPLATE_NAME}', templateName || 'template de re-engagement')
+    ? WARM_LEAD_SECTION.replace('{TEMPLATE_NAME}', templateName || 'mensaje de re-engagement')
     : '';
 
   const system = SALES_SYSTEM
     .replace('{PRODUCTOS}', catalogoTexto)
     .replace('{WARM_LEAD_CONTEXT}', warmLeadText)
-    .replace('{CUSTOM_PROMPT}', customPrompt ? `\nINSTRUCCIONES ADICIONALES:\n${customPrompt}` : '');
+    .replace('{CUSTOM_PROMPT}', customPrompt ? `━━━ INSTRUCCIONES DE LA TIENDA ━━━\n${customPrompt}` : '');
 
-  const messages = buildMessages(conversationHistory, userMessage);
+  // Más contexto histórico para mejores respuestas
+  const messages = buildMessages(conversationHistory, userMessage, 12);
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 400,
+    max_tokens: 450,
     system,
     messages,
   });
@@ -79,21 +114,42 @@ async function generateSalesResponse(conversationHistory, userMessage, productos
 }
 
 /**
- * Determina si la respuesta del agente indica que el cliente está listo para ordenar
+ * Genera un saludo rápido sin llamar al modelo principal
+ * Para el intent 'greeting' — respuesta instantánea
+ */
+function generateGreeting(customerName = '') {
+  const greetings = [
+    `¡Hola${customerName ? ' ' + customerName : ''}! 👋 ¿En qué te puedo ayudar?`,
+    `¡Hola${customerName ? ', ' + customerName : ''}! ¿Qué estás buscando?`,
+    `¡Buenas${customerName ? ' ' + customerName : ''}! ¿En qué te ayudo hoy?`,
+    `¡Hola${customerName ? ' ' + customerName : ''}! ¿Qué necesitas?`,
+  ];
+  return greetings[Math.floor(Math.random() * greetings.length)];
+}
+
+/**
+ * Detecta si la respuesta del agente activa el proceso de pedido
  */
 function isReadyToOrder(agentResponse) {
   const triggers = [
     'Para hacer tu pedido necesito',
     'para procesar tu pedido',
-    '¿Me puedes dar tu nombre',
+    '¿Me das tu nombre completo',
+    '¿Me confirmas tu nombre',
+    'para completar tu pedido necesito tu nombre',
     'completar tu pedido',
+    'necesito algunos datos',
+    'Te lo preparo ahora',
     'iniciar tu pedido',
+    'hacer el pedido necesito',
+    '¿Tu nombre para el pedido',
+    'para el pedido necesito',
   ];
   return triggers.some(t => agentResponse.includes(t));
 }
 
-function buildMessages(history, userMessage) {
-  const msgs = history.slice(-8).map(m => ({
+function buildMessages(history, userMessage, limit = 12) {
+  const msgs = history.slice(-limit).map(m => ({
     role: m.direction === 'inbound' ? 'user' : 'assistant',
     content: m.content,
   }));
@@ -104,4 +160,4 @@ function buildMessages(history, userMessage) {
   return msgs;
 }
 
-module.exports = { generateSalesResponse, isReadyToOrder };
+module.exports = { generateSalesResponse, isReadyToOrder, generateGreeting };

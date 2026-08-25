@@ -10,7 +10,7 @@
 
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
-const shopifyApi  = require('./shopify-api');  // Shopify: productos y pedidos (directo)
+const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
@@ -21,7 +21,7 @@ const ordersAgent  = require('./agents/orders');
  */
 async function processMessage(orgId, conversationId, userMessage) {
   const conversation = await db.getConversationById(conversationId);
-  const history = await db.getLastMessages(conversationId, 12);
+  const history = await db.getLastMessages(conversationId, 16);
 
   // URL pública de la tienda integrada (para links en catálogo y system prompt)
   const tiendaUrl = await db.getSetting(orgId, 'store_public_url') || null;
@@ -95,6 +95,20 @@ async function processMessage(orgId, conversationId, userMessage) {
     : '';
   const storeCustomPrompt = [deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
+  // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
+  // Si escribe de nuevo después de confirmar, reiniciar a exploración
+  if (currentState === 'confirmed' || currentState === 'awaiting_payment') {
+    const inboundAfterConfirm = history.filter(m => m.direction === 'inbound').length;
+    // Si es el primer mensaje post-confirmación, responder con continuación natural
+    if (inboundAfterConfirm <= 1) {
+      await db.updatePipelineState(conversationId, 'exploring');
+      const afterOrderMsg = '¡Ya tenemos tu pedido registrado! 😊 ¿Puedo ayudarte con algo más?';
+      return { response: afterOrderMsg, agentType: 'sales', newState: 'exploring' };
+    }
+    // Si ya hay más mensajes, solo reiniciar el estado y seguir normalmente
+    await db.updatePipelineState(conversationId, 'exploring');
+  }
+
   // ── Detectar respuesta a template de re-engagement ─────────────────
   // Si el último estado era 'template_sent', el cliente acaba de responder
   // a uno de nuestros templates → lead caliente, ir directo a venta
@@ -150,16 +164,38 @@ async function processMessage(orgId, conversationId, userMessage) {
   const { intent, confidence } = intentResult || { intent: 'interested', confidence: 0.9 };
   console.log(`[Pipeline] Intent: ${intent} (${Math.round(confidence * 100)}%) | State: ${effectiveState}${isTemplateReply ? ' 🔥 WARM LEAD' : ''}`);
 
-  const salesOpts = { isWarmLead: isTemplateReply, templateName };
+  // Datos del cliente conocido para personalizar saludos
+  const knownCustomerData = conversation.phone_number
+    ? await db.getContact(orgId, conversation.phone_number).catch(() => null)
+    : null;
+  const customerName = knownCustomerData?.name?.split(' ')[0] || '';
+
+  const salesOpts = { isWarmLead: isTemplateReply, templateName, customerName, intent };
 
   // ── Mapeo de intent → acción ─────────────────────────────────────
 
-  // El cliente quiere hablar con humano — pero si ya detectamos un bucle, ignorar y atender normal
+  // FAST PATH: Saludo simple → respuesta inmediata sin LLM adicional
+  if (intent === 'greeting' && !isTemplateReply && history.filter(m => m.direction === 'outbound').length === 0) {
+    const greeting = salesAgent.generateGreeting(customerName);
+    await db.updatePipelineState(conversationId, 'exploring');
+    return { response: greeting, agentType: 'sales', newState: 'exploring' };
+  }
+
+  // FAST PATH: Pregunta de delivery → responder con info de settings + retomar venta
+  if (intent === 'delivery_inquiry' && storeCustomPrompt && !isTemplateReply) {
+    // Dejar que el agente de ventas responda — ya tiene la info de delivery en su prompt
+    const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
+    const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : effectiveState;
+    await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
+    return { response: salesResponse, agentType: 'sales', newState };
+  }
+
+  // El cliente quiere hablar con humano — salvo si ya detectamos bucle de escalación
   if (intent === 'human_request' && !escalationResult.loopDetected) {
     await db.setAgentMode(conversationId, 'human');
     await db.updatePipelineState(conversationId, 'exploring');
     return {
-      response: '¡Claro! Te voy a conectar con uno de nuestros asesores ahora mismo. En un momento alguien te atiende 👋',
+      response: '¡Claro! Te conecto con uno de nuestros asesores ahora mismo. En un momento alguien te atiende 👋',
       agentType: 'orchestrator',
       newState: 'exploring',
       switchToHuman: true,
@@ -174,17 +210,11 @@ async function processMessage(orgId, conversationId, userMessage) {
     return { response: salesResponse, agentType: 'sales', newState };
   }
 
-  // Cliente muestra interés o tiene objeción → Agente de ventas
-  if (intent === 'interested' || intent === 'objection') {
-    const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
-    const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
-    await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
-    return { response: salesResponse, agentType: 'sales', newState };
-  }
-
-  // Exploración general o soporte → Agente de ventas en modo informativo
+  // Interés, objeción, exploración, delivery, soporte → Agente de ventas
   const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
-  return { response: salesResponse, agentType: 'sales', newState: 'exploring' };
+  const finalState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : (intent === 'interested' ? 'interested' : effectiveState);
+  await db.updatePipelineState(conversationId, finalState, finalState === 'collecting_order' ? {} : undefined);
+  return { response: salesResponse, agentType: 'sales', newState: finalState };
 }
 
 /**
@@ -270,7 +300,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto);
 
   // 3. Verificar si el cliente confirmó
-  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage);
+  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft);
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft)) {
     // Default 'cod' — si no está configurado asumimos pago contra entrega
@@ -291,22 +321,23 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
     // ── COD: solo guardar en nuestra DB, sin tocar Shopify ────────
     if (paymentMode === 'cod') {
+      const qty = parseInt(updatedDraft.quantity) || 1;
       try {
         const order = await db.createOrder({
           conversationId,
           organizationId: orgId,
-          items:           [{ name: updatedDraft.product_name, quantity: updatedDraft.quantity }],
+          items:           [{ name: updatedDraft.product_name, quantity: qty }],
           customerName:    updatedDraft.customer_name,
           customerPhone:   updatedDraft.customer_phone || conversation.phone_number,
           shippingAddress: { address: updatedDraft.address, city: updatedDraft.city },
           totalPrice:      updatedDraft.price
-            ? parseFloat(updatedDraft.price) * (parseInt(updatedDraft.quantity) || 1)
+            ? parseFloat(updatedDraft.price) * qty
             : null,
         });
         saveContact();
         await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
         console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id}`);
-        const successMsg = `✅ ¡Pedido confirmado!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\n💵 El pago se realiza al momento del despacho.\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
+        const successMsg = `✅ ¡Pedido confirmado!\n\n📦 ${updatedDraft.product_name} x${qty}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\nEl pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
         return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id } };
       } catch (err) {
         console.error('[Pipeline] ❌ Error guardando pedido COD:', err.message);
@@ -322,11 +353,12 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     }
 
     // ── Link de pago: crear draft en Shopify + guardar en DB ──────
+    const qty = parseInt(updatedDraft.quantity) || 1;
     try {
-      const result = await createShopifyOrder(orgId, conversationId, updatedDraft);
+      const result = await createShopifyOrder(orgId, conversationId, { ...updatedDraft, quantity: qty });
       saveContact();
       await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
-      const successMsg = `✅ ¡Pedido creado exitosamente!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
+      const successMsg = `✅ ¡Pedido creado!\n\n📦 ${updatedDraft.product_name} x${qty}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Te avisamos cuando esté en camino! 🚀`;
       return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
     } catch (err) {
       const status  = err.response?.status;
