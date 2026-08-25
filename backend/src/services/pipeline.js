@@ -274,7 +274,8 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft)) {
     // ── CREAR ORDEN EN SHOPIFY ─────────────────────────────────
-    const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'link';
+    // Default 'cod' — si no está configurado asumimos pago contra entrega
+    const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
     try {
       const result = await createShopifyOrder(orgId, conversationId, updatedDraft);
 
@@ -335,8 +336,8 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         : '';
 
       const errorMsg = productInfo
-        ? `Recibí todos tus datos 📝${productInfo ? '\n\n' + productInfo : ''}\n\nHubo un problema técnico al generar tu link de pago 😔 Un asesor te lo enviará manualmente en unos minutos. ¡Gracias por tu paciencia!`
-        : 'Recibí tu pedido pero hubo un problema técnico al generarlo 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
+        ? `Recibí todos tus datos 📝\n\n${productInfo}\n\nHubo un problema técnico al registrar tu pedido 😔 Un asesor te confirmará en unos minutos. ¡Gracias por tu paciencia!`
+        : 'Recibí tu pedido pero hubo un problema técnico 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
 
       // Log detallado para debugging
       console.error('[Pipeline] Error detail:', err.message);

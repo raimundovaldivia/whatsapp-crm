@@ -30,6 +30,7 @@ const STORE_KEYS = [
   'store_how_to_buy',      // texto largo editable
   'store_about_us',        // texto largo editable
   'store_public_url',      // URL pública de la tienda integrada (ej: https://crm.diezrios.cl/tienda/diezrios)
+  'payment_mode',          // 'cod' = pago contra entrega | 'link' = link de pago Shopify
 ];
 
 // ── GET /api/store-settings ────────────────────────────────────────
