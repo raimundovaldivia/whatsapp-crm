@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Delivery CRM",
+    "slug": "whatsapp-crm-delivery",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0f172a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.yourcompany.deliverycrm",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para calcular la ruta de entrega desde tu posición actual."
+      },
+      "config": {
+        "googleMapsApiKey": "TU_GOOGLE_MAPS_IOS_KEY"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0f172a"
+      },
+      "package": "com.yourcompany.deliverycrm",
+      "config": {
+        "googleMaps": {
+          "apiKey": "TU_GOOGLE_MAPS_ANDROID_KEY"
+        }
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Necesitamos tu ubicación para calcular la ruta de entrega."
+        }
+      ]
+    ]
+  }
+}

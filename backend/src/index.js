@@ -44,6 +44,7 @@ const productsRouter       = require('./routes/products');       // Productos pr
 const storeRouter          = require('./routes/store');          // Tienda pública
 const storeSettingsRouter  = require('./routes/store-settings'); // Ajustes editables de la tienda
 const contactsRouter       = require('./routes/contacts');        // Contactos (leads y clientes)
+const deliveryRouter       = require('./routes/delivery');         // App mobile de repartidor
 
 const app    = express();
 const server = http.createServer(app);
@@ -135,6 +136,7 @@ app.use('/api/payment-proofs', paymentProofsRouter); // Comprobantes de pago
 app.use('/api/products',      productsRouter);       // Productos propios
 app.use('/api/store-settings', storeSettingsRouter); // Ajustes editables de la tienda (con auth)
 app.use('/api/contacts',      contactsRouter);       // Contactos: leads y clientes
+app.use('/api/delivery',      deliveryRouter);        // App mobile repartidor
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
