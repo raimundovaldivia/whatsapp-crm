@@ -108,9 +108,11 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [lastSync,      setLastSync]      = useState(null);
 
   // Filtros
-  const [dateFilter,   setDateFilter]   = useState('all');   // all | today | week | month
-  const [sourceFilter, setSourceFilter] = useState('all');   // all | bot | shopify
-  const [statusFilter, setStatusFilter] = useState('all');   // all | paid | pending | cancelled
+  const [dateFilter,   setDateFilter]   = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [page,         setPage]         = useState(1);
+  const PAGE_SIZE = 50;
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -171,6 +173,14 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       return true;
     });
   }
+
+  const totalPages  = Math.ceil(filtered.length / PAGE_SIZE);
+  const paginated   = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // Reset página si el filtro cambia
+  const setDateFilterR   = v => { setDateFilter(v);   setPage(1); };
+  const setSourceFilterR = v => { setSourceFilter(v); setPage(1); };
+  const setStatusFilterR = v => { setStatusFilter(v); setPage(1); };
 
   const handleStatusChange = async (orderId, newStatus) => {
     try {
@@ -251,7 +261,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               { key: 'week',  label: '7 días' },
               { key: 'month', label: '30 días' },
             ].map(({ key, label }) => (
-              <button key={key} onClick={() => setDateFilter(key)}
+              <button key={key} onClick={() => setDateFilterR(key)}
                 style={{ padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, border: `1px solid ${dateFilter === key ? colors.green : colors.border}`, backgroundColor: dateFilter === key ? colors.green : colors.bgPanel, color: dateFilter === key ? 'white' : colors.textSecondary, cursor: 'pointer' }}>
                 {label}
               </button>
@@ -266,7 +276,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
             { key: 'bot',     label: '🤖 Bot',   icon: null },
             { key: 'shopify', label: '🛍️ Shopify', icon: null },
           ].map(({ key, label }) => (
-            <button key={key} onClick={() => setSourceFilter(key)}
+            <button key={key} onClick={() => setSourceFilterR(key)}
               style={{ padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, border: `1px solid ${sourceFilter === key ? '#4db6ac' : colors.border}`, backgroundColor: sourceFilter === key ? '#0d2929' : colors.bgPanel, color: sourceFilter === key ? '#4db6ac' : colors.textSecondary, cursor: 'pointer' }}>
               {label}
             </button>
@@ -281,7 +291,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
             { key: 'paid',      label: 'Pagados' },
             { key: 'cancelled', label: 'Cancelados' },
           ].map(({ key, label }) => (
-            <button key={key} onClick={() => setStatusFilter(key)}
+            <button key={key} onClick={() => setStatusFilterR(key)}
               style={{ padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, border: `1px solid ${statusFilter === key ? colors.yellow : colors.border}`, backgroundColor: statusFilter === key ? '#2e2100' : colors.bgPanel, color: statusFilter === key ? colors.yellow : colors.textSecondary, cursor: 'pointer' }}>
               {label}
             </button>
@@ -294,19 +304,39 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         ) : filtered.length === 0 ? (
           <EmptyMsg icon={<ShoppingBag size={40} />} text="Sin pedidos en este rango" sub="Prueba cambiando los filtros de fecha o fuente" />
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {filtered.map(order => (
-              order.source === 'bot'
-                ? <BotOrderCard key={order._key} order={order.raw}
-                    onStatusChange={handleStatusChange}
-                    onResendLink={handleResendLink}
-                    onSyncShopify={handleSyncShopify}
-                    onGoToConversation={onSelectConversation}
-                    syncing={syncing === order.rawId}
-                  />
-                : <ShopifyOrderCard key={order._key} order={order} />
-            ))}
-          </div>
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {paginated.map(order => (
+                order.source === 'bot'
+                  ? <BotOrderCard key={order._key} order={order.raw}
+                      onStatusChange={handleStatusChange}
+                      onResendLink={handleResendLink}
+                      onSyncShopify={handleSyncShopify}
+                      onGoToConversation={onSelectConversation}
+                      syncing={syncing === order.rawId}
+                    />
+                  : <ShopifyOrderCard key={order._key} order={order} />
+              ))}
+            </div>
+
+            {/* Paginación */}
+            {totalPages > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '16px 0' }}>
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                  style={{ padding: '6px 16px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, color: page === 1 ? colors.textSecondary : colors.textPrimary, cursor: page === 1 ? 'not-allowed' : 'pointer', fontSize: '13px' }}>
+                  ← Anterior
+                </button>
+                <span style={{ fontSize: '13px', color: colors.textSecondary }}>
+                  Página <strong style={{ color: colors.textPrimary }}>{page}</strong> de {totalPages}
+                  <span style={{ marginLeft: '8px', opacity: 0.6 }}>({filtered.length} total)</span>
+                </span>
+                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+                  style={{ padding: '6px 16px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, color: page === totalPages ? colors.textSecondary : colors.textPrimary, cursor: page === totalPages ? 'not-allowed' : 'pointer', fontSize: '13px' }}>
+                  Siguiente →
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
