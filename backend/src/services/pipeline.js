@@ -273,80 +273,71 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage);
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft)) {
-    // ── CREAR ORDEN EN SHOPIFY ─────────────────────────────────
     // Default 'cod' — si no está configurado asumimos pago contra entrega
     const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
+
+    const saveContact = () => db.upsertContact(orgId, {
+      phone:     conversation.phone_number,
+      name:      updatedDraft.customer_name  || null,
+      email:     updatedDraft.customer_email || null,
+      address:   updatedDraft.address        || null,
+      city:      updatedDraft.city           || null,
+      region:    updatedDraft.region         || null,
+      shopifyId: updatedDraft.shopify_customer_id || null,
+    }).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
+
+    // ── COD: solo guardar en nuestra DB, sin tocar Shopify ────────
+    if (paymentMode === 'cod') {
+      try {
+        const order = await db.createOrder({
+          conversationId,
+          organizationId: orgId,
+          items:           [{ name: updatedDraft.product_name, quantity: updatedDraft.quantity }],
+          customerName:    updatedDraft.customer_name,
+          customerPhone:   updatedDraft.customer_phone || conversation.phone_number,
+          shippingAddress: { address: updatedDraft.address, city: updatedDraft.city },
+          totalPrice:      updatedDraft.price
+            ? parseFloat(updatedDraft.price) * (parseInt(updatedDraft.quantity) || 1)
+            : null,
+        });
+        saveContact();
+        await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
+        console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id}`);
+        const successMsg = `✅ ¡Pedido confirmado!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\n💵 El pago se realiza al momento del despacho.\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
+        return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id } };
+      } catch (err) {
+        console.error('[Pipeline] ❌ Error guardando pedido COD:', err.message);
+        const productInfo = updatedDraft.product_name
+          ? `📦 *${updatedDraft.product_name}* x${updatedDraft.quantity || 1}\n📍 ${updatedDraft.address || ''}, ${updatedDraft.city || ''}`
+          : '';
+        const errorMsg = productInfo
+          ? `Recibí todos tus datos 📝\n\n${productInfo}\n\nHubo un problema técnico al registrar tu pedido 😔 Un asesor te confirmará en unos minutos. ¡Gracias por tu paciencia!`
+          : 'Recibí tu pedido pero hubo un problema técnico 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
+        await db.setAgentMode(conversationId, 'human');
+        return { response: errorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true };
+      }
+    }
+
+    // ── Link de pago: crear draft en Shopify + guardar en DB ──────
     try {
       const result = await createShopifyOrder(orgId, conversationId, updatedDraft);
-
-      let successMsg;
-      if (paymentMode === 'cod') {
-        // Despacho por pagar — completar el draft inmediatamente como orden real
-        try {
-          const ds = await db.getPrimaryDataSource(orgId);
-          await shopifyApi.completeDraftOrder(
-            ds.config?.storeUrl,
-            ds.config?.accessToken,
-            result.orderId,
-          );
-          console.log(`[Pipeline] ✅ Draft completado como orden real COD: ${result.orderId}`);
-        } catch (completeErr) {
-          // No es fatal — el draft existe igual, solo queda en Borradores
-          console.warn('[Pipeline] No se pudo completar el draft como orden real:', completeErr.message);
-        }
-        // ── Guardar/actualizar contacto con los datos del pedido confirmado ──
-      db.upsertContact(orgId, {
-        phone:   conversation.phone_number,
-        name:    updatedDraft.customer_name  || null,
-        email:   updatedDraft.customer_email || null,
-        address: updatedDraft.address        || null,
-        city:    updatedDraft.city           || null,
-        region:  updatedDraft.region         || null,
-        shopifyId: updatedDraft.shopify_customer_id || null,
-      }).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
-
-      await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
-        successMsg = `✅ ¡Pedido confirmado!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\n💵 El pago se realiza al momento del despacho.\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
-        return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: result };
-      } else {
-        // Link de pago (comportamiento por defecto)
-        db.upsertContact(orgId, {
-          phone:   conversation.phone_number,
-          name:    updatedDraft.customer_name  || null,
-          email:   updatedDraft.customer_email || null,
-          address: updatedDraft.address        || null,
-          city:    updatedDraft.city           || null,
-          shopifyId: updatedDraft.shopify_customer_id || null,
-        }).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
-
-        await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
-        successMsg = `✅ ¡Pedido creado exitosamente!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
-        return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
-      }
+      saveContact();
+      await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
+      const successMsg = `✅ ¡Pedido creado exitosamente!\n\n📦 *${updatedDraft.product_name}* x${updatedDraft.quantity}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Gracias por tu compra! Te avisaremos cuando tu pedido esté en camino 🚀`;
+      return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
     } catch (err) {
       const status  = err.response?.status;
-      const resData = err.response?.data;
-      const detail  = resData ? JSON.stringify(resData) : err.message;
+      const detail  = err.response?.data ? JSON.stringify(err.response.data) : err.message;
       console.error(`[Pipeline] ❌ Error creando orden en Shopify (HTTP ${status || 'N/A'}):`, detail);
-      console.error('[Pipeline] Draft que se intentó enviar:', JSON.stringify(updatedDraft));
-
-      // Construir mensaje de error con resumen del pedido para que el cliente sepa que recibimos su info
-      const productInfo = updatedDraft.product_name
-        ? `📦 *${updatedDraft.product_name}* x${updatedDraft.quantity || 1}\n📍 ${updatedDraft.address || ''}, ${updatedDraft.city || ''}`
-        : '';
-
-      const errorMsg = productInfo
-        ? `Recibí todos tus datos 📝\n\n${productInfo}\n\nHubo un problema técnico al registrar tu pedido 😔 Un asesor te confirmará en unos minutos. ¡Gracias por tu paciencia!`
-        : 'Recibí tu pedido pero hubo un problema técnico 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
-
-      // Log detallado para debugging
-      console.error('[Pipeline] Error detail:', err.message);
-      console.error('[Pipeline] Shopify response:', JSON.stringify(err.response?.data));
-
       if (status === 401 || detail?.includes('Invalid API key') || detail?.includes('access token')) {
         console.error('[Pipeline] ⚠️  Token de Shopify inválido — reconecta Shopify desde Ajustes del CRM.');
       }
-
+      const productInfo = updatedDraft.product_name
+        ? `📦 *${updatedDraft.product_name}* x${updatedDraft.quantity || 1}\n📍 ${updatedDraft.address || ''}, ${updatedDraft.city || ''}`
+        : '';
+      const errorMsg = productInfo
+        ? `Recibí todos tus datos 📝\n\n${productInfo}\n\nHubo un problema técnico al registrar tu pedido 😔 Un asesor te confirmará en unos minutos. ¡Gracias por tu paciencia!`
+        : 'Recibí tu pedido pero hubo un problema técnico 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
       await db.setAgentMode(conversationId, 'human');
       return { response: errorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true };
     }
