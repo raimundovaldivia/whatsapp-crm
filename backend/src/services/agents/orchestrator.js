@@ -66,7 +66,7 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     ESCALATION_PHRASES.some(phrase => m.content?.toLowerCase().includes(phrase))
   ).length;
   if (escalationLoopCount >= 2) {
-    return { escalate: false, reason: 'Rompiendo bucle — bot ya escaló múltiples veces, retomando como IA', urgency: 'low' };
+    return { escalate: false, loopDetected: true, reason: 'Rompiendo bucle — bot ya escaló múltiples veces, retomando como IA', urgency: 'low' };
   }
 
   // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────

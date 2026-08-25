@@ -146,8 +146,8 @@ async function processMessage(orgId, conversationId, userMessage) {
 
   // ── Mapeo de intent → acción ─────────────────────────────────────
 
-  // El cliente quiere hablar con humano
-  if (intent === 'human_request') {
+  // El cliente quiere hablar con humano — pero si ya detectamos un bucle, ignorar y atender normal
+  if (intent === 'human_request' && !escalationResult.loopDetected) {
     await db.setAgentMode(conversationId, 'human');
     await db.updatePipelineState(conversationId, 'exploring');
     return {

@@ -132,6 +132,8 @@ router.post('/', async (req, res) => {
       if (typeof db.clearLastEscalation === 'function') {
         await db.clearLastEscalation(conversation.id).catch(() => {});
       }
+      // Resetear estado del pipeline para que el próximo mensaje se trate como conversación nueva
+      await db.updatePipelineState(conversation.id, 'exploring', {}).catch(() => {});
       // No responder ahora — el próximo mensaje del cliente activará la IA limpia
       return;
     }
