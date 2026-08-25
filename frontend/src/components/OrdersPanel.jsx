@@ -208,8 +208,25 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
     finally { setSyncing(null); }
   };
 
-  const totalRevenue = filtered.reduce((s, o) => s + o.total, 0);
-  const totalPending = filtered.filter(o => o.source === 'bot' ? o.botStatus === 'sent' : o.financialStatus === 'PENDING').length;
+  // Solo sumar órdenes efectivamente pagadas
+  const totalRevenue = filtered
+    .filter(o => o.source === 'bot'
+      ? ['paid', 'payment_received'].includes(o.botStatus)
+      : o.financialStatus === 'PAID')
+    .reduce((s, o) => s + o.total, 0);
+
+  // Sin despachar (más útil que "pending pago" para tienda COD)
+  const totalUnfulfilled = filtered.filter(o =>
+    o.source === 'bot'
+      ? ['draft', 'sent', 'payment_received'].includes(o.botStatus)
+      : !['FULFILLED', 'RESTOCKED'].includes(o.fulfillmentStatus)
+  ).length;
+
+  const totalPaid = filtered.filter(o =>
+    o.source === 'bot'
+      ? ['paid', 'payment_received'].includes(o.botStatus)
+      : o.financialStatus === 'PAID'
+  ).length;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.bgApp, overflow: 'hidden' }}>
@@ -238,10 +255,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
           {[
-            { icon: <Package size={18} color={colors.textSecondary} />, label: 'En vista', value: filtered.length, color: colors.textPrimary },
-            { icon: <Clock size={18} color={colors.yellow} />,          label: 'Pendientes', value: totalPending, color: colors.yellow },
-            { icon: <Bot size={18} color={colors.green} />,             label: 'Del Bot', value: filtered.filter(o => o.source === 'bot').length, color: colors.green },
-            { icon: <DollarSign size={18} color={colors.green} />,      label: 'Total vista', value: `$${totalRevenue.toLocaleString('es-CL')}`, color: colors.green },
+            { icon: <Package size={18} color={colors.textSecondary} />, label: 'En vista',        value: filtered.length,                                     color: colors.textPrimary },
+            { icon: <Clock size={18} color={colors.yellow} />,          label: 'Sin despachar',  value: totalUnfulfilled,                                        color: colors.yellow },
+            { icon: <CheckCircle size={18} color={colors.green} />,     label: 'Pagados',        value: totalPaid,                                               color: colors.green },
+            { icon: <DollarSign size={18} color={colors.green} />,      label: 'Total pagado',   value: `$${totalRevenue.toLocaleString('es-CL')}`,              color: colors.green },
           ].map(({ icon, label, value, color }) => (
             <div key={label} style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '14px 16px', border: `1px solid ${colors.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>{icon}<span style={{ fontSize: '11px', color: colors.textSecondary }}>{label}</span></div>
