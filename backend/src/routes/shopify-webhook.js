@@ -163,9 +163,26 @@ async function handleOrderPaid(orgId, shopifyOrder) {
  * orders/create — Shopify crea la orden real desde un draft
  */
 async function handleOrderCreate(orgId, shopifyOrder) {
+  // Upsertear el cliente en contacts para que el bot lo reconozca en el futuro
+  const phone = cleanPhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone || shopifyOrder.customer?.phone);
+  if (phone) {
+    const cust    = shopifyOrder.customer || {};
+    const addr    = shopifyOrder.billing_address || shopifyOrder.shipping_address || {};
+    const shopifyId = cust.id ? String(cust.id) : null;
+    db.upsertContact(orgId, {
+      phone,
+      name:      [cust.first_name, cust.last_name].filter(Boolean).join(' ') || addr.name || null,
+      email:     cust.email || null,
+      address:   addr.address1 || null,
+      city:      addr.city || null,
+      region:    addr.province || null,
+      shopifyId,
+    }).catch(() => {});
+  }
+
   const localOrder = await findLocalOrder(orgId, {
     shopifyOrderId: String(shopifyOrder.id),
-    customerPhone:  cleanPhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone),
+    customerPhone:  phone,
   });
 
   if (localOrder && !localOrder.shopify_order_id) {

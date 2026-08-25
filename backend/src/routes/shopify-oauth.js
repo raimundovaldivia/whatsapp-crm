@@ -16,13 +16,14 @@
  *   FRONTEND_URL         = URL del frontend (ej: https://crm.onrender.com)
  */
 
-const express  = require('express');
-const router   = express.Router();
-const crypto   = require('crypto');
-const axios    = require('axios');
-const db       = require('../db/database');
+const express    = require('express');
+const router     = express.Router();
+const crypto     = require('crypto');
+const axios      = require('axios');
+const db         = require('../db/database');
 const { getPool } = require('../db/database');
 const { requireAuth } = require('../middleware/auth');
+const shopifyApi = require('../services/shopify-api');
 
 const API_KEY    = process.env.SHOPIFY_API_KEY    || '';
 const API_SECRET = process.env.SHOPIFY_API_SECRET || '';
@@ -199,6 +200,11 @@ router.get('/callback', async (req, res) => {
 
   console.log(`[ShopifyOAuth] ✅ Tienda ${shop} conectada para org ${orgId}`);
 
+  // ── Sincronizar clientes en background (sin bloquear el redirect) ─
+  syncShopifyCustomers(orgId).catch(err =>
+    console.warn('[ShopifyOAuth] Sync clientes background error:', err.message)
+  );
+
   // ── Redirigir al frontend con éxito ─────────────────────────────
   res.redirect(`${FRONTEND}?shopify_success=1&shop=${encodeURIComponent(shop)}`);
 });
@@ -241,6 +247,63 @@ router.delete('/disconnect', requireAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── POST /api/shopify-oauth/sync-customers ───────────────────────
+// Sincronización manual de clientes Shopify → tabla contacts
+router.post('/sync-customers', requireAuth, async (req, res) => {
+  try {
+    const stats = await syncShopifyCustomers(req.orgId);
+    res.json({ success: true, ...stats });
+  } catch (err) {
+    console.error('[ShopifyOAuth] sync-customers error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Helper: sincronizar clientes de Shopify → contacts ──────────
+/**
+ * Descarga todos los clientes de Shopify y los upsertea en contacts.
+ * Sólo importa clientes que tengan teléfono o email.
+ * @returns {{ synced: number, skipped: number }}
+ */
+async function syncShopifyCustomers(orgId) {
+  const ds = await db.getPrimaryDataSource(orgId);
+  if (!ds?.config?.accessToken) {
+    throw new Error('No hay conexión con Shopify configurada');
+  }
+
+  const { shop, token } = shopifyApi.credentialsFrom(ds);
+  const customers = await shopifyApi.getAllCustomers(shop, token);
+
+  let synced = 0, skipped = 0;
+
+  for (const c of customers) {
+    // Normalizar teléfono: quitar todo lo que no sea dígito
+    const rawPhone = c.phone || '';
+    const phone    = rawPhone.replace(/\D/g, '');
+
+    if (!phone && !c.email) { skipped++; continue; }
+
+    // Si no tiene teléfono usamos email como identificador temporal,
+    // pero upsertContact requiere phone → solo guardamos los que tienen teléfono
+    if (!phone) { skipped++; continue; }
+
+    const addr = c.address;
+    await db.upsertContact(orgId, {
+      phone,
+      name:      c.name || null,
+      email:     c.email || null,
+      address:   addr?.address1 || null,
+      city:      addr?.city || null,
+      region:    addr?.province || null,
+      shopifyId: c.id || null,
+    });
+    synced++;
+  }
+
+  console.log(`[ShopifyOAuth] Sync completado: ${synced} clientes guardados, ${skipped} sin teléfono omitidos`);
+  return { synced, skipped, total: customers.length };
+}
 
 // ─── Helper: upsert del data source Shopify ──────────────────────
 

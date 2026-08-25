@@ -91,6 +91,7 @@ function ShopifyTab() {
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState('');
   const [success, setSuccess]     = useState('');
+  const [syncing, setSyncing]     = useState(false);
 
   const card = {
     backgroundColor: colors.bgPanel, borderRadius: '14px',
@@ -185,8 +186,26 @@ function ShopifyTab() {
                   Desconectar
                 </button>
               </div>
+              {/* Botón sincronizar clientes */}
+              <button
+                onClick={async () => {
+                  setSyncing(true); setError(''); setSuccess('');
+                  try {
+                    const { data } = await api.post('/shopify-oauth/sync-customers');
+                    setSuccess(`✅ ${data.synced} clientes importados desde Shopify (${data.skipped} sin teléfono omitidos)`);
+                  } catch (err) {
+                    setError(err.response?.data?.error || 'Error sincronizando clientes');
+                  } finally { setSyncing(false); }
+                }}
+                disabled={syncing}
+                style={{ padding: '10px 16px', borderRadius: '8px', border: `1px solid ${colors.border}`,
+                  backgroundColor: 'transparent', color: syncing ? colors.textMuted : colors.textPrimary,
+                  cursor: syncing ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600,
+                  display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {syncing ? '⏳ Sincronizando...' : '🔄 Sincronizar clientes desde Shopify'}
+              </button>
               <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.7 }}>
-                Para cambiar de tienda, desconecta primero y vuelve a conectar.
+                Esto importa todos los clientes de Shopify a tu CRM para que el bot los reconozca automáticamente. También se hace en automático al conectar Shopify.
               </div>
             </>
           ) : (
