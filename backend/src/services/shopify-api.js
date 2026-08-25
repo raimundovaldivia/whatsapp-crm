@@ -519,17 +519,22 @@ async function completeDraftOrder(shop, token, draftOrderId) {
  * @param {Array} products
  * @param {string} shop
  */
-function formatProductsForAI(products, shop = null) {
+function formatProductsForAI(products, shop = null, tiendaUrl = null) {
   if (!products?.length) return 'No hay productos disponibles en este momento.';
 
   return products.map(p => {
-    const precio = p.priceMin === p.priceMax
-      ? `$${Number(p.priceMin).toLocaleString('es-CL')}`
-      : `$${Number(p.priceMin).toLocaleString('es-CL')} – $${Number(p.priceMax).toLocaleString('es-CL')}`;
+    const priceMin = p.priceMin ?? Number(p.price) ?? 0;
+    const priceMax = p.priceMax ?? Number(p.price) ?? 0;
+    const precio = priceMin === priceMax
+      ? `$${Number(priceMin).toLocaleString('es-CL')}`
+      : `$${Number(priceMin).toLocaleString('es-CL')} – $${Number(priceMax).toLocaleString('es-CL')}`;
 
-    const productLink = shop && p.handle
-      ? `  🔗 https://${shop}/products/${p.handle}`
-      : '';
+    // Preferir URL de la tienda propia; fallback a Shopify
+    const productLink = tiendaUrl && p.handle
+      ? `  🔗 ${tiendaUrl}#product-${p.handle}`
+      : shop && p.handle
+        ? `  🔗 https://${shop}/products/${p.handle}`
+        : '';
 
     // Stock a nivel de variante si existen, o a nivel de producto si no
     const topStockInfo = !p.variants?.length && p.inventoryQuantity != null

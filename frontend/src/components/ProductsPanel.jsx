@@ -21,7 +21,7 @@ function StoreConfigTab({ orgSlug, colors }) {
     store_name: '', store_logo: '', store_color: '#22c55e',
     store_announcement: '', store_hero_title: '', store_hero_subtitle: '',
     store_hero_tags: '', store_whatsapp_phone: '', store_free_shipping: '10000',
-    admin_alert_phone: '', store_how_to_buy: '', store_about_us: '',
+    admin_alert_phone: '', store_how_to_buy: '', store_about_us: '', store_public_url: '',
   });
 
   useEffect(() => {
@@ -40,6 +40,7 @@ function StoreConfigTab({ orgSlug, colors }) {
           admin_alert_phone: s.admin_alert_phone || '',
           store_how_to_buy: s.store_how_to_buy || '',
           store_about_us: s.store_about_us || '',
+          store_public_url: s.store_public_url || '',
         });
       })
       .catch(() => setError('Error cargando configuración'))
@@ -127,6 +128,7 @@ function StoreConfigTab({ orgSlug, colors }) {
           <div><label style={lbl}>Umbral envío gratis ($)</label><input style={inp} type="number" min="0" value={form.store_free_shipping} onChange={set('store_free_shipping')} placeholder="10000" /><p style={hint}>Pon 0 para desactivar</p></div>
           <div><label style={lbl}>WhatsApp de contacto (botón flotante)</label><input style={inp} value={form.store_whatsapp_phone} onChange={set('store_whatsapp_phone')} placeholder="56912345678" /><p style={hint}>Vacío = botón no aparece</p></div>
           <div><label style={lbl}>Teléfono admin (alertas de pedidos)</label><input style={inp} value={form.admin_alert_phone} onChange={set('admin_alert_phone')} placeholder="56912345678" /><p style={hint}>Recibe un WhatsApp por cada pedido nuevo</p></div>
+          <div><label style={lbl}>URL pública de la tienda (para el bot)</label><input style={inp} value={form.store_public_url} onChange={set('store_public_url')} placeholder="https://crm.diezrios.cl/tienda/diezrios" /><p style={hint}>El bot usará esta URL cuando los clientes pidan el link del catálogo o al compartir productos</p></div>
         </div>
       </div>
 

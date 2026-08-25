@@ -88,6 +88,17 @@ export default function Tienda({ slug }) {
     })();
   }, [slug]);
 
+  // Scroll al producto indicado por URL hash (#product-handle) una vez que carguen
+  useEffect(() => {
+    if (loading) return;
+    const hash = window.location.hash; // ej: #product-huevos-xl
+    if (!hash) return;
+    setTimeout(() => {
+      const el = document.querySelector(hash);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 400); // pequeño delay para que el DOM esté listo
+  }, [loading]);
+
   const PRIMARY      = store?.color        || '#22c55e';
   const FREE_SHIP    = store?.freeShipping  ?? 10000;
   const ANNOUNCEMENT = store?.announcement  || `🚚 Delivery gratis en compras sobre ${fmt(FREE_SHIP)}`;
@@ -422,9 +433,11 @@ export default function Tienda({ slug }) {
                   const outOfStock  = product.stock === 0;
                   return (
                     <div key={product.id}
+                      id={`product-${product.handle || product.id}`}
                       style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden',
                         border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1,
-                        boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column' }}>
+                        boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column',
+                        scrollMarginTop: 90 }}>
 
                       {/* Image */}
                       <div style={{ position: 'relative', height: isMobile ? 140 : 200, backgroundColor: '#f9fafb', overflow: 'hidden', flexShrink: 0 }}>
@@ -500,7 +513,9 @@ export default function Tienda({ slug }) {
                       const hasDiscount = product.compare_price && parseFloat(product.compare_price) > parseFloat(product.price);
                       const outOfStock  = product.stock === 0;
                       return (
-                        <div key={product.id} style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden', border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column' }}>
+                        <div key={product.id}
+                          id={`product-${product.handle || product.id}`}
+                          style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden', border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column', scrollMarginTop: 90 }}>
                           <div style={{ position: 'relative', height: isMobile ? 140 : 200, backgroundColor: '#f9fafb', overflow: 'hidden', flexShrink: 0 }}>
                             {product.image_url
                               ? <img src={product.image_url} alt={product.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />

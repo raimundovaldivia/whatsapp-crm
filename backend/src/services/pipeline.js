@@ -22,56 +22,53 @@ const ordersAgent  = require('./agents/orders');
 async function processMessage(orgId, conversationId, userMessage) {
   const conversation = await db.getConversationById(conversationId);
   const history = await db.getLastMessages(conversationId, 12);
-  // Obtener catálogo — caché local primero (TTL 30 min), Shopify como fallback
+
+  // URL pública de la tienda integrada (para links en catálogo y system prompt)
+  const tiendaUrl = await db.getSetting(orgId, 'store_public_url') || null;
+
+  // ── Catálogo: siempre desde nuestra DB, nunca llamar Shopify en vivo ──
+  // Fuente 1: products_cache (sincronizado desde Shopify, tiene variantes + stock)
+  // Fuente 2: products (tabla propia del CRM, gestionada manualmente)
   const ds = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
   let products = [];
   let productosTexto = '';
-  if (ds?.config?.accessToken) {
-    try {
-      const CACHE_TTL_MINUTES = 30;
-      const cacheAgeMinutes = await db.getProductsCacheAge(orgId);
-
-      if (cacheAgeMinutes < CACHE_TTL_MINUTES) {
-        // Usar caché local — sin llamada a Shopify
-        const cached = await db.getCachedProducts(orgId);
-        products = cached.map(p => {
-          // raw_json contiene el producto completo de Shopify (con variantes y stock)
-          if (p.raw_json) {
-            try { return JSON.parse(p.raw_json); } catch (_) {}
-          }
-          // Fallback: construir desde columnas (sin variantes)
-          return {
-            id: p.external_id, title: p.title, description: p.description,
-            priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
-            inventoryQuantity: p.inventory_quantity,
-            sku: p.sku, imageUrl: p.image_url, tags: p.tags,
-            productType: p.product_type, handle: p.handle,
-          };
-        });
-        productosTexto = shopifyApi.formatProductsForAI(products, shop);
-        console.log(`[Pipeline] 📦 Productos desde caché (${Math.round(cacheAgeMinutes)}min de antigüedad)`);
-      } else {
-        // Caché expirado o vacío → llamar a Shopify y actualizar caché
-        const { shop: s, token } = shopifyApi.credentialsFrom(ds);
-        const res = await shopifyApi.getProducts(s, token, { limit: 250 });
-        products = res.products || [];
-        productosTexto = shopifyApi.formatProductsForAI(products, s);
-        console.log(`[Pipeline] 🛍️ Productos desde Shopify (${products.length} items), actualizando caché...`);
-        // Guardar en caché en background (no bloquea la respuesta)
-        if (products.length && ds?.id) {
-          db.cacheProducts(orgId, ds.id, products.map(p => ({
-            externalId: String(p.id), title: p.title || '', description: p.description || '',
-            price: String(p.price || ''), compareAtPrice: String(p.compare_at_price || ''),
-            sku: p.sku || '', inventoryQuantity: p.inventory_quantity ?? 0,
-            imageUrl: p.image_url || '', tags: p.tags || '', productType: p.product_type || '',
-            handle: p.handle || '', rawJson: JSON.stringify(p),
-          }))).catch(e => console.warn('[Pipeline] Error guardando caché de productos:', e.message));
+  try {
+    // Intentar primero products_cache (tiene raw_json con variantes y stock completos)
+    const cached = await db.getCachedProducts(orgId);
+    if (cached?.length) {
+      products = cached.map(p => {
+        if (p.raw_json) {
+          try { return JSON.parse(p.raw_json); } catch (_) {}
         }
+        return {
+          id: p.external_id, title: p.title, description: p.description,
+          priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
+          inventoryQuantity: p.inventory_quantity,
+          sku: p.sku, imageUrl: p.image_url, tags: p.tags,
+          productType: p.product_type, handle: p.handle,
+        };
+      });
+      console.log(`[Pipeline] 📦 Catálogo desde DB/caché (${products.length} productos)`);
+    } else {
+      // Fallback: tabla products propia del CRM
+      const ownProducts = await db.getProducts(orgId, true);
+      if (ownProducts?.length) {
+        products = ownProducts.map(p => ({
+          id: String(p.id), title: p.title, description: p.description,
+          priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
+          inventoryQuantity: p.stock ?? null,
+          handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
+          productType: p.category || '',
+        }));
+        console.log(`[Pipeline] 📦 Catálogo desde tabla products propia (${products.length} productos)`);
       }
-    } catch (err) {
-      console.warn('[Pipeline] No se pudieron cargar productos:', err.message);
     }
+    if (products.length) {
+      productosTexto = shopifyApi.formatProductsForAI(products, shop, tiendaUrl);
+    }
+  } catch (err) {
+    console.warn('[Pipeline] Error cargando catálogo desde DB:', err.message);
   }
 
   const currentState = conversation.pipeline_state || 'exploring';
@@ -93,7 +90,10 @@ async function processMessage(orgId, conversationId, userMessage) {
       if (lines.length) deliverySection = `## Información de Entrega\n${lines.join('\n')}`;
     } catch { /* JSON inválido — ignorar */ }
   }
-  const storeCustomPrompt = [deliverySection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
+  const tiendaSection = tiendaUrl
+    ? `## Tienda online\nLos clientes pueden explorar el catálogo completo y hacer pedidos directamente en: ${tiendaUrl}\nCuando el cliente pregunte por la página web, por el catálogo online o pida un link de la tienda, comparte esa URL.`
+    : '';
+  const storeCustomPrompt = [deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
   // ── Detectar respuesta a template de re-engagement ─────────────────
   // Si el último estado era 'template_sent', el cliente acaba de responder
