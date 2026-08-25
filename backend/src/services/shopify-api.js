@@ -281,10 +281,10 @@ const ORDERS_QUERY = `
             id firstName lastName email phone
           }
           shippingAddress {
-            firstName lastName phone
+            firstName lastName phone city
           }
           billingAddress {
-            firstName lastName phone
+            firstName lastName phone city
           }
           lineItems(first: 50) {
             edges {

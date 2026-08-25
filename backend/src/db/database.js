@@ -746,12 +746,23 @@ async function getAccuracyStats(orgId) {
 async function upsertShopifyOrders(orgId, orders) {
   if (!orders?.length) return;
   for (const o of orders) {
-    const customerName  = o.customer ? `${o.customer.first_name || ''} ${o.customer.last_name || ''}`.trim() : null;
+    // getAllOrders devuelve formato GraphQL camelCase:
+    // o.createdAt, o.totalPrice (number), o.financialStatus, o.fulfillmentStatus
+    // o.customer.name (ya formateado), o.customer.phone/email
+    // o.items (ya mapeados): [{ title, quantity, price }]
+    const customerName  = o.customer?.name || null;
     const customerEmail = o.customer?.email || null;
-    const customerPhone = o.customer?.phone || o.billing_address?.phone || null;
-    const shippingCity  = o.shipping_address?.city || o.billing_address?.city || null;
-    const items         = (o.line_items || []).map(li => ({ name: li.name, quantity: li.quantity, price: li.price }));
-    const createdAt     = o.created_at || null;
+    const customerPhone = o.customer?.phone
+      || o.shippingAddress?.phone
+      || o.billingAddress?.phone
+      || null;
+    const shippingCity  = o.shippingAddress?.city || o.billingAddress?.city || null;
+    const items         = (o.items || []).map(li => ({
+      name:     li.title || li.name,
+      quantity: li.quantity,
+      price:    li.price,
+    }));
+    const createdAt     = o.createdAt || null;
 
     await pool.query(
       `INSERT INTO shopify_orders
@@ -776,10 +787,10 @@ async function upsertShopifyOrders(orgId, orders) {
         orgId,
         String(o.id),
         o.name || null,
-        o.financial_status || null,
-        o.fulfillment_status || null,
-        o.total_price ? parseFloat(o.total_price) : null,
-        customerName || null,
+        o.financialStatus || null,
+        o.fulfillmentStatus || null,
+        o.totalPrice || null,
+        customerName,
         customerEmail,
         customerPhone,
         shippingCity,
