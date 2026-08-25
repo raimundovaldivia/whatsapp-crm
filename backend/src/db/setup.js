@@ -397,6 +397,29 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_shopify_orders_org_date
         ON shopify_orders(organization_id, shopify_created_at DESC);
+
+      -- ─── REPARTOS (rutas de entrega asignadas al repartidor) ─────
+
+      CREATE TABLE IF NOT EXISTS delivery_routes (
+        id                SERIAL PRIMARY KEY,
+        organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name              TEXT NOT NULL,
+        status            TEXT NOT NULL DEFAULT 'draft'
+          CHECK(status IN ('draft','sent','in_progress','completed','cancelled')),
+        driver_name       TEXT,
+        driver_phone      TEXT,
+        orders            JSONB DEFAULT '[]',
+        optimized_route   JSONB,
+        stop_statuses     JSONB DEFAULT '{}',
+        total_distance    TEXT,
+        total_duration    TEXT,
+        maps_url          TEXT,
+        created_at        TIMESTAMPTZ DEFAULT NOW(),
+        sent_at           TIMESTAMPTZ,
+        completed_at      TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_delivery_routes_org_status
+        ON delivery_routes(organization_id, status, created_at DESC);
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

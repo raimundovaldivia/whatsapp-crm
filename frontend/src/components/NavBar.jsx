@@ -1,4 +1,4 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon, Sparkles, Receipt, Store } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon, Sparkles, Receipt, Store, Truck } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 const NAV_ITEMS = [
@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { key: 'chats',        icon: MessageSquare, label: 'Chats' },
   { key: 'reengagement', icon: UserCheck,     label: 'Re-enganche' },
   { key: 'orders',       icon: ShoppingBag,   label: 'CRM' },
+  { key: 'repartos',     icon: Truck,         label: 'Repartos' },
   { key: 'pagos',        icon: Receipt,       label: 'Pagos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'productos',    icon: Store,         label: 'Mi Tienda' },
@@ -13,7 +14,7 @@ const NAV_ITEMS = [
 ];
 
 // Items visibles en la barra móvil (los más usados)
-const MOBILE_ITEMS = ['chats', 'reengagement', 'orders', 'clientes', 'settings'];
+const MOBILE_ITEMS = ['chats', 'reengagement', 'orders', 'repartos', 'settings'];
 
 export default function NavBar({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, pendingProofs, isMobile }) {
   const { colors, isDark, toggle } = useTheme();

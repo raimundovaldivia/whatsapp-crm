@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity,
   Linking, Alert, ActivityIndicator, Platform, ScrollView,
 } from 'react-native';
-import { updateOrderStatus } from '../services/api';
+import { updateStopStatus } from '../services/api';
 
 const C = {
   bg:     '#0f172a',
@@ -18,7 +18,7 @@ const C = {
 };
 
 export default function StopScreen({ route: navRoute, navigation }) {
-  const { stop, stopNumber, totalStops, onComplete } = navRoute.params;
+  const { stop, routeId, stopKey, stopNumber, totalStops, onComplete } = navRoute.params;
   const [loading, setLoading] = useState(false);
   const [done,    setDone]    = useState(false);
   const [status,  setStatus]  = useState(null);
@@ -28,10 +28,9 @@ export default function StopScreen({ route: navRoute, navigation }) {
     const url  = Platform.OS === 'ios'
       ? `maps://maps.apple.com/?daddr=${addr}&dirflg=d`
       : `google.navigation:q=${addr}&mode=d`;
-    Linking.openURL(url).catch(() => {
-      // Fallback: Google Maps web
-      Linking.openURL(`https://maps.google.com/maps?daddr=${addr}`);
-    });
+    Linking.openURL(url).catch(() =>
+      Linking.openURL(`https://maps.google.com/maps?daddr=${addr}`)
+    );
   }
 
   function callCustomer() {
@@ -39,8 +38,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
       Alert.alert('Sin teléfono', 'Este pedido no tiene número de teléfono registrado.');
       return;
     }
-    const phone = stop.phone.replace(/\D/g, '');
-    Linking.openURL(`tel:${phone}`);
+    Linking.openURL(`tel:${stop.phone.replace(/\D/g, '')}`);
   }
 
   async function markAs(newStatus) {
@@ -56,11 +54,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
           onPress: async () => {
             setLoading(true);
             try {
-              await updateOrderStatus(stop.id, stop.source, newStatus);
+              await updateStopStatus(routeId, stopKey, newStatus);
               setStatus(newStatus);
               setDone(true);
-              if (onComplete) onComplete(newStatus === 'entregado' ? 'done' : 'failed');
-              // Volver a la pantalla de ruta después de un momento
+              if (onComplete) onComplete(newStatus);
               setTimeout(() => navigation.goBack(), 1200);
             } catch (err) {
               Alert.alert('Error', err.response?.data?.error || err.message);
@@ -75,12 +72,12 @@ export default function StopScreen({ route: navRoute, navigation }) {
 
   return (
     <ScrollView style={s.container} contentContainerStyle={s.content}>
-      {/* Header de parada */}
+      {/* Parada número */}
       <View style={s.badge}>
         <Text style={s.badgeText}>Parada {stopNumber} de {totalStops}</Text>
       </View>
 
-      {/* Nombre del cliente */}
+      {/* Nombre */}
       <Text style={s.customerName}>{stop.customerName}</Text>
 
       {/* Dirección */}
@@ -121,21 +118,19 @@ export default function StopScreen({ route: navRoute, navigation }) {
         </View>
       )}
 
-      {/* Pedido */}
+      {/* N° Pedido */}
       <View style={s.infoCard}>
         <Text style={s.infoLabel}>🧾 Pedido</Text>
         <Text style={s.infoValue}>{stop.orderName}</Text>
       </View>
 
-      {/* ─── Botones de acción ─── */}
+      {/* ─── Acciones ─── */}
       {!done ? (
         <>
-          {/* Navegación */}
           <TouchableOpacity style={s.navBtn} onPress={openMaps} activeOpacity={0.85}>
             <Text style={s.navBtnText}>🗺  Navegar con Google Maps</Text>
           </TouchableOpacity>
 
-          {/* Llamar */}
           {stop.phone && (
             <TouchableOpacity style={s.callBtn} onPress={callCustomer} activeOpacity={0.85}>
               <Text style={s.callBtnText}>📞  Llamar al cliente</Text>
@@ -143,7 +138,6 @@ export default function StopScreen({ route: navRoute, navigation }) {
           )}
 
           <View style={s.statusRow}>
-            {/* Entregado */}
             <TouchableOpacity
               style={[s.statusBtn, s.deliveredBtn, loading && s.btnDisabled]}
               onPress={() => markAs('entregado')}
@@ -157,14 +151,13 @@ export default function StopScreen({ route: navRoute, navigation }) {
               )}
             </TouchableOpacity>
 
-            {/* No encontrado */}
             <TouchableOpacity
               style={[s.statusBtn, s.failedBtn, loading && s.btnDisabled]}
               onPress={() => markAs('cancelled')}
               disabled={loading}
               activeOpacity={0.85}>
               <Text style={s.statusIcon}>✕</Text>
-              <Text style={s.statusBtnText}>No encontrado</Text>
+              <Text style={[s.statusBtnText, { color: C.red }]}>No encontrado</Text>
             </TouchableOpacity>
           </View>
         </>
@@ -172,7 +165,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
         <View style={s.doneBox}>
           <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : '❌'}</Text>
           <Text style={s.doneText}>
-            {status === 'entregado' ? '¡Entregado!' : 'Marcado como no encontrado'}
+            {status === 'entregado' ? '¡Entregado!' : 'No encontrado'}
           </Text>
           <Text style={s.doneSub}>Volviendo a la ruta...</Text>
         </View>

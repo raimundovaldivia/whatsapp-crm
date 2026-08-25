@@ -18,33 +18,35 @@ const C = {
   muted:  '#94a3b8',
 };
 
-// Colores de los marcadores por estado
 const STOP_COLORS = {
   pending:   C.orange,
-  done:      C.green,
-  failed:    '#f87171',
-  current:   C.blue,
+  entregado: C.green,
+  cancelled: '#f87171',
 };
 
 export default function RouteScreen({ route: navRoute, navigation }) {
-  const { route: routeData, onStatusUpdate } = navRoute.params;
-  const { route: stops, totalDistance, totalDuration, optimized } = routeData;
+  const { routeId, routeName, route: routeData } = navRoute.params;
+  const { route: stops, totalDistance, totalDuration, optimized, stopStatuses: initialStatuses } = routeData;
 
   const mapRef = useRef(null);
-  const [stopStates, setStopStates] = useState(
-    Object.fromEntries(stops.map(s => [`${s.source}_${s.id}`, 'pending']))
-  );
+
+  // Inicializar estados desde lo que viene del backend (stop_statuses de DB)
+  const [stopStates, setStopStates] = useState(initialStatuses || {});
+
+  function getStopKey(stop) {
+    return `${stop.source}_${stop.id}`;
+  }
 
   function getStopColor(stop) {
-    const state = stopStates[`${stop.source}_${stop.id}`];
+    const state = stopStates[getStopKey(stop)] || 'pending';
     return STOP_COLORS[state] || STOP_COLORS.pending;
   }
 
   function focusStop(stop) {
     if (stop.lat && stop.lng && mapRef.current) {
       mapRef.current.animateToRegion({
-        latitude: stop.lat,
-        longitude: stop.lng,
+        latitude:      stop.lat,
+        longitude:     stop.lng,
         latitudeDelta:  0.005,
         longitudeDelta: 0.005,
       }, 600);
@@ -54,11 +56,12 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   function openStopDetail(stop) {
     navigation.navigate('Stop', {
       stop,
-      stopNumber:  stop.stopNumber,
-      totalStops:  stops.length,
-      onComplete: (status) => {
-        setStopStates(prev => ({ ...prev, [`${stop.source}_${stop.id}`]: status }));
-        if (onStatusUpdate) onStatusUpdate();
+      routeId,
+      stopKey:    getStopKey(stop),
+      stopNumber: stop.stopNumber,
+      totalStops: stops.length,
+      onComplete: (newStatus) => {
+        setStopStates(prev => ({ ...prev, [getStopKey(stop)]: newStatus }));
       },
     });
   }
@@ -71,20 +74,19 @@ export default function RouteScreen({ route: navRoute, navigation }) {
     Linking.openURL(url);
   }
 
-  // Región inicial del mapa: centrar en las paradas con lat/lng
   const stopsWithCoords = stops.filter(s => s.lat && s.lng);
-  const initialRegion = stopsWithCoords.length > 0 ? {
+  const initialRegion   = stopsWithCoords.length > 0 ? {
     latitude:      stopsWithCoords.reduce((s, p) => s + p.lat, 0) / stopsWithCoords.length,
     longitude:     stopsWithCoords.reduce((s, p) => s + p.lng, 0) / stopsWithCoords.length,
     latitudeDelta:  0.08,
     longitudeDelta: 0.08,
   } : {
-    latitude: -33.45, longitude: -70.65,  // Santiago por defecto
+    latitude: -33.45, longitude: -70.65,
     latitudeDelta: 0.2, longitudeDelta: 0.2,
   };
 
-  const doneCount   = Object.values(stopStates).filter(v => v === 'done').length;
-  const failedCount = Object.values(stopStates).filter(v => v === 'failed').length;
+  const doneCount   = Object.values(stopStates).filter(v => v === 'entregado').length;
+  const failedCount = Object.values(stopStates).filter(v => v === 'cancelled').length;
 
   return (
     <View style={s.container}>
@@ -98,13 +100,12 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           showsUserLocation
           showsMyLocationButton>
 
-          {/* Marcadores numerados */}
-          {stops.map((stop, idx) => {
+          {stops.map((stop) => {
             if (!stop.lat || !stop.lng) return null;
             const color = getStopColor(stop);
             return (
               <Marker
-                key={`${stop.source}_${stop.id}`}
+                key={getStopKey(stop)}
                 coordinate={{ latitude: stop.lat, longitude: stop.lng }}
                 onPress={() => openStopDetail(stop)}>
                 <View style={[s.markerBubble, { backgroundColor: color }]}>
@@ -114,7 +115,6 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             );
           })}
 
-          {/* Línea de ruta */}
           {stopsWithCoords.length >= 2 && (
             <Polyline
               coordinates={stopsWithCoords.map(s => ({ latitude: s.lat, longitude: s.lng }))}
@@ -136,31 +136,28 @@ export default function RouteScreen({ route: navRoute, navigation }) {
 
       {/* Lista de paradas */}
       <View style={s.listContainer}>
-        {/* Header de la lista */}
         <View style={s.listHeader}>
           <Text style={s.listTitle}>Paradas ({stops.length})</Text>
           <TouchableOpacity onPress={openFullRouteInMaps} style={s.mapsBtn}>
-            <Text style={s.mapsBtnText}>Abrir todo en Maps</Text>
+            <Text style={s.mapsBtnText}>Abrir en Maps</Text>
           </TouchableOpacity>
         </View>
 
         <FlatList
           data={stops}
-          keyExtractor={s => `${s.source}_${s.id}`}
+          keyExtractor={stop => getStopKey(stop)}
           renderItem={({ item: stop }) => {
-            const state  = stopStates[`${stop.source}_${stop.id}`];
+            const state  = stopStates[getStopKey(stop)] || 'pending';
             const color  = getStopColor(stop);
-            const isDone = state === 'done';
+            const isDone = state === 'entregado' || state === 'cancelled';
             return (
               <TouchableOpacity
                 style={[s.stopCard, isDone && s.stopDone]}
                 onPress={() => { focusStop(stop); openStopDetail(stop); }}
                 activeOpacity={0.75}>
-                {/* Número */}
                 <View style={[s.stopNum, { backgroundColor: color }]}>
                   <Text style={s.stopNumText}>{stop.stopNumber}</Text>
                 </View>
-                {/* Info */}
                 <View style={s.stopBody}>
                   <Text style={[s.stopName, isDone && s.textDone]} numberOfLines={1}>
                     {stop.customerName}
@@ -170,10 +167,9 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                     <Text style={s.stopTime}>{stop.distanceText} · {stop.durationText}</Text>
                   ) : null}
                 </View>
-                {/* Estado badge */}
                 <View style={[s.badge, { backgroundColor: color + '22', borderColor: color + '44' }]}>
                   <Text style={[s.badgeText, { color }]}>
-                    {state === 'done' ? 'Entregado' : state === 'failed' ? 'Fallido' : 'Pendiente'}
+                    {state === 'entregado' ? 'Entregado' : state === 'cancelled' ? 'Fallido' : 'Pendiente'}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -181,7 +177,6 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           }}
         />
 
-        {/* Resumen final si están todos procesados */}
         {(doneCount + failedCount) === stops.length && stops.length > 0 && (
           <View style={s.summary}>
             <Text style={s.summaryText}>

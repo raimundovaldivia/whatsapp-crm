@@ -6,7 +6,6 @@ const STORAGE_KEYS = {
   BASE_URL: 'crm_base_url',
 };
 
-// Instancia de axios configurable por URL base guardada
 let _client = null;
 
 async function getClient() {
@@ -21,12 +20,11 @@ async function getClient() {
   return _client;
 }
 
-// Resetear cliente (al cambiar URL o token)
 export function resetClient() {
   _client = null;
 }
 
-// ── Auth ────────────────────────────────────────────────────────────
+// ── Auth ─────────────────────────────────────────────────────────────
 export async function login(baseUrl, email, password) {
   const url = baseUrl.replace(/\/$/, '');
   const res = await axios.post(`${url}/api/auth/login`, { email, password }, { timeout: 10000 });
@@ -48,25 +46,26 @@ export async function getSavedCredentials() {
   return { token: token[1], baseUrl: baseUrl[1] };
 }
 
-// ── Delivery endpoints ──────────────────────────────────────────────
-export async function getDeliveryOrders() {
+// ── Rutas asignadas (repartidor) ──────────────────────────────────────
+export async function getActiveRoute() {
   const client = await getClient();
-  const res = await client.get('/api/delivery/orders');
+  const res = await client.get('/api/delivery/routes/active');
   return res.data;
 }
 
-export async function optimizeRoute(orders, origin) {
+/**
+ * Marcar una parada como entregada, cancelada o pendiente.
+ * @param {number} routeId  ID de la ruta
+ * @param {string} stopKey  Clave de la parada: "shopify_<id>" o "bot_<id>"
+ * @param {string} status   'entregado' | 'cancelled' | 'pending'
+ */
+export async function updateStopStatus(routeId, stopKey, status) {
   const client = await getClient();
-  const res = await client.post('/api/delivery/optimize', { orders, origin });
+  const res = await client.patch(`/api/delivery/routes/${routeId}/stops/${stopKey}`, { status });
   return res.data;
 }
 
-export async function updateOrderStatus(id, source, status) {
-  const client = await getClient();
-  const res = await client.patch(`/api/delivery/orders/${id}/status`, { status, source });
-  return res.data;
-}
-
+// ── Resumen del día ───────────────────────────────────────────────────
 export async function getDailySummary() {
   const client = await getClient();
   const res = await client.get('/api/delivery/summary');
