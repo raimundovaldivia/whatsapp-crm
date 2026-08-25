@@ -43,6 +43,23 @@ export default function Tienda({ slug }) {
   const [formErrors, setFormErrors]   = useState({});
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // Liberar el overflow bloqueado por el CSS global del CRM
+  useEffect(() => {
+    document.body.style.overflow   = 'auto';
+    document.body.style.height     = 'auto';
+    document.body.style.background = 'white';
+    document.body.style.color      = '#111827';
+    const root = document.getElementById('root');
+    if (root) { root.style.height = 'auto'; root.style.display = 'block'; }
+    return () => {
+      document.body.style.overflow   = '';
+      document.body.style.height     = '';
+      document.body.style.background = '';
+      document.body.style.color      = '';
+      if (root) { root.style.height = ''; root.style.display = ''; }
+    };
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
