@@ -14,6 +14,7 @@ import SettingsPanel     from './components/SettingsPanel.jsx';
 import AssistantPanel       from './components/AssistantPanel.jsx';
 import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
 import ProductsPanel        from './components/ProductsPanel.jsx';
+import ContactsPanel        from './components/ContactsPanel.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
@@ -403,6 +404,13 @@ export default function App() {
         <OrdersPanel
           onSelectConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
           onOrderPaid={() => setPendingOrders(n => Math.max(0, n - 1))}
+        />
+      )}
+
+      {/* Vista Contactos (leads + clientes) */}
+      {view === 'contacts' && (
+        <ContactsPanel
+          onSelectConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
         />
       )}
 

@@ -276,15 +276,18 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     // Default 'cod' — si no está configurado asumimos pago contra entrega
     const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
 
-    const saveContact = () => db.upsertContact(orgId, {
-      phone:     conversation.phone_number,
-      name:      updatedDraft.customer_name  || null,
-      email:     updatedDraft.customer_email || null,
-      address:   updatedDraft.address        || null,
-      city:      updatedDraft.city           || null,
-      region:    updatedDraft.region         || null,
-      shopifyId: updatedDraft.shopify_customer_id || null,
-    }).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
+    const saveContact = () => Promise.all([
+      db.upsertContact(orgId, {
+        phone:     conversation.phone_number,
+        name:      updatedDraft.customer_name  || null,
+        email:     updatedDraft.customer_email || null,
+        address:   updatedDraft.address        || null,
+        city:      updatedDraft.city           || null,
+        region:    updatedDraft.region         || null,
+        shopifyId: updatedDraft.shopify_customer_id || null,
+      }),
+      db.promoteToCustomer(orgId, conversation.phone_number),
+    ]).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
 
     // ── COD: solo guardar en nuestra DB, sin tocar Shopify ────────
     if (paymentMode === 'cod') {

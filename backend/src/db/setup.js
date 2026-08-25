@@ -291,6 +291,13 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_contacts_org_phone ON contacts(organization_id, phone);
 
+      -- Migración: tipo de contacto y última actividad
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS contact_type TEXT DEFAULT 'lead'
+        CHECK(contact_type IN ('lead','customer'));
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_seen_at  TIMESTAMP;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source        TEXT DEFAULT 'whatsapp';
+      CREATE INDEX IF NOT EXISTS idx_contacts_org_type ON contacts(organization_id, contact_type);
+
       -- ─── PRODUCTOS PROPIOS (independiente de Shopify) ─────────────
       -- Catálogo gestionado desde el CRM, usado por la tienda pública.
       CREATE TABLE IF NOT EXISTS products (

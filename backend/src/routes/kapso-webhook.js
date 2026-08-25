@@ -95,6 +95,9 @@ router.post('/', async (req, res) => {
     // 1. Obtener/crear conversación
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
 
+    // 1b. Registrar como lead (sin pisar tipo si ya es customer)
+    db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
+
     // 2. Guardar mensaje del cliente (puede ser duplicado si otro webhook llegó primero)
     const savedMsg = await db.saveMessage({
       conversationId:    conversation.id,

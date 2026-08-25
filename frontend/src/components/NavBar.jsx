@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { key: 'reengagement', icon: UserCheck,     label: 'Re-enganche' },
   { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
   { key: 'pagos',        icon: Receipt,       label: 'Pagos' },
+  { key: 'contacts',     icon: Users,         label: 'Contactos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'productos',    icon: Store,         label: 'Mi Tienda' },
   { key: 'catalogo',     icon: Package,       label: 'Catálogo' },

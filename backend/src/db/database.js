@@ -583,6 +583,64 @@ async function upsertContact(orgId, { phone, name, email, address, city, region,
   return getContact(orgId, phone);
 }
 
+/**
+ * Registra o actualiza un contacto como lead al recibir un mensaje.
+ * No sobreescribe datos existentes ni baja de 'customer' a 'lead'.
+ */
+async function touchLead(orgId, phone, name = null) {
+  if (!phone) return;
+  await pool.query(
+    `INSERT INTO contacts (organization_id, phone, name, contact_type, source, last_seen_at, updated_at)
+     VALUES ($1, $2, $3, 'lead', 'whatsapp', NOW(), NOW())
+     ON CONFLICT (organization_id, phone) DO UPDATE SET
+       name         = COALESCE(EXCLUDED.name, contacts.name),
+       last_seen_at = NOW(),
+       updated_at   = NOW()`,
+    [orgId, phone, name || null]
+  );
+}
+
+/**
+ * Promueve un contacto de lead a customer al confirmar un pedido.
+ */
+async function promoteToCustomer(orgId, phone) {
+  if (!phone) return;
+  await pool.query(
+    `UPDATE contacts SET contact_type = 'customer', updated_at = NOW()
+     WHERE organization_id = $1 AND phone = $2`,
+    [orgId, phone]
+  );
+}
+
+/**
+ * Lista contactos con filtros opcionales.
+ */
+async function getContacts(orgId, { type = null, search = null, limit = 100, offset = 0 } = {}) {
+  const conditions = ['organization_id = $1'];
+  const params = [orgId];
+  let i = 2;
+  if (type) { conditions.push(`contact_type = $${i++}`); params.push(type); }
+  if (search) {
+    conditions.push(`(name ILIKE $${i} OR phone ILIKE $${i})`);
+    params.push(`%${search}%`);
+    i++;
+  }
+  params.push(limit, offset);
+  return query(
+    `SELECT * FROM contacts WHERE ${conditions.join(' AND ')}
+     ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC
+     LIMIT $${i} OFFSET $${i + 1}`,
+    params
+  );
+}
+
+async function countContacts(orgId, type = null) {
+  const cond = type ? 'AND contact_type = $2' : '';
+  const args = type ? [orgId, type] : [orgId];
+  const row  = await queryOne(`SELECT COUNT(*) as n FROM contacts WHERE organization_id = $1 ${cond}`, args);
+  return parseInt(row?.n || 0);
+}
+
 // ─── SETTINGS ─────────────────────────────────────────────────────
 
 async function getSetting(orgId, key) {
@@ -864,8 +922,8 @@ module.exports = {
   createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation,
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
-  // Contacts — definidas justo arriba
-  getContact, upsertContact,
+  // Contacts
+  getContact, upsertContact, touchLead, promoteToCustomer, getContacts, countContacts,
   // Settings
   getSetting, setSetting,
   // Escalation feedback
