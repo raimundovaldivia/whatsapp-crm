@@ -24,19 +24,24 @@ function normalizeBotOrder(o) {
 }
 
 function normalizeShopifyOrder(o) {
+  // Formato DB: columnas snake_case, items ya como array parseado
+  const items = Array.isArray(o.items)
+    ? o.items.map(i => ({ title: i.name || i.title, quantity: i.quantity, price: i.price }))
+    : [];
   return {
-    _key:          `shopify-${o.id}`,
-    source:        'shopify',
-    rawId:         o.id,
-    customerName:  o.customer?.name || 'Cliente desconocido',
-    phone:         o.customer?.phone || '—',
-    date:          new Date(o.createdAt),
-    total:         Number(o.totalPrice || 0),
-    shopifyName:   o.name,
-    financialStatus:   o.financialStatus,
-    fulfillmentStatus: o.fulfillmentStatus,
-    items:         (o.lineItems || []).map(i => ({ title: i.title, quantity: i.quantity, price: i.price })),
-    raw:           o,
+    _key:             `shopify-${o.shopify_order_id || o.id}`,
+    source:           'shopify',
+    rawId:            o.shopify_order_id || o.id,
+    dbId:             o.id,
+    customerName:     o.customer_name || 'Cliente desconocido',
+    phone:            o.customer_phone || '—',
+    date:             o.shopify_created_at ? new Date(o.shopify_created_at) : new Date(0),
+    total:            Number(o.total_price || 0),
+    shopifyName:      o.shopify_name,
+    financialStatus:  (o.financial_status || '').toUpperCase(),
+    fulfillmentStatus:(o.fulfillment_status || '').toUpperCase(),
+    items,
+    raw:              o,
   };
 }
 
@@ -99,6 +104,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [stats,         setStats]         = useState(null);
   const [toast,         setToast]         = useState(null);
   const [syncing,       setSyncing]       = useState(null);
+  const [syncingAll,    setSyncingAll]    = useState(false);
+  const [lastSync,      setLastSync]      = useState(null);
 
   // Filtros
   const [dateFilter,   setDateFilter]   = useState('all');   // all | today | week | month
@@ -116,17 +123,31 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       const [botData, statsData, shopifyRes] = await Promise.all([
         ordersAPI.getAll(),
         ordersAPI.getStats(),
-        api.get('/orders/shopify', { params: { status: 'any', limit: 100 } }).catch(() => ({ data: { orders: [] } })),
+        api.get('/orders/shopify').catch(() => ({ data: { orders: [], lastSync: null } })),
       ]);
       setBotOrders(botData || []);
       setStats(statsData);
       setShopifyOrders(shopifyRes.data?.orders || []);
+      if (shopifyRes.data?.lastSync) setLastSync(new Date(shopifyRes.data.lastSync));
     } catch {
       showToast('Error cargando pedidos', 'error');
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const handleSyncAll = async () => {
+    setSyncingAll(true);
+    try {
+      const res = await api.post('/orders/shopify/sync');
+      showToast(`✅ Sincronizadas ${res.data.synced} órdenes de Shopify`);
+      await load();
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Error sincronizando con Shopify', 'error');
+    } finally {
+      setSyncingAll(false);
+    }
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -187,6 +208,16 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       <div style={{ padding: '14px 24px', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px' }}>
         <ShoppingBag size={20} color={colors.green} />
         <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600, flex: 1 }}>Pedidos</h1>
+        {lastSync && (
+          <span style={{ fontSize: '11px', color: colors.textSecondary }}>
+            Shopify: {lastSync.toLocaleString('es-CL', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}
+          </span>
+        )}
+        <button onClick={handleSyncAll} disabled={syncingAll}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: syncingAll ? colors.bgHover : '#0d2929', color: '#4db6ac', padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 500, border: '1px solid #1a4040', cursor: syncingAll ? 'not-allowed' : 'pointer', opacity: syncingAll ? 0.7 : 1 }}>
+          <RefreshCw size={12} style={{ animation: syncingAll ? 'spin 1s linear infinite' : 'none' }} />
+          {syncingAll ? 'Sincronizando...' : 'Sync Shopify'}
+        </button>
         <button onClick={load} style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', border: 'none', cursor: 'pointer' }}>
           <RefreshCw size={15} />
         </button>
@@ -444,9 +475,10 @@ function ShopifyOrderCard({ order }) {
             <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Detalles</div>
             <div style={{ fontSize: '12px', color: colors.textSecondary, lineHeight: '1.8' }}>
               <div>📅 {formatDateTime(order.date)}</div>
-              {order.raw?.customer?.email && <div>✉️ {order.raw.customer.email}</div>}
-              {order.raw?.shippingAddress && <div>📍 {order.raw.shippingAddress.city}</div>}
-              <div style={{ color: '#4db6ac' }}>🛍️ Canal: {order.raw?.channel || 'Shopify'}</div>
+              {order.raw?.customer_email && <div>✉️ {order.raw.customer_email}</div>}
+              {order.raw?.customer_phone && <div>📞 {order.raw.customer_phone}</div>}
+              {order.raw?.shipping_city  && <div>📍 {order.raw.shipping_city}</div>}
+              <div style={{ color: '#4db6ac' }}>🛍️ Canal: Shopify</div>
             </div>
           </div>
         </div>

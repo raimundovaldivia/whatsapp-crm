@@ -364,6 +364,29 @@ async function setupDatabase() {
       ALTER TABLE payment_proofs ADD CONSTRAINT payment_proofs_status_check
         CHECK(status IN ('pending','pre_verified','verified','rejected'))
         NOT VALID;
+
+      -- ─── CACHÉ DE ÓRDENES DE SHOPIFY ────────────────────────────────
+      CREATE TABLE IF NOT EXISTS shopify_orders (
+        id                  SERIAL PRIMARY KEY,
+        organization_id     INTEGER NOT NULL,
+        shopify_order_id    TEXT NOT NULL,
+        shopify_name        TEXT,
+        financial_status    TEXT,
+        fulfillment_status  TEXT,
+        total_price         DECIMAL(12,2),
+        customer_name       TEXT,
+        customer_email      TEXT,
+        customer_phone      TEXT,
+        shipping_city       TEXT,
+        items               JSONB DEFAULT '[]',
+        raw_json            JSONB,
+        shopify_created_at  TIMESTAMP,
+        synced_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(organization_id, shopify_order_id),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_shopify_orders_org_date
+        ON shopify_orders(organization_id, shopify_created_at DESC);
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

@@ -737,6 +737,75 @@ async function getAccuracyStats(orgId) {
   );
 }
 
+// ─── SHOPIFY ORDERS CACHE ─────────────────────────────────────────────
+
+/**
+ * Upsert bulk de órdenes Shopify en nuestra DB.
+ * orders: array de objetos ya normalizados con campos del schema.
+ */
+async function upsertShopifyOrders(orgId, orders) {
+  if (!orders?.length) return;
+  for (const o of orders) {
+    const customerName  = o.customer ? `${o.customer.first_name || ''} ${o.customer.last_name || ''}`.trim() : null;
+    const customerEmail = o.customer?.email || null;
+    const customerPhone = o.customer?.phone || o.billing_address?.phone || null;
+    const shippingCity  = o.shipping_address?.city || o.billing_address?.city || null;
+    const items         = (o.line_items || []).map(li => ({ name: li.name, quantity: li.quantity, price: li.price }));
+    const createdAt     = o.created_at || null;
+
+    await pool.query(
+      `INSERT INTO shopify_orders
+         (organization_id, shopify_order_id, shopify_name, financial_status, fulfillment_status,
+          total_price, customer_name, customer_email, customer_phone, shipping_city,
+          items, raw_json, shopify_created_at, synced_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+       ON CONFLICT (organization_id, shopify_order_id) DO UPDATE SET
+         shopify_name        = EXCLUDED.shopify_name,
+         financial_status    = EXCLUDED.financial_status,
+         fulfillment_status  = EXCLUDED.fulfillment_status,
+         total_price         = EXCLUDED.total_price,
+         customer_name       = EXCLUDED.customer_name,
+         customer_email      = EXCLUDED.customer_email,
+         customer_phone      = EXCLUDED.customer_phone,
+         shipping_city       = EXCLUDED.shipping_city,
+         items               = EXCLUDED.items,
+         raw_json            = EXCLUDED.raw_json,
+         shopify_created_at  = EXCLUDED.shopify_created_at,
+         synced_at           = NOW()`,
+      [
+        orgId,
+        String(o.id),
+        o.name || null,
+        o.financial_status || null,
+        o.fulfillment_status || null,
+        o.total_price ? parseFloat(o.total_price) : null,
+        customerName || null,
+        customerEmail,
+        customerPhone,
+        shippingCity,
+        JSON.stringify(items),
+        JSON.stringify(o),
+        createdAt,
+      ]
+    );
+  }
+}
+
+async function getShopifyOrders(orgId) {
+  return query(
+    'SELECT * FROM shopify_orders WHERE organization_id = $1 ORDER BY shopify_created_at DESC NULLS LAST',
+    [orgId]
+  );
+}
+
+async function getShopifyOrdersSyncedAt(orgId) {
+  const row = await queryOne(
+    'SELECT MAX(synced_at) as last_sync FROM shopify_orders WHERE organization_id = $1',
+    [orgId]
+  );
+  return row?.last_sync || null;
+}
+
 module.exports = {
   getPool,
   // Orgs
@@ -775,4 +844,6 @@ module.exports = {
   getDailyCache, saveDailyCache,
   savePredictions, markMessageSent,
   getPendingOutcomeCheck, saveOutcome, getAccuracyStats,
+  // Shopify orders cache
+  upsertShopifyOrders, getShopifyOrders, getShopifyOrdersSyncedAt,
 };

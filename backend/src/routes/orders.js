@@ -77,23 +77,39 @@ router.get('/stats', async (req, res) => {
 });
 
 /**
- * GET /api/orders/shopify?status=any&limit=50&cursor=
- * Órdenes reales de Shopify via GraphQL directo (no del bot)
- * IMPORTANTE: debe estar ANTES de /:id para no ser interceptado
+ * GET /api/orders/shopify
+ * Lee las órdenes de Shopify desde nuestra DB (previamente sincronizadas).
+ * IMPORTANTE: debe estar ANTES de /:id para no ser interceptado.
  */
 router.get('/shopify', async (req, res) => {
   try {
+    const orders   = await db.getShopifyOrders(req.orgId);
+    const lastSync = await db.getShopifyOrdersSyncedAt(req.orgId);
+    res.json({ success: true, orders, total: orders.length, lastSync });
+  } catch (err) {
+    console.error('[Orders/Shopify GET]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/orders/shopify/sync
+ * Llama a Shopify, trae TODAS las órdenes y las upsertea en nuestra DB.
+ */
+router.post('/shopify/sync', async (req, res) => {
+  try {
     const ds = await db.getPrimaryDataSource(req.orgId);
-    if (!ds) return res.json({ success: true, orders: [], total: 0 });
+    if (!ds) return res.status(400).json({ success: false, error: 'No hay fuente de datos Shopify configurada' });
 
     const { shop, token } = shopifyApi.credentialsFrom(ds);
-    const status = req.query.status || 'any';
+    const orders = await shopifyApi.getAllOrders(shop, token, { status: 'any' });
 
-    // Traer TODAS las órdenes paginando automáticamente (hasta 10.000)
-    const orders = await shopifyApi.getAllOrders(shop, token, { status });
-    res.json({ success: true, orders, total: orders.length });
+    await db.upsertShopifyOrders(req.orgId, orders);
+
+    const lastSync = await db.getShopifyOrdersSyncedAt(req.orgId);
+    res.json({ success: true, synced: orders.length, lastSync });
   } catch (err) {
-    console.error('[Orders/Shopify]', err.message);
+    console.error('[Orders/Shopify SYNC]', err.message);
     if (err.message.includes('accessToken') || err.message.includes('401')) {
       return res.status(401).json({
         success: false,
