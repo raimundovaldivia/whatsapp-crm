@@ -32,6 +32,7 @@ router.get('/:slug/info', async (req, res) => {
       storeName, storeLogo, storeColor,
       announcement, heroTitle, heroSubtitle, heroTagsRaw,
       whatsappPhone, freeShippingRaw,
+      howToBuy, aboutUs,
     ] = await Promise.all([
       db.getSetting(org.id, 'store_name'),
       db.getSetting(org.id, 'store_logo'),
@@ -42,6 +43,8 @@ router.get('/:slug/info', async (req, res) => {
       db.getSetting(org.id, 'store_hero_tags'),
       db.getSetting(org.id, 'store_whatsapp_phone'),
       db.getSetting(org.id, 'store_free_shipping'),
+      db.getSetting(org.id, 'store_how_to_buy'),
+      db.getSetting(org.id, 'store_about_us'),
     ]);
 
     let heroTags = ['🥚 Huevos libres', '🫒 Aceitunas', '🧀 Quesos', '🚚 Lun – Sáb'];
@@ -58,6 +61,8 @@ router.get('/:slug/info', async (req, res) => {
       heroTags,
       whatsappPhone: whatsappPhone || null,
       freeShipping:  freeShippingRaw ? parseInt(freeShippingRaw) : 10000,
+      howToBuy:     howToBuy  || null,
+      aboutUs:      aboutUs   || null,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

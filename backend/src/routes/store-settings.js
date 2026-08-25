@@ -27,6 +27,8 @@ const STORE_KEYS = [
   'store_whatsapp_phone',
   'store_free_shipping',   // número como string
   'admin_alert_phone',
+  'store_how_to_buy',      // texto largo editable
+  'store_about_us',        // texto largo editable
 ];
 
 // ── GET /api/store-settings ────────────────────────────────────────

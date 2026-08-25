@@ -21,7 +21,7 @@ function StoreConfigTab({ orgSlug, colors }) {
     store_name: '', store_logo: '', store_color: '#22c55e',
     store_announcement: '', store_hero_title: '', store_hero_subtitle: '',
     store_hero_tags: '', store_whatsapp_phone: '', store_free_shipping: '10000',
-    admin_alert_phone: '',
+    admin_alert_phone: '', store_how_to_buy: '', store_about_us: '',
   });
 
   useEffect(() => {
@@ -38,6 +38,8 @@ function StoreConfigTab({ orgSlug, colors }) {
           store_whatsapp_phone: s.store_whatsapp_phone || '',
           store_free_shipping: s.store_free_shipping || '10000',
           admin_alert_phone: s.admin_alert_phone || '',
+          store_how_to_buy: s.store_how_to_buy || '',
+          store_about_us: s.store_about_us || '',
         });
       })
       .catch(() => setError('Error cargando configuración'))
@@ -125,6 +127,30 @@ function StoreConfigTab({ orgSlug, colors }) {
           <div><label style={lbl}>Umbral envío gratis ($)</label><input style={inp} type="number" min="0" value={form.store_free_shipping} onChange={set('store_free_shipping')} placeholder="10000" /><p style={hint}>Pon 0 para desactivar</p></div>
           <div><label style={lbl}>WhatsApp de contacto (botón flotante)</label><input style={inp} value={form.store_whatsapp_phone} onChange={set('store_whatsapp_phone')} placeholder="56912345678" /><p style={hint}>Vacío = botón no aparece</p></div>
           <div><label style={lbl}>Teléfono admin (alertas de pedidos)</label><input style={inp} value={form.admin_alert_phone} onChange={set('admin_alert_phone')} placeholder="56912345678" /><p style={hint}>Recibe un WhatsApp por cada pedido nuevo</p></div>
+        </div>
+      </div>
+
+      {/* Cómo comprar */}
+      <div style={section}>
+        <div style={secHead}><Sparkles size={15} color={colors.green} /> Cómo comprar</div>
+        <div style={secBody}>
+          <div>
+            <label style={lbl}>Texto "Cómo comprar"</label>
+            <textarea style={{ ...inp, height: 120, resize: 'vertical' }} value={form.store_how_to_buy} onChange={set('store_how_to_buy')} placeholder="Vacío = se muestra contenido por defecto con los 4 pasos." />
+            <p style={hint}>Si lo dejas vacío, se muestra el flujo estándar. Escribe aquí tu proceso personalizado.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Nuestra historia */}
+      <div style={section}>
+        <div style={secHead}><Store size={15} color={colors.green} /> Nuestra historia</div>
+        <div style={secBody}>
+          <div>
+            <label style={lbl}>Texto "Nuestra historia"</label>
+            <textarea style={{ ...inp, height: 120, resize: 'vertical' }} value={form.store_about_us} onChange={set('store_about_us')} placeholder="Vacío = se muestra contenido por defecto." />
+            <p style={hint}>Cuéntale a tus clientes quiénes son, qué los hace especiales. Si lo dejas vacío se muestra contenido genérico.</p>
+          </div>
         </div>
       </div>
 

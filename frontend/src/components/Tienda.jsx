@@ -41,6 +41,7 @@ export default function Tienda({ slug }) {
   const [isTablet,    setIsTablet]    = useState(() => window.innerWidth < 1024);
   const [activeCategory, setActiveCategory] = useState(null); // null = todas
   const [catMenuOpen,    setCatMenuOpen]    = useState(false);
+  const [activeTab,      setActiveTab]      = useState('productos');
 
   // Responsive breakpoints
   useEffect(() => {
@@ -93,6 +94,8 @@ export default function Tienda({ slug }) {
   const HERO_SUB     = store?.heroSubtitle  || 'Sin intermediarios. Animales criados en libertad, productos que llegan frescos a tu puerta.';
   const HERO_TAGS    = store?.heroTags      || ['🥚 Huevos libres', '🫒 Aceitunas', '🧀 Quesos', '🚚 Lun – Sáb'];
   const WA_PHONE     = store?.whatsappPhone || null;
+  const HOW_TO_BUY   = store?.howToBuy      || null;
+  const ABOUT_US     = store?.aboutUs       || null;
 
   const cartCount = cart.reduce((s, i) => s + i.quantity, 0);
   const cartTotal = cart.reduce((s, i) => s + parseFloat(i.product.price) * i.quantity, 0);
@@ -265,65 +268,73 @@ export default function Tienda({ slug }) {
             </div>
           </div>
         )}
-      </header>
+        {/* ── Nav tabs: Productos | Cómo comprar | Nuestra historia ── */}
+        {view === 'catalog' && (
+          <div style={{ borderTop: '1px solid #f3f4f6' }}>
+            <div style={{ maxWidth: 1200, margin: '0 auto', padding: isMobile ? '0 4px' : '0 24px', display: 'flex', alignItems: 'center', overflowX: 'auto', scrollbarWidth: 'none' }}>
 
-      {/* Nav de categorías — solo si hay categorías */}
-      {categories.length > 0 && (
-        <nav style={{ backgroundColor: 'white', borderBottom: '1px solid #e5e7eb' }}>
-          <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 24px', display: 'flex', alignItems: 'center', gap: 0, overflowX: 'auto' }}>
-            {/* Dropdown "Productos" — desktop */}
-            {!isMobile && (
-              <div style={{ position: 'relative' }}>
+              {/* Tab Productos — con dropdown de categorías en desktop */}
+              <div style={{ position: 'relative', flexShrink: 0 }}>
                 <button
-                  onMouseEnter={() => setCatMenuOpen(true)}
-                  onMouseLeave={() => setCatMenuOpen(false)}
-                  onClick={() => { setCatMenuOpen(false); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: PRIMARY, borderBottom: `2px solid ${PRIMARY}` }}>
+                  onMouseEnter={hasCategories && !isMobile ? () => setCatMenuOpen(true) : undefined}
+                  onMouseLeave={hasCategories && !isMobile ? () => setCatMenuOpen(false) : undefined}
+                  onClick={() => { setActiveTab('productos'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, padding: isMobile ? '10px 12px' : '11px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: isMobile ? 13 : 14, fontWeight: activeTab === 'productos' ? 700 : 500, color: activeTab === 'productos' ? PRIMARY : '#374151', borderBottom: `2px solid ${activeTab === 'productos' ? PRIMARY : 'transparent'}`, whiteSpace: 'nowrap' }}>
                   Productos
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  {hasCategories && !isMobile && <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                 </button>
-                {catMenuOpen && (
+                {hasCategories && !isMobile && catMenuOpen && (
                   <div
                     onMouseEnter={() => setCatMenuOpen(true)}
                     onMouseLeave={() => setCatMenuOpen(false)}
-                    style={{ position: 'absolute', top: '100%', left: 0, backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', minWidth: 200, zIndex: 300, padding: '8px 0' }}>
-                    <button onClick={() => { setCatMenuOpen(false); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
+                    style={{ position: 'absolute', top: '100%', left: 0, backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', minWidth: 210, zIndex: 300, padding: '8px 0' }}>
+                    <button onClick={() => { setCatMenuOpen(false); setActiveTab('productos'); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
                       style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 500, color: '#374151' }}>
                       Ver todos los productos
                     </button>
                     <div style={{ height: 1, backgroundColor: '#f3f4f6', margin: '4px 0' }} />
                     {categories.map(cat => (
-                      <button key={cat} onClick={() => scrollToCategory(cat)}
-                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 400, color: '#374151' }}>
+                      <button key={cat} onClick={() => { setActiveTab('productos'); scrollToCategory(cat); }}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: '#374151' }}>
                         {cat}
                       </button>
                     ))}
                   </div>
                 )}
               </div>
-            )}
 
-            {/* Pills horizontales — mobile */}
-            {isMobile && (
-              <div style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '8px 0', scrollbarWidth: 'none' }}>
-                <button onClick={() => setActiveCategory(null)}
-                  style={{ flexShrink: 0, padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${!activeCategory ? PRIMARY : '#e5e7eb'}`, background: !activeCategory ? PRIMARY : 'white', color: !activeCategory ? 'white' : '#374151', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              <button onClick={() => { setActiveTab('como-comprar'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                style={{ flexShrink: 0, padding: isMobile ? '10px 12px' : '11px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: isMobile ? 13 : 14, fontWeight: activeTab === 'como-comprar' ? 700 : 500, color: activeTab === 'como-comprar' ? PRIMARY : '#374151', borderBottom: `2px solid ${activeTab === 'como-comprar' ? PRIMARY : 'transparent'}`, whiteSpace: 'nowrap' }}>
+                Cómo comprar
+              </button>
+
+              <button onClick={() => { setActiveTab('historia'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                style={{ flexShrink: 0, padding: isMobile ? '10px 12px' : '11px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: isMobile ? 13 : 14, fontWeight: activeTab === 'historia' ? 700 : 500, color: activeTab === 'historia' ? PRIMARY : '#374151', borderBottom: `2px solid ${activeTab === 'historia' ? PRIMARY : 'transparent'}`, whiteSpace: 'nowrap' }}>
+                Nuestra historia
+              </button>
+            </div>
+
+            {/* Pills de categoría — mobile (sub-nav, solo en tab Productos) */}
+            {hasCategories && isMobile && activeTab === 'productos' && (
+              <div style={{ borderTop: '1px solid #f3f4f6', padding: '6px 12px 8px', display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none' }}>
+                <button onClick={() => { setActiveTab('productos'); document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' }); }}
+                  style={{ flexShrink: 0, padding: '4px 12px', borderRadius: 20, border: `1.5px solid ${PRIMARY}`, background: PRIMARY, color: 'white', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
                   Todos
                 </button>
                 {categories.map(cat => (
-                  <button key={cat} onClick={() => scrollToCategory(cat)}
-                    style={{ flexShrink: 0, padding: '5px 14px', borderRadius: 20, border: `1.5px solid #e5e7eb`, background: 'white', color: '#374151', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>
+                  <button key={cat} onClick={() => { setActiveTab('productos'); scrollToCategory(cat); }}
+                    style={{ flexShrink: 0, padding: '4px 12px', borderRadius: 20, border: '1.5px solid #e5e7eb', background: 'white', color: '#374151', fontSize: 11, fontWeight: 500, cursor: 'pointer' }}>
                     {cat}
                   </button>
                 ))}
               </div>
             )}
           </div>
-        </nav>
-      )}
+        )}
+      </header>
 
       {/* Delivery progress bar (cuando hay items en carrito) */}
-      {cartTotal > 0 && (
+      {activeTab === 'productos' && cartTotal > 0 && (
         <div style={{ backgroundColor: cartTotal >= FREE_SHIP ? '#f0fdf4' : '#fefce8', borderBottom: `1px solid ${cartTotal >= FREE_SHIP ? '#bbf7d0' : '#fef08a'}`, padding: '8px 16px', textAlign: 'center' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: cartTotal >= FREE_SHIP ? '#166534' : '#854d0e', marginBottom: 5 }}>
             {cartTotal >= FREE_SHIP ? '✅ ¡Delivery gratis incluido!' : `Agrega ${fmt(FREE_SHIP - cartTotal)} más para delivery gratis`}
@@ -335,7 +346,7 @@ export default function Tienda({ slug }) {
       )}
 
       {/* ── CATÁLOGO ──────────────────────────────────────────────── */}
-      {view === 'catalog' && (
+      {view === 'catalog' && activeTab === 'productos' && (
         <>
           {/* Hero */}
           <section style={{ background: 'linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 60%,#f9fafb 100%)', padding: isMobile ? '36px 16px 40px' : '56px 24px' }}>
@@ -596,6 +607,107 @@ export default function Tienda({ slug }) {
             </div>
           </footer>
         </>
+      )}
+
+      {/* ── CÓMO COMPRAR ──────────────────────────────────────────── */}
+      {view === 'catalog' && activeTab === 'como-comprar' && (
+        <div style={{ maxWidth: 800, margin: '0 auto', padding: isMobile ? '32px 16px 60px' : '48px 24px 80px' }}>
+          <h1 style={{ margin: '0 0 8px', fontSize: isMobile ? 24 : 32, fontWeight: 900 }}>Cómo comprar</h1>
+          <p style={{ margin: '0 0 40px', color: '#6b7280', fontSize: 15, lineHeight: 1.7 }}>Comprar es fácil y rápido. Te explicamos el proceso paso a paso.</p>
+
+          {HOW_TO_BUY ? (
+            <div style={{ whiteSpace: 'pre-wrap', fontSize: 15, lineHeight: 1.8, color: '#374151', marginBottom: 40 }}>{HOW_TO_BUY}</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 20, marginBottom: 48 }}>
+                {[
+                  { n: '1', icon: '🛒', t: 'Elige tus productos', d: 'Navega el catálogo y añade lo que quieras al carrito.' },
+                  { n: '2', icon: '📱', t: 'Confirma tu pedido', d: 'Rellena tus datos de entrega: nombre, WhatsApp y dirección.' },
+                  { n: '3', icon: '✅', t: 'Recibe confirmación', d: 'Te enviamos un mensaje de WhatsApp con el resumen del pedido.' },
+                  { n: '4', icon: '🚚', t: 'Llega a tu puerta', d: FREE_SHIP > 0 ? `Delivery gratis en pedidos sobre ${fmt(FREE_SHIP)}.` : 'Coordinamos la entrega contigo por WhatsApp.' },
+                ].map(s => (
+                  <div key={s.n} style={{ display: 'flex', gap: 16, alignItems: 'flex-start', background: '#f9fafb', borderRadius: 14, padding: isMobile ? '16px 14px' : '20px 20px', border: '1px solid #e5e7eb' }}>
+                    <div style={{ width: 40, height: 40, borderRadius: '50%', background: `${PRIMARY}20`, color: PRIMARY, fontWeight: 800, fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.n}</div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: isMobile ? 14 : 16, marginBottom: 4 }}>{s.icon} {s.t}</div>
+                      <div style={{ color: '#6b7280', fontSize: isMobile ? 13 : 14, lineHeight: 1.6 }}>{s.d}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr', gap: 14, marginBottom: 40 }}>
+                {[
+                  { icon: '💳', t: 'Forma de pago', d: 'Pago contra entrega. Efectivo o transferencia al recibir.' },
+                  { icon: '📅', t: 'Horarios de pedido', d: 'Lunes a sábado hasta las 11 AM para entrega el mismo día.' },
+                  { icon: '📍', t: 'Zonas de entrega', d: 'Consulta tu zona disponible escribiéndonos por WhatsApp.' },
+                  { icon: '🔄', t: 'Cambios', d: 'Si hay algún problema con tu pedido, contáctanos por WhatsApp y lo resolvemos.' },
+                ].map(c => (
+                  <div key={c.t} style={{ background: 'white', borderRadius: 12, padding: isMobile ? '16px 14px' : '20px 18px', border: '1px solid #e5e7eb' }}>
+                    <div style={{ fontSize: 22, marginBottom: 8 }}>{c.icon}</div>
+                    <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, marginBottom: 5 }}>{c.t}</div>
+                    <div style={{ fontSize: isMobile ? 12 : 13, color: '#6b7280', lineHeight: 1.6 }}>{c.d}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {WA_PHONE && (
+            <div style={{ background: `${PRIMARY}10`, border: `1px solid ${PRIMARY}30`, borderRadius: 16, padding: isMobile ? '24px 16px' : '28px 24px', textAlign: 'center' }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>💬</div>
+              <div style={{ fontWeight: 800, fontSize: isMobile ? 16 : 18, marginBottom: 6 }}>¿Tienes alguna duda?</div>
+              <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 18 }}>Escríbenos por WhatsApp, te respondemos rápido.</div>
+              <a href={`https://wa.me/${WA_PHONE.replace(/\D/g, '')}`} target="_blank" rel="noreferrer"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 24px', borderRadius: 10, background: '#25d366', color: 'white', textDecoration: 'none', fontWeight: 700, fontSize: 14 }}>
+                <MessageCircle size={18} fill="white" />
+                Contactar por WhatsApp
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── NUESTRA HISTORIA ──────────────────────────────────────────── */}
+      {view === 'catalog' && activeTab === 'historia' && (
+        <div style={{ maxWidth: 800, margin: '0 auto', padding: isMobile ? '32px 16px 60px' : '48px 24px 80px' }}>
+          <div style={{ background: `linear-gradient(135deg, ${PRIMARY}15 0%, ${PRIMARY}05 100%)`, borderRadius: 20, padding: isMobile ? '32px 20px' : '48px 40px', textAlign: 'center', marginBottom: 48, border: `1px solid ${PRIMARY}20` }}>
+            {logoUrl
+              ? <img src={logoUrl} alt={storeName} style={{ height: isMobile ? 56 : 72, width: 'auto', objectFit: 'contain', marginBottom: 20 }} />
+              : <div style={{ fontSize: isMobile ? 28 : 36, fontWeight: 900, color: PRIMARY, marginBottom: 12 }}>{storeName}</div>}
+            <p style={{ margin: '0 auto', fontSize: isMobile ? 15 : 17, color: '#374151', lineHeight: 1.8, maxWidth: 480 }}>
+              {ABOUT_US || `Somos ${storeName}, una empresa dedicada a traer los mejores productos frescos directo del campo a tu mesa, sin intermediarios, con amor y compromiso.`}
+            </p>
+          </div>
+
+          {!ABOUT_US && (
+            <>
+              <h2 style={{ margin: '0 0 22px', fontSize: isMobile ? 20 : 24, fontWeight: 800 }}>Nuestros valores</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(3, 1fr)', gap: isMobile ? 12 : 16, marginBottom: 48 }}>
+                {[
+                  { icon: '🌿', t: 'Campo libre', d: 'Animales criados en libertad, sin confinamiento industrial.' },
+                  { icon: '🤝', t: 'Sin intermediarios', d: 'Del productor directamente a tu mesa.' },
+                  { icon: '🧡', t: 'Con dedicación', d: 'Cada producto preparado con cuidado y atención al detalle.' },
+                ].map(v => (
+                  <div key={v.t} style={{ background: 'white', borderRadius: 14, padding: isMobile ? '18px 14px' : '24px 20px', border: '1px solid #e5e7eb', textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+                    <div style={{ fontSize: isMobile ? 28 : 32, marginBottom: 10 }}>{v.icon}</div>
+                    <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, marginBottom: 6 }}>{v.t}</div>
+                    <div style={{ fontSize: isMobile ? 11 : 12, color: '#6b7280', lineHeight: 1.6 }}>{v.d}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div style={{ textAlign: 'center', padding: isMobile ? '28px 16px' : '36px 24px', background: '#f9fafb', borderRadius: 16, border: '1px solid #e5e7eb' }}>
+            <div style={{ fontWeight: 800, fontSize: isMobile ? 18 : 20, marginBottom: 8 }}>¿Listo para probar?</div>
+            <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 20 }}>Explora nuestros productos y pide hoy.</div>
+            <button onClick={() => { setActiveTab('productos'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+              style={{ padding: isMobile ? '11px 22px' : '13px 28px', borderRadius: 12, border: 'none', background: PRIMARY, color: 'white', fontWeight: 800, fontSize: isMobile ? 14 : 15, cursor: 'pointer' }}>
+              Ver productos
+            </button>
+          </div>
+        </div>
       )}
 
       {/* ── CHECKOUT ──────────────────────────────────────────────── */}
