@@ -531,16 +531,20 @@ function formatProductsForAI(products, shop = null) {
       ? `  🔗 https://${shop}/products/${p.handle}`
       : '';
 
+    // Stock a nivel de variante si existen, o a nivel de producto si no
+    const topStockInfo = !p.variants?.length && p.inventoryQuantity != null
+      ? ` (stock: ${p.inventoryQuantity})`
+      : '';
     const variantes = p.variants?.length > 0
       ? p.variants.map(v => {
           const stockInfo  = v.stock != null ? ` (stock: ${v.stock})` : '';
-          const agotado    = v.available === false ? ' ❌ agotado' : '';
+          const agotado    = v.available === false ? ' ❌ agotado' : (v.stock === 0 ? ' ❌ agotado' : '');
           return `  · ${v.title}: $${Number(v.price).toLocaleString('es-CL')}${stockInfo}${agotado}`;
         }).join('\n')
       : '';
 
     return [
-      `• ${p.title} | ${precio}`,
+      `• ${p.title} | ${precio}${topStockInfo}`,
       p.vendor      ? `  Marca: ${p.vendor}` : '',
       p.productType ? `  Categoría: ${p.productType}` : '',
       p.description ? `  ${p.description.slice(0, 250)}` : '',

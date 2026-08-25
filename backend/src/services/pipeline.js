@@ -35,12 +35,20 @@ async function processMessage(orgId, conversationId, userMessage) {
       if (cacheAgeMinutes < CACHE_TTL_MINUTES) {
         // Usar caché local — sin llamada a Shopify
         const cached = await db.getCachedProducts(orgId);
-        products = cached.map(p => ({
-          id: p.external_id, title: p.title, description: p.description,
-          price: p.price, sku: p.sku, inventoryQuantity: p.inventory_quantity,
-          imageUrl: p.image_url, tags: p.tags, productType: p.product_type,
-          handle: p.handle,
-        }));
+        products = cached.map(p => {
+          // raw_json contiene el producto completo de Shopify (con variantes y stock)
+          if (p.raw_json) {
+            try { return JSON.parse(p.raw_json); } catch (_) {}
+          }
+          // Fallback: construir desde columnas (sin variantes)
+          return {
+            id: p.external_id, title: p.title, description: p.description,
+            priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
+            inventoryQuantity: p.inventory_quantity,
+            sku: p.sku, imageUrl: p.image_url, tags: p.tags,
+            productType: p.product_type, handle: p.handle,
+          };
+        });
         productosTexto = shopifyApi.formatProductsForAI(products, shop);
         console.log(`[Pipeline] 📦 Productos desde caché (${Math.round(cacheAgeMinutes)}min de antigüedad)`);
       } else {
