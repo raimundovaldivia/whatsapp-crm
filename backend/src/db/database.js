@@ -795,6 +795,24 @@ async function getAccuracyStats(orgId) {
   );
 }
 
+async function bulkDeleteBotOrders(orgId, ids) {
+  if (!ids?.length) return 0;
+  const { rowCount } = await pool.query(
+    'DELETE FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])',
+    [orgId, ids]
+  );
+  return rowCount;
+}
+
+async function bulkDeleteShopifyOrders(orgId, shopifyOrderIds) {
+  if (!shopifyOrderIds?.length) return 0;
+  const { rowCount } = await pool.query(
+    'DELETE FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])',
+    [orgId, shopifyOrderIds]
+  );
+  return rowCount;
+}
+
 async function bulkUpdateBotOrderStatus(orgId, ids, status) {
   if (!ids?.length) return 0;
   const { rowCount } = await pool.query(
@@ -935,6 +953,7 @@ module.exports = {
   getPendingOutcomeCheck, saveOutcome, getAccuracyStats,
   // Bulk updates
   bulkUpdateBotOrderStatus, bulkUpdateShopifyOrderStatus,
+  bulkDeleteBotOrders, bulkDeleteShopifyOrders,
   // Shopify orders cache
   upsertShopifyOrders, getShopifyOrders, getShopifyOrdersSyncedAt,
 };

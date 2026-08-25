@@ -232,6 +232,24 @@ router.post('/:id/sync-shopify', async (req, res) => {
 });
 
 /**
+ * DELETE /api/orders/bulk
+ * Eliminar órdenes masivamente.
+ * Body: { botIds: [1,2,3], shopifyIds: ["...","..."] }
+ */
+router.delete('/bulk', async (req, res) => {
+  const { botIds = [], shopifyIds = [] } = req.body;
+  try {
+    const [botCount, shopifyCount] = await Promise.all([
+      botIds.length     ? db.bulkDeleteBotOrders(req.orgId, botIds)         : 0,
+      shopifyIds.length ? db.bulkDeleteShopifyOrders(req.orgId, shopifyIds) : 0,
+    ]);
+    res.json({ success: true, deleted: botCount + shopifyCount });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * PATCH /api/orders/bulk-status
  * Cambio masivo de estado.
  * Body: { status, botIds: [1,2,3], shopifyIds: ["gid://...","gid://..."] }

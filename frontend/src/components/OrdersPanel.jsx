@@ -40,6 +40,7 @@ function normalizeShopifyOrder(o) {
     shopifyName:      o.shopify_name,
     financialStatus:  (o.financial_status || '').toUpperCase(),
     fulfillmentStatus:(o.fulfillment_status || '').toUpperCase(),
+    crmStatus:        o.crm_status || 'nuevo',
     items,
     raw:              o,
   };
@@ -190,13 +191,12 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   filtered = filterBySource(filtered, sourceFilter);
   if (statusFilter !== 'all') {
     filtered = filtered.filter(o => {
-      if (o.source === 'bot') return o.botStatus === statusFilter;
-      if (o.source === 'shopify') {
-        if (statusFilter === 'paid')      return o.financialStatus === 'PAID';
-        if (statusFilter === 'pending')   return o.financialStatus === 'PENDING';
-        if (statusFilter === 'cancelled') return ['VOIDED','REFUNDED'].includes(o.financialStatus);
-      }
-      return true;
+      // Estado CRM unificado: bot usa botStatus, Shopify usa crmStatus
+      const crmKey = o.source === 'bot' ? o.botStatus : o.crmStatus;
+      // Mapeos legacy bot → CRM
+      const legacyMap = { draft: 'nuevo', sent: 'nuevo', payment_received: 'paid' };
+      const effective = legacyMap[crmKey] || crmKey;
+      return effective === statusFilter;
     });
   }
 
@@ -218,24 +218,52 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const deselectAll = () => setSelected(new Set());
   const allSelected = filtered.length > 0 && filtered.every(o => selected.has(o._key));
 
-  // Aplicar cambio masivo
+  const getSelOrders = () => filtered.filter(o => selected.has(o._key));
+
+  // Aplicar cambio masivo de estado
   const handleBulkApply = async () => {
     if (!bulkStatus || selected.size === 0) return;
-    const selOrders = filtered.filter(o => selected.has(o._key));
-    const botIds      = selOrders.filter(o => o.source === 'bot').map(o => o.rawId);
-    const shopifyIds  = selOrders.filter(o => o.source === 'shopify').map(o => String(o.rawId));
+    const selOrders  = getSelOrders();
+    const botIds     = selOrders.filter(o => o.source === 'bot').map(o => o.rawId);
+    const shopifyIds = selOrders.filter(o => o.source === 'shopify').map(o => String(o.rawId));
     setApplyingBulk(true);
     try {
       const res = await api.patch('/orders/bulk-status', { status: bulkStatus, botIds, shopifyIds });
-      showToast(`✅ ${res.data.updated} órdenes actualizadas a "${CRM_STATUSES.find(s=>s.key===bulkStatus)?.label || bulkStatus}"`);
-      setSelected(new Set());
-      setBulkStatus('');
-      await load();
-    } catch (err) {
-      showToast(err.response?.data?.error || 'Error al actualizar', 'error');
-    } finally {
-      setApplyingBulk(false);
-    }
+      showToast(`✅ ${res.data.updated} órdenes → "${CRM_STATUSES.find(s=>s.key===bulkStatus)?.label || bulkStatus}"`);
+      setSelected(new Set()); setBulkStatus(''); await load();
+    } catch (err) { showToast(err.response?.data?.error || 'Error al actualizar', 'error'); }
+    finally { setApplyingBulk(false); }
+  };
+
+  // Anular masivo
+  const handleBulkCancel = async () => {
+    if (selected.size === 0) return;
+    const selOrders  = getSelOrders();
+    const botIds     = selOrders.filter(o => o.source === 'bot').map(o => o.rawId);
+    const shopifyIds = selOrders.filter(o => o.source === 'shopify').map(o => String(o.rawId));
+    setApplyingBulk(true);
+    try {
+      const res = await api.patch('/orders/bulk-status', { status: 'cancelled', botIds, shopifyIds });
+      showToast(`🚫 ${res.data.updated} órdenes anuladas`);
+      setSelected(new Set()); await load();
+    } catch (err) { showToast(err.response?.data?.error || 'Error al anular', 'error'); }
+    finally { setApplyingBulk(false); }
+  };
+
+  // Eliminar masivo
+  const handleBulkDelete = async () => {
+    if (selected.size === 0) return;
+    if (!window.confirm(`¿Eliminar ${selected.size} pedido(s) permanentemente?`)) return;
+    const selOrders  = getSelOrders();
+    const botIds     = selOrders.filter(o => o.source === 'bot').map(o => o.rawId);
+    const shopifyIds = selOrders.filter(o => o.source === 'shopify').map(o => String(o.rawId));
+    setApplyingBulk(true);
+    try {
+      const res = await api.delete('/orders/bulk', { data: { botIds, shopifyIds } });
+      showToast(`🗑️ ${res.data.deleted} órdenes eliminadas`);
+      setSelected(new Set()); await load();
+    } catch (err) { showToast(err.response?.data?.error || 'Error al eliminar', 'error'); }
+    finally { setApplyingBulk(false); }
   };
 
   const handleStatusChange = async (orderId, newStatus) => {
@@ -271,12 +299,14 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       : o.financialStatus === 'PAID')
     .reduce((s, o) => s + o.total, 0);
 
-  // Sin despachar (más útil que "pending pago" para tienda COD)
-  const totalUnfulfilled = filtered.filter(o =>
-    o.source === 'bot'
-      ? ['draft', 'sent', 'payment_received'].includes(o.botStatus)
-      : !['FULFILLED', 'RESTOCKED'].includes(o.fulfillmentStatus)
-  ).length;
+  const DONE_STATES = ['en_camino', 'entregado', 'paid', 'cancelled'];
+  // Sin despachar = solo nuevo y por_despachar
+  const totalUnfulfilled = filtered.filter(o => {
+    const crmKey  = o.source === 'bot' ? o.botStatus : o.crmStatus;
+    const legacyMap = { draft: 'nuevo', sent: 'nuevo', payment_received: 'paid' };
+    const effective = legacyMap[crmKey] || crmKey;
+    return ['nuevo', 'por_despachar'].includes(effective);
+  }).length;
 
   const totalPaid = filtered.filter(o =>
     o.source === 'bot'
@@ -357,15 +387,15 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
 
           <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
 
-          {/* Estado */}
-          {[
-            { key: 'all',       label: 'Todos' },
-            { key: 'pending',   label: 'Pendientes' },
-            { key: 'paid',      label: 'Pagados' },
-            { key: 'cancelled', label: 'Cancelados' },
-          ].map(({ key, label }) => (
+          {/* Estado CRM */}
+          {[{ key: 'all', label: 'Todos', color: colors.textSecondary, bg: colors.bgPanel },
+            ...CRM_STATUSES.map(s => ({ key: s.key, label: s.label, color: s.color, bg: s.bg })),
+          ].map(({ key, label, color, bg }) => (
             <button key={key} onClick={() => setStatusFilterR(key)}
-              style={{ padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, border: `1px solid ${statusFilter === key ? colors.yellow : colors.border}`, backgroundColor: statusFilter === key ? '#2e2100' : colors.bgPanel, color: statusFilter === key ? colors.yellow : colors.textSecondary, cursor: 'pointer' }}>
+              style={{ padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500,
+                border: `1px solid ${statusFilter === key ? color : colors.border}`,
+                backgroundColor: statusFilter === key ? bg : colors.bgPanel,
+                color: statusFilter === key ? color : colors.textSecondary, cursor: 'pointer' }}>
               {label}
             </button>
           ))}
@@ -392,6 +422,18 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               <button onClick={handleBulkApply} disabled={!bulkStatus || applyingBulk}
                 style={{ padding: '6px 16px', borderRadius: '8px', border: 'none', backgroundColor: bulkStatus ? colors.green : colors.bgHover, color: bulkStatus ? 'white' : colors.textSecondary, cursor: bulkStatus ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: 600, opacity: applyingBulk ? 0.7 : 1 }}>
                 {applyingBulk ? 'Aplicando...' : 'Aplicar'}
+              </button>
+
+              <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
+
+              <button onClick={handleBulkCancel} disabled={applyingBulk}
+                style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #fb923c44', backgroundColor: '#2e1500', color: '#fb923c', cursor: 'pointer', fontSize: '12px', fontWeight: 500, opacity: applyingBulk ? 0.7 : 1 }}>
+                🚫 Anular
+              </button>
+
+              <button onClick={handleBulkDelete} disabled={applyingBulk}
+                style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #f8717144', backgroundColor: '#2d1a1a', color: '#f87171', cursor: 'pointer', fontSize: '12px', fontWeight: 500, opacity: applyingBulk ? 0.7 : 1 }}>
+                🗑️ Eliminar
               </button>
             </>
           )}
