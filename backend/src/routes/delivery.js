@@ -25,17 +25,21 @@ router.use(requireAuth);
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function normalizeShopifyOrder(row) {
+  // shipping_address viene de raw_json JSONB (puede ser objeto o null)
   let addr = {};
-  try { addr = typeof row.shipping_address === 'string' ? JSON.parse(row.shipping_address) : (row.shipping_address || {}); } catch (_) {}
+  try {
+    const raw = row.shipping_address;
+    addr = raw && typeof raw === 'object' ? raw : (raw ? JSON.parse(raw) : {});
+  } catch (_) {}
   const street = addr.address1 || addr.address || '';
-  const city   = addr.city || '';
+  const city   = addr.city || row.shipping_city || '';
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
   return {
     id: row.id, source: 'shopify',
-    orderName: row.order_name || `#${row.id}`,
+    orderName: row.order_name || `#${row.id}`,      // shopify_name aliaseado como order_name
     customerName: row.customer_name || 'Sin nombre',
-    phone: row.phone || addr.phone || '',
+    phone: row.phone || addr.phone || '',             // customer_phone aliaseado como phone
     address: street, city, fullAddress: [street, city].filter(Boolean).join(', '),
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
   };
@@ -65,17 +69,30 @@ router.get('/orders', async (req, res) => {
   try {
     const [shopifyRes, botRes] = await Promise.all([
       pool.query(`
-        SELECT shopify_order_id AS id, order_name, customer_name,
-               shipping_address, phone, items, total_price, crm_status
+        SELECT shopify_order_id      AS id,
+               shopify_name          AS order_name,
+               customer_name,
+               customer_phone        AS phone,
+               shipping_city,
+               raw_json->'shipping_address' AS shipping_address,
+               items,
+               total_price,
+               crm_status
         FROM shopify_orders
         WHERE organization_id = $1 AND crm_status IN ('nuevo', 'por_despachar')
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
-        SELECT id, customer_name, shipping_address,
-               customer_phone AS phone, items, total_price, status AS crm_status
+        SELECT id,
+               customer_name,
+               shipping_address,
+               customer_phone        AS phone,
+               items,
+               total_price,
+               status                AS crm_status
         FROM orders
-        WHERE organization_id = $1 AND status IN ('nuevo', 'por_despachar')
+        WHERE organization_id = $1
+          AND status IN ('nuevo', 'por_despachar', 'payment_received', 'paid')
         ORDER BY created_at ASC
       `, [req.orgId]),
     ]);
