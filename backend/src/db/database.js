@@ -429,6 +429,46 @@ async function getLatestPendingOrderByConversation(conversationId) {
   );
 }
 
+// ─── PRODUCTS PROPIOS ─────────────────────────────────────────────
+
+async function getProducts(orgId, onlyActive = false) {
+  const cond = onlyActive ? 'AND active = TRUE' : '';
+  return query(
+    `SELECT * FROM products WHERE organization_id = $1 ${cond} ORDER BY position ASC, id ASC`,
+    [orgId]
+  );
+}
+
+async function getProductById(orgId, id) {
+  return queryOne('SELECT * FROM products WHERE organization_id = $1 AND id = $2', [orgId, id]);
+}
+
+async function createProduct(orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position }) {
+  return queryOne(
+    `INSERT INTO products (organization_id, title, description, price, compare_price, sku, stock, image_url, active, position)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [orgId, title, description || null, price, comparePrice || null, sku || null,
+     stock ?? -1, imageUrl || null, active !== false, position || 0]
+  );
+}
+
+async function updateProduct(orgId, id, updates) {
+  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, updated_at:1 };
+  const keys   = Object.keys(updates).filter(k => allowed[k]);
+  if (!keys.length) return getProductById(orgId, id);
+  const values = keys.map(k => updates[k]);
+  const set    = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  values.push(id, orgId);
+  return queryOne(
+    `UPDATE products SET ${set}, updated_at = NOW() WHERE id = $${values.length - 1} AND organization_id = $${values.length} RETURNING *`,
+    values
+  );
+}
+
+async function deleteProduct(orgId, id) {
+  return queryOne('DELETE FROM products WHERE id = $1 AND organization_id = $2 RETURNING id', [id, orgId]);
+}
+
 // ─── PAYMENT PROOFS ────────────────────────────────────────────────
 
 async function savePaymentProof({ orgId, conversationId, orderId, mediaId, customerPhone, customerName, orderSummary,
@@ -718,6 +758,8 @@ module.exports = {
   saveMessage, getMessagesByConversation, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
+  // Products propios
+  getProducts, getProductById, createProduct, updateProduct, deleteProduct,
   // Orders
   createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation,
   // Payment proofs

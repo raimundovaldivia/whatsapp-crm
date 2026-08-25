@@ -291,6 +291,26 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_contacts_org_phone ON contacts(organization_id, phone);
 
+      -- ─── PRODUCTOS PROPIOS (independiente de Shopify) ─────────────
+      -- Catálogo gestionado desde el CRM, usado por la tienda pública.
+      CREATE TABLE IF NOT EXISTS products (
+        id              SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL,
+        title           TEXT NOT NULL,
+        description     TEXT,
+        price           DECIMAL(10,2) NOT NULL,
+        compare_price   DECIMAL(10,2),
+        sku             TEXT,
+        stock           INTEGER DEFAULT -1,   -- -1 = sin límite
+        image_url       TEXT,
+        active          BOOLEAN DEFAULT TRUE,
+        position        INTEGER DEFAULT 0,    -- orden en la tienda
+        created_at      TIMESTAMP DEFAULT NOW(),
+        updated_at      TIMESTAMP DEFAULT NOW(),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_products_org_active ON products(organization_id, active, position);
+
       -- Migración: ampliar estados de pedidos para incluir 'payment_received'
       DO $$
       BEGIN
