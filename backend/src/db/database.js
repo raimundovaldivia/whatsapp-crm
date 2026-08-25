@@ -737,6 +737,26 @@ async function getAccuracyStats(orgId) {
   );
 }
 
+async function bulkUpdateBotOrderStatus(orgId, ids, status) {
+  if (!ids?.length) return 0;
+  const { rowCount } = await pool.query(
+    `UPDATE orders SET status = $1
+     WHERE organization_id = $2 AND id = ANY($3::int[])`,
+    [status, orgId, ids]
+  );
+  return rowCount;
+}
+
+async function bulkUpdateShopifyOrderStatus(orgId, shopifyOrderIds, crmStatus) {
+  if (!shopifyOrderIds?.length) return 0;
+  const { rowCount } = await pool.query(
+    `UPDATE shopify_orders SET crm_status = $1
+     WHERE organization_id = $2 AND shopify_order_id = ANY($3::text[])`,
+    [crmStatus, orgId, shopifyOrderIds]
+  );
+  return rowCount;
+}
+
 // ─── SHOPIFY ORDERS CACHE ─────────────────────────────────────────────
 
 /**
@@ -855,6 +875,8 @@ module.exports = {
   getDailyCache, saveDailyCache,
   savePredictions, markMessageSent,
   getPendingOutcomeCheck, saveOutcome, getAccuracyStats,
+  // Bulk updates
+  bulkUpdateBotOrderStatus, bulkUpdateShopifyOrderStatus,
   // Shopify orders cache
   upsertShopifyOrders, getShopifyOrders, getShopifyOrdersSyncedAt,
 };

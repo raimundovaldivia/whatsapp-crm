@@ -231,6 +231,28 @@ router.post('/:id/sync-shopify', async (req, res) => {
   }
 });
 
+/**
+ * PATCH /api/orders/bulk-status
+ * Cambio masivo de estado.
+ * Body: { status, botIds: [1,2,3], shopifyIds: ["gid://...","gid://..."] }
+ */
+router.patch('/bulk-status', async (req, res) => {
+  const VALID = ['nuevo','por_despachar','en_camino','entregado','paid','cancelled','draft','sent','payment_received'];
+  const { status, botIds = [], shopifyIds = [] } = req.body;
+  if (!status || !VALID.includes(status)) {
+    return res.status(400).json({ success: false, error: `Estado inválido. Opciones: ${VALID.join(', ')}` });
+  }
+  try {
+    const [botCount, shopifyCount] = await Promise.all([
+      botIds.length     ? db.bulkUpdateBotOrderStatus(req.orgId, botIds, status)         : 0,
+      shopifyIds.length ? db.bulkUpdateShopifyOrderStatus(req.orgId, shopifyIds, status) : 0,
+    ]);
+    res.json({ success: true, updated: botCount + shopifyCount, botCount, shopifyCount });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 function safeJSON(str, fallback) {
   try { return JSON.parse(str); } catch { return fallback; }
 }

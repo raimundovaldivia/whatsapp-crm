@@ -315,15 +315,18 @@ async function setupDatabase() {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT;
       CREATE INDEX IF NOT EXISTS idx_products_org_category ON products(organization_id, category);
 
-      -- Migración: ampliar estados de pedidos para incluir 'payment_received'
+      -- Migración: ampliar estados de pedidos (incluye estados logísticos COD)
       DO $$
       BEGIN
         ALTER TABLE orders DROP CONSTRAINT orders_status_check;
       EXCEPTION WHEN undefined_object THEN NULL;
       END $$;
       ALTER TABLE orders ADD CONSTRAINT orders_status_check
-        CHECK(status IN ('draft','sent','payment_received','paid','cancelled'))
+        CHECK(status IN ('draft','sent','payment_received','nuevo','por_despachar','en_camino','entregado','paid','cancelled'))
         NOT VALID;
+
+      -- Migración: estado CRM local para órdenes Shopify
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS crm_status TEXT DEFAULT 'nuevo';
 
       -- ─── COMPROBANTES DE PAGO ────────────────────────────────────────
       -- Se crea automáticamente cuando el cliente envía una foto de transferencia.

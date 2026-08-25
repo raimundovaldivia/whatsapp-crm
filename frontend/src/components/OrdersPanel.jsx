@@ -63,14 +63,35 @@ function filterBySource(orders, sourceFilter) {
   return orders.filter(o => o.source === sourceFilter);
 }
 
+// ─── Estados CRM unificados ──────────────────────────────────────
+const CRM_STATUSES = [
+  { key: 'nuevo',         label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
+  { key: 'por_despachar', label: 'Por despachar',  color: '#fb923c', bg: '#2e1500' },
+  { key: 'en_camino',     label: 'En camino',      color: '#38bdf8', bg: '#0c2030' },
+  { key: 'entregado',     label: 'Entregado',      color: '#4ade80', bg: '#0a2015' },
+  { key: 'paid',          label: 'Pagado',          color: '#22c55e', bg: '#052010' },
+  { key: 'cancelled',     label: 'Cancelado',      color: '#f87171', bg: '#2d1a1a' },
+];
+
+function getCrmStatusStyle(status) {
+  return CRM_STATUSES.find(s => s.key === status)
+    || { label: status || 'Nuevo', color: '#a78bfa', bg: '#1e1030' };
+}
+
 // ─── Estado bot → label/color ─────────────────────────────────────
 function getBotStatusStyle(status, colors) {
+  const crm = getCrmStatusStyle(status);
   return {
-    draft:     { label: 'Borrador',  color: colors.textSecondary, bg: colors.bgHover },
-    sent:      { label: 'Pendiente', color: colors.yellow,        bg: '#2e2100' },
-    paid:      { label: 'Pagado',    color: colors.green,         bg: colors.bgAccent },
-    cancelled: { label: 'Cancelado', color: colors.red,           bg: '#2d1a1a' },
-    failed:    { label: 'Fallido',   color: colors.red,           bg: '#2d1a1a' },
+    draft:            { label: 'Borrador',       color: colors.textSecondary, bg: colors.bgHover },
+    sent:             { label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
+    payment_received: { label: 'Pago recibido',  color: '#38bdf8', bg: '#0c2030' },
+    nuevo:            crm,
+    por_despachar:    crm,
+    en_camino:        crm,
+    entregado:        crm,
+    paid:             { label: 'Pagado',         color: '#22c55e', bg: '#052010' },
+    cancelled:        { label: 'Cancelado',      color: '#f87171', bg: '#2d1a1a' },
+    failed:           { label: 'Fallido',        color: '#f87171', bg: '#2d1a1a' },
   }[status] || { label: status, color: colors.textSecondary, bg: colors.bgHover };
 }
 
@@ -106,6 +127,11 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [syncing,       setSyncing]       = useState(null);
   const [syncingAll,    setSyncingAll]    = useState(false);
   const [lastSync,      setLastSync]      = useState(null);
+
+  // Selección masiva
+  const [selected,       setSelected]      = useState(new Set()); // Set de _key
+  const [bulkStatus,     setBulkStatus]    = useState('');
+  const [applyingBulk,   setApplyingBulk]  = useState(false);
 
   // Filtros
   const [dateFilter,   setDateFilter]   = useState('all');
@@ -177,10 +203,40 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const totalPages  = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated   = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Reset página si el filtro cambia
-  const setDateFilterR   = v => { setDateFilter(v);   setPage(1); };
-  const setSourceFilterR = v => { setSourceFilter(v); setPage(1); };
-  const setStatusFilterR = v => { setStatusFilter(v); setPage(1); };
+  // Reset página + selección si el filtro cambia
+  const setDateFilterR   = v => { setDateFilter(v);   setPage(1); setSelected(new Set()); };
+  const setSourceFilterR = v => { setSourceFilter(v); setPage(1); setSelected(new Set()); };
+  const setStatusFilterR = v => { setStatusFilter(v); setPage(1); setSelected(new Set()); };
+
+  // Selección
+  const toggleSelect = key => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+  const selectAllPage  = () => setSelected(prev => { const next = new Set(prev); paginated.forEach(o => next.add(o._key)); return next; });
+  const deselectAll    = () => setSelected(new Set());
+  const allPageSelected = paginated.length > 0 && paginated.every(o => selected.has(o._key));
+
+  // Aplicar cambio masivo
+  const handleBulkApply = async () => {
+    if (!bulkStatus || selected.size === 0) return;
+    const selOrders = filtered.filter(o => selected.has(o._key));
+    const botIds      = selOrders.filter(o => o.source === 'bot').map(o => o.rawId);
+    const shopifyIds  = selOrders.filter(o => o.source === 'shopify').map(o => String(o.rawId));
+    setApplyingBulk(true);
+    try {
+      const res = await api.patch('/orders/bulk-status', { status: bulkStatus, botIds, shopifyIds });
+      showToast(`✅ ${res.data.updated} órdenes actualizadas a "${CRM_STATUSES.find(s=>s.key===bulkStatus)?.label || bulkStatus}"`);
+      setSelected(new Set());
+      setBulkStatus('');
+      await load();
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Error al actualizar', 'error');
+    } finally {
+      setApplyingBulk(false);
+    }
+  };
 
   const handleStatusChange = async (orderId, newStatus) => {
     try {
@@ -315,6 +371,32 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           ))}
         </div>
 
+        {/* Barra de selección masiva */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <button onClick={allPageSelected ? deselectAll : selectAllPage}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: allPageSelected ? colors.green : colors.bgPanel, color: allPageSelected ? 'white' : colors.textSecondary, cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
+            <span style={{ width: 14, height: 14, borderRadius: 3, border: `2px solid ${allPageSelected ? 'white' : colors.border}`, backgroundColor: allPageSelected ? 'white' : 'transparent', display: 'inline-block', flexShrink: 0 }} />
+            {allPageSelected ? 'Deseleccionar página' : 'Seleccionar página'}
+          </button>
+
+          {selected.size > 0 && (
+            <>
+              <span style={{ fontSize: '12px', color: colors.textSecondary }}>{selected.size} seleccionada{selected.size !== 1 ? 's' : ''}</span>
+              <button onClick={deselectAll} style={{ background: 'none', border: 'none', color: colors.textSecondary, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline' }}>Limpiar</button>
+              <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
+              <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgHover, color: colors.textPrimary, fontSize: '12px', cursor: 'pointer' }}>
+                <option value=''>Cambiar estado a…</option>
+                {CRM_STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+              </select>
+              <button onClick={handleBulkApply} disabled={!bulkStatus || applyingBulk}
+                style={{ padding: '6px 16px', borderRadius: '8px', border: 'none', backgroundColor: bulkStatus ? colors.green : colors.bgHover, color: bulkStatus ? 'white' : colors.textSecondary, cursor: bulkStatus ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: 600, opacity: applyingBulk ? 0.7 : 1 }}>
+                {applyingBulk ? 'Aplicando...' : 'Aplicar'}
+              </button>
+            </>
+          )}
+        </div>
+
         {/* Lista unificada */}
         {loading ? (
           <EmptyMsg icon={<Package size={40} />} text="Cargando pedidos..." />
@@ -331,8 +413,13 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                       onSyncShopify={handleSyncShopify}
                       onGoToConversation={onSelectConversation}
                       syncing={syncing === order.rawId}
+                      selected={selected.has(order._key)}
+                      onToggleSelect={() => toggleSelect(order._key)}
                     />
-                  : <ShopifyOrderCard key={order._key} order={order} />
+                  : <ShopifyOrderCard key={order._key} order={order}
+                      selected={selected.has(order._key)}
+                      onToggleSelect={() => toggleSelect(order._key)}
+                    />
               ))}
             </div>
 
@@ -363,8 +450,18 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   );
 }
 
+// ─── Checkbox reutilizable ────────────────────────────────────────
+function SelectBox({ checked, onChange, colors }) {
+  return (
+    <div onClick={e => { e.stopPropagation(); onChange(); }}
+      style={{ width: 16, height: 16, borderRadius: 4, border: `2px solid ${checked ? colors.green : colors.border}`, backgroundColor: checked ? colors.green : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', transition: 'all .15s' }}>
+      {checked && <span style={{ color: 'white', fontSize: 10, fontWeight: 700, lineHeight: 1 }}>✓</span>}
+    </div>
+  );
+}
+
 // ─── Card pedido Bot ──────────────────────────────────────────────
-function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGoToConversation, syncing }) {
+function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGoToConversation, syncing, selected, onToggleSelect }) {
   const { colors } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const status = getBotStatusStyle(order.status, colors);
@@ -372,11 +469,13 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
   const addr   = order.shipping_address || {};
 
   return (
-    <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = colors.borderStrong}
-      onMouseLeave={e => e.currentTarget.style.borderColor = colors.border}>
+    <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', border: `2px solid ${selected ? colors.green : colors.border}`, overflow: 'hidden', transition: 'border-color .15s' }}
+      onMouseEnter={e => { if (!selected) e.currentTarget.style.borderColor = colors.borderStrong; }}
+      onMouseLeave={e => { if (!selected) e.currentTarget.style.borderColor = colors.border; }}>
 
       <div onClick={() => setExpanded(!expanded)} style={{ padding: '13px 18px', display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
+        <SelectBox checked={!!selected} onChange={onToggleSelect} colors={colors} />
+
         {/* Badge fuente — Bot */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', backgroundColor: '#0d1f0d', border: '1px solid #1a3d1a', fontSize: '11px', fontWeight: 600, color: colors.green, flexShrink: 0 }}>
           <Bot size={10} /> Bot
@@ -462,24 +561,32 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
 }
 
 // ─── Card pedido Shopify ──────────────────────────────────────────
-function ShopifyOrderCard({ order }) {
+function ShopifyOrderCard({ order, selected, onToggleSelect }) {
   const { colors } = useTheme();
   const [expanded, setExpanded] = useState(false);
+  const crmStyle    = getCrmStatusStyle(order.raw?.crm_status || 'nuevo');
   const financial   = getShopifyFinancialStyle(order.financialStatus, colors);
   const fulfillment = getShopifyFulfillmentStyle(order.fulfillmentStatus, colors);
 
   return (
-    <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = colors.borderStrong}
-      onMouseLeave={e => e.currentTarget.style.borderColor = colors.border}>
+    <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', border: `2px solid ${selected ? colors.green : colors.border}`, overflow: 'hidden', transition: 'border-color .15s' }}
+      onMouseEnter={e => { if (!selected) e.currentTarget.style.borderColor = colors.borderStrong; }}
+      onMouseLeave={e => { if (!selected) e.currentTarget.style.borderColor = colors.border; }}>
 
       <div onClick={() => setExpanded(!expanded)} style={{ padding: '13px 18px', display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
+        <SelectBox checked={!!selected} onChange={onToggleSelect} colors={colors} />
+
         {/* Badge fuente — Shopify */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', backgroundColor: '#0d2020', border: '1px solid #1a3d3d', fontSize: '11px', fontWeight: 600, color: '#4db6ac', flexShrink: 0 }}>
           <Store size={10} /> Shopify
         </div>
 
-        {/* Badge estado pago */}
+        {/* Badge estado CRM */}
+        <div style={{ backgroundColor: crmStyle.bg, color: crmStyle.color, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 500, border: `1px solid ${crmStyle.color}44`, flexShrink: 0 }}>
+          {crmStyle.label}
+        </div>
+
+        {/* Badge estado pago Shopify */}
         <div style={{ backgroundColor: financial.bg, color: financial.color, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 500, border: `1px solid ${financial.color}33`, flexShrink: 0 }}>
           {financial.label}
         </div>
