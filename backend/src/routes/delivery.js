@@ -74,7 +74,7 @@ router.get('/orders', async (req, res) => {
                customer_name,
                customer_phone        AS phone,
                shipping_city,
-               raw_json->'shipping_address' AS shipping_address,
+               raw_json->'shippingAddress'   AS shipping_address,
                items,
                total_price,
                crm_status
