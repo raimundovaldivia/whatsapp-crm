@@ -40,6 +40,8 @@ const templatesRouter      = require('./routes/templates');
 const dashboardRouter      = require('./routes/dashboard');
 const assistantRouter      = require('./routes/assistant');    // Asistente IA del CRM
 const paymentProofsRouter  = require('./routes/payment-proofs'); // Comprobantes de pago
+const productsRouter       = require('./routes/products');       // Productos propios
+const storeRouter          = require('./routes/store');          // Tienda pública
 
 const app    = express();
 const server = http.createServer(app);
@@ -128,6 +130,8 @@ app.use('/api/templates',     templatesRouter);     // WhatsApp Message Template
 app.use('/api/dashboard',     dashboardRouter);     // Dashboard de victorias
 app.use('/api/assistant',     assistantRouter);     // Asistente IA del CRM
 app.use('/api/payment-proofs', paymentProofsRouter); // Comprobantes de pago
+app.use('/api/products',      productsRouter);       // Productos propios
+app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;

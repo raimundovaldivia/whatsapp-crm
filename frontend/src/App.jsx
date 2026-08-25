@@ -13,6 +13,7 @@ import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
 import AssistantPanel       from './components/AssistantPanel.jsx';
 import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
+import ProductsPanel        from './components/ProductsPanel.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
@@ -432,6 +433,9 @@ export default function App() {
           onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
         />
       )}
+
+      {/* Vista Mi Tienda (gestión de productos + tienda pública) */}
+      {view === 'productos' && <ProductsPanel orgSlug={org?.slug} />}
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}

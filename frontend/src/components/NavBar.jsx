@@ -1,4 +1,4 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon, Sparkles, Receipt } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, UserCheck, Users, Sun, Moon, Sparkles, Receipt, Store } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 const NAV_ITEMS = [
@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
   { key: 'pagos',        icon: Receipt,       label: 'Pagos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
+  { key: 'productos',    icon: Store,         label: 'Mi Tienda' },
   { key: 'catalogo',     icon: Package,       label: 'Catálogo' },
   { key: 'asistente',    icon: Sparkles,      label: 'Asistente' },
 ];
@@ -113,7 +114,7 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
 
       {NAV_ITEMS.map(({ key, icon: Icon, label }) => {
         const active = view === key;
-        const badge = key === 'chats' ? unreadCount : key === 'orders' ? pendingOrders : 0;
+        const badge = key === 'chats' ? unreadCount : key === 'orders' ? pendingOrders : key === 'pagos' ? (pendingProofs || 0) : 0;
         return (
           <NavItem key={key} active={active} label={label} badge={badge}
             onClick={() => onChangeView(key)} colors={colors}>
