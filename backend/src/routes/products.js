@@ -30,9 +30,9 @@ router.get('/', async (req, res) => {
 // ── POST /api/products ─────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
-    const { title, description, price, comparePrice, sku, stock, imageUrl, active, position } = req.body;
+    const { title, description, price, comparePrice, sku, stock, imageUrl, active, position, category } = req.body;
     if (!title || price == null) return res.status(400).json({ error: 'title y price son requeridos' });
-    const product = await db.createProduct(req.orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position });
+    const product = await db.createProduct(req.orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position, category });
     res.status(201).json({ product });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -42,7 +42,7 @@ router.post('/', async (req, res) => {
 // ── PUT /api/products/:id ──────────────────────────────────────────
 router.put('/:id', async (req, res) => {
   try {
-    const { title, description, price, compare_price, comparePrice, sku, stock, image_url, imageUrl, active, position } = req.body;
+    const { title, description, price, compare_price, comparePrice, sku, stock, image_url, imageUrl, active, position, category } = req.body;
     const updates = {};
     if (title       !== undefined) updates.title         = title;
     if (description !== undefined) updates.description   = description;
@@ -53,6 +53,7 @@ router.put('/:id', async (req, res) => {
     if ((imageUrl ?? image_url) !== undefined) updates.image_url = imageUrl ?? image_url;
     if (active      !== undefined) updates.active        = active;
     if (position    !== undefined) updates.position      = position;
+    if (category    !== undefined) updates.category      = category;
 
     const product = await db.updateProduct(req.orgId, parseInt(req.params.id), updates);
     if (!product) return res.status(404).json({ error: 'Producto no encontrado' });
@@ -102,6 +103,7 @@ router.post('/import-shopify', async (req, res) => {
       const sku         = variant.sku || null;
       const stock       = variant.stock ?? variant.inventoryQuantity ?? -1;
       const active      = sp.status === 'ACTIVE' || sp.status === 'active';
+      const category    = sp.productType || null;
 
       // imageUrl viene directamente como URL (GraphQL) — no como { src }
       const shopifyImageUrl = sp.imageUrl || sp.image || null;
@@ -121,12 +123,12 @@ router.post('/import-shopify', async (req, res) => {
       if (existingProduct) {
         await db.updateProduct(req.orgId, existingProduct.id, {
           price, compare_price: comparePrice, image_url: imageUrl,
-          description, sku, stock, active,  // también actualiza active e imagen
+          description, sku, stock, active, category,
         });
         updated++;
       } else {
         await db.createProduct(req.orgId, {
-          title, description, price, comparePrice, sku, stock, imageUrl, active,
+          title, description, price, comparePrice, sku, stock, imageUrl, active, category,
         });
         imported++;
       }

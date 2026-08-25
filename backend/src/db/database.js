@@ -443,17 +443,17 @@ async function getProductById(orgId, id) {
   return queryOne('SELECT * FROM products WHERE organization_id = $1 AND id = $2', [orgId, id]);
 }
 
-async function createProduct(orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position }) {
+async function createProduct(orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position, category }) {
   return queryOne(
-    `INSERT INTO products (organization_id, title, description, price, compare_price, sku, stock, image_url, active, position)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    `INSERT INTO products (organization_id, title, description, price, compare_price, sku, stock, image_url, active, position, category)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
     [orgId, title, description || null, price, comparePrice || null, sku || null,
-     stock ?? -1, imageUrl || null, active !== false, position || 0]
+     stock ?? -1, imageUrl || null, active !== false, position || 0, category || null]
   );
 }
 
 async function updateProduct(orgId, id, updates) {
-  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, updated_at:1 };
+  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, category:1, updated_at:1 };
   const keys   = Object.keys(updates).filter(k => allowed[k]);
   if (!keys.length) return getProductById(orgId, id);
   const values = keys.map(k => updates[k]);

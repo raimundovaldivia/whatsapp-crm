@@ -311,6 +311,10 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_products_org_active ON products(organization_id, active, position);
 
+      -- Migración: agregar campo category a products
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT;
+      CREATE INDEX IF NOT EXISTS idx_products_org_category ON products(organization_id, category);
+
       -- Migración: ampliar estados de pedidos para incluir 'payment_received'
       DO $$
       BEGIN

@@ -9,7 +9,7 @@ import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, Ext
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
-const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true };
+const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true, category: '' };
 
 /* ── Configuración de tienda ──────────────────────────────────────── */
 function StoreConfigTab({ orgSlug, colors }) {
@@ -171,6 +171,7 @@ export default function ProductsPanel({ orgSlug }) {
       title: p.title, description: p.description || '', price: p.price,
       comparePrice: p.compare_price || '', sku: p.sku || '',
       stock: String(p.stock ?? -1), imageUrl: p.image_url || '', active: p.active,
+      category: p.category || '',
     });
     setShowForm(true);
   };
@@ -185,6 +186,7 @@ export default function ProductsPanel({ orgSlug }) {
         price: parseFloat(form.price), comparePrice: parseFloat(form.comparePrice) || null,
         sku: form.sku.trim() || null, stock: parseInt(form.stock) || -1,
         imageUrl: form.imageUrl.trim() || null, active: form.active,
+        category: form.category.trim() || null,
       };
       if (editing) {
         await api.put(`/products/${editing.id}`, payload);
@@ -410,6 +412,7 @@ export default function ProductsPanel({ orgSlug }) {
               { label: 'Descripción', key: 'description', placeholder: 'Descripción del producto', multiline: true },
               { label: 'Precio *', key: 'price', placeholder: '15900', type: 'number' },
               { label: 'Precio antes (tachado)', key: 'comparePrice', placeholder: '19900', type: 'number' },
+              { label: 'Categoría', key: 'category', placeholder: 'Huevos, Quesos, Aceitunas...' },
               { label: 'SKU', key: 'sku', placeholder: 'CAM-AZU-M' },
               { label: 'Stock (-1 = sin límite)', key: 'stock', placeholder: '-1', type: 'number' },
               { label: 'URL de imagen', key: 'imageUrl', placeholder: 'https://...' },
