@@ -98,11 +98,15 @@ router.get('/orders', async (req, res) => {
         ORDER BY created_at ASC
       `, [req.orgId]),
     ]);
-    const orders = [
-      ...shopifyRes.rows.map(normalizeShopifyOrder),
-      ...botRes.rows.map(normalizeBotOrder),
-    ].filter(o => o.fullAddress.trim().length > 3);
-    res.json({ success: true, orders, total: orders.length });
+    const shopifyOrders = shopifyRes.rows.map(normalizeShopifyOrder);
+    const botOrders     = botRes.rows.map(normalizeBotOrder);
+    const orders        = [...shopifyOrders, ...botOrders];
+    res.json({
+      success: true,
+      orders,
+      total: orders.length,
+      _debug: { shopify: shopifyOrders.length, bot: botOrders.length },
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
