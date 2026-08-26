@@ -91,7 +91,7 @@ async function processMessage(orgId, conversationId, userMessage) {
     } catch { /* JSON inválido — ignorar */ }
   }
   const tiendaSection = tiendaUrl
-    ? `## Tienda online\nLos clientes pueden explorar el catálogo completo y hacer pedidos directamente en: ${tiendaUrl}\nCuando el cliente pregunte por la página web, por el catálogo online o pida un link de la tienda, comparte esa URL.`
+    ? `## Tienda online\nURL de la tienda: ${tiendaUrl}\nUsa este link SOLO cuando el cliente pida explícitamente ver la tienda, el catálogo completo o la página web (ej: "¿tienes web?", "mándame el link del catálogo", "quiero ver todos los productos"). NUNCA uses este link para cerrar una venta ni como respuesta a "si", "dale", "sí quiero" o cualquier confirmación de compra — en ese caso, usa SIEMPRE las frases de cierre del pedido para recopilar los datos del cliente.`
     : '';
   const storeCustomPrompt = [deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
@@ -205,7 +205,20 @@ async function processMessage(orgId, conversationId, userMessage) {
   // Lead caliente (respuesta a template) o cliente quiere ordenar → Agente de ventas en modo warm
   if (isTemplateReply || intent === 'wants_to_order' || (intent === 'interested' && confidence > 0.85)) {
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
-    const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
+    let newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
+
+    // Safety net: si el bot mandó la URL de la tienda pero el cliente quería comprar,
+    // forzar collecting_order — el agente de ventas no debía mandar un link aquí
+    const hasShopUrl = tiendaUrl && salesResponse.includes(tiendaUrl);
+    const hasShopifyUrl = shop && salesResponse.includes(shop);
+    if ((hasShopUrl || hasShopifyUrl) && (intent === 'wants_to_order' || isTemplateReply)) {
+      console.warn('[Pipeline] ⚠️  Agente mandó URL de tienda al cerrar venta — forzando collecting_order');
+      newState = 'collecting_order';
+      await db.updatePipelineState(conversationId, 'collecting_order', {});
+      const forceMsg = '¡Perfecto! Para hacer tu pedido necesito algunos datos. ¿Me das tu nombre completo?';
+      return { response: forceMsg, agentType: 'orders', newState: 'collecting_order' };
+    }
+
     await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
     return { response: salesResponse, agentType: 'sales', newState };
   }
