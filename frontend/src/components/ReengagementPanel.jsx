@@ -550,7 +550,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
 
       {/* ── Modo Envío Masivo ── */}
       {mainTab === 'masivo' && (
-        <BroadcastPanel colors={colors} testPhone={testPhone} />
+        <BroadcastPanel colors={colors} testPhone={testPhone} parentTemplates={templates} />
       )}
 
       {/* ── Modo IA Predictiva ── */}
@@ -1070,15 +1070,15 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
 
 // ─── Componente: Envío Masivo ────────────────────────────────────────────────
 
-function BroadcastPanel({ colors, testPhone }) {
+function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [contacts,   setContacts]   = useState([]);
   const [sources,    setSources]    = useState(null);   // { whatsapp, shopify }
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState('');
   const [selected,   setSelected]   = useState(new Set());
-  const [templates,  setTemplates]  = useState([]);
-  const [tplLoading, setTplLoading] = useState(true);
-  const [selTpl,     setSelTpl]     = useState(null);   // template seleccionado
+  const [templates,  setTemplates]  = useState(parentTemplates);
+  const [tplLoading, setTplLoading] = useState(parentTemplates.length === 0);
+  const [selTpl,     setSelTpl]     = useState(parentTemplates[0] || null);   // template seleccionado
   const [sending,    setSending]    = useState(false);
   const [results,    setResults]    = useState(null);   // { sent, failed }
   const [toast,      setToast]      = useState(null);
@@ -1107,14 +1107,18 @@ function BroadcastPanel({ colors, testPhone }) {
           .finally(() => setLoading(false));
       });
 
-    api.get('/reengagement/templates')
-      .then(r => {
-        const tpls = r.data.data || r.data.templates || [];
-        setTemplates(tpls);
-        if (tpls.length > 0) setSelTpl(tpls[0]);
-      })
-      .catch(() => {})
-      .finally(() => setTplLoading(false));
+    // Solo cargar templates si el padre no los pasó
+    if (parentTemplates.length === 0) {
+      api.get('/reengagement/templates')
+        .then(r => {
+          const tpls = r.data.data || r.data.templates || [];
+          setTemplates(tpls);
+          if (tpls.length > 0) setSelTpl(tpls[0]);
+        })
+        .catch(() => {})
+        .finally(() => setTplLoading(false));
+    }
+    // si ya vienen del padre, tplLoading ya es false
   }, []);
 
   const filtered = contacts.filter(c => {
