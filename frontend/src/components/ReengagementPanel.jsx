@@ -1065,7 +1065,6 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
         </button>
       </div>
     </div>
-    </>}
   );
 }
 
