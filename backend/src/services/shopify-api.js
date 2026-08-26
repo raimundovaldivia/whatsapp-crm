@@ -554,9 +554,27 @@ function formatProductsForAI(products, shop = null, tiendaUrl = null) {
   return products.map(p => {
     const priceMin = p.priceMin ?? Number(p.price) ?? 0;
     const priceMax = p.priceMax ?? Number(p.price) ?? 0;
-    const precio = priceMin === priceMax
+
+    // Precio base (puede ser rango si hay variantes)
+    const precioBase = priceMin === priceMax
       ? `$${Number(priceMin).toLocaleString('es-CL')}`
       : `$${Number(priceMin).toLocaleString('es-CL')} – $${Number(priceMax).toLocaleString('es-CL')}`;
+
+    // Descuento: si compare_price > price, mostrar precio original tachado
+    const comparePrice = p.compareAtPrice ?? p.compare_price ?? p.comparePrice ?? null;
+    const compareNum   = comparePrice ? Number(comparePrice) : 0;
+    const hasDiscount  = compareNum > 0 && compareNum > priceMin;
+    const pctDescuento = hasDiscount ? Math.round((1 - priceMin / compareNum) * 100) : 0;
+    const precioConDescuento = hasDiscount
+      ? `~~$${compareNum.toLocaleString('es-CL')}~~ → ${precioBase} (−${pctDescuento}% descuento)`
+      : precioBase;
+
+    // Descuento por volumen (solo tabla products propia, no variantes Shopify)
+    const bulkPrice  = p.bulkPrice  ?? p.bulk_price  ?? null;
+    const bulkMinQty = p.bulkMinQty ?? p.bulk_min_qty ?? null;
+    const bulkLine   = bulkPrice && bulkMinQty && Number(bulkPrice) > 0 && Number(bulkMinQty) > 1
+      ? `  🧾 Precio por volumen: comprando ${bulkMinQty}+ unidades → $${Number(bulkPrice).toLocaleString('es-CL')}/u`
+      : '';
 
     // Preferir URL de la tienda propia; fallback a Shopify
     const productLink = tiendaUrl && p.handle
@@ -578,10 +596,11 @@ function formatProductsForAI(products, shop = null, tiendaUrl = null) {
       : '';
 
     return [
-      `• ${p.title} | ${precio}${topStockInfo}`,
+      `• ${p.title} | ${precioConDescuento}${topStockInfo}`,
       p.vendor      ? `  Marca: ${p.vendor}` : '',
       p.productType ? `  Categoría: ${p.productType}` : '',
       p.description ? `  ${p.description.slice(0, 250)}` : '',
+      bulkLine,
       variantes,
       productLink,
     ].filter(Boolean).join('\n');

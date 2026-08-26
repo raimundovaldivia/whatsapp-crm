@@ -322,6 +322,10 @@ async function setupDatabase() {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT;
       CREATE INDEX IF NOT EXISTS idx_products_org_category ON products(organization_id, category);
 
+      -- Migración: descuento por volumen
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS bulk_price    DECIMAL(10,2);
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS bulk_min_qty  INTEGER;
+
       -- Migración: ampliar estados de pedidos (incluye estados logísticos COD)
       DO $$
       BEGIN

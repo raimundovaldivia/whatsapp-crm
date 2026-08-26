@@ -65,6 +65,9 @@ async function processMessage(orgId, conversationId, userMessage) {
         products = visibleOwn.map(p => ({
           id: String(p.id), title: p.title, description: p.description,
           priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
+          compare_price: p.compare_price ?? null,
+          bulk_price: p.bulk_price ?? null,
+          bulk_min_qty: p.bulk_min_qty ?? null,
           inventoryQuantity: p.stock ?? null,
           handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
           productType: p.category || '',

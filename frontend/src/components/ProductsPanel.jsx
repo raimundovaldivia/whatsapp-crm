@@ -9,7 +9,7 @@ import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, Ext
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
-const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true, category: '', isBusiness: false };
+const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true, category: '', isBusiness: false, bulkPrice: '', bulkMinQty: '' };
 
 /* ── Configuración de tienda ──────────────────────────────────────── */
 function StoreConfigTab({ orgSlug, colors }) {
@@ -210,6 +210,8 @@ export default function ProductsPanel({ orgSlug }) {
       comparePrice: p.compare_price || '', sku: p.sku || '',
       stock: String(p.stock ?? -1), imageUrl: p.image_url || '', active: p.active,
       category: p.category || '', isBusiness: p.is_business || false,
+      bulkPrice: p.bulk_price ? String(p.bulk_price) : '',
+      bulkMinQty: p.bulk_min_qty ? String(p.bulk_min_qty) : '',
     });
     setShowForm(true);
   };
@@ -225,6 +227,8 @@ export default function ProductsPanel({ orgSlug }) {
         sku: form.sku.trim() || null, stock: parseInt(form.stock) || -1,
         imageUrl: form.imageUrl.trim() || null, active: form.active,
         category: form.category.trim() || null, isBusiness: form.isBusiness,
+        bulkPrice: parseFloat(form.bulkPrice) || null,
+        bulkMinQty: parseInt(form.bulkMinQty) || null,
       };
       if (editing) {
         await api.put(`/products/${editing.id}`, payload);
@@ -402,12 +406,26 @@ export default function ProductsPanel({ orgSlug }) {
                     </span>
                   )}
                 </div>
-                {p.is_business && (
-                  <div style={{ marginBottom: '8px' }}>
-                    <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#6366f120', color: '#6366f1',
-                      border: '1px solid #6366f155', borderRadius: '20px', padding: '2px 8px' }}>
-                      🏢 Solo empresas
-                    </span>
+                {(p.is_business || (p.bulk_price && p.bulk_min_qty) || (p.compare_price && parseFloat(p.compare_price) > parseFloat(p.price))) && (
+                  <div style={{ marginBottom: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                    {p.is_business && (
+                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#6366f120', color: '#6366f1',
+                        border: '1px solid #6366f155', borderRadius: '20px', padding: '2px 8px' }}>
+                        🏢 Solo empresas
+                      </span>
+                    )}
+                    {p.compare_price && parseFloat(p.compare_price) > parseFloat(p.price) && (
+                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#ef444420', color: '#ef4444',
+                        border: '1px solid #ef444455', borderRadius: '20px', padding: '2px 8px' }}>
+                        🏷️ −{Math.round((1 - parseFloat(p.price)/parseFloat(p.compare_price))*100)}% dcto
+                      </span>
+                    )}
+                    {p.bulk_price && p.bulk_min_qty && (
+                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#f59e0b20', color: '#d97706',
+                        border: '1px solid #f59e0b55', borderRadius: '20px', padding: '2px 8px' }}>
+                        🧾 {p.bulk_min_qty}+ u.: ${Number(p.bulk_price).toLocaleString('es-CL')}
+                      </span>
+                    )}
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -506,6 +524,34 @@ export default function ProductsPanel({ orgSlug }) {
                 )}
               </div>
             ))}
+
+            {/* Descuento por volumen */}
+            <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '12px 14px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '10px' }}>
+                🧾 Descuento por volumen (opcional)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div>
+                  <label style={{ fontSize: '11px', color: colors.textMuted, display: 'block', marginBottom: '4px' }}>Precio por unidad (bulk)</label>
+                  <input type="number" value={form.bulkPrice} onChange={e => setForm(f => ({ ...f, bulkPrice: e.target.value }))}
+                    placeholder="Ej: 900"
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
+                      backgroundColor: colors.bgPanel, color: colors.textPrimary, fontSize: '14px', boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '11px', color: colors.textMuted, display: 'block', marginBottom: '4px' }}>Mínimo de unidades</label>
+                  <input type="number" min="2" value={form.bulkMinQty} onChange={e => setForm(f => ({ ...f, bulkMinQty: e.target.value }))}
+                    placeholder="Ej: 6"
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
+                      backgroundColor: colors.bgPanel, color: colors.textPrimary, fontSize: '14px', boxSizing: 'border-box' }} />
+                </div>
+              </div>
+              {form.bulkPrice && form.bulkMinQty && (
+                <div style={{ marginTop: '8px', fontSize: '11px', color: colors.green }}>
+                  ✓ El bot dirá: "Comprando {form.bulkMinQty}+ unidades → ${Number(form.bulkPrice).toLocaleString('es-CL')}/u"
+                </div>
+              )}
+            </div>
 
             {/* Preview imagen */}
             {form.imageUrl && (
