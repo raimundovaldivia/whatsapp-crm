@@ -148,12 +148,11 @@ export default function App() {
 
   useEffect(() => {
     if (appState === 'crm') {
-      // Primero limpiar duplicados (+56... vs 56...), luego cargar conversaciones ya limpias
-      api.post('/conversations/merge-duplicates')
-        .catch(() => {})
-        .finally(() => loadConversations());
+      loadConversations();
       loadOrderStats();
       loadProofStats();
+      // Limpiar duplicados en background (no bloquea la carga)
+      api.post('/conversations/merge-duplicates').catch(() => {});
     }
   }, [appState]);
 
