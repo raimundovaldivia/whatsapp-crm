@@ -7,7 +7,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
-import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone } from 'lucide-react';
+import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,70 @@ function NuevoReparto({ colors }) {
     }
   }
 
+  function handleExportXlsx() {
+    if (selectedOrders.length === 0) return;
+
+    // ── Hoja 1: Despacho (formato software externo) ──────────────
+    const HEADERS = [
+      'Título* Requerido', 'Dirección completa* Requerida', 'Carga',
+      'Hora inicial', 'Hora final', 'Tiempo de servicio', 'Notas',
+      'Latitud', 'Longitud', 'ID de referencia', 'Habilidades requeridas',
+      'Habilidades opcionales', 'Persona de contacto', 'Teléfono de contacto',
+      'Hora inicial 2', 'Hora final 2', 'Carga 2', 'Carga 3', 'Prioridad',
+      'SMS', 'Correo electrónico de contacto', 'Carga pick', 'Carga pick 2',
+      'Carga pick 3', 'Fecha programada', 'Tipo de visita',
+    ];
+
+    const despachoRows = selectedOrders.map(o => {
+      const row = new Array(26).fill('');
+      // Col A: #IDNombre
+      row[0] = `${o.orderName}${o.customerName}`;
+      // Col B: Dirección
+      row[1] = o.fullAddress || '';
+      // Col G: Notas (items)
+      row[6] = (o.items || []).map(i => {
+        const name  = i.name || i.title || i.product_name || '?';
+        const price = i.price ? ` - $${Number(i.price).toLocaleString('es-CL')}` : '';
+        return `${i.quantity}x ${name}${price}`;
+      }).join(', ');
+      // Col N: Teléfono como fórmula =+56...
+      const phone = (o.phone || '').replace(/\D/g, '');
+      if (phone) row[13] = { t: 'n', f: `+${phone}` };
+      return row;
+    });
+
+    const ws1 = XLSX.utils.aoa_to_sheet([HEADERS, ...despachoRows]);
+
+    // ── Hoja 2: Resumen de productos ──────────────────────────────
+    const totals = {};
+    for (const o of selectedOrders) {
+      for (const i of (o.items || [])) {
+        const name  = i.name || i.title || i.product_name || 'Sin nombre';
+        const price = Number(i.price) || 0;
+        const qty   = Number(i.quantity) || 0;
+        if (!totals[name]) totals[name] = { qty: 0, price };
+        totals[name].qty   += qty;
+        totals[name].price  = price; // último precio visto
+      }
+    }
+    const resumenHeaders = ['Producto', 'Cantidad Total', 'Precio Unitario', 'Total'];
+    const resumenRows = Object.entries(totals)
+      .sort((a, b) => b[1].qty - a[1].qty)
+      .map(([name, { qty, price }]) => [
+        name, qty,
+        price ? `$${price.toLocaleString('es-CL')}` : '—',
+        price ? `$${(qty * price).toLocaleString('es-CL')}` : '—',
+      ]);
+
+    const ws2 = XLSX.utils.aoa_to_sheet([resumenHeaders, ...resumenRows]);
+
+    // ── Generar archivo ───────────────────────────────────────────
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws1, 'Hoja 91');
+    XLSX.utils.book_append_sheet(wb, ws2, 'Resumen productos');
+    XLSX.writeFile(wb, `despacho_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
   function reset() {
     setStep('select');
     setOptimizedRoute(null);
@@ -254,8 +319,8 @@ function NuevoReparto({ colors }) {
           </div>
         )}
 
-        {/* Botón optimizar */}
-        <div style={{ padding: '14px 16px', borderTop: `1px solid ${colors.border}` }}>
+        {/* Botones acción */}
+        <div style={{ padding: '14px 16px', borderTop: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <button
             onClick={handleOptimize}
             disabled={selectedOrders.length === 0 || optimizing}
@@ -266,6 +331,18 @@ function NuevoReparto({ colors }) {
               gap: '8px',
             }}>
             {optimizing ? 'Optimizando...' : `Optimizar ruta (${selectedOrders.length})`}
+          </button>
+          <button
+            onClick={handleExportXlsx}
+            disabled={selectedOrders.length === 0}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+              width: '100%', padding: '9px 18px', borderRadius: '10px', fontWeight: 600,
+              fontSize: '13px', cursor: selectedOrders.length === 0 ? 'not-allowed' : 'pointer',
+              border: '1px solid #22c55e44', backgroundColor: '#052010', color: '#4ade80',
+              opacity: selectedOrders.length === 0 ? 0.4 : 1,
+            }}>
+            <Download size={14} /> Exportar despacho ({selectedOrders.length})
           </button>
         </div>
       </div>

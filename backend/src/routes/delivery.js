@@ -93,8 +93,7 @@ router.get('/orders', async (req, res) => {
                status                AS crm_status
         FROM orders
         WHERE organization_id = $1
-          AND status IS NOT NULL
-          AND status NOT IN ('draft', 'en_camino', 'entregado', 'cancelled')
+          AND (status IS NULL OR status NOT IN ('en_camino', 'entregado', 'cancelled'))
         ORDER BY created_at ASC
       `, [req.orgId]),
     ]);
