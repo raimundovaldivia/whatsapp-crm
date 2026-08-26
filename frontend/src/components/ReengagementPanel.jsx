@@ -1150,12 +1150,29 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
     setSending(true);
     setResults(null);
-    const items = Array.from(selected).map(phone => ({
-      phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
-      templateName:   selTpl.name,
-      languageCode:   selTpl.language || 'es',
-      vars:           [],
-    }));
+
+    // Detectar variables del template ({{1}}, {{2}}, ...)
+    const bodyComp = (selTpl.components || []).find(c => c.type === 'BODY');
+    const varMatches = bodyComp?.text ? [...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)] : [];
+    const varCount = new Set(varMatches.map(m => m[1])).size;
+
+    const items = Array.from(selected).map(phone => {
+      const contact = contacts.find(c => c.phone === phone);
+      const nombre = (contact?.name || 'Cliente').split(' ')[0]; // primer nombre
+
+      // Rellenar cada variable con el nombre del contacto
+      const components = varCount > 0 ? [{
+        type: 'body',
+        parameters: Array.from({ length: varCount }, () => ({ type: 'text', text: nombre })),
+      }] : [];
+
+      return {
+        phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
+        templateName: selTpl.name,
+        languageCode: selTpl.language || 'es',
+        components,
+      };
+    });
     try {
       const res = await api.post('/reengagement/send-bulk', { items });
       const sent   = res.data.results?.filter(r => r.success).length || 0;
