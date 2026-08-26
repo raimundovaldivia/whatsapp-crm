@@ -431,7 +431,7 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ backgroundColor: colors.bgApp, position: 'sticky', top: 0, zIndex: 1 }}>
-                  {['Contacto', 'Teléfono', 'Último mensaje', 'Pedidos', 'Tipo', ''].map(h => (
+                  {['Contacto', 'Teléfono', 'Dirección', 'Último mensaje', 'Pedidos', 'Tipo', ''].map(h => (
                     <th key={h} style={{ padding: '10px 16px', textAlign: 'left', color: colors.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${colors.border}`, whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -453,6 +453,14 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                       </div>
                     </td>
                     <td style={{ padding: '12px 16px', color: colors.textSecondary, fontSize: '12px' }}>{lead.phone}</td>
+                    <td style={{ padding: '12px 16px', color: colors.textSecondary, fontSize: '12px' }}>
+                      {(lead.address || lead.city)
+                        ? <span style={{ display: 'flex', alignItems: 'flex-start', gap: '4px' }}>
+                            <MapPin size={11} style={{ marginTop: '1px', flexShrink: 0, color: colors.green }} />
+                            <span>{[lead.address, lead.city].filter(Boolean).join(', ')}</span>
+                          </span>
+                        : '—'}
+                    </td>
                     <td style={{ padding: '12px 16px', color: colors.textSecondary, fontSize: '12px' }}>{lead.last_seen_at ? formatDate(lead.last_seen_at) : '—'}</td>
                     <td style={{ padding: '12px 16px', textAlign: 'center' }}>
                       {(parseInt(lead.total_orders) || 0) > 0
