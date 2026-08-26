@@ -895,6 +895,37 @@ async function upsertShopifyOrders(orgId, orders) {
         createdAt,
       ]
     );
+
+    // Sincronizar cliente en la tabla contacts (si tiene teléfono)
+    if (customerPhone) {
+      await pool.query(
+        `INSERT INTO contacts
+           (organization_id, phone, name, email, city, contact_type, shopify_id,
+            total_orders, last_order_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,'customer',$6,1,$7,NOW(),NOW())
+         ON CONFLICT (organization_id, phone) DO UPDATE SET
+           name          = COALESCE(EXCLUDED.name, contacts.name),
+           email         = COALESCE(EXCLUDED.email, contacts.email),
+           city          = COALESCE(EXCLUDED.city,  contacts.city),
+           contact_type  = 'customer',
+           shopify_id    = COALESCE(EXCLUDED.shopify_id, contacts.shopify_id),
+           total_orders  = (
+             SELECT COUNT(*) FROM shopify_orders
+             WHERE organization_id = $1 AND customer_phone = $2
+           ),
+           last_order_at = GREATEST(contacts.last_order_at, EXCLUDED.last_order_at),
+           updated_at    = NOW()`,
+        [
+          orgId,
+          customerPhone,
+          customerName,
+          customerEmail,
+          shippingCity,
+          o.customer?.id ? String(o.customer.id) : null,
+          createdAt,
+        ]
+      );
+    }
   }
 }
 

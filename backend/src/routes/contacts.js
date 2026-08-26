@@ -47,61 +47,70 @@ router.get('/stats', async (req, res) => {
 
 /**
  * GET /api/contacts/broadcast
- * Todos los contactos con teléfono disponibles para envío masivo:
- *   - Tabla contacts (WhatsApp leads/customers)
- *   - Clientes únicos de shopify_orders con customer_phone válido
- * Deduplicados por teléfono normalizado.
+ * Todos los contactos con teléfono desde la tabla contacts.
+ * Los clientes de Shopify se sincronizan automáticamente en upsertShopifyOrders.
  */
 router.get('/broadcast', async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
-    const [waRes, shopRes] = await Promise.all([
-      // WhatsApp contacts
-      pool.query(
-        `SELECT phone, name, contact_type, total_orders, last_order_at
-         FROM contacts
-         WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
-         ORDER BY total_orders DESC NULLS LAST`,
-        [req.orgId]
-      ),
-      // Clientes de Shopify orders cacheados con teléfono
-      pool.query(
-        `SELECT DISTINCT ON (customer_phone)
-           customer_phone  AS phone,
-           customer_name   AS name,
-           'shopify'       AS source,
-           COUNT(*) OVER (PARTITION BY customer_phone) AS total_orders
-         FROM shopify_orders
-         WHERE organization_id = $1
-           AND customer_phone IS NOT NULL
-           AND customer_phone <> ''
-         ORDER BY customer_phone, synced_at DESC`,
-        [req.orgId]
-      ),
-    ]);
+    const { rows } = await pool.query(
+      `SELECT phone, name, email, city, contact_type,
+              shopify_id, total_orders, last_order_at,
+              CASE WHEN shopify_id IS NOT NULL THEN 'shopify' ELSE 'whatsapp' END AS source
+       FROM contacts
+       WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
+       ORDER BY total_orders DESC NULLS LAST, last_order_at DESC NULLS LAST`,
+      [req.orgId]
+    );
+    const whatsapp = rows.filter(c => c.source === 'whatsapp').length;
+    const shopify  = rows.filter(c => c.source === 'shopify').length;
+    res.json({ success: true, contacts: rows, total: rows.length, sources: { whatsapp, shopify } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
-    // Normalizar teléfono (quitar +, espacios, guiones)
-    const normalize = p => (p || '').replace(/[\s\-().+]/g, '');
+/**
+ * POST /api/contacts/backfill-shopify
+ * Rellena la tabla contacts con todos los clientes ya cacheados en shopify_orders.
+ * Solo necesita ejecutarse una vez (o cuando se quiera forzar re-sincronización).
+ */
+router.post('/backfill-shopify', async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (customer_phone)
+         customer_phone, customer_name, customer_email, shipping_city, shopify_created_at,
+         COUNT(*) OVER (PARTITION BY customer_phone) AS order_count
+       FROM shopify_orders
+       WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+       ORDER BY customer_phone, shopify_created_at DESC`,
+      [req.orgId]
+    );
 
-    // Primero los contactos WhatsApp (ya verificados)
-    const seen = new Map();
-    for (const c of waRes.rows) {
-      const norm = normalize(c.phone);
-      if (norm && !seen.has(norm)) {
-        seen.set(norm, { phone: c.phone, name: c.name || 'Sin nombre', source: 'whatsapp', contact_type: c.contact_type, total_orders: parseInt(c.total_orders) || 0 });
-      }
+    let upserted = 0;
+    for (const r of rows) {
+      await pool.query(
+        `INSERT INTO contacts
+           (organization_id, phone, name, email, city, contact_type,
+            total_orders, last_order_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,'customer',$6,$7,NOW(),NOW())
+         ON CONFLICT (organization_id, phone) DO UPDATE SET
+           name          = COALESCE(EXCLUDED.name, contacts.name),
+           email         = COALESCE(EXCLUDED.email, contacts.email),
+           city          = COALESCE(EXCLUDED.city,  contacts.city),
+           contact_type  = 'customer',
+           total_orders  = GREATEST(contacts.total_orders, EXCLUDED.total_orders),
+           last_order_at = GREATEST(contacts.last_order_at, EXCLUDED.last_order_at),
+           updated_at    = NOW()`,
+        [req.orgId, r.customer_phone, r.customer_name, r.customer_email, r.shipping_city,
+         parseInt(r.order_count) || 1, r.shopify_created_at]
+      );
+      upserted++;
     }
-    // Luego los de Shopify que no estén ya
-    for (const c of shopRes.rows) {
-      const norm = normalize(c.phone);
-      if (norm && !seen.has(norm)) {
-        seen.set(norm, { phone: c.phone, name: c.name || 'Sin nombre', source: 'shopify', contact_type: 'customer', total_orders: parseInt(c.total_orders) || 0 });
-      }
-    }
-
-    const contacts = Array.from(seen.values());
-    res.json({ success: true, contacts, total: contacts.length, sources: { whatsapp: waRes.rows.length, shopify: shopRes.rows.length } });
+    res.json({ success: true, upserted });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

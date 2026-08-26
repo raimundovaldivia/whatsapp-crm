@@ -1091,6 +1091,8 @@ function BroadcastPanel({ colors, testPhone }) {
 
   // Cargar contactos y templates en paralelo
   useEffect(() => {
+    // Primero asegurar que los clientes de Shopify estén en contacts
+    api.post('/contacts/backfill-shopify').catch(() => {});
     api.get('/contacts/broadcast')
       .then(res => {
         const list = res.data.contacts || [];
