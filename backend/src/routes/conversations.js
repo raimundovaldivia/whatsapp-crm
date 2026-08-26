@@ -503,5 +503,72 @@ router.post('/merge-duplicates', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/conversations/scan-hot-leads
+ * Analiza conversaciones con actividad en las últimas 48h usando IA (Haiku)
+ * y actualiza su pipeline_state a 'interested' si detecta intención de compra hoy.
+ */
+router.post('/scan-hot-leads', async (req, res) => {
+  const pool = getPool();
+  try {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    // Conversaciones con actividad en últimas 48h que no estén en 'done'
+    const { rows: convs } = await pool.query(
+      `SELECT c.id, c.contact_name, c.phone_number, c.pipeline_state
+       FROM conversations c
+       WHERE c.organization_id = $1
+         AND c.last_message_at > NOW() - INTERVAL '48 hours'
+         AND c.pipeline_state NOT IN ('done', 'interested', 'collecting_order')
+       ORDER BY c.last_message_at DESC
+       LIMIT 60`,
+      [req.orgId]
+    );
+
+    let updated = 0;
+    for (const conv of convs) {
+      // Obtener los últimos 10 mensajes
+      const { rows: msgs } = await pool.query(
+        `SELECT direction, content FROM messages
+         WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 10`,
+        [conv.id]
+      );
+      if (!msgs.length) continue;
+
+      const history = msgs.reverse().map(m =>
+        `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${(m.content || '').slice(0, 200)}`
+      ).join('\n');
+
+      const response = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 10,
+        system: 'Eres un clasificador de intención de compra. Responde SOLO con "si" o "no".',
+        messages: [{
+          role: 'user',
+          content: `¿El cliente en esta conversación muestra intención clara de comprar HOY o muy pronto (hace preguntas de precio, disponibilidad, despacho, o dice que lo quiere)?\n\n${history}`,
+        }],
+      });
+
+      const answer = response.content[0]?.text?.trim().toLowerCase() || '';
+      if (answer.startsWith('si') || answer === 'sí') {
+        await pool.query(
+          `UPDATE conversations SET pipeline_state = 'interested', updated_at = NOW() WHERE id = $1`,
+          [conv.id]
+        );
+        updated++;
+      }
+
+      // Rate limit: pequeña pausa entre llamadas
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    res.json({ success: true, scanned: convs.length, hotLeadsFound: updated });
+  } catch (err) {
+    console.error('[scan-hot-leads]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

@@ -1,29 +1,34 @@
 import { useState } from 'react';
-import { MessageSquare, Search, RefreshCw, Plus, X, Send } from 'lucide-react';
+import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
-import { conversationsAPI } from '../utils/api.js';
+import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
   const [search, setSearch]       = useState('');
-  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'ai' | 'human' | 'unread'
+  const [activeTab, setActiveTab] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
   const [name, setName]           = useState('');
   const [text, setText]           = useState('');
   const [sending, setSending]     = useState(false);
   const [error, setError]         = useState('');
+  const [scanning, setScanning]   = useState(false);
+
+  const HOT_STATES = ['interested', 'collecting_order'];
 
   const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
   const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
+  const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state)).length;
 
   const filtered = conversations.filter(c => {
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
     if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
+    if (activeTab === 'hot'    && !HOT_STATES.includes(c.pipeline_state)) return false;
     const q = search.toLowerCase();
     return (
       c.contact_name?.toLowerCase().includes(q) ||
@@ -31,6 +36,16 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       c.last_message?.toLowerCase().includes(q)
     );
   });
+
+  const handleScanHotLeads = async () => {
+    setScanning(true);
+    try {
+      await api.post('/conversations/scan-hot-leads');
+      onRefresh();
+      setActiveTab('hot');
+    } catch (e) { console.error(e); }
+    finally { setScanning(false); }
+  };
 
   const openModal  = () => { setPhone(''); setName(''); setText(''); setError(''); setShowModal(true); };
   const closeModal = () => { if (!sending) setShowModal(false); };
@@ -145,13 +160,13 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 6px', gap: '6px' }}>
+      {/* Tabs — fila 1 */}
+      <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 0', gap: '6px' }}>
         {[
-          { key: 'all',   label: 'Todos',    count: conversations.length, color: colors.textSecondary },
-          { key: 'ai',     label: '🤖 IA',       count: aiCount,    color: colors.green },
-          { key: 'human',  label: '👤 Humano',   count: humanCount, color: colors.yellow, urgent: humanUnread },
-          { key: 'unread', label: '🔵 No leídos', count: unreadCount, color: colors.red || '#f87171' },
+          { key: 'all',    label: 'Todos',       count: conversations.length, color: colors.textSecondary },
+          { key: 'ai',     label: '🤖 IA',        count: aiCount,             color: colors.green },
+          { key: 'human',  label: '👤 Humano',    count: humanCount,          color: colors.yellow, urgent: humanUnread },
+          { key: 'unread', label: '🔵 No leídos', count: unreadCount,         color: '#f87171' },
         ].map(tab => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}
             style={{
@@ -171,15 +186,42 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
               borderRadius: '10px', padding: '0 5px', fontSize: '10px', fontWeight: 700, minWidth: '16px', textAlign: 'center',
             }}>{tab.count}</span>
             {tab.key === 'human' && tab.urgent > 0 && (
-              <span style={{
-                position: 'absolute', top: '-3px', right: '-3px',
-                width: '8px', height: '8px', borderRadius: '50%',
-                backgroundColor: '#ef4444', border: `1px solid ${colors.bgSub}`,
-                animation: 'pulse 1.5s infinite',
-              }} />
+              <span style={{ position: 'absolute', top: '-3px', right: '-3px', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', border: `1px solid ${colors.bgSub}` }} />
             )}
           </button>
         ))}
+      </div>
+
+      {/* Tab Hot Leads — fila 2 */}
+      <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 6px', gap: '6px', alignItems: 'center' }}>
+        <button onClick={() => setActiveTab('hot')} style={{
+          flex: 1, padding: '5px 8px', borderRadius: '6px',
+          border: activeTab === 'hot' ? '1px solid #f97316' : `1px solid ${colors.border}`,
+          backgroundColor: activeTab === 'hot' ? '#f9731622' : 'transparent',
+          color: activeTab === 'hot' ? '#f97316' : colors.textSecondary,
+          fontSize: '12px', fontWeight: activeTab === 'hot' ? 700 : 400,
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+          transition: 'all 0.15s',
+        }}>
+          <Flame size={12} color={activeTab === 'hot' ? '#f97316' : colors.textMuted} />
+          <span>Hot leads</span>
+          <span style={{
+            backgroundColor: activeTab === 'hot' ? '#f97316' : colors.bgHover,
+            color: activeTab === 'hot' ? 'white' : colors.textSecondary,
+            borderRadius: '10px', padding: '0 6px', fontSize: '10px', fontWeight: 700,
+          }}>{hotCount}</span>
+        </button>
+        <button onClick={handleScanHotLeads} disabled={scanning} title="Escanear conversaciones recientes con IA para detectar clientes interesados hoy"
+          style={{
+            padding: '5px 10px', borderRadius: '6px', border: `1px solid ${colors.border}`,
+            backgroundColor: 'transparent', color: scanning ? colors.textMuted : '#f97316',
+            fontSize: '11px', fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer',
+            display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
+            transition: 'all 0.15s',
+          }}>
+          {scanning ? <Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Flame size={11} />}
+          {scanning ? 'Escaneando...' : 'Escanear IA'}
+        </button>
       </div>
 
       {/* Lista */}
