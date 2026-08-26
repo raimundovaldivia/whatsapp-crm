@@ -281,10 +281,10 @@ const ORDERS_QUERY = `
             id firstName lastName email phone
           }
           shippingAddress {
-            firstName lastName phone city
+            firstName lastName address1 address2 city province zip country phone
           }
           billingAddress {
-            firstName lastName phone city
+            firstName lastName address1 address2 city province zip country phone
           }
           lineItems(first: 50) {
             edges {
@@ -339,11 +339,19 @@ async function getOrders(shop, token, opts = {}) {
     shippingAddress:   node.shippingAddress ? {
       firstName: node.shippingAddress.firstName,
       lastName:  node.shippingAddress.lastName,
+      address1:  node.shippingAddress.address1,
+      address2:  node.shippingAddress.address2,
+      city:      node.shippingAddress.city,
+      province:  node.shippingAddress.province,
+      zip:       node.shippingAddress.zip,
+      country:   node.shippingAddress.country,
       phone:     node.shippingAddress.phone,
     } : null,
     billingAddress:    node.billingAddress ? {
       firstName: node.billingAddress.firstName,
       lastName:  node.billingAddress.lastName,
+      address1:  node.billingAddress.address1,
+      city:      node.billingAddress.city,
       phone:     node.billingAddress.phone,
     } : null,
     items: node.lineItems?.edges?.map(({ node: li }) => ({
