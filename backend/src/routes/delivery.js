@@ -62,12 +62,16 @@ function normalizeBotOrder(row) {
     || row.shopify_city
     || shopifyAddr.city
     || '';
+  const isGeneric = n => !n || ['cliente', 'sin nombre', 'cliente sin nombre'].includes(n.trim().toLowerCase());
+  const customerName = isGeneric(row.customer_name)
+    ? (row.contact_name || row.customer_name || 'Sin nombre')
+    : row.customer_name;
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
   return {
     id: String(row.id), source: 'bot',
     orderName: `#BOT-${row.id}`,
-    customerName: row.customer_name || 'Sin nombre',
+    customerName,
     phone: row.phone || '',
     address: street, city, fullAddress: [street, city].filter(Boolean).join(', '),
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
@@ -103,6 +107,7 @@ router.get('/orders', async (req, res) => {
                o.items,
                o.total_price,
                o.status                AS crm_status,
+               ct.name                 AS contact_name,
                ct.address              AS contact_address,
                ct.city                 AS contact_city,
                so.raw_json->'shippingAddress'  AS shopify_shipping,
