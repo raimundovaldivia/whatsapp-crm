@@ -16,19 +16,27 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [error, setError]         = useState('');
   const [scanning, setScanning]   = useState(false);
 
-  const HOT_STATES = ['interested', 'collecting_order'];
+  const HOT_STATES   = ['interested', 'collecting_order'];
+  const now          = Date.now();
+  const h24          = 24 * 60 * 60 * 1000;
+  const isStalled    = c => {
+    const last = new Date(c.last_message_at).getTime();
+    return c.pipeline_state !== 'done' && (now - last) > h24;
+  };
 
   const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
   const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
   const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state)).length;
+  const stalledCount = conversations.filter(isStalled).length;
 
   const filtered = conversations.filter(c => {
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
     if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
-    if (activeTab === 'hot'    && !HOT_STATES.includes(c.pipeline_state)) return false;
+    if (activeTab === 'hot'     && !HOT_STATES.includes(c.pipeline_state)) return false;
+    if (activeTab === 'stalled' && !isStalled(c))                          return false;
     const q = search.toLowerCase();
     return (
       c.contact_name?.toLowerCase().includes(q) ||
@@ -36,6 +44,8 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       c.last_message?.toLowerCase().includes(q)
     );
   });
+
+  const [triggering, setTriggering] = useState(false);
 
   const handleScanHotLeads = async () => {
     setScanning(true);
@@ -45,6 +55,18 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       setActiveTab('hot');
     } catch (e) { console.error(e); }
     finally { setScanning(false); }
+  };
+
+  const handleTriggerFollowUp = async () => {
+    setTriggering(true);
+    try {
+      const r = await api.post('/conversations/trigger-follow-up');
+      onRefresh();
+      setActiveTab('stalled');
+      if (r.data?.sent > 0) alert(`✅ Bot envió ${r.data.sent} mensaje(s) de seguimiento`);
+      else alert('Sin conversaciones que necesiten seguimiento ahora mismo');
+    } catch (e) { console.error(e); }
+    finally { setTriggering(false); }
   };
 
   const openModal  = () => { setPhone(''); setName(''); setText(''); setError(''); setShowModal(true); };
@@ -192,36 +214,51 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         ))}
       </div>
 
-      {/* Tab Hot Leads — fila 2 */}
-      <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 6px', gap: '6px', alignItems: 'center' }}>
-        <button onClick={() => setActiveTab('hot')} style={{
-          flex: 1, padding: '5px 8px', borderRadius: '6px',
-          border: activeTab === 'hot' ? '1px solid #f97316' : `1px solid ${colors.border}`,
-          backgroundColor: activeTab === 'hot' ? '#f9731622' : 'transparent',
-          color: activeTab === 'hot' ? '#f97316' : colors.textSecondary,
-          fontSize: '12px', fontWeight: activeTab === 'hot' ? 700 : 400,
-          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-          transition: 'all 0.15s',
-        }}>
-          <Flame size={12} color={activeTab === 'hot' ? '#f97316' : colors.textMuted} />
-          <span>Hot leads</span>
-          <span style={{
-            backgroundColor: activeTab === 'hot' ? '#f97316' : colors.bgHover,
-            color: activeTab === 'hot' ? 'white' : colors.textSecondary,
-            borderRadius: '10px', padding: '0 6px', fontSize: '10px', fontWeight: 700,
-          }}>{hotCount}</span>
-        </button>
-        <button onClick={handleScanHotLeads} disabled={scanning} title="Escanear conversaciones recientes con IA para detectar clientes interesados hoy"
-          style={{
-            padding: '5px 10px', borderRadius: '6px', border: `1px solid ${colors.border}`,
-            backgroundColor: 'transparent', color: scanning ? colors.textMuted : '#f97316',
-            fontSize: '11px', fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer',
-            display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
-            transition: 'all 0.15s',
+      {/* Fila 2 — Hot leads + Sin cierre */}
+      <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 6px', gap: '6px' }}>
+
+        {/* Hot Leads */}
+        <div style={{ flex: 1, display: 'flex', gap: '4px' }}>
+          <button onClick={() => setActiveTab('hot')} style={{
+            flex: 1, padding: '5px 6px', borderRadius: '6px',
+            border: activeTab === 'hot' ? '1px solid #f97316' : `1px solid ${colors.border}`,
+            backgroundColor: activeTab === 'hot' ? '#f9731622' : 'transparent',
+            color: activeTab === 'hot' ? '#f97316' : colors.textSecondary,
+            fontSize: '11px', fontWeight: activeTab === 'hot' ? 700 : 400,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
           }}>
-          {scanning ? <Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Flame size={11} />}
-          {scanning ? 'Escaneando...' : 'Escanear IA'}
-        </button>
+            <Flame size={11} />
+            <span>Hot</span>
+            <span style={{ backgroundColor: activeTab === 'hot' ? '#f97316' : colors.bgHover, color: activeTab === 'hot' ? 'white' : colors.textSecondary, borderRadius: '10px', padding: '0 5px', fontSize: '10px', fontWeight: 700 }}>{hotCount}</span>
+          </button>
+          <button onClick={handleScanHotLeads} disabled={scanning} title="Detectar hot leads con IA"
+            style={{ padding: '5px 7px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: scanning ? colors.textMuted : '#f97316', fontSize: '10px', fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}>
+            {scanning ? <Loader size={10} /> : <Flame size={10} />}
+            {scanning ? '...' : 'IA'}
+          </button>
+        </div>
+
+        {/* Sin cierre */}
+        <div style={{ flex: 1, display: 'flex', gap: '4px' }}>
+          <button onClick={() => setActiveTab('stalled')} style={{
+            flex: 1, padding: '5px 6px', borderRadius: '6px',
+            border: activeTab === 'stalled' ? '1px solid #a78bfa' : `1px solid ${colors.border}`,
+            backgroundColor: activeTab === 'stalled' ? '#a78bfa22' : 'transparent',
+            color: activeTab === 'stalled' ? '#a78bfa' : colors.textSecondary,
+            fontSize: '11px', fontWeight: activeTab === 'stalled' ? 700 : 400,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
+          }}>
+            <span>⏳</span>
+            <span>Sin cierre</span>
+            <span style={{ backgroundColor: activeTab === 'stalled' ? '#a78bfa' : colors.bgHover, color: activeTab === 'stalled' ? 'white' : colors.textSecondary, borderRadius: '10px', padding: '0 5px', fontSize: '10px', fontWeight: 700 }}>{stalledCount}</span>
+          </button>
+          <button onClick={handleTriggerFollowUp} disabled={triggering} title="Bot intenta cerrar conversaciones abandonadas"
+            style={{ padding: '5px 7px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: triggering ? colors.textMuted : '#a78bfa', fontSize: '10px', fontWeight: 600, cursor: triggering ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}>
+            {triggering ? <Loader size={10} /> : <span>🤖</span>}
+            {triggering ? '...' : 'Bot'}
+          </button>
+        </div>
+
       </div>
 
       {/* Lista */}

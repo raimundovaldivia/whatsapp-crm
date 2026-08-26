@@ -504,6 +504,93 @@ router.post('/merge-duplicates', async (req, res) => {
 });
 
 /**
+ * POST /api/conversations/trigger-follow-up
+ * Dispara el follow-up bot ahora mismo para conversaciones abandonadas de esta org.
+ * El cron corre automáticamente cada 30min pero este endpoint lo activa a demanda.
+ */
+router.post('/trigger-follow-up', async (req, res) => {
+  const pool = getPool();
+  try {
+    const Anthropic    = require('@anthropic-ai/sdk');
+    const kapsoService = require('../services/kapso-whatsapp');
+    const client       = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    // Conversaciones abandonadas: sin respuesta >2h, <22h, modo IA, no cerradas
+    // Ampliamos a cualquier pipeline_state activo (no solo interested/collecting)
+    const { rows: stalled } = await pool.query(
+      `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.order_draft,
+              c.follow_up_sent_at, c.last_inbound_at
+       FROM conversations c
+       WHERE c.organization_id = $1
+         AND c.agent_mode = 'ai'
+         AND c.pipeline_state NOT IN ('done')
+         AND c.last_message_at < NOW() - INTERVAL '2 hours'
+         AND c.last_message_at > NOW() - INTERVAL '22 hours'
+         AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '6 hours')
+       ORDER BY c.last_message_at ASC
+       LIMIT 30`,
+      [req.orgId]
+    );
+
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    const storeContext = await db.getSetting(req.orgId, 'store_context') || '';
+    let sent = 0;
+
+    const PROMPT = `Eres alguien que trabaja en una tienda y escribes a un cliente que no respondió.
+CONTEXTO TIENDA: ${storeContext}
+ÚLTIMOS MENSAJES:
+{HISTORIAL}
+Escribe UN mensaje de 1-2 líneas para retomar. Tono cálido y casual. Referencia algo específico.
+Si es de noche (>21h), escribe: SKIP. Sin comillas. Solo el mensaje.`;
+
+    const hora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
+
+    for (const conv of stalled) {
+      try {
+        const msgs = await db.getLastMessages(conv.id, 8);
+        if (!msgs.length) continue;
+
+        const historial = msgs.map(m =>
+          `${m.direction === 'inbound' ? (conv.contact_name || 'Cliente') : 'Nosotros'}: ${(m.content || '').slice(0, 200)}`
+        ).join('\n');
+
+        const response = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 120,
+          system: PROMPT.replace('{HISTORIAL}', historial),
+          messages: [{ role: 'user', content: `Hora actual: ${hora}. Genera el mensaje.` }],
+        });
+
+        const text = (response.content[0]?.text || '').trim();
+        if (!text || text === 'SKIP') continue;
+
+        await kapsoService.sendTextMessage(conv.phone_number, text, wc);
+        const savedMsg = await db.saveMessage({
+          conversationId: conv.id, whatsappMessageId: null,
+          direction: 'outbound', content: text, sentBy: 'ai', agentType: 'follow_up',
+        });
+        await db.updateConversationLastMessage(conv.id, text, false);
+        await pool.query('UPDATE conversations SET follow_up_sent_at = NOW() WHERE id = $1', [conv.id]);
+
+        const updatedConv = await db.getConversationById(conv.id);
+        io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
+        sent++;
+        await new Promise(r => setTimeout(r, 1200));
+      } catch (e) {
+        console.error(`[trigger-follow-up] conv ${conv.id}:`, e.message);
+      }
+    }
+
+    res.json({ success: true, checked: stalled.length, sent });
+  } catch (err) {
+    console.error('[trigger-follow-up]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/conversations/scan-hot-leads
  * Analiza conversaciones con actividad en las últimas 48h usando IA (Haiku)
  * y actualiza su pipeline_state a 'interested' si detecta intención de compra hoy.
