@@ -190,6 +190,7 @@ export default function ProductsPanel({ orgSlug }) {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [copied, setCopied]             = useState(false);
+  const [newCatMode, setNewCatMode]     = useState(false); // true cuando el usuario elige "+ Nueva categoría..."
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -202,9 +203,12 @@ export default function ProductsPanel({ orgSlug }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const openNew = () => { setEditing(null); setForm(EMPTY_FORM); setShowForm(true); };
+  const openNew = () => { setEditing(null); setForm(EMPTY_FORM); setNewCatMode(false); setShowForm(true); };
   const openEdit = (p) => {
     setEditing(p);
+    const existingCats = [...new Set(products.map(q => q.category).filter(Boolean))];
+    const catIsNew = p.category && !existingCats.includes(p.category);
+    setNewCatMode(catIsNew);
     setForm({
       title: p.title, description: p.description || '', price: p.price,
       comparePrice: p.compare_price || '', sku: p.sku || '',
@@ -215,7 +219,7 @@ export default function ProductsPanel({ orgSlug }) {
     });
     setShowForm(true);
   };
-  const closeForm = () => { setShowForm(false); setEditing(null); };
+  const closeForm = () => { setShowForm(false); setEditing(null); setNewCatMode(false); };
 
   const handleSave = async () => {
     if (!form.title.trim() || !form.price) return;
@@ -501,7 +505,6 @@ export default function ProductsPanel({ orgSlug }) {
               { label: 'Descripción', key: 'description', placeholder: 'Descripción del producto', multiline: true },
               { label: 'Precio *', key: 'price', placeholder: '15900', type: 'number' },
               { label: 'Precio normal sin oferta (opcional)', key: 'comparePrice', placeholder: 'Ej: 19900 — si está en oferta, pon aquí el precio original', type: 'number' },
-              { label: 'Categoría', key: 'category', placeholder: 'Huevos, Quesos, Aceitunas...' },
               { label: 'SKU', key: 'sku', placeholder: 'CAM-AZU-M' },
               { label: 'Stock (-1 = sin límite)', key: 'stock', placeholder: '-1', type: 'number' },
               { label: 'URL de imagen', key: 'imageUrl', placeholder: 'https://...' },
@@ -524,6 +527,51 @@ export default function ProductsPanel({ orgSlug }) {
                 )}
               </div>
             ))}
+
+            {/* Categoría — select dinámico con opción "nueva" */}
+            {(() => {
+              const existingCats = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
+              return (
+                <div>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>
+                    Categoría
+                  </label>
+                  <select
+                    value={newCatMode ? '__nueva__' : (form.category || '')}
+                    onChange={e => {
+                      if (e.target.value === '__nueva__') {
+                        setNewCatMode(true);
+                        setForm(f => ({ ...f, category: '' }));
+                      } else {
+                        setNewCatMode(false);
+                        setForm(f => ({ ...f, category: e.target.value }));
+                      }
+                    }}
+                    style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`,
+                      backgroundColor: colors.bgApp, color: colors.textPrimary,
+                      fontSize: '14px', boxSizing: 'border-box', cursor: 'pointer' }}
+                  >
+                    <option value="">Sin categoría</option>
+                    {existingCats.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                    <option value="__nueva__">+ Nueva categoría...</option>
+                  </select>
+                  {newCatMode && (
+                    <input
+                      type="text"
+                      placeholder="Nombre de la nueva categoría"
+                      value={form.category}
+                      onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                      autoFocus
+                      style={{ width: '100%', marginTop: '8px', padding: '9px 12px', borderRadius: '8px',
+                        border: `1px solid ${colors.green}`, backgroundColor: colors.bgApp,
+                        color: colors.textPrimary, fontSize: '14px', boxSizing: 'border-box', outline: 'none' }}
+                    />
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Descuento por volumen */}
             <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '12px 14px' }}>
