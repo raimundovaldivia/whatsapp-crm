@@ -1,9 +1,10 @@
 /**
- * clientes.js — Clientes desde Shopify GraphQL directo
+ * clientes.js — Clientes Shopify servidos desde DB local (contacts)
  *
- * GET /api/clientes/all   → TODOS los clientes (loop en backend)
- * GET /api/clientes       → Una página de clientes (cursor-based)
- * GET /api/clientes/local → Clientes en DB local (conversaciones del bot)
+ * GET  /api/clientes/all   → Clientes desde contacts (sincronizados)
+ * POST /api/clientes/sync  → Sincroniza clientes de Shopify → contacts
+ * GET  /api/clientes/local → Clientes del bot (conversaciones WhatsApp)
+ * GET  /api/clientes       → Una página de Shopify (fallback, paginación)
  */
 
 const express     = require('express');
@@ -15,52 +16,103 @@ const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
 
+/** Convierte una fila de contacts al formato que espera el frontend */
+function contactToCustomer(c) {
+  return {
+    id:          c.id,
+    shopifyId:   c.shopify_id,
+    name:        c.name || '—',
+    firstName:   (c.name || '').split(' ')[0],
+    email:       c.email,
+    phone:       c.phone,
+    ordersCount: parseInt(c.orders_count) || 0,
+    totalSpent:  parseFloat(c.total_spent) || 0,
+    currency:    c.currency || 'CLP',
+    tags:        Array.isArray(c.tags) ? c.tags : (c.tags ? JSON.parse(c.tags) : []),
+    address: {
+      address1: c.address1 || c.address || null,
+      address2: c.address2 || null,
+      city:     c.city     || null,
+      province: c.province || null,
+      zip:      c.zip      || null,
+      country:  c.country  || null,
+    },
+    createdAt:   c.shopify_created_at || c.created_at,
+    lastOrder:   c.last_order_data
+                   ? (typeof c.last_order_data === 'string' ? JSON.parse(c.last_order_data) : c.last_order_data)
+                   : null,
+    note:        c.shopify_note || c.notes || null,
+    shopifySyncedAt: c.shopify_synced_at || null,
+  };
+}
+
 /**
  * GET /api/clientes/all
- * Descarga TODOS los clientes de Shopify paginando internamente.
- * El frontend hace UNA sola llamada y espera el resultado completo.
+ * Devuelve clientes desde la tabla contacts local (sin llamar a Shopify).
+ * Si no hay clientes sincronizados, indica que hay que hacer /sync primero.
  */
 router.get('/all', async (req, res) => {
   try {
-    const ds = await db.getPrimaryDataSource(req.orgId);
-    if (!ds) return res.json({ success: true, customers: [], total: 0 });
+    const q = (req.query.query || '').toLowerCase();
 
-    const { shop, token } = shopifyApi.credentialsFrom(ds);
-    const query           = req.query.query || '';
+    let sql = `
+      SELECT *
+      FROM contacts
+      WHERE organization_id = $1
+        AND (shopify_id IS NOT NULL OR contact_type = 'customer')
+    `;
+    const params = [req.orgId];
 
-    const customers = await shopifyApi.getAllCustomers(shop, token, query);
-
-    // Enriquecer con teléfonos locales para clientes sin teléfono en Shopify
-    const withoutPhone = customers.filter(c => !c.phone && c.email);
-    if (withoutPhone.length > 0) {
-      const emails = withoutPhone.map(c => c.email.toLowerCase());
-      const { rows } = await getPool().query(
-        `SELECT DISTINCT ON (LOWER(customer_email)) LOWER(customer_email) AS email, customer_phone AS phone
-         FROM shopify_orders
-         WHERE organization_id = $1
-           AND customer_email = ANY($2)
-           AND customer_phone IS NOT NULL AND customer_phone <> ''
-         ORDER BY LOWER(customer_email), shopify_created_at DESC`,
-        [req.orgId, emails]
-      );
-      const phoneMap = new Map(rows.map(r => [r.email, r.phone]));
-      for (const c of customers) {
-        if (!c.phone && c.email) {
-          c.phone = phoneMap.get(c.email.toLowerCase()) || null;
-        }
-      }
+    if (q) {
+      params.push(`%${q}%`);
+      sql += ` AND (LOWER(name) LIKE $${params.length}
+                OR LOWER(email) LIKE $${params.length}
+                OR phone LIKE $${params.length})`;
     }
+
+    sql += ' ORDER BY last_order_at DESC NULLS LAST, created_at DESC';
+
+    const { rows } = await getPool().query(sql, params);
+
+    const customers = rows.map(contactToCustomer);
 
     res.json({
       success:   true,
       customers,
       total:     customers.length,
+      fromCache: true,
+      needsSync: customers.length === 0,
     });
 
   } catch (err) {
     console.error('[Clientes/all]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
-    // Token expirado o inválido → guiar al usuario a reconectar
+/**
+ * POST /api/clientes/sync
+ * Descarga todos los clientes de Shopify y los upsertea en contacts.
+ * Llamar desde el frontend con un botón "Sincronizar clientes".
+ */
+router.post('/sync', async (req, res) => {
+  try {
+    const ds = await db.getPrimaryDataSource(req.orgId);
+    if (!ds) return res.status(400).json({ success: false, error: 'No hay fuente de datos Shopify configurada' });
+
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const customers = await shopifyApi.getAllCustomers(shop, token, '');
+
+    let synced = 0;
+    for (const c of customers) {
+      await db.upsertShopifyCustomerProfile(req.orgId, c);
+      synced++;
+    }
+
+    res.json({ success: true, synced });
+
+  } catch (err) {
+    console.error('[Clientes/sync]', err.message);
     if (err.message.includes('accessToken') || err.message.includes('401')) {
       return res.status(401).json({
         success: false,
@@ -68,14 +120,13 @@ router.get('/all', async (req, res) => {
         code:    'SHOPIFY_RECONNECT',
       });
     }
-
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 /**
  * GET /api/clientes/local
- * Clientes del bot (conversaciones locales)
+ * Clientes del bot (conversaciones locales de WhatsApp)
  */
 router.get('/local', async (req, res) => {
   try {
@@ -105,7 +156,7 @@ router.get('/local', async (req, res) => {
 
 /**
  * GET /api/clientes?limit=50&cursor=&query=
- * Una página de clientes (para uso futuro con paginación en UI)
+ * Una página de clientes desde Shopify (fallback / paginación externa)
  */
 router.get('/', async (req, res) => {
   try {

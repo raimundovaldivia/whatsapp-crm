@@ -36,6 +36,8 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   const [search, setSearch]             = useState('');
   const [page, setPage]                 = useState(1);
   const [expanded, setExpanded]         = useState(null);
+  const [needsSync, setNeedsSync]       = useState(false);
+  const [syncing, setSyncing]           = useState(false);
   const abortRef = useRef(false);
 
   // ── Leads (contacts DB) state ──
@@ -63,6 +65,7 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
       if (!data.success) throw new Error(data.error);
       setAllCustomers(data.customers || []);
       setLoadingProgress({ loaded: data.total, total: data.total });
+      setNeedsSync(!!data.needsSync);
     } catch (err) {
       setError(err.response?.data?.error || err.message);
     } finally {
@@ -87,6 +90,20 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
       setLeadsLoading(false);
     }
   }, []);
+
+  const syncShopify = useCallback(async () => {
+    setSyncing(true);
+    setError(null);
+    try {
+      const res = await api.post('/clientes/sync', {}, { timeout: 180000 });
+      if (!res.data.success) throw new Error(res.data.error);
+      await loadAll();
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally {
+      setSyncing(false);
+    }
+  }, [loadAll]);
 
   useEffect(() => { loadAll(); return () => { abortRef.current = true; }; }, []);
 
@@ -178,7 +195,14 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
               style={{ background: 'none', border: 'none', color: colors.textPrimary, fontSize: '13px', outline: 'none', width: '220px' }}
             />
           </div>
-          <button onClick={isLeads ? () => loadLeads(1, leadsSearch) : loadAll} title="Recargar"
+          {!isLeads && (
+            <button onClick={syncShopify} disabled={syncing} title="Sincronizar clientes desde Shopify"
+              style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: syncing ? colors.bgHover : `${colors.green}18`, border: `1px solid ${colors.green}33`, cursor: syncing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.green, fontSize: '12px', fontWeight: 600 }}>
+              <RefreshCw size={12} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
+              {syncing ? 'Sincronizando...' : 'Sync Shopify'}
+            </button>
+          )}
+          <button onClick={isLeads ? () => loadLeads(1, leadsSearch) : loadAll} title="Recargar desde DB local"
             style={{ padding: '8px', borderRadius: '8px', backgroundColor: colors.bgHover, border: 'none', cursor: 'pointer', display: 'flex' }}>
             <RefreshCw size={14} color={colors.textSecondary} />
           </button>
@@ -202,6 +226,20 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Banner: primera vez, necesita sync */}
+      {!isLeads && needsSync && !loading && (
+        <div style={{ backgroundColor: `${colors.green}15`, borderBottom: `1px solid ${colors.green}33`, padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <RefreshCw size={16} color={colors.green} />
+          <span style={{ color: colors.textPrimary, fontSize: '13px' }}>
+            Aún no hay clientes sincronizados. Hacé click en <strong>Sync Shopify</strong> para importar los clientes desde tu tienda.
+          </span>
+          <button onClick={syncShopify} disabled={syncing}
+            style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: '8px', backgroundColor: colors.green, border: 'none', cursor: 'pointer', color: '#fff', fontSize: '12px', fontWeight: 700 }}>
+            {syncing ? 'Sincronizando...' : 'Sincronizar ahora'}
+          </button>
         </div>
       )}
 

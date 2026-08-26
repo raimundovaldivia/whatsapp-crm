@@ -175,9 +175,22 @@ const CUSTOMERS_QUERY = `
           createdAt
           updatedAt
           defaultAddress {
-            address1 city province country zip
+            address1 address2 city province country zip
           }
           tags
+          note
+          orders(first: 1, sortKey: PROCESSED_AT, reverse: true) {
+            edges {
+              node {
+                name
+                processedAt
+                totalPriceSet { shopMoney { amount } }
+                lineItems(first: 5) {
+                  edges { node { title quantity } }
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -216,6 +229,17 @@ async function getCustomers(shop, token, opts = {}) {
     updatedAt:     node.updatedAt,
     address:       node.defaultAddress || null,
     tags:          node.tags || [],
+    note:          node.note || null,
+    lastOrder:     (() => {
+      const edge = node.orders?.edges?.[0]?.node;
+      if (!edge) return null;
+      return {
+        name:       edge.name,
+        createdAt:  edge.processedAt,
+        totalPrice: parseFloat(edge.totalPriceSet?.shopMoney?.amount || 0),
+        items:      (edge.lineItems?.edges || []).map(e => e.node.title),
+      };
+    })(),
   }));
 
   return {

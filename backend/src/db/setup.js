@@ -467,6 +467,21 @@ async function setupDatabase() {
 
       -- Quitar '+' de los que quedan con ese prefijo
       UPDATE contacts SET phone = SUBSTRING(phone FROM 2) WHERE phone LIKE '+%';
+
+      -- Migración: campos ricos de Shopify en contacts (para servir clientes desde DB local)
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address1          TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address2          TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS province          TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS zip               TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS country           TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS total_spent       NUMERIC DEFAULT 0;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS orders_count      INTEGER DEFAULT 0;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS tags              JSONB DEFAULT '[]';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS shopify_created_at TIMESTAMP;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_order_data   JSONB;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS currency          TEXT DEFAULT 'CLP';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS shopify_note      TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS shopify_synced_at TIMESTAMP;
     `);
 
     // Migración: permitir pedidos manuales sin conversación asociada

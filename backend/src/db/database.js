@@ -626,6 +626,79 @@ async function upsertContact(orgId, { phone, name, email, address, city, region,
 }
 
 /**
+ * Upsert completo de un cliente de Shopify en la tabla contacts.
+ * Guarda todos los campos ricos para servir la lista de clientes desde DB local.
+ *
+ * @param {number} orgId
+ * @param {object} c - objeto de cliente de shopifyApi.getAllCustomers
+ */
+async function upsertShopifyCustomerProfile(orgId, c) {
+  const rawPhone = c.phone || null;
+  const phone    = rawPhone ? normalizePhone(rawPhone) : null;
+  const shopifyId = c.id ? String(c.id) : null;
+
+  // Necesitamos al menos teléfono (es el ID canónico) para hacer upsert seguro
+  if (!phone) return;
+
+  const addr = c.address || {};
+  const lastOrderData = c.lastOrder ? {
+    name:       c.lastOrder.name,
+    items:      (c.lastOrder.items || []).map(i => i.title || i.name || i),
+    totalPrice: parseFloat(c.lastOrder.totalPrice || 0),
+    createdAt:  c.lastOrder.createdAt,
+  } : null;
+
+  await pool.query(
+    `INSERT INTO contacts
+       (organization_id, phone, name, email,
+        address1, address2, city, province, zip, country,
+        total_spent, orders_count, tags, shopify_id,
+        shopify_created_at, last_order_data, currency, shopify_note,
+        contact_type, shopify_synced_at, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16::jsonb,$17,$18,'customer',NOW(),NOW(),NOW())
+     ON CONFLICT (organization_id, phone) DO UPDATE SET
+       name               = COALESCE(EXCLUDED.name,          contacts.name),
+       email              = COALESCE(EXCLUDED.email,         contacts.email),
+       address1           = COALESCE(EXCLUDED.address1,      contacts.address1),
+       address2           = EXCLUDED.address2,
+       city               = COALESCE(EXCLUDED.city,          contacts.city),
+       province           = EXCLUDED.province,
+       zip                = EXCLUDED.zip,
+       country            = EXCLUDED.country,
+       total_spent        = EXCLUDED.total_spent,
+       orders_count       = EXCLUDED.orders_count,
+       tags               = EXCLUDED.tags,
+       shopify_id         = COALESCE(EXCLUDED.shopify_id,    contacts.shopify_id),
+       shopify_created_at = COALESCE(EXCLUDED.shopify_created_at, contacts.shopify_created_at),
+       last_order_data    = EXCLUDED.last_order_data,
+       currency           = EXCLUDED.currency,
+       shopify_note       = EXCLUDED.shopify_note,
+       contact_type       = 'customer',
+       shopify_synced_at  = NOW(),
+       updated_at         = NOW()`,
+    [
+      orgId, phone,
+      c.name || null,
+      c.email || null,
+      addr.address1 || null,
+      addr.address2 || null,
+      addr.city || null,
+      addr.province || null,
+      addr.zip || null,
+      addr.country || null,
+      parseFloat(c.totalSpent || 0),
+      parseInt(c.ordersCount || 0),
+      JSON.stringify(c.tags || []),
+      shopifyId,
+      c.createdAt || null,
+      lastOrderData ? JSON.stringify(lastOrderData) : null,
+      c.currency || 'CLP',
+      c.note || null,
+    ]
+  );
+}
+
+/**
  * Actualiza el tipo de cliente (personal / empresa).
  */
 async function updateContactClientType(orgId, phone, clientType) {
@@ -1032,7 +1105,7 @@ module.exports = {
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts
-  getContact, upsertContact, updateContactClientType, touchLead, promoteToCustomer, getContacts, countContacts,
+  getContact, upsertContact, upsertShopifyCustomerProfile, updateContactClientType, touchLead, promoteToCustomer, getContacts, countContacts,
   // Settings
   getSetting, setSetting,
   // Escalation feedback
