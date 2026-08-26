@@ -235,7 +235,7 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
      FROM conversations c
      LEFT JOIN contacts co
        ON co.organization_id = c.organization_id
-      AND co.phone = c.phone_number
+      AND REGEXP_REPLACE(co.phone, '^\+', '') = c.phone_number
      WHERE ${where}
      ORDER BY c.last_message_at DESC`,
     [orgId]

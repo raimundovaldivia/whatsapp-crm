@@ -437,60 +437,66 @@ router.delete('/:id/messages', async (req, res) => {
 router.post('/merge-duplicates', async (req, res) => {
   const pool = getPool();
   try {
-    // 1. Normalizar: quitar '+' de todos los phone_number en esta org
-    await pool.query(
-      `UPDATE conversations
-         SET phone_number = REGEXP_REPLACE(phone_number, '^\\+', ''), updated_at = NOW()
-       WHERE organization_id = $1 AND phone_number LIKE '+%'`,
-      [req.orgId]
-    );
-
-    // 2. Encontrar duplicados que aún persistan (mismo número, distintos IDs)
-    const dups = await pool.query(
-      `SELECT phone_number, ARRAY_AGG(id ORDER BY
-          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) DESC,
-          c.created_at ASC
-       ) AS ids
-       FROM conversations c
-       WHERE organization_id = $1
-       GROUP BY phone_number
-       HAVING COUNT(*) > 1`,
-      [req.orgId]
-    );
-
     let merged = 0;
-    for (const row of dups.rows) {
-      const [keepId, ...dupeIds] = row.ids;
-      for (const dupeId of dupeIds) {
-        // Reasignar mensajes del duplicado al que se conserva
-        await pool.query(
-          'UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2',
-          [keepId, dupeId]
-        );
-        // Copiar el nombre si el que se conserva no tiene uno real
-        const dupe = await pool.query('SELECT contact_name FROM conversations WHERE id = $1', [dupeId]);
-        const dupeName = dupe.rows[0]?.contact_name;
-        if (dupeName && !/^\d+$/.test(dupeName) && dupeName !== 'Cliente') {
-          await pool.query(
-            `UPDATE conversations SET contact_name = $1, updated_at = NOW()
-             WHERE id = $2 AND (contact_name IS NULL OR contact_name = 'Cliente' OR contact_name ~ '^[0-9]+$')`,
-            [dupeName, keepId]
-          );
-        }
-        await pool.query('DELETE FROM conversations WHERE id = $1', [dupeId]);
-        merged++;
+
+    // ── Paso 1: Pares exactos con/sin '+' ────────────────────────────────
+    // Busca conversaciones donde existe UNA con phone='56...' y OTRA con phone='+56...'
+    // Mantiene la sin '+' (la del webhook), mueve mensajes, borra la con '+'.
+    const pairs = await pool.query(
+      `SELECT c_keep.id AS keep_id, c_dupe.id AS dupe_id,
+              c_dupe.contact_name AS dupe_name, c_keep.contact_name AS keep_name
+       FROM conversations c_keep
+       JOIN conversations c_dupe
+         ON c_dupe.organization_id = c_keep.organization_id
+        AND c_dupe.phone_number = '+' || c_keep.phone_number
+       WHERE c_keep.organization_id = $1
+         AND c_keep.phone_number NOT LIKE '+%'`,
+      [req.orgId]
+    );
+
+    for (const row of pairs.rows) {
+      const { keep_id, dupe_id, dupe_name, keep_name } = row;
+      // Mover mensajes del duplicado (con +) al que conservamos (sin +)
+      await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [keep_id, dupe_id]);
+      // Copiar nombre si el duplicado tiene uno mejor
+      const keepIsGeneric = !keep_name || keep_name === 'Cliente' || /^\d+$/.test(keep_name);
+      if (dupe_name && !/^\d+$/.test(dupe_name) && dupe_name !== 'Cliente' && keepIsGeneric) {
+        await pool.query('UPDATE conversations SET contact_name = $1, updated_at = NOW() WHERE id = $2', [dupe_name, keep_id]);
       }
+      // Sincronizar last_message y last_message_at del que conservamos
+      await pool.query(
+        `UPDATE conversations c SET
+           last_message = sub.last_message, last_message_at = sub.last_message_at, updated_at = NOW()
+         FROM (SELECT content AS last_message, created_at AS last_message_at
+               FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
+         WHERE c.id = $1`,
+        [keep_id]
+      );
+      await pool.query('DELETE FROM conversations WHERE id = $1', [dupe_id]);
+      merged++;
     }
 
-    // 3. También normalizar teléfonos en la tabla contacts
+    // ── Paso 2: Normalizar phones en contacts (sin constraint issue) ──────
+    // En contacts la clave es (organization_id, phone) — puede haber pares +/sin +
+    // Borramos el '+' solo si NO existe ya uno sin '+' para esa org
     await pool.query(
-      `UPDATE contacts
-         SET phone = REGEXP_REPLACE(phone, '^\\+', ''), updated_at = NOW()
+      `DELETE FROM contacts
+       WHERE organization_id = $1 AND phone LIKE '+%'
+         AND EXISTS (
+           SELECT 1 FROM contacts c2
+           WHERE c2.organization_id = $1
+             AND c2.phone = SUBSTRING(contacts.phone FROM 2)
+         )`,
+      [req.orgId]
+    );
+    // Los que quedan con '+' y no tienen duplicado: actualizarlos
+    await pool.query(
+      `UPDATE contacts SET phone = SUBSTRING(phone FROM 2), updated_at = NOW()
        WHERE organization_id = $1 AND phone LIKE '+%'`,
       [req.orgId]
     );
 
-    res.json({ success: true, normalizedWithPlus: true, mergedConversations: merged });
+    res.json({ success: true, mergedConversations: merged });
   } catch (err) {
     console.error('[merge-duplicates]', err.message);
     res.status(500).json({ success: false, error: err.message });
