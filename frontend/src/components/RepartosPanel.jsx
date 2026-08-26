@@ -185,9 +185,9 @@ function NuevoReparto({ colors }) {
         const price = i.price ? ` - $${Number(i.price).toLocaleString('es-CL')}` : '';
         return `${i.quantity}x ${name}${price}`;
       }).join(', ');
-      // Col N: Teléfono — fórmula + valor cacheado para máxima compatibilidad
-      const phone = (o.phone || '').replace(/\D/g, '');
-      if (phone) row[13] = { t: 'n', f: `+${phone}`, v: Number(phone) };
+      // Col N: Teléfono — solo dígitos, sin 56 ni +56
+      const phone = (o.phone || '').replace(/\D/g, '').replace(/^56/, '');
+      if (phone) row[13] = Number(phone);
       return row;
     });
 
