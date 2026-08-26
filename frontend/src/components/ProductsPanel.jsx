@@ -500,7 +500,7 @@ export default function ProductsPanel({ orgSlug }) {
               { label: 'Nombre *', key: 'title', placeholder: 'Ej: Camiseta azul talla M' },
               { label: 'Descripción', key: 'description', placeholder: 'Descripción del producto', multiline: true },
               { label: 'Precio *', key: 'price', placeholder: '15900', type: 'number' },
-              { label: 'Precio antes (tachado)', key: 'comparePrice', placeholder: '19900', type: 'number' },
+              { label: 'Precio normal sin oferta (opcional)', key: 'comparePrice', placeholder: 'Ej: 19900 — si está en oferta, pon aquí el precio original', type: 'number' },
               { label: 'Categoría', key: 'category', placeholder: 'Huevos, Quesos, Aceitunas...' },
               { label: 'SKU', key: 'sku', placeholder: 'CAM-AZU-M' },
               { label: 'Stock (-1 = sin límite)', key: 'stock', placeholder: '-1', type: 'number' },
