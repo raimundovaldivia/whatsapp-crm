@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
-import { conversationsAPI } from '../utils/api.js';
+import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
@@ -14,6 +14,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
+
+  // Order modal state
+  const [showOrderModal, setShowOrderModal]   = useState(false);
+  const [products, setProducts]               = useState([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [orderItems, setOrderItems]           = useState({}); // { productId: quantity }
+  const [sendSummary, setSendSummary]         = useState(true);
+  const [creatingOrder, setCreatingOrder]     = useState(false);
+  const [orderError, setOrderError]           = useState('');
 
   // Template modal state
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -197,6 +206,49 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const initials = (conversation.contact_name || conversation.phone_number || '?')
     .split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
 
+  // ── Order modal handlers ────────────────────────────────────────
+  const openOrderModal = async () => {
+    setShowOrderModal(true);
+    setOrderItems({});
+    setOrderError('');
+    setProductsLoading(true);
+    try {
+      const r = await api.get('/products');
+      setProducts((r.data.products || r.data.data || []).filter(p => p.active !== false));
+    } catch { setProducts([]); }
+    finally { setProductsLoading(false); }
+  };
+
+  const setQty = (id, delta) => {
+    setOrderItems(prev => {
+      const cur = prev[id] || 0;
+      const next = Math.max(0, cur + delta);
+      if (next === 0) { const n = {...prev}; delete n[id]; return n; }
+      return { ...prev, [id]: next };
+    });
+  };
+
+  const handleCreateOrder = async () => {
+    const items = Object.entries(orderItems).map(([id, qty]) => {
+      const p = products.find(p => String(p.id) === String(id));
+      return { productId: id, title: p?.title || id, price: p?.price || 0, quantity: qty };
+    });
+    if (!items.length) { setOrderError('Agrega al menos un producto'); return; }
+    setCreatingOrder(true); setOrderError('');
+    try {
+      await api.post(`/conversations/${conversation.id}/orders`, { items, sendSummary });
+      setShowOrderModal(false);
+      setOrderItems({});
+    } catch (err) {
+      setOrderError(err.response?.data?.error || err.message);
+    } finally { setCreatingOrder(false); }
+  };
+
+  const orderTotal = Object.entries(orderItems).reduce((s, [id, qty]) => {
+    const p = products.find(p => String(p.id) === String(id));
+    return s + (parseFloat(p?.price || 0) * qty);
+  }, 0);
+
   return (
     <div style={{
       flex: 1,
@@ -278,6 +330,22 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               {!isMobile && (deleting ? 'Borrando...' : 'Reset chat')}
             </button>
           )}
+          <button
+            onClick={openOrderModal}
+            title="Crear orden"
+            style={{
+              backgroundColor: 'transparent',
+              border: `1px solid ${colors.borderStrong}`,
+              borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
+              color: colors.green,
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', transition: 'all 0.15s',
+            }}
+          >
+            <ShoppingCart size={13} />
+            {!isMobile && 'Nueva orden'}
+          </button>
           <button
             onClick={openTemplateModal}
             title="Enviar template de WhatsApp"
@@ -489,6 +557,74 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       )}
 
       {/* Modal de templates */}
+      {/* ── Modal Nueva Orden ── */}
+      {showOrderModal && (
+        <div style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.6)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+          <div style={{ backgroundColor: colors.bgPanel, borderRadius:'14px', border:`1px solid ${colors.border}`, width:'100%', maxWidth:'520px', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }}>
+
+            {/* Header */}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', borderBottom:`1px solid ${colors.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                <ShoppingCart size={16} color={colors.green} />
+                <span style={{ fontWeight:700, fontSize:'15px', color:colors.textPrimary }}>Nueva orden</span>
+                <span style={{ fontSize:'12px', color:colors.textMuted }}>— {conversation.contact_name || conversation.phone_number}</span>
+              </div>
+              <button onClick={() => setShowOrderModal(false)} style={{ background:'none', border:'none', cursor:'pointer', color:colors.textMuted, padding:'4px' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Product list */}
+            <div style={{ flex:1, overflowY:'auto', padding:'12px 16px' }}>
+              {productsLoading ? (
+                <div style={{ textAlign:'center', padding:'40px', color:colors.textMuted }}>Cargando productos...</div>
+              ) : products.length === 0 ? (
+                <div style={{ textAlign:'center', padding:'40px', color:colors.textMuted }}>No hay productos en el catálogo</div>
+              ) : products.map(p => {
+                const qty = orderItems[p.id] || 0;
+                return (
+                  <div key={p.id} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'10px 0', borderBottom:`1px solid ${colors.border}` }}>
+                    {p.image_url && <img src={p.image_url} alt={p.title} style={{ width:'44px', height:'44px', borderRadius:'8px', objectFit:'cover', flexShrink:0 }} />}
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontWeight:600, fontSize:'13px', color:colors.textPrimary }}>{p.title}</div>
+                      <div style={{ fontSize:'12px', color:colors.green, fontWeight:700 }}>${parseFloat(p.price).toLocaleString('es-CL')}</div>
+                    </div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>
+                      <button onClick={() => setQty(p.id, -1)} disabled={qty===0} style={{ width:'28px', height:'28px', borderRadius:'50%', border:`1px solid ${colors.border}`, background:'none', cursor:qty===0?'not-allowed':'pointer', color:colors.textSecondary, display:'flex', alignItems:'center', justifyContent:'center', opacity:qty===0?0.4:1 }}>
+                        <Minus size={12} />
+                      </button>
+                      <span style={{ minWidth:'20px', textAlign:'center', fontWeight:700, fontSize:'14px', color:qty>0?colors.green:colors.textMuted }}>{qty}</span>
+                      <button onClick={() => setQty(p.id, +1)} style={{ width:'28px', height:'28px', borderRadius:'50%', border:`1px solid ${colors.green}`, background:colors.green, cursor:'pointer', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding:'14px 20px', borderTop:`1px solid ${colors.border}` }}>
+              <label style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px', cursor:'pointer', fontSize:'13px', color:colors.textSecondary }}>
+                <input type="checkbox" checked={sendSummary} onChange={e => setSendSummary(e.target.checked)} />
+                Enviar resumen por WhatsApp al cliente
+              </label>
+              {orderError && <div style={{ color:colors.red, fontSize:'12px', marginBottom:'8px' }}>{orderError}</div>}
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                <div>
+                  <span style={{ fontSize:'12px', color:colors.textMuted }}>Total: </span>
+                  <span style={{ fontWeight:700, fontSize:'16px', color:colors.green }}>${orderTotal.toLocaleString('es-CL')}</span>
+                </div>
+                <button onClick={handleCreateOrder} disabled={creatingOrder || Object.keys(orderItems).length===0} style={{ display:'flex', alignItems:'center', gap:'6px', padding:'8px 20px', borderRadius:'8px', border:'none', backgroundColor:Object.keys(orderItems).length>0?colors.green:colors.bgHover, color:Object.keys(orderItems).length>0?'#fff':colors.textMuted, fontWeight:700, fontSize:'13px', cursor:creatingOrder||Object.keys(orderItems).length===0?'not-allowed':'pointer', opacity:creatingOrder?0.7:1 }}>
+                  <ShoppingCart size={14} />
+                  {creatingOrder ? 'Creando...' : 'Crear orden'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showTemplateModal && (
         <div style={{
           position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)',
