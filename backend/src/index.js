@@ -106,7 +106,8 @@ app.use((req, res, next) => {
   }
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ─── HEALTH CHECK ────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({
