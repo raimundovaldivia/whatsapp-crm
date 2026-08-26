@@ -217,21 +217,40 @@ async function upsertConversation(orgId, phoneNumber, contactName = null) {
     'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2',
     [orgId, phone]
   );
+
+  const isGenericName = n => !n || n === 'Cliente' || /^\d+$/.test(n);
+  const resolvedName = isGenericName(contactName) ? null : contactName;
+
   if (existing) {
-    // Solo actualizar el nombre si el nuevo es mejor (no nulo, no genérico, no número)
-    const isGeneric = !contactName || contactName === 'Cliente' || /^\d+$/.test(contactName);
-    const existingIsGeneric = !existing.contact_name || existing.contact_name === 'Cliente' || /^\d+$/.test(existing.contact_name);
-    if (!isGeneric && (existingIsGeneric || contactName !== existing.contact_name)) {
+    const existingIsGeneric = isGenericName(existing.contact_name);
+    if (resolvedName && (existingIsGeneric || resolvedName !== existing.contact_name)) {
       await pool.query(
         'UPDATE conversations SET contact_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [contactName, existing.id]
+        [resolvedName, existing.id]
       );
     }
-    return queryOne('SELECT * FROM conversations WHERE id = $1', [existing.id]);
+  } else {
+    await queryOne(
+      `INSERT INTO conversations (organization_id, phone_number, contact_name) VALUES ($1, $2, $3) RETURNING *`,
+      [orgId, phone, resolvedName || phone]
+    );
   }
+
+  // Siempre sincronizar el contacto (contacts es la fuente de verdad del phone)
+  try {
+    await pool.query(
+      `INSERT INTO contacts (organization_id, phone, name, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (organization_id, phone) DO UPDATE SET
+         name       = CASE WHEN $3 IS NOT NULL AND contacts.name IS NULL THEN $3 ELSE contacts.name END,
+         updated_at = NOW()`,
+      [orgId, phone, resolvedName]
+    );
+  } catch (_) {}
+
   return queryOne(
-    `INSERT INTO conversations (organization_id, phone_number, contact_name) VALUES ($1, $2, $3) RETURNING *`,
-    [orgId, phone, contactName || phone]
+    'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2',
+    [orgId, phone]
   );
 }
 
