@@ -1219,8 +1219,10 @@ router.post('/submit-templates', async (req, res) => {
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message, templateName, languageCode, components, previewText } = req.body;
+    let { phone, message, templateName, languageCode, components, previewText } = req.body;
     if (!phone) return res.status(400).json({ success: false, error: 'phone requerido' });
+    // Normalizar: siempre sin "+" para consistencia con el webhook
+    phone = phone.replace(/^\+/, '');
 
     const isTemplate = !!templateName;
     if (!isTemplate && !message) {
@@ -1305,6 +1307,8 @@ router.post('/send-bulk', async (req, res) => {
 
   const results = [];
   for (const item of items) {
+    // Normalizar teléfono: siempre sin "+" para consistencia con el webhook
+    item.phone = (item.phone || '').replace(/^\+/, '');
     try {
       const isTemplate = !!item.templateName;
       let sentResult;
