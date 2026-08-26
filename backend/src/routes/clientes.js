@@ -30,6 +30,27 @@ router.get('/all', async (req, res) => {
 
     const customers = await shopifyApi.getAllCustomers(shop, token, query);
 
+    // Enriquecer con teléfonos locales para clientes sin teléfono en Shopify
+    const withoutPhone = customers.filter(c => !c.phone && c.email);
+    if (withoutPhone.length > 0) {
+      const emails = withoutPhone.map(c => c.email.toLowerCase());
+      const { rows } = await getPool().query(
+        `SELECT DISTINCT ON (LOWER(customer_email)) LOWER(customer_email) AS email, customer_phone AS phone
+         FROM shopify_orders
+         WHERE organization_id = $1
+           AND customer_email = ANY($2)
+           AND customer_phone IS NOT NULL AND customer_phone <> ''
+         ORDER BY LOWER(customer_email), shopify_created_at DESC`,
+        [req.orgId, emails]
+      );
+      const phoneMap = new Map(rows.map(r => [r.email, r.phone]));
+      for (const c of customers) {
+        if (!c.phone && c.email) {
+          c.phone = phoneMap.get(c.email.toLowerCase()) || null;
+        }
+      }
+    }
+
     res.json({
       success:   true,
       customers,
