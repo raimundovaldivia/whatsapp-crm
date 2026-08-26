@@ -583,6 +583,83 @@ router.post('/merge-duplicates', async (req, res) => {
 });
 
 /**
+ * GET /api/conversations/search-by-phone?phone=xxx
+ * Busca TODAS las conversaciones de un número en cualquier formato (56xxx, +56xxx, xxx sin prefijo).
+ * Útil para diagnosticar chats perdidos y encontrar duplicados.
+ */
+router.get('/search-by-phone', async (req, res) => {
+  const pool = getPool();
+  try {
+    const rawPhone = (req.query.phone || '').replace(/\s/g, '').replace(/^\+/, '');
+    if (!rawPhone) return res.status(400).json({ success: false, error: 'Falta parámetro phone' });
+
+    // Construir todas las variantes del número
+    const variants = new Set([rawPhone]);
+    // Sin código de país (9-digit chileno)
+    if (/^569\d{8}$/.test(rawPhone)) variants.add(rawPhone.slice(2));  // 569xxx -> 9xxx
+    if (/^9\d{8}$/.test(rawPhone))   variants.add('56' + rawPhone);    // 9xxx -> 569xxx
+    // Con +
+    variants.add('+' + rawPhone);
+
+    const placeholders = [...variants].map((_, i) => `$${i + 2}`).join(', ');
+    const { rows } = await pool.query(
+      `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.agent_mode,
+              c.last_message_at, c.hot_lead_excluded,
+              COUNT(m.id)::int AS message_count,
+              MIN(m.created_at) AS first_message_at
+       FROM conversations c
+       LEFT JOIN messages m ON m.conversation_id = c.id
+       WHERE c.organization_id = $1
+         AND c.phone_number IN (${placeholders})
+       GROUP BY c.id
+       ORDER BY c.last_message_at DESC`,
+      [req.orgId, ...[...variants]]
+    );
+
+    res.json({ success: true, phone: rawPhone, variants: [...variants], conversations: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/conversations/merge-into/:targetId
+ * Fusiona UNA conversación específica (sourceId del body) dentro de targetId.
+ * Mueve los mensajes y borra la conversación fuente.
+ */
+router.post('/merge-into/:targetId', async (req, res) => {
+  const pool = getPool();
+  try {
+    const targetId = parseInt(req.params.targetId);
+    const { sourceId } = req.body;
+    if (!sourceId || !targetId || sourceId === targetId) {
+      return res.status(400).json({ success: false, error: 'Parámetros inválidos' });
+    }
+    // Verificar que ambas son de esta org
+    const target = await pool.query('SELECT id FROM conversations WHERE id = $1 AND organization_id = $2', [targetId, req.orgId]);
+    const source = await pool.query('SELECT id FROM conversations WHERE id = $1 AND organization_id = $2', [sourceId, req.orgId]);
+    if (!target.rows.length || !source.rows.length) {
+      return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    }
+    await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [targetId, sourceId]);
+    // Actualizar last_message del target
+    await pool.query(
+      `UPDATE conversations SET
+         last_message    = sub.content,
+         last_message_at = sub.created_at,
+         updated_at      = NOW()
+       FROM (SELECT content, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
+       WHERE conversations.id = $1`,
+      [targetId]
+    );
+    await pool.query('DELETE FROM conversations WHERE id = $1', [sourceId]);
+    res.json({ success: true, mergedInto: targetId, deleted: sourceId });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/conversations/trigger-follow-up
  * Dispara el follow-up bot ahora mismo para conversaciones abandonadas de esta org.
  * El cron corre automáticamente cada 30min pero este endpoint lo activa a demanda.

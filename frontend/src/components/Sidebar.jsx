@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader } from 'lucide-react';
+import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -15,6 +15,14 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [sending, setSending]     = useState(false);
   const [error, setError]         = useState('');
   const [scanning, setScanning]   = useState(false);
+
+  // Diagnóstico de número
+  const [showDiagModal, setShowDiagModal]   = useState(false);
+  const [diagPhone, setDiagPhone]           = useState('');
+  const [diagResults, setDiagResults]       = useState(null);
+  const [diagLoading, setDiagLoading]       = useState(false);
+  const [diagError, setDiagError]           = useState('');
+  const [mergingId, setMergingId]           = useState(null);
 
   const HOT_STATES   = ['interested', 'collecting_order'];
   const now          = Date.now();
@@ -83,14 +91,131 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     } finally { setSending(false); }
   };
 
+  const handleDiagSearch = async () => {
+    if (!diagPhone.trim()) return;
+    setDiagLoading(true); setDiagError(''); setDiagResults(null);
+    try {
+      const r = await api.get(`/conversations/search-by-phone?phone=${encodeURIComponent(diagPhone.trim())}`);
+      setDiagResults(r.data);
+    } catch (e) { setDiagError(e.response?.data?.error || e.message); }
+    finally { setDiagLoading(false); }
+  };
+
+  const handleMergeInto = async (targetId, sourceId) => {
+    if (!window.confirm('¿Fusionar esa conversación en esta? Los mensajes del número anterior quedarán aquí y esa conversación se borrará.')) return;
+    setMergingId(sourceId);
+    try {
+      await api.post(`/conversations/merge-into/${targetId}`, { sourceId });
+      // Refrescar resultados del diagnóstico
+      const r = await api.get(`/conversations/search-by-phone?phone=${encodeURIComponent(diagPhone.trim())}`);
+      setDiagResults(r.data);
+      onRefresh();
+    } catch (e) { alert('Error: ' + (e.response?.data?.error || e.message)); }
+    finally { setMergingId(null); }
+  };
+
   const inp = {
     width: '100%', backgroundColor: colors.bgHover, border: `1px solid ${colors.borderStrong}`,
     borderRadius: '8px', padding: '10px 12px', color: colors.textPrimary,
     fontSize: '14px', outline: 'none', boxSizing: 'border-box',
   };
 
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('es-CL', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+
   return (
     <>
+    {/* Modal diagnóstico de número */}
+    {showDiagModal && (
+      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}
+        onClick={() => setShowDiagModal(false)}>
+        <div onClick={e => e.stopPropagation()}
+          style={{ backgroundColor: colors.bgPanel, borderRadius: '14px', padding: '24px', width: '480px', maxWidth: '95vw',
+            maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: '14px', boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+            border: `1px solid ${colors.border}`, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Stethoscope size={18} color={colors.green} />
+              <span style={{ fontWeight: 700, fontSize: '16px', color: colors.textPrimary }}>Diagnosticar número</span>
+            </div>
+            <button onClick={() => setShowDiagModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary }}><X size={18} /></button>
+          </div>
+          <p style={{ margin: 0, fontSize: '13px', color: colors.textSecondary }}>
+            Busca todas las conversaciones de un número en cualquier formato (+56, 56, sin prefijo). Si hay duplicados, podés fusionarlos aquí.
+          </p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="tel" placeholder="56987249069 ó 987249069 ó +56987249069" value={diagPhone}
+              onChange={e => setDiagPhone(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleDiagSearch()}
+              style={{ flex: 1, padding: '9px 12px', borderRadius: '8px', border: `1px solid ${colors.borderStrong}`,
+                backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '14px', outline: 'none' }}
+              autoFocus />
+            <button onClick={handleDiagSearch} disabled={diagLoading}
+              style={{ padding: '9px 16px', borderRadius: '8px', border: 'none', backgroundColor: colors.green,
+                color: 'white', fontWeight: 600, fontSize: '13px', cursor: diagLoading ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {diagLoading ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Search size={14} />}
+              Buscar
+            </button>
+          </div>
+          {diagError && <div style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#2d1a1a', color: '#f87171', fontSize: '13px' }}>{diagError}</div>}
+
+          {diagResults && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ fontSize: '13px', color: colors.textSecondary }}>
+                Variantes buscadas: {diagResults.variants.map(v => <code key={v} style={{ marginLeft: 4, fontSize: '11px', backgroundColor: colors.bgApp, padding: '1px 5px', borderRadius: '4px' }}>{v}</code>)}
+              </div>
+              {diagResults.conversations.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '20px', color: colors.textMuted, fontSize: '13px' }}>No se encontraron conversaciones para este número.</div>
+              ) : (
+                <>
+                  {diagResults.conversations.length > 1 && (
+                    <div style={{ padding: '8px 12px', borderRadius: '8px', backgroundColor: '#f59e0b18', border: '1px solid #f59e0b44', fontSize: '12px', color: '#d97706' }}>
+                      ⚠️ Se encontraron {diagResults.conversations.length} conversaciones — hay duplicados. Fusioná las más antiguas en la más nueva.
+                    </div>
+                  )}
+                  {diagResults.conversations.map((conv, idx) => (
+                    <div key={conv.id} style={{ border: `1px solid ${idx === 0 ? colors.green : colors.border}`,
+                      borderRadius: '10px', padding: '12px 14px', backgroundColor: colors.bgApp }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: '14px', color: colors.textPrimary }}>
+                            {conv.contact_name && conv.contact_name !== 'Cliente' ? conv.contact_name : '(sin nombre)'}
+                            {idx === 0 && <span style={{ marginLeft: 6, fontSize: '10px', backgroundColor: colors.green + '22', color: colors.green, borderRadius: '20px', padding: '1px 7px', fontWeight: 700 }}>MÁS RECIENTE</span>}
+                          </div>
+                          <div style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '2px' }}>
+                            📱 {conv.phone_number} · ID #{conv.id}
+                          </div>
+                          <div style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '2px', display: 'flex', gap: '10px' }}>
+                            <span>💬 {conv.message_count} mensajes</span>
+                            <span>📅 {fmtDate(conv.first_message_at)} → {fmtDate(conv.last_message_at)}</span>
+                          </div>
+                        </div>
+                        {idx > 0 && (
+                          <button
+                            onClick={() => handleMergeInto(diagResults.conversations[0].id, conv.id)}
+                            disabled={mergingId === conv.id}
+                            title={`Fusionar en conversación #${diagResults.conversations[0].id}`}
+                            style={{ flexShrink: 0, padding: '6px 10px', borderRadius: '7px', border: '1px solid #f59e0b',
+                              backgroundColor: 'transparent', color: '#d97706', fontSize: '11px', fontWeight: 600,
+                              cursor: mergingId === conv.id ? 'not-allowed' : 'pointer',
+                              display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            {mergingId === conv.id ? <Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <GitMerge size={11} />}
+                            {mergingId === conv.id ? 'Fusionando...' : 'Fusionar aquí'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      </div>
+    )}
+
     {/* Modal nueva conversación */}
     {showModal && (
       <div style={{
@@ -165,6 +290,11 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = colors.textSecondary; }}
             title="Nueva conversación"><Plus size={18} /></button>
+          <button onClick={() => { setShowDiagModal(true); setDiagPhone(''); setDiagResults(null); setDiagError(''); }}
+            style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = colors.textSecondary; }}
+            title="Diagnosticar número (chats perdidos)"><Stethoscope size={16} /></button>
           <button onClick={onRefresh}
             style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: 'pointer' }}
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
