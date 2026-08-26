@@ -33,14 +33,18 @@ const CACHE_TTL = 2 * 60 * 60 * 1000;
    Agrupa órdenes de Shopify por teléfono y calcula métricas de
    comportamiento para alimentar el modelo predictivo de la IA.
 ───────────────────────────────────────────────────────────────────── */
-/** Normaliza teléfono: quita espacios, asegura formato +56XXXXXXXXX */
+/**
+ * Normaliza teléfono al formato canónico: 56XXXXXXXXX (sin +)
+ * Este es el mismo formato que usan contacts, conversations y shopify_orders.
+ * contacts.phone actúa como ID único del contacto en todo el sistema.
+ */
 function normalizePhone(raw) {
   if (!raw) return null;
   let p = raw.replace(/\s+/g, '').replace(/[^+\d]/g, '');
-  // Si empieza con 9 y tiene 9 dígitos → asumir Chile
-  if (/^9\d{8}$/.test(p)) p = '+56' + p;
-  // Si empieza con 56 sin + y tiene 11 dígitos
-  if (/^56\d{9}$/.test(p)) p = '+' + p;
+  // Quitar + inicial si lo tiene
+  if (p.startsWith('+')) p = p.slice(1);
+  // 9 dígitos → agregar 56
+  if (/^9\d{8}$/.test(p)) p = '56' + p;
   return p.length >= 8 ? p : null;
 }
 
