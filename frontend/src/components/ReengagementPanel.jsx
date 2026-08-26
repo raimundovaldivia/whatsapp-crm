@@ -1092,17 +1092,20 @@ function BroadcastPanel({ colors, testPhone }) {
 
   // Cargar contactos y templates en paralelo
   useEffect(() => {
-    // Primero asegurar que los clientes de Shopify estén en contacts
-    api.post('/contacts/backfill-shopify').catch(() => {});
-    api.get('/contacts/broadcast')
-      .then(res => {
-        const list = res.data.contacts || [];
-        setContacts(list);
-        setSources(res.data.sources || null);
-        setSelected(new Set(list.map(c => c.phone)));
-      })
-      .catch(() => setContacts([]))
-      .finally(() => setLoading(false));
+    // Backfill primero, luego cargar la lista (en serie, no en paralelo)
+    api.post('/contacts/backfill-shopify')
+      .catch(() => {})
+      .finally(() => {
+        api.get('/contacts/broadcast')
+          .then(res => {
+            const list = res.data.contacts || [];
+            setContacts(list);
+            setSources(res.data.sources || null);
+            setSelected(new Set(list.map(c => c.phone)));
+          })
+          .catch(() => setContacts([]))
+          .finally(() => setLoading(false));
+      });
 
     api.get('/reengagement/templates')
       .then(r => {
