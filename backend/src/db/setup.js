@@ -423,6 +423,12 @@ async function setupDatabase() {
 
       -- Migración: bandera para excluir manualmente de Hot Leads
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
+
+      -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos de 9 dígitos)
+      -- Paso 1: agregar '56' a los que son solo 9 dígitos empezando en 9
+      UPDATE contacts SET phone = '56' || phone WHERE phone ~ '^9[0-9]{8}$';
+      -- Paso 2: quitar el '+' de los que tienen prefijo
+      UPDATE contacts SET phone = SUBSTRING(phone FROM 2) WHERE phone LIKE '+%';
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

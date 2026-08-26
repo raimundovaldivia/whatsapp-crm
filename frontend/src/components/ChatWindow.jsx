@@ -220,8 +220,10 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
   };
 
-  const initials = (conversation.contact_name || conversation.phone_number || '?')
-    .split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+  const _rawName = conversation.contact_name;
+  const _isGenericName = !_rawName || _rawName === 'Cliente' || /^\d+$/.test(_rawName);
+  const displayContactName = _isGenericName ? (conversation.phone_number || '?') : _rawName;
+  const initials = displayContactName.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
 
   // ── Order modal handlers ────────────────────────────────────────
   const openOrderModal = async () => {
@@ -342,7 +344,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               maxWidth: isMobile ? '110px' : 'none',
             }}>
-              {conversation.contact_name || conversation.phone_number}
+              {displayContactName}
             </div>
             {!isMobile && (
               <div style={{ fontSize: '12px', color: colors.textSecondary }}>

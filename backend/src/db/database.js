@@ -239,9 +239,25 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
   const where = unreadOnly
     ? 'c.organization_id = $1 AND c.unread_count > 0'
     : 'c.organization_id = $1';
+  // JOIN con contacts para mostrar el nombre real cuando el de la conversación es genérico
+  // contacts.phone está normalizado (sin +, con código de país) igual que conversations.phone_number
   return query(
-    `SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
-     FROM conversations c WHERE ${where} ORDER BY c.last_message_at DESC`,
+    `SELECT c.*,
+       CASE
+         WHEN c.contact_name IS NOT NULL
+           AND c.contact_name <> 'Cliente'
+           AND c.contact_name <> c.phone_number
+           AND c.contact_name !~ '^[0-9]+$'
+         THEN c.contact_name
+         WHEN co.name IS NOT NULL AND co.name !~ '^[0-9]+$' AND co.name <> 'Cliente'
+         THEN co.name
+         ELSE c.contact_name
+       END AS contact_name,
+       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
+     FROM conversations c
+     LEFT JOIN contacts co ON co.organization_id = c.organization_id
+                           AND co.phone = c.phone_number
+     WHERE ${where} ORDER BY c.last_message_at DESC`,
     [orgId]
   );
 }
@@ -585,6 +601,8 @@ async function getContact(orgId, phone) {
  * @param {object} data - { phone, name?, email?, address?, city?, region?, notes?, shopifyId? }
  */
 async function upsertContact(orgId, { phone, name, email, address, city, region, notes, shopifyId } = {}) {
+  if (!phone) return null;
+  phone = normalizePhone(phone); // siempre normalizar antes de guardar
   if (!phone) return null;
   await pool.query(
     `INSERT INTO contacts (organization_id, phone, name, email, address, city, region, notes, shopify_id, updated_at)
