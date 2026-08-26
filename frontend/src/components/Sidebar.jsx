@@ -7,7 +7,7 @@ import { useTheme } from '../theme.js';
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
   const [search, setSearch]       = useState('');
-  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'ai' | 'human'
+  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'ai' | 'human' | 'unread'
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
   const [name, setName]           = useState('');
@@ -18,10 +18,12 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
   const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
+  const unreadCount = conversations.filter(c => c.unread_count > 0).length;
 
   const filtered = conversations.filter(c => {
-    if (activeTab === 'ai'    && c.agent_mode !== 'ai')    return false;
-    if (activeTab === 'human' && c.agent_mode !== 'human') return false;
+    if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
+    if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
+    if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
     const q = search.toLowerCase();
     return (
       c.contact_name?.toLowerCase().includes(q) ||
@@ -147,8 +149,9 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 6px', gap: '6px' }}>
         {[
           { key: 'all',   label: 'Todos',    count: conversations.length, color: colors.textSecondary },
-          { key: 'ai',    label: '🤖 IA',    count: aiCount,              color: colors.green },
-          { key: 'human', label: '👤 Humano', count: humanCount,          color: colors.yellow, urgent: humanUnread },
+          { key: 'ai',     label: '🤖 IA',       count: aiCount,    color: colors.green },
+          { key: 'human',  label: '👤 Humano',   count: humanCount, color: colors.yellow, urgent: humanUnread },
+          { key: 'unread', label: '🔵 No leídos', count: unreadCount, color: colors.red || '#f87171' },
         ].map(tab => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}
             style={{

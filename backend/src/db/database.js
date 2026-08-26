@@ -214,11 +214,14 @@ async function upsertConversation(orgId, phoneNumber, contactName = null) {
   );
 }
 
-async function getAllConversations(orgId) {
+async function getAllConversations(orgId, { unreadOnly = false } = {}) {
+  const where = unreadOnly
+    ? 'c.organization_id = $1 AND c.unread_count > 0'
+    : 'c.organization_id = $1';
   return query(
     `SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
      FROM conversations c
-     WHERE c.organization_id = $1
+     WHERE ${where}
      ORDER BY c.last_message_at DESC`,
     [orgId]
   );

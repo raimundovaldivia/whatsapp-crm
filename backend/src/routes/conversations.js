@@ -19,7 +19,8 @@ router.use(requireAuth);
  */
 router.get('/', async (req, res) => {
   try {
-    res.json({ success: true, data: await db.getAllConversations(req.orgId) });
+    const { unread } = req.query;
+    res.json({ success: true, data: await db.getAllConversations(req.orgId, { unreadOnly: unread === 'true' }) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
