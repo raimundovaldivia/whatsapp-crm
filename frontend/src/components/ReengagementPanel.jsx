@@ -1109,7 +1109,7 @@ function BroadcastPanel({ colors, testPhone }) {
 
     api.get('/reengagement/templates')
       .then(r => {
-        const tpls = r.data.templates || [];
+        const tpls = r.data.data || r.data.templates || [];
         setTemplates(tpls);
         if (tpls.length > 0) setSelTpl(tpls[0]);
       })
