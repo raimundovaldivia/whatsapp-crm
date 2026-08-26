@@ -16,7 +16,7 @@ function normalizeBotOrder(o) {
     source:       'bot',
     rawId:        o.id,
     customerName: o.customer_name || o.contact_name || 'Cliente',
-    phone:        o.phone_number || '—',
+    phone:        o.customer_phone || o.phone_number || '—',
     date:         new Date(o.created_at),
     total:        Number(o.total_price || 0),
     botStatus:    o.status,
@@ -627,7 +627,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 500 }}>{order.customer_name || order.contact_name}</div>
-          <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '1px' }}>{order.phone_number} · {formatDateTime(order.created_at)}</div>
+          <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '1px' }}>{order.customer_phone || order.phone_number || '—'} · {formatDateTime(order.created_at)}</div>
         </div>
 
         <div style={{ color: colors.textSecondary, fontSize: '12px', textAlign: 'right', flexShrink: 0, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
