@@ -23,6 +23,8 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [diagLoading, setDiagLoading]       = useState(false);
   const [diagError, setDiagError]           = useState('');
   const [mergingId, setMergingId]           = useState(null);
+  const [mergingAll, setMergingAll]         = useState(false);
+  const [mergeAllResult, setMergeAllResult] = useState(null);
 
   const HOT_STATES   = ['interested', 'collecting_order'];
   const now          = Date.now();
@@ -91,6 +93,22 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     } finally { setSending(false); }
   };
 
+  const handleMergeAllDuplicates = async () => {
+    if (!window.confirm('¿Fusionar TODOS los duplicados? Esto busca todos los números guardados en distintos formatos (sin 56, con +, etc.) y los une en una sola conversación. No se pueden deshacer los cambios.')) return;
+    setMergingAll(true); setMergeAllResult(null);
+    try {
+      const r = await api.post('/conversations/merge-duplicates');
+      setMergeAllResult(r.data);
+      onRefresh();
+      // Refrescar diagnóstico si hay número buscado
+      if (diagPhone.trim()) {
+        const r2 = await api.get(`/conversations/search-by-phone?phone=${encodeURIComponent(diagPhone.trim())}`);
+        setDiagResults(r2.data);
+      }
+    } catch (e) { alert('Error: ' + (e.response?.data?.error || e.message)); }
+    finally { setMergingAll(false); }
+  };
+
   const handleDiagSearch = async () => {
     if (!diagPhone.trim()) return;
     setDiagLoading(true); setDiagError(''); setDiagResults(null);
@@ -142,6 +160,27 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
           <p style={{ margin: 0, fontSize: '13px', color: colors.textSecondary }}>
             Busca todas las conversaciones de un número en cualquier formato (+56, 56, sin prefijo). Si hay duplicados, podés fusionarlos aquí.
           </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
+            backgroundColor: colors.bgApp, borderRadius: '8px', border: `1px solid ${colors.border}` }}>
+            <div style={{ flex: 1, fontSize: '12px', color: colors.textSecondary }}>
+              <strong style={{ color: colors.textPrimary }}>Fusión masiva</strong> — une todos los duplicados de la org de una vez (9-digit sin 56, con +, etc.)
+            </div>
+            <button onClick={handleMergeAllDuplicates} disabled={mergingAll}
+              style={{ flexShrink: 0, padding: '6px 12px', borderRadius: '7px', border: '1px solid #f59e0b',
+                backgroundColor: 'transparent', color: mergingAll ? colors.textMuted : '#d97706',
+                fontSize: '12px', fontWeight: 600, cursor: mergingAll ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', gap: '5px' }}>
+              {mergingAll ? <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <GitMerge size={12} />}
+              {mergingAll ? 'Fusionando...' : 'Fusionar todos'}
+            </button>
+          </div>
+          {mergeAllResult && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', backgroundColor: colors.bgAccent || '#22c55e18',
+              border: '1px solid #22c55e44', fontSize: '12px', color: colors.green, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              ✅ Se fusionaron {mergeAllResult.mergedConversations} conversación(es) duplicada(s)
+              <button onClick={() => setMergeAllResult(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.green }}><X size={12} /></button>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '8px' }}>
             <input
               type="tel" placeholder="56987249069 ó 987249069 ó +56987249069" value={diagPhone}
