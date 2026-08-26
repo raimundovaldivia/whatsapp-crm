@@ -3,7 +3,7 @@ import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
   ShoppingBag, TrendingUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
-  FileText, Download, MoreVertical, X,
+  FileText, Download, MoreVertical, X, Check,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { api, reengagementAPI } from '../utils/api.js';
@@ -59,6 +59,7 @@ const confColor = (conf, colors) =>
 export default function ReengagementPanel({ filterPhone = null, onClearFilter = null, testPhone = null, onNavigateToSettings = null }) {
   const { colors } = useTheme();
   const WINDOWS = getWINDOWS(colors);
+  const [mainTab, setMainTab] = useState('ia'); // 'ia' | 'masivo'
 
   const [candidates, setCandidates]   = useState([]);
   const [loading, setLoading]         = useState(true);
@@ -460,8 +461,23 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Botón principal */}
-        <button onClick={() => load(true)} disabled={loading}
+        {/* Selector de modo principal */}
+        <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '2px', border: `1px solid ${colors.border}`, gap: '2px', flexShrink: 0 }}>
+          {[
+            { key: 'ia',     label: '⚡ IA Predictiva' },
+            { key: 'masivo', label: '📢 Envío masivo' },
+          ].map(({ key, label }) => (
+            <button key={key} onClick={() => setMainTab(key)} style={{
+              padding: '5px 12px', borderRadius: '6px', border: 'none', cursor: 'pointer',
+              fontSize: '12px', fontWeight: 600, transition: 'all 0.15s',
+              backgroundColor: mainTab === key ? colors.green : 'transparent',
+              color: mainTab === key ? '#fff' : colors.textSecondary,
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {/* Botón principal (solo en modo IA) */}
+        {mainTab === 'ia' && <button onClick={() => load(true)} disabled={loading}
           style={{
             display: 'flex', alignItems: 'center', gap: '5px',
             padding: '7px 14px', borderRadius: '8px',
@@ -529,8 +545,16 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               </button>
             </div>
           )}
-        </div>
+        </div>}
       </div>
+
+      {/* ── Modo Envío Masivo ── */}
+      {mainTab === 'masivo' && (
+        <BroadcastPanel colors={colors} testPhone={testPhone} />
+      )}
+
+      {/* ── Modo IA Predictiva ── */}
+      {mainTab !== 'masivo' && <>
 
       {/* Tabs + filtro de confianza */}
       {!loading && !error && totalCandidates > 0 && (
@@ -1037,6 +1061,235 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
             : <Send size={13} />}
           {isSending ? 'Enviando...' : 'Enviar'}
         </button>
+      </div>
+    </div>
+    </>}
+  );
+}
+
+// ─── Componente: Envío Masivo ────────────────────────────────────────────────
+
+function BroadcastPanel({ colors, testPhone }) {
+  const [contacts,   setContacts]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [search,     setSearch]     = useState('');
+  const [selected,   setSelected]   = useState(new Set());
+  const [templates,  setTemplates]  = useState([]);
+  const [tplLoading, setTplLoading] = useState(true);
+  const [selTpl,     setSelTpl]     = useState(null);   // template seleccionado
+  const [sending,    setSending]    = useState(false);
+  const [results,    setResults]    = useState(null);   // { sent, failed }
+  const [toast,      setToast]      = useState(null);
+  const [testMode,   setTestMode]   = useState(false);
+  const TEST_PHONE = testPhone || '';
+
+  const showToast = (msg, type = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 5000);
+  };
+
+  // Cargar contactos y templates en paralelo
+  useEffect(() => {
+    Promise.all([
+      api.get('/contacts', { params: { limit: 1000 } }),
+      api.get('/contacts', { params: { type: 'customer', limit: 1000 } }),
+    ]).then(([leadsRes, custRes]) => {
+      const all = [...(leadsRes.data.contacts || []), ...(custRes.data.contacts || [])];
+      // Deduplicar por teléfono
+      const seen = new Set();
+      const deduped = all.filter(c => { if (seen.has(c.phone)) return false; seen.add(c.phone); return true; });
+      setContacts(deduped);
+      setSelected(new Set(deduped.map(c => c.phone)));
+    }).catch(() => setContacts([]))
+      .finally(() => setLoading(false));
+
+    api.get('/reengagement/templates')
+      .then(r => {
+        const tpls = r.data.templates || [];
+        setTemplates(tpls);
+        if (tpls.length > 0) setSelTpl(tpls[0]);
+      })
+      .catch(() => {})
+      .finally(() => setTplLoading(false));
+  }, []);
+
+  const filtered = contacts.filter(c => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (c.name || '').toLowerCase().includes(q) || (c.phone || '').includes(q);
+  });
+
+  function toggleAll() {
+    if (selected.size === filtered.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filtered.map(c => c.phone)));
+    }
+  }
+
+  function toggleOne(phone) {
+    setSelected(prev => {
+      const n = new Set(prev);
+      n.has(phone) ? n.delete(phone) : n.add(phone);
+      return n;
+    });
+  }
+
+  async function handleSend() {
+    if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
+    if (selected.size === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
+    if (!window.confirm(`¿Enviar "${selTpl.name}" a ${selected.size} contactos?`)) return;
+
+    setSending(true);
+    setResults(null);
+    const items = Array.from(selected).map(phone => ({
+      phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
+      templateName:   selTpl.name,
+      languageCode:   selTpl.language || 'es',
+      vars:           [],
+    }));
+    try {
+      const res = await api.post('/reengagement/send-bulk', { items });
+      const sent   = res.data.results?.filter(r => r.success).length || 0;
+      const failed = res.data.results?.filter(r => !r.success).length || 0;
+      setResults({ sent, failed });
+      showToast(`✅ ${sent} enviados${failed ? ` · ${failed} fallidos` : ''}`);
+    } catch (err) {
+      showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const allChecked  = filtered.length > 0 && filtered.every(c => selected.has(c.phone));
+  const someChecked = filtered.some(c => selected.has(c.phone));
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: '70px', right: '20px', zIndex: 9999,
+          backgroundColor: toast.type === 'error' ? '#f87171' : '#22c55e',
+          color: '#fff', padding: '10px 18px', borderRadius: '10px',
+          fontSize: '13px', fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+        }}>{toast.msg}</div>
+      )}
+
+      {/* Toolbar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
+
+        {/* Search */}
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Buscar por nombre o teléfono..."
+          style={{ flex: 1, minWidth: '180px', padding: '7px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
+        />
+
+        {/* Template selector */}
+        {tplLoading ? (
+          <span style={{ color: colors.textMuted, fontSize: '13px' }}>Cargando templates...</span>
+        ) : templates.length === 0 ? (
+          <span style={{ color: colors.red, fontSize: '13px' }}>Sin templates aprobados</span>
+        ) : (
+          <select
+            value={selTpl?.name || ''}
+            onChange={e => setSelTpl(templates.find(t => t.name === e.target.value) || null)}
+            style={{ padding: '7px 10px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', cursor: 'pointer' }}>
+            {templates.map(t => (
+              <option key={t.name} value={t.name}>{t.name}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Test mode */}
+        <button onClick={() => setTestMode(t => !t)} style={{
+          padding: '6px 10px', borderRadius: '7px', border: `1px solid ${testMode ? colors.yellow + '66' : colors.border}`,
+          backgroundColor: testMode ? colors.yellow + '22' : 'transparent',
+          color: testMode ? colors.yellow : colors.textMuted,
+          fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+        }}>
+          🧪 Prueba
+        </button>
+
+        {/* Enviar */}
+        <button onClick={handleSend} disabled={sending || selected.size === 0 || !selTpl} style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          padding: '7px 16px', borderRadius: '8px', border: 'none',
+          backgroundColor: (selected.size > 0 && selTpl) ? colors.green : colors.bgHover,
+          color: (selected.size > 0 && selTpl) ? '#fff' : colors.textMuted,
+          fontSize: '13px', fontWeight: 700, cursor: (sending || selected.size === 0 || !selTpl) ? 'not-allowed' : 'pointer',
+          opacity: sending ? 0.7 : 1,
+        }}>
+          <Send size={14} />
+          {sending ? 'Enviando...' : `Enviar a ${selected.size}`}
+        </button>
+      </div>
+
+      {/* Test mode banner */}
+      {testMode && TEST_PHONE && (
+        <div style={{ backgroundColor: `${colors.yellow}18`, borderBottom: `1px solid ${colors.yellow}44`, padding: '7px 20px', fontSize: '12px', color: colors.yellow, fontWeight: 600 }}>
+          🧪 Modo prueba — todos los mensajes irán a {TEST_PHONE}
+        </div>
+      )}
+
+      {/* Resultado */}
+      {results && (
+        <div style={{ padding: '10px 20px', backgroundColor: `${colors.green}18`, borderBottom: `1px solid ${colors.green}33`, display: 'flex', gap: '16px', alignItems: 'center' }}>
+          <span style={{ color: colors.green, fontWeight: 700, fontSize: '13px' }}>✅ {results.sent} enviados</span>
+          {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
+        </div>
+      )}
+
+      {/* Select all bar */}
+      {!loading && filtered.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 20px', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}` }}>
+          <button onClick={toggleAll} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, fontSize: '13px', padding: 0 }}>
+            <div style={{ width: '16px', height: '16px', borderRadius: '4px', border: `2px solid ${allChecked ? colors.green : colors.border}`, backgroundColor: allChecked ? colors.green : someChecked ? colors.green + '44' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              {allChecked && <Check size={10} color="#fff" strokeWidth={3} />}
+              {!allChecked && someChecked && <span style={{ width: '8px', height: '2px', backgroundColor: colors.green, display: 'block' }} />}
+            </div>
+            {allChecked ? 'Deseleccionar todos' : 'Seleccionar todos'}
+          </button>
+          <span style={{ color: colors.textMuted, fontSize: '12px', marginLeft: 'auto' }}>
+            {selected.size} de {filtered.length} seleccionados
+          </span>
+        </div>
+      )}
+
+      {/* Lista de contactos */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {loading ? (
+          <div style={{ padding: '60px', textAlign: 'center', color: colors.textMuted }}>Cargando contactos...</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: '60px', textAlign: 'center', color: colors.textMuted }}>
+            {search ? 'Sin resultados para esa búsqueda' : 'No hay contactos en el sistema'}
+          </div>
+        ) : filtered.map(c => {
+          const checked = selected.has(c.phone);
+          return (
+            <div key={c.phone} onClick={() => toggleOne(c.phone)}
+              style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 20px', cursor: 'pointer', borderBottom: `1px solid ${colors.border}`, backgroundColor: checked ? `${colors.green}06` : 'transparent', transition: 'background 0.1s' }}>
+              <div style={{ width: '16px', height: '16px', borderRadius: '4px', border: `2px solid ${checked ? colors.green : colors.border}`, backgroundColor: checked ? colors.green : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.1s' }}>
+                {checked && <Check size={10} color="#fff" strokeWidth={3} />}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px' }}>{c.name || 'Sin nombre'}</div>
+                <div style={{ color: colors.textMuted, fontSize: '12px' }}>{c.phone}</div>
+              </div>
+              {c.total_orders > 0 && (
+                <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: '6px', padding: '2px 6px' }}>
+                  {c.total_orders} pedidos
+                </span>
+              )}
+              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '5px', backgroundColor: c.contact_type === 'customer' ? `${colors.green}22` : `${colors.blue}22`, color: c.contact_type === 'customer' ? colors.green : colors.blue }}>
+                {c.contact_type === 'customer' ? 'Cliente' : 'Lead'}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
