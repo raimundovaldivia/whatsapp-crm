@@ -54,6 +54,8 @@ export default function App() {
 
   // Deduplicar mensajes entre optimistic update y socket event
   const seenMessageIds = useRef(new Set());
+  // Conversaciones cuyo historial ya fue cargado desde la API (evita saltear fetch por mensajes de socket)
+  const loadedConvIds = useRef(new Set());
 
   // ── Verificar sesión al inicio ──────────────────────────────────
   useEffect(() => {
@@ -216,9 +218,10 @@ export default function App() {
   const handleSelectConversation = useCallback(async (id) => {
     setView('chats');
     setSelectedId(id);
-    if (!messages[id]) {
+    if (!loadedConvIds.current.has(id)) {
       try {
         const { messages: msgs } = await conversationsAPI.getMessages(id);
+        loadedConvIds.current.add(id);
         setMessages(prev => ({ ...prev, [id]: msgs }));
         setConversations(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c));
       } catch (err) { console.error(err); }
