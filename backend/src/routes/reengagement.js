@@ -1366,9 +1366,7 @@ router.post('/send-bulk', async (req, res) => {
         await db.updateConversationLastMessage(convId, savedContent);
         const updated = await db.getConversationById(convId);
         io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
-        if (isTemplate) {
-          await db.updatePipelineState(convId, 'template_sent');
-        }
+        // No tocamos pipeline_state — 'template_sent' no es un valor válido
       }
 
       results.push({ phone: item.phone, success: true });
