@@ -182,83 +182,67 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         </div>
       </div>
 
-      {/* Tabs — fila 1 */}
-      <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 0', gap: '6px' }}>
+      {/* Chips de filtro — scrollable horizontal, estilo WhatsApp */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '6px',
+        padding: '6px 12px 8px', overflowX: 'auto',
+        backgroundColor: colors.bgSub,
+        scrollbarWidth: 'none', msOverflowStyle: 'none',
+      }}>
         {[
-          { key: 'all',    label: 'Todos',       count: conversations.length, color: colors.textSecondary },
-          { key: 'ai',     label: '🤖 IA',        count: aiCount,             color: colors.green },
-          { key: 'human',  label: '👤 Humano',    count: humanCount,          color: colors.yellow, urgent: humanUnread },
-          { key: 'unread', label: '🔵 No leídos', count: unreadCount,         color: '#f87171' },
-        ].map(tab => (
-          <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-            style={{
-              flex: 1, padding: '5px 4px', borderRadius: '6px',
-              border: activeTab === tab.key ? `1px solid ${tab.color}` : `1px solid ${colors.border}`,
-              backgroundColor: activeTab === tab.key ? `${tab.color}22` : 'transparent',
-              color: activeTab === tab.key ? tab.color : colors.textSecondary,
-              fontSize: '12px', fontWeight: activeTab === tab.key ? 600 : 400,
-              cursor: 'pointer', position: 'relative',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
-              transition: 'all 0.15s',
-            }}>
-            <span>{tab.label}</span>
-            <span style={{
-              backgroundColor: activeTab === tab.key ? tab.color : colors.bgHover,
-              color: activeTab === tab.key ? 'white' : colors.textSecondary,
-              borderRadius: '10px', padding: '0 5px', fontSize: '10px', fontWeight: 700, minWidth: '16px', textAlign: 'center',
-            }}>{tab.count}</span>
-            {tab.key === 'human' && tab.urgent > 0 && (
-              <span style={{ position: 'absolute', top: '-3px', right: '-3px', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', border: `1px solid ${colors.bgSub}` }} />
-            )}
-          </button>
-        ))}
-      </div>
+          { key: 'all',     label: 'Todos',      count: conversations.length, color: colors.green,   dot: null },
+          { key: 'unread',  label: 'No leídos',  count: unreadCount,          color: '#f87171',      dot: null },
+          { key: 'hot',     label: '🔥 Hot',     count: hotCount,             color: '#f97316',      dot: null },
+          { key: 'stalled', label: '⏳ Sin cierre', count: stalledCount,      color: '#a78bfa',      dot: null },
+          { key: 'ai',      label: '🤖 IA',      count: aiCount,              color: colors.green,   dot: null },
+          { key: 'human',   label: '👤 Humano',  count: humanCount,           color: colors.yellow,  dot: humanUnread > 0 },
+        ].map(tab => {
+          const active = activeTab === tab.key;
+          return (
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+              style={{
+                flexShrink: 0,
+                padding: '5px 12px', borderRadius: '20px',
+                border: active ? 'none' : `1px solid ${colors.border}`,
+                backgroundColor: active ? tab.color : colors.bgPanel,
+                color: active ? '#fff' : colors.textSecondary,
+                fontSize: '12px', fontWeight: active ? 700 : 400,
+                cursor: 'pointer', position: 'relative',
+                display: 'flex', alignItems: 'center', gap: '5px',
+                transition: 'all 0.15s', whiteSpace: 'nowrap',
+                boxShadow: active ? `0 2px 8px ${tab.color}44` : 'none',
+              }}>
+              <span>{tab.label}</span>
+              {tab.count > 0 && (
+                <span style={{
+                  backgroundColor: active ? 'rgba(255,255,255,0.3)' : colors.bgHover,
+                  color: active ? '#fff' : colors.textSecondary,
+                  borderRadius: '10px', padding: '0 5px',
+                  fontSize: '10px', fontWeight: 700, minWidth: '16px', textAlign: 'center',
+                }}>{tab.count}</span>
+              )}
+              {tab.dot && (
+                <span style={{ position: 'absolute', top: '-2px', right: '-2px', width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', border: `1px solid ${colors.bgSub}` }} />
+              )}
+            </button>
+          );
+        })}
 
-      {/* Fila 2 — Hot leads + Sin cierre */}
-      <div style={{ display: 'flex', backgroundColor: colors.bgSub, padding: '4px 12px 6px', gap: '6px' }}>
-
-        {/* Hot Leads */}
-        <div style={{ flex: 1, display: 'flex', gap: '4px' }}>
-          <button onClick={() => setActiveTab('hot')} style={{
-            flex: 1, padding: '5px 6px', borderRadius: '6px',
-            border: activeTab === 'hot' ? '1px solid #f97316' : `1px solid ${colors.border}`,
-            backgroundColor: activeTab === 'hot' ? '#f9731622' : 'transparent',
-            color: activeTab === 'hot' ? '#f97316' : colors.textSecondary,
-            fontSize: '11px', fontWeight: activeTab === 'hot' ? 700 : 400,
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
-          }}>
-            <Flame size={11} />
-            <span>Hot</span>
-            <span style={{ backgroundColor: activeTab === 'hot' ? '#f97316' : colors.bgHover, color: activeTab === 'hot' ? 'white' : colors.textSecondary, borderRadius: '10px', padding: '0 5px', fontSize: '10px', fontWeight: 700 }}>{hotCount}</span>
-          </button>
-          <button onClick={handleScanHotLeads} disabled={scanning} title="Detectar hot leads con IA"
-            style={{ padding: '5px 7px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: scanning ? colors.textMuted : '#f97316', fontSize: '10px', fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}>
+        {/* Botones de acción IA — solo visibles en el tab correspondiente */}
+        {activeTab === 'hot' && (
+          <button onClick={handleScanHotLeads} disabled={scanning}
+            style={{ flexShrink: 0, padding: '5px 10px', borderRadius: '20px', border: `1px solid #f97316`, backgroundColor: 'transparent', color: scanning ? colors.textMuted : '#f97316', fontSize: '11px', fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
             {scanning ? <Loader size={10} /> : <Flame size={10} />}
-            {scanning ? '...' : 'IA'}
+            {scanning ? 'Escaneando...' : 'Escanear IA'}
           </button>
-        </div>
-
-        {/* Sin cierre */}
-        <div style={{ flex: 1, display: 'flex', gap: '4px' }}>
-          <button onClick={() => setActiveTab('stalled')} style={{
-            flex: 1, padding: '5px 6px', borderRadius: '6px',
-            border: activeTab === 'stalled' ? '1px solid #a78bfa' : `1px solid ${colors.border}`,
-            backgroundColor: activeTab === 'stalled' ? '#a78bfa22' : 'transparent',
-            color: activeTab === 'stalled' ? '#a78bfa' : colors.textSecondary,
-            fontSize: '11px', fontWeight: activeTab === 'stalled' ? 700 : 400,
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
-          }}>
-            <span>⏳</span>
-            <span>Sin cierre</span>
-            <span style={{ backgroundColor: activeTab === 'stalled' ? '#a78bfa' : colors.bgHover, color: activeTab === 'stalled' ? 'white' : colors.textSecondary, borderRadius: '10px', padding: '0 5px', fontSize: '10px', fontWeight: 700 }}>{stalledCount}</span>
+        )}
+        {activeTab === 'stalled' && (
+          <button onClick={handleTriggerFollowUp} disabled={triggering}
+            style={{ flexShrink: 0, padding: '5px 10px', borderRadius: '20px', border: `1px solid #a78bfa`, backgroundColor: 'transparent', color: triggering ? colors.textMuted : '#a78bfa', fontSize: '11px', fontWeight: 600, cursor: triggering ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {triggering ? <Loader size={10} /> : <span style={{fontSize:'10px'}}>🤖</span>}
+            {triggering ? 'Enviando...' : 'Bot seguimiento'}
           </button>
-          <button onClick={handleTriggerFollowUp} disabled={triggering} title="Bot intenta cerrar conversaciones abandonadas"
-            style={{ padding: '5px 7px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: triggering ? colors.textMuted : '#a78bfa', fontSize: '10px', fontWeight: 600, cursor: triggering ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}>
-            {triggering ? <Loader size={10} /> : <span>🤖</span>}
-            {triggering ? '...' : 'Bot'}
-          </button>
-        </div>
-
+        )}
       </div>
 
       {/* Lista */}
