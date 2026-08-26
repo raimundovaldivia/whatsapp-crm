@@ -48,9 +48,20 @@ function normalizeShopifyOrder(row) {
 function normalizeBotOrder(row) {
   let addr = {};
   try { addr = typeof row.shipping_address === 'string' ? JSON.parse(row.shipping_address) : (row.shipping_address || {}); } catch (_) {}
-  // Usar dirección del pedido; si no existe, usar la del contacto (guardada de Shopify)
-  const street = addr.address || addr.address1 || row.contact_address || '';
-  const city   = addr.city || row.contact_city || '';
+  // Fallback 1: contacts table (local DB)
+  // Fallback 2: shopify_orders shipping address (más completo)
+  let shopifyAddr = {};
+  try { shopifyAddr = typeof row.shopify_shipping === 'string' ? JSON.parse(row.shopify_shipping) : (row.shopify_shipping || {}); } catch (_) {}
+
+  const street = addr.address || addr.address1
+    || row.contact_address
+    || shopifyAddr.address1 || shopifyAddr.address
+    || '';
+  const city = addr.city
+    || row.contact_city
+    || row.shopify_city
+    || shopifyAddr.city
+    || '';
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
   return {
@@ -93,7 +104,9 @@ router.get('/orders', async (req, res) => {
                o.total_price,
                o.status                AS crm_status,
                ct.address              AS contact_address,
-               ct.city                 AS contact_city
+               ct.city                 AS contact_city,
+               so.raw_json->'shippingAddress'  AS shopify_shipping,
+               so.shipping_city                AS shopify_city
         FROM orders o
         LEFT JOIN contacts ct
           ON ct.organization_id = o.organization_id
@@ -103,6 +116,19 @@ router.get('/orders', async (req, res) => {
                CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
                CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
              ])
+        LEFT JOIN LATERAL (
+          SELECT raw_json, shipping_city
+          FROM shopify_orders
+          WHERE organization_id = o.organization_id
+            AND customer_phone = ANY(ARRAY[
+                  o.customer_phone,
+                  CASE WHEN o.customer_phone ~ '^569' THEN SUBSTRING(o.customer_phone FROM 3) END,
+                  CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
+                  CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
+                ])
+          ORDER BY shopify_created_at DESC
+          LIMIT 1
+        ) so ON true
         WHERE o.organization_id = $1
           AND (o.status IS NULL OR o.status NOT IN ('en_camino', 'entregado', 'cancelled'))
         ORDER BY o.created_at ASC
@@ -116,6 +142,7 @@ router.get('/orders', async (req, res) => {
     const botDebug = botRes.rows.map(r => ({
       id: r.id, phone: r.phone, hasShipping: !!r.shipping_address,
       contactAddr: r.contact_address, contactCity: r.contact_city,
+      shopifyCity: r.shopify_city, hasShopifyShipping: !!r.shopify_shipping,
     }));
     console.log('[Delivery] Bot orders debug:', JSON.stringify(botDebug));
 
