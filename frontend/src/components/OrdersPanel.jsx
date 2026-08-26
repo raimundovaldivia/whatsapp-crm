@@ -328,7 +328,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
 
       // Col N: Teléfono (fórmula =+56...)
       const phone = (order.phone || '').replace(/\D/g, '');
-      if (phone) row[13] = { t: 'n', f: `+${phone}` };
+      if (phone) row[13] = { t: 'n', f: `+${phone}`, v: Number(phone) };
 
       return row;
     });
