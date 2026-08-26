@@ -555,7 +555,56 @@ router.post('/merge-duplicates', async (req, res) => {
       merged++;
     }
 
-    // ── Paso 3: Normalizar phones en contacts (sin constraint issue) ──────
+    // ── Paso 3: 9XXXXXXXX vs +569XXXXXXXX ───────────────────────────────────
+    // El caso que faltaba: número sin código de país vs con + y código de país
+    const pairsShortVsPlusFull = await pool.query(
+      `SELECT
+         c_long.id  AS keep_id,  c_long.contact_name  AS keep_name,
+         c_short.id AS dupe_id,  c_short.contact_name AS dupe_name
+       FROM conversations c_long
+       JOIN conversations c_short
+         ON c_short.organization_id = c_long.organization_id
+        AND c_long.phone_number = '56' || c_short.phone_number
+       WHERE c_long.organization_id = $1
+         AND c_short.phone_number ~ '^9[0-9]{8}$'
+         AND c_long.phone_number ~ '^569[0-9]{8}$'`,
+      [req.orgId]
+    );
+
+    // También buscar: 9XXXXXXXX vs +56XXXXXXXXX
+    const pairsShortVsPlusFullInv = await pool.query(
+      `SELECT
+         c_full.id  AS keep_id,  c_full.contact_name  AS keep_name,
+         c_short.id AS dupe_id,  c_short.contact_name AS dupe_name
+       FROM conversations c_full
+       JOIN conversations c_short
+         ON c_short.organization_id = c_full.organization_id
+        AND c_full.phone_number = '+56' || c_short.phone_number
+       WHERE c_full.organization_id = $1
+         AND c_short.phone_number ~ '^9[0-9]{8}$'`,
+      [req.orgId]
+    );
+
+    for (const row of [...pairsShortVsPlusFull.rows, ...pairsShortVsPlusFullInv.rows]) {
+      const { keep_id, dupe_id, dupe_name, keep_name } = row;
+      await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [keep_id, dupe_id]);
+      const keepIsGeneric = !keep_name || keep_name === 'Cliente' || /^\d+$/.test(keep_name);
+      if (dupe_name && !/^\d+$/.test(dupe_name) && dupe_name !== 'Cliente' && keepIsGeneric) {
+        await pool.query('UPDATE conversations SET contact_name = $1, updated_at = NOW() WHERE id = $2', [dupe_name, keep_id]);
+      }
+      await pool.query(
+        `UPDATE conversations c SET
+           last_message = sub.last_message, last_message_at = sub.last_message_at, updated_at = NOW()
+         FROM (SELECT content AS last_message, created_at AS last_message_at
+               FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
+         WHERE c.id = $1`,
+        [keep_id]
+      );
+      await pool.query('DELETE FROM conversations WHERE id = $1', [dupe_id]);
+      merged++;
+    }
+
+    // ── Paso 4: Normalizar phones en contacts (sin constraint issue) ──────
     // En contacts la clave es (organization_id, phone) — puede haber pares +/sin +
     // Borramos el '+' solo si NO existe ya uno sin '+' para esa org
     await pool.query(
@@ -593,13 +642,19 @@ router.get('/search-by-phone', async (req, res) => {
     const rawPhone = (req.query.phone || '').replace(/\s/g, '').replace(/^\+/, '');
     if (!rawPhone) return res.status(400).json({ success: false, error: 'Falta parámetro phone' });
 
-    // Construir todas las variantes del número
+    // Construir todas las variantes del número (normalizar primero a canónico 56XXXXXXXXX)
+    let canonical = rawPhone;
+    if (/^9\d{8}$/.test(canonical)) canonical = '56' + canonical;
+
     const variants = new Set([rawPhone]);
-    // Sin código de país (9-digit chileno)
-    if (/^569\d{8}$/.test(rawPhone)) variants.add(rawPhone.slice(2));  // 569xxx -> 9xxx
-    if (/^9\d{8}$/.test(rawPhone))   variants.add('56' + rawPhone);    // 9xxx -> 569xxx
-    // Con +
-    variants.add('+' + rawPhone);
+    if (/^569\d{8}$/.test(canonical)) {
+      variants.add(canonical);              // 56991623745
+      variants.add(canonical.slice(2));     // 991623745
+      variants.add('+' + canonical);        // +56991623745
+      variants.add('+' + canonical.slice(2)); // +991623745
+    } else {
+      variants.add('+' + rawPhone);
+    }
 
     const placeholders = [...variants].map((_, i) => `$${i + 2}`).join(', ');
     const { rows } = await pool.query(
