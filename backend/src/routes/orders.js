@@ -157,6 +157,26 @@ router.post('/shopify/sync', async (req, res) => {
 });
 
 /**
+ * PATCH /api/orders/:id/address
+ * Actualizar dirección de un pedido (bot) sin conversación o con dirección vacía
+ */
+router.patch('/:id/address', async (req, res) => {
+  try {
+    const { address } = req.body;
+    if (!address) return res.status(400).json({ error: 'address es requerido' });
+    const addrJson = JSON.stringify({ address1: address });
+    const { rows: [order] } = await getPool().query(
+      `UPDATE orders SET shipping_address = $1 WHERE id = $2 AND organization_id = $3 RETURNING *`,
+      [addrJson, parseInt(req.params.id), req.orgId]
+    );
+    if (!order) return res.status(404).json({ error: 'Pedido no encontrado' });
+    res.json({ order });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/orders/:id
  * Detalle de una orden
  */
@@ -164,7 +184,7 @@ router.get('/:id', async (req, res) => {
   try {
     const { rows: [order] } = await getPool().query(
       `SELECT o.*, c.phone_number, c.contact_name
-       FROM orders o JOIN conversations c ON o.conversation_id = c.id
+       FROM orders o LEFT JOIN conversations c ON o.conversation_id = c.id
        WHERE o.id = $1 AND o.organization_id = $2`,
       [parseInt(req.params.id), req.orgId]
     );

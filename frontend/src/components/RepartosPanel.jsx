@@ -79,6 +79,8 @@ function NuevoReparto({ colors }) {
   const [sending,        setSending]        = useState(false);
   const [sentRoute,      setSentRoute]      = useState(null);
   const [error,          setError]          = useState(null);
+  const [editingAddr,    setEditingAddr]    = useState(null); // key de orden en edición
+  const [addrDraft,      setAddrDraft]      = useState('');
 
   useEffect(() => {
     setLoadingOrders(true);
@@ -137,6 +139,23 @@ function NuevoReparto({ colors }) {
       setError(e.response?.data?.error || e.message);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function saveAddress(order) {
+    if (!addrDraft.trim()) return;
+    try {
+      await api.patch(`/orders/${order.id}/address`, { address: addrDraft.trim() });
+      // Actualizar localmente
+      setOrders(prev => prev.map(o =>
+        o.source === 'bot' && String(o.id) === String(order.id)
+          ? { ...o, fullAddress: addrDraft.trim(), address: addrDraft.trim() }
+          : o
+      ));
+      setEditingAddr(null);
+      setAddrDraft('');
+    } catch (e) {
+      setError(e.response?.data?.error || 'Error guardando dirección');
     }
   }
 
@@ -306,10 +325,31 @@ function NuevoReparto({ colors }) {
                       </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
-                      <MapPin size={11} color={colors.textMuted} />
-                      <span style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {o.fullAddress || '—'}
-                      </span>
+                      <MapPin size={11} color={o.fullAddress ? colors.textMuted : colors.red} />
+                      {o.source === 'bot' && !o.fullAddress && editingAddr !== `${o.source}_${o.id}` ? (
+                        <button
+                          onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(''); }}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.red, fontSize: '12px', padding: 0, textDecoration: 'underline' }}>
+                          + Agregar dirección
+                        </button>
+                      ) : o.source === 'bot' && editingAddr === `${o.source}_${o.id}` ? (
+                        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: '4px', flex: 1 }}>
+                          <input
+                            autoFocus
+                            value={addrDraft}
+                            onChange={e => setAddrDraft(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveAddress(o); if (e.key === 'Escape') { setEditingAddr(null); setAddrDraft(''); } }}
+                            placeholder="Ej: Av. Ejemplo 123, La Serena"
+                            style={{ flex: 1, fontSize: '11px', padding: '2px 6px', borderRadius: '5px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, outline: 'none' }}
+                          />
+                          <button onClick={() => saveAddress(o)} style={{ background: colors.green, border: 'none', borderRadius: '4px', color: '#fff', fontSize: '11px', padding: '2px 7px', cursor: 'pointer', fontWeight: 600 }}>✓</button>
+                          <button onClick={() => { setEditingAddr(null); setAddrDraft(''); }} style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', fontSize: '12px' }}>✕</button>
+                        </div>
+                      ) : (
+                        <span style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {o.fullAddress || '—'}
+                        </span>
+                      )}
                     </div>
                     <span style={{ color: colors.textMuted, fontSize: '11px' }}>{o.orderName}</span>
                   </div>
