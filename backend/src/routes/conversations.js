@@ -144,8 +144,8 @@ router.post('/start', async (req, res) => {
     if (!phone?.trim()) return res.status(400).json({ success: false, error: 'Número de teléfono requerido' });
     if (!text?.trim())  return res.status(400).json({ success: false, error: 'Mensaje requerido' });
 
-    // Normalizar el teléfono: solo dígitos, sin +
-    const phoneNorm = phone.trim().replace(/^\+/, '').replace(/\s/g, '');
+    // Normalizar el teléfono: con código de país, sin +
+    const phoneNorm = db.normalizePhone(phone.trim());
 
     const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
@@ -476,7 +476,42 @@ router.post('/merge-duplicates', async (req, res) => {
       merged++;
     }
 
-    // ── Paso 2: Normalizar phones en contacts (sin constraint issue) ──────
+    // ── Paso 2: Pares sin código de país (9XXXXXXXX vs 569XXXXXXXX) ─────────
+    // Busca conversaciones donde phone='9XXXXXXXX' y existe otra con phone='569XXXXXXXX'
+    // Mantiene la que tiene más mensajes.
+    const pairsNoCC = await pool.query(
+      `SELECT
+         c_long.id  AS keep_id,  c_long.contact_name  AS keep_name,
+         c_short.id AS dupe_id,  c_short.contact_name AS dupe_name
+       FROM conversations c_long
+       JOIN conversations c_short
+         ON c_short.organization_id = c_long.organization_id
+        AND c_long.phone_number = '56' || c_short.phone_number
+       WHERE c_long.organization_id = $1
+         AND c_short.phone_number ~ '^9[0-9]{8}$'`,
+      [req.orgId]
+    );
+
+    for (const row of pairsNoCC.rows) {
+      const { keep_id, dupe_id, dupe_name, keep_name } = row;
+      await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [keep_id, dupe_id]);
+      const keepIsGeneric = !keep_name || keep_name === 'Cliente' || /^\d+$/.test(keep_name);
+      if (dupe_name && !/^\d+$/.test(dupe_name) && dupe_name !== 'Cliente' && keepIsGeneric) {
+        await pool.query('UPDATE conversations SET contact_name = $1, updated_at = NOW() WHERE id = $2', [dupe_name, keep_id]);
+      }
+      await pool.query(
+        `UPDATE conversations c SET
+           last_message = sub.last_message, last_message_at = sub.last_message_at, updated_at = NOW()
+         FROM (SELECT content AS last_message, created_at AS last_message_at
+               FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
+         WHERE c.id = $1`,
+        [keep_id]
+      );
+      await pool.query('DELETE FROM conversations WHERE id = $1', [dupe_id]);
+      merged++;
+    }
+
+    // ── Paso 3: Normalizar phones en contacts (sin constraint issue) ──────
     // En contacts la clave es (organization_id, phone) — puede haber pares +/sin +
     // Borramos el '+' solo si NO existe ya uno sin '+' para esa org
     await pool.query(

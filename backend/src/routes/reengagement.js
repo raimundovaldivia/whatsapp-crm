@@ -1221,8 +1221,8 @@ router.post('/send', async (req, res) => {
   try {
     let { phone, message, templateName, languageCode, components, previewText } = req.body;
     if (!phone) return res.status(400).json({ success: false, error: 'phone requerido' });
-    // Normalizar: siempre sin "+" para consistencia con el webhook
-    phone = phone.replace(/^\+/, '');
+    // Normalizar: con código de país, sin "+"
+    phone = db.normalizePhone(phone);
 
     const isTemplate = !!templateName;
     if (!isTemplate && !message) {
@@ -1307,8 +1307,8 @@ router.post('/send-bulk', async (req, res) => {
 
   const results = [];
   for (const item of items) {
-    // Normalizar teléfono: siempre sin "+" para consistencia con el webhook
-    item.phone = (item.phone || '').replace(/^\+/, '');
+    // Normalizar teléfono: con código de país, sin "+"
+    item.phone = db.normalizePhone(item.phone);
     try {
       const isTemplate = !!item.templateName;
       let sentResult;

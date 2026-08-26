@@ -192,11 +192,26 @@ async function createDefaultAgents(orgId, dataSourceId) {
   }
 }
 
+// ─── PHONE NORMALIZATION ──────────────────────────────────────────
+// Regla: siempre almacenar con código de país.
+// - Saca "+" → "56961899016"
+// - Si son 9 dígitos empezando en 9 (móvil chileno) → agrega "56"
+// - Ej: "+56961899016" → "56961899016"
+//       "961899016"    → "56961899016"
+//       "56961899016"  → "56961899016" (sin cambio)
+function normalizePhone(phoneNumber) {
+  if (!phoneNumber) return '';
+  let phone = String(phoneNumber).replace(/^\+/, '').trim();
+  // Móvil chileno sin código de país: 9 dígitos empezando en 9
+  if (/^9\d{8}$/.test(phone)) phone = '56' + phone;
+  return phone;
+}
+
 // ─── CONVERSATIONS ────────────────────────────────────────────────
 
 async function upsertConversation(orgId, phoneNumber, contactName = null) {
-  // Normalizar: siempre sin "+" para evitar duplicados +56.../56...
-  const phone = (phoneNumber || '').replace(/^\+/, '');
+  // Normalizar: siempre con código de país, sin "+"
+  const phone = normalizePhone(phoneNumber);
 
   const existing = await queryOne(
     'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2',
@@ -953,6 +968,7 @@ async function getShopifyOrdersSyncedAt(orgId) {
 
 module.exports = {
   getPool,
+  normalizePhone,
   // Orgs
   createOrganization, getOrgById, markSetupDone,
   // Users
