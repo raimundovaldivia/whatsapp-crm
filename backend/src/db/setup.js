@@ -468,6 +468,31 @@ async function setupDatabase() {
       -- Quitar '+' de los que quedan con ese prefijo
       UPDATE contacts SET phone = SUBSTRING(phone FROM 2) WHERE phone LIKE '+%';
 
+      -- Backfill: crear contacts faltantes desde shopify_orders (phone ya normalizado)
+      -- Para cada cliente en shopify_orders que tenga phone, asegurar que exista en contacts.
+      INSERT INTO contacts (organization_id, phone, name, email, city, contact_type, created_at, updated_at)
+      SELECT DISTINCT ON (so.organization_id, normalized_phone)
+        so.organization_id,
+        CASE
+          WHEN so.customer_phone LIKE '+%' THEN SUBSTRING(so.customer_phone FROM 2)
+          WHEN so.customer_phone ~ '^9[0-9]{8}$' THEN '56' || so.customer_phone
+          ELSE so.customer_phone
+        END AS normalized_phone,
+        so.customer_name,
+        so.customer_email,
+        so.shipping_city,
+        'customer',
+        NOW(), NOW()
+      FROM shopify_orders so
+      WHERE so.customer_phone IS NOT NULL AND so.customer_phone <> ''
+      ORDER BY so.organization_id, normalized_phone, so.shopify_created_at DESC
+      ON CONFLICT (organization_id, phone) DO UPDATE SET
+        name         = COALESCE(EXCLUDED.name,  contacts.name),
+        email        = COALESCE(EXCLUDED.email, contacts.email),
+        city         = COALESCE(EXCLUDED.city,  contacts.city),
+        contact_type = 'customer',
+        updated_at   = NOW();
+
       -- Migración: campos ricos de Shopify en contacts (para servir clientes desde DB local)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address1          TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address2          TEXT;

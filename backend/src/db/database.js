@@ -1047,8 +1047,9 @@ async function upsertShopifyOrders(orgId, orders) {
       ]
     );
 
-    // Sincronizar cliente en la tabla contacts (si tiene teléfono)
-    if (customerPhone) {
+    // Sincronizar cliente en la tabla contacts (usando phone normalizado)
+    const contactPhone = normalizePhone(customerPhone);
+    if (contactPhone) {
       await pool.query(
         `INSERT INTO contacts
            (organization_id, phone, name, email, city, contact_type, shopify_id,
@@ -1062,13 +1063,19 @@ async function upsertShopifyOrders(orgId, orders) {
            shopify_id    = COALESCE(EXCLUDED.shopify_id, contacts.shopify_id),
            total_orders  = (
              SELECT COUNT(*) FROM shopify_orders
-             WHERE organization_id = $1 AND customer_phone = $2
+             WHERE organization_id = $1
+               AND customer_phone = ANY(ARRAY[
+                     $2,
+                     CASE WHEN $2 ~ '^569' THEN SUBSTRING($2 FROM 3) END,
+                     CASE WHEN $2 ~ '^9'   THEN '56' || $2 END,
+                     '+' || $2
+                   ])
            ),
            last_order_at = GREATEST(contacts.last_order_at, EXCLUDED.last_order_at),
            updated_at    = NOW()`,
         [
           orgId,
-          customerPhone,
+          contactPhone,
           customerName,
           customerEmail,
           shippingCity,
