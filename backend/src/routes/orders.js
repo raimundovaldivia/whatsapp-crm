@@ -62,10 +62,22 @@ router.get('/', async (req, res) => {
       `SELECT
         o.*,
         c.phone_number,
-        c.contact_name,
-        c.pipeline_state
+        c.pipeline_state,
+        CASE
+          WHEN o.customer_name IS NULL OR LOWER(TRIM(o.customer_name)) IN ('cliente','sin nombre','cliente sin nombre')
+          THEN COALESCE(ct.name, o.customer_name)
+          ELSE o.customer_name
+        END AS customer_name_resolved
       FROM orders o
-      JOIN conversations c ON o.conversation_id = c.id
+      LEFT JOIN conversations c ON o.conversation_id = c.id
+      LEFT JOIN contacts ct
+        ON ct.organization_id = o.organization_id
+       AND ct.phone = ANY(ARRAY[
+             o.customer_phone,
+             CASE WHEN o.customer_phone ~ '^569' THEN SUBSTRING(o.customer_phone FROM 3) END,
+             CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
+             CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
+           ])
       WHERE o.organization_id = $1
       ORDER BY o.created_at DESC`,
       [req.orgId]
@@ -73,6 +85,7 @@ router.get('/', async (req, res) => {
 
     const parsed = orders.map(o => ({
       ...o,
+      customer_name: o.customer_name_resolved || o.customer_name,
       items: safeJSON(o.items, []),
       shipping_address: safeJSON(o.shipping_address, {}),
     }));
