@@ -624,6 +624,32 @@ router.post('/merge-duplicates', async (req, res) => {
       [req.orgId]
     );
 
+    // ── Paso 5: Normalizar conversations.phone_number a formato canónico ────
+    // Conversaciones con phone 9XXXXXXXX (sin 56) que no tienen par → actualizar a 569XXXXXXXX
+    await pool.query(
+      `UPDATE conversations SET phone_number = '56' || phone_number, updated_at = NOW()
+       WHERE organization_id = $1
+         AND phone_number ~ '^9[0-9]{8}$'
+         AND NOT EXISTS (
+           SELECT 1 FROM conversations c2
+           WHERE c2.organization_id = $1
+             AND c2.phone_number = '56' || conversations.phone_number
+         )`,
+      [req.orgId]
+    );
+    // Conversaciones con phone +56XXXXXXXXX → quitar el +
+    await pool.query(
+      `UPDATE conversations SET phone_number = SUBSTRING(phone_number FROM 2), updated_at = NOW()
+       WHERE organization_id = $1
+         AND phone_number LIKE '+%'
+         AND NOT EXISTS (
+           SELECT 1 FROM conversations c2
+           WHERE c2.organization_id = $1
+             AND c2.phone_number = SUBSTRING(conversations.phone_number FROM 2)
+         )`,
+      [req.orgId]
+    );
+
     res.json({ success: true, mergedConversations: merged });
   } catch (err) {
     console.error('[merge-duplicates]', err.message);

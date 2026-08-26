@@ -276,7 +276,12 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
        co.client_type
      FROM conversations c
      LEFT JOIN contacts co ON co.organization_id = c.organization_id
-                           AND co.phone = c.phone_number
+                           AND co.phone = ANY(ARRAY[
+                                 c.phone_number,
+                                 CASE WHEN c.phone_number ~ '^9[0-9]{8}$'  THEN '56' || c.phone_number END,
+                                 CASE WHEN c.phone_number ~ '^569[0-9]{8}$' THEN SUBSTRING(c.phone_number FROM 3) END,
+                                 CASE WHEN c.phone_number LIKE '+%'         THEN SUBSTRING(c.phone_number FROM 2) END
+                               ])
      WHERE ${where} ORDER BY c.last_message_at DESC`,
     [orgId]
   );
