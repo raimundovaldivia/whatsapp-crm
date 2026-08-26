@@ -534,7 +534,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
         </div>
 
         <div style={{ color: colors.textSecondary, fontSize: '12px', textAlign: 'right', flexShrink: 0, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {items.map(i => `${i.name || i.product_name} ×${i.quantity}`).join(', ') || '—'}
+          {items.map(i => `${i.name || i.title || i.product_name || '?'} ×${i.quantity}`).join(', ') || '—'}
         </div>
 
         <div style={{ color: colors.green, fontSize: '15px', fontWeight: 700, flexShrink: 0, minWidth: '80px', textAlign: 'right' }}>
@@ -551,7 +551,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
               <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Productos</div>
               {items.length > 0 ? items.map((item, i) => (
                 <div key={i} style={{ color: colors.textPrimary, fontSize: '13px', display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: `1px solid ${colors.bgSub}` }}>
-                  <span>{item.name || item.product_name}</span>
+                  <span>{item.name || item.title || item.product_name}</span>
                   <span style={{ color: colors.textSecondary }}>× {item.quantity}</span>
                 </div>
               )) : <div style={{ color: colors.textSecondary, fontSize: '13px' }}>Sin detalle</div>}
