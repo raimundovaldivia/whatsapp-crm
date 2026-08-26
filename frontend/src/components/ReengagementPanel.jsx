@@ -488,7 +488,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
           }}>
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           {loading ? 'Analizando...' : 'Nuevo análisis'}
-        </button>
+        </button>}
 
         {/* Menú ⋮ */}
         <div style={{ position: 'relative', flexShrink: 0 }}>
