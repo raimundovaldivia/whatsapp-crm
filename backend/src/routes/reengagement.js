@@ -1354,7 +1354,8 @@ router.post('/send-bulk', async (req, res) => {
 
       results.push({ phone: item.phone, success: true });
     } catch (err) {
-      results.push({ phone: item.phone, success: false, error: err.message });
+      const metaDetail = err.response?.data ? JSON.stringify(err.response.data) : null;
+      results.push({ phone: item.phone, success: false, error: metaDetail || err.message });
     }
 
     if (items.indexOf(item) < items.length - 1) {
