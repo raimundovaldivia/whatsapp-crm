@@ -1168,12 +1168,18 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         parameters: Array.from({ length: varCount }, () => ({ type: 'text', text: nombre })),
       }] : [];
 
+      // Texto de preview para mostrar en el chat (reemplaza {{N}} con el nombre)
+      const previewText = bodyComp?.text
+        ? bodyComp.text.replace(/\{\{\d+\}\}/g, nombre)
+        : null;
+
       return {
         phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
         templateName: selTpl.name,
         languageCode: selTpl.language || 'es',
         components,
         contactName: nombre,
+        previewText,
       };
     });
     try {
