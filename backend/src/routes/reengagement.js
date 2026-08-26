@@ -1312,9 +1312,28 @@ router.post('/send-bulk', async (req, res) => {
 
       if (isTemplate) {
         const kapsoService = require('../services/kapso-whatsapp');
-        sentResult = await kapsoService.sendTemplate(
-          item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
-        );
+        try {
+          sentResult = await kapsoService.sendTemplate(
+            item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
+          );
+        } catch (tplErr) {
+          // Error 132000: faltan parámetros — reintenta con la cantidad correcta
+          const metaCode = tplErr.response?.data?.error?.code;
+          const details  = tplErr.response?.data?.error?.error_data?.details || '';
+          const needed   = parseInt((details.match(/expected number of params \((\d+)\)/) || [])[1] || '0');
+          if (metaCode === 132000 && needed > 0) {
+            const name = item.contactName || 'Cliente';
+            const autoComponents = [{
+              type: 'body',
+              parameters: Array.from({ length: needed }, () => ({ type: 'text', text: name })),
+            }];
+            sentResult = await kapsoService.sendTemplate(
+              item.phone, item.templateName, item.languageCode || 'es', autoComponents, wc
+            );
+          } else {
+            throw tplErr;
+          }
+        }
         savedContent = item.previewText
           ? `[Template: ${item.templateName}]\n\n${item.previewText}`
           : `[Template: ${item.templateName}]`;

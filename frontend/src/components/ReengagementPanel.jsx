@@ -1171,6 +1171,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         templateName: selTpl.name,
         languageCode: selTpl.language || 'es',
         components,
+        contactName: nombre,
       };
     });
     try {
