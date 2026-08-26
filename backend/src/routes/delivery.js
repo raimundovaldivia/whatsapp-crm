@@ -48,8 +48,9 @@ function normalizeShopifyOrder(row) {
 function normalizeBotOrder(row) {
   let addr = {};
   try { addr = typeof row.shipping_address === 'string' ? JSON.parse(row.shipping_address) : (row.shipping_address || {}); } catch (_) {}
-  const street = addr.address || addr.address1 || '';
-  const city   = addr.city || '';
+  // Usar dirección del pedido; si no existe, usar la del contacto (guardada de Shopify)
+  const street = addr.address || addr.address1 || row.contact_address || '';
+  const city   = addr.city || row.contact_city || '';
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
   return {
@@ -84,17 +85,22 @@ router.get('/orders', async (req, res) => {
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
-        SELECT id,
-               customer_name,
-               shipping_address,
-               customer_phone        AS phone,
-               items,
-               total_price,
-               status                AS crm_status
-        FROM orders
-        WHERE organization_id = $1
-          AND (status IS NULL OR status NOT IN ('en_camino', 'entregado', 'cancelled'))
-        ORDER BY created_at ASC
+        SELECT o.id,
+               o.customer_name,
+               o.shipping_address,
+               o.customer_phone        AS phone,
+               o.items,
+               o.total_price,
+               o.status                AS crm_status,
+               ct.address              AS contact_address,
+               ct.city                 AS contact_city
+        FROM orders o
+        LEFT JOIN contacts ct
+          ON ct.organization_id = o.organization_id
+         AND ct.phone = o.customer_phone
+        WHERE o.organization_id = $1
+          AND (o.status IS NULL OR o.status NOT IN ('en_camino', 'entregado', 'cancelled'))
+        ORDER BY o.created_at ASC
       `, [req.orgId]),
     ]);
     const shopifyOrders = shopifyRes.rows.map(normalizeShopifyOrder);
