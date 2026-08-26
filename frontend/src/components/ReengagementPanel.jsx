@@ -1070,6 +1070,14 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
 
 // ─── Componente: Envío Masivo ────────────────────────────────────────────────
 
+function toTitleCase(s) {
+  const LOWER = new Set(['de','del','la','las','los','y','e','el','en','con','por','a']);
+  return (s || '').trim().split(/\s+/).filter(Boolean).map((w, i) => {
+    const wl = w.toLowerCase();
+    return (i === 0 || !LOWER.has(wl)) ? wl.charAt(0).toUpperCase() + wl.slice(1) : wl;
+  }).join(' ');
+}
+
 function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [contacts,   setContacts]   = useState([]);
   const [sources,    setSources]    = useState(null);   // { whatsapp, shopify }
@@ -1093,8 +1101,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   // Cargar contactos y templates en paralelo
   useEffect(() => {
-    // Backfill primero, luego cargar la lista (en serie, no en paralelo)
-    api.post('/contacts/backfill-shopify')
+    // Backfill + normalizar nombres, luego cargar la lista
+    api.post('/contacts/backfill-shopify').catch(() => {});
+    api.post('/contacts/normalize-names')
       .catch(() => {})
       .finally(() => {
         api.get('/contacts/broadcast')
@@ -1160,7 +1169,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
     const items = Array.from(selected).map(phone => {
       const contact = contacts.find(c => c.phone === phone);
-      const nombre = (contact?.name || 'Cliente').split(' ')[0]; // primer nombre
+      const nombre = toTitleCase((contact?.name || 'Cliente').split(' ')[0]); // primer nombre, formateado
 
       // Rellenar cada variable con el nombre del contacto
       const components = varCount > 0 ? [{
@@ -1321,7 +1330,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 {checked && <Check size={10} color="#fff" strokeWidth={3} />}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px' }}>{c.name || 'Sin nombre'}</div>
+                <div style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px' }}>{toTitleCase(c.name) || 'Sin nombre'}</div>
                 <div style={{ color: colors.textMuted, fontSize: '12px' }}>{c.phone}</div>
               </div>
               {c.total_orders > 0 && (

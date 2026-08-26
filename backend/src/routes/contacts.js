@@ -116,6 +116,41 @@ router.post('/backfill-shopify', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/contacts/normalize-names
+ * Aplica Title Case a todos los nombres de contactos de esta organización.
+ */
+router.post('/normalize-names', async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name FROM contacts WHERE organization_id = $1 AND name IS NOT NULL`,
+      [req.orgId]
+    );
+    function toTitleCase(s) {
+      const LOWER = new Set(['de','del','la','las','los','y','e','el','en','con','por','a']);
+      return (s || '').trim().split(/\s+/).filter(Boolean).map((w, i) => {
+        const wl = w.toLowerCase();
+        return (i === 0 || !LOWER.has(wl))
+          ? wl.charAt(0).toUpperCase() + wl.slice(1)
+          : wl;
+      }).join(' ');
+    }
+    let updated = 0;
+    for (const { id, name } of rows) {
+      const fixed = toTitleCase(name);
+      if (fixed !== name) {
+        await pool.query(`UPDATE contacts SET name = $1, updated_at = NOW() WHERE id = $2`, [fixed, id]);
+        updated++;
+      }
+    }
+    res.json({ success: true, checked: rows.length, updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.patch('/:phone/type', async (req, res) => {
   try {
     const { type } = req.body;
