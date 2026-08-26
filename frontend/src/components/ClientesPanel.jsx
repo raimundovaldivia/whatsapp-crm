@@ -108,7 +108,7 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
           c.name?.toLowerCase().includes(q) ||
           c.email?.toLowerCase().includes(q) ||
           c.phone?.includes(q) ||
-          c.city?.toLowerCase().includes(q)
+          c.address?.city?.toLowerCase().includes(q)
         );
       })
     : allCustomers;
@@ -122,9 +122,9 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   useEffect(() => { setPage(1); }, [search]);
 
   // Stats (sobre todos los cargados)
-  const totalOrders = allCustomers.reduce((s, c) => s + (parseInt(c.totalOrders) || 0), 0);
+  const totalOrders = allCustomers.reduce((s, c) => s + (parseInt(c.ordersCount) || 0), 0);
   const totalSpent  = allCustomers.reduce((s, c) => s + (parseFloat(c.totalSpent)  || 0), 0);
-  const withOrders  = allCustomers.filter(c => (parseInt(c.totalOrders) || 0) > 0).length;
+  const withOrders  = allCustomers.filter(c => (parseInt(c.ordersCount) || 0) > 0).length;
 
   const isLeads = tab === 'leads';
 
@@ -265,11 +265,11 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                 {pageItems.map(c => (
                   <>
                     <tr
-                      key={c.shopifyId}
-                      onClick={() => setExpanded(expanded === c.shopifyId ? null : c.shopifyId)}
-                      style={{ borderBottom: `1px solid ${colors.bgSub}`, cursor: 'pointer', backgroundColor: expanded === c.shopifyId ? colors.bgAccent : 'transparent', transition: 'background-color 0.1s' }}
-                      onMouseEnter={e => { if (expanded !== c.shopifyId) e.currentTarget.style.backgroundColor = colors.bgSub; }}
-                      onMouseLeave={e => { if (expanded !== c.shopifyId) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                      key={c.id}
+                      onClick={() => setExpanded(expanded === c.id ? null : c.id)}
+                      style={{ borderBottom: `1px solid ${colors.bgSub}`, cursor: 'pointer', backgroundColor: expanded === c.id ? colors.bgAccent : 'transparent', transition: 'background-color 0.1s' }}
+                      onMouseEnter={e => { if (expanded !== c.id) e.currentTarget.style.backgroundColor = colors.bgSub; }}
+                      onMouseLeave={e => { if (expanded !== c.id) e.currentTarget.style.backgroundColor = 'transparent'; }}
                     >
                       <td style={{ padding: '12px 16px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -296,9 +296,9 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                         </div>
                       </td>
                       <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                        {(parseInt(c.totalOrders) || 0) > 0
+                        {(parseInt(c.ordersCount) || 0) > 0
                           ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center', color: colors.textPrimary, fontSize: '13px' }}>
-                              <ShoppingBag size={12} color={colors.green} /> {parseInt(c.totalOrders)}
+                              <ShoppingBag size={12} color={colors.green} /> {parseInt(c.ordersCount)}
                             </span>
                           : <span style={{ color: colors.textSecondary, fontSize: '13px' }}>—</span>}
                       </td>
@@ -318,8 +318,11 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                         ) : <span style={{ color: colors.borderStrong, fontSize: '12px' }}>—</span>}
                       </td>
                       <td style={{ padding: '12px 16px', color: colors.textSecondary, fontSize: '12px' }}>
-                        {c.city
-                          ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><MapPin size={11} /> {c.city}</span>
+                        {(c.address?.city || c.address?.country)
+                          ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <MapPin size={11} color={colors.green} />
+                              {[c.address?.city, c.address?.province].filter(Boolean).join(', ')}
+                            </span>
                           : '—'}
                       </td>
                       <td style={{ padding: '12px 16px' }}>
@@ -337,12 +340,12 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                             </button>
                           )}
                           <ChevronRight size={14} color={colors.borderStrong}
-                            style={{ transform: expanded === c.shopifyId ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
+                            style={{ transform: expanded === c.id ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
                         </div>
                       </td>
                     </tr>
-                    {expanded === c.shopifyId && (
-                      <tr key={`${c.shopifyId}-detail`} style={{ backgroundColor: colors.bgApp }}>
+                    {expanded === c.id && (
+                      <tr key={`${c.id}-detail`} style={{ backgroundColor: colors.bgApp }}>
                         <td colSpan={7} style={{ padding: '12px 16px 16px 62px', borderBottom: `2px solid ${colors.green}33` }}>
                           <div style={{ display: 'flex', gap: '32px', flexWrap: 'wrap' }}>
                             {c.lastOrder && (
@@ -364,9 +367,10 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                               <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Info</div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', color: colors.textSecondary }}>
                                 <div><span style={{ color: colors.textPrimary }}>Cliente desde:</span> {formatDate(c.createdAt)}</div>
-                                {c.city    && <div><span style={{ color: colors.textPrimary }}>Ciudad:</span> {c.city}</div>}
-                                {c.country && <div><span style={{ color: colors.textPrimary }}>País:</span> {c.country}</div>}
-                                {c.note    && <div><span style={{ color: colors.textPrimary }}>Nota:</span> {c.note}</div>}
+                                {c.address?.address1 && <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {c.address.address1}</div>}
+                                {c.address?.city     && <div><span style={{ color: colors.textPrimary }}>Ciudad:</span> {c.address.city}{c.address.province ? `, ${c.address.province}` : ''}</div>}
+                                {c.address?.country  && <div><span style={{ color: colors.textPrimary }}>País:</span> {c.address.country}</div>}
+                                {c.note              && <div><span style={{ color: colors.textPrimary }}>Nota:</span> {c.note}</div>}
                                 {c.tags?.length > 0 && (
                                   <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
                                     <span style={{ color: colors.textPrimary }}>Tags:</span>
