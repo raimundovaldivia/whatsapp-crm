@@ -507,6 +507,33 @@ async function setupDatabase() {
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS currency          TEXT DEFAULT 'CLP';
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS shopify_note      TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS shopify_synced_at TIMESTAMP;
+
+      -- Backfill: crear contacts para todas las conversaciones que no tienen contact aún.
+      -- Normaliza el phone (9XXXXXXXX → 56XXXXXXXXX, quita +).
+      -- DO NOTHING si ya existe: no queremos bajar un 'customer' a 'lead'.
+      INSERT INTO contacts (organization_id, phone, name, contact_type, source, created_at, updated_at)
+      SELECT DISTINCT ON (c.organization_id, normalized_phone)
+        c.organization_id,
+        CASE
+          WHEN c.phone_number LIKE '+%'          THEN SUBSTRING(c.phone_number FROM 2)
+          WHEN c.phone_number ~ '^9[0-9]{8}$'   THEN '56' || c.phone_number
+          ELSE c.phone_number
+        END AS normalized_phone,
+        CASE
+          WHEN c.contact_name IS NULL OR c.contact_name ~ '^[0-9]+$' OR c.contact_name = 'Cliente'
+          THEN NULL
+          ELSE c.contact_name
+        END,
+        'lead',
+        'whatsapp',
+        NOW(), NOW()
+      FROM conversations c
+      WHERE c.phone_number IS NOT NULL AND c.phone_number <> ''
+      ORDER BY c.organization_id, normalized_phone, c.last_message_at DESC
+      ON CONFLICT (organization_id, phone) DO UPDATE SET
+        name       = COALESCE(EXCLUDED.name, contacts.name),
+        source     = COALESCE(contacts.source, 'whatsapp'),
+        updated_at = NOW();
     `);
 
     // Migración: permitir pedidos manuales sin conversación asociada
