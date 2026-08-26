@@ -225,6 +225,25 @@ router.patch('/:id/pipeline-state', async (req, res) => {
 });
 
 /**
+ * PATCH /api/conversations/:id/client-type
+ * Marcar manualmente un contacto como "empresa" o "personal"
+ */
+router.patch('/:id/client-type', async (req, res) => {
+  try {
+    const { clientType } = req.body;
+    if (!['personal', 'empresa'].includes(clientType)) {
+      return res.status(400).json({ success: false, error: 'clientType debe ser "personal" o "empresa"' });
+    }
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    const contact = await db.updateContactClientType(req.orgId, conv.phone_number, clientType);
+    res.json({ success: true, clientType, contact });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/conversations/:id/orders
  */
 router.get('/:id/orders', async (req, res) => {

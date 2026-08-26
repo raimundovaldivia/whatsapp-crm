@@ -48,10 +48,19 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const isDevUser = currentUserEmail === DEV_EMAIL;
   const HOT_STATES = ['interested', 'collecting_order'];
   const isHotLead = HOT_STATES.includes(conversation.pipeline_state);
+  const isEmpresa = conversation.client_type === 'empresa';
 
   const handleRemoveHotLead = async () => {
     try {
       await api.patch(`/conversations/${conversation.id}/pipeline-state`, { state: 'exploring', excludeHotLead: true });
+      onRefresh?.();
+    } catch (e) { console.error(e); }
+  };
+
+  const handleToggleEmpresa = async () => {
+    const newType = isEmpresa ? 'personal' : 'empresa';
+    try {
+      await api.patch(`/conversations/${conversation.id}/client-type`, { clientType: newType });
       onRefresh?.();
     } catch (e) { console.error(e); }
   };
@@ -427,6 +436,24 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               🔥 Hot Lead <X size={10} />
             </button>
           )}
+          <button
+            onClick={handleToggleEmpresa}
+            title={isEmpresa ? 'Marcar como cliente particular' : 'Marcar como empresa (B2B)'}
+            style={{
+              backgroundColor: isEmpresa ? '#6366f1' : 'transparent',
+              border: isEmpresa ? '1px solid #6366f1' : `1px solid ${colors.borderStrong}`,
+              borderRadius: '20px',
+              padding: '4px 10px',
+              color: isEmpresa ? 'white' : colors.textMuted,
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', fontWeight: isEmpresa ? 600 : 400, transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#4f46e5' : '#6366f120'; e.currentTarget.style.color = isEmpresa ? 'white' : '#6366f1'; }}
+            onMouseLeave={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#6366f1' : 'transparent'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.textMuted; }}
+          >
+            🏢 {isEmpresa ? 'Empresa' : 'Empresa'}
+          </button>
           <AgentToggle
             mode={conversation.agent_mode}
             onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode)}

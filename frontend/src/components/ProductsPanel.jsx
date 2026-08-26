@@ -9,7 +9,7 @@ import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, Ext
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
-const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true, category: '' };
+const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true, category: '', isBusiness: false };
 
 /* ── Configuración de tienda ──────────────────────────────────────── */
 function StoreConfigTab({ orgSlug, colors }) {
@@ -209,7 +209,7 @@ export default function ProductsPanel({ orgSlug }) {
       title: p.title, description: p.description || '', price: p.price,
       comparePrice: p.compare_price || '', sku: p.sku || '',
       stock: String(p.stock ?? -1), imageUrl: p.image_url || '', active: p.active,
-      category: p.category || '',
+      category: p.category || '', isBusiness: p.is_business || false,
     });
     setShowForm(true);
   };
@@ -224,7 +224,7 @@ export default function ProductsPanel({ orgSlug }) {
         price: parseFloat(form.price), comparePrice: parseFloat(form.comparePrice) || null,
         sku: form.sku.trim() || null, stock: parseInt(form.stock) || -1,
         imageUrl: form.imageUrl.trim() || null, active: form.active,
-        category: form.category.trim() || null,
+        category: form.category.trim() || null, isBusiness: form.isBusiness,
       };
       if (editing) {
         await api.put(`/products/${editing.id}`, payload);
@@ -387,7 +387,7 @@ export default function ProductsPanel({ orgSlug }) {
                     {p.description}
                   </div>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: '16px', fontWeight: 700, color: colors.textPrimary }}>
                     ${Number(p.price).toLocaleString('es-CL')}
                   </span>
@@ -402,6 +402,14 @@ export default function ProductsPanel({ orgSlug }) {
                     </span>
                   )}
                 </div>
+                {p.is_business && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#6366f120', color: '#6366f1',
+                      border: '1px solid #6366f155', borderRadius: '20px', padding: '2px 8px' }}>
+                      🏢 Solo empresas
+                    </span>
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button onClick={() => handleToggle(p)} title={p.active ? 'Desactivar' : 'Activar'}
                     style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
@@ -509,6 +517,21 @@ export default function ProductsPanel({ orgSlug }) {
             <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
               <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
               <span style={{ fontSize: '14px', color: colors.textPrimary }}>Producto activo (visible en la tienda)</span>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
+              backgroundColor: form.isBusiness ? '#6366f110' : 'transparent',
+              border: `1px solid ${form.isBusiness ? '#6366f155' : colors.border}`,
+              borderRadius: '8px', padding: '10px 12px' }}>
+              <input type="checkbox" checked={form.isBusiness} onChange={e => setForm(f => ({ ...f, isBusiness: e.target.checked }))} />
+              <div>
+                <span style={{ fontSize: '14px', color: form.isBusiness ? '#6366f1' : colors.textPrimary, fontWeight: form.isBusiness ? 600 : 400 }}>
+                  🏢 Solo para empresas (B2B)
+                </span>
+                <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '2px' }}>
+                  El bot NO mostrará este producto ni su precio a clientes particulares
+                </div>
+              </div>
             </label>
 
             <button onClick={handleSave} disabled={saving || !form.title.trim() || !form.price}

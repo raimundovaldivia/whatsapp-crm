@@ -424,6 +424,13 @@ async function setupDatabase() {
       -- Migración: bandera para excluir manualmente de Hot Leads
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
 
+      -- Migración: tipo de cliente en contactos (personal / empresa)
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS client_type TEXT DEFAULT 'personal';
+
+      -- Migración: productos solo para empresas
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT FALSE;
+      ALTER TABLE products_cache ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT FALSE;
+
       -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos)
       -- Eliminar primero los que quedarían duplicados tras normalizar
 

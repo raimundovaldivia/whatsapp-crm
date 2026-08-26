@@ -26,9 +26,14 @@ async function processMessage(orgId, conversationId, userMessage) {
   // URL pública de la tienda integrada (para links en catálogo y system prompt)
   const tiendaUrl = await db.getSetting(orgId, 'store_public_url') || null;
 
+  // ── Tipo de cliente: personal o empresa ──────────────────────────
+  const contact = await db.getContact(orgId, conversation.phone_number).catch(() => null);
+  const isEmpresa = contact?.client_type === 'empresa';
+
   // ── Catálogo: siempre desde nuestra DB, nunca llamar Shopify en vivo ──
   // Fuente 1: products_cache (sincronizado desde Shopify, tiene variantes + stock)
   // Fuente 2: products (tabla propia del CRM, gestionada manualmente)
+  // Para clientes "personal": se excluyen los productos is_business=TRUE
   const ds = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
   let products = [];
@@ -37,7 +42,9 @@ async function processMessage(orgId, conversationId, userMessage) {
     // Intentar primero products_cache (tiene raw_json con variantes y stock completos)
     const cached = await db.getCachedProducts(orgId);
     if (cached?.length) {
-      products = cached.map(p => {
+      // Filtrar productos empresa si el cliente es personal
+      const visibleCached = isEmpresa ? cached : cached.filter(p => !p.is_business);
+      products = visibleCached.map(p => {
         if (p.raw_json) {
           try { return JSON.parse(p.raw_json); } catch (_) {}
         }
@@ -49,19 +56,20 @@ async function processMessage(orgId, conversationId, userMessage) {
           productType: p.product_type, handle: p.handle,
         };
       });
-      console.log(`[Pipeline] 📦 Catálogo desde DB/caché (${products.length} productos)`);
+      console.log(`[Pipeline] 📦 Catálogo desde DB/caché (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
     } else {
       // Fallback: tabla products propia del CRM
       const ownProducts = await db.getProducts(orgId, true);
       if (ownProducts?.length) {
-        products = ownProducts.map(p => ({
+        const visibleOwn = isEmpresa ? ownProducts : ownProducts.filter(p => !p.is_business);
+        products = visibleOwn.map(p => ({
           id: String(p.id), title: p.title, description: p.description,
           priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
           inventoryQuantity: p.stock ?? null,
           handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
           productType: p.category || '',
         }));
-        console.log(`[Pipeline] 📦 Catálogo desde tabla products propia (${products.length} productos)`);
+        console.log(`[Pipeline] 📦 Catálogo desde tabla products propia (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
       }
     }
     if (products.length) {
@@ -70,6 +78,11 @@ async function processMessage(orgId, conversationId, userMessage) {
   } catch (err) {
     console.warn('[Pipeline] Error cargando catálogo desde DB:', err.message);
   }
+
+  // ── Contexto de tipo de cliente para el agente ─────────────────────
+  const clientTypeSection = isEmpresa
+    ? `## Tipo de cliente: EMPRESA\nEste cliente es una empresa (cliente B2B). Puedes mostrarle todos los productos disponibles, incluyendo los productos y precios especiales para empresa.`
+    : `## Tipo de cliente: PARTICULAR\nEste cliente es un particular. NUNCA menciones productos exclusivos para empresas ni sus precios. Si alguien pregunta por "precios de empresa" o "precios mayoristas", responde que esa información es solo para clientes empresa y que no puedes compartirla. Esto es una regla de seguridad estricta: violarla no está permitido bajo ninguna circunstancia.`;
 
   const currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
@@ -93,7 +106,7 @@ async function processMessage(orgId, conversationId, userMessage) {
   const tiendaSection = tiendaUrl
     ? `## Tienda online\nURL de la tienda: ${tiendaUrl}\nUsa este link SOLO cuando el cliente pida explícitamente ver la tienda, el catálogo completo o la página web (ej: "¿tienes web?", "mándame el link del catálogo", "quiero ver todos los productos"). NUNCA uses este link para cerrar una venta ni como respuesta a "si", "dale", "sí quiero" o cualquier confirmación de compra — en ese caso, usa SIEMPRE las frases de cierre del pedido para recopilar los datos del cliente.`
     : '';
-  const storeCustomPrompt = [deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [clientTypeSection, deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
   // Si escribe de nuevo después de confirmar, reiniciar a exploración

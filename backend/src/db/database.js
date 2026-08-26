@@ -253,7 +253,8 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
          THEN co.name
          ELSE c.contact_name
        END AS contact_name,
-       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
+       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
+       co.client_type
      FROM conversations c
      LEFT JOIN contacts co ON co.organization_id = c.organization_id
                            AND co.phone = c.phone_number
@@ -481,17 +482,17 @@ async function getProductById(orgId, id) {
   return queryOne('SELECT * FROM products WHERE organization_id = $1 AND id = $2', [orgId, id]);
 }
 
-async function createProduct(orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position, category }) {
+async function createProduct(orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position, category, isBusiness }) {
   return queryOne(
-    `INSERT INTO products (organization_id, title, description, price, compare_price, sku, stock, image_url, active, position, category)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    `INSERT INTO products (organization_id, title, description, price, compare_price, sku, stock, image_url, active, position, category, is_business)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
     [orgId, title, description || null, price, comparePrice || null, sku || null,
-     stock ?? -1, imageUrl || null, active !== false, position || 0, category || null]
+     stock ?? -1, imageUrl || null, active !== false, position || 0, category || null, isBusiness === true]
   );
 }
 
 async function updateProduct(orgId, id, updates) {
-  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, category:1, updated_at:1 };
+  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, category:1, is_business:1, updated_at:1 };
   const keys   = Object.keys(updates).filter(k => allowed[k]);
   if (!keys.length) return getProductById(orgId, id);
   const values = keys.map(k => updates[k]);
@@ -619,6 +620,23 @@ async function upsertContact(orgId, { phone, name, email, address, city, region,
        last_order_at = CASE WHEN EXCLUDED.address IS NOT NULL THEN NOW() ELSE contacts.last_order_at END,
        updated_at = NOW()`,
     [orgId, phone, name || null, email || null, address || null, city || null, region || null, notes || null, shopifyId || null]
+  );
+  return getContact(orgId, phone);
+}
+
+/**
+ * Actualiza el tipo de cliente (personal / empresa).
+ */
+async function updateContactClientType(orgId, phone, clientType) {
+  if (!['personal', 'empresa'].includes(clientType)) throw new Error('clientType inválido');
+  phone = normalizePhone(phone);
+  await pool.query(
+    `INSERT INTO contacts (organization_id, phone, client_type, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (organization_id, phone) DO UPDATE SET
+       client_type = EXCLUDED.client_type,
+       updated_at  = NOW()`,
+    [orgId, phone, clientType]
   );
   return getContact(orgId, phone);
 }
@@ -1013,7 +1031,7 @@ module.exports = {
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts
-  getContact, upsertContact, touchLead, promoteToCustomer, getContacts, countContacts,
+  getContact, upsertContact, updateContactClientType, touchLead, promoteToCustomer, getContacts, countContacts,
   // Settings
   getSetting, setSetting,
   // Escalation feedback
