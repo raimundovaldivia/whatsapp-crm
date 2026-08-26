@@ -151,8 +151,6 @@ export default function App() {
       loadConversations();
       loadOrderStats();
       loadProofStats();
-      // Limpiar duplicados en background (no bloquea la carga)
-      api.post('/conversations/merge-duplicates').catch(() => {});
     }
   }, [appState]);
 

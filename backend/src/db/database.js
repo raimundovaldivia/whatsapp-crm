@@ -225,19 +225,8 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
     ? 'c.organization_id = $1 AND c.unread_count > 0'
     : 'c.organization_id = $1';
   return query(
-    `SELECT c.*,
-       COALESCE(
-         CASE WHEN c.contact_name IS NULL OR c.contact_name = 'Cliente' OR c.contact_name ~ '^[0-9]+$'
-              THEN co.name ELSE c.contact_name END,
-         c.contact_name
-       ) AS contact_name,
-       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count
-     FROM conversations c
-     LEFT JOIN contacts co
-       ON co.organization_id = c.organization_id
-      AND (co.phone = c.phone_number OR co.phone = '+' || c.phone_number)
-     WHERE ${where}
-     ORDER BY c.last_message_at DESC`,
+    `SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
+     FROM conversations c WHERE ${where} ORDER BY c.last_message_at DESC`,
     [orgId]
   );
 }
