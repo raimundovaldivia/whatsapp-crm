@@ -367,8 +367,10 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                               <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Info</div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', color: colors.textSecondary }}>
                                 <div><span style={{ color: colors.textPrimary }}>Cliente desde:</span> {formatDate(c.createdAt)}</div>
-                                {c.address?.address1 && <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {c.address.address1}</div>}
+                                {c.phone             && <div><span style={{ color: colors.textPrimary }}>Teléfono:</span> {c.phone}</div>}
+                                {c.address?.address1 && <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {[c.address.address1, c.address.address2].filter(Boolean).join(', ')}</div>}
                                 {c.address?.city     && <div><span style={{ color: colors.textPrimary }}>Ciudad:</span> {c.address.city}{c.address.province ? `, ${c.address.province}` : ''}</div>}
+                                {c.address?.zip      && <div><span style={{ color: colors.textPrimary }}>Código postal:</span> {c.address.zip}</div>}
                                 {c.address?.country  && <div><span style={{ color: colors.textPrimary }}>País:</span> {c.address.country}</div>}
                                 {c.note              && <div><span style={{ color: colors.textPrimary }}>Nota:</span> {c.note}</div>}
                                 {c.tags?.length > 0 && (
