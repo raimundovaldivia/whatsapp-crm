@@ -1083,7 +1083,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [results,    setResults]    = useState(null);   // { sent, failed }
   const [toast,      setToast]      = useState(null);
   const [testMode,   setTestMode]   = useState(false);
-  const TEST_PHONE = testPhone || '';
+  const [testPhoneInput, setTestPhoneInput] = useState(testPhone || '');
+  const TEST_PHONE = testPhoneInput.trim();
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -1146,6 +1147,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   async function handleSend() {
     if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
     if (selected.size === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
+    if (testMode && !TEST_PHONE) { showToast('Ingresa un número de prueba antes de enviar', 'error'); return; }
     if (!window.confirm(`¿Enviar "${selTpl.name}" a ${selected.size} contactos?`)) return;
 
     setSending(true);
@@ -1255,9 +1257,19 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       </div>
 
       {/* Test mode banner */}
-      {testMode && TEST_PHONE && (
-        <div style={{ backgroundColor: `${colors.yellow}18`, borderBottom: `1px solid ${colors.yellow}44`, padding: '7px 20px', fontSize: '12px', color: colors.yellow, fontWeight: 600 }}>
-          🧪 Modo prueba — todos los mensajes irán a {TEST_PHONE}
+      {testMode && (
+        <div style={{ backgroundColor: `${colors.yellow}18`, borderBottom: `1px solid ${colors.yellow}44`, padding: '8px 20px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '12px', color: colors.yellow, fontWeight: 600, flexShrink: 0 }}>🧪 Número de prueba:</span>
+          <input
+            value={testPhoneInput}
+            onChange={e => setTestPhoneInput(e.target.value)}
+            placeholder="+56912345678"
+            style={{ padding: '4px 10px', borderRadius: '6px', border: `1px solid ${colors.yellow}66`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '12px', width: '160px', outline: 'none' }}
+          />
+          {TEST_PHONE
+            ? <span style={{ fontSize: '12px', color: colors.yellow }}>Todos los mensajes irán a <strong>{TEST_PHONE}</strong></span>
+            : <span style={{ fontSize: '12px', color: colors.red, fontWeight: 600 }}>⚠️ Ingresa un número para activar el modo prueba</span>
+          }
         </div>
       )}
 
