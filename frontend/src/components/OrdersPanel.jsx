@@ -786,8 +786,26 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
   const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [lookingUp, setLookingUp] = useState(false);
 
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const lookupContact = async (phone) => {
+    if (!phone.trim()) return;
+    setLookingUp(true);
+    try {
+      const res = await api.get(`/contacts/by-phone?phone=${encodeURIComponent(phone.trim())}`);
+      const c = res.data?.contact;
+      if (c) {
+        setForm(f => ({
+          ...f,
+          customerName: f.customerName || c.name || f.customerName,
+          address: f.address || [c.address, c.city].filter(Boolean).join(', ') || f.address,
+        }));
+      }
+    } catch (_) {}
+    finally { setLookingUp(false); }
+  };
 
   const setItem = (idx, k, v) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [k]: v } : it));
 
@@ -841,8 +859,13 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
               <input style={inp} value={form.customerName} onChange={e => setField('customerName', e.target.value)} placeholder="Juan Pérez" />
             </div>
             <div>
-              <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Teléfono</label>
-              <input style={inp} value={form.phone} onChange={e => setField('phone', e.target.value)} placeholder="56987654321" />
+              <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>
+                Teléfono {lookingUp && <span style={{ color: colors.textSecondary, fontStyle: 'italic' }}>buscando...</span>}
+              </label>
+              <input style={inp} value={form.phone}
+                onChange={e => setField('phone', e.target.value)}
+                onBlur={e => lookupContact(e.target.value)}
+                placeholder="56987654321" />
             </div>
           </div>
 

@@ -32,6 +32,30 @@ router.get('/', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/contacts/by-phone?phone=56987...
+ * Busca un contacto por teléfono (con normalización de variantes).
+ */
+router.get('/by-phone', async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  try {
+    const raw = (req.query.phone || '').replace(/\D/g, '');
+    if (!raw) return res.json({ contact: null });
+    // Variantes del número
+    const variants = new Set([raw]);
+    if (/^569\d{8}$/.test(raw))  variants.add(raw.slice(2));
+    if (/^9\d{8}$/.test(raw))    variants.add('56' + raw);
+    const { rows } = await pool.query(
+      `SELECT * FROM contacts WHERE organization_id = $1 AND phone = ANY($2) LIMIT 1`,
+      [req.orgId, [...variants]]
+    );
+    res.json({ contact: rows[0] || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/stats', async (req, res) => {
   try {
     const [total, leads, customers] = await Promise.all([
