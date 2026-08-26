@@ -28,14 +28,14 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
-  const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state)).length;
+  const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state) && !c.hot_lead_excluded).length;
   const stalledCount = conversations.filter(isStalled).length;
 
   const filtered = conversations.filter(c => {
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
     if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
-    if (activeTab === 'hot'     && !HOT_STATES.includes(c.pipeline_state)) return false;
+    if (activeTab === 'hot'     && (!HOT_STATES.includes(c.pipeline_state) || c.hot_lead_excluded)) return false;
     if (activeTab === 'stalled' && !isStalled(c))                          return false;
     const q = search.toLowerCase();
     return (

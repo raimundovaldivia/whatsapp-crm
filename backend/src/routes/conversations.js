@@ -205,13 +205,20 @@ router.post('/start', async (req, res) => {
  */
 router.patch('/:id/pipeline-state', async (req, res) => {
   try {
-    const { state } = req.body;
+    const { state, excludeHotLead } = req.body;
     const VALID = ['exploring', 'interested', 'collecting_order', 'awaiting_payment', 'done'];
     if (!VALID.includes(state)) {
       return res.status(400).json({ success: false, error: `Estado inválido. Válidos: ${VALID.join(', ')}` });
     }
     await db.updatePipelineState(parseInt(req.params.id), state);
-    res.json({ success: true, state });
+    // Si se excluye de hot leads, marcar la bandera para que el scan no la vuelva a añadir
+    if (excludeHotLead) {
+      await getPool().query(
+        'UPDATE conversations SET hot_lead_excluded = TRUE, updated_at = NOW() WHERE id = $1',
+        [parseInt(req.params.id)]
+      );
+    }
+    res.json({ success: true, state, excludeHotLead: !!excludeHotLead });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -654,13 +661,14 @@ router.post('/scan-hot-leads', async (req, res) => {
     const Anthropic = require('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-    // Conversaciones con actividad en últimas 48h que no estén en 'done'
+    // Conversaciones con actividad en últimas 48h que no estén en 'done' ni excluidas manualmente
     const { rows: convs } = await pool.query(
       `SELECT c.id, c.contact_name, c.phone_number, c.pipeline_state
        FROM conversations c
        WHERE c.organization_id = $1
          AND c.last_message_at > NOW() - INTERVAL '48 hours'
          AND c.pipeline_state NOT IN ('done', 'interested', 'collecting_order')
+         AND (c.hot_lead_excluded IS NULL OR c.hot_lead_excluded = FALSE)
        ORDER BY c.last_message_at DESC
        LIMIT 60`,
       [req.orgId]

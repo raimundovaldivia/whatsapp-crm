@@ -420,6 +420,9 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_org_status
         ON delivery_routes(organization_id, status, created_at DESC);
+
+      -- Migración: bandera para excluir manualmente de Hot Leads
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
     `);
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');

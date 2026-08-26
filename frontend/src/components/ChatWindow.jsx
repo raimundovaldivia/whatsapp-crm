@@ -51,7 +51,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   const handleRemoveHotLead = async () => {
     try {
-      await api.patch(`/conversations/${conversation.id}/pipeline-state`, { state: 'exploring' });
+      await api.patch(`/conversations/${conversation.id}/pipeline-state`, { state: 'exploring', excludeHotLead: true });
       onRefresh?.();
     } catch (e) { console.error(e); }
   };
