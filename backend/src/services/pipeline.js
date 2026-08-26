@@ -335,7 +335,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
             : null,
         });
         saveContact();
-        await db.updatePipelineState(conversationId, 'confirmed', updatedDraft);
+        await db.updatePipelineState(conversationId, 'done', updatedDraft);
         console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id}`);
         const successMsg = `✅ ¡Pedido confirmado!\n\n📦 ${updatedDraft.product_name} x${qty}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\nEl pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
         return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id } };
