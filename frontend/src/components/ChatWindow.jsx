@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -7,7 +7,7 @@ import { useTheme } from '../theme.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping }) {
+export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -24,6 +24,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [creatingOrder, setCreatingOrder]     = useState(false);
   const [orderError, setOrderError]           = useState('');
 
+  // Merge modal state
+  const [showMergeModal, setShowMergeModal]     = useState(false);
+  const [mergeSearch, setMergeSearch]           = useState('');
+  const [mergeConvs, setMergeConvs]             = useState([]);
+  const [mergeLoading, setMergeLoading]         = useState(false);
+  const [merging, setMerging]                   = useState(false);
+  const [mergeError, setMergeError]             = useState('');
+
   // Template modal state
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [templates, setTemplates] = useState([]);
@@ -38,6 +46,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   const isHumanMode = conversation.agent_mode === 'human';
   const isDevUser = currentUserEmail === DEV_EMAIL;
+  const HOT_STATES = ['interested', 'collecting_order'];
+  const isHotLead = HOT_STATES.includes(conversation.pipeline_state);
+
+  const handleRemoveHotLead = async () => {
+    try {
+      await api.patch(`/conversations/${conversation.id}/pipeline-state`, { state: 'exploring' });
+      onRefresh?.();
+    } catch (e) { console.error(e); }
+  };
 
   // Reset feedback state when conversation changes
   useEffect(() => {
@@ -249,6 +266,32 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     return s + (parseFloat(p?.price || 0) * qty);
   }, 0);
 
+  // ── Merge modal handlers ────────────────────────────────────────
+  const openMergeModal = async () => {
+    setShowMergeModal(true);
+    setMergeSearch('');
+    setMergeError('');
+    setMergeLoading(true);
+    try {
+      const r = await api.get('/conversations');
+      const all = r.data?.data || [];
+      setMergeConvs(all.filter(c => c.id !== conversation.id));
+    } catch { setMergeConvs([]); }
+    finally { setMergeLoading(false); }
+  };
+
+  const handleMerge = async (sourceId) => {
+    if (!window.confirm('¿Fusionar esa conversación en esta? Los mensajes del número anterior quedarán aquí y esa conversación se eliminará.')) return;
+    setMerging(true); setMergeError('');
+    try {
+      await api.post(`/conversations/${conversation.id}/merge-from/${sourceId}`);
+      setShowMergeModal(false);
+      window.location.reload(); // recargar para ver el historial completo
+    } catch (err) {
+      setMergeError(err.response?.data?.error || err.message);
+    } finally { setMerging(false); }
+  };
+
   return (
     <div style={{
       flex: 1,
@@ -362,6 +405,26 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             <FileText size={13} />
             {!isMobile && 'Template'}
           </button>
+          {isHotLead && (
+            <button
+              onClick={handleRemoveHotLead}
+              title="Sacar de Hot Leads"
+              style={{
+                backgroundColor: 'transparent',
+                border: '1px solid #f9731666',
+                borderRadius: '20px',
+                padding: '4px 10px',
+                color: '#f97316',
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: '4px',
+                fontSize: '11px', fontWeight: 600, transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f9731620'; }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+            >
+              🔥 Hot Lead <X size={10} />
+            </button>
+          )}
           <AgentToggle
             mode={conversation.agent_mode}
             onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode)}

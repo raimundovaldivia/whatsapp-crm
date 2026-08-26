@@ -200,6 +200,24 @@ router.post('/start', async (req, res) => {
 });
 
 /**
+ * PATCH /api/conversations/:id/pipeline-state
+ * Permite cambiar manualmente el pipeline_state (ej: sacar a un cliente de hot lead)
+ */
+router.patch('/:id/pipeline-state', async (req, res) => {
+  try {
+    const { state } = req.body;
+    const VALID = ['exploring', 'interested', 'collecting_order', 'awaiting_payment', 'done'];
+    if (!VALID.includes(state)) {
+      return res.status(400).json({ success: false, error: `Estado inválido. Válidos: ${VALID.join(', ')}` });
+    }
+    await db.updatePipelineState(parseInt(req.params.id), state);
+    res.json({ success: true, state });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/conversations/:id/orders
  */
 router.get('/:id/orders', async (req, res) => {

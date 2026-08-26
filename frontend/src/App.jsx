@@ -375,6 +375,7 @@ export default function App() {
                 messages={selectedMsgs}
                 onSendMessage={handleSendMessage}
                 onToggleAgentMode={handleToggleAgentMode}
+                onRefresh={loadConversations}
                 botTyping={botTypingConvs.has(selectedId)}
                 onEscalationFeedback={async (convId, feedback) => {
                   await conversationsAPI.sendEscalationFeedback(convId, feedback);
