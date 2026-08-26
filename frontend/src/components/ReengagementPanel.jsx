@@ -1071,6 +1071,7 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
 
 function BroadcastPanel({ colors, testPhone }) {
   const [contacts,   setContacts]   = useState([]);
+  const [sources,    setSources]    = useState(null);   // { whatsapp, shopify }
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState('');
   const [selected,   setSelected]   = useState(new Set());
@@ -1090,17 +1091,14 @@ function BroadcastPanel({ colors, testPhone }) {
 
   // Cargar contactos y templates en paralelo
   useEffect(() => {
-    Promise.all([
-      api.get('/contacts', { params: { limit: 1000 } }),
-      api.get('/contacts', { params: { type: 'customer', limit: 1000 } }),
-    ]).then(([leadsRes, custRes]) => {
-      const all = [...(leadsRes.data.contacts || []), ...(custRes.data.contacts || [])];
-      // Deduplicar por teléfono
-      const seen = new Set();
-      const deduped = all.filter(c => { if (seen.has(c.phone)) return false; seen.add(c.phone); return true; });
-      setContacts(deduped);
-      setSelected(new Set(deduped.map(c => c.phone)));
-    }).catch(() => setContacts([]))
+    api.get('/contacts/broadcast')
+      .then(res => {
+        const list = res.data.contacts || [];
+        setContacts(list);
+        setSources(res.data.sources || null);
+        setSelected(new Set(list.map(c => c.phone)));
+      })
+      .catch(() => setContacts([]))
       .finally(() => setLoading(false));
 
     api.get('/reengagement/templates')
@@ -1255,6 +1253,7 @@ function BroadcastPanel({ colors, testPhone }) {
           </button>
           <span style={{ color: colors.textMuted, fontSize: '12px', marginLeft: 'auto' }}>
             {selected.size} de {filtered.length} seleccionados
+            {sources && <span style={{ marginLeft: '10px', opacity: 0.7 }}>· 💬 {sources.whatsapp} WhatsApp · 🛒 {sources.shopify} Shopify</span>}
           </span>
         </div>
       )}
@@ -1286,6 +1285,9 @@ function BroadcastPanel({ colors, testPhone }) {
               )}
               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '5px', backgroundColor: c.contact_type === 'customer' ? `${colors.green}22` : `${colors.blue}22`, color: c.contact_type === 'customer' ? colors.green : colors.blue }}>
                 {c.contact_type === 'customer' ? 'Cliente' : 'Lead'}
+              </span>
+              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '5px', backgroundColor: c.source === 'shopify' ? '#f97316' + '22' : '#25d366' + '22', color: c.source === 'shopify' ? '#f97316' : '#25d366' }}>
+                {c.source === 'shopify' ? '🛒' : '💬'}
               </span>
             </div>
           );
