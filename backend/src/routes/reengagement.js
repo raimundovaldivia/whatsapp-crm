@@ -588,7 +588,25 @@ router.post('/fill-template-vars', async (req, res) => {
 
     // Buscar datos del cliente en el caché de análisis
     const cached = analysisCache.get(req.orgId);
-    const c = cached?.data?.find(x => x.phone === phone) || {};
+    const c = { ...(cached?.data?.find(x => x.phone === phone) || {}) };
+
+    // Priorizar nombre de WhatsApp sobre el de Shopify
+    try {
+      const pool = getPool();
+      const digits = phone.replace(/\D/g, '');
+      const variants = [phone];
+      if (/^569\d{8}$/.test(digits)) variants.push(digits.slice(2));
+      if (/^9\d{8}$/.test(digits))   variants.push('56' + digits);
+      const { rows } = await pool.query(
+        `SELECT contact_name FROM conversations
+         WHERE organization_id = $1 AND phone_number = ANY($2)
+           AND contact_name IS NOT NULL AND contact_name <> ''
+           AND LOWER(contact_name) NOT IN ('cliente','sin nombre')
+         ORDER BY last_message_at DESC LIMIT 1`,
+        [req.orgId, variants]
+      );
+      if (rows[0]?.contact_name) c.name = rows[0].contact_name;
+    } catch (_) {}
 
     // Extraer variables del template
     const varNums = [...new Set([...templateBody.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))].sort();
@@ -664,7 +682,27 @@ router.post('/ai-pick-template', async (req, res) => {
 
     // Datos del cliente desde el caché de análisis
     const cached = analysisCache.get(req.orgId);
-    const c = cached?.data?.find(x => x.phone === phone) || {};
+    const c = { ...(cached?.data?.find(x => x.phone === phone) || {}) };
+
+    // Priorizar el nombre de WhatsApp (conversations) sobre el de Shopify
+    // porque en Shopify puede haber pedidos a nombre de otra persona
+    try {
+      const pool = getPool();
+      const variants = [phone];
+      const digits = phone.replace(/\D/g, '');
+      if (/^569\d{8}$/.test(digits)) variants.push(digits.slice(2));
+      if (/^9\d{8}$/.test(digits))   variants.push('56' + digits);
+      const { rows } = await pool.query(
+        `SELECT contact_name FROM conversations
+         WHERE organization_id = $1 AND phone_number = ANY($2)
+           AND contact_name IS NOT NULL AND contact_name <> ''
+           AND LOWER(contact_name) NOT IN ('cliente','sin nombre')
+         ORDER BY last_message_at DESC LIMIT 1`,
+        [req.orgId, variants]
+      );
+      if (rows[0]?.contact_name) c.name = rows[0].contact_name;
+    } catch (_) {}
+
 
     // Contexto de la tienda (catálogo + info de entrega) para mejorar las variables
     const storeCtx = await db.getSetting(req.orgId, 'store_context') || '';
