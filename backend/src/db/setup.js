@@ -424,10 +424,37 @@ async function setupDatabase() {
       -- Migración: bandera para excluir manualmente de Hot Leads
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
 
-      -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos de 9 dígitos)
-      -- Paso 1: agregar '56' a los que son solo 9 dígitos empezando en 9
+      -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos)
+      -- Eliminar primero los que quedarían duplicados tras normalizar
+
+      -- Caso A: existe '9XXXXXXXX' Y ya existe '569XXXXXXXX' → borrar el corto
+      DELETE FROM contacts WHERE phone ~ '^9[0-9]{8}$'
+        AND EXISTS (
+          SELECT 1 FROM contacts c2
+          WHERE c2.organization_id = contacts.organization_id
+            AND c2.phone = '56' || contacts.phone
+        );
+
+      -- Caso B: existe '9XXXXXXXX' Y ya existe '+569XXXXXXXX' → borrar el corto
+      DELETE FROM contacts WHERE phone ~ '^9[0-9]{8}$'
+        AND EXISTS (
+          SELECT 1 FROM contacts c2
+          WHERE c2.organization_id = contacts.organization_id
+            AND c2.phone = '+56' || contacts.phone
+        );
+
+      -- Ahora es seguro agregar '56' a los que quedan con 9 dígitos
       UPDATE contacts SET phone = '56' || phone WHERE phone ~ '^9[0-9]{8}$';
-      -- Paso 2: quitar el '+' de los que tienen prefijo
+
+      -- Caso C: existe '+56XXXXXXXX' Y ya existe '56XXXXXXXX' → borrar el que tiene '+'
+      DELETE FROM contacts WHERE phone LIKE '+%'
+        AND EXISTS (
+          SELECT 1 FROM contacts c2
+          WHERE c2.organization_id = contacts.organization_id
+            AND c2.phone = SUBSTRING(contacts.phone FROM 2)
+        );
+
+      -- Quitar '+' de los que quedan con ese prefijo
       UPDATE contacts SET phone = SUBSTRING(phone FROM 2) WHERE phone LIKE '+%';
     `);
 
