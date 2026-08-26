@@ -97,7 +97,12 @@ router.get('/orders', async (req, res) => {
         FROM orders o
         LEFT JOIN contacts ct
           ON ct.organization_id = o.organization_id
-         AND ct.phone = o.customer_phone
+         AND ct.phone = ANY(ARRAY[
+               o.customer_phone,
+               CASE WHEN o.customer_phone ~ '^569' THEN SUBSTRING(o.customer_phone FROM 3) END,
+               CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
+               CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
+             ])
         WHERE o.organization_id = $1
           AND (o.status IS NULL OR o.status NOT IN ('en_camino', 'entregado', 'cancelled'))
         ORDER BY o.created_at ASC
@@ -106,11 +111,19 @@ router.get('/orders', async (req, res) => {
     const shopifyOrders = shopifyRes.rows.map(normalizeShopifyOrder);
     const botOrders     = botRes.rows.map(normalizeBotOrder);
     const orders        = [...shopifyOrders, ...botOrders];
+
+    // Debug temporal: qué encontró para los pedidos bot sin dirección
+    const botDebug = botRes.rows.map(r => ({
+      id: r.id, phone: r.phone, hasShipping: !!r.shipping_address,
+      contactAddr: r.contact_address, contactCity: r.contact_city,
+    }));
+    console.log('[Delivery] Bot orders debug:', JSON.stringify(botDebug));
+
     res.json({
       success: true,
       orders,
       total: orders.length,
-      _debug: { shopify: shopifyOrders.length, bot: botOrders.length },
+      _debug: { shopify: shopifyOrders.length, bot: botOrders.length, botDetail: botDebug },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
