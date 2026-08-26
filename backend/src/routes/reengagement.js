@@ -167,9 +167,25 @@ function buildCustomerStats(orders) {
 ───────────────────────────────────────────────────────────────────── */
 function heuristicPredict(c) {
   if (!c.avgFreqDays) {
-    // Solo 1 pedido: asumir ciclo de 14 días desde la última compra
-    const d = 14 - c.daysInactive;
-    return { predictedDays: d, confidence: 40, aiReason: '1 compra, ciclo est. 14d', source: 'heuristic' };
+    // Solo 1 pedido: clasificar por tiempo inactivo sin asumir ciclo corto
+    // Un cliente con 1 compra que lleva mucho tiempo inactivo → contactar pronto
+    const inactive = c.daysInactive || 0;
+    let d, conf, reason;
+
+    if (inactive <= 7) {
+      // Compra reciente — esperar un poco
+      d = 14; conf = 35; reason = '1 compra reciente, muy pronto para re-enganchar';
+    } else if (inactive <= 30) {
+      // 1-4 semanas → contactar esta semana
+      d = 3; conf = 50; reason = `1 compra, ${inactive}d inactivo, momento ideal`;
+    } else if (inactive <= 90) {
+      // 1-3 meses → urgente
+      d = 1; conf = 55; reason = `1 compra, ${inactive}d sin volver, alta prioridad`;
+    } else {
+      // Más de 3 meses → difícil de recuperar pero vale intentarlo
+      d = 1; conf = 35; reason = `1 compra hace ${inactive}d, recuperación difícil`;
+    }
+    return { predictedDays: d, confidence: conf, aiReason: reason, source: 'heuristic' };
   }
 
   const d    = c.avgFreqDays - c.daysInactive;  // negativo = ya venció

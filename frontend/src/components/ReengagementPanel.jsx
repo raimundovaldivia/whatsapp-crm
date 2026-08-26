@@ -74,7 +74,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
   const [sending, setSending]         = useState(new Set());
   const [sendingBulk, setSendingBulk] = useState(false);
   const [toast, setToast]             = useState(null);
-  const [minConf, setMinConf]         = useState(65);
+  const [minConf, setMinConf]         = useState(50);
   const [testMode, setTestMode]       = useState(false);
   const [menuOpen, setMenuOpen]       = useState(false);
   const TEST_PHONE = testPhone || '56954565558';
