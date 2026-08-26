@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { formatDateTime } from '../utils/dates.js';
 import {
   ShoppingBag, RefreshCw, ExternalLink, Send, RotateCcw,
-  CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar,
+  CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar, Download,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { ordersAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
@@ -266,6 +267,71 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
     finally { setApplyingBulk(false); }
   };
 
+  // ─── Export para despacho ─────────────────────────────────────────
+  const handleExportXlsx = () => {
+    const selOrders = getSelOrders();
+    if (selOrders.length === 0) return;
+
+    const HEADERS = [
+      'Título* Requerido', 'Dirección completa* Requerida', 'Carga',
+      'Hora inicial', 'Hora final', 'Tiempo de servicio', 'Notas',
+      'Latitud', 'Longitud', 'ID de referencia', 'Habilidades requeridas',
+      'Habilidades opcionales', 'Persona de contacto', 'Teléfono de contacto',
+      'Hora inicial 2', 'Hora final 2', 'Carga 2', 'Carga 3', 'Prioridad',
+      'SMS', 'Correo electrónico de contacto', 'Carga pick', 'Carga pick 2',
+      'Carga pick 3', 'Fecha programada', 'Tipo de visita',
+    ];
+
+    const dataRows = selOrders.map(order => {
+      const row = new Array(26).fill('');
+
+      // Col A: Título — #IDNombre (sin espacio)
+      const id = order.source === 'shopify'
+        ? (order.shopifyName || `#${order.rawId}`)
+        : `#${order.rawId}`;
+      row[0] = `${id}${order.customerName}`;
+
+      // Col B: Dirección completa
+      if (order.source === 'bot') {
+        const addr = order.raw?.shipping_address || {};
+        row[1] = typeof addr === 'string'
+          ? addr
+          : [addr.address || addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
+      } else {
+        const addr = order.raw?.shipping_address;
+        if (!addr) {
+          row[1] = '';
+        } else if (typeof addr === 'string') {
+          try {
+            const p = JSON.parse(addr);
+            row[1] = [p.address1, p.city, p.zip].filter(Boolean).join(', ');
+          } catch { row[1] = addr; }
+        } else {
+          row[1] = [addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
+        }
+      }
+
+      // Col G: Notas — items
+      row[6] = (order.items || []).map(i => {
+        const price = i.price ? ` - $${Number(i.price).toLocaleString('es-CL')}` : '';
+        return `${i.quantity}x ${i.title || '?'}${price}`;
+      }).join(', ');
+
+      // Col N: Teléfono (fórmula =+56...)
+      const phone = (order.phone || '').replace(/\D/g, '');
+      if (phone) row[13] = { t: 'n', f: `+${phone}` };
+
+      return row;
+    });
+
+    const wsData = [HEADERS, ...dataRows];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Hoja 91');
+    const fecha = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `despacho_${fecha}.xlsx`);
+  };
+
   const handleStatusChange = async (orderId, newStatus) => {
     try {
       const updated = await ordersAPI.setStatus(orderId, newStatus);
@@ -434,6 +500,13 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               <button onClick={handleBulkDelete} disabled={applyingBulk}
                 style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #f8717144', backgroundColor: '#2d1a1a', color: '#f87171', cursor: 'pointer', fontSize: '12px', fontWeight: 500, opacity: applyingBulk ? 0.7 : 1 }}>
                 🗑️ Eliminar
+              </button>
+
+              <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
+
+              <button onClick={handleExportXlsx}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: '1px solid #22c55e44', backgroundColor: '#052010', color: '#4ade80', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
+                <Download size={12} /> Exportar despacho
               </button>
             </>
           )}
