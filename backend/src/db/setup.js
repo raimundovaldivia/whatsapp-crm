@@ -469,6 +469,11 @@ async function setupDatabase() {
       UPDATE contacts SET phone = SUBSTRING(phone FROM 2) WHERE phone LIKE '+%';
     `);
 
+    // Migración: permitir pedidos manuales sin conversación asociada
+    await client.query(`
+      ALTER TABLE orders ALTER COLUMN conversation_id DROP NOT NULL;
+    `);
+
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

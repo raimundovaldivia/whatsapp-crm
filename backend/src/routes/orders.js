@@ -18,6 +18,41 @@ const { requireAuth } = require('../middleware/auth');
 router.use(requireAuth);
 
 /**
+ * POST /api/orders
+ * Crear pedido manual (sin conversación de WhatsApp)
+ */
+router.post('/', async (req, res) => {
+  try {
+    const { customerName, phone, address, items, status, notes } = req.body;
+    if (!customerName) return res.status(400).json({ error: 'customerName es requerido' });
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Agrega al menos un producto' });
+
+    const total = items.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 1), 0);
+    const itemsJson = JSON.stringify(items.map(i => ({
+      name: i.name || i.title || '',
+      quantity: Number(i.quantity) || 1,
+      price: Number(i.price) || 0,
+    })));
+
+    const shippingJson = address ? JSON.stringify({ address1: address }) : null;
+    const orderStatus  = status || 'nuevo';
+    const pool = getPool();
+
+    const { rows } = await pool.query(
+      `INSERT INTO orders
+         (organization_id, customer_name, customer_phone, shipping_address, items, total_price, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       RETURNING *`,
+      [req.orgId, customerName, phone || null, shippingJson, itemsJson, String(total), orderStatus]
+    );
+    res.status(201).json({ order: rows[0] });
+  } catch (err) {
+    console.error('[Orders] Error creando pedido manual:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/orders
  * Todas las órdenes de la organización con info de conversación
  */

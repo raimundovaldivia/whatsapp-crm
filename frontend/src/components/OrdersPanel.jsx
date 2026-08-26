@@ -3,6 +3,7 @@ import { formatDateTime } from '../utils/dates.js';
 import {
   ShoppingBag, RefreshCw, ExternalLink, Send, RotateCcw,
   CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar, Download,
+  Plus, Trash2, X,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ordersAPI, api } from '../utils/api.js';
@@ -130,6 +131,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [syncingAll,    setSyncingAll]    = useState(false);
   const [lastSync,      setLastSync]      = useState(null);
 
+  // Nuevo pedido manual
+  const [showNewOrder,   setShowNewOrder]  = useState(false);
+  const [products,       setProducts]      = useState([]);
+
   // Selección masiva
   const [selected,       setSelected]      = useState(new Set()); // Set de _key
   const [bulkStatus,     setBulkStatus]    = useState('');
@@ -180,6 +185,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   };
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    api.get('/products').then(r => setProducts(r.data?.products || [])).catch(() => {});
+  }, []);
 
   // Normalizar y mezclar
   const allNormalized = [
@@ -387,6 +396,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       <div style={{ padding: '14px 24px', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px' }}>
         <ShoppingBag size={20} color={colors.green} />
         <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600, flex: 1 }}>Pedidos</h1>
+        <button onClick={() => setShowNewOrder(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.green, color: 'white', padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer' }}>
+          <Plus size={13} /> Nuevo pedido
+        </button>
         {lastSync && (
           <span style={{ fontSize: '11px', color: colors.textSecondary }}>
             Shopify: {lastSync.toLocaleString('es-CL', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}
@@ -560,6 +573,16 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       </div>
 
       {toast && <Toast toast={toast} />}
+
+      {showNewOrder && (
+        <NewOrderModal
+          colors={colors}
+          products={products}
+          onClose={() => setShowNewOrder(false)}
+          onSaved={() => { setShowNewOrder(false); load(); showToast('✅ Pedido creado'); }}
+        />
+      )}
+
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
@@ -752,6 +775,158 @@ function ShopifyOrderCard({ order, selected, onToggleSelect }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Modal nuevo pedido manual ────────────────────────────────────
+function NewOrderModal({ colors, products, onClose, onSaved }) {
+  const EMPTY_ITEM = { name: '', quantity: 1, price: '' };
+  const [form, setForm] = useState({ customerName: '', phone: '', address: '', status: 'nuevo' });
+  const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const setItem = (idx, k, v) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [k]: v } : it));
+
+  const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM }]);
+  const removeItem = idx => setItems(prev => prev.filter((_, i) => i !== idx));
+
+  const selectProduct = (idx, productId) => {
+    if (!productId) { setItem(idx, 'name', ''); setItem(idx, 'price', ''); return; }
+    const p = products.find(p => String(p.id) === productId);
+    if (p) { setItem(idx, 'name', p.title); setItem(idx, 'price', String(p.price)); }
+  };
+
+  const total = items.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 1), 0);
+
+  const handleSave = async () => {
+    if (!form.customerName.trim()) { setError('El nombre del cliente es requerido'); return; }
+    if (items.some(i => !i.name.trim())) { setError('Completa el nombre de todos los productos'); return; }
+    setSaving(true); setError('');
+    try {
+      await api.post('/orders', { ...form, items });
+      onSaved();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error creando pedido');
+      setSaving(false);
+    }
+  };
+
+  const inp = {
+    padding: '8px 10px', borderRadius: '8px', border: `1px solid ${colors.border}`,
+    backgroundColor: colors.bgHover, color: colors.textPrimary, fontSize: '13px',
+    outline: 'none', width: '100%', boxSizing: 'border-box',
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div style={{ backgroundColor: colors.bgPanel, borderRadius: '16px', width: '100%', maxWidth: '520px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: `1px solid ${colors.border}` }}>
+
+        {/* Header */}
+        <div style={{ padding: '18px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: colors.textPrimary }}>Nuevo pedido</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: colors.textSecondary, cursor: 'pointer', padding: '4px' }}><X size={18} /></button>
+        </div>
+
+        {/* Body */}
+        <div style={{ overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+          {/* Cliente */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div>
+              <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Nombre cliente *</label>
+              <input style={inp} value={form.customerName} onChange={e => setField('customerName', e.target.value)} placeholder="Juan Pérez" />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Teléfono</label>
+              <input style={inp} value={form.phone} onChange={e => setField('phone', e.target.value)} placeholder="56987654321" />
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Dirección</label>
+            <input style={inp} value={form.address} onChange={e => setField('address', e.target.value)} placeholder="Av. Ejemplo 123, La Serena" />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Estado inicial</label>
+            <select style={{ ...inp, cursor: 'pointer' }} value={form.status} onChange={e => setField('status', e.target.value)}>
+              <option value="nuevo">Nuevo</option>
+              <option value="por_despachar">Por despachar</option>
+              <option value="paid">Pagado</option>
+            </select>
+          </div>
+
+          {/* Productos */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <label style={{ fontSize: '11px', color: colors.textSecondary }}>Productos *</label>
+              <button onClick={addItem} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '3px 8px', color: colors.textSecondary, cursor: 'pointer', fontSize: '11px' }}>
+                <Plus size={11} /> Agregar
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {items.map((item, idx) => (
+                <div key={idx} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  {/* Selector de producto */}
+                  <div style={{ flex: 2, minWidth: 0 }}>
+                    {products.length > 0 ? (
+                      <select style={{ ...inp, width: '100%' }}
+                        onChange={e => { selectProduct(idx, e.target.value); }}
+                        defaultValue="">
+                        <option value="">— Seleccionar o escribir —</option>
+                        {products.filter(p => p.active !== false).map(p => (
+                          <option key={p.id} value={String(p.id)}>{p.title} · ${Number(p.price).toLocaleString('es-CL')}</option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <input style={{ ...inp, marginTop: products.length > 0 ? '4px' : '0' }}
+                      value={item.name}
+                      onChange={e => setItem(idx, 'name', e.target.value)}
+                      placeholder="Nombre del producto" />
+                  </div>
+                  {/* Cantidad */}
+                  <input style={{ ...inp, width: '56px', textAlign: 'center', flexShrink: 0 }}
+                    type="number" min="1" value={item.quantity}
+                    onChange={e => setItem(idx, 'quantity', e.target.value)} />
+                  {/* Precio */}
+                  <input style={{ ...inp, width: '90px', flexShrink: 0 }}
+                    type="number" min="0" value={item.price}
+                    onChange={e => setItem(idx, 'price', e.target.value)}
+                    placeholder="Precio" />
+                  {items.length > 1 && (
+                    <button onClick={() => removeItem(idx)} style={{ background: 'none', border: 'none', color: colors.red, cursor: 'pointer', padding: '4px', flexShrink: 0 }}>
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Total */}
+          <div style={{ textAlign: 'right', fontSize: '15px', fontWeight: 700, color: colors.green }}>
+            Total: ${total.toLocaleString('es-CL')}
+          </div>
+
+          {error && <div style={{ padding: '8px 12px', backgroundColor: `${colors.red}22`, borderRadius: '8px', color: colors.red, fontSize: '13px' }}>{error}</div>}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '14px 20px', borderTop: `1px solid ${colors.border}`, display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: '8px', border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, cursor: 'pointer', fontSize: '13px' }}>
+            Cancelar
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: colors.green, color: 'white', fontWeight: 700, fontSize: '13px', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+            {saving ? 'Guardando...' : 'Crear pedido'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

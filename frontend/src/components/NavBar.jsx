@@ -5,7 +5,7 @@ const NAV_ITEMS = [
   { key: 'dashboard',    icon: BarChart2,     label: 'Victorias' },
   { key: 'chats',        icon: MessageSquare, label: 'Chats' },
   { key: 'reengagement', icon: UserCheck,     label: 'Re-enganche' },
-  { key: 'orders',       icon: ShoppingBag,   label: 'CRM' },
+  { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
   { key: 'repartos',     icon: Truck,         label: 'Repartos' },
   { key: 'pagos',        icon: Receipt,       label: 'Pagos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
