@@ -195,12 +195,18 @@ async function createDefaultAgents(orgId, dataSourceId) {
 // ─── CONVERSATIONS ────────────────────────────────────────────────
 
 async function upsertConversation(orgId, phoneNumber, contactName = null) {
+  // Normalizar: siempre sin "+" para evitar duplicados +56.../56...
+  const phone = (phoneNumber || '').replace(/^\+/, '');
+
   const existing = await queryOne(
     'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2',
-    [orgId, phoneNumber]
+    [orgId, phone]
   );
   if (existing) {
-    if (contactName && contactName !== existing.contact_name) {
+    // Solo actualizar el nombre si el nuevo es mejor (no nulo, no genérico, no número)
+    const isGeneric = !contactName || contactName === 'Cliente' || /^\d+$/.test(contactName);
+    const existingIsGeneric = !existing.contact_name || existing.contact_name === 'Cliente' || /^\d+$/.test(existing.contact_name);
+    if (!isGeneric && (existingIsGeneric || contactName !== existing.contact_name)) {
       await pool.query(
         'UPDATE conversations SET contact_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [contactName, existing.id]
@@ -210,7 +216,7 @@ async function upsertConversation(orgId, phoneNumber, contactName = null) {
   }
   return queryOne(
     `INSERT INTO conversations (organization_id, phone_number, contact_name) VALUES ($1, $2, $3) RETURNING *`,
-    [orgId, phoneNumber, contactName || 'Cliente']
+    [orgId, phone, contactName || phone]
   );
 }
 
@@ -219,8 +225,17 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
     ? 'c.organization_id = $1 AND c.unread_count > 0'
     : 'c.organization_id = $1';
   return query(
-    `SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
+    `SELECT c.*,
+       COALESCE(
+         CASE WHEN c.contact_name IS NULL OR c.contact_name = 'Cliente' OR c.contact_name ~ '^[0-9]+$'
+              THEN co.name ELSE c.contact_name END,
+         c.contact_name
+       ) AS contact_name,
+       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count
      FROM conversations c
+     LEFT JOIN contacts co
+       ON co.organization_id = c.organization_id
+      AND co.phone = c.phone_number
      WHERE ${where}
      ORDER BY c.last_message_at DESC`,
     [orgId]

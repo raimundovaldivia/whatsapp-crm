@@ -148,6 +148,8 @@ export default function App() {
 
   useEffect(() => {
     if (appState === 'crm') {
+      // Limpiar duplicados por número (+56... vs 56...) — silencioso, una vez al inicio
+      api.post('/conversations/merge-duplicates').catch(() => {});
       loadConversations();
       loadOrderStats();
       loadProofStats();

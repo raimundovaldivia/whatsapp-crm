@@ -215,6 +215,71 @@ router.get('/:id/orders', async (req, res) => {
 });
 
 /**
+ * POST /api/conversations/:id/orders
+ * Crear una orden manual desde el panel admin.
+ * Body: { items: [{productId, title, price, quantity}], sendSummary: boolean }
+ */
+router.post('/:id/orders', async (req, res) => {
+  try {
+    const convId = parseInt(req.params.id);
+    const conv   = await db.getConversationById(convId, req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+
+    const { items = [], sendSummary = true } = req.body;
+    if (!items.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
+
+    const totalPrice = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
+
+    const order = await db.createOrder({
+      conversationId: convId,
+      organizationId: req.orgId,
+      items,
+      customerName:    conv.contact_name || conv.phone_number,
+      customerPhone:   conv.phone_number,
+      shippingAddress: {},
+      totalPrice,
+    });
+
+    // Guardar mensaje de resumen en el chat y enviarlo al cliente
+    if (sendSummary) {
+      const lines = items.map(i => `• ${i.title} x${i.quantity || 1} — $${(parseFloat(i.price) * parseInt(i.quantity || 1)).toLocaleString('es-CL')}`);
+      const summary = `🛒 *Pedido #${order.id} generado*\n\n${lines.join('\n')}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
+
+      const wc = await db.getWhatsappConfig(req.orgId);
+      if (wc) {
+        try {
+          const provider = wc.provider || 'kapso';
+          if (provider === 'kapso') {
+            await require('../services/kapso-whatsapp').sendTextMessage(conv.phone_number, summary, wc);
+          } else if (provider === 'twilio') {
+            await require('../services/twilio-whatsapp').sendTextMessage(conv.phone_number, summary, wc);
+          } else {
+            await require('../services/whatsapp').sendTextMessage(conv.phone_number, summary, wc);
+          }
+        } catch (_) { /* no bloquear si el WA falla */ }
+      }
+      const savedMsg = await db.saveMessage({
+        conversationId:    convId,
+        whatsappMessageId: `order_${order.id}_${Date.now()}`,
+        content:           summary,
+        direction:         'outbound',
+        type:              'text',
+        sentBy:            'human',
+      });
+      await db.updateConversationLastMessage(convId, summary);
+      const updatedConv = await db.getConversationById(convId);
+      const io = req.app.get('io');
+      io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
+    }
+
+    res.json({ success: true, order });
+  } catch (err) {
+    console.error('[Conversations/createOrder]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/conversations/:id/escalation-feedback
  * Guarda si la escalación fue correcta o innecesaria
  * Body: { feedback: 'correct' | 'unnecessary' }
@@ -360,6 +425,74 @@ router.delete('/:id/messages', async (req, res) => {
 
     res.json({ success: true, deleted: rowCount });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/conversations/merge-duplicates
+ * Encuentra conversaciones duplicadas (mismo teléfono con/sin '+') y las fusiona.
+ * Mantiene la que tiene más mensajes y borra la otra.
+ */
+router.post('/merge-duplicates', async (req, res) => {
+  const pool = getPool();
+  try {
+    // 1. Normalizar: quitar '+' de todos los phone_number en esta org
+    await pool.query(
+      `UPDATE conversations
+         SET phone_number = REGEXP_REPLACE(phone_number, '^\\+', ''), updated_at = NOW()
+       WHERE organization_id = $1 AND phone_number LIKE '+%'`,
+      [req.orgId]
+    );
+
+    // 2. Encontrar duplicados que aún persistan (mismo número, distintos IDs)
+    const dups = await pool.query(
+      `SELECT phone_number, ARRAY_AGG(id ORDER BY
+          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) DESC,
+          c.created_at ASC
+       ) AS ids
+       FROM conversations c
+       WHERE organization_id = $1
+       GROUP BY phone_number
+       HAVING COUNT(*) > 1`,
+      [req.orgId]
+    );
+
+    let merged = 0;
+    for (const row of dups.rows) {
+      const [keepId, ...dupeIds] = row.ids;
+      for (const dupeId of dupeIds) {
+        // Reasignar mensajes del duplicado al que se conserva
+        await pool.query(
+          'UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2',
+          [keepId, dupeId]
+        );
+        // Copiar el nombre si el que se conserva no tiene uno real
+        const dupe = await pool.query('SELECT contact_name FROM conversations WHERE id = $1', [dupeId]);
+        const dupeName = dupe.rows[0]?.contact_name;
+        if (dupeName && !/^\d+$/.test(dupeName) && dupeName !== 'Cliente') {
+          await pool.query(
+            `UPDATE conversations SET contact_name = $1, updated_at = NOW()
+             WHERE id = $2 AND (contact_name IS NULL OR contact_name = 'Cliente' OR contact_name ~ '^[0-9]+$')`,
+            [dupeName, keepId]
+          );
+        }
+        await pool.query('DELETE FROM conversations WHERE id = $1', [dupeId]);
+        merged++;
+      }
+    }
+
+    // 3. También normalizar teléfonos en la tabla contacts
+    await pool.query(
+      `UPDATE contacts
+         SET phone = REGEXP_REPLACE(phone, '^\\+', ''), updated_at = NOW()
+       WHERE organization_id = $1 AND phone LIKE '+%'`,
+      [req.orgId]
+    );
+
+    res.json({ success: true, normalizedWithPlus: true, mergedConversations: merged });
+  } catch (err) {
+    console.error('[merge-duplicates]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
