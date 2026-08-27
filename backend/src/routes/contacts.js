@@ -175,6 +175,70 @@ router.post('/normalize-names', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/contacts/import
+ * Importación masiva de leads desde CSV/Excel.
+ * Body: { leads: [{phone, name?, email?}] }
+ * Normaliza phones y upsertea sin pisar contactos existentes.
+ * Retorna: { imported, skipped, invalid, errors[] }
+ */
+router.post('/import', async (req, res) => {
+  try {
+    const { leads = [] } = req.body;
+    if (!Array.isArray(leads) || leads.length === 0) {
+      return res.status(400).json({ success: false, error: 'No se enviaron leads' });
+    }
+    if (leads.length > 5000) {
+      return res.status(400).json({ success: false, error: 'Máximo 5000 leads por importación' });
+    }
+
+    const { getPool } = require('../db/database');
+    const { normalizePhone } = db;
+    const pool = getPool();
+
+    let imported = 0, skipped = 0, invalid = 0;
+    const errors = [];
+
+    for (const raw of leads) {
+      const phone = normalizePhone ? normalizePhone(raw.phone) : (() => {
+        if (!raw.phone) return null;
+        let p = String(raw.phone).replace(/\s/g, '').replace(/^\+/, '');
+        if (/^9\d{8}$/.test(p)) p = '56' + p;
+        return p.length >= 8 ? p : null;
+      })();
+
+      if (!phone) { invalid++; continue; }
+
+      const name  = (raw.name  || '').trim() || null;
+      const email = (raw.email || '').trim().toLowerCase() || null;
+
+      try {
+        const { rowCount } = await pool.query(
+          `INSERT INTO contacts
+             (organization_id, phone, name, email, contact_type, source, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'lead', 'import', NOW(), NOW())
+           ON CONFLICT (organization_id, phone) DO UPDATE SET
+             name       = CASE WHEN EXCLUDED.name IS NOT NULL AND contacts.name IS NULL
+                               THEN EXCLUDED.name ELSE contacts.name END,
+             email      = CASE WHEN EXCLUDED.email IS NOT NULL AND contacts.email IS NULL
+                               THEN EXCLUDED.email ELSE contacts.email END,
+             updated_at = NOW()
+           WHERE contacts.name IS NULL OR contacts.email IS NULL`,
+          [req.orgId, phone, name, email]
+        );
+        // rowCount = 1 si insertó o actualizó, 0 si ya existía y no había nada que actualizar
+        if (rowCount > 0) imported++; else skipped++;
+      } catch (err) {
+        errors.push({ phone: raw.phone, error: err.message });
+      }
+    }
+
+    res.json({ success: true, imported, skipped, invalid, errors: errors.slice(0, 20) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.patch('/:phone/type', async (req, res) => {
   try {
     const { type } = req.body;

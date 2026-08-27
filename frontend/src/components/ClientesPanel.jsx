@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users, Search, RefreshCw, MessageSquare, ShoppingBag,
-  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, UserCheck, Zap,
+  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, UserCheck, Zap, Upload, X, CheckCircle, AlertCircle,
 } from 'lucide-react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -48,6 +48,13 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   const [leadsPage, setLeadsPage]   = useState(1);
   const [leadsTotal, setLeadsTotal] = useState(0);
   const [leadsStats, setLeadsStats] = useState(null);
+  const [importModal, setImportModal] = useState(false);
+  const [importRows, setImportRows]   = useState([]);   // [{phone, name, email}]
+  const [importCols, setImportCols]   = useState({ phone: '', name: '', email: '' });
+  const [importHeaders, setImportHeaders] = useState([]);
+  const [importing, setImporting]     = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const fileInputRef = useRef(null);
 
   // Una sola llamada al backend — el backend hace el loop internamente (servidor a servidor)
   const loadAll = useCallback(async () => {
@@ -104,6 +111,54 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
       setSyncing(false);
     }
   }, [loadAll]);
+
+  const handleImportFile = useCallback(async (file) => {
+    if (!file) return;
+    setImportResult(null);
+    try {
+      const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
+      const buf  = await file.arrayBuffer();
+      const wb   = XLSX.read(buf, { type: 'array' });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      if (data.length < 2) return;
+      const headers = data[0].map(h => String(h || '').trim());
+      const rows    = data.slice(1).map(r => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = String(r[i] ?? '').trim(); });
+        return obj;
+      }).filter(r => Object.values(r).some(v => v));
+      setImportHeaders(headers);
+      setImportRows(rows);
+      // Auto-detectar columnas
+      const phoneCol = headers.find(h => /phone|tel[eé]|celular|m[oó]vil|whatsapp/i.test(h)) || headers[0];
+      const nameCol  = headers.find(h => /nombre|name/i.test(h)) || '';
+      const emailCol = headers.find(h => /email|correo/i.test(h)) || '';
+      setImportCols({ phone: phoneCol, name: nameCol, email: emailCol });
+    } catch (e) {
+      alert('Error leyendo el archivo: ' + e.message);
+    }
+  }, []);
+
+  const submitImport = useCallback(async () => {
+    if (!importCols.phone || importRows.length === 0) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const leads = importRows.map(r => ({
+        phone: r[importCols.phone] || '',
+        name:  importCols.name  ? r[importCols.name]  : '',
+        email: importCols.email ? r[importCols.email] : '',
+      })).filter(l => l.phone);
+      const res = await api.post('/contacts/import', { leads });
+      setImportResult(res.data);
+      if (res.data.success) loadLeads(1, leadsSearch);
+    } catch (e) {
+      setImportResult({ success: false, error: e.response?.data?.error || e.message });
+    } finally {
+      setImporting(false);
+    }
+  }, [importRows, importCols, leadsSearch, loadLeads]);
 
   useEffect(() => { loadAll(); return () => { abortRef.current = true; }; }, []);
 
@@ -195,6 +250,12 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
               style={{ background: 'none', border: 'none', color: colors.textPrimary, fontSize: '13px', outline: 'none', width: '220px' }}
             />
           </div>
+          {isLeads && (
+            <button onClick={() => { setImportModal(true); setImportRows([]); setImportResult(null); }} title="Importar leads desde archivo"
+              style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: `${colors.green}18`, border: `1px solid ${colors.green}33`, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.green, fontSize: '12px', fontWeight: 600 }}>
+              <Upload size={12} /> Importar leads
+            </button>
+          )}
           {!isLeads && (
             <button onClick={syncShopify} disabled={syncing} title="Sincronizar clientes desde Shopify"
               style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: syncing ? colors.bgHover : `${colors.green}18`, border: `1px solid ${colors.green}33`, cursor: syncing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.green, fontSize: '12px', fontWeight: 600 }}>
@@ -562,6 +623,123 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
       )}
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+
+      {/* Modal importar leads */}
+      {importModal && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '14px', border: `1px solid ${colors.border}`, width: '540px', maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Upload size={18} color={colors.green} />
+                <span style={{ color: colors.textPrimary, fontSize: '16px', fontWeight: 700 }}>Importar leads</span>
+              </div>
+              <button onClick={() => setImportModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Upload area */}
+            {importRows.length === 0 && !importResult && (
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); handleImportFile(e.dataTransfer.files[0]); }}
+                style={{ border: `2px dashed ${colors.green}44`, borderRadius: '10px', padding: '32px', textAlign: 'center', cursor: 'pointer', color: colors.textSecondary, fontSize: '13px' }}>
+                <Upload size={28} color={colors.green} style={{ marginBottom: '8px' }} />
+                <div style={{ color: colors.textPrimary, fontWeight: 600, marginBottom: '4px' }}>Arrastrá tu archivo aquí o hacé click</div>
+                <div>CSV o Excel (.xlsx) — una columna debe ser el teléfono</div>
+                <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }}
+                  onChange={e => handleImportFile(e.target.files[0])} />
+              </div>
+            )}
+
+            {/* Columnas y preview */}
+            {importRows.length > 0 && !importResult && (
+              <>
+                <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
+                  <strong style={{ color: colors.textPrimary }}>{importRows.length}</strong> filas detectadas. Asigná qué columna es cada campo:
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  {[
+                    { key: 'phone', label: 'Teléfono *', required: true },
+                    { key: 'name',  label: 'Nombre',     required: false },
+                    { key: 'email', label: 'Email',       required: false },
+                  ].map(({ key, label, required }) => (
+                    <div key={key}>
+                      <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '4px' }}>{label}</div>
+                      <select
+                        value={importCols[key]}
+                        onChange={e => setImportCols(p => ({ ...p, [key]: e.target.value }))}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${required && !importCols[key] ? colors.red || '#ef4444' : colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '12px' }}>
+                        <option value="">— ninguna —</option>
+                        {importHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Preview */}
+                <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', overflow: 'auto', maxHeight: '180px', fontSize: '12px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        {['Teléfono', 'Nombre', 'Email'].map(h => (
+                          <th key={h} style={{ padding: '6px 10px', color: colors.textSecondary, textAlign: 'left', borderBottom: `1px solid ${colors.border}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importRows.slice(0, 6).map((r, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: '5px 10px', color: colors.textPrimary }}>{importCols.phone ? r[importCols.phone] : '—'}</td>
+                          <td style={{ padding: '5px 10px', color: colors.textSecondary }}>{importCols.name  ? r[importCols.name]  : '—'}</td>
+                          <td style={{ padding: '5px 10px', color: colors.textSecondary }}>{importCols.email ? r[importCols.email] : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importRows.length > 6 && <div style={{ padding: '5px 10px', color: colors.textSecondary }}>... y {importRows.length - 6} más</div>}
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  <button onClick={() => setImportRows([])} style={{ padding: '8px 14px', borderRadius: '8px', backgroundColor: colors.bgHover, border: `1px solid ${colors.border}`, color: colors.textSecondary, fontSize: '13px', cursor: 'pointer' }}>
+                    Cambiar archivo
+                  </button>
+                  <button onClick={submitImport} disabled={importing || !importCols.phone}
+                    style={{ padding: '8px 18px', borderRadius: '8px', backgroundColor: colors.green, border: 'none', color: '#fff', fontSize: '13px', fontWeight: 700, cursor: importing || !importCols.phone ? 'not-allowed' : 'pointer', opacity: importing || !importCols.phone ? 0.7 : 1 }}>
+                    {importing ? 'Importando...' : `Importar ${importRows.length} leads`}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Resultado */}
+            {importResult && (
+              <div style={{ textAlign: 'center', padding: '16px' }}>
+                {importResult.success
+                  ? <CheckCircle size={40} color={colors.green} style={{ marginBottom: '12px' }} />
+                  : <AlertCircle size={40} color="#ef4444" style={{ marginBottom: '12px' }} />}
+                {importResult.success ? (
+                  <>
+                    <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '16px', marginBottom: '12px' }}>Importación completada</div>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', fontSize: '13px' }}>
+                      <div><span style={{ color: colors.green, fontWeight: 700, fontSize: '22px' }}>{importResult.imported}</span><br /><span style={{ color: colors.textSecondary }}>Nuevos</span></div>
+                      <div><span style={{ color: colors.textSecondary, fontWeight: 700, fontSize: '22px' }}>{importResult.skipped}</span><br /><span style={{ color: colors.textSecondary }}>Ya existían</span></div>
+                      <div><span style={{ color: '#f59e0b', fontWeight: 700, fontSize: '22px' }}>{importResult.invalid}</span><br /><span style={{ color: colors.textSecondary }}>Sin teléfono válido</span></div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ color: '#ef4444', fontSize: '14px' }}>{importResult.error}</div>
+                )}
+                <button onClick={() => setImportModal(false)} style={{ marginTop: '16px', padding: '8px 20px', borderRadius: '8px', backgroundColor: colors.green, border: 'none', color: '#fff', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                  Cerrar
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
