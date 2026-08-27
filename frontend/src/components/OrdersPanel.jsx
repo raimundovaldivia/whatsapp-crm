@@ -446,6 +446,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   ).length;
 
   return (
+    <>
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.bgApp, overflow: 'hidden' }}>
 
       {/* Header */}
@@ -702,6 +703,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         </div>
       </div>
     )}
+    </>
   );
 }
 
