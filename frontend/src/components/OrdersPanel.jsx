@@ -20,7 +20,7 @@ function normalizeBotOrder(o) {
     date:         new Date(o.created_at),
     total:        Number(o.total_price || 0),
     botStatus:    o.status,
-    items:        (Array.isArray(o.items) ? o.items : []).map(i => ({ title: i.name || i.product_name, quantity: i.quantity, price: i.price })),
+    items:        (Array.isArray(o.items) ? o.items : []).map(i => ({ title: i.title || i.name || i.product_name, quantity: i.quantity, price: i.price })),
     raw:          o,
   };
 }
