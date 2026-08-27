@@ -14,7 +14,6 @@ const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
 const { requireAuth } = require('../middleware/auth');
-const { clearOrgCache: clearReengagementCache } = require('./reengagement');
 
 router.use(requireAuth);
 
@@ -46,7 +45,6 @@ router.post('/', async (req, res) => {
        RETURNING *`,
       [req.orgId, customerName, phone || null, shippingJson, itemsJson, String(total), orderStatus]
     );
-    clearReengagementCache(req.orgId);
     res.status(201).json({ order: rows[0] });
   } catch (err) {
     console.error('[Orders] Error creando pedido manual:', err.message);

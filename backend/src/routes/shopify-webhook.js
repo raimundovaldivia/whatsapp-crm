@@ -14,7 +14,15 @@ const crypto  = require('crypto');
 const db      = require('../db/database');
 const { getPool } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
-const { clearOrgCache: clearReengagementCache } = require('./reengagement');
+// Invalida el caché de reenganche en DB cuando llega un pedido nuevo
+function clearReengagementCache(orgId) {
+  const { getPool } = require('../db/database');
+  const today = new Date().toISOString().slice(0, 10);
+  getPool().query(
+    `UPDATE reengagement_daily_cache SET candidates = NULL WHERE organization_id = $1 AND cache_date = $2`,
+    [orgId, today]
+  ).catch(() => {});
+}
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
