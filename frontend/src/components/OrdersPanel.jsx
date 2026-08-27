@@ -231,8 +231,11 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
     return sum + (o.total || 0);
   }, 0);
 
-  // Ventas de los pedidos visibles (filtrados)
-  const ventasFiltradas = sumarValidos(filtered);
+  // Ventas: si el filtro es "Todo", usar el total real del backend (DB completa)
+  // Para otros filtros, calcular desde los pedidos cargados en frontend
+  const ventasFiltradas = dateFilter === 'all'
+    ? (stats?.ventasTotal ?? sumarValidos(filtered))
+    : sumarValidos(filtered);
 
   // Ventas este mes: calculado desde allNormalized (todos los pedidos cargados)
   const now = new Date();

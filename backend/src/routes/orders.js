@@ -144,13 +144,30 @@ router.get('/stats', async (req, res) => {
         AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
     `, [req.orgId]);
 
+    // Ventas históricas totales (toda la DB)
+    const { rows: [ventasTotalRow] } = await pool.query(`
+      SELECT COALESCE(SUM(total_price), 0) AS s
+      FROM shopify_orders
+      WHERE organization_id = $1
+        AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+    `, [req.orgId]);
+
+    const { rows: [pedidosTotalRow] } = await pool.query(`
+      SELECT COUNT(*) AS n
+      FROM shopify_orders
+      WHERE organization_id = $1
+        AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+    `, [req.orgId]);
+
     res.json({
       success: true,
       data: {
-        ventasHoy:   parseFloat(ventasHoyRow.s)  || 0,
-        pedidosHoy:  parseInt(pedidosHoyRow.n)   || 0,
-        ventasMes:   parseFloat(ventasMesRow.s)  || 0,
-        pedidosMes:  parseInt(pedidosMesRow.n)   || 0,
+        ventasHoy:    parseFloat(ventasHoyRow.s)    || 0,
+        pedidosHoy:   parseInt(pedidosHoyRow.n)     || 0,
+        ventasMes:    parseFloat(ventasMesRow.s)    || 0,
+        pedidosMes:   parseInt(pedidosMesRow.n)     || 0,
+        ventasTotal:  parseFloat(ventasTotalRow.s)  || 0,
+        pedidosTotal: parseInt(pedidosTotalRow.n)   || 0,
       },
     });
   } catch (err) {
