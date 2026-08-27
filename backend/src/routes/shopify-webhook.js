@@ -14,6 +14,7 @@ const crypto  = require('crypto');
 const db      = require('../db/database');
 const { getPool } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
+const { clearOrgCache: clearReengagementCache } = require('./reengagement');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -156,6 +157,9 @@ async function handleOrderPaid(orgId, shopifyOrder) {
     await db.updateConversationLastMessage(conv.id, confirmMsg);
   }
 
+  // Invalidar caché de reenganche — el cliente ya compró, no debe aparecer
+  clearReengagementCache(orgId);
+
   console.log(`[Shopify WH] ✅ Orden #${shopifyOrder.order_number} marcada como pagada`);
 }
 
@@ -188,6 +192,11 @@ async function handleOrderCreate(orgId, shopifyOrder) {
   if (localOrder && !localOrder.shopify_order_id) {
     await db.updateOrder(localOrder.id, { shopify_order_id: String(shopifyOrder.id) });
     io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, shopifyOrderId: String(shopifyOrder.id) });
+  }
+
+  // Si el pedido llega ya pagado desde Shopify (compra directa en tienda), invalida caché
+  if ((shopifyOrder.financial_status || '').toLowerCase() === 'paid') {
+    clearReengagementCache(orgId);
   }
 }
 

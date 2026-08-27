@@ -1518,3 +1518,14 @@ router.get('/accuracy', async (req, res) => {
 
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;
+
+/**
+ * Invalida el caché de reenganche para una org.
+ * Llamar cuando llega un pedido nuevo/pagado para que el próximo
+ * análisis incluya el pedido fresco.
+ */
+module.exports.clearOrgCache = function clearOrgCache(orgId) {
+  analysisCache.delete(orgId);
+  const today = new Date().toISOString().slice(0, 10);
+  db.saveDailyCache(orgId, today, null).catch(() => {});
+};
