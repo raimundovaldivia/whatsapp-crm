@@ -361,23 +361,18 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       row[0] = `${id}${order.customerName}`;
 
       // Col B: Dirección completa
+      const parseAddr = (raw) => {
+        if (!raw) return {};
+        if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return {}; } }
+        return raw;
+      };
       if (order.source === 'bot') {
-        const addr = order.raw?.shipping_address || {};
-        row[1] = typeof addr === 'string'
-          ? addr
-          : [addr.address || addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
+        const addr = parseAddr(order.raw?.shipping_address);
+        // Bot guarda: { address, city } o { address1, city, zip }
+        row[1] = [addr.address || addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
       } else {
-        const addr = order.raw?.shipping_address;
-        if (!addr) {
-          row[1] = '';
-        } else if (typeof addr === 'string') {
-          try {
-            const p = JSON.parse(addr);
-            row[1] = [p.address1, p.city, p.zip].filter(Boolean).join(', ');
-          } catch { row[1] = addr; }
-        } else {
-          row[1] = [addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
-        }
+        const addr = parseAddr(order.raw?.shipping_address);
+        row[1] = [addr.address1 || addr.address, addr.city, addr.zip].filter(Boolean).join(', ');
       }
 
       // Col G: Notas — items
