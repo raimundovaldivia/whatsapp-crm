@@ -8,6 +8,7 @@ import EmptyState     from './components/EmptyState.jsx';
 import OrdersPanel    from './components/OrdersPanel.jsx';
 import CatalogoPanel  from './components/CatalogoPanel.jsx';
 import DashboardPanel     from './components/DashboardPanel.jsx';
+import StatsPanel         from './components/StatsPanel.jsx';
 import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
@@ -431,6 +432,9 @@ export default function App() {
 
       {/* Vista Dashboard */}
       {view === 'dashboard' && <DashboardPanel onChangeView={setView} />}
+
+      {/* Vista Estadísticas */}
+      {view === 'stats' && <StatsPanel />}
 
       {/* Vista Comprobantes de pago */}
       {view === 'pagos' && (
