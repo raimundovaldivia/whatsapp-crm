@@ -298,8 +298,11 @@ export default function DashboardPanel({ onChangeView }) {
                           </div>
                           <div style={{ textAlign: 'center', fontSize: '10px',
                             color: isToday ? colors.green : colors.textMuted,
-                            fontWeight: isToday ? 700 : 400 }}>
-                            {dayLabel}
+                            fontWeight: isToday ? 700 : 400, lineHeight: 1.3 }}>
+                            {dayLabel}<br/>
+                            <span style={{ fontSize: '9px', opacity: 0.7 }}>
+                              {new Date(d.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}
+                            </span>
                           </div>
                           {d.revenue > 0 && (
                             <div style={{ textAlign: 'center', fontSize: '9px', color: colors.textSecondary }}>
