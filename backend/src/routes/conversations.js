@@ -269,7 +269,7 @@ router.post('/:id/orders', async (req, res) => {
     const conv   = await db.getConversationById(convId, req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
-    const { items = [], sendSummary = true } = req.body;
+    const { items = [], sendSummary = true, shippingAddress = {} } = req.body;
     if (!items.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
 
     const totalPrice = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
@@ -291,7 +291,7 @@ router.post('/:id/orders', async (req, res) => {
       items,
       customerName,
       customerPhone:   conv.phone_number,
-      shippingAddress: {},
+      shippingAddress,
       totalPrice,
     });
 

@@ -40,6 +40,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [products, setProducts]               = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [orderItems, setOrderItems]           = useState({}); // { productId: quantity }
+  const [orderAddress, setOrderAddress]       = useState('');
+  const [orderCity, setOrderCity]             = useState('');
   const [sendSummary, setSendSummary]         = useState(true);
   const [creatingOrder, setCreatingOrder]     = useState(false);
   const [orderError, setOrderError]           = useState('');
@@ -258,6 +260,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const openOrderModal = async () => {
     setShowOrderModal(true);
     setOrderItems({});
+    setOrderAddress('');
+    setOrderCity('');
     setOrderError('');
     setProductsLoading(true);
     try {
@@ -294,9 +298,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     if (!items.length) { setOrderError('Agrega al menos un producto'); return; }
     setCreatingOrder(true); setOrderError('');
     try {
-      await api.post(`/conversations/${conversation.id}/orders`, { items, sendSummary });
+      const shippingAddress = orderAddress.trim() ? { address: orderAddress.trim(), city: orderCity.trim() } : {};
+      await api.post(`/conversations/${conversation.id}/orders`, { items, sendSummary, shippingAddress });
       setShowOrderModal(false);
       setOrderItems({});
+      setOrderAddress('');
+      setOrderCity('');
     } catch (err) {
       setOrderError(err.response?.data?.error || err.message);
     } finally { setCreatingOrder(false); }
@@ -810,6 +817,20 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
             {/* Footer */}
             <div style={{ padding:'14px 20px', borderTop:`1px solid ${colors.border}` }}>
+              {/* Dirección de despacho */}
+              <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
+                <div style={{ fontSize:'11px', color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección de despacho</div>
+                <input
+                  value={orderAddress} onChange={e => setOrderAddress(e.target.value)}
+                  placeholder="Calle y número"
+                  style={{ backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', outline:'none' }}
+                />
+                <input
+                  value={orderCity} onChange={e => setOrderCity(e.target.value)}
+                  placeholder="Ciudad / Comuna"
+                  style={{ backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', outline:'none' }}
+                />
+              </div>
               <label style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px', cursor:'pointer', fontSize:'13px', color:colors.textSecondary }}>
                 <input type="checkbox" checked={sendSummary} onChange={e => setSendSummary(e.target.checked)} />
                 Enviar resumen por WhatsApp al cliente
