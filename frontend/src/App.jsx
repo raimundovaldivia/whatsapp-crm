@@ -23,7 +23,7 @@ export default function App() {
   const [appState, setAppState] = useState('loading');
   const [user, setUser]         = useState(null);
   const [org, setOrg]           = useState(null);
-  const [view, setView]         = useState('dashboard');
+  const [view, setView]         = useState('chats');
 
   // Responsive
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -80,7 +80,7 @@ export default function App() {
 
   const handleSetupComplete = useCallback(() => {
     setOrg(o => ({ ...o, setup_done: 1 }));
-    setView('dashboard');
+    setView('chats');
   }, []);
 
   // ── Retorno de OAuth (Kapso / Shopify) ────────────────────────
