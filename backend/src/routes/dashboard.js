@@ -121,14 +121,14 @@ router.get('/wins', async (req, res) => {
       pool.query(`
         SELECT day::date AS day,
                COUNT(*)                              AS orders,
-               COALESCE(SUM(total_price::numeric), 0) AS revenue
+               COALESCE(SUM(total_price), 0)         AS revenue
         FROM (
-          SELECT created_at AS day, total_price FROM orders
+          SELECT created_at AS day, NULLIF(total_price, '')::numeric AS total_price FROM orders
             WHERE organization_id = $1
               AND (status IS NULL OR status NOT IN ('cancelled'))
               AND created_at >= NOW() - INTERVAL '6 days'
           UNION ALL
-          SELECT shopify_created_at AS day, total_price FROM shopify_orders
+          SELECT shopify_created_at AS day, total_price::numeric AS total_price FROM shopify_orders
             WHERE organization_id = $1
               AND shopify_created_at IS NOT NULL
               AND shopify_created_at >= NOW() - INTERVAL '6 days'
@@ -183,7 +183,7 @@ router.get('/wins', async (req, res) => {
 
       // Últimos 8 pedidos (bot + shopify mezclados)
       pool.query(`
-        SELECT customer_name, total_price::numeric AS total_price, status, created_at, 'bot' AS source
+        SELECT customer_name, NULLIF(total_price, '')::numeric AS total_price, status, created_at, 'bot' AS source
         FROM orders
         WHERE organization_id = $1 AND (status IS NULL OR status NOT IN ('cancelled'))
         UNION ALL
