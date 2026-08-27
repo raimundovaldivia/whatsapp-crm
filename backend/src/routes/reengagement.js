@@ -306,79 +306,50 @@ function extractFirstName(rawName, phone) {
 ───────────────────────────────────────────────────────────────────── */
 async function runFullAnalysis(orgId, ds) {
   const today = new Date().toISOString().slice(0, 10);
-  const { shop, token } = shopifyApi.credentialsFrom(ds);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const { getPool } = require('../db/database');
+  const pool = getPool();
 
-  console.log(`[Reengagement] Descargando órdenes de ${shop}...`);
-  let allOrders = [];
-  let cursor = null; let page = 0;
-  while (true) {
-    page++;
-    const result = await shopifyApi.getOrders(shop, token, { limit: 250, cursor, status: 'any' });
-    const validas = (result.orders || []).filter(o => {
-      const fs = (o.financialStatus || '').toUpperCase();
-      return fs !== 'VOIDED' && fs !== 'REFUNDED';
-    });
-    allOrders = allOrders.concat(validas);
-    if (!result.hasNextPage || !result.endCursor || page >= 50) break;
-    cursor = result.endCursor;
-    await sleep(300);
-  }
-  console.log(`[Reengagement] Total órdenes: ${allOrders.length}`);
-  if (!allOrders.length) return null;
+  // ── Leer pedidos desde la base de datos local ──────────────────────
+  console.log(`[Reengagement] Leyendo órdenes desde DB local (org ${orgId})...`);
+  const { rows: dbRows } = await pool.query(
+    `SELECT customer_phone, customer_name, customer_email,
+            total_price, items, shopify_created_at, shopify_name, financial_status
+     FROM shopify_orders
+     WHERE organization_id = $1
+       AND customer_phone IS NOT NULL AND customer_phone <> ''
+       AND shopify_created_at IS NOT NULL
+       AND (financial_status IS NULL
+            OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+     ORDER BY shopify_created_at ASC`,
+    [orgId]
+  );
+  console.log(`[Reengagement] Total órdenes en DB: ${dbRows.length}`);
+  if (!dbRows.length) return null;
 
-  const conCustomerPhone = allOrders.filter(o => normalizePhone(o.customer?.phone)).length;
-  const sinPhone         = allOrders.length - conCustomerPhone;
-  const conShippingPhone = allOrders.filter(o =>
-    !normalizePhone(o.customer?.phone) &&
-    (normalizePhone(o.shippingAddress?.phone) || normalizePhone(o.billingAddress?.phone))
-  ).length;
-  console.log(`[Reengagement] Teléfonos — customer: ${conCustomerPhone} | shipping/billing: ${conShippingPhone} | sin phone: ${sinPhone - conShippingPhone}`);
-
-  const toNumericId = (id) => String(id || '').replace(/[^0-9]/g, '');
-  const ordenesSinPhoneConId = allOrders.filter(o => !normalizePhone(o.customer?.phone) && o.customer?.id);
-  console.log(`[Reengagement] Órdenes sin teléfono con customerId: ${ordenesSinPhoneConId.length}`);
-
-  if (ordenesSinPhoneConId.length > 0) {
-    try {
-      const phoneMap = new Map();
-      let cur2 = undefined; let pg2 = 0;
-      while (true) {
-        pg2++;
-        const result = await shopifyApi.getCustomers(shop, token, { limit: 100, cursor: cur2 });
-        for (const c of (result.customers || [])) {
-          const phone = normalizePhone(c.phone);
-          if (!phone) continue;
-          const entry  = { phone, name: c.name || phone, email: c.email };
-          const numId  = toNumericId(c.id);
-          const fullId = String(c.id || '');
-          if (numId)   phoneMap.set(numId, entry);
-          if (fullId)  phoneMap.set(fullId, entry);
-          if (c.email) phoneMap.set(c.email.toLowerCase(), entry);
-        }
-        if (!result.hasNextPage || !result.endCursor || pg2 >= 50) break;
-        cur2 = result.endCursor;
-        await sleep(300);
-      }
-      let enriquecidas = 0;
-      for (const order of allOrders) {
-        if (normalizePhone(order.customer?.phone)) continue;
-        if (!order.customer) continue;
-        const rawId = String(order.customer.id || '');
-        const email = (order.customer.email || '').toLowerCase();
-        const ed = phoneMap.get(rawId) || phoneMap.get(toNumericId(rawId)) || (email ? phoneMap.get(email) : null);
-        if (ed) { order.customer.phone = ed.phone; if (!order.customer.name) order.customer.name = ed.name; enriquecidas++; }
-      }
-      console.log(`[Reengagement] Órdenes enriquecidas con catálogo: ${enriquecidas}`);
-    } catch (err) {
-      console.warn('[Reengagement] No se pudo enriquecer con catálogo:', err.message);
-    }
-  }
+  // Convertir filas DB al formato que espera buildCustomerStats
+  const allOrders = dbRows.map(r => ({
+    customer: {
+      phone: r.customer_phone,
+      name:  r.customer_name || r.customer_phone,
+      email: r.customer_email || null,
+    },
+    totalPrice: parseFloat(r.total_price) || 0,
+    createdAt:  r.shopify_created_at,
+    name:       r.shopify_name || null,
+    lineItems:  (Array.isArray(r.items) ? r.items : []).map(i => ({
+      title: typeof i === 'string' ? i : (i.name || i.title || ''),
+    })),
+  }));
 
   const allStats = buildCustomerStats(allOrders);
   console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
   if (!allStats.length) return null;
 
+  // ── Scoring basado en días inactivo vs frecuencia promedio ─────────
+  // overdueRatio = daysInactive / avgFreqDays
+  // >1 → ya venció el ciclo (candidato urgente)
+  // Clientes con 1 solo pedido usan heurística de tiempo inactivo
   const todayDow = new Date().getDay();
   let aiResults  = [];
   const BATCH = 20;
@@ -394,7 +365,7 @@ async function runFullAnalysis(orgId, ds) {
   const aiMap = new Map(aiResults.map(r => [r.phone, r]));
 
   let calibration = await db.getCalibration(orgId);
-  if (!calibration && allOrders.length > 0) {
+  if (!calibration) {
     try {
       const bt = runBacktesting(allOrders, normalizePhone);
       await db.saveCalibration(orgId, bt);
@@ -426,20 +397,25 @@ async function runFullAnalysis(orgId, ds) {
 
     const confidence = applyCalibration(confidenceRaw, calibration);
 
+    // overdueRatio: cuántas veces el ciclo normal ya venció sin compra
+    // null si solo tiene 1 pedido (no hay frecuencia calculada)
+    const overdueRatio = c.avgFreqDays
+      ? Math.round((c.daysInactive / c.avgFreqDays) * 100) / 100
+      : null;
+
     let buyWindow, urgency;
     if      (predictedDays <= 1)   { buyWindow = 'hoy';    urgency = 4; }
     else if (predictedDays <= 7)   { buyWindow = 'semana'; urgency = 3; }
     else if (predictedDays <= 30)  { buyWindow = 'mes';    urgency = 2; }
     else                           { buyWindow = 'lejano'; urgency = 1; }
 
-    return { ...c, predictedDays, confidenceRaw, confidence, aiReason, predSource, buyWindow, urgency };
+    return { ...c, predictedDays, confidenceRaw, confidence, aiReason, predSource, buyWindow, urgency, overdueRatio };
   })
-  .filter(c => c.predictedDays <= 365)   // mostrar hasta 1 año
+  .filter(c => c.predictedDays <= 365)
   .sort((a, b) => a.predictedDays - b.predictedDays);
 
   console.log(`[Reengagement] Resultado: IA=${aiHits} | heurística=${heuristicHits} | total=${enriched.length}`);
 
-  // Guardar caché del día
   try {
     await db.saveDailyCache(orgId, today, enriched);
     await db.savePredictions(orgId, enriched, today);
@@ -448,17 +424,15 @@ async function runFullAnalysis(orgId, ds) {
 
   analysisCache.set(orgId, { data: enriched, ts: Date.now() });
 
-  // Log resumen en consola
   ['hoy','semana','mes','lejano'].forEach(w => {
     const g = enriched.filter(c => c.buyWindow === w);
     if (g.length) console.log(`  ${w.toUpperCase()}: ${g.length} clientes`);
   });
 
   const diagnostico = {
-    totalOrdenes:      allOrders.length,
+    totalOrdenes:      dbRows.length,
     clientesConTel:    allStats.length,
-    sinTelefono:       sinPhone - conShippingPhone,
-    conShippingPhone,
+    fuenteDatos:       'db_local',
     conPrediccionAI:   aiHits,
     conPrediccionHeur: heuristicHits,
     enVentana:         enriched.length,
