@@ -117,25 +117,29 @@ router.get('/wins', async (req, res) => {
         ) t
       `, [orgId]),
 
-      // Ventas por día — últimos 7 días (bot + shopify)
+      // Ventas por día — últimos 7 días (bot + shopify), hora local Chile
       pool.query(`
-        SELECT day::date AS day,
+        SELECT day_local AS day,
                COUNT(*)                              AS orders,
                COALESCE(SUM(total_price), 0)         AS revenue
         FROM (
-          SELECT created_at AS day, NULLIF(total_price, '')::numeric AS total_price FROM orders
+          SELECT (created_at AT TIME ZONE 'America/Santiago')::date AS day_local,
+                 NULLIF(total_price, '')::numeric AS total_price
+          FROM orders
             WHERE organization_id = $1
               AND (status IS NULL OR status NOT IN ('cancelled'))
-              AND created_at >= NOW() - INTERVAL '6 days'
+              AND (created_at AT TIME ZONE 'America/Santiago')::date >= (NOW() AT TIME ZONE 'America/Santiago')::date - 6
           UNION ALL
-          SELECT shopify_created_at AS day, total_price::numeric AS total_price FROM shopify_orders
+          SELECT (shopify_created_at AT TIME ZONE 'America/Santiago')::date AS day_local,
+                 total_price::numeric AS total_price
+          FROM shopify_orders
             WHERE organization_id = $1
               AND shopify_created_at IS NOT NULL
-              AND shopify_created_at >= NOW() - INTERVAL '6 days'
+              AND (shopify_created_at AT TIME ZONE 'America/Santiago')::date >= (NOW() AT TIME ZONE 'America/Santiago')::date - 6
               AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
         ) t
-        GROUP BY day::date
-        ORDER BY day ASC
+        GROUP BY day_local
+        ORDER BY day_local ASC
       `, [orgId]),
 
       // Nuevas conversaciones esta semana
@@ -199,16 +203,23 @@ router.get('/wins', async (req, res) => {
     ]);
 
     // Construir ventas por día (últimos 7, rellenando días sin datos)
+    // r.day viene como DATE de PG → string 'YYYY-MM-DD' sin conversión de zona horaria
     const dayMap = {};
     dailySalesRows.rows.forEach(r => {
-      const key = new Date(r.day).toISOString().split('T')[0];
+      // PG devuelve Date objects para columnas DATE; formatear directo sin toISOString (que aplica UTC)
+      const d = r.day;
+      const key = typeof d === 'string' ? d.slice(0, 10)
+        : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
       dayMap[key] = { orders: parseInt(r.orders), revenue: parseFloat(r.revenue) };
     });
+
+    // Generar los últimos 7 días en hora local del servidor (Chile)
+    const nowCL = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Santiago' }));
     const dailySales = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
+      const d = new Date(nowCL);
       d.setDate(d.getDate() - i);
-      const key = d.toISOString().split('T')[0];
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
       dailySales.push({
         date:    key,
         orders:  dayMap[key]?.orders  || 0,
