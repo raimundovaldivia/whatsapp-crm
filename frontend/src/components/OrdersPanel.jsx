@@ -49,7 +49,16 @@ function normalizeShopifyOrder(o) {
 }
 
 // ─── Filtros de fecha ─────────────────────────────────────────────
-function filterByDate(orders, dateFilter) {
+function filterByDate(orders, dateFilter, customDate) {
+  if (dateFilter === 'custom' && customDate) {
+    // Filtrar por día exacto (hora local)
+    return orders.filter(o => {
+      const d = o.date;
+      const y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+      const key = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      return key === customDate;
+    });
+  }
   if (dateFilter === 'all') return orders;
   const now = new Date();
   const cutoffs = {
@@ -142,6 +151,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
 
   // Filtros
   const [dateFilter,   setDateFilter]   = useState('all');
+  const [customDate,   setCustomDate]   = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [page,         setPage]         = useState(1);
@@ -197,7 +207,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   ].sort((a, b) => b.date - a.date);
 
   // Aplicar filtros
-  let filtered = filterByDate(allNormalized, dateFilter);
+  let filtered = filterByDate(allNormalized, dateFilter, customDate);
   filtered = filterBySource(filtered, sourceFilter);
   if (statusFilter !== 'all') {
     filtered = filtered.filter(o => {
@@ -214,7 +224,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const paginated   = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   // Reset página + selección si el filtro cambia
-  const setDateFilterR   = v => { setDateFilter(v);   setPage(1); setSelected(new Set()); };
+  const setDateFilterR   = v => { setDateFilter(v); if (v !== 'custom') setCustomDate(''); setPage(1); setSelected(new Set()); };
   const setSourceFilterR = v => { setSourceFilter(v); setPage(1); setSelected(new Set()); };
   const setStatusFilterR = v => { setStatusFilter(v); setPage(1); setSelected(new Set()); };
 
@@ -449,6 +459,17 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                 {label}
               </button>
             ))}
+            <input
+              type="date"
+              value={customDate}
+              onChange={e => {
+                setCustomDate(e.target.value);
+                setDateFilter('custom');
+                setPage(1);
+                setSelected(new Set());
+              }}
+              style={{ padding: '4px 8px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${dateFilter === 'custom' ? colors.green : colors.border}`, backgroundColor: colors.bgPanel, color: dateFilter === 'custom' ? colors.green : colors.textSecondary, cursor: 'pointer', outline: 'none' }}
+            />
           </div>
 
           <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
