@@ -170,14 +170,14 @@ export default function DashboardPanel({ onChangeView }) {
   useEffect(() => { load(); }, []);
 
   /* ── Número héroe animado ── */
-  const heroRevenue    = useCountUp(data?.week?.revenue    || 0, 1400);
-  const heroBotMsgs    = useCountUp(data?.week?.botMessages || 0, 900);
-  const heroOrders     = useCountUp(data?.week?.orders      || 0, 800);
-  const heroNewConvs   = useCountUp(data?.week?.newConversations || 0, 700);
+  const heroTodayRevenue = useCountUp(data?.today?.revenue  || 0, 1400);
+  const heroWeekRevenue  = useCountUp(data?.week?.revenue   || 0, 1200);
+  const heroBotMsgs      = useCountUp(data?.week?.botMessages || 0, 900);
+  const heroNewConvs     = useCountUp(data?.week?.newConversations || 0, 700);
 
-  /* ── Máximo para el sparkline ── */
-  const maxActivity = data
-    ? Math.max(...(data.activityByDay || []).map(d => d.inbound + d.bot), 1)
+  /* ── Máximo para el sparkline de ventas ── */
+  const maxRevenue = data
+    ? Math.max(...(data.dailySales || []).map(d => d.revenue), 1)
     : 1;
 
   const DAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
@@ -208,10 +208,10 @@ export default function DashboardPanel({ onChangeView }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <Zap size={18} color={colors.yellow} />
           <span style={{ color: colors.textPrimary, fontSize: '16px', fontWeight: 700 }}>
-            Esta semana
+            Resumen
           </span>
           <span style={{ color: colors.textMuted, fontSize: '12px' }}>
-            desde el {weekStart}
+            {new Date().toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })}
           </span>
         </div>
         <button onClick={load}
@@ -232,7 +232,7 @@ export default function DashboardPanel({ onChangeView }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '860px' }}>
 
-            {/* ── Número héroe: ingresos ── */}
+            {/* ── Hero: ventas del día ── */}
             <div style={{ ...card, background: isDark
               ? `linear-gradient(135deg, ${colors.bgPanel} 0%, #0d2d1a 100%)`
               : `linear-gradient(135deg, ${colors.bgPanel} 0%, #e8f5ee 100%)` }}>
@@ -241,27 +241,25 @@ export default function DashboardPanel({ onChangeView }) {
                   <div>
                     <div style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase',
                       letterSpacing: '0.8px', color: colors.textMuted, marginBottom: '8px' }}>
-                      💰 Ingresos generados por el bot
+                      📦 Ventas de hoy
                     </div>
                     <div style={{ fontSize: loading ? '32px' : '48px', fontWeight: 800,
                       color: colors.green, lineHeight: 1, letterSpacing: '-1px', transition: 'font-size 0.3s' }}>
-                      {loading ? '—' : clp(heroRevenue)}
+                      {loading ? '—' : clp(heroTodayRevenue)}
                     </div>
                     <div style={{ fontSize: '13px', color: colors.textSecondary, marginTop: '8px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
-                      {loading ? '' : data?.week?.revenue > 0
-                        ? 'El bot trabajó por ti esta semana 🤖'
-                        : 'Aún sin ventas esta semana — ¡el re-enganche puede cambiar eso!'}
-                      {!loading && <Delta current={data?.week?.revenue || 0} prev={data?.lastWeek?.revenue || 0} colors={colors} />}
+                      {loading ? '' : `${data?.today?.orders || 0} pedido${(data?.today?.orders || 0) !== 1 ? 's' : ''} hoy (bot + Shopify)`}
                     </div>
                   </div>
-                  {!loading && data?.allTime?.revenue > 0 && (
+                  {!loading && (
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: '11px', color: colors.textMuted, marginBottom: '4px' }}>Total histórico</div>
+                      <div style={{ fontSize: '11px', color: colors.textMuted, marginBottom: '4px' }}>Esta semana</div>
                       <div style={{ fontSize: '20px', fontWeight: 700, color: colors.textSecondary }}>
-                        {clp(data.allTime.revenue)}
+                        {clp(heroWeekRevenue)}
                       </div>
                       <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '2px' }}>
-                        {data.allTime.orders} pedido{data.allTime.orders !== 1 ? 's' : ''}
+                        {data?.week?.orders || 0} pedido{(data?.week?.orders || 0) !== 1 ? 's' : ''}
+                        <Delta current={data?.week?.revenue || 0} prev={data?.lastWeek?.revenue || 0} colors={colors} />
                       </div>
                     </div>
                   )}
@@ -269,8 +267,55 @@ export default function DashboardPanel({ onChangeView }) {
               </div>
             </div>
 
-            {/* ── 3 stat cards ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+            {/* ── Sparkline: ventas por día (últimos 7) ── */}
+            {!loading && data?.dailySales && (
+              <div style={card}>
+                <div style={{ padding: '16px 20px 0', display: 'flex', alignItems: 'center',
+                  justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>
+                    Ventas últimos 7 días
+                  </span>
+                  <span style={{ fontSize: '11px', color: colors.textMuted }}>Bot + Shopify</span>
+                </div>
+                <div style={{ padding: '12px 20px 16px' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+                    {data.dailySales.map((d, i) => {
+                      const date = new Date(d.date);
+                      const dayLabel = DAY_LABELS[date.getDay()];
+                      const isToday = i === data.dailySales.length - 1;
+                      const pct = maxRevenue > 0 ? (d.revenue / maxRevenue) * 100 : 0;
+                      return (
+                        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', position: 'relative' }}
+                          title={`${dayLabel}: ${clp(d.revenue)} (${d.orders} pedidos)`}>
+                          <div style={{ height: '56px', display: 'flex', alignItems: 'flex-end' }}>
+                            <div style={{
+                              width: '100%', borderRadius: '3px 3px 0 0',
+                              height: `${Math.max(pct, d.revenue > 0 ? 8 : 2)}%`,
+                              backgroundColor: isToday ? colors.green : (d.revenue > 0 ? `${colors.green}88` : colors.border),
+                              transition: 'height 0.5s ease',
+                              minHeight: '2px',
+                            }} />
+                          </div>
+                          <div style={{ textAlign: 'center', fontSize: '10px',
+                            color: isToday ? colors.green : colors.textMuted,
+                            fontWeight: isToday ? 700 : 400 }}>
+                            {dayLabel}
+                          </div>
+                          {d.revenue > 0 && (
+                            <div style={{ textAlign: 'center', fontSize: '9px', color: colors.textSecondary }}>
+                              {clp(d.revenue)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── 2 stat cards: bot + clientes ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
               {[
                 {
                   icon: <Bot size={18} color={colors.green} />,
@@ -278,28 +323,15 @@ export default function DashboardPanel({ onChangeView }) {
                   value: loading ? '—' : heroBotMsgs,
                   sub:   loading ? '' : `${data?.week?.clientMessages || 0} recibidos de clientes`,
                   accent: colors.green,
-                  prevKey: 'botMessages',
-                  currKey: 'botMessages',
-                },
-                {
-                  icon: <Package size={18} color={colors.purple} />,
-                  label: 'Pedidos creados',
-                  value: loading ? '—' : heroOrders,
-                  sub:   loading ? '' : data?.allTime?.orders
-                    ? `${data.allTime.orders} en total`
-                    : 'esta semana',
-                  accent: colors.purple,
-                  prevKey: 'orders',
-                  currKey: 'orders',
+                  delta: { curr: data?.week?.botMessages || 0, prev: data?.lastWeek?.botMessages || 0 },
                 },
                 {
                   icon: <MessageSquare size={18} color={colors.yellow} />,
                   label: 'Nuevos clientes',
                   value: loading ? '—' : heroNewConvs,
-                  sub:   'conversaciones iniciadas',
+                  sub:   'conversaciones iniciadas esta semana',
                   accent: colors.yellow,
-                  prevKey: 'newConversations',
-                  currKey: 'newConversations',
+                  delta: { curr: data?.week?.newConversations || 0, prev: data?.lastWeek?.newConversations || 0 },
                 },
               ].map((s, i) => (
                 <div key={i} style={{ ...card, padding: '18px 20px' }}>
@@ -308,54 +340,16 @@ export default function DashboardPanel({ onChangeView }) {
                       backgroundColor: `${s.accent}18`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {s.icon}
                     </div>
-                    <span style={{ fontSize: '12px', color: colors.textSecondary, fontWeight: 500 }}>
-                      {s.label}
-                    </span>
+                    <span style={{ fontSize: '12px', color: colors.textSecondary, fontWeight: 500 }}>{s.label}</span>
                   </div>
-                  <div style={{ fontSize: '32px', fontWeight: 800, color: colors.textPrimary, lineHeight: 1 }}>
-                    {s.value}
-                  </div>
+                  <div style={{ fontSize: '32px', fontWeight: 800, color: colors.textPrimary, lineHeight: 1 }}>{s.value}</div>
                   <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '6px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
                     {s.sub}
-                    {!loading && <Delta current={data?.week?.[s.currKey] || 0} prev={data?.lastWeek?.[s.prevKey] || 0} colors={colors} />}
+                    {!loading && <Delta current={s.delta.curr} prev={s.delta.prev} colors={colors} />}
                   </div>
                 </div>
               ))}
             </div>
-
-            {/* ── Sparkline: actividad 7 días ── */}
-            {!loading && data?.activityByDay && (
-              <div style={card}>
-                <div style={{ padding: '16px 20px 0', display: 'flex', alignItems: 'center',
-                  justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>
-                    Actividad últimos 7 días
-                  </span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11px', color: colors.textMuted }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: colors.green, display: 'inline-block' }} />
-                      Bot respondió
-                    </span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: colors.textMuted, display: 'inline-block', opacity: 0.4 }} />
-                      Cliente escribió
-                    </span>
-                  </div>
-                </div>
-                <div style={{ padding: '12px 20px 16px' }}>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
-                    {data.activityByDay.map((d, i) => {
-                      const date = new Date(d.date);
-                      const dayLabel = DAY_LABELS[date.getDay()];
-                      const isToday = i === data.activityByDay.length - 1;
-                      return (
-                        <SparklineBar key={i} d={d} dayLabel={dayLabel} isToday={isToday} maxActivity={maxActivity} colors={colors} isDark={isDark} />
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* ── Feed de victorias recientes ── */}
             <div style={card}>
@@ -419,16 +413,16 @@ export default function DashboardPanel({ onChangeView }) {
                             {order.customerName}
                           </span>
                           <StatusBadge status={order.status} colors={colors} />
-                          {order.byBot && (
-                            <span style={{
-                              display: 'flex', alignItems: 'center', gap: '3px',
-                              fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '20px',
-                              backgroundColor: `${colors.green}18`, color: colors.green,
-                              border: `1px solid ${colors.green}33`, flexShrink: 0,
-                            }}>
-                              <Bot size={9} /> Bot
-                            </span>
-                          )}
+                          <span style={{
+                            display: 'flex', alignItems: 'center', gap: '3px',
+                            fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '20px',
+                            backgroundColor: order.source === 'bot' ? `${colors.green}18` : '#0d2929',
+                            color: order.source === 'bot' ? colors.green : '#4db6ac',
+                            border: `1px solid ${order.source === 'bot' ? colors.green : '#4db6ac'}33`,
+                            flexShrink: 0,
+                          }}>
+                            {order.source === 'bot' ? <><Bot size={9} /> Bot</> : '🛍️ Shopify'}
+                          </span>
                         </div>
                         <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '2px' }}>
                           {timeAgo(order.createdAt)}
@@ -445,7 +439,7 @@ export default function DashboardPanel({ onChangeView }) {
             </div>
 
             {/* ── CTA si no hay actividad ── */}
-            {!loading && data?.week?.botMessages === 0 && data?.week?.orders === 0 && (
+            {!loading && data?.week?.botMessages === 0 && data?.week?.revenue === 0 && (
               <div style={{ ...card, padding: '20px', display: 'flex', alignItems: 'center',
                 gap: '16px', backgroundColor: `${colors.yellow}0d`,
                 border: `1px solid ${colors.yellow}33` }}>
