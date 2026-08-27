@@ -85,7 +85,7 @@ function getCrmStatusStyle(status) {
 function getBotStatusStyle(status, colors) {
   const crm = getCrmStatusStyle(status);
   return {
-    draft:            { label: 'Borrador',       color: colors.textSecondary, bg: colors.bgHover },
+    draft:            { label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
     sent:             { label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
     payment_received: { label: 'Pago recibido',  color: '#38bdf8', bg: '#0c2030' },
     nuevo:            crm,
@@ -421,10 +421,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
           {[
-            { icon: <Package size={18} color={colors.textSecondary} />, label: 'En vista',        value: filtered.length,                                     color: colors.textPrimary },
-            { icon: <Clock size={18} color={colors.yellow} />,          label: 'Sin despachar',  value: totalUnfulfilled,                                        color: colors.yellow },
-            { icon: <CheckCircle size={18} color={colors.green} />,     label: 'Pagados',        value: totalPaid,                                               color: colors.green },
-            { icon: <DollarSign size={18} color={colors.green} />,      label: 'Total pagado',   value: `$${totalRevenue.toLocaleString('es-CL')}`,              color: colors.green },
+            { icon: <Package size={18} color={colors.textSecondary} />, label: 'En vista',           value: filtered.length,                                                                color: colors.textPrimary },
+            { icon: <Clock size={18} color={colors.yellow} />,          label: 'Sin despachar',      value: totalUnfulfilled,                                                               color: colors.yellow },
+            { icon: <DollarSign size={18} color={colors.green} />,      label: 'Ventas hoy',         value: stats?.ventasHoy != null ? `$${Number(stats.ventasHoy).toLocaleString('es-CL')}` : '—', color: colors.green },
+            { icon: <DollarSign size={18} color='#4db6ac' />,           label: 'Ventas este mes',    value: stats?.ventasMes != null ? `$${Number(stats.ventasMes).toLocaleString('es-CL')}` : '—', color: '#4db6ac' },
           ].map(({ icon, label, value, color }) => (
             <div key={label} style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '14px 16px', border: `1px solid ${colors.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>{icon}<span style={{ fontSize: '11px', color: colors.textSecondary }}>{label}</span></div>
@@ -624,6 +624,13 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
         <div style={{ backgroundColor: status.bg, color: status.color, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 500, border: `1px solid ${status.color}33`, flexShrink: 0 }}>
           {status.label}
         </div>
+
+        {/* Badge financiero — Pendiente para draft/sent */}
+        {(order.status === 'draft' || order.status === 'sent') && (
+          <div style={{ backgroundColor: '#2e2100', color: colors.yellow, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 500, border: `1px solid ${colors.yellow}33`, flexShrink: 0 }}>
+            Pendiente
+          </div>
+        )}
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 500 }}>{order.customer_name || order.contact_name}</div>

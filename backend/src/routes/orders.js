@@ -98,25 +98,75 @@ router.get('/', async (req, res) => {
 
 /**
  * GET /api/orders/stats
- * Resumen rápido para el dashboard
+ * Panorama general de ventas de la empresa (bot + Shopify)
  */
 router.get('/stats', async (req, res) => {
   try {
     const pool = getPool();
-    const { rows: [totalRow] }   = await pool.query('SELECT COUNT(*) as n FROM orders WHERE organization_id = $1', [req.orgId]);
-    const { rows: [paidRow] }    = await pool.query("SELECT COUNT(*) as n FROM orders WHERE organization_id = $1 AND status = 'paid'", [req.orgId]);
-    const { rows: [pendingRow] } = await pool.query("SELECT COUNT(*) as n FROM orders WHERE organization_id = $1 AND status IN ('draft','sent')", [req.orgId]);
-    const { rows: [revenueRow] } = await pool.query("SELECT SUM(total_price::numeric) as s FROM orders WHERE organization_id = $1 AND status = 'paid'", [req.orgId]);
-    const { rows: [todayRow] }   = await pool.query("SELECT COUNT(*) as n FROM orders WHERE organization_id = $1 AND created_at::date = CURRENT_DATE", [req.orgId]);
+
+    // Ventas hoy: bot (paid) + Shopify (paid)
+    const { rows: [ventasHoyRow] } = await pool.query(`
+      SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
+        SELECT total_price FROM orders
+          WHERE organization_id = $1 AND status = 'paid'
+            AND created_at::date = CURRENT_DATE
+        UNION ALL
+        SELECT total_price FROM shopify_orders
+          WHERE organization_id = $1
+            AND UPPER(financial_status) = 'PAID'
+            AND shopify_created_at::date = CURRENT_DATE
+      ) t
+    `, [req.orgId]);
+
+    // Pedidos hoy: ambas fuentes, cualquier estado no cancelado
+    const { rows: [pedidosHoyRow] } = await pool.query(`
+      SELECT COUNT(*) AS n FROM (
+        SELECT id FROM orders
+          WHERE organization_id = $1 AND status NOT IN ('cancelled')
+            AND created_at::date = CURRENT_DATE
+        UNION ALL
+        SELECT id FROM shopify_orders
+          WHERE organization_id = $1
+            AND UPPER(financial_status) NOT IN ('VOIDED','REFUNDED')
+            AND shopify_created_at::date = CURRENT_DATE
+      ) t
+    `, [req.orgId]);
+
+    // Ventas este mes: bot (paid) + Shopify (paid)
+    const { rows: [ventasMesRow] } = await pool.query(`
+      SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
+        SELECT total_price FROM orders
+          WHERE organization_id = $1 AND status = 'paid'
+            AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
+        UNION ALL
+        SELECT total_price FROM shopify_orders
+          WHERE organization_id = $1
+            AND UPPER(financial_status) = 'PAID'
+            AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
+      ) t
+    `, [req.orgId]);
+
+    // Pedidos este mes: ambas fuentes
+    const { rows: [pedidosMesRow] } = await pool.query(`
+      SELECT COUNT(*) AS n FROM (
+        SELECT id FROM orders
+          WHERE organization_id = $1 AND status NOT IN ('cancelled')
+            AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
+        UNION ALL
+        SELECT id FROM shopify_orders
+          WHERE organization_id = $1
+            AND UPPER(financial_status) NOT IN ('VOIDED','REFUNDED')
+            AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
+      ) t
+    `, [req.orgId]);
 
     res.json({
       success: true,
       data: {
-        total:   parseInt(totalRow.n),
-        paid:    parseInt(paidRow.n),
-        pending: parseInt(pendingRow.n),
-        revenue: parseFloat(revenueRow.s) || 0,
-        today:   parseInt(todayRow.n),
+        ventasHoy:   parseFloat(ventasHoyRow.s)  || 0,
+        pedidosHoy:  parseInt(pedidosHoyRow.n)   || 0,
+        ventasMes:   parseFloat(ventasMesRow.s)  || 0,
+        pedidosMes:  parseInt(pedidosMesRow.n)   || 0,
       },
     });
   } catch (err) {
