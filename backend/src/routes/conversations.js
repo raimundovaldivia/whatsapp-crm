@@ -274,11 +274,22 @@ router.post('/:id/orders', async (req, res) => {
 
     const totalPrice = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
 
+    // Resolver nombre: priorizar contacts table si la conv solo tiene el número como nombre
+    let customerName = conv.contact_name;
+    const rawPhone = conv.phone_number;
+    if (!customerName || customerName === rawPhone || /^\d+$/.test(customerName) || customerName === 'Cliente') {
+      const contact = await db.getContact(req.orgId, rawPhone);
+      if (contact?.name && contact.name !== rawPhone && !/^\d+$/.test(contact.name)) {
+        customerName = contact.name;
+      }
+    }
+    customerName = customerName || rawPhone;
+
     const order = await db.createOrder({
       conversationId: convId,
       organizationId: req.orgId,
       items,
-      customerName:    conv.contact_name || conv.phone_number,
+      customerName,
       customerPhone:   conv.phone_number,
       shippingAddress: {},
       totalPrice,
