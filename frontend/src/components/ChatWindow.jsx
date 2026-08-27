@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -14,6 +14,26 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
+
+  // Historial de compras
+  const [showHistory, setShowHistory]       = useState(false);
+  const [historyData, setHistoryData]       = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const openHistory = useCallback(async () => {
+    const phone = conversation.phone_number;
+    if (!phone) return;
+    setShowHistory(true);
+    setHistoryLoading(true);
+    try {
+      const res = await api.get(`/orders/history/${encodeURIComponent(phone)}`);
+      setHistoryData(res.data?.data || null);
+    } catch {
+      setHistoryData(null);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [conversation.phone_number]);
 
   // Order modal state
   const [showOrderModal, setShowOrderModal]   = useState(false);
@@ -356,7 +376,10 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               {displayContactName}
             </div>
             {!isMobile && (
-              <div style={{ fontSize: '12px', color: colors.textSecondary }}>
+              <div onClick={openHistory}
+                style={{ fontSize: '12px', color: colors.green, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                title="Ver historial de compras">
+                <History size={11} />
                 {conversation.phone_number}
               </div>
             )}
@@ -645,6 +668,77 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           textAlign: 'center',
         }}>
           {error}
+        </div>
+      )}
+
+      {/* ── Modal Historial de Compras ── */}
+      {showHistory && (
+        <div onClick={() => setShowHistory(false)} style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.6)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ backgroundColor: colors.bgPanel, borderRadius:'14px', border:`1px solid ${colors.border}`, width:'100%', maxWidth:'500px', maxHeight:'80vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }}>
+            {/* Header */}
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${colors.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                <History size={16} color={colors.green} />
+                <span style={{ fontWeight:700, fontSize:'15px', color:colors.textPrimary }}>Historial de compras</span>
+                <span style={{ fontSize:'12px', color:colors.textSecondary }}>— {conversation.contact_name || conversation.phone_number}</span>
+              </div>
+              <button onClick={() => setShowHistory(false)} style={{ background:'none', border:'none', cursor:'pointer', color:colors.textSecondary, padding:'4px' }}><X size={18} /></button>
+            </div>
+
+            {/* Body */}
+            <div style={{ flex:1, overflowY:'auto', padding:'16px 20px' }}>
+              {historyLoading ? (
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'40px', color:colors.textSecondary }}>
+                  <Loader size={20} style={{ animation:'spin 1s linear infinite' }} />
+                </div>
+              ) : !historyData || historyData.shopifyOrders.length === 0 ? (
+                <div style={{ textAlign:'center', color:colors.textSecondary, padding:'40px', fontSize:'13px' }}>Sin compras registradas en Shopify</div>
+              ) : (
+                <>
+                  {/* Resumen */}
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
+                    {[
+                      { label:'Pedidos', value: historyData.summary.totalPedidos },
+                      { label:'Total gastado', value: `$${Number(historyData.summary.totalGastado).toLocaleString('es-CL')}` },
+                      { label:'Última compra', value: historyData.summary.ultimaCompra ? new Date(historyData.summary.ultimaCompra).toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—' },
+                    ].map(({ label, value }) => (
+                      <div key={label} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'10px 12px', border:`1px solid ${colors.border}` }}>
+                        <div style={{ fontSize:'10px', color:colors.textSecondary, marginBottom:'4px' }}>{label}</div>
+                        <div style={{ fontSize:'14px', fontWeight:700, color:colors.textPrimary }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Lista de órdenes */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+                    {historyData.shopifyOrders.map((o, i) => {
+                      const fecha = o.shopify_created_at ? new Date(o.shopify_created_at).toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—';
+                      const items = Array.isArray(o.items) ? o.items : [];
+                      const fs = (o.financial_status||'').toUpperCase();
+                      const fsColor = fs === 'PAID' ? colors.green : fs === 'PENDING' ? colors.yellow : colors.textSecondary;
+                      const fsLabel = { PAID:'Pagado', PENDING:'Pendiente', REFUNDED:'Reembolsado', VOIDED:'Anulado', AUTHORIZED:'Autorizado' }[fs] || fs;
+                      return (
+                        <div key={i} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
+                          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
+                            <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha} {o.shopify_name ? `· ${o.shopify_name}` : ''}</span>
+                            <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                              <span style={{ fontSize:'11px', color:fsColor, fontWeight:600 }}>{fsLabel}</span>
+                              <span style={{ fontSize:'13px', fontWeight:700, color:colors.textPrimary }}>${Number(o.total_price||0).toLocaleString('es-CL')}</span>
+                            </div>
+                          </div>
+                          {items.length > 0 && (
+                            <div style={{ fontSize:'11px', color:colors.textSecondary }}>
+                              {items.map(it => `${it.quantity}x ${it.name || it.title}`).join(' · ')}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

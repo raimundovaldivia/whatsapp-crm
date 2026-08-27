@@ -176,6 +176,60 @@ router.get('/stats', async (req, res) => {
 });
 
 /**
+ * GET /api/orders/history/:phone
+ * Historial de compras de un cliente por número de teléfono.
+ * Busca en shopify_orders con variantes del número (56xxx, 9xxx, +56xxx).
+ */
+router.get('/history/:phone', async (req, res) => {
+  try {
+    const pool  = getPool();
+    const phone = req.params.phone.replace(/\s+/g, '');
+    // Variantes del número para búsqueda flexible
+    const variants = [phone];
+    if (phone.startsWith('56') && phone.length >= 10)       variants.push(phone.slice(2));
+    if (phone.startsWith('9')  && phone.length === 9)        variants.push('56' + phone);
+    if (!phone.startsWith('+') && phone.startsWith('56'))    variants.push('+' + phone);
+
+    const { rows: shopifyOrders } = await pool.query(`
+      SELECT shopify_order_id, shopify_name, customer_name, total_price,
+             financial_status, fulfillment_status, shopify_created_at, items
+      FROM shopify_orders
+      WHERE organization_id = $1
+        AND customer_phone = ANY($2::text[])
+      ORDER BY shopify_created_at DESC
+      LIMIT 20
+    `, [req.orgId, variants]);
+
+    const { rows: botOrders } = await pool.query(`
+      SELECT id, customer_name, total_price, status, created_at, items
+      FROM orders
+      WHERE organization_id = $1
+        AND customer_phone = ANY($2::text[])
+        AND status NOT IN ('cancelled')
+      ORDER BY created_at DESC
+      LIMIT 10
+    `, [req.orgId, variants]);
+
+    // Resumen agregado
+    const validShopify = shopifyOrders.filter(o => !['VOIDED','REFUNDED'].includes((o.financial_status||'').toUpperCase()));
+    const totalGastado  = validShopify.reduce((s, o) => s + parseFloat(o.total_price || 0), 0);
+    const totalPedidos  = validShopify.length;
+    const ultimaCompra  = shopifyOrders[0]?.shopify_created_at || null;
+
+    res.json({
+      success: true,
+      data: {
+        summary: { totalPedidos, totalGastado, ultimaCompra },
+        shopifyOrders,
+        botOrders,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/orders/shopify
  * Lee las órdenes de Shopify desde nuestra DB (previamente sincronizadas).
  * IMPORTANTE: debe estar ANTES de /:id para no ser interceptado.

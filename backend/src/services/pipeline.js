@@ -109,7 +109,7 @@ async function processMessage(orgId, conversationId, userMessage) {
   const tiendaSection = tiendaUrl
     ? `## Tienda online\nURL de la tienda: ${tiendaUrl}\nUsa este link SOLO cuando el cliente pida explícitamente ver la tienda, el catálogo completo o la página web (ej: "¿tienes web?", "mándame el link del catálogo", "quiero ver todos los productos"). NUNCA uses este link para cerrar una venta ni como respuesta a "si", "dale", "sí quiero" o cualquier confirmación de compra — en ese caso, usa SIEMPRE las frases de cierre del pedido para recopilar los datos del cliente.`
     : '';
-  const storeCustomPrompt = [clientTypeSection, deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [clientTypeSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
   // Si escribe de nuevo después de confirmar, reiniciar a exploración
@@ -185,6 +185,46 @@ async function processMessage(orgId, conversationId, userMessage) {
     ? await db.getContact(orgId, conversation.phone_number).catch(() => null)
     : null;
   const customerName = knownCustomerData?.name?.split(' ')[0] || '';
+
+  // Historial de compras del cliente — inyectado al contexto del bot
+  let purchaseHistorySection = '';
+  if (conversation.phone_number) {
+    try {
+      const pool    = getPool();
+      const phone   = conversation.phone_number.replace(/\s+/g, '');
+      const variants = [phone];
+      if (phone.startsWith('56') && phone.length >= 10) variants.push(phone.slice(2));
+      if (phone.startsWith('9')  && phone.length === 9) variants.push('56' + phone);
+      if (!phone.startsWith('+') && phone.startsWith('56')) variants.push('+' + phone);
+
+      const { rows } = await pool.query(`
+        SELECT customer_name, total_price, financial_status, shopify_created_at, items
+        FROM shopify_orders
+        WHERE organization_id = $1
+          AND customer_phone = ANY($2::text[])
+          AND UPPER(financial_status) NOT IN ('VOIDED','REFUNDED')
+        ORDER BY shopify_created_at DESC
+        LIMIT 10
+      `, [orgId, variants]);
+
+      if (rows.length > 0) {
+        const total = rows.reduce((s, o) => s + parseFloat(o.total_price || 0), 0);
+        const lines = rows.map(o => {
+          const fecha = o.shopify_created_at
+            ? new Date(o.shopify_created_at).toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' })
+            : '—';
+          const items = Array.isArray(o.items)
+            ? o.items.map(i => `${i.quantity}x ${i.name || i.title}`).join(', ')
+            : '';
+          return `- ${fecha}: $${parseFloat(o.total_price||0).toLocaleString('es-CL')} — ${items}`;
+        });
+        purchaseHistorySection = `## Historial de compras del cliente\nEste cliente ha comprado ${rows.length} vez/veces. Total acumulado: $${total.toLocaleString('es-CL')}.\nÚltimas compras:\n${lines.join('\n')}\n\nUsa esta información para personalizar tu atención: recuerda lo que compró antes, sugiere productos complementarios y trátalo como cliente frecuente si aplica.`;
+      }
+    } catch (e) {
+      // No romper el flujo si falla la consulta de historial
+      console.warn('[Pipeline] historial compras error:', e.message);
+    }
+  }
 
   const salesOpts = { isWarmLead: isTemplateReply, templateName, customerName, intent };
 
