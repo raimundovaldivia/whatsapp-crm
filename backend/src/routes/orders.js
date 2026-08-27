@@ -117,6 +117,7 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND shopify_created_at::date = CURRENT_DATE
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
@@ -133,6 +134,7 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND shopify_created_at::date = CURRENT_DATE
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
@@ -149,6 +151,7 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
@@ -165,6 +168,7 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
