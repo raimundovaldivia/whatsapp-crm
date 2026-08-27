@@ -223,10 +223,11 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const totalPages  = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated   = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Helper para sumar pedidos válidos (excluye voided/refunded/cancelled)
+  // Helper para sumar ventas: solo shopify_orders, excluye voided/refunded
+  // (los pedidos bot que pasaron por Shopify ya están en shopify_orders)
   const sumarValidos = (orders) => orders.reduce((sum, o) => {
-    if (o.source === 'shopify' && ['VOIDED', 'REFUNDED'].includes(o.financialStatus)) return sum;
-    if (o.source === 'bot' && o.botStatus === 'cancelled') return sum;
+    if (o.source === 'bot') return sum;
+    if (['VOIDED', 'REFUNDED'].includes(o.financialStatus)) return sum;
     return sum + (o.total || 0);
   }, 0);
 
