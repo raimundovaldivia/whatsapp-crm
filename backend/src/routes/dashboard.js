@@ -35,117 +35,69 @@ router.get('/wins', async (req, res) => {
       recentOrderRows,
     ] = await Promise.all([
 
-      // Ventas hoy: shopify + bot pagado sin shopify_order_id (evita doble conteo)
+      // Ventas hoy — solo shopify_orders (fuente correcta, sin doble conteo)
       pool.query(`
-        SELECT COALESCE(SUM(total_price), 0) AS s FROM (
-          SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
-            WHERE organization_id = $1
-              AND status = 'paid'
-              AND (shopify_order_id IS NULL OR shopify_order_id = '')
-              AND created_at::date = CURRENT_DATE
-          UNION ALL
-          SELECT total_price::numeric AS total_price FROM shopify_orders
-            WHERE organization_id = $1
-              AND shopify_created_at IS NOT NULL
-              AND shopify_created_at::date = CURRENT_DATE
-              AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-        ) t
+        SELECT COALESCE(SUM(total_price), 0) AS s
+        FROM shopify_orders
+        WHERE organization_id = $1
+          AND shopify_created_at IS NOT NULL
+          AND (shopify_created_at AT TIME ZONE 'America/Santiago')::date = (NOW() AT TIME ZONE 'America/Santiago')::date
+          AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
       `, [orgId]),
 
       // Pedidos hoy
       pool.query(`
-        SELECT COUNT(*) AS n FROM (
-          SELECT id::text FROM orders
-            WHERE organization_id = $1
-              AND status = 'paid'
-              AND (shopify_order_id IS NULL OR shopify_order_id = '')
-              AND created_at::date = CURRENT_DATE
-          UNION ALL
-          SELECT id::text FROM shopify_orders
-            WHERE organization_id = $1
-              AND shopify_created_at IS NOT NULL
-              AND shopify_created_at::date = CURRENT_DATE
-              AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-        ) t
+        SELECT COUNT(*) AS n
+        FROM shopify_orders
+        WHERE organization_id = $1
+          AND shopify_created_at IS NOT NULL
+          AND (shopify_created_at AT TIME ZONE 'America/Santiago')::date = (NOW() AT TIME ZONE 'America/Santiago')::date
+          AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
       `, [orgId]),
 
       // Ventas esta semana
       pool.query(`
-        SELECT COALESCE(SUM(total_price), 0) AS s FROM (
-          SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
-            WHERE organization_id = $1
-              AND status = 'paid'
-              AND (shopify_order_id IS NULL OR shopify_order_id = '')
-              AND created_at >= date_trunc('week', NOW())
-          UNION ALL
-          SELECT total_price::numeric AS total_price FROM shopify_orders
-            WHERE organization_id = $1
-              AND shopify_created_at IS NOT NULL
-              AND shopify_created_at >= date_trunc('week', NOW())
-              AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-        ) t
+        SELECT COALESCE(SUM(total_price), 0) AS s
+        FROM shopify_orders
+        WHERE organization_id = $1
+          AND shopify_created_at IS NOT NULL
+          AND shopify_created_at >= date_trunc('week', NOW() AT TIME ZONE 'America/Santiago') AT TIME ZONE 'America/Santiago'
+          AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
       `, [orgId]),
 
       // Pedidos esta semana
       pool.query(`
-        SELECT COUNT(*) AS n FROM (
-          SELECT id::text FROM orders
-            WHERE organization_id = $1
-              AND status = 'paid'
-              AND (shopify_order_id IS NULL OR shopify_order_id = '')
-              AND created_at >= date_trunc('week', NOW())
-          UNION ALL
-          SELECT id::text FROM shopify_orders
-            WHERE organization_id = $1
-              AND shopify_created_at IS NOT NULL
-              AND shopify_created_at >= date_trunc('week', NOW())
-              AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-        ) t
+        SELECT COUNT(*) AS n
+        FROM shopify_orders
+        WHERE organization_id = $1
+          AND shopify_created_at IS NOT NULL
+          AND shopify_created_at >= date_trunc('week', NOW() AT TIME ZONE 'America/Santiago') AT TIME ZONE 'America/Santiago'
+          AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
       `, [orgId]),
 
       // Ventas semana pasada
       pool.query(`
-        SELECT COALESCE(SUM(total_price), 0) AS s FROM (
-          SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
-            WHERE organization_id = $1
-              AND status = 'paid'
-              AND (shopify_order_id IS NULL OR shopify_order_id = '')
-              AND created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
-              AND created_at <  date_trunc('week', NOW())
-          UNION ALL
-          SELECT total_price::numeric AS total_price FROM shopify_orders
-            WHERE organization_id = $1
-              AND shopify_created_at IS NOT NULL
-              AND shopify_created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
-              AND shopify_created_at <  date_trunc('week', NOW())
-              AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-        ) t
+        SELECT COALESCE(SUM(total_price), 0) AS s
+        FROM shopify_orders
+        WHERE organization_id = $1
+          AND shopify_created_at IS NOT NULL
+          AND shopify_created_at >= date_trunc('week', (NOW() - INTERVAL '7 days') AT TIME ZONE 'America/Santiago') AT TIME ZONE 'America/Santiago'
+          AND shopify_created_at <  date_trunc('week', NOW() AT TIME ZONE 'America/Santiago') AT TIME ZONE 'America/Santiago'
+          AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
       `, [orgId]),
 
       // Ventas por día — últimos 7 días, hora local Chile
       pool.query(`
-        SELECT day_local AS day,
+        SELECT (shopify_created_at AT TIME ZONE 'America/Santiago')::date AS day,
                COUNT(*)                              AS orders,
                COALESCE(SUM(total_price), 0)         AS revenue
-        FROM (
-          SELECT (created_at AT TIME ZONE 'America/Santiago')::date AS day_local,
-                 NULLIF(total_price, '')::numeric AS total_price
-          FROM orders
-            WHERE organization_id = $1
-              AND status = 'paid'
-              AND (shopify_order_id IS NULL OR shopify_order_id = '')
-              AND (created_at AT TIME ZONE 'America/Santiago')::date >= (NOW() AT TIME ZONE 'America/Santiago')::date - 6
-          UNION ALL
-          SELECT (shopify_created_at AT TIME ZONE 'America/Santiago')::date AS day_local,
-                 total_price::numeric AS total_price
-          FROM shopify_orders
-            WHERE organization_id = $1
-              AND shopify_created_at IS NOT NULL
-              AND (shopify_created_at AT TIME ZONE 'America/Santiago')::date >= (NOW() AT TIME ZONE 'America/Santiago')::date - 6
-              AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-        ) t
-        GROUP BY day_local
-        ORDER BY day_local ASC
+        FROM shopify_orders
+        WHERE organization_id = $1
+          AND shopify_created_at IS NOT NULL
+          AND (shopify_created_at AT TIME ZONE 'America/Santiago')::date >= (NOW() AT TIME ZONE 'America/Santiago')::date - 6
+          AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
+        GROUP BY 1
+        ORDER BY 1 ASC
       `, [orgId]),
 
       // Nuevas conversaciones esta semana

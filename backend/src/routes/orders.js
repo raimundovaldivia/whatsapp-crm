@@ -104,72 +104,44 @@ router.get('/stats', async (req, res) => {
   try {
     const pool = getPool();
 
-    // Ventas hoy: todas menos canceladas/anuladas/reembolsadas
+    // Ventas hoy — solo shopify_orders (fuente correcta, sin doble conteo)
     const { rows: [ventasHoyRow] } = await pool.query(`
-      SELECT COALESCE(SUM(total_price), 0) AS s FROM (
-        SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
-          WHERE organization_id = $1
-            AND status = 'paid'
-            AND (shopify_order_id IS NULL OR shopify_order_id = '')
-            AND created_at::date = CURRENT_DATE
-        UNION ALL
-        SELECT total_price::numeric AS total_price FROM shopify_orders
-          WHERE organization_id = $1
-            AND shopify_created_at IS NOT NULL
-            AND shopify_created_at::date = CURRENT_DATE
-            AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-      ) t
+      SELECT COALESCE(SUM(total_price), 0) AS s
+      FROM shopify_orders
+      WHERE organization_id = $1
+        AND shopify_created_at IS NOT NULL
+        AND (shopify_created_at AT TIME ZONE 'America/Santiago')::date = (NOW() AT TIME ZONE 'America/Santiago')::date
+        AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
     `, [req.orgId]);
 
     // Pedidos hoy
     const { rows: [pedidosHoyRow] } = await pool.query(`
-      SELECT COUNT(*) AS n FROM (
-        SELECT id::text FROM orders
-          WHERE organization_id = $1
-            AND status = 'paid'
-            AND (shopify_order_id IS NULL OR shopify_order_id = '')
-            AND created_at::date = CURRENT_DATE
-        UNION ALL
-        SELECT id::text FROM shopify_orders
-          WHERE organization_id = $1
-            AND shopify_created_at IS NOT NULL
-            AND shopify_created_at::date = CURRENT_DATE
-            AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-      ) t
+      SELECT COUNT(*) AS n
+      FROM shopify_orders
+      WHERE organization_id = $1
+        AND shopify_created_at IS NOT NULL
+        AND (shopify_created_at AT TIME ZONE 'America/Santiago')::date = (NOW() AT TIME ZONE 'America/Santiago')::date
+        AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
     `, [req.orgId]);
 
     // Ventas este mes
     const { rows: [ventasMesRow] } = await pool.query(`
-      SELECT COALESCE(SUM(total_price), 0) AS s FROM (
-        SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
-          WHERE organization_id = $1
-            AND status = 'paid'
-            AND (shopify_order_id IS NULL OR shopify_order_id = '')
-            AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
-        UNION ALL
-        SELECT total_price::numeric AS total_price FROM shopify_orders
-          WHERE organization_id = $1
-            AND shopify_created_at IS NOT NULL
-            AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
-            AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-      ) t
+      SELECT COALESCE(SUM(total_price), 0) AS s
+      FROM shopify_orders
+      WHERE organization_id = $1
+        AND shopify_created_at IS NOT NULL
+        AND DATE_TRUNC('month', shopify_created_at AT TIME ZONE 'America/Santiago') = DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Santiago')
+        AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
     `, [req.orgId]);
 
     // Pedidos este mes
     const { rows: [pedidosMesRow] } = await pool.query(`
-      SELECT COUNT(*) AS n FROM (
-        SELECT id::text FROM orders
-          WHERE organization_id = $1
-            AND status = 'paid'
-            AND (shopify_order_id IS NULL OR shopify_order_id = '')
-            AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
-        UNION ALL
-        SELECT id::text FROM shopify_orders
-          WHERE organization_id = $1
-            AND shopify_created_at IS NOT NULL
-            AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
-            AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-      ) t
+      SELECT COUNT(*) AS n
+      FROM shopify_orders
+      WHERE organization_id = $1
+        AND shopify_created_at IS NOT NULL
+        AND DATE_TRUNC('month', shopify_created_at AT TIME ZONE 'America/Santiago') = DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Santiago')
+        AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
     `, [req.orgId]);
 
     res.json({
