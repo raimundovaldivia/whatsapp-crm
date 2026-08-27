@@ -106,13 +106,13 @@ router.get('/stats', async (req, res) => {
 
     // Ventas hoy: todas menos canceladas/anuladas/reembolsadas
     const { rows: [ventasHoyRow] } = await pool.query(`
-      SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
-        SELECT total_price FROM orders
+      SELECT COALESCE(SUM(total_price), 0) AS s FROM (
+        SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
           WHERE organization_id = $1
             AND (status IS NULL OR status NOT IN ('cancelled'))
             AND created_at::date = CURRENT_DATE
         UNION ALL
-        SELECT total_price FROM shopify_orders
+        SELECT total_price::numeric AS total_price FROM shopify_orders
           WHERE organization_id = $1
             AND shopify_created_at IS NOT NULL
             AND shopify_created_at::date = CURRENT_DATE
@@ -123,12 +123,12 @@ router.get('/stats', async (req, res) => {
     // Pedidos hoy: ambas fuentes, cualquier estado no cancelado
     const { rows: [pedidosHoyRow] } = await pool.query(`
       SELECT COUNT(*) AS n FROM (
-        SELECT id FROM orders
+        SELECT id::text FROM orders
           WHERE organization_id = $1
             AND (status IS NULL OR status NOT IN ('cancelled'))
             AND created_at::date = CURRENT_DATE
         UNION ALL
-        SELECT id FROM shopify_orders
+        SELECT id::text FROM shopify_orders
           WHERE organization_id = $1
             AND shopify_created_at IS NOT NULL
             AND shopify_created_at::date = CURRENT_DATE
@@ -138,13 +138,13 @@ router.get('/stats', async (req, res) => {
 
     // Ventas este mes: todas menos canceladas/anuladas/reembolsadas
     const { rows: [ventasMesRow] } = await pool.query(`
-      SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
-        SELECT total_price FROM orders
+      SELECT COALESCE(SUM(total_price), 0) AS s FROM (
+        SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
           WHERE organization_id = $1
             AND (status IS NULL OR status NOT IN ('cancelled'))
             AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
         UNION ALL
-        SELECT total_price FROM shopify_orders
+        SELECT total_price::numeric AS total_price FROM shopify_orders
           WHERE organization_id = $1
             AND shopify_created_at IS NOT NULL
             AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
@@ -155,12 +155,12 @@ router.get('/stats', async (req, res) => {
     // Pedidos este mes: ambas fuentes
     const { rows: [pedidosMesRow] } = await pool.query(`
       SELECT COUNT(*) AS n FROM (
-        SELECT id FROM orders
+        SELECT id::text FROM orders
           WHERE organization_id = $1
             AND (status IS NULL OR status NOT IN ('cancelled'))
             AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
         UNION ALL
-        SELECT id FROM shopify_orders
+        SELECT id::text FROM shopify_orders
           WHERE organization_id = $1
             AND shopify_created_at IS NOT NULL
             AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)

@@ -37,13 +37,13 @@ router.get('/wins', async (req, res) => {
 
       // Ventas hoy (bot + shopify, no canceladas)
       pool.query(`
-        SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
-          SELECT total_price FROM orders
+        SELECT COALESCE(SUM(total_price), 0) AS s FROM (
+          SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
             WHERE organization_id = $1
               AND (status IS NULL OR status NOT IN ('cancelled'))
               AND created_at::date = CURRENT_DATE
           UNION ALL
-          SELECT total_price FROM shopify_orders
+          SELECT total_price::numeric AS total_price FROM shopify_orders
             WHERE organization_id = $1
               AND shopify_created_at IS NOT NULL
               AND shopify_created_at::date = CURRENT_DATE
@@ -69,13 +69,13 @@ router.get('/wins', async (req, res) => {
 
       // Ventas esta semana (bot + shopify)
       pool.query(`
-        SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
-          SELECT total_price FROM orders
+        SELECT COALESCE(SUM(total_price), 0) AS s FROM (
+          SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
             WHERE organization_id = $1
               AND (status IS NULL OR status NOT IN ('cancelled'))
               AND created_at >= date_trunc('week', NOW())
           UNION ALL
-          SELECT total_price FROM shopify_orders
+          SELECT total_price::numeric AS total_price FROM shopify_orders
             WHERE organization_id = $1
               AND shopify_created_at IS NOT NULL
               AND shopify_created_at >= date_trunc('week', NOW())
@@ -101,14 +101,14 @@ router.get('/wins', async (req, res) => {
 
       // Ventas semana pasada (bot + shopify)
       pool.query(`
-        SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
-          SELECT total_price FROM orders
+        SELECT COALESCE(SUM(total_price), 0) AS s FROM (
+          SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
             WHERE organization_id = $1
               AND (status IS NULL OR status NOT IN ('cancelled'))
               AND created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
               AND created_at <  date_trunc('week', NOW())
           UNION ALL
-          SELECT total_price FROM shopify_orders
+          SELECT total_price::numeric AS total_price FROM shopify_orders
             WHERE organization_id = $1
               AND shopify_created_at IS NOT NULL
               AND shopify_created_at >= date_trunc('week', NOW() - INTERVAL '7 days')
