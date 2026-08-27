@@ -310,37 +310,61 @@ async function runFullAnalysis(orgId, ds) {
   const { getPool } = require('../db/database');
   const pool = getPool();
 
-  // ── Leer pedidos desde la base de datos local ──────────────────────
+  // ── Leer pedidos desde ambas tablas locales ────────────────────────
   console.log(`[Reengagement] Leyendo órdenes desde DB local (org ${orgId})...`);
   const { rows: dbRows } = await pool.query(
-    `SELECT customer_phone, customer_name, customer_email,
-            total_price, items, shopify_created_at, shopify_name, financial_status
+    `-- Pedidos de Shopify (webhook/sync)
+     SELECT customer_phone, customer_name, customer_email,
+            total_price::DECIMAL          AS total_price,
+            items                         AS items,
+            shopify_created_at            AS order_date,
+            shopify_name                  AS order_name,
+            financial_status
      FROM shopify_orders
      WHERE organization_id = $1
        AND customer_phone IS NOT NULL AND customer_phone <> ''
        AND shopify_created_at IS NOT NULL
        AND (financial_status IS NULL
             OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-     ORDER BY shopify_created_at ASC`,
+
+     UNION ALL
+
+     -- Pedidos CRM creados por el bot (solo confirmados)
+     SELECT customer_phone, customer_name, NULL AS customer_email,
+            NULLIF(total_price, '')::DECIMAL     AS total_price,
+            CASE WHEN items IS NOT NULL AND items <> '' AND items <> '[]'
+                 THEN items::JSONB ELSE '[]'::JSONB END AS items,
+            created_at                           AS order_date,
+            shopify_order_id                     AS order_name,
+            status                               AS financial_status
+     FROM orders
+     WHERE organization_id = $1
+       AND customer_phone IS NOT NULL AND customer_phone <> ''
+       AND status IN ('paid', 'sent', 'payment_received')
+
+     ORDER BY order_date ASC`,
     [orgId]
   );
   console.log(`[Reengagement] Total órdenes en DB: ${dbRows.length}`);
   if (!dbRows.length) return null;
 
   // Convertir filas DB al formato que espera buildCustomerStats
-  const allOrders = dbRows.map(r => ({
-    customer: {
-      phone: r.customer_phone,
-      name:  r.customer_name || r.customer_phone,
-      email: r.customer_email || null,
-    },
-    totalPrice: parseFloat(r.total_price) || 0,
-    createdAt:  r.shopify_created_at,
-    name:       r.shopify_name || null,
-    lineItems:  (Array.isArray(r.items) ? r.items : []).map(i => ({
-      title: typeof i === 'string' ? i : (i.name || i.title || ''),
-    })),
-  }));
+  const allOrders = dbRows.map(r => {
+    const rawItems = Array.isArray(r.items) ? r.items : [];
+    return {
+      customer: {
+        phone: r.customer_phone,
+        name:  r.customer_name || r.customer_phone,
+        email: r.customer_email || null,
+      },
+      totalPrice: parseFloat(r.total_price) || 0,
+      createdAt:  r.order_date,
+      name:       r.order_name || null,
+      lineItems:  rawItems.map(i => ({
+        title: typeof i === 'string' ? i : (i.name || i.title || ''),
+      })),
+    };
+  });
 
   const allStats = buildCustomerStats(allOrders);
   console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
