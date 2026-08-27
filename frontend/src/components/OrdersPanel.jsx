@@ -593,6 +593,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                       syncing={syncing === order.rawId}
                       selected={selected.has(order._key)}
                       onToggleSelect={() => toggleSelect(order._key)}
+                      products={products}
+                      onItemsUpdated={load}
                     />
                   : <ShopifyOrderCard key={order._key} order={order}
                       selected={selected.has(order._key)}
@@ -649,12 +651,53 @@ function SelectBox({ checked, onChange, colors }) {
 }
 
 // ─── Card pedido Bot ──────────────────────────────────────────────
-function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGoToConversation, syncing, selected, onToggleSelect }) {
+function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGoToConversation, syncing, selected, onToggleSelect, products = [], onItemsUpdated }) {
   const { colors } = useTheme();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded,  setExpanded]  = useState(false);
+  const [editMode,  setEditMode]  = useState(false);
+  const [editItems, setEditItems] = useState([]);
+  const [saving,    setSaving]    = useState(false);
+  const [editErr,   setEditErr]   = useState('');
+
   const status = getBotStatusStyle(order.status, colors);
   const items  = Array.isArray(order.items) ? order.items : [];
   const addr   = order.shipping_address || {};
+
+  const startEdit = (e) => {
+    e.stopPropagation();
+    setEditItems(items.map(i => ({ name: i.name || i.title || i.product_name || '', quantity: Number(i.quantity) || 1, price: Number(i.price) || 0 })));
+    setEditErr('');
+    setEditMode(true);
+  };
+
+  const cancelEdit = () => { setEditMode(false); setEditErr(''); };
+
+  const setItemField = (idx, field, val) =>
+    setEditItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
+
+  const removeItem = (idx) => setEditItems(prev => prev.filter((_, i) => i !== idx));
+
+  const addItem = () => setEditItems(prev => [...prev, { name: '', quantity: 1, price: 0 }]);
+
+  const selectProduct = (idx, productId) => {
+    if (!productId) { setItemField(idx, 'name', ''); setItemField(idx, 'price', 0); return; }
+    const p = products.find(p => String(p.id) === productId);
+    if (p) setEditItems(prev => prev.map((it, i) => i === idx ? { ...it, name: p.title, price: Number(p.price) || 0 } : it));
+  };
+
+  const saveItems = async () => {
+    if (editItems.some(i => !i.name.trim())) { setEditErr('Completa el nombre de todos los items'); return; }
+    setSaving(true); setEditErr('');
+    try {
+      await api.patch(`/orders/${order.id}/items`, { items: editItems });
+      setEditMode(false);
+      onItemsUpdated?.();
+    } catch (err) {
+      setEditErr(err?.response?.data?.error || 'Error al guardar');
+    } finally { setSaving(false); }
+  };
+
+  const editTotal = editItems.reduce((s, i) => s + (Number(i.price) * Number(i.quantity)), 0);
 
   return (
     <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', border: `2px solid ${selected ? colors.green : colors.border}`, overflow: 'hidden', transition: 'border-color .15s' }}
@@ -701,13 +744,78 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
         <div style={{ borderTop: `1px solid ${colors.border}`, padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <div>
-              <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Productos</div>
-              {items.length > 0 ? items.map((item, i) => (
-                <div key={i} style={{ color: colors.textPrimary, fontSize: '13px', display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: `1px solid ${colors.bgSub}` }}>
-                  <span>{item.name || item.title || item.product_name}</span>
-                  <span style={{ color: colors.textSecondary }}>× {item.quantity}</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Productos</div>
+                {!editMode && !['cancelled','paid'].includes(order.status) && (
+                  <button onClick={startEdit} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: `1px solid ${colors.border}`, color: colors.textSecondary, borderRadius: '6px', padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}>
+                    ✏️ Editar
+                  </button>
+                )}
+              </div>
+
+              {editMode ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {editItems.map((item, idx) => (
+                    <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgSub }}>
+                      {/* Selector de producto */}
+                      {products.length > 0 && (
+                        <select onChange={e => selectProduct(idx, e.target.value)}
+                          style={{ backgroundColor: colors.bgPanel, color: colors.textSecondary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 6px', fontSize: '11px' }}>
+                          <option value="">— Elegir producto —</option>
+                          {products.map(p => <option key={p.id} value={String(p.id)}>{p.title}</option>)}
+                        </select>
+                      )}
+                      {/* Nombre */}
+                      <input value={item.name} onChange={e => setItemField(idx, 'name', e.target.value)} placeholder="Nombre del producto"
+                        style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 8px', fontSize: '12px' }} />
+                      {/* Cantidad y precio */}
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <button onClick={() => setItemField(idx, 'quantity', Math.max(1, item.quantity - 1))}
+                          style={{ width: 26, height: 26, borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, color: colors.textPrimary, cursor: 'pointer', fontSize: '14px', lineHeight: 1 }}>−</button>
+                        <span style={{ color: colors.textPrimary, fontSize: '13px', minWidth: '24px', textAlign: 'center' }}>{item.quantity}</span>
+                        <button onClick={() => setItemField(idx, 'quantity', item.quantity + 1)}
+                          style={{ width: 26, height: 26, borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, color: colors.textPrimary, cursor: 'pointer', fontSize: '14px', lineHeight: 1 }}>+</button>
+                        <span style={{ color: colors.textSecondary, fontSize: '12px', marginLeft: '4px' }}>Precio:</span>
+                        <input type="number" value={item.price} onChange={e => setItemField(idx, 'price', Number(e.target.value))} min="0"
+                          style={{ width: '80px', backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 6px', fontSize: '12px' }} />
+                        <button onClick={() => removeItem(idx)}
+                          style={{ marginLeft: 'auto', background: 'none', border: 'none', color: colors.red, cursor: 'pointer', padding: '2px' }}>
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Agregar item */}
+                  <button onClick={addItem} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'none', border: `1px dashed ${colors.border}`, color: colors.textSecondary, borderRadius: '8px', padding: '6px 10px', fontSize: '12px', cursor: 'pointer' }}>
+                    <Plus size={12} /> Agregar producto
+                  </button>
+
+                  {/* Total en edición */}
+                  <div style={{ color: colors.green, fontSize: '13px', fontWeight: 600, textAlign: 'right' }}>
+                    Total: ${editTotal.toLocaleString('es-CL')}
+                  </div>
+
+                  {editErr && <div style={{ color: colors.red, fontSize: '12px' }}>{editErr}</div>}
+
+                  {/* Botones guardar/cancelar */}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={saveItems} disabled={saving} style={{ flex: 1, padding: '7px', borderRadius: '8px', border: 'none', backgroundColor: colors.green, color: '#000', fontSize: '12px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+                      {saving ? 'Guardando...' : '✓ Guardar cambios'}
+                    </button>
+                    <button onClick={cancelEdit} style={{ padding: '7px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '12px', cursor: 'pointer' }}>
+                      Cancelar
+                    </button>
+                  </div>
                 </div>
-              )) : <div style={{ color: colors.textSecondary, fontSize: '13px' }}>Sin detalle</div>}
+              ) : (
+                items.length > 0 ? items.map((item, i) => (
+                  <div key={i} style={{ color: colors.textPrimary, fontSize: '13px', display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: `1px solid ${colors.bgSub}` }}>
+                    <span>{item.name || item.title || item.product_name}</span>
+                    <span style={{ color: colors.textSecondary }}>× {item.quantity}{item.price ? ` · $${Number(item.price).toLocaleString('es-CL')}` : ''}</span>
+                  </div>
+                )) : <div style={{ color: colors.textSecondary, fontSize: '13px' }}>Sin detalle</div>
+              )}
             </div>
             <div>
               <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Envío</div>

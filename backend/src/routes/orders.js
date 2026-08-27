@@ -275,6 +275,27 @@ router.post('/shopify/sync', async (req, res) => {
 });
 
 /**
+ * PATCH /api/orders/:id/items
+ * Reemplaza los items de un pedido bot y recalcula el total.
+ * Body: { items: [{ name, quantity, price }] }
+ */
+router.patch('/:id/items', async (req, res) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items)) return res.status(400).json({ error: 'items debe ser un array' });
+    const total = items.reduce((s, i) => s + (Number(i.price) * Number(i.quantity)), 0);
+    const updated = await db.updateOrder(parseInt(req.params.id), {
+      items:       JSON.stringify(items),
+      total_price: String(total),
+    });
+    if (!updated) return res.status(404).json({ error: 'Pedido no encontrado' });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * PATCH /api/orders/:id/address
  * Actualizar dirección de un pedido (bot) sin conversación o con dirección vacía
  */
