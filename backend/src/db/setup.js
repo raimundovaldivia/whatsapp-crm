@@ -541,6 +541,38 @@ async function setupDatabase() {
       ALTER TABLE orders ALTER COLUMN conversation_id DROP NOT NULL;
     `);
 
+    // Migración: normalizar teléfonos en contacts (+56... → 56..., 9... → 56...)
+    // y eliminar duplicados que queden tras la normalización.
+    await client.query(`
+      -- Paso 1: actualizar phones con formato +56... o 9... al canónico 56...
+      UPDATE contacts SET
+        phone      = CASE
+                       WHEN phone LIKE '+%'        THEN SUBSTRING(phone FROM 2)
+                       WHEN phone ~ '^9[0-9]{8}$' THEN '56' || phone
+                       ELSE phone
+                     END,
+        updated_at = NOW()
+      WHERE phone LIKE '+%' OR phone ~ '^9[0-9]{8}$';
+
+      -- Paso 2: eliminar duplicados — conservar el de mayor información
+      -- (más pedidos o el que tiene shopify_id)
+      DELETE FROM contacts
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+            ROW_NUMBER() OVER (
+              PARTITION BY organization_id, phone
+              ORDER BY
+                CASE WHEN shopify_id IS NOT NULL THEN 0 ELSE 1 END,
+                COALESCE(total_orders, 0) DESC,
+                updated_at DESC
+            ) AS rn
+          FROM contacts
+        ) ranked
+        WHERE rn > 1
+      );
+    `);
+
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

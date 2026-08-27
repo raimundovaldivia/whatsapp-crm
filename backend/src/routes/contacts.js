@@ -78,12 +78,34 @@ router.get('/broadcast', async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
+    // Normaliza el teléfono y deduplica — prefiere formato 56XXXXXXXXX sobre +56...
     const { rows } = await pool.query(
-      `SELECT phone, name, email, city, contact_type,
+      `WITH norm AS (
+         SELECT *,
+           CASE
+             WHEN phone LIKE '+%'         THEN SUBSTRING(phone FROM 2)
+             WHEN phone ~ '^9[0-9]{8}$'  THEN '56' || phone
+             ELSE phone
+           END AS norm_phone,
+           ROW_NUMBER() OVER (
+             PARTITION BY organization_id,
+               CASE
+                 WHEN phone LIKE '+%'        THEN SUBSTRING(phone FROM 2)
+                 WHEN phone ~ '^9[0-9]{8}$' THEN '56' || phone
+                 ELSE phone
+               END
+             ORDER BY
+               CASE WHEN phone NOT LIKE '+%' AND phone NOT ~ '^9[0-9]{8}$' THEN 0 ELSE 1 END,
+               total_orders DESC NULLS LAST
+           ) AS rn
+         FROM contacts
+         WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
+       )
+       SELECT norm_phone AS phone, name, email, city, contact_type,
               shopify_id, total_orders, last_order_at,
               CASE WHEN shopify_id IS NOT NULL THEN 'shopify' ELSE 'whatsapp' END AS source
-       FROM contacts
-       WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
+       FROM norm
+       WHERE rn = 1
        ORDER BY total_orders DESC NULLS LAST, last_order_at DESC NULLS LAST`,
       [req.orgId]
     );
