@@ -252,9 +252,17 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
     return n;
   });
 
+  // Todos los del tab actual seleccionados → desmarcar solo los del tab actual.
+  // Alguno o ninguno → agregar los del tab actual a la selección existente.
   const toggleAll = () => {
-    if (selected.size === visible.length) setSelected(new Set());
-    else setSelected(new Set(visible.map(c => c.phone)));
+    const visiblePhones = visible.map(c => c.phone);
+    const allVisible = visiblePhones.every(p => selected.has(p));
+    setSelected(prev => {
+      const n = new Set(prev);
+      if (allVisible) visiblePhones.forEach(p => n.delete(p));
+      else            visiblePhones.forEach(p => n.add(p));
+      return n;
+    });
   };
 
   const sendOne = async (phone) => {
@@ -565,7 +573,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               const count   = byWindow(w.key).length;
               const isActive = activeWindow === w.key;
               return (
-                <button key={w.key} onClick={() => { setActiveWindow(w.key); setSelected(new Set()); }}
+                <button key={w.key} onClick={() => setActiveWindow(w.key)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '6px',
                     padding: '10px 16px', background: 'none', border: 'none', cursor: 'pointer',
@@ -687,13 +695,24 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         <div style={{ padding: '8px 24px', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <button onClick={toggleAll}
             style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, fontSize: '13px' }}>
-            {selected.size === visible.length && visible.length > 0
+            {visible.every(c => selected.has(c.phone)) && visible.length > 0
               ? <CheckSquare size={16} color={colors.green} />
               : <Square size={16} />}
-            {selected.size === visible.length && visible.length > 0
-              ? 'Deseleccionar todos'
-              : `Seleccionar todos (${visible.length})`}
+            {visible.every(c => selected.has(c.phone)) && visible.length > 0
+              ? `Deseleccionar este tab (${visible.length})`
+              : `Seleccionar este tab (${visible.length})`}
           </button>
+          {selected.size > 0 && (
+            <span style={{ fontSize: '12px', color: colors.green, fontWeight: 600 }}>
+              {selected.size} seleccionados en total
+            </span>
+          )}
+          {selected.size > 0 && (
+            <button onClick={() => setSelected(new Set())}
+              style={{ fontSize: '12px', color: colors.textSecondary, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+              Limpiar
+            </button>
+          )}
 
           <div style={{ flex: 1 }} />
 
