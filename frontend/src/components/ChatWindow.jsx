@@ -262,7 +262,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setProductsLoading(true);
     try {
       const r = await api.get('/products');
-      setProducts((r.data.products || r.data.data || []).filter(p => p.active !== false));
+      const all = (r.data.products || r.data.data || []).filter(p => p.active !== false);
+      // Si el cliente es empresa, mostrar solo productos empresa; si no, solo productos normales
+      setProducts(isEmpresa ? all.filter(p => p.is_business) : all.filter(p => !p.is_business));
     } catch { setProducts([]); }
     finally { setProductsLoading(false); }
   };
