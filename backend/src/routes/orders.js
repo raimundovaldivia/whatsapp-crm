@@ -109,7 +109,8 @@ router.get('/stats', async (req, res) => {
       SELECT COALESCE(SUM(total_price), 0) AS s FROM (
         SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
           WHERE organization_id = $1
-            AND (status IS NULL OR status NOT IN ('cancelled'))
+            AND status = 'paid'
+            AND (shopify_order_id IS NULL OR shopify_order_id = '')
             AND created_at::date = CURRENT_DATE
         UNION ALL
         SELECT total_price::numeric AS total_price FROM shopify_orders
@@ -117,16 +118,16 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND shopify_created_at::date = CURRENT_DATE
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
-    // Pedidos hoy: ambas fuentes, cualquier estado no cancelado
+    // Pedidos hoy
     const { rows: [pedidosHoyRow] } = await pool.query(`
       SELECT COUNT(*) AS n FROM (
         SELECT id::text FROM orders
           WHERE organization_id = $1
-            AND (status IS NULL OR status NOT IN ('cancelled'))
+            AND status = 'paid'
+            AND (shopify_order_id IS NULL OR shopify_order_id = '')
             AND created_at::date = CURRENT_DATE
         UNION ALL
         SELECT id::text FROM shopify_orders
@@ -134,16 +135,16 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND shopify_created_at::date = CURRENT_DATE
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
-    // Ventas este mes: todas menos canceladas/anuladas/reembolsadas
+    // Ventas este mes
     const { rows: [ventasMesRow] } = await pool.query(`
       SELECT COALESCE(SUM(total_price), 0) AS s FROM (
         SELECT NULLIF(total_price, '')::numeric AS total_price FROM orders
           WHERE organization_id = $1
-            AND (status IS NULL OR status NOT IN ('cancelled'))
+            AND status = 'paid'
+            AND (shopify_order_id IS NULL OR shopify_order_id = '')
             AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
         UNION ALL
         SELECT total_price::numeric AS total_price FROM shopify_orders
@@ -151,16 +152,16 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
-    // Pedidos este mes: ambas fuentes
+    // Pedidos este mes
     const { rows: [pedidosMesRow] } = await pool.query(`
       SELECT COUNT(*) AS n FROM (
         SELECT id::text FROM orders
           WHERE organization_id = $1
-            AND (status IS NULL OR status NOT IN ('cancelled'))
+            AND status = 'paid'
+            AND (shopify_order_id IS NULL OR shopify_order_id = '')
             AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
         UNION ALL
         SELECT id::text FROM shopify_orders
@@ -168,7 +169,6 @@ router.get('/stats', async (req, res) => {
             AND shopify_created_at IS NOT NULL
             AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
             AND (financial_status IS NULL OR UPPER(financial_status) NOT IN ('VOIDED','REFUNDED'))
-            AND shopify_order_id NOT IN (SELECT shopify_order_id FROM orders WHERE organization_id = $1 AND shopify_order_id IS NOT NULL)
       ) t
     `, [req.orgId]);
 
