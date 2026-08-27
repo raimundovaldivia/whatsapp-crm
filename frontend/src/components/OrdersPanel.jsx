@@ -223,6 +223,21 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const totalPages  = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated   = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+  // Ventas de los pedidos visibles (filtrados)
+  const ventasFiltradas = filtered.reduce((sum, o) => {
+    if (o.source === 'shopify' && ['VOIDED', 'REFUNDED'].includes(o.financialStatus)) return sum;
+    if (o.source === 'bot' && o.botStatus === 'cancelled') return sum;
+    return sum + (o.total || 0);
+  }, 0);
+
+  const dateFilterLabel = {
+    all:    'Ventas total',
+    today:  'Ventas hoy',
+    week:   'Ventas 7 días',
+    month:  'Ventas 30 días',
+    custom: customDate ? `Ventas ${new Date(customDate + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}` : 'Ventas día',
+  }[dateFilter] || 'Ventas';
+
   // Reset página + selección si el filtro cambia
   const setDateFilterR   = v => { setDateFilter(v); if (v !== 'custom') setCustomDate(''); setPage(1); setSelected(new Set()); };
   const setSourceFilterR = v => { setSourceFilter(v); setPage(1); setSelected(new Set()); };
@@ -433,7 +448,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           {[
             { icon: <Package size={18} color={colors.textSecondary} />, label: 'En vista',           value: filtered.length,                                                                color: colors.textPrimary },
             { icon: <Clock size={18} color={colors.yellow} />,          label: 'Sin despachar',      value: totalUnfulfilled,                                                               color: colors.yellow },
-            { icon: <DollarSign size={18} color={colors.green} />,      label: 'Ventas hoy',         value: stats?.ventasHoy != null ? `$${Number(stats.ventasHoy).toLocaleString('es-CL')}` : '—', color: colors.green },
+            { icon: <DollarSign size={18} color={colors.green} />,      label: dateFilterLabel,      value: `$${ventasFiltradas.toLocaleString('es-CL')}`,                                          color: colors.green },
             { icon: <DollarSign size={18} color='#4db6ac' />,           label: 'Ventas este mes',    value: stats?.ventasMes != null ? `$${Number(stats.ventasMes).toLocaleString('es-CL')}` : '—', color: '#4db6ac' },
           ].map(({ icon, label, value, color }) => (
             <div key={label} style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '14px 16px', border: `1px solid ${colors.border}` }}>
