@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatDateTime } from '../utils/dates.js';
 import {
   ShoppingBag, RefreshCw, ExternalLink, Send, RotateCcw,
   CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar, Download,
-  Plus, Trash2, X,
+  Plus, Trash2, X, MessageSquare,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { ordersAPI, api } from '../utils/api.js';
+import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
 // ─── Normalización ────────────────────────────────────────────────
@@ -148,6 +148,28 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [selected,       setSelected]      = useState(new Set()); // Set de _key
   const [bulkStatus,     setBulkStatus]    = useState('');
   const [applyingBulk,   setApplyingBulk]  = useState(false);
+
+  // Drawer de conversación
+  const [convDrawer,     setConvDrawer]     = useState(null); // { convId, name, phone }
+  const [drawerMsgs,     setDrawerMsgs]     = useState([]);
+  const [drawerLoading,  setDrawerLoading]  = useState(false);
+  const drawerEndRef = useRef(null);
+
+  const openConvDrawer = useCallback(async (convId, name, phone) => {
+    if (!convId) return;
+    setConvDrawer({ convId, name, phone });
+    setDrawerMsgs([]);
+    setDrawerLoading(true);
+    try {
+      const msgs = await conversationsAPI.getMessages(convId);
+      setDrawerMsgs(msgs || []);
+    } catch { setDrawerMsgs([]); }
+    finally { setDrawerLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (drawerMsgs.length) drawerEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [drawerMsgs]);
 
   // Filtros
   const [dateFilter,   setDateFilter]   = useState('all');
@@ -589,7 +611,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                       onStatusChange={handleStatusChange}
                       onResendLink={handleResendLink}
                       onSyncShopify={handleSyncShopify}
-                      onGoToConversation={onSelectConversation}
+                      onGoToConversation={(convId) => openConvDrawer(convId, order.raw?.customer_name || order.raw?.contact_name, order.raw?.customer_phone || order.raw?.phone_number)}
                       syncing={syncing === order.rawId}
                       selected={selected.has(order._key)}
                       onToggleSelect={() => toggleSelect(order._key)}
@@ -637,6 +659,54 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
+
+    {/* ── Drawer lateral de conversación ── */}
+    {convDrawer && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', pointerEvents: 'none' }}>
+        {/* Overlay semitransparente */}
+        <div onClick={() => setConvDrawer(null)}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', pointerEvents: 'all' }} />
+
+        {/* Panel */}
+        <div style={{ width: '420px', maxWidth: '92vw', backgroundColor: colors.bgPanel, borderLeft: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', pointerEvents: 'all', boxShadow: '-8px 0 32px rgba(0,0,0,0.4)' }}>
+          {/* Header */}
+          <div style={{ padding: '14px 18px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <MessageSquare size={16} color={colors.green} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {convDrawer.name || convDrawer.phone}
+              </div>
+              <div style={{ color: colors.textSecondary, fontSize: '11px' }}>{convDrawer.phone}</div>
+            </div>
+            <button onClick={() => setConvDrawer(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: '4px' }}>
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* Mensajes */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {drawerLoading ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>Cargando...</div>
+            ) : drawerMsgs.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>Sin mensajes</div>
+            ) : drawerMsgs.map((msg, i) => {
+              const isOut = msg.direction === 'outbound';
+              return (
+                <div key={i} style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                  <div style={{ maxWidth: '80%', backgroundColor: isOut ? colors.green + '22' : colors.bgSub, border: `1px solid ${isOut ? colors.green + '44' : colors.border}`, borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px', padding: '8px 12px' }}>
+                    <div style={{ color: colors.textPrimary, fontSize: '13px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
+                    <div style={{ color: colors.textSecondary, fontSize: '10px', marginTop: '4px', textAlign: isOut ? 'right' : 'left' }}>
+                      {formatDateTime(msg.created_at)}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={drawerEndRef} />
+          </div>
+        </div>
+      </div>
+    )}
   );
 }
 
@@ -854,7 +924,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
               </button>
             )}
             <button onClick={() => onGoToConversation?.(order.conversation_id)} style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: colors.bgHover, color: colors.textSecondary, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: 'none', cursor: 'pointer' }}>
-              Ver conversación →
+              <MessageSquare size={12} /> Ver conversación
             </button>
           </div>
         </div>
