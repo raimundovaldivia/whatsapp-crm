@@ -78,40 +78,30 @@ router.get('/broadcast', async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
-    // Normaliza el teléfono y deduplica — prefiere formato 56XXXXXXXXX sobre +56...
     const { rows } = await pool.query(
-      `WITH norm AS (
-         SELECT *,
-           CASE
-             WHEN phone LIKE '+%'         THEN SUBSTRING(phone FROM 2)
-             WHEN phone ~ '^9[0-9]{8}$'  THEN '56' || phone
-             ELSE phone
-           END AS norm_phone,
-           ROW_NUMBER() OVER (
-             PARTITION BY organization_id,
-               CASE
-                 WHEN phone LIKE '+%'        THEN SUBSTRING(phone FROM 2)
-                 WHEN phone ~ '^9[0-9]{8}$' THEN '56' || phone
-                 ELSE phone
-               END
-             ORDER BY
-               CASE WHEN phone NOT LIKE '+%' AND phone NOT ~ '^9[0-9]{8}$' THEN 0 ELSE 1 END,
-               total_orders DESC NULLS LAST
-           ) AS rn
-         FROM contacts
-         WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
-       )
-       SELECT norm_phone AS phone, name, email, city, contact_type,
+      `SELECT phone, name, email, city, contact_type,
               shopify_id, total_orders, last_order_at,
               CASE WHEN shopify_id IS NOT NULL THEN 'shopify' ELSE 'whatsapp' END AS source
-       FROM norm
-       WHERE rn = 1
+       FROM contacts
+       WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
        ORDER BY total_orders DESC NULLS LAST, last_order_at DESC NULLS LAST`,
       [req.orgId]
     );
-    const whatsapp = rows.filter(c => c.source === 'whatsapp').length;
-    const shopify  = rows.filter(c => c.source === 'shopify').length;
-    res.json({ success: true, contacts: rows, total: rows.length, sources: { whatsapp, shopify } });
+
+    // Deduplicar por teléfono normalizado — prefiere formato 56XXXXXXXXX
+    const normalize = p => String(p || '').replace(/^\+/, '').replace(/^9(\d{8})$/, '56$1');
+    const seen = new Map();
+    for (const row of rows) {
+      const key = normalize(row.phone);
+      if (!seen.has(key)) {
+        seen.set(key, { ...row, phone: key });
+      }
+    }
+    const contacts = [...seen.values()];
+
+    const whatsapp = contacts.filter(c => c.source === 'whatsapp').length;
+    const shopify  = contacts.filter(c => c.source === 'shopify').length;
+    res.json({ success: true, contacts, total: contacts.length, sources: { whatsapp, shopify } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
