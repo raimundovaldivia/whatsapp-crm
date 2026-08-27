@@ -135,8 +135,8 @@ function SparklineBar({ d, dayLabel, isToday, maxActivity, colors, isDark }) {
 function StatusBadge({ status, colors }) {
   const map = {
     paid:    { label: 'Pagado',    bg: `${colors.green}22`,   color: colors.green },
-    draft:   { label: 'Borrador',  bg: `${colors.yellow}22`,  color: colors.yellow },
-    sent:    { label: 'Enviado',   bg: `${colors.purple}22`,  color: colors.purple },
+    draft:   { label: 'Nuevo',     bg: `${colors.purple}22`,  color: colors.purple },
+    sent:    { label: 'Nuevo',     bg: `${colors.purple}22`,  color: colors.purple },
     pending: { label: 'Pendiente', bg: `${colors.yellow}22`,  color: colors.yellow },
     cancelled:{ label: 'Cancelado', bg: '#2d1a1a',            color: colors.red },
   };
