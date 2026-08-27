@@ -263,8 +263,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     try {
       const r = await api.get('/products');
       const all = (r.data.products || r.data.data || []).filter(p => p.active !== false);
-      // Si el cliente es empresa, mostrar solo productos empresa; si no, solo productos normales
-      setProducts(isEmpresa ? all.filter(p => p.is_business) : all.filter(p => !p.is_business));
+      // Si el cliente es empresa, mostrar solo productos empresa (is_business=true); si no, solo productos normales
+      const empresaProds = all.filter(p => p.is_business === true || p.is_business === 1 || p.is_business === 'true');
+      const normalProds  = all.filter(p => !p.is_business);
+      if (isEmpresa) {
+        // Si no hay productos empresa configurados, mostrar todos con advertencia
+        setProducts(empresaProds.length > 0 ? empresaProds : all);
+        if (empresaProds.length === 0) console.warn('[Nueva orden] Cliente es empresa pero no hay productos con is_business=true. Mostrando todos.', all.map(p => ({ id: p.id, title: p.title, is_business: p.is_business })));
+      } else {
+        setProducts(normalProds.length > 0 ? normalProds : all);
+      }
     } catch { setProducts([]); }
     finally { setProductsLoading(false); }
   };
@@ -752,10 +760,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
             {/* Header */}
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', borderBottom:`1px solid ${colors.border}` }}>
-              <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
                 <ShoppingCart size={16} color={colors.green} />
                 <span style={{ fontWeight:700, fontSize:'15px', color:colors.textPrimary }}>Nueva orden</span>
                 <span style={{ fontSize:'12px', color:colors.textMuted }}>— {conversation.contact_name || conversation.phone_number}</span>
+                {isEmpresa && (
+                  <span style={{ fontSize:'10px', fontWeight:700, backgroundColor:'#6366f120', color:'#6366f1', border:'1px solid #6366f155', borderRadius:'20px', padding:'2px 8px' }}>
+                    🏢 Productos empresa
+                  </span>
+                )}
               </div>
               <button onClick={() => setShowOrderModal(false)} style={{ background:'none', border:'none', cursor:'pointer', color:colors.textMuted, padding:'4px' }}>
                 <X size={18} />
@@ -767,7 +780,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               {productsLoading ? (
                 <div style={{ textAlign:'center', padding:'40px', color:colors.textMuted }}>Cargando productos...</div>
               ) : products.length === 0 ? (
-                <div style={{ textAlign:'center', padding:'40px', color:colors.textMuted }}>No hay productos en el catálogo</div>
+                <div style={{ textAlign:'center', padding:'40px', color:colors.textMuted }}>
+                  {isEmpresa
+                    ? '⚠️ No hay productos marcados como empresa. Ve a Productos → editar → activar "Solo para empresas (B2B)".'
+                    : 'No hay productos en el catálogo'}
+                </div>
               ) : products.map(p => {
                 const qty = orderItems[p.id] || 0;
                 return (
