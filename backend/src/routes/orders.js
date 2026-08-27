@@ -104,16 +104,17 @@ router.get('/stats', async (req, res) => {
   try {
     const pool = getPool();
 
-    // Ventas hoy: bot (paid) + Shopify (paid)
+    // Ventas hoy: todas menos canceladas/anuladas/reembolsadas
     const { rows: [ventasHoyRow] } = await pool.query(`
       SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
         SELECT total_price FROM orders
-          WHERE organization_id = $1 AND status = 'paid'
+          WHERE organization_id = $1
+            AND status NOT IN ('cancelled')
             AND created_at::date = CURRENT_DATE
         UNION ALL
         SELECT total_price FROM shopify_orders
           WHERE organization_id = $1
-            AND UPPER(financial_status) = 'PAID'
+            AND UPPER(financial_status) NOT IN ('VOIDED','REFUNDED')
             AND shopify_created_at::date = CURRENT_DATE
       ) t
     `, [req.orgId]);
@@ -132,16 +133,17 @@ router.get('/stats', async (req, res) => {
       ) t
     `, [req.orgId]);
 
-    // Ventas este mes: bot (paid) + Shopify (paid)
+    // Ventas este mes: todas menos canceladas/anuladas/reembolsadas
     const { rows: [ventasMesRow] } = await pool.query(`
       SELECT COALESCE(SUM(total_price::numeric), 0) AS s FROM (
         SELECT total_price FROM orders
-          WHERE organization_id = $1 AND status = 'paid'
+          WHERE organization_id = $1
+            AND status NOT IN ('cancelled')
             AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
         UNION ALL
         SELECT total_price FROM shopify_orders
           WHERE organization_id = $1
-            AND UPPER(financial_status) = 'PAID'
+            AND UPPER(financial_status) NOT IN ('VOIDED','REFUNDED')
             AND DATE_TRUNC('month', shopify_created_at) = DATE_TRUNC('month', CURRENT_DATE)
       ) t
     `, [req.orgId]);
