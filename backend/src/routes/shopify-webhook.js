@@ -194,10 +194,8 @@ async function handleOrderCreate(orgId, shopifyOrder) {
     io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, shopifyOrderId: String(shopifyOrder.id) });
   }
 
-  // Si el pedido llega ya pagado desde Shopify (compra directa en tienda), invalida caché
-  if ((shopifyOrder.financial_status || '').toLowerCase() === 'paid') {
-    clearReengagementCache(orgId);
-  }
+  // Cualquier orden nueva = cliente activo, no contactar por reenganche
+  clearReengagementCache(orgId);
 }
 
 /**

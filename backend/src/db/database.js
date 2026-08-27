@@ -465,11 +465,18 @@ async function getProductsCacheAge(orgId) {
 // ─── ORDERS ───────────────────────────────────────────────────────
 
 async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice }) {
-  return queryOne(
+  const order = await queryOne(
     `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price)
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
     [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice]
   );
+  // Invalidar caché de reenganche — el cliente ya tiene un pedido activo
+  const today = new Date().toISOString().slice(0, 10);
+  pool.query(
+    `UPDATE reengagement_daily_cache SET candidates = NULL WHERE organization_id = $1 AND cache_date = $2`,
+    [organizationId, today]
+  ).catch(() => {});
+  return order;
 }
 
 async function updateOrder(id, updates) {

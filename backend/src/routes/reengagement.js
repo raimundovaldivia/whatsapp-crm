@@ -340,7 +340,7 @@ async function runFullAnalysis(orgId, ds) {
      FROM orders
      WHERE organization_id = $1
        AND customer_phone IS NOT NULL AND customer_phone <> ''
-       AND status IN ('paid', 'sent', 'payment_received')
+       AND status NOT IN ('cancelled')
 
      ORDER BY order_date ASC`,
     [orgId]
