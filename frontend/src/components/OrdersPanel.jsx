@@ -453,6 +453,21 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
+        {/* Stats */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+          {[
+            { icon: <Package size={18} color={colors.textSecondary} />, label: 'En vista',        value: filtered.length,                                    color: colors.textPrimary },
+            { icon: <Clock size={18} color={colors.yellow} />,          label: 'Sin despachar',   value: totalUnfulfilled,                                   color: colors.yellow },
+            { icon: <DollarSign size={18} color={colors.green} />,      label: dateFilterLabel,   value: `$${ventasFiltradas.toLocaleString('es-CL')}`,      color: colors.green },
+            { icon: <DollarSign size={18} color='#4db6ac' />,           label: 'Ventas este mes', value: `$${ventasMesFront.toLocaleString('es-CL')}`,       color: '#4db6ac' },
+          ].map(({ icon, label, value, color }) => (
+            <div key={label} style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '14px 16px', border: `1px solid ${colors.border}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>{icon}<span style={{ fontSize: '11px', color: colors.textSecondary }}>{label}</span></div>
+              <div style={{ fontSize: '20px', fontWeight: 700, color }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
         {/* Filtros */}
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
           {/* Fecha */}
