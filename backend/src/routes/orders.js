@@ -67,7 +67,11 @@ router.get('/', async (req, res) => {
           WHEN o.customer_name IS NULL OR LOWER(TRIM(o.customer_name)) IN ('cliente','sin nombre','cliente sin nombre')
           THEN COALESCE(ct.name, o.customer_name)
           ELSE o.customer_name
-        END AS customer_name_resolved
+        END AS customer_name_resolved,
+        ct.address1  AS contact_address1,
+        ct.address   AS contact_address,
+        ct.city      AS contact_city,
+        ct.province  AS contact_province
       FROM orders o
       LEFT JOIN conversations c ON o.conversation_id = c.id
       LEFT JOIN contacts ct
@@ -83,12 +87,22 @@ router.get('/', async (req, res) => {
       [req.orgId]
     );
 
-    const parsed = orders.map(o => ({
-      ...o,
-      customer_name: o.customer_name_resolved || o.customer_name,
-      items: safeJSON(o.items, []),
-      shipping_address: safeJSON(o.shipping_address, {}),
-    }));
+    const parsed = orders.map(o => {
+      const addr = safeJSON(o.shipping_address, {});
+      // Si la orden no tiene dirección propia, usar la del contacto
+      if (!addr.address && !addr.address1) {
+        if (o.contact_address1) addr.address1 = o.contact_address1;
+        else if (o.contact_address) addr.address1 = o.contact_address;
+        if (o.contact_city)     addr.city     = o.contact_city;
+        if (o.contact_province) addr.province = o.contact_province;
+      }
+      return {
+        ...o,
+        customer_name:    o.customer_name_resolved || o.customer_name,
+        items:            safeJSON(o.items, []),
+        shipping_address: addr,
+      };
+    });
 
     res.json({ success: true, data: parsed });
   } catch (err) {
