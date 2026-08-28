@@ -373,18 +373,9 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         const addr = parseAddr(order.raw?.shipping_address);
         row[1] = [addr.address || addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
       } else {
-        // Shopify: dirección viene en shipping_address1 + shipping_city (columnas propias)
-        // También puede venir del raw_json o del auto-completado desde contacts
-        const rawJson = parseAddr(order.raw?.raw_json);
-        const shippingFromRaw = rawJson?.shippingAddress;
-        const street = order.raw?.shipping_address1
-          || shippingFromRaw?.address1
-          || '';
-        const city   = order.raw?.shipping_city
-          || shippingFromRaw?.city
-          || '';
-        const zip    = shippingFromRaw?.zip || '';
-        row[1] = [street, city, zip].filter(Boolean).join(', ');
+        // Shopify: el API ya auto-completa shipping_address1 y shipping_city
+        // desde el contacto cuando la orden no tiene dirección propia
+        row[1] = [order.raw?.shipping_address1, order.raw?.shipping_city].filter(Boolean).join(', ');
       }
 
       // Col G: Notas — items + total
