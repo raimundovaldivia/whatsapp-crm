@@ -298,6 +298,9 @@ async function setupDatabase() {
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source        TEXT DEFAULT 'whatsapp';
       CREATE INDEX IF NOT EXISTS idx_contacts_org_type ON contacts(organization_id, contact_type);
 
+      -- Migración: opt-out (no quiere recibir mensajes)
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS opt_out BOOLEAN DEFAULT FALSE;
+
       -- ─── PRODUCTOS PROPIOS (independiente de Shopify) ─────────────
       -- Catálogo gestionado desde el CRM, usado por la tienda pública.
       CREATE TABLE IF NOT EXISTS products (

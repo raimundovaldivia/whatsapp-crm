@@ -748,6 +748,23 @@ async function updateContactClientType(orgId, phone, clientType) {
 }
 
 /**
+ * Marca o desmarca opt-out de un contacto.
+ * @param {number} orgId
+ * @param {string} phone - teléfono normalizado
+ * @param {boolean} value - true = no quiere mensajes, false = sí quiere
+ */
+async function setContactOptOut(orgId, phone, value) {
+  phone = normalizePhone(phone);
+  if (!phone) return null;
+  await pool.query(
+    `UPDATE contacts SET opt_out = $3, updated_at = NOW()
+     WHERE organization_id = $1 AND phone = $2`,
+    [orgId, phone, !!value]
+  );
+  return getContact(orgId, phone);
+}
+
+/**
  * Registra o actualiza un contacto como lead al recibir un mensaje.
  * No sobreescribe datos existentes ni baja de 'customer' a 'lead'.
  */
@@ -1147,7 +1164,7 @@ module.exports = {
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts
-  getContact, upsertContact, upsertShopifyCustomerProfile, updateContactClientType, touchLead, promoteToCustomer, getContacts, countContacts,
+  getContact, upsertContact, upsertShopifyCustomerProfile, updateContactClientType, setContactOptOut, touchLead, promoteToCustomer, getContacts, countContacts,
   // Settings
   getSetting, setSetting,
   // Escalation feedback

@@ -80,10 +80,11 @@ router.get('/broadcast', async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT phone, name, email, city, contact_type,
-              shopify_id, total_orders, last_order_at,
+              shopify_id, total_orders, last_order_at, opt_out,
               CASE WHEN shopify_id IS NOT NULL THEN 'shopify' ELSE 'whatsapp' END AS source
        FROM contacts
        WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
+         AND (opt_out IS NULL OR opt_out = FALSE)
        ORDER BY total_orders DESC NULLS LAST, last_order_at DESC NULLS LAST`,
       [req.orgId]
     );
@@ -361,6 +362,26 @@ router.patch('/:phone', async (req, res) => {
        RETURNING *`,
       [req.orgId, phone, name || null, address || null, city || null]
     );
+    res.json({ success: true, data: contact });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/contacts/:phone/opt-out
+ * Marca o desmarca a un contacto como "no quiere recibir mensajes".
+ * Body: { optOut: true | false }
+ */
+router.patch('/:phone/opt-out', async (req, res) => {
+  try {
+    const { optOut } = req.body;
+    if (typeof optOut !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'optOut debe ser true o false' });
+    }
+    const db = require('../db/database');
+    const contact = await db.setContactOptOut(req.orgId, req.params.phone, optOut);
+    if (!contact) return res.status(404).json({ success: false, error: 'Contacto no encontrado' });
     res.json({ success: true, data: contact });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

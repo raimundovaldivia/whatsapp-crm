@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -70,7 +70,27 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const isDevUser = currentUserEmail === DEV_EMAIL;
   const HOT_STATES = ['interested', 'collecting_order'];
   const isHotLead = HOT_STATES.includes(conversation.pipeline_state);
-  const isEmpresa = conversation.client_type === 'empresa';
+  const isEmpresa  = conversation.client_type === 'empresa';
+  const [optOut, setOptOut] = useState(!!conversation.opt_out);
+  const [togglingOptOut, setTogglingOptOut] = useState(false);
+
+  // Sync si cambia de conversación
+  useEffect(() => { setOptOut(!!conversation.opt_out); }, [conversation.id, conversation.opt_out]);
+
+  const handleToggleOptOut = async () => {
+    if (togglingOptOut) return;
+    const phone = conversation.phone_number;
+    if (!phone) return;
+    const newVal = !optOut;
+    const label  = newVal ? 'No contactar' : 'Volver a contactar';
+    if (!window.confirm(`¿${label} a ${conversation.contact_name || phone}?`)) return;
+    setTogglingOptOut(true);
+    try {
+      await api.patch(`/contacts/${encodeURIComponent(phone)}/opt-out`, { optOut: newVal });
+      setOptOut(newVal);
+    } catch (e) { console.error(e); }
+    setTogglingOptOut(false);
+  };
 
   const handleRemoveHotLead = async () => {
     try {
@@ -485,6 +505,24 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               🔥 Hot Lead <X size={10} />
             </button>
           )}
+          <button
+            onClick={handleToggleOptOut}
+            disabled={togglingOptOut}
+            title={optOut ? 'Volver a contactar (quitar opt-out)' : 'Marcar como No contactar'}
+            style={{
+              backgroundColor: optOut ? '#ef444420' : 'transparent',
+              border: optOut ? '1px solid #ef4444' : `1px solid ${colors.borderStrong}`,
+              borderRadius: '20px',
+              padding: '4px 10px',
+              color: optOut ? '#ef4444' : colors.textMuted,
+              cursor: togglingOptOut ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', fontWeight: optOut ? 600 : 400, transition: 'all 0.15s',
+            }}
+          >
+            <BellOff size={11} />
+            {!isMobile && (optOut ? 'No contactar' : 'Opt-out')}
+          </button>
           <button
             onClick={handleToggleEmpresa}
             title={isEmpresa ? 'Marcar como cliente particular' : 'Marcar como empresa (B2B)'}
