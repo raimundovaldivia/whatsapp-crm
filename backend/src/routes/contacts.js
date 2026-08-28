@@ -110,7 +110,7 @@ router.get('/broadcast', async (req, res) => {
 /**
  * POST /api/contacts/backfill-shopify
  * Rellena la tabla contacts con todos los clientes ya cacheados en shopify_orders.
- * Solo necesita ejecutarse una vez (o cuando se quiera forzar re-sincronización).
+ * Ahora también extrae address1 del raw_json de la orden más reciente.
  */
 router.post('/backfill-shopify', async (req, res) => {
   const { getPool } = require('../db/database');
@@ -119,6 +119,7 @@ router.post('/backfill-shopify', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (customer_phone)
          customer_phone, customer_name, customer_email, shipping_city, shopify_created_at,
+         raw_json,
          COUNT(*) OVER (PARTITION BY customer_phone) AS order_count
        FROM shopify_orders
        WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
@@ -128,21 +129,29 @@ router.post('/backfill-shopify', async (req, res) => {
 
     let upserted = 0;
     for (const r of rows) {
+      // Extraer address1 del raw_json de la orden más reciente
+      let address1 = null;
+      try {
+        const raw = typeof r.raw_json === 'string' ? JSON.parse(r.raw_json) : r.raw_json;
+        address1 = raw?.shippingAddress?.address1 || raw?.billingAddress?.address1 || null;
+      } catch {}
+
       await pool.query(
         `INSERT INTO contacts
-           (organization_id, phone, name, email, city, contact_type,
+           (organization_id, phone, name, email, city, address1, contact_type,
             total_orders, last_order_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,'customer',$6,$7,NOW(),NOW())
+         VALUES ($1,$2,$3,$4,$5,$6,'customer',$7,$8,NOW(),NOW())
          ON CONFLICT (organization_id, phone) DO UPDATE SET
-           name          = COALESCE(EXCLUDED.name, contacts.name),
-           email         = COALESCE(EXCLUDED.email, contacts.email),
-           city          = COALESCE(EXCLUDED.city,  contacts.city),
+           name          = COALESCE(EXCLUDED.name,     contacts.name),
+           email         = COALESCE(EXCLUDED.email,    contacts.email),
+           city          = COALESCE(EXCLUDED.city,     contacts.city),
+           address1      = COALESCE(EXCLUDED.address1, contacts.address1),
            contact_type  = 'customer',
            total_orders  = GREATEST(contacts.total_orders, EXCLUDED.total_orders),
            last_order_at = GREATEST(contacts.last_order_at, EXCLUDED.last_order_at),
            updated_at    = NOW()`,
-        [req.orgId, r.customer_phone, r.customer_name, r.customer_email, r.shipping_city,
-         parseInt(r.order_count) || 1, r.shopify_created_at]
+        [req.orgId, r.customer_phone, r.customer_name, r.customer_email,
+         r.shipping_city, address1, parseInt(r.order_count) || 1, r.shopify_created_at]
       );
       upserted++;
     }

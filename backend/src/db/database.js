@@ -1062,16 +1062,18 @@ async function upsertShopifyOrders(orgId, orders) {
 
     // Sincronizar cliente en la tabla contacts (usando phone normalizado)
     const contactPhone = normalizePhone(customerPhone);
+    const shippingAddress1 = o.shippingAddress?.address1 || o.billingAddress?.address1 || null;
     if (contactPhone) {
       await pool.query(
         `INSERT INTO contacts
-           (organization_id, phone, name, email, city, contact_type, shopify_id,
+           (organization_id, phone, name, email, city, address1, contact_type, shopify_id,
             total_orders, last_order_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,'customer',$6,1,$7,NOW(),NOW())
+         VALUES ($1,$2,$3,$4,$5,$6,'customer',$7,1,$8,NOW(),NOW())
          ON CONFLICT (organization_id, phone) DO UPDATE SET
-           name          = COALESCE(EXCLUDED.name, contacts.name),
-           email         = COALESCE(EXCLUDED.email, contacts.email),
-           city          = COALESCE(EXCLUDED.city,  contacts.city),
+           name          = COALESCE(EXCLUDED.name,     contacts.name),
+           email         = COALESCE(EXCLUDED.email,    contacts.email),
+           city          = COALESCE(EXCLUDED.city,     contacts.city),
+           address1      = COALESCE(EXCLUDED.address1, contacts.address1),
            contact_type  = 'customer',
            shopify_id    = COALESCE(EXCLUDED.shopify_id, contacts.shopify_id),
            total_orders  = (
@@ -1092,6 +1094,7 @@ async function upsertShopifyOrders(orgId, orders) {
           customerName,
           customerEmail,
           shippingCity,
+          shippingAddress1,
           o.customer?.id ? String(o.customer.id) : null,
           createdAt,
         ]

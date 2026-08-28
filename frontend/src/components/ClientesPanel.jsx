@@ -132,6 +132,8 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
     try {
       const res = await api.post('/clientes/sync', {}, { timeout: 180000 });
       if (!res.data.success) throw new Error(res.data.error);
+      // Backfill addresses from order history for contacts still missing address1
+      await api.post('/contacts/backfill-shopify', {}, { timeout: 60000 }).catch(() => {});
       await loadAll();
     } catch (err) {
       setError(err.response?.data?.error || err.message);
