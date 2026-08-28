@@ -14,6 +14,7 @@ const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
+const scheduledOrdersSvc = require('./scheduled-orders');
 
 /**
  * Procesa un mensaje entrante y genera la respuesta adecuada
@@ -243,6 +244,42 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   const customerName = knownCustomerData?.name?.split(' ')[0] || '';
 
   const salesOpts = { isWarmLead: isTemplateReply, templateName, customerName, intent };
+
+  // ── Pedido futuro: el cliente quiere pedir para después ────────────
+  // Detectar ANTES del mapeo normal. Solo aplica cuando el cliente muestra
+  // intención de compra pero indica una fecha futura.
+  const BUY_INTENTS = ['wants_to_order', 'interested', 'exploring'];
+  if (BUY_INTENTS.includes(intent) && !isTemplateReply &&
+      scheduledOrdersSvc.isFutureOrderIntent(userMessage)) {
+    try {
+      const todayISO = new Date().toISOString().split('T')[0];
+      const recentTexts = history.slice(-6).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
+      const extracted = await scheduledOrdersSvc.extractScheduledOrderData(userMessage, recentTexts, todayISO);
+
+      // Buscar template configurado para follow-up de pedidos agendados
+      const templateName = await db.getSetting(orgId, 'scheduled_order_template') || null;
+
+      await db.createScheduledOrder({
+        orgId,
+        conversationId,
+        phone:        conversation.phone_number,
+        customerName: knownCustomerData?.name || customerName || null,
+        productNotes: extracted.productNotes,
+        desiredDate:  extracted.desiredDate,
+        templateName,
+      });
+
+      await db.updatePipelineState(conversationId, 'scheduled');
+      const dateLabel = scheduledOrdersSvc.formatDateEs(extracted.desiredDate);
+      const replyMsg  = `¡Perfecto, agendado! 📅 El ${dateLabel} te escribimos para confirmar tu pedido de ${extracted.productNotes}. ¡Te esperamos!`;
+      L.agent('orchestrator', 0);
+      L.step('scheduled', `fecha: ${extracted.desiredDate} | producto: ${extracted.productNotes}`);
+      return { response: replyMsg, agentType: 'orchestrator', newState: 'scheduled' };
+    } catch (err) {
+      console.warn('[Pipeline] Error guardando pedido agendado, continuando normalmente:', err.message);
+      // Si falla, sigue el flujo normal — no bloquear al cliente
+    }
+  }
 
   // ── Mapeo de intent → acción ─────────────────────────────────────
 

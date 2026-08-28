@@ -392,6 +392,51 @@ async function claimOrderCreation(conversationId) {
   return rowCount > 0; // true = ganamos el lock, false = ya lo creó otro proceso
 }
 
+// ─── SCHEDULED ORDERS ─────────────────────────────────────────────
+
+async function createScheduledOrder({ orgId, conversationId, phone, customerName, productNotes, desiredDate, templateName }) {
+  const { rows: [row] } = await pool.query(
+    `INSERT INTO scheduled_orders
+       (organization_id, conversation_id, phone, customer_name, product_notes, desired_date, template_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [orgId, conversationId, phone, customerName || null, productNotes || null, desiredDate, templateName || null]
+  );
+  return row;
+}
+
+/**
+ * Trae los pedidos agendados pendientes cuya fecha ya llegó (desired_date <= HOY).
+ * @param {number|null} orgId - si null, trae de todas las orgs
+ */
+async function getPendingScheduledOrders(orgId = null) {
+  const { rows } = await pool.query(
+    `SELECT so.*, o.name AS org_name
+     FROM scheduled_orders so
+     JOIN organizations o ON o.id = so.organization_id
+     WHERE so.status = 'pending'
+       AND so.desired_date <= CURRENT_DATE
+       ${orgId ? 'AND so.organization_id = $1' : ''}
+     ORDER BY so.desired_date ASC`,
+    orgId ? [orgId] : []
+  );
+  return rows;
+}
+
+async function markScheduledOrderSent(id) {
+  await pool.query(
+    `UPDATE scheduled_orders SET status = 'sent', sent_at = NOW() WHERE id = $1`,
+    [id]
+  );
+}
+
+async function cancelScheduledOrder(id) {
+  await pool.query(
+    `UPDATE scheduled_orders SET status = 'cancelled' WHERE id = $1`,
+    [id]
+  );
+}
+
 // ─── MESSAGES ─────────────────────────────────────────────────────
 
 async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = 'sent', sentBy = 'ai', agentType = null }) {
@@ -1167,6 +1212,8 @@ module.exports = {
   upsertConversation, getAllConversations, getConversationById,
   updateConversationLastMessage, markConversationAsRead, setAgentMode,
   updatePipelineState, getOrderDraft, claimOrderCreation,
+  // Scheduled orders
+  createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
   saveMessage, getMessagesByConversation, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,

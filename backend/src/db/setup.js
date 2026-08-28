@@ -301,6 +301,26 @@ async function setupDatabase() {
       -- Migración: opt-out (no quiere recibir mensajes)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS opt_out BOOLEAN DEFAULT FALSE;
 
+      -- ─── PEDIDOS AGENDADOS ─────────────────────────────────────────
+      -- Clientes que quieren pedir para una fecha futura.
+      -- El cron job de follow-up les envía un template de WhatsApp cuando llega el día.
+      CREATE TABLE IF NOT EXISTS scheduled_orders (
+        id              SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        phone           TEXT NOT NULL,
+        customer_name   TEXT,
+        product_notes   TEXT,           -- qué quiere pedir (extraído por LLM)
+        desired_date    DATE NOT NULL,  -- cuándo lo quiere
+        template_name   TEXT,           -- template a usar para el follow-up
+        status          TEXT DEFAULT 'pending'
+          CHECK(status IN ('pending','sent','cancelled')),
+        created_at      TIMESTAMP DEFAULT NOW(),
+        sent_at         TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_sched_orders_org_date
+        ON scheduled_orders(organization_id, desired_date, status);
+
       -- ─── PRODUCTOS PROPIOS (independiente de Shopify) ─────────────
       -- Catálogo gestionado desde el CRM, usado por la tienda pública.
       CREATE TABLE IF NOT EXISTS products (
