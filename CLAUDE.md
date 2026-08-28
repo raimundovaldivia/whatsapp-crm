@@ -1,8 +1,36 @@
 # WhatsApp CRM — Guía para Claude
 
+## Visión del producto — leer antes de todo
+
+Este sistema está diseñado para servir a tiendas Shopify en **tres modos**. Cada feature que construyamos debe considerar los tres:
+
+### Modo 1 — Operar en paralelo con Shopify
+El cliente sigue usando Shopify como vitrina web pero el bot maneja todas las ventas por WhatsApp. El CRM sincroniza catálogo, clientes y órdenes con Shopify bidireccionalmente.
+**Estado:** casi completo. Gaps: sincronización automática de pedidos bot → Shopify, y reflejo en tiempo real de pagos Shopify → CRM.
+
+### Modo 2 — Migrar completamente fuera de Shopify
+El cliente abandona Shopify. El CRM reemplaza todo: bot de ventas, gestión de pedidos, catálogo, clientes. Shopify deja de ser una dependencia.
+**Estado:** el bot y los pedidos ya funcionan sin Shopify. Gaps pendientes:
+- Pasarela de pago propia (hoy es transferencia manual o Shopify Checkout)
+- Vitrina web / catálogo público para que el cliente vea productos sin tienda Shopify
+- Control de inventario real (hoy solo sincronizamos el stock de Shopify)
+- Facturación / boletas
+
+### Modo 3 — Crear ecommerce desde cero usando Shopify como fuente
+Se importa todo desde Shopify (productos → `products`, clientes → `contacts`, órdenes → `shopify_orders`) y luego se "desconecta" Shopify. El negocio queda operando en el CRM de forma independiente.
+**Estado:** el sync de productos, clientes y órdenes ya existe. Falta un script de migración one-off que consolide todo y marque la org como "independiente de Shopify".
+
+### Principio de diseño derivado
+**Shopify es opcional, no obligatorio.** Al construir cualquier feature:
+- Las entidades core (productos, pedidos, clientes) deben tener existencia propia en el CRM
+- Shopify es una fuente/destino de sincronización, no la fuente de verdad
+- Si un feature solo funciona si Shopify está conectado, hay que marcarlo como "Modo 1" y planear su versión independiente
+
+---
+
 ## Qué es este proyecto
 
-CRM multi-tenant de WhatsApp con agentes de IA para automatizar ventas. Las tiendas Shopify conectan su catálogo, los clientes escriben por WhatsApp, y 3 agentes de IA (orquestador, ventas, órdenes) gestionan la conversación y crean pedidos en Shopify.
+CRM multi-tenant de WhatsApp con agentes de IA para automatizar ventas. Las tiendas Shopify conectan su catálogo, los clientes escriben por WhatsApp, y 3 agentes de IA (orquestador, ventas, órdenes) gestionan la conversación y crean pedidos. Shopify es opcional — el sistema puede operar de forma completamente independiente.
 
 ---
 
