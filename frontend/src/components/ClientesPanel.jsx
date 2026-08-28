@@ -39,6 +39,34 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   const [needsSync, setNeedsSync]       = useState(false);
   const [syncing, setSyncing]           = useState(false);
   const abortRef = useRef(false);
+  // Edición de dirección inline
+  const [addrEditId,  setAddrEditId]  = useState(null);
+  const [addrStreet,  setAddrStreet]  = useState('');
+  const [addrCity,    setAddrCity]    = useState('');
+  const [addrSaving,  setAddrSaving]  = useState(false);
+  const [addrErr,     setAddrErr]     = useState('');
+  const startAddrEdit = (c) => {
+    setAddrEditId(c.id);
+    setAddrStreet(c.address?.address1 || '');
+    setAddrCity(c.address?.city || '');
+    setAddrErr('');
+  };
+  const cancelAddrEdit = () => { setAddrEditId(null); setAddrErr(''); };
+  const saveAddr = async (c) => {
+    if (!addrStreet.trim()) { setAddrErr('La dirección es requerida'); return; }
+    setAddrSaving(true); setAddrErr('');
+    try {
+      await api.patch(`/contacts/${c.phone}`, { address: addrStreet.trim(), city: addrCity.trim() });
+      // Actualizar localmente sin refetch completo
+      setAllCustomers(prev => prev.map(x => x.id === c.id
+        ? { ...x, address: { ...x.address, address1: addrStreet.trim(), city: addrCity.trim() } }
+        : x
+      ));
+      setAddrEditId(null);
+    } catch (e) {
+      setAddrErr(e?.response?.data?.error || 'Error al guardar');
+    } finally { setAddrSaving(false); }
+  };
 
   // ── Leads (contacts DB) state ──
   const [leads, setLeads]           = useState([]);
@@ -466,12 +494,44 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                               <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Info</div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', color: colors.textSecondary }}>
                                 <div><span style={{ color: colors.textPrimary }}>Cliente desde:</span> {formatDate(c.createdAt)}</div>
-                                {c.phone             && <div><span style={{ color: colors.textPrimary }}>Teléfono:</span> {c.phone}</div>}
-                                {c.address?.address1 && <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {[c.address.address1, c.address.address2].filter(Boolean).join(', ')}</div>}
-                                {c.address?.city     && <div><span style={{ color: colors.textPrimary }}>Ciudad:</span> {c.address.city}{c.address.province ? `, ${c.address.province}` : ''}</div>}
-                                {c.address?.zip      && <div><span style={{ color: colors.textPrimary }}>Código postal:</span> {c.address.zip}</div>}
-                                {c.address?.country  && <div><span style={{ color: colors.textPrimary }}>País:</span> {c.address.country}</div>}
-                                {c.note              && <div><span style={{ color: colors.textPrimary }}>Nota:</span> {c.note}</div>}
+                                {c.phone && <div><span style={{ color: colors.textPrimary }}>Teléfono:</span> {c.phone}</div>}
+
+                                {/* Dirección — editable */}
+                                {addrEditId === c.id ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
+                                    <input value={addrStreet} onChange={e => setAddrStreet(e.target.value)} placeholder="Calle y número *"
+                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${addrStreet ? colors.border : '#f8717166'}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                                    <input value={addrCity} onChange={e => setAddrCity(e.target.value)} placeholder="Ciudad / Comuna"
+                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                                    {addrErr && <div style={{ color: '#f87171', fontSize: '11px' }}>{addrErr}</div>}
+                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                      <button onClick={() => saveAddr(c)} disabled={addrSaving}
+                                        style={{ padding: '4px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#4ade80', color: '#000', fontSize: '11px', fontWeight: 600, cursor: addrSaving ? 'not-allowed' : 'pointer', opacity: addrSaving ? 0.7 : 1 }}>
+                                        {addrSaving ? 'Guardando...' : '✓ Guardar'}
+                                      </button>
+                                      <button onClick={cancelAddrEdit}
+                                        style={{ padding: '4px 10px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '11px', cursor: 'pointer' }}>
+                                        Cancelar
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    {c.address?.address1
+                                      ? <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {[c.address.address1, c.address.address2].filter(Boolean).join(', ')}</div>
+                                      : <div style={{ color: '#f87171', fontStyle: 'italic' }}>⚠ Sin dirección de calle</div>
+                                    }
+                                    {c.address?.city && <div><span style={{ color: colors.textPrimary }}>Ciudad:</span> {c.address.city}{c.address.province ? `, ${c.address.province}` : ''}</div>}
+                                    {c.address?.zip  && <div><span style={{ color: colors.textPrimary }}>CP:</span> {c.address.zip}</div>}
+                                    <button onClick={() => startAddrEdit(c)}
+                                      style={{ alignSelf: 'flex-start', marginTop: '2px', padding: '3px 10px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '11px', cursor: 'pointer' }}>
+                                      ✏️ {c.address?.address1 ? 'Editar dirección' : 'Agregar dirección'}
+                                    </button>
+                                  </>
+                                )}
+
+                                {c.address?.country && <div><span style={{ color: colors.textPrimary }}>País:</span> {c.address.country}</div>}
+                                {c.note             && <div><span style={{ color: colors.textPrimary }}>Nota:</span> {c.note}</div>}
                                 {c.tags?.length > 0 && (
                                   <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
                                     <span style={{ color: colors.textPrimary }}>Tags:</span>
