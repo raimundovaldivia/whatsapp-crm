@@ -161,8 +161,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
     setDrawerMsgs([]);
     setDrawerLoading(true);
     try {
-      const msgs = await conversationsAPI.getMessages(convId);
-      setDrawerMsgs(msgs || []);
+      const data = await conversationsAPI.getMessages(convId);
+      // getMessages devuelve { conversation, messages } — extraer solo el array
+      const msgs = Array.isArray(data) ? data : (data?.messages || []);
+      setDrawerMsgs(msgs);
     } catch { setDrawerMsgs([]); }
     finally { setDrawerLoading(false); }
   }, []);
