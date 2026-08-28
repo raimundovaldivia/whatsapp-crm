@@ -288,9 +288,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     try {
       const phone = conversation.phone_number;
       const cr = await api.get('/contacts/by-phone', { params: { phone } });
-      if (cr.data?.contact?.address) {
-        setOrderAddress(cr.data.contact.address);
-        setOrderCity(cr.data.contact.city || '');
+      const ct = cr.data?.contact;
+      if (ct) {
+        const addr = ct.address1 || ct.address || '';
+        if (addr) setOrderAddress(addr);
+        if (ct.city) setOrderCity(ct.city);
       }
     } catch { /* ignorar si falla */ }
     try {
