@@ -1120,7 +1120,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   // Cargar contactos y templates en paralelo
   useEffect(() => {
-    // Backfill + normalizar nombres, luego cargar la lista
+    // Dedup + backfill + normalizar nombres, luego cargar la lista
+    api.post('/contacts/dedup-phones').catch(() => {});
     api.post('/contacts/backfill-shopify').catch(() => {});
     api.post('/contacts/normalize-names')
       .catch(() => {})

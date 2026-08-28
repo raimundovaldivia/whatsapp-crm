@@ -88,8 +88,14 @@ router.get('/broadcast', async (req, res) => {
       [req.orgId]
     );
 
-    // Deduplicar por teléfono normalizado — prefiere formato 56XXXXXXXXX
-    const normalize = p => String(p || '').replace(/^\+/, '').replace(/^9(\d{8})$/, '56$1');
+    // Deduplicar por teléfono normalizado — prefiere formato 569XXXXXXXX (11 dígitos)
+    // Bug anterior: /^9(\d{8})$/ capturaba solo 8 dígitos → 10 dígitos en vez de 11
+    const normalize = p => {
+      const n = String(p || '').replace(/\D/g, '');
+      if (/^9\d{8}$/.test(n))   return '56' + n;  // 912345678 → 56912345678
+      if (/^\d{11}$/.test(n))   return n;           // 56912345678 → igual
+      return n;
+    };
     const seen = new Map();
     for (const row of rows) {
       const key = normalize(row.phone);
@@ -156,6 +162,60 @@ router.post('/backfill-shopify', async (req, res) => {
       upserted++;
     }
     res.json({ success: true, upserted });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/contacts/dedup-phones
+ * Fusiona contactos duplicados que tienen el mismo número en formatos distintos
+ * (ej: 912345678 y 56912345678). Conserva la fila con más datos.
+ */
+router.post('/dedup-phones', async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  try {
+    // Normalizar: todos los teléfonos de 9 dígitos que empiezan en 9 → anteponer 56
+    const { rows: toFix } = await pool.query(
+      `SELECT id, phone FROM contacts
+       WHERE organization_id = $1
+         AND phone ~ '^9[0-9]{8}$'`,
+      [req.orgId]
+    );
+
+    let merged = 0;
+    for (const row of toFix) {
+      const canonical = '56' + row.phone;
+      // Buscar si ya existe la versión canónica
+      const { rows: [existing] } = await pool.query(
+        `SELECT id FROM contacts WHERE organization_id = $1 AND phone = $2 LIMIT 1`,
+        [req.orgId, canonical]
+      );
+      if (existing) {
+        // Transferir datos relevantes de la fila corta al canónico y eliminar la corta
+        await pool.query(
+          `UPDATE contacts SET
+             name         = COALESCE(contacts.name,     (SELECT name     FROM contacts WHERE id = $2)),
+             email        = COALESCE(contacts.email,    (SELECT email    FROM contacts WHERE id = $2)),
+             address      = COALESCE(contacts.address,  (SELECT address  FROM contacts WHERE id = $2)),
+             address1     = COALESCE(contacts.address1, (SELECT address1 FROM contacts WHERE id = $2)),
+             city         = COALESCE(contacts.city,     (SELECT city     FROM contacts WHERE id = $2)),
+             updated_at   = NOW()
+           WHERE id = $1`,
+          [existing.id, row.id]
+        );
+        await pool.query(`DELETE FROM contacts WHERE id = $1`, [row.id]);
+        merged++;
+      } else {
+        // Solo actualizar el teléfono al formato canónico
+        await pool.query(
+          `UPDATE contacts SET phone = $1, updated_at = NOW() WHERE id = $2`,
+          [canonical, row.id]
+        );
+      }
+    }
+    res.json({ success: true, checked: toFix.length, merged });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
