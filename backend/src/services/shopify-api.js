@@ -188,6 +188,9 @@ const CUSTOMERS_QUERY = `
                 lineItems(first: 5) {
                   edges { node { title quantity } }
                 }
+                shippingAddress {
+                  address1 address2 city province country zip
+                }
               }
             }
           }
@@ -227,7 +230,12 @@ async function getCustomers(shop, token, opts = {}) {
     currency:      node.amountSpent?.currencyCode || 'CLP',
     createdAt:     node.createdAt,
     updatedAt:     node.updatedAt,
-    address:       node.defaultAddress || null,
+    // Dirección: priorizar defaultAddress (perfil), fallback a shippingAddress del último pedido
+    address:       (() => {
+      if (node.defaultAddress) return node.defaultAddress;
+      const lastOrderAddr = node.orders?.edges?.[0]?.node?.shippingAddress;
+      return lastOrderAddr || null;
+    })(),
     tags:          node.tags || [],
     note:          node.note || null,
     lastOrder:     (() => {
