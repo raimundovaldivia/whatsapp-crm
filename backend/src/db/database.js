@@ -377,6 +377,21 @@ async function getOrderDraft(id) {
   try { return JSON.parse(conv?.order_draft || '{}'); } catch { return {}; }
 }
 
+/**
+ * Intenta cambiar pipeline_state de 'collecting_order' → 'done' de forma atómica.
+ * Retorna true si lo logró (este proceso crea el pedido), false si ya lo hizo otro.
+ * Previene pedidos duplicados cuando dos mensajes llegan casi simultáneamente.
+ */
+async function claimOrderCreation(conversationId) {
+  const { rowCount } = await pool.query(
+    `UPDATE conversations
+     SET pipeline_state = 'done', updated_at = NOW()
+     WHERE id = $1 AND pipeline_state = 'collecting_order'`,
+    [conversationId]
+  );
+  return rowCount > 0; // true = ganamos el lock, false = ya lo creó otro proceso
+}
+
 // ─── MESSAGES ─────────────────────────────────────────────────────
 
 async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = 'sent', sentBy = 'ai', agentType = null }) {
@@ -1151,7 +1166,7 @@ module.exports = {
   // Conversations
   upsertConversation, getAllConversations, getConversationById,
   updateConversationLastMessage, markConversationAsRead, setAgentMode,
-  updatePipelineState, getOrderDraft,
+  updatePipelineState, getOrderDraft, claimOrderCreation,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
   saveMessage, getMessagesByConversation, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,

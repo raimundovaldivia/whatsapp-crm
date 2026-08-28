@@ -143,6 +143,15 @@ router.post('/', async (req, res) => {
     const tPipeline = Date.now();
     const result = await pipeline.processMessage(org.id, conversation.id, parsed.text, log);
     io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
+
+    // Si el pipeline detectó un pedido duplicado, no enviar ni guardar nada
+    if (result.duplicate) {
+      console.warn(`[KapsoWebhook] Pedido duplicado ignorado para conv ${conversation.id}`);
+      log.step('duplicate', 'pedido ya creado por otro proceso — respuesta silenciada');
+      log.done();
+      return;
+    }
+
     log.response(result.response, Date.now() - tPipeline);
 
     // 6. Enviar respuesta por WhatsApp via Kapso

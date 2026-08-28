@@ -397,6 +397,16 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft);
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft)) {
+    // ── Lock atómico anti-duplicado ──────────────────────────────────
+    // Cambia pipeline_state collecting_order → done solo si aún no lo hizo otro proceso.
+    // Si dos mensajes llegan casi simultáneamente (ej: "Genial" + "Gracias"),
+    // solo el primero en hacer el UPDATE gana; el segundo retorna null y se ignora.
+    const claimed = await db.claimOrderCreation(conversationId);
+    if (!claimed) {
+      console.warn(`[Pipeline] ⚠️  Pedido duplicado bloqueado para conv ${conversationId}`);
+      return { response: null, agentType: 'orders', newState: 'confirmed', duplicate: true };
+    }
+
     // Default 'cod' — si no está configurado asumimos pago contra entrega
     const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
 
