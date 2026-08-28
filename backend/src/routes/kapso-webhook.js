@@ -18,6 +18,7 @@ const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
 const { notifyAdminHandoff }    = require('../services/notifications');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
+const { createBotLogger }       = require('../services/bot-logger');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -89,7 +90,8 @@ router.post('/', async (req, res) => {
 
   if (!parsed.text) return;
 
-  console.log(`[KapsoWebhook] [Org:${org.name}] 📩 ${parsed.from}: ${parsed.text}`);
+  const log = createBotLogger(org.name, parsed.from);
+  log.in(parsed.text);
 
   try {
     // 1. Obtener/crear conversación
@@ -106,63 +108,61 @@ router.post('/', async (req, res) => {
       content:           parsed.text,
       sentBy:            'client',
     });
-    // Si es duplicado (savedMsg null), continuar igual — el Meta webhook pudo haberlo guardado
-    // pero no puede responder (null token). Kapso sí puede, así que seguimos.
 
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig);
 
-    // 3. Emitir al CRM en tiempo real (usar savedMsg o buscarlo si fue duplicado)
+    // 3. Emitir al CRM en tiempo real
     const msgForSocket = savedMsg || { conversationId: conversation.id, direction: 'inbound', content: parsed.text };
     const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, { message: msgForSocket, conversation: updatedConv });
 
     // 4. Si está en modo humano, verificar si hace mucho que no responde un humano
     if (updatedConv.agent_mode !== 'ai') {
-      const AUTO_RESET_MINUTES = 1440; // 24 horas sin respuesta humana → vuelve a IA
+      const AUTO_RESET_MINUTES = 1440;
       const mins = await db.minutesSinceLastHumanReply(conversation.id);
       if (mins < AUTO_RESET_MINUTES) {
-        console.log(`[KapsoWebhook] Modo humano activo (último humano hace ${Math.round(mins)}min), sin respuesta IA`);
+        log.humanMode(mins);
+        log.done();
         return;
       }
-      // Auto-reset a modo IA — pero NO responder en este turno para evitar loops
-      // El próximo mensaje del cliente ya recibirá respuesta normal de IA
-      console.log(`[KapsoWebhook] Auto-reset a modo IA (sin respuesta humana en ${Math.round(mins)}min)`);
+      log.autoReset(mins);
       await db.setAgentMode(conversation.id, 'ai');
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
-      // Limpiar el estado de escalación para que el pipeline trate el próximo mensaje como nuevo
       if (typeof db.clearLastEscalation === 'function') {
         await db.clearLastEscalation(conversation.id).catch(() => {});
       }
-      // Resetear estado del pipeline para que el próximo mensaje se trate como conversación nueva
       await db.updatePipelineState(conversation.id, 'exploring', {}).catch(() => {});
-      // No responder ahora — el próximo mensaje del cliente activará la IA limpia
+      log.done();
       return;
     }
 
     // 5. Ejecutar pipeline de 3 agentes
     io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
-    const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);
+    const tPipeline = Date.now();
+    const result = await pipeline.processMessage(org.id, conversation.id, parsed.text, log);
     io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
+    log.response(result.response, Date.now() - tPipeline);
 
     // 6. Enviar respuesta por WhatsApp via Kapso
     let sentResult = null;
     let windowExpired = false;
+    const tSend = Date.now();
     try {
       sentResult = await kapsoService.sendTextMessage(
         parsed.from,
         result.response,
         whatsappConfig
       );
+      log.sent(Date.now() - tSend);
     } catch (sendErr) {
       if (sendErr.is24hWindow) {
         windowExpired = true;
-        console.warn(`[KapsoWebhook] ⏰ Ventana 24h expirada para ${parsed.from} — guardando respuesta como bloqueada`);
-        // Notificar al CRM para que muestre el banner
+        log.windowExpired(parsed.from);
         io?.emit(`window_expired_${org.id}`, { conversationId: conversation.id, phone: parsed.from });
       } else {
-        throw sendErr; // otro error — propagar
+        throw sendErr;
       }
     }
 
@@ -199,15 +199,15 @@ router.post('/', async (req, res) => {
       });
     }
 
+    log.done();
+
   } catch (err) {
-    // Imprimir error completo incluyendo respuesta de APIs externas
     if (err.response) {
-      console.error('[KapsoWebhook] Error HTTP', err.response.status,
-        'url:', err.config?.url,
-        'body:', JSON.stringify(err.response.data));
+      log.error('HTTP', new Error(`${err.response.status} ${err.config?.url} — ${JSON.stringify(err.response.data)}`));
     } else {
-      console.error('[KapsoWebhook] Error procesando mensaje:', err.message, err.stack?.split('\n')[1]);
+      log.error('pipeline', err);
     }
+    log.done();
   }
 });
 

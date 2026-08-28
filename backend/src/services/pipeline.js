@@ -19,7 +19,9 @@ const ordersAgent  = require('./agents/orders');
  * Procesa un mensaje entrante y genera la respuesta adecuada
  * @returns {{ response: string, agentType: string, newState: string }}
  */
-async function processMessage(orgId, conversationId, userMessage) {
+async function processMessage(orgId, conversationId, userMessage, log = null) {
+  const noop = { step:()=>{}, context:()=>{}, intent:()=>{}, escalation:()=>{}, agent:()=>{}, error:()=>{} };
+  const L = log || noop;
   const conversation = await db.getConversationById(conversationId);
   const history = await db.getLastMessages(conversationId, 16);
 
@@ -80,6 +82,7 @@ async function processMessage(orgId, conversationId, userMessage) {
     }
   } catch (err) {
     console.warn('[Pipeline] Error cargando catálogo desde DB:', err.message);
+    L.error('catálogo', err);
   }
 
   // ── Contexto de tipo de cliente para el agente ─────────────────────
@@ -146,8 +149,16 @@ async function processMessage(orgId, conversationId, userMessage) {
       }
     } catch (e) {
       console.warn('[Pipeline] historial compras error:', e.message);
+      L.error('historial', e);
     }
   }
+
+  L.context({
+    products: products.length,
+    history:  purchaseHistorySection ? (purchaseHistorySection.match(/\n-/g) || []).length : 0,
+    agentMode: conversation.agent_mode || 'ai',
+    state: currentState,
+  });
 
   const storeCustomPrompt = [clientTypeSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
 
@@ -159,6 +170,7 @@ async function processMessage(orgId, conversationId, userMessage) {
     if (inboundAfterConfirm <= 1) {
       await db.updatePipelineState(conversationId, 'exploring');
       const afterOrderMsg = '¡Ya tenemos tu pedido registrado! 😊 ¿Puedo ayudarte con algo más?';
+      L.agent('sales', 0);
       return { response: afterOrderMsg, agentType: 'sales', newState: 'exploring' };
     }
     // Si ya hay más mensajes, solo reiniciar el estado y seguir normalmente
@@ -189,6 +201,8 @@ async function processMessage(orgId, conversationId, userMessage) {
       : orchestrator.classifyIntent(userMessage, history, effectiveState),
   ]);
 
+  L.escalation(escalationResult.escalate, escalationResult.urgency, escalationResult.reason);
+
   // Si el agente de escalación detecta que se necesita humano
   if (escalationResult.escalate) {
     console.log(`[Pipeline] 🚨 Escalación detectada (${escalationResult.urgency}): ${escalationResult.reason}`);
@@ -213,11 +227,13 @@ async function processMessage(orgId, conversationId, userMessage) {
 
   // ── Si estamos en proceso de recopilación de datos ──────────────
   if (currentState === 'collecting_order') {
+    L.agent('orders', 0);
     return await handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto);
   }
 
   // ── Paso 1: Orquestador clasifica la intención ──────────────────
   const { intent, confidence } = intentResult || { intent: 'interested', confidence: 0.9 };
+  L.intent(intent, Math.round(confidence * 100), 0);
   console.log(`[Pipeline] Intent: ${intent} (${Math.round(confidence * 100)}%) | State: ${effectiveState}${isTemplateReply ? ' 🔥 WARM LEAD' : ''}`);
 
   // Datos del cliente conocido para personalizar saludos
@@ -234,15 +250,18 @@ async function processMessage(orgId, conversationId, userMessage) {
   if (intent === 'greeting' && !isTemplateReply && history.filter(m => m.direction === 'outbound').length === 0) {
     const greeting = salesAgent.generateGreeting(customerName);
     await db.updatePipelineState(conversationId, 'exploring');
+    L.agent('sales', 0);
     return { response: greeting, agentType: 'sales', newState: 'exploring' };
   }
 
   // FAST PATH: Pregunta de delivery → responder con info de settings + retomar venta
   if (intent === 'delivery_inquiry' && storeCustomPrompt && !isTemplateReply) {
     // Dejar que el agente de ventas responda — ya tiene la info de delivery en su prompt
+    const tDel = Date.now();
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
     const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : effectiveState;
     await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
+    L.agent('sales', Date.now() - tDel);
     return { response: salesResponse, agentType: 'sales', newState };
   }
 
@@ -250,6 +269,7 @@ async function processMessage(orgId, conversationId, userMessage) {
   if (intent === 'human_request' && !escalationResult.loopDetected) {
     await db.setAgentMode(conversationId, 'human');
     await db.updatePipelineState(conversationId, 'exploring');
+    L.agent('orchestrator', 0);
     return {
       response: '¡Claro! Te conecto con uno de nuestros asesores ahora mismo. En un momento alguien te atiende 👋',
       agentType: 'orchestrator',
@@ -260,6 +280,7 @@ async function processMessage(orgId, conversationId, userMessage) {
 
   // Lead caliente (respuesta a template) o cliente quiere ordenar → Agente de ventas en modo warm
   if (isTemplateReply || intent === 'wants_to_order' || (intent === 'interested' && confidence > 0.85)) {
+    const tWarm = Date.now();
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
     let newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
 
@@ -272,17 +293,21 @@ async function processMessage(orgId, conversationId, userMessage) {
       newState = 'collecting_order';
       await db.updatePipelineState(conversationId, 'collecting_order', {});
       const forceMsg = '¡Perfecto! Para hacer tu pedido necesito algunos datos. ¿Me das tu nombre completo?';
+      L.agent('orders', Date.now() - tWarm);
       return { response: forceMsg, agentType: 'orders', newState: 'collecting_order' };
     }
 
     await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
+    L.agent('sales', Date.now() - tWarm);
     return { response: salesResponse, agentType: 'sales', newState };
   }
 
   // Interés, objeción, exploración, delivery, soporte → Agente de ventas
+  const tGen = Date.now();
   const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
   const finalState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : (intent === 'interested' ? 'interested' : effectiveState);
   await db.updatePipelineState(conversationId, finalState, finalState === 'collecting_order' ? {} : undefined);
+  L.agent('sales', Date.now() - tGen);
   return { response: salesResponse, agentType: 'sales', newState: finalState };
 }
 
