@@ -181,14 +181,27 @@ async function handleOrderCreate(orgId, shopifyOrder) {
     const cust    = shopifyOrder.customer || {};
     const addr    = shopifyOrder.billing_address || shopifyOrder.shipping_address || {};
     const shopifyId = cust.id ? String(cust.id) : null;
-    db.upsertContact(orgId, {
+    // Usar upsertShopifyCustomerProfile para guardar dirección completa (address1, city, province, zip, country)
+    db.upsertShopifyCustomerProfile(orgId, {
       phone,
-      name:      [cust.first_name, cust.last_name].filter(Boolean).join(' ') || addr.name || null,
-      email:     cust.email || null,
-      address:   addr.address1 || null,
-      city:      addr.city || null,
-      region:    addr.province || null,
-      shopifyId,
+      name:         [cust.first_name, cust.last_name].filter(Boolean).join(' ') || addr.name || null,
+      email:        cust.email || null,
+      id:           shopifyId,
+      address: {
+        address1: addr.address1 || null,
+        address2: addr.address2 || null,
+        city:     addr.city    || null,
+        province: addr.province || null,
+        zip:      addr.zip     || null,
+        country:  addr.country || null,
+      },
+      totalSpent:  null,
+      ordersCount: null,
+      tags:        [],
+      createdAt:   cust.created_at || null,
+      currency:    null,
+      note:        null,
+      lastOrder:   null,
     }).catch(() => {});
   }
 
