@@ -688,9 +688,28 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             Sin mensajes aún
           </div>
         ) : (
-          messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))
+          messages.reduce((acc, msg, i) => {
+            const msgDay = msg.created_at ? new Date(msg.created_at).toDateString() : null;
+            const prevDay = i > 0 && messages[i-1].created_at ? new Date(messages[i-1].created_at).toDateString() : null;
+            if (msgDay && msgDay !== prevDay) {
+              const d = new Date(msg.created_at);
+              const today = new Date();
+              const yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
+              let label;
+              if (d.toDateString() === today.toDateString()) label = 'Hoy';
+              else if (d.toDateString() === yesterday.toDateString()) label = 'Ayer';
+              else label = d.toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' });
+              acc.push(
+                <div key={`sep-${msgDay}`} style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '10px 0' }}>
+                  <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
+                  <span style={{ fontSize: '11px', color: colors.textSecondary, fontWeight: 500, whiteSpace: 'nowrap', textTransform: 'capitalize' }}>{label}</span>
+                  <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
+                </div>
+              );
+            }
+            acc.push(<MessageBubble key={msg.id} message={msg} />);
+            return acc;
+          }, [])
         )}
         {/* Typing indicator */}
         {botTyping && (
