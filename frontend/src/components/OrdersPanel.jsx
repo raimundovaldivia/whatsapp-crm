@@ -720,15 +720,40 @@ function SelectBox({ checked, onChange, colors }) {
 // ─── Card pedido Bot ──────────────────────────────────────────────
 function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGoToConversation, syncing, selected, onToggleSelect, products = [], onItemsUpdated }) {
   const { colors } = useTheme();
-  const [expanded,  setExpanded]  = useState(false);
-  const [editMode,  setEditMode]  = useState(false);
-  const [editItems, setEditItems] = useState([]);
-  const [saving,    setSaving]    = useState(false);
-  const [editErr,   setEditErr]   = useState('');
+  const [expanded,   setExpanded]   = useState(false);
+  const [editMode,   setEditMode]   = useState(false);
+  const [editItems,  setEditItems]  = useState([]);
+  const [saving,     setSaving]     = useState(false);
+  const [editErr,    setEditErr]    = useState('');
+  const [addrEdit,   setAddrEdit]   = useState(false);
+  const [addrStreet, setAddrStreet] = useState('');
+  const [addrCity,   setAddrCity]   = useState('');
+  const [addrSaving, setAddrSaving] = useState(false);
+  const [addrErr,    setAddrErr]    = useState('');
 
   const status = getBotStatusStyle(order.status, colors);
   const items  = Array.isArray(order.items) ? order.items : [];
   const addr   = order.shipping_address || {};
+
+  const startAddrEdit = (e) => {
+    e.stopPropagation();
+    setAddrStreet(addr.address || addr.address1 || '');
+    setAddrCity(addr.city || '');
+    setAddrErr('');
+    setAddrEdit(true);
+  };
+  const cancelAddrEdit = () => { setAddrEdit(false); setAddrErr(''); };
+  const saveAddr = async () => {
+    if (!addrStreet.trim()) { setAddrErr('Ingresa la dirección'); return; }
+    setAddrSaving(true); setAddrErr('');
+    try {
+      await api.patch(`/orders/${order.id}/address`, { address: addrStreet.trim(), city: addrCity.trim() });
+      setAddrEdit(false);
+      onItemsUpdated?.();
+    } catch (err) {
+      setAddrErr(err?.response?.data?.error || 'Error al guardar');
+    } finally { setAddrSaving(false); }
+  };
 
   const startEdit = (e) => {
     e.stopPropagation();
@@ -885,11 +910,36 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
               )}
             </div>
             <div>
-              <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Envío</div>
-              <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: '1.7' }}>
-                {addr.address || addr.address1 || '—'}<br />
-                {addr.city}{addr.zip ? ` · CP ${addr.zip}` : ''}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Envío</div>
+                {!addrEdit && (
+                  <button onClick={startAddrEdit} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: `1px solid ${colors.border}`, color: colors.textSecondary, borderRadius: '6px', padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}>
+                    ✏️ {addr.address || addr.address1 ? 'Editar' : 'Agregar'}
+                  </button>
+                )}
               </div>
+              {addrEdit ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <input value={addrStreet} onChange={e => setAddrStreet(e.target.value)} placeholder="Calle y número"
+                    style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                  <input value={addrCity} onChange={e => setAddrCity(e.target.value)} placeholder="Ciudad / Comuna"
+                    style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                  {addrErr && <div style={{ color: colors.red, fontSize: '11px' }}>{addrErr}</div>}
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button onClick={saveAddr} disabled={addrSaving} style={{ flex: 1, padding: '5px', borderRadius: '6px', border: 'none', backgroundColor: colors.green, color: '#000', fontSize: '11px', fontWeight: 600, cursor: addrSaving ? 'not-allowed' : 'pointer', opacity: addrSaving ? 0.7 : 1 }}>
+                      {addrSaving ? 'Guardando...' : '✓ Guardar'}
+                    </button>
+                    <button onClick={cancelAddrEdit} style={{ padding: '5px 10px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '11px', cursor: 'pointer' }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ color: addr.address || addr.address1 ? colors.textPrimary : colors.textSecondary, fontSize: '13px', lineHeight: '1.7', fontStyle: addr.address || addr.address1 ? 'normal' : 'italic' }}>
+                  {addr.address || addr.address1 || 'Sin dirección'}<br />
+                  {addr.city}{addr.zip ? ` · CP ${addr.zip}` : ''}
+                </div>
+              )}
             </div>
           </div>
 

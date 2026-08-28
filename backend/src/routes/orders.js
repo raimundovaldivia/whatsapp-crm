@@ -301,15 +301,15 @@ router.patch('/:id/items', async (req, res) => {
  */
 router.patch('/:id/address', async (req, res) => {
   try {
-    const { address } = req.body;
+    const { address, city } = req.body;
     if (!address) return res.status(400).json({ error: 'address es requerido' });
-    const addrJson = JSON.stringify({ address1: address });
+    const addrJson = JSON.stringify({ address, city: city || '' });
     const { rows: [order] } = await getPool().query(
       `UPDATE orders SET shipping_address = $1 WHERE id = $2 AND organization_id = $3 RETURNING *`,
       [addrJson, parseInt(req.params.id), req.orgId]
     );
     if (!order) return res.status(404).json({ error: 'Pedido no encontrado' });
-    res.json({ order });
+    res.json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
