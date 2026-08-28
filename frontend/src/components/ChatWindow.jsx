@@ -264,6 +264,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setOrderCity('');
     setOrderError('');
     setProductsLoading(true);
+    // Precargar dirección del contacto
+    try {
+      const phone = conversation.phone_number;
+      const cr = await api.get('/contacts/by-phone', { params: { phone } });
+      if (cr.data?.contact?.address) {
+        setOrderAddress(cr.data.contact.address);
+        setOrderCity(cr.data.contact.city || '');
+      }
+    } catch { /* ignorar si falla */ }
     try {
       const r = await api.get('/products');
       const all = (r.data.products || r.data.data || []).filter(p => p.active !== false);

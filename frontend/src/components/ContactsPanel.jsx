@@ -127,7 +127,7 @@ export default function ContactsPanel({ onSelectConversation }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              {contacts.map(c => <ContactRow key={c.id} contact={c} colors={colors} onGoToConversation={onSelectConversation} />)}
+              {contacts.map(c => <ContactRow key={c.id} contact={c} colors={colors} onGoToConversation={onSelectConversation} onUpdated={load} />)}
             </div>
 
             {/* Paginación */}
@@ -164,52 +164,127 @@ export default function ContactsPanel({ onSelectConversation }) {
   );
 }
 
-function ContactRow({ contact, colors, onGoToConversation }) {
+function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
   const typeStyle = TYPE_COLORS[contact.contact_type] || TYPE_COLORS.lead;
   const displayName = contact.name && contact.name !== 'Cliente' ? contact.name : null;
+  const hasAddress = !!(contact.address);
+
+  const [expanded, setExpanded] = useState(false);
+  const [editing,  setEditing]  = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editAddr, setEditAddr] = useState('');
+  const [editCity, setEditCity] = useState('');
+  const [saving,   setSaving]   = useState(false);
+  const [err,      setErr]      = useState('');
+
+  const startEdit = (e) => {
+    e.stopPropagation();
+    setEditName(contact.name || '');
+    setEditAddr(contact.address || '');
+    setEditCity(contact.city || '');
+    setErr('');
+    setEditing(true);
+  };
+  const cancel = () => { setEditing(false); setErr(''); };
+  const save = async (e) => {
+    e.stopPropagation();
+    if (!editAddr.trim()) { setErr('La dirección es requerida'); return; }
+    setSaving(true); setErr('');
+    try {
+      await api.patch(`/contacts/${contact.phone}`, { name: editName.trim() || undefined, address: editAddr.trim(), city: editCity.trim() });
+      setEditing(false);
+      onUpdated?.();
+    } catch (err2) {
+      setErr(err2?.response?.data?.error || 'Error al guardar');
+    } finally { setSaving(false); }
+  };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 120px 120px 90px', gap: '12px', padding: '10px 16px',
-      backgroundColor: colors.bgPanel, borderRadius: '10px', border: `1px solid ${colors.border}`,
-      alignItems: 'center', cursor: onGoToConversation ? 'pointer' : 'default' }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = colors.borderStrong}
-      onMouseLeave={e => e.currentTarget.style.borderColor = colors.border}>
+    <div style={{ backgroundColor: colors.bgPanel, borderRadius: '10px', border: `1px solid ${hasAddress ? colors.border : '#5c262633'}`, overflow: 'hidden' }}
+      onMouseEnter={e => { if (!expanded) e.currentTarget.style.borderColor = hasAddress ? colors.borderStrong : '#f8717155'; }}
+      onMouseLeave={e => { if (!expanded) e.currentTarget.style.borderColor = hasAddress ? colors.border : '#5c262633'; }}>
 
-      {/* Nombre */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-        <div style={{ width: 32, height: 32, borderRadius: '50%', backgroundColor: typeStyle.bg,
-          border: `1px solid ${typeStyle.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: typeStyle.color, fontSize: '13px', fontWeight: 700, flexShrink: 0 }}>
-          {(displayName || contact.phone || '?')[0].toUpperCase()}
-        </div>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {displayName || contact.phone}
+      {/* Fila principal */}
+      <div onClick={() => setExpanded(!expanded)}
+        style={{ display: 'grid', gridTemplateColumns: '1fr 130px 120px 120px 90px', gap: '12px', padding: '10px 16px', alignItems: 'center', cursor: 'pointer' }}>
+
+        {/* Nombre */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+          <div style={{ width: 32, height: 32, borderRadius: '50%', backgroundColor: typeStyle.bg,
+            border: `1px solid ${typeStyle.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: typeStyle.color, fontSize: '13px', fontWeight: 700, flexShrink: 0 }}>
+            {(displayName || contact.phone || '?')[0].toUpperCase()}
           </div>
-          {displayName && <div style={{ color: colors.textSecondary, fontSize: '11px' }}>{contact.city || contact.email || ''}</div>}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {displayName || contact.phone}
+            </div>
+            <div style={{ fontSize: '11px', color: hasAddress ? colors.textSecondary : '#f87171', fontStyle: hasAddress ? 'normal' : 'italic' }}>
+              {hasAddress ? (contact.address + (contact.city ? `, ${contact.city}` : '')) : '⚠ Sin dirección'}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ color: colors.textSecondary, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {contact.phone}
+        </div>
+        <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
+          {contact.last_seen_at ? formatDateTime(contact.last_seen_at) : '—'}
+        </div>
+        <div style={{ color: contact.total_orders > 0 ? '#4ade80' : colors.textSecondary, fontSize: '13px', fontWeight: contact.total_orders > 0 ? 600 : 400 }}>
+          {contact.total_orders > 0 ? `${contact.total_orders} pedido${contact.total_orders !== 1 ? 's' : ''}` : '—'}
+        </div>
+        <div style={{ backgroundColor: typeStyle.bg, color: typeStyle.color, borderRadius: '20px', padding: '3px 10px',
+          fontSize: '11px', fontWeight: 600, border: `1px solid ${typeStyle.border}`, textAlign: 'center' }}>
+          {typeStyle.label}
         </div>
       </div>
 
-      {/* Teléfono */}
-      <div style={{ color: colors.textSecondary, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {contact.phone}
-      </div>
-
-      {/* Último mensaje */}
-      <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
-        {contact.last_seen_at ? formatDateTime(contact.last_seen_at) : '—'}
-      </div>
-
-      {/* Pedidos */}
-      <div style={{ color: contact.total_orders > 0 ? '#4ade80' : colors.textSecondary, fontSize: '13px', fontWeight: contact.total_orders > 0 ? 600 : 400 }}>
-        {contact.total_orders > 0 ? `${contact.total_orders} pedido${contact.total_orders !== 1 ? 's' : ''}` : '—'}
-      </div>
-
-      {/* Tipo */}
-      <div style={{ backgroundColor: typeStyle.bg, color: typeStyle.color, borderRadius: '20px', padding: '3px 10px',
-        fontSize: '11px', fontWeight: 600, border: `1px solid ${typeStyle.border}`, textAlign: 'center' }}>
-        {typeStyle.label}
-      </div>
+      {/* Panel expandido */}
+      {expanded && (
+        <div style={{ borderTop: `1px solid ${colors.border}`, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {editing ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxWidth: 460 }}>
+              <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Nombre completo"
+                style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
+              <input value={editAddr} onChange={e => setEditAddr(e.target.value)} placeholder="Calle y número *"
+                style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${editAddr ? colors.border : '#f8717166'}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
+              <input value={editCity} onChange={e => setEditCity(e.target.value)} placeholder="Ciudad / Comuna"
+                style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
+              {err && <div style={{ color: '#f87171', fontSize: '12px' }}>{err}</div>}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={save} disabled={saving} style={{ padding: '7px 16px', borderRadius: '8px', border: 'none', backgroundColor: '#4ade80', color: '#000', fontSize: '12px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+                  {saving ? 'Guardando...' : '✓ Guardar'}
+                </button>
+                <button onClick={cancel} style={{ padding: '7px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '12px', cursor: 'pointer' }}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px' }}>
+              <div style={{ fontSize: '13px', color: colors.textSecondary, lineHeight: '1.6' }}>
+                {contact.email && <div>📧 {contact.email}</div>}
+                {hasAddress
+                  ? <div>📍 {contact.address}{contact.city ? `, ${contact.city}` : ''}</div>
+                  : <div style={{ color: '#f87171', fontStyle: 'italic' }}>⚠ Sin dirección — las órdenes de este contacto no tendrán dirección</div>
+                }
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <button onClick={startEdit} style={{ padding: '6px 14px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '12px', cursor: 'pointer' }}>
+                  ✏️ Editar datos
+                </button>
+                {onGoToConversation && (
+                  <button onClick={e => { e.stopPropagation(); onGoToConversation(contact); }}
+                    style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', backgroundColor: colors.bgAccent, color: '#4ade80', fontSize: '12px', cursor: 'pointer' }}>
+                    💬 Ir al chat
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

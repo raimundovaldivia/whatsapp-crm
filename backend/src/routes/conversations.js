@@ -274,16 +274,24 @@ router.post('/:id/orders', async (req, res) => {
 
     const totalPrice = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
 
-    // Resolver nombre: priorizar contacts table si la conv solo tiene el número como nombre
+    // Resolver nombre y dirección desde contacts (fuente de verdad)
     let customerName = conv.contact_name;
     const rawPhone = conv.phone_number;
+    const contact = await db.getContact(req.orgId, rawPhone);
+
     if (!customerName || customerName === rawPhone || /^\d+$/.test(customerName) || customerName === 'Cliente') {
-      const contact = await db.getContact(req.orgId, rawPhone);
       if (contact?.name && contact.name !== rawPhone && !/^\d+$/.test(contact.name)) {
         customerName = contact.name;
       }
     }
     customerName = customerName || rawPhone;
+
+    // Dirección: usar la del modal; si está vacía, usar la del contacto como fallback
+    let finalAddress = shippingAddress;
+    const addrEmpty = !shippingAddress?.address && !shippingAddress?.address1;
+    if (addrEmpty && contact?.address) {
+      finalAddress = { address: contact.address, city: contact.city || '' };
+    }
 
     const order = await db.createOrder({
       conversationId: convId,
@@ -291,7 +299,7 @@ router.post('/:id/orders', async (req, res) => {
       items,
       customerName,
       customerPhone:   conv.phone_number,
-      shippingAddress,
+      shippingAddress: finalAddress,
       totalPrice,
     });
 

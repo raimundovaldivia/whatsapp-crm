@@ -270,4 +270,32 @@ router.patch('/:phone/type', async (req, res) => {
   }
 });
 
+/**
+ * PATCH /api/contacts/:phone
+ * Actualiza nombre, dirección y ciudad de un contacto.
+ */
+router.patch('/:phone', async (req, res) => {
+  try {
+    const { getPool } = require('../db/database');
+    const { name, address, city } = req.body;
+    const phone = req.params.phone;
+    // Upsert: inserta o actualiza dirección/nombre
+    const { rows: [contact] } = await getPool().query(
+      `INSERT INTO contacts (organization_id, phone, name, address, city, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (organization_id, phone)
+       DO UPDATE SET
+         name       = CASE WHEN $3 IS NOT NULL THEN $3 ELSE contacts.name END,
+         address    = CASE WHEN $4 IS NOT NULL THEN $4 ELSE contacts.address END,
+         city       = CASE WHEN $5 IS NOT NULL THEN $5 ELSE contacts.city END,
+         updated_at = NOW()
+       RETURNING *`,
+      [req.orgId, phone, name || null, address || null, city || null]
+    );
+    res.json({ success: true, data: contact });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
