@@ -12,7 +12,7 @@ const express = require('express');
 const router  = express.Router();
 const crypto  = require('crypto');
 const db      = require('../db/database');
-const { getPool } = require('../db/database');
+const { getPool, normalizePhone } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 // Invalida el caché de reenganche en DB cuando llega un pedido nuevo
 function clearReengagementCache(orgId) {
@@ -115,7 +115,7 @@ async function handleOrderPaid(orgId, shopifyOrder) {
   let localOrder = await findLocalOrder(orgId, {
     shopifyOrderId:  String(shopifyOrder.id),
     shopifyDraftId:  draftOrderId,
-    customerPhone:   cleanPhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone),
+    customerPhone:   normalizePhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone),
   });
 
   if (!localOrder) {
@@ -176,7 +176,7 @@ async function handleOrderPaid(orgId, shopifyOrder) {
  */
 async function handleOrderCreate(orgId, shopifyOrder) {
   // Upsertear el cliente en contacts para que el bot lo reconozca en el futuro
-  const phone = cleanPhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone || shopifyOrder.customer?.phone);
+  const phone = normalizePhone(shopifyOrder.phone || shopifyOrder.billing_address?.phone || shopifyOrder.customer?.phone);
   if (phone) {
     const cust    = shopifyOrder.customer || {};
     const addr    = shopifyOrder.billing_address || shopifyOrder.shipping_address || {};
@@ -304,10 +304,8 @@ function extractDraftIdFromNote(note) {
   return match ? match[1] : null;
 }
 
-function cleanPhone(phone) {
-  if (!phone) return null;
-  return phone.replace(/\D/g, '');
-}
+// cleanPhone eliminado — usar normalizePhone (importado de database.js) que
+// estandariza a formato 56XXXXXXXXX para evitar duplicados por formato distinto.
 
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;
