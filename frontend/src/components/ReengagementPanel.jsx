@@ -1098,18 +1098,19 @@ function toTitleCase(s) {
 }
 
 function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
-  const [contacts,   setContacts]   = useState([]);
-  const [sources,    setSources]    = useState(null);   // { whatsapp, shopify }
-  const [loading,    setLoading]    = useState(true);
-  const [search,     setSearch]     = useState('');
-  const [selected,   setSelected]   = useState(new Set());
-  const [templates,  setTemplates]  = useState(parentTemplates);
-  const [tplLoading, setTplLoading] = useState(parentTemplates.length === 0);
-  const [selTpl,     setSelTpl]     = useState(parentTemplates[0] || null);   // template seleccionado
-  const [sending,    setSending]    = useState(false);
-  const [results,    setResults]    = useState(null);   // { sent, failed }
-  const [toast,      setToast]      = useState(null);
-  const [testMode,   setTestMode]   = useState(false);
+  const [contacts,       setContacts]       = useState([]);
+  const [sources,        setSources]        = useState(null);
+  const [loading,        setLoading]        = useState(true);
+  const [search,         setSearch]         = useState('');
+  const [excludeRecent,  setExcludeRecent]  = useState(false);
+  const [selected,       setSelected]       = useState(new Set());
+  const [templates,      setTemplates]      = useState(parentTemplates);
+  const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
+  const [selTpl,         setSelTpl]         = useState(parentTemplates[0] || null);
+  const [sending,        setSending]        = useState(false);
+  const [results,        setResults]        = useState(null);
+  const [toast,          setToast]          = useState(null);
+  const [testMode,       setTestMode]       = useState(false);
   const [testPhoneInput, setTestPhoneInput] = useState(testPhone || '');
   const TEST_PHONE = testPhoneInput.trim();
 
@@ -1151,10 +1152,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     // si ya vienen del padre, tplLoading ya es false
   }, []);
 
+  const ONE_WEEK_AGO = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const filtered = contacts.filter(c => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (c.name || '').toLowerCase().includes(q) || (c.phone || '').includes(q);
+    if (search) {
+      const q = search.toLowerCase();
+      if (!(c.name || '').toLowerCase().includes(q) && !(c.phone || '').includes(q)) return false;
+    }
+    if (excludeRecent && c.last_order_at) {
+      if (new Date(c.last_order_at).getTime() >= ONE_WEEK_AGO) return false;
+    }
+    return true;
   });
 
   function toggleAll() {
@@ -1251,6 +1258,35 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           style={{ flex: 1, minWidth: '180px', padding: '7px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
         />
 
+        {/* Filtro: excluir compradores recientes */}
+        <button
+          onClick={() => {
+            const next = !excludeRecent;
+            setExcludeRecent(next);
+            // Reajustar selección: mantener solo los que pasan el filtro nuevo
+            if (next) {
+              setSelected(prev => {
+                const n = new Set();
+                contacts.forEach(c => {
+                  if (!prev.has(c.phone)) return;
+                  if (c.last_order_at && new Date(c.last_order_at).getTime() >= Date.now() - 7 * 24 * 60 * 60 * 1000) return;
+                  n.add(c.phone);
+                });
+                return n;
+              });
+            }
+          }}
+          style={{
+            padding: '6px 11px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
+            cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+            border: `1px solid ${excludeRecent ? colors.green + '66' : colors.border}`,
+            backgroundColor: excludeRecent ? colors.green + '22' : 'transparent',
+            color: excludeRecent ? colors.green : colors.textMuted,
+          }}
+        >
+          {excludeRecent ? '✓ ' : ''}Sin compras esta semana
+        </button>
+
         {/* Template selector */}
         {tplLoading ? (
           <span style={{ color: colors.textMuted, fontSize: '13px' }}>Cargando templates...</span>
@@ -1328,6 +1364,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           </button>
           <span style={{ color: colors.textMuted, fontSize: '12px', marginLeft: 'auto' }}>
             {selected.size} de {filtered.length} seleccionados
+            {excludeRecent && contacts.length > filtered.length && (
+              <span style={{ marginLeft: '8px', color: colors.yellow, fontWeight: 600 }}>
+                · {contacts.length - filtered.length} excluidos (compraron esta semana)
+              </span>
+            )}
             {sources && <span style={{ marginLeft: '10px', opacity: 0.7 }}>· 💬 {sources.whatsapp} WhatsApp · 🛒 {sources.shopify} Shopify</span>}
           </span>
         </div>
