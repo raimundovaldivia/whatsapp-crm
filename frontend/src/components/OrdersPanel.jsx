@@ -387,11 +387,14 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         row[1] = [street, city, zip].filter(Boolean).join(', ');
       }
 
-      // Col G: Notas — items
-      row[6] = (order.items || []).map(i => {
+      // Col G: Notas — items + total
+      const itemsText = (order.items || []).map(i => {
         const price = i.price ? ` - $${Number(i.price).toLocaleString('es-CL')}` : '';
         return `${i.quantity}x ${i.title || '?'}${price}`;
       }).join(', ');
+      const total = order.total ?? order.raw?.total_price ?? 0;
+      const totalText = total ? ` | Total: $${Number(total).toLocaleString('es-CL')}` : '';
+      row[6] = itemsText + totalText;
 
       // Col N: Teléfono (fórmula =+56...)
       const phone = (order.phone || '').replace(/\D/g, '');
