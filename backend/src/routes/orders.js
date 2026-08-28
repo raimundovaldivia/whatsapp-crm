@@ -245,16 +245,92 @@ router.get('/history/:phone', async (req, res) => {
 
 /**
  * GET /api/orders/shopify
- * Lee las órdenes de Shopify desde nuestra DB (previamente sincronizadas).
+ * Lee las órdenes de Shopify desde nuestra DB, auto-completando dirección
+ * desde contacts cuando la orden no la tiene.
  * IMPORTANTE: debe estar ANTES de /:id para no ser interceptado.
  */
 router.get('/shopify', async (req, res) => {
   try {
-    const orders   = await db.getShopifyOrders(req.orgId);
+    const pool     = getPool();
     const lastSync = await db.getShopifyOrdersSyncedAt(req.orgId);
+
+    // JOIN con contacts para auto-completar dirección cuando la orden no la tiene
+    const { rows } = await pool.query(`
+      SELECT
+        so.*,
+        ct.address1   AS contact_address1,
+        ct.address    AS contact_address,
+        ct.city       AS contact_city,
+        ct.province   AS contact_province
+      FROM shopify_orders so
+      LEFT JOIN contacts ct
+        ON ct.organization_id = so.organization_id
+       AND ct.phone = so.customer_phone
+      WHERE so.organization_id = $1
+      ORDER BY so.shopify_created_at DESC NULLS LAST
+    `, [req.orgId]);
+
+    // Si la orden no tiene shipping_city, usar la del contacto
+    const orders = rows.map(o => {
+      const result = { ...o };
+      if (!result.shipping_city && result.contact_city) {
+        result.shipping_city = result.contact_city;
+      }
+      if (!result.shipping_address1 && (result.contact_address1 || result.contact_address)) {
+        result.shipping_address1 = result.contact_address1 || result.contact_address;
+      }
+      // Limpiar campos auxiliares del JOIN
+      delete result.contact_address1;
+      delete result.contact_address;
+      delete result.contact_city;
+      delete result.contact_province;
+      return result;
+    });
+
     res.json({ success: true, orders, total: orders.length, lastSync });
   } catch (err) {
     console.error('[Orders/Shopify GET]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/orders/shopify/:id/address
+ * Editar dirección de una orden de Shopify (en nuestra DB local).
+ * Body: { address1, city, province }
+ */
+router.patch('/shopify/:id/address', async (req, res) => {
+  try {
+    const { address1, city, province } = req.body;
+    if (!address1?.trim()) return res.status(400).json({ error: 'address1 es requerido' });
+
+    const { rows } = await getPool().query(
+      `UPDATE shopify_orders
+         SET shipping_city       = COALESCE($3, shipping_city),
+             shipping_address1   = $2,
+             synced_at           = NOW()
+       WHERE id = $1 AND organization_id = $4
+       RETURNING *`,
+      [parseInt(req.params.id), address1.trim(), city?.trim() || null, req.orgId]
+    );
+
+    if (!rows.length) return res.status(404).json({ error: 'Orden no encontrada' });
+
+    // También actualizar el contacto si no tiene dirección
+    if (rows[0].customer_phone) {
+      await getPool().query(
+        `UPDATE contacts SET
+           address1   = COALESCE(address1, $2),
+           city       = COALESCE(city, $3),
+           updated_at = NOW()
+         WHERE organization_id = $1 AND phone = $4`,
+        [req.orgId, address1.trim(), city?.trim() || null, rows[0].customer_phone]
+      );
+    }
+
+    res.json({ success: true, data: rows[0] });
+  } catch (err) {
+    console.error('[Orders/Shopify PATCH address]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

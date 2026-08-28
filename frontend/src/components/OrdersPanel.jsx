@@ -619,6 +619,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                   : <ShopifyOrderCard key={order._key} order={order}
                       selected={selected.has(order._key)}
                       onToggleSelect={() => toggleSelect(order._key)}
+                      onAddressUpdated={load}
                     />
               ))}
             </div>
@@ -983,12 +984,39 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
 }
 
 // ─── Card pedido Shopify ──────────────────────────────────────────
-function ShopifyOrderCard({ order, selected, onToggleSelect }) {
+function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated }) {
   const { colors } = useTheme();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded]     = useState(false);
+  const [editingAddr, setEditingAddr] = useState(false);
+  const [addrStreet, setAddrStreet]   = useState('');
+  const [addrCity,   setAddrCity]     = useState('');
+  const [savingAddr, setSavingAddr]   = useState(false);
   const crmStyle    = getCrmStatusStyle(order.raw?.crm_status || 'nuevo');
   const financial   = getShopifyFinancialStyle(order.financialStatus, colors);
   const fulfillment = getShopifyFulfillmentStyle(order.fulfillmentStatus, colors);
+
+  const displayAddr  = order.raw?.shipping_address1 || order.raw?.shipping_city || null;
+  const displayCity  = order.raw?.shipping_city || null;
+
+  function openEditAddr() {
+    setAddrStreet(order.raw?.shipping_address1 || '');
+    setAddrCity(order.raw?.shipping_city || '');
+    setEditingAddr(true);
+  }
+
+  async function saveAddr() {
+    if (!addrStreet.trim()) return;
+    setSavingAddr(true);
+    try {
+      await api.patch(`/orders/shopify/${order.dbId}/address`, { address1: addrStreet.trim(), city: addrCity.trim() });
+      setEditingAddr(false);
+      onAddressUpdated?.();
+    } catch (e) {
+      alert('Error guardando dirección');
+    } finally {
+      setSavingAddr(false);
+    }
+  }
 
   return (
     <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', border: `2px solid ${selected ? colors.green : colors.border}`, overflow: 'hidden', transition: 'border-color .15s' }}
@@ -1047,13 +1075,48 @@ function ShopifyOrderCard({ order, selected, onToggleSelect }) {
               </div>
             ))}
           </div>
-          <div style={{ minWidth: '180px' }}>
+          <div style={{ minWidth: '200px' }}>
             <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Detalles</div>
             <div style={{ fontSize: '12px', color: colors.textSecondary, lineHeight: '1.8' }}>
               <div>📅 {formatDateTime(order.date)}</div>
               {order.raw?.customer_email && <div>✉️ {order.raw.customer_email}</div>}
               {order.raw?.customer_phone && <div>📞 {order.raw.customer_phone}</div>}
-              {order.raw?.shipping_city  && <div>📍 {order.raw.shipping_city}</div>}
+
+              {/* Dirección */}
+              {editingAddr ? (
+                <div style={{ marginTop: '6px' }}>
+                  <input
+                    value={addrStreet}
+                    onChange={e => setAddrStreet(e.target.value)}
+                    placeholder="Calle y número"
+                    style={{ width: '100%', marginBottom: '4px', padding: '4px 6px', borderRadius: '6px', border: `1px solid ${colors.border}`, background: colors.bgSub, color: colors.textPrimary, fontSize: '12px' }}
+                  />
+                  <input
+                    value={addrCity}
+                    onChange={e => setAddrCity(e.target.value)}
+                    placeholder="Ciudad"
+                    style={{ width: '100%', marginBottom: '6px', padding: '4px 6px', borderRadius: '6px', border: `1px solid ${colors.border}`, background: colors.bgSub, color: colors.textPrimary, fontSize: '12px' }}
+                  />
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button onClick={saveAddr} disabled={savingAddr} style={{ flex: 1, padding: '4px', borderRadius: '6px', border: 'none', background: colors.green, color: '#fff', fontSize: '11px', cursor: 'pointer' }}>
+                      {savingAddr ? '...' : 'Guardar'}
+                    </button>
+                    <button onClick={() => setEditingAddr(false)} style={{ flex: 1, padding: '4px', borderRadius: '6px', border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textSecondary, fontSize: '11px', cursor: 'pointer' }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                  <span style={{ color: displayAddr ? colors.textSecondary : colors.textMuted, fontStyle: displayAddr ? 'normal' : 'italic' }}>
+                    📍 {displayAddr ? [displayAddr, displayCity].filter(Boolean).join(', ') : 'Sin dirección'}
+                  </span>
+                  <button onClick={openEditAddr} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, fontSize: '10px', padding: '0 2px', lineHeight: 1 }}>
+                    ✏️
+                  </button>
+                </div>
+              )}
+
               <div style={{ color: '#4db6ac' }}>🛍️ Canal: Shopify</div>
             </div>
           </div>

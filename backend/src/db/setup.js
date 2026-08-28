@@ -301,6 +301,9 @@ async function setupDatabase() {
       -- Migración: opt-out (no quiere recibir mensajes)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS opt_out BOOLEAN DEFAULT FALSE;
 
+      -- Migración: dirección editable en shopify_orders
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address1 TEXT;
+
       -- ─── PEDIDOS AGENDADOS ─────────────────────────────────────────
       -- Clientes que quieren pedir para una fecha futura.
       -- El cron job de follow-up les envía un template de WhatsApp cuando llega el día.
