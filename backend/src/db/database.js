@@ -1089,10 +1089,12 @@ async function upsertShopifyOrders(orgId, orders) {
     // o.items (ya mapeados): [{ title, quantity, price }]
     const customerName  = o.customer?.name || null;
     const customerEmail = o.customer?.email || null;
-    const customerPhone = o.customer?.phone
+    const customerPhone = normalizePhone(
+      o.customer?.phone
       || o.shippingAddress?.phone
       || o.billingAddress?.phone
-      || null;
+      || null
+    ) || null;
     const shippingCity  = o.shippingAddress?.city || o.billingAddress?.city || null;
     const items         = (o.items || []).map(li => ({
       name:     li.title || li.name,
