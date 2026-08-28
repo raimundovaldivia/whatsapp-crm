@@ -254,41 +254,39 @@ router.get('/shopify', async (req, res) => {
     const pool     = getPool();
     const lastSync = await db.getShopifyOrdersSyncedAt(req.orgId);
 
-    // JOIN con contacts para auto-completar dirección cuando la orden no la tiene.
-    // DISTINCT ON evita duplicados si hay más de un contacto con el mismo teléfono.
+    // JOIN con contacts — el contacto ES la fuente autoritativa de dirección.
+    // El teléfono normalizado (56XXXXXXXXX) es la clave de enlace.
+    // El CASE en el JOIN maneja teléfonos sin normalizar en shopify_orders (registros legacy).
     const { rows } = await pool.query(`
       SELECT
         so.*,
         ct.address1   AS contact_address1,
-        ct.address    AS contact_address,
         ct.city       AS contact_city,
         ct.province   AS contact_province
       FROM shopify_orders so
       LEFT JOIN LATERAL (
-        SELECT address1, address, city, province
+        SELECT address1, city, province
         FROM contacts
         WHERE organization_id = so.organization_id
-          AND phone = so.customer_phone
+          AND phone = CASE
+            WHEN so.customer_phone ~ '^9[0-9]{8}$' THEN '56' || so.customer_phone
+            ELSE so.customer_phone
+          END
         LIMIT 1
       ) ct ON true
       WHERE so.organization_id = $1
       ORDER BY so.shopify_created_at DESC NULLS LAST
     `, [req.orgId]);
 
-    // Si la orden no tiene shipping_city, usar la del contacto
+    // El contacto es la fuente autoritativa: sus datos SIEMPRE prevalecen sobre la orden.
+    // Principio: phone = clave primaria de enlace; contact = fuente de verdad para dirección.
     const orders = rows.map(o => {
       const result = { ...o };
-      if (!result.shipping_city && result.contact_city) {
-        result.shipping_city = result.contact_city;
-      }
-      // Solo usar contact_address1 (campo estructurado), NO contact_address (legacy)
-      // El campo legacy puede contener el nombre de ciudad en vez de la calle → duplicado
-      if (!result.shipping_address1 && result.contact_address1) {
-        result.shipping_address1 = result.contact_address1;
-      }
+      // Preferir datos del contacto cuando existen (no solo como fallback)
+      if (result.contact_city)    result.shipping_city     = result.contact_city;
+      if (result.contact_address1) result.shipping_address1 = result.contact_address1;
       // Limpiar campos auxiliares del JOIN
       delete result.contact_address1;
-      delete result.contact_address;
       delete result.contact_city;
       delete result.contact_province;
       return result;

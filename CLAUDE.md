@@ -169,13 +169,25 @@ const phone = normalizePhone(rawPhone); // 56912345678
 - `customer_phone` en `shopify_orders` se guardaba sin normalizar → JOIN con contacts fallaba → "Sin pedidos" aunque el contacto tenía historial
 - **Regla:** toda función que guarde teléfono en DB debe pasar por `normalizePhone()` primero
 
-**JOINs entre tablas por teléfono:** usar `LATERAL` con `LIMIT 1` para evitar duplicados si hay datos sucios:
+**El contacto es la fuente autoritativa de datos del cliente.**
+El teléfono normalizado (`56XXXXXXXXX`) es la **clave primaria de enlace entre TODAS las tablas**. Cuando hay datos del contacto, siempre prevalecen sobre los datos de Shopify u otras fuentes. No tratar datos de contacts como "fallback" — son la fuente de verdad.
+
+**JOINs entre tablas por teléfono:** usar `LATERAL` con `LIMIT 1` para evitar duplicados si hay datos sucios. Siempre normalizar el phone en el JOIN para manejar registros legacy sin normalizar:
 ```sql
 LEFT JOIN LATERAL (
   SELECT address1, city FROM contacts
-  WHERE organization_id = so.organization_id AND phone = so.customer_phone
+  WHERE organization_id = so.organization_id
+    AND phone = CASE
+      WHEN so.customer_phone ~ '^9[0-9]{8}$' THEN '56' || so.customer_phone
+      ELSE so.customer_phone
+    END
   LIMIT 1
 ) ct ON true
+```
+**Después del JOIN, siempre usar datos del contacto cuando existen (no solo cuando la orden está vacía):**
+```js
+if (result.contact_city)     result.shipping_city     = result.contact_city;
+if (result.contact_address1) result.shipping_address1 = result.contact_address1;
 ```
 
 ---
