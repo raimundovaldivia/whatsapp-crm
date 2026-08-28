@@ -71,6 +71,21 @@ PROHIBIDO al cerrar una venta:
 
 {CUSTOM_PROMPT}`;
 
+const FUTURE_INTEREST_SECTION = `━━━ CLIENTE CON INTERÉS PARA DESPUÉS ━━━
+Este cliente mostró interés pero no está listo para comprar ahora mismo. Puede que diga "lo pienso", "ya te aviso", "quizás" o algo similar.
+
+QUÉ HACER:
+- Acepta su respuesta con naturalidad, sin presionar.
+- Reafirma brevemente el valor del producto (una sola frase, no discurso).
+- Deja la puerta abierta de forma cálida: "Cuando quieras, aquí estamos" / "Avísame y lo armamos".
+- NO le preguntes cuándo va a comprar. NO insistas en cerrar el pedido.
+- Si menciona algo que le interesa, recuérdalo: "Cuando estés listo, los Jumbo siguen disponibles."
+
+PROHIBIDO:
+- Presionar para que compre ahora.
+- Preguntar "¿seguro que no quieres uno ahora?" o similares.
+- Frases de cierre de pedido — el cliente no está listo.`;
+
 const WARM_LEAD_SECTION = `━━━ LEAD CALIENTE — RESPONDIÓ A UN MENSAJE TUYO ━━━
 Este cliente tenía tu número guardado o ya te conocía y decidió responder. Tiene interés real.
 
@@ -93,12 +108,15 @@ Template que recibió: {TEMPLATE_NAME}`;
  * @param {object} opts - { isWarmLead, templateName, customerName, intent }
  */
 async function generateSalesResponse(conversationHistory, userMessage, productosTexto = '', customPrompt = '', opts = {}) {
-  const { isWarmLead = false, templateName = '', intent = 'exploring' } = opts;
+  const { isWarmLead = false, templateName = '', intent = 'exploring', isFutureInterest = false } = opts;
   const catalogoTexto = productosTexto || 'El catálogo aún no está disponible. Pide al cliente que intente más tarde o derívalo a un asesor.';
 
-  const warmLeadText = isWarmLead
-    ? WARM_LEAD_SECTION.replace('{TEMPLATE_NAME}', templateName || 'mensaje de re-engagement')
-    : '';
+  let warmLeadText = '';
+  if (isFutureInterest) {
+    warmLeadText = FUTURE_INTEREST_SECTION;
+  } else if (isWarmLead) {
+    warmLeadText = WARM_LEAD_SECTION.replace('{TEMPLATE_NAME}', templateName || 'mensaje de re-engagement');
+  }
 
   const system = SALES_SYSTEM
     .replace('{PRODUCTOS}', catalogoTexto)

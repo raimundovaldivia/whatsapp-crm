@@ -14,7 +14,7 @@ const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
-const scheduledOrdersSvc = require('./scheduled-orders');
+const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 
 /**
  * Procesa un mensaje entrante y genera la respuesta adecuada
@@ -249,12 +249,26 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   // Detectar ANTES del mapeo normal. Solo aplica cuando el cliente muestra
   // intención de compra pero indica una fecha futura.
   const BUY_INTENTS = ['wants_to_order', 'interested', 'exploring'];
+
+  // ── Intención futura SUAVE: "lo pienso", "ya te aviso", "quizás" ──
+  // Sin fecha comprometida → no scheduled_order, solo cambiar estado y no presionar
+  if (BUY_INTENTS.includes(intent) && !isTemplateReply && isSoftFutureIntent(userMessage)) {
+    await db.updatePipelineState(conversationId, 'future_interest');
+    const tSoft = Date.now();
+    const softOpts = { ...salesOpts, isFutureInterest: true };
+    const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, softOpts);
+    L.agent('sales', Date.now() - tSoft);
+    L.step('future_interest', 'interés sin fecha — sin presión');
+    return { response: salesResponse, agentType: 'sales', newState: 'future_interest' };
+  }
+
+  // ── Intención futura EXPLÍCITA: "para el viernes", "la próxima semana" ──
   if (BUY_INTENTS.includes(intent) && !isTemplateReply &&
-      scheduledOrdersSvc.isFutureOrderIntent(userMessage)) {
+      isFutureOrderIntent(userMessage)) {
     try {
       const todayISO = new Date().toISOString().split('T')[0];
       const recentTexts = history.slice(-6).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
-      const extracted = await scheduledOrdersSvc.extractScheduledOrderData(userMessage, recentTexts, todayISO);
+      const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
 
       // Buscar template configurado para follow-up de pedidos agendados
       const templateName = await db.getSetting(orgId, 'scheduled_order_template') || null;
@@ -270,7 +284,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
       });
 
       await db.updatePipelineState(conversationId, 'scheduled');
-      const dateLabel = scheduledOrdersSvc.formatDateEs(extracted.desiredDate);
+      const dateLabel = formatDateEs(extracted.desiredDate);
       const replyMsg  = `¡Perfecto, agendado! 📅 El ${dateLabel} te escribimos para confirmar tu pedido de ${extracted.productNotes}. ¡Te esperamos!`;
       L.agent('orchestrator', 0);
       L.step('scheduled', `fecha: ${extracted.desiredDate} | producto: ${extracted.productNotes}`);

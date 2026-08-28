@@ -94,4 +94,38 @@ function formatDateEs(isoDate) {
   });
 }
 
-module.exports = { isFutureOrderIntent, extractScheduledOrderData, formatDateEs };
+// Patrones de intención futura SUAVE: el cliente no se compromete con fecha
+// ("lo pienso", "ya te aviso", "quizás") — sin scheduled_order, estado future_interest
+const SOFT_FUTURE_PATTERNS = [
+  /lo\s+(pienso|voy\s+a\s+pensar|pensaré|pensaré)/i,
+  /voy\s+a\s+pensar(lo)?/i,
+  /d[eé]jame\s+pensar(lo)?/i,
+  /quiz[aá]s?/i,
+  /tal\s+vez/i,
+  /de\s+repente/i,         // modismo chileno para "quizás"
+  /ya\s+te\s+(aviso|confirmo|digo|escribo|llamo)/i,
+  /te\s+(confirmo|aviso|digo|escribo)\s+(despu[eé]s|m[aá]s\s+tarde|luego)/i,
+  /cuando\s+(pueda|tenga|me\s+alcance|pueda\s+pagar|llegue)/i,
+  /ahorita\s+no/i,
+  /no\s+(por\s+ahora|por\s+el\s+momento|ahorita)/i,
+  /en\s+otro\s+momento/i,
+  /m[aá]s\s+adelante/i,
+  /en\s+alg[uú]n\s+momento/i,
+  /despu[eé]s\s+te\s+(escribo|llamo|confirmo)/i,
+  /lo\s+pensaré/i,
+  /no\s+s[eé]\s+(todav[ií]a|a[uú]n|si\s+puedo)/i,
+  /todav[ií]a\s+no\s+s[eé]/i,
+  /no\s+estoy\s+seguro/i,
+];
+
+/**
+ * Retorna true si el mensaje indica interés futuro SUAVE (sin fecha comprometida).
+ * A diferencia de isFutureOrderIntent, aquí el cliente no da una fecha concreta.
+ */
+function isSoftFutureIntent(message) {
+  // Si ya hay fecha explícita, no es "soft" — es "hard" (scheduled_order)
+  if (isFutureOrderIntent(message)) return false;
+  return SOFT_FUTURE_PATTERNS.some(p => p.test(message));
+}
+
+module.exports = { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs };
