@@ -369,12 +369,22 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         return raw;
       };
       if (order.source === 'bot') {
+        // Bot: shipping_address es JSONB con { address, city } o { address1, city, zip }
         const addr = parseAddr(order.raw?.shipping_address);
-        // Bot guarda: { address, city } o { address1, city, zip }
         row[1] = [addr.address || addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
       } else {
-        const addr = parseAddr(order.raw?.shipping_address);
-        row[1] = [addr.address1 || addr.address, addr.city, addr.zip].filter(Boolean).join(', ');
+        // Shopify: dirección viene en shipping_address1 + shipping_city (columnas propias)
+        // También puede venir del raw_json o del auto-completado desde contacts
+        const rawJson = parseAddr(order.raw?.raw_json);
+        const shippingFromRaw = rawJson?.shippingAddress;
+        const street = order.raw?.shipping_address1
+          || shippingFromRaw?.address1
+          || '';
+        const city   = order.raw?.shipping_city
+          || shippingFromRaw?.city
+          || '';
+        const zip    = shippingFromRaw?.zip || '';
+        row[1] = [street, city, zip].filter(Boolean).join(', ');
       }
 
       // Col G: Notas — items
