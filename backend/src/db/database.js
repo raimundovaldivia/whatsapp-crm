@@ -207,6 +207,35 @@ function normalizePhone(phoneNumber) {
   return phone;
 }
 
+// Partículas que van en minúscula en nombres hispanohablantes
+const NAME_LOWERCASE_PARTICLES = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'e', 'van', 'von', 'di', 'da', 'do']);
+
+/**
+ * Normaliza un nombre a Title Case inteligente.
+ * - "JUAN PÉREZ" → "Juan Pérez"
+ * - "juan de la vega" → "Juan de la Vega"
+ * - "  maría   josé  " → "María José"
+ * - null/'' → null
+ */
+function normalizeName(name) {
+  if (!name) return null;
+  const clean = String(name).trim().replace(/\s+/g, ' ');
+  if (!clean) return null;
+  // Si tiene mezcla de mayúsculas y minúsculas ya, no tocar (ej: "iPhone")
+  // Solo normalizar si está todo en mayúsculas o todo en minúsculas
+  const upper = clean === clean.toUpperCase();
+  const lower = clean === clean.toLowerCase();
+  if (!upper && !lower) return clean; // ya está formateado
+  return clean
+    .toLowerCase()
+    .split(' ')
+    .map((word, i) => {
+      if (i > 0 && NAME_LOWERCASE_PARTICLES.has(word)) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ');
+}
+
 // ─── CONVERSATIONS ────────────────────────────────────────────────
 
 async function upsertConversation(orgId, phoneNumber, contactName = null) {
@@ -712,7 +741,7 @@ async function upsertContact(orgId, { phone, name, email, address, city, region,
        total_orders = contacts.total_orders + CASE WHEN EXCLUDED.address IS NOT NULL THEN 1 ELSE 0 END,
        last_order_at = CASE WHEN EXCLUDED.address IS NOT NULL THEN NOW() ELSE contacts.last_order_at END,
        updated_at = NOW()`,
-    [orgId, phone, name || null, email || null, address || null, city || null, region || null, notes || null, shopifyId || null]
+    [orgId, phone, normalizeName(name), email || null, address || null, city || null, region || null, notes || null, shopifyId || null]
   );
   return getContact(orgId, phone);
 }
@@ -770,7 +799,7 @@ async function upsertShopifyCustomerProfile(orgId, c) {
        updated_at         = NOW()`,
     [
       orgId, phone,
-      c.name || null,
+      normalizeName(c.name),
       c.email || null,
       addr.address1 || null,
       addr.address2 || null,
@@ -1087,7 +1116,7 @@ async function upsertShopifyOrders(orgId, orders) {
     // o.createdAt, o.totalPrice (number), o.financialStatus, o.fulfillmentStatus
     // o.customer.name (ya formateado), o.customer.phone/email
     // o.items (ya mapeados): [{ title, quantity, price }]
-    const customerName  = o.customer?.name || null;
+    const customerName  = normalizeName(o.customer?.name || null);
     const customerEmail = o.customer?.email || null;
     const customerPhone = normalizePhone(
       o.customer?.phone
@@ -1199,7 +1228,7 @@ async function getShopifyOrdersSyncedAt(orgId) {
 
 module.exports = {
   getPool,
-  normalizePhone,
+  normalizePhone, normalizeName,
   // Orgs
   createOrganization, getOrgById, markSetupDone,
   // Users
