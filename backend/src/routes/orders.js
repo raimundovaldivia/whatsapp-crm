@@ -281,8 +281,10 @@ router.get('/shopify', async (req, res) => {
       if (!result.shipping_city && result.contact_city) {
         result.shipping_city = result.contact_city;
       }
-      if (!result.shipping_address1 && (result.contact_address1 || result.contact_address)) {
-        result.shipping_address1 = result.contact_address1 || result.contact_address;
+      // Solo usar contact_address1 (campo estructurado), NO contact_address (legacy)
+      // El campo legacy puede contener el nombre de ciudad en vez de la calle → duplicado
+      if (!result.shipping_address1 && result.contact_address1) {
+        result.shipping_address1 = result.contact_address1;
       }
       // Limpiar campos auxiliares del JOIN
       delete result.contact_address1;
