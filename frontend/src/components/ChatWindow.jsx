@@ -774,49 +774,72 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'40px', color:colors.textSecondary }}>
                   <Loader size={20} style={{ animation:'spin 1s linear infinite' }} />
                 </div>
-              ) : !historyData || historyData.shopifyOrders.length === 0 ? (
-                <div style={{ textAlign:'center', color:colors.textSecondary, padding:'40px', fontSize:'13px' }}>Sin compras registradas en Shopify</div>
+              ) : !historyData || (historyData.shopifyOrders.length === 0 && historyData.botOrders.length === 0) ? (
+                <div style={{ textAlign:'center', color:colors.textSecondary, padding:'40px', fontSize:'13px' }}>Sin compras registradas</div>
               ) : (
                 <>
-                  {/* Resumen */}
-                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
-                    {[
-                      { label:'Pedidos', value: historyData.summary.totalPedidos },
-                      { label:'Total gastado', value: `$${Number(historyData.summary.totalGastado).toLocaleString('es-CL')}` },
-                      { label:'Última compra', value: historyData.summary.ultimaCompra ? new Date(historyData.summary.ultimaCompra).toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—' },
-                    ].map(({ label, value }) => (
-                      <div key={label} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'10px 12px', border:`1px solid ${colors.border}` }}>
-                        <div style={{ fontSize:'10px', color:colors.textSecondary, marginBottom:'4px' }}>{label}</div>
-                        <div style={{ fontSize:'14px', fontWeight:700, color:colors.textPrimary }}>{value}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Lista de órdenes */}
-                  <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-                    {historyData.shopifyOrders.map((o, i) => {
-                      const fecha = o.shopify_created_at ? new Date(o.shopify_created_at).toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—';
-                      const items = Array.isArray(o.items) ? o.items : [];
-                      const fs = (o.financial_status||'').toUpperCase();
-                      const fsColor = fs === 'PAID' ? colors.green : fs === 'PENDING' ? colors.yellow : colors.textSecondary;
-                      const fsLabel = { PAID:'Pagado', PENDING:'Pendiente', REFUNDED:'Reembolsado', VOIDED:'Anulado', AUTHORIZED:'Autorizado' }[fs] || fs;
-                      return (
-                        <div key={i} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
-                          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-                            <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha} {o.shopify_name ? `· ${o.shopify_name}` : ''}</span>
-                            <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                              <span style={{ fontSize:'11px', color:fsColor, fontWeight:600 }}>{fsLabel}</span>
-                              <span style={{ fontSize:'13px', fontWeight:700, color:colors.textPrimary }}>${Number(o.total_price||0).toLocaleString('es-CL')}</span>
-                            </div>
+                  {/* Resumen — combina Shopify + bot */}
+                  {(() => {
+                    const botTotal = (historyData.botOrders || []).reduce((s, o) => s + parseFloat(o.total_price || 0), 0);
+                    const totalGastado = historyData.summary.totalGastado + botTotal;
+                    const totalPedidos = historyData.summary.totalPedidos + (historyData.botOrders || []).length;
+                    const allDates = [
+                      historyData.summary.ultimaCompra,
+                      ...(historyData.botOrders || []).map(o => o.created_at),
+                    ].filter(Boolean).map(d => new Date(d));
+                    const ultimaCompra = allDates.length ? new Date(Math.max(...allDates)) : null;
+                    return (
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
+                        {[
+                          { label:'Pedidos', value: totalPedidos },
+                          { label:'Total gastado', value: `$${Number(totalGastado).toLocaleString('es-CL')}` },
+                          { label:'Última compra', value: ultimaCompra ? ultimaCompra.toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—' },
+                        ].map(({ label, value }) => (
+                          <div key={label} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'10px 12px', border:`1px solid ${colors.border}` }}>
+                            <div style={{ fontSize:'10px', color:colors.textSecondary, marginBottom:'4px' }}>{label}</div>
+                            <div style={{ fontSize:'14px', fontWeight:700, color:colors.textPrimary }}>{value}</div>
                           </div>
-                          {items.length > 0 && (
-                            <div style={{ fontSize:'11px', color:colors.textSecondary }}>
-                              {items.map(it => `${it.quantity}x ${it.name || it.title}`).join(' · ')}
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Lista unificada: Shopify + bot, ordenados por fecha desc */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+                    {[
+                      ...(historyData.shopifyOrders || []).map(o => ({ ...o, _source: 'shopify', _date: o.shopify_created_at })),
+                      ...(historyData.botOrders     || []).map(o => ({ ...o, _source: 'bot',     _date: o.created_at })),
+                    ]
+                      .sort((a, b) => new Date(b._date) - new Date(a._date))
+                      .map((o, i) => {
+                        const fecha = o._date ? new Date(o._date).toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—';
+                        const items = Array.isArray(o.items) ? o.items : [];
+                        const isShopify = o._source === 'shopify';
+                        const fs = isShopify ? (o.financial_status||'').toUpperCase() : (o.status||'').toUpperCase();
+                        const fsColor = ['PAID','CONFIRMED','PAYMENT_RECEIVED'].includes(fs) ? colors.green : ['PENDING','NUEVO','SENT'].includes(fs) ? colors.yellow : colors.textSecondary;
+                        const fsLabel = { PAID:'Pagado', PENDING:'Pendiente', REFUNDED:'Reembolsado', VOIDED:'Anulado', NUEVO:'Nuevo', CONFIRMED:'Confirmado', PAYMENT_RECEIVED:'Pagado', SENT:'Enviado' }[fs] || fs;
+                        return (
+                          <div key={i} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
+                            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
+                              <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                                <span style={{ fontSize:'10px', padding:'1px 6px', borderRadius:'4px', backgroundColor: isShopify ? '#0d2020' : colors.bgSub, color: isShopify ? '#4db6ac' : colors.textSecondary, border:`1px solid ${isShopify ? '#1a3d3d' : colors.border}` }}>
+                                  {isShopify ? 'Shopify' : 'Bot'}
+                                </span>
+                                <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}{o.shopify_name ? ` · ${o.shopify_name}` : ''}</span>
+                              </div>
+                              <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                                <span style={{ fontSize:'11px', color:fsColor, fontWeight:600 }}>{fsLabel}</span>
+                                <span style={{ fontSize:'13px', fontWeight:700, color:colors.textPrimary }}>${Number(o.total_price||0).toLocaleString('es-CL')}</span>
+                              </div>
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                            {items.length > 0 && (
+                              <div style={{ fontSize:'11px', color:colors.textSecondary }}>
+                                {items.map(it => `${it.quantity}x ${it.name || it.title}`).join(' · ')}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
                 </>
               )}

@@ -560,6 +560,15 @@ async function createOrder({ conversationId, organizationId, items, customerName
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
     [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice]
   );
+  // Actualizar last_order_at en contacts para que el broadcast lo excluya correctamente
+  if (customerPhone) {
+    const normPhone = normalizePhone(customerPhone);
+    pool.query(
+      `UPDATE contacts SET last_order_at = NOW(), updated_at = NOW()
+       WHERE organization_id = $1 AND phone = $2`,
+      [organizationId, normPhone]
+    ).catch(() => {});
+  }
   // Invalidar caché de reenganche — el cliente ya tiene un pedido activo
   const today = new Date().toISOString().slice(0, 10);
   pool.query(
