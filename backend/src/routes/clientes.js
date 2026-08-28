@@ -18,6 +18,11 @@ router.use(requireAuth);
 
 /** Convierte una fila de contacts al formato que espera el frontend */
 function contactToCustomer(c) {
+  // orders_count viene de customer profile sync (Shopify)
+  // total_orders viene de order sync (conteo real)
+  // real_orders viene del JOIN con shopify_orders en /all
+  const ordersCount = parseInt(c.real_orders || c.orders_count || c.total_orders) || 0;
+  const totalSpent  = parseFloat(c.real_spent || c.total_spent) || 0;
   return {
     id:          c.id,
     shopifyId:   c.shopify_id,
@@ -25,8 +30,8 @@ function contactToCustomer(c) {
     firstName:   (c.name || '').split(' ')[0],
     email:       c.email,
     phone:       c.phone,
-    ordersCount: parseInt(c.orders_count) || 0,
-    totalSpent:  parseFloat(c.total_spent) || 0,
+    ordersCount,
+    totalSpent,
     currency:    c.currency || 'CLP',
     tags:        Array.isArray(c.tags) ? c.tags : (c.tags ? JSON.parse(c.tags) : []),
     address: {
@@ -54,27 +59,72 @@ function contactToCustomer(c) {
 router.get('/all', async (req, res) => {
   try {
     const q = (req.query.query || '').toLowerCase();
-
-    let sql = `
-      SELECT *
-      FROM contacts
-      WHERE organization_id = $1
-        AND (shopify_id IS NOT NULL OR contact_type = 'customer')
-    `;
     const params = [req.orgId];
 
+    let whereExtra = '';
     if (q) {
       params.push(`%${q}%`);
-      sql += ` AND (LOWER(name) LIKE $${params.length}
-                OR LOWER(email) LIKE $${params.length}
-                OR phone LIKE $${params.length})`;
+      whereExtra = ` AND (LOWER(co.name) LIKE $${params.length}
+                      OR LOWER(co.email) LIKE $${params.length}
+                      OR co.phone LIKE $${params.length})`;
     }
 
-    sql += ' ORDER BY last_order_at DESC NULLS LAST, created_at DESC';
+    // JOIN con shopify_orders para obtener conteo real y última dirección
+    const sql = `
+      SELECT
+        co.*,
+        COALESCE(ord.real_orders, 0)          AS real_orders,
+        COALESCE(ord.real_spent,  0)          AS real_spent,
+        ord.last_shipping_address             AS last_raw,
+        ord.last_shipping_city                AS ord_city
+      FROM contacts co
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)                            AS real_orders,
+          SUM(total_price::numeric)           AS real_spent,
+          (
+            SELECT raw_json->>'shippingAddress'
+            FROM shopify_orders so2
+            WHERE so2.organization_id = $1
+              AND so2.customer_phone = co.phone
+            ORDER BY so2.shopify_created_at DESC NULLS LAST
+            LIMIT 1
+          )                                   AS last_shipping_address,
+          (
+            SELECT shipping_city
+            FROM shopify_orders so2
+            WHERE so2.organization_id = $1
+              AND so2.customer_phone = co.phone
+            ORDER BY so2.shopify_created_at DESC NULLS LAST
+            LIMIT 1
+          )                                   AS last_shipping_city
+        FROM shopify_orders so
+        WHERE so.organization_id = $1
+          AND so.customer_phone = co.phone
+      ) ord ON true
+      WHERE co.organization_id = $1
+        AND (co.shopify_id IS NOT NULL OR co.contact_type = 'customer')
+        ${whereExtra}
+      ORDER BY co.last_order_at DESC NULLS LAST, co.created_at DESC
+    `;
 
     const { rows } = await getPool().query(sql, params);
 
-    const customers = rows.map(contactToCustomer);
+    // Si el contacto no tiene dirección guardada, usar la del último pedido de shopify_orders
+    const customers = rows.map(c => {
+      if (!c.address1 && !c.address) {
+        if (c.last_raw) {
+          try {
+            const addr = JSON.parse(c.last_raw);
+            c.address1 = addr?.address1 || null;
+            c.city     = c.city || addr?.city || c.ord_city || null;
+          } catch {}
+        } else if (c.ord_city) {
+          c.city = c.city || c.ord_city;
+        }
+      }
+      return contactToCustomer(c);
+    });
 
     res.json({
       success:   true,
