@@ -254,7 +254,8 @@ router.get('/shopify', async (req, res) => {
     const pool     = getPool();
     const lastSync = await db.getShopifyOrdersSyncedAt(req.orgId);
 
-    // JOIN con contacts para auto-completar dirección cuando la orden no la tiene
+    // JOIN con contacts para auto-completar dirección cuando la orden no la tiene.
+    // DISTINCT ON evita duplicados si hay más de un contacto con el mismo teléfono.
     const { rows } = await pool.query(`
       SELECT
         so.*,
@@ -263,9 +264,13 @@ router.get('/shopify', async (req, res) => {
         ct.city       AS contact_city,
         ct.province   AS contact_province
       FROM shopify_orders so
-      LEFT JOIN contacts ct
-        ON ct.organization_id = so.organization_id
-       AND ct.phone = so.customer_phone
+      LEFT JOIN LATERAL (
+        SELECT address1, address, city, province
+        FROM contacts
+        WHERE organization_id = so.organization_id
+          AND phone = so.customer_phone
+        LIMIT 1
+      ) ct ON true
       WHERE so.organization_id = $1
       ORDER BY so.shopify_created_at DESC NULLS LAST
     `, [req.orgId]);
