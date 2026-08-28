@@ -14,75 +14,223 @@ backend/           → Node.js + Express + Socket.io (Web Service en Render)
   src/
     routes/        → API REST endpoints
     services/      → lógica de negocio
-      agents/      → orquestador.js, sales.js, orders.js
+      agents/      → orchestrator.js, sales.js, orders.js
       pipeline.js  → orquesta los 3 agentes
       shopify-api.js → GraphQL directo a Shopify Admin API
-    db/database.js → queries PostgreSQL (pg pool)
+      scheduled-orders.js  → detección y extracción de pedidos futuros
+      scheduled-follow-up.js → cron job diario para follow-up con template
+      bot-logger.js → logging estructurado con trace IDs
+    db/
+      database.js  → queries PostgreSQL (pg pool)
+      setup.js     → migraciones DDL (se corren en cada arranque)
+  scripts/         → scripts one-off para Railway (normalizar datos, crear templates, etc.)
 ```
 
 **URLs de producción:**
-- Backend: `https://whatsapp-crm-front.onrender.com` (nombre confuso pero es el backend)
-- Frontend: `https://whatsapp-crm-6fzm.onrender.com` (Static Site, requiere redeploy manual)
+- Backend: `https://whatsapp-crm-front.onrender.com`
+- Frontend: `https://whatsapp-crm-6fzm.onrender.com` (Static Site — requiere Manual Deploy)
 - Repo: `https://github.com/raimundovaldivia/whatsapp-crm`
 
 ---
 
 ## Git — cómo pushear cambios
 
-**⚠️ IMPORTANTE: El workspace está en NTFS (Windows). Git en NTFS tiene problemas con lock files.**  
+**⚠️ El workspace está en NTFS (Windows). Git en NTFS tiene problemas con lock files.**
 **NUNCA hacer git directamente en `/sessions/.../mnt/A-SHOPIFY/whatsapp-crm`. SIEMPRE usar el clon en `/tmp/crm-push`.**
 
-**Token GitHub:** guardado en auto-memory (`reference_github_token.md`). Leerlo con `Read` antes de pushear. NUNCA poner el token en este archivo ni en ningún archivo del repo — GitHub Push Protection lo bloquea.
+**Token GitHub:** en auto-memory (`reference_github_token.md`). NUNCA ponerlo en ningún archivo del repo — GitHub Push Protection lo bloquea y rechaza el push.
 
-**Flujo de push — siempre por `/tmp/crm-push`:**
+**Flujo de push:**
 
 ```bash
-# 1. Si el clon no existe o está desactualizado:
+# Si el clon no existe:
 cd /tmp && rm -rf crm-push
-# El token viene de auto-memory — leerlo antes de este paso
-git clone https://raimundovaldivia:<TOKEN>@github.com/raimundovaldivia/whatsapp-crm.git crm-push
-cd crm-push && git config user.email "raivaldiviabou@gmail.com" && git config user.name "Rai"
+git clone "https://raimundovaldivia:<TOKEN>@github.com/raimundovaldivia/whatsapp-crm.git" crm-push
+cd crm-push
+git config user.email "raivaldiviabou@gmail.com"
+git config user.name "Raimundo Valdivia"
 
-# 2. Sincronizar con remote (siempre antes de copiar archivos):
+# Siempre antes de copiar archivos (evitar divergencia):
 cd /tmp/crm-push && git fetch origin && git reset --hard origin/main
 
-# 3. Copiar archivos modificados:
+# Copiar, commitear, pushear:
 cp /sessions/hopeful-admiring-carson/mnt/A-SHOPIFY/whatsapp-crm/<archivo> /tmp/crm-push/<archivo>
-
-# 4. Verificar sintaxis antes de commitear:
-node --check /tmp/crm-push/backend/src/routes/<archivo>.js
-
-# 5. Commit y push:
-cd /tmp/crm-push
 git add <archivos>
-git commit -m "feat: descripción
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+git commit -m "tipo: descripción\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 git push origin main
 ```
 
-Después del push, el backend en Render hace **auto-deploy**. El frontend (Static Site) requiere **Manual Deploy** en el dashboard de Render.
+Después del push: **backend en Railway hace auto-deploy**. El frontend (Render Static Site) requiere **Manual Deploy** en el dashboard de Render.
 
 ---
 
-## Proveedor WhatsApp: Kapso (activo)
+## Base de datos — tablas clave
 
-La org usa **Kapso** como proxy de Meta Cloud API. Esto es importante:
+PostgreSQL multi-tenant. **NUNCA hacer queries sin `WHERE organization_id = $1`.**
 
-- Webhook de Kapso: `POST /kapso-webhook` — recibe mensajes y responde con IA
+### contacts
+La tabla central de clientes. El teléfono es el ID canónico.
+
+```
+phone        TEXT    → formato canónico: 56XXXXXXXXX (sin +, con código de país)
+address1     TEXT    → calle y número (campo estructurado — usar este)
+address      TEXT    → campo legacy de texto libre (fallback si address1 es null)
+city         TEXT    → ciudad
+province     TEXT    → región/provincia
+zip          TEXT    → código postal
+country      TEXT    → país
+opt_out      BOOLEAN → no quiere mensajes (excluir de broadcast)
+last_order_at TIMESTAMP → se actualiza tanto por Shopify como por pedidos del bot
+total_orders  INTEGER   → count de pedidos
+contact_type  TEXT    → 'lead' | 'customer'
+shopify_id    TEXT    → ID de cliente en Shopify
+```
+
+**Funciones para upsert:**
+- `upsertContact(orgId, { phone, name, email, address, city, region, shopifyId })` — campos básicos, campo `address` legacy
+- `upsertShopifyCustomerProfile(orgId, c)` — upsert completo con `address1`, `address2`, `city`, `province`, `zip`, `country` — **usar esta cuando lleguen datos ricos de Shopify**
+
+### conversations
+```
+phone_number  TEXT    → teléfono normalizado (56XXXXXXXXX)
+pipeline_state TEXT   → estado del pipeline (ver sección Pipeline)
+agent_mode    TEXT    → 'ai' | 'human'
+```
+
+### orders (pedidos del bot/CRM)
+```
+customer_phone TEXT   → teléfono normalizado
+shipping_address JSONB → { address, city } o { address1, city, zip }
+status        TEXT    → 'nuevo' | 'confirmed' | 'payment_received' | 'sent' | 'cancelled'
+```
+
+### shopify_orders (caché de órdenes Shopify)
+```
+customer_phone  TEXT  → teléfono normalizado (56XXXXXXXXX)
+shipping_city   TEXT  → ciudad de envío
+shipping_address1 TEXT → dirección editable manualmente
+financial_status TEXT → 'PAID' | 'PENDING' | 'REFUNDED' | 'VOIDED'
+items           JSONB → [{ name, quantity, price }]
+raw_json        JSONB → objeto completo de la orden de Shopify
+```
+
+### scheduled_orders (pedidos para fecha futura)
+```
+phone          TEXT   → teléfono del cliente
+desired_date   DATE   → fecha en que quiere el pedido
+product_notes  TEXT   → qué quiere pedir (extraído por LLM)
+template_name  TEXT   → template de WhatsApp a usar en el follow-up
+status         TEXT   → 'pending' | 'sent' | 'cancelled'
+```
+
+---
+
+## Normalización de teléfonos — regla de oro
+
+**Formato canónico: `56XXXXXXXXX` (11 dígitos, sin +, sin espacios)**
+
+`normalizePhone()` en `database.js` es la función única para esto. Aplicarla SIEMPRE antes de guardar o comparar teléfonos.
+
+```js
+const { normalizePhone } = require('../db/database');
+const phone = normalizePhone(rawPhone); // 56912345678
+```
+
+**Bugs históricos por no normalizar:**
+- `cleanPhone()` en `shopify-webhook.js` solo quitaba el `+` sin agregar `56` → duplicados en contacts
+- `customer_phone` en `shopify_orders` se guardaba sin normalizar → JOIN con contacts fallaba → "Sin pedidos" aunque el contacto tenía historial
+- **Regla:** toda función que guarde teléfono en DB debe pasar por `normalizePhone()` primero
+
+**JOINs entre tablas por teléfono:** usar `LATERAL` con `LIMIT 1` para evitar duplicados si hay datos sucios:
+```sql
+LEFT JOIN LATERAL (
+  SELECT address1, city FROM contacts
+  WHERE organization_id = so.organization_id AND phone = so.customer_phone
+  LIMIT 1
+) ct ON true
+```
+
+---
+
+## Normalización de nombres
+
+`normalizeName()` en `database.js` — convierte a Title Case respetando partículas (de, del, la, etc.).
+- `"JUAN PÉREZ"` → `"Juan Pérez"`
+- `"juan de la vega"` → `"Juan de la Vega"`
+- Nombres con mezcla de mayúsculas/minúsculas ya formateados → no se tocan
+
+Aplicar en `upsertContact`, `upsertShopifyCustomerProfile`, `upsertShopifyOrders`.
+
+---
+
+## Pipeline — estados
+
+```
+exploring        → cliente explorando, sin intención clara
+interested       → muestra interés en un producto
+collecting_order → confirmó compra, bot recopilando datos (nombre, dirección)
+confirmed        → datos recopilados, orden creada
+awaiting_payment → esperando comprobante
+scheduled        → quiere pedir para fecha futura explícita (ej: "el viernes")
+future_interest  → interés vago sin fecha ("lo pienso", "ya te aviso")
+template_sent    → se envió template de follow-up (ventana 24h expirada)
+done             → flujo completado
+```
+
+**Intenciones clasificadas por Haiku:** `greeting | exploring | interested | wants_to_order | order_confirmed | payment | complaint | opt_out | other`
+
+**Detección de intención futura:**
+- `isFutureOrderIntent(msg)` → fecha explícita → `scheduled` → cron job envía template el día indicado
+- `isSoftFutureIntent(msg)` → sin fecha ("de repente", "quizás", "ya te aviso") → `future_interest` → salesAgent con modo no-presión
+- "de repente" en Chile significa "quizás", no "de repente" — está en los patrones
+
+---
+
+## Historial de compras — dos tablas
+
+El historial de un cliente está en DOS tablas:
+- `shopify_orders` → órdenes que pasaron por Shopify
+- `orders` → órdenes generadas por el bot/CRM manual
+
+El endpoint `GET /api/orders/history/:phone` ya devuelve ambas:
+```js
+{ shopifyOrders: [...], botOrders: [...], summary: { totalPedidos, totalGastado, ultimaCompra } }
+```
+
+El frontend (ChatWindow.jsx) mezcla ambas listas ordenadas por fecha y muestra badge "Shopify" o "Bot". **El resumen debe sumar ambas fuentes.**
+
+---
+
+## Broadcast — filtros importantes
+
+`GET /api/contacts/broadcast` excluye:
+- Contactos con `opt_out = TRUE`
+- Contactos sin teléfono
+
+El frontend además filtra por `last_order_at` (excluye quienes compraron recientemente).
+
+**⚠️ CRÍTICO:** `last_order_at` se actualiza en dos momentos:
+1. Cuando Shopify sincroniza una orden (`upsertShopifyOrders`)
+2. Cuando el bot crea un pedido (`createOrder`) — **se actualiza en contacts vía `normalizePhone(customerPhone)`**
+
+Si `createOrder` no actualiza `last_order_at`, clientes con pedidos recientes del bot aparecen en el broadcast.
+
+---
+
+## Proveedor WhatsApp: Kapso
+
+- Webhook de Kapso: `POST /kapso-webhook` — único handler para mensajes
 - Webhook de Meta: `POST /webhook` — **ignorar si provider='kapso'** (guard ya implementado)
-- Envío: `kapso-whatsapp.js` usa `X-API-Key` en lugar de `Authorization: Bearer`
-- El `access_token` de Meta es null para orgs que usan Kapso — eso es correcto, no es un bug
+- Envío: `kapso-whatsapp.js` usa header `X-API-Key` (no `Authorization: Bearer`)
+- `access_token` de Meta es null para orgs Kapso — **eso es correcto, no es un bug**
 
-**NUNCA procesar el mismo mensaje dos veces.** Kapso Y Meta envían el mismo mensaje a sus respectivos webhooks. El guard en `webhook.js` detecta `provider='kapso'` y retorna sin procesar. `saveMessage` usa `ON CONFLICT (whatsapp_message_id) DO NOTHING` como segunda defensa.
+**NUNCA procesar el mismo mensaje dos veces.** Kapso Y Meta envían el mismo mensaje. El guard en `webhook.js` detecta `provider='kapso'` y retorna sin procesar.
 
 ---
 
-## Shopify — integración directa (sin raigentic)
+## Shopify — integración directa
 
-Se usa `shopify-api.js` con GraphQL directo a `https://{shop}/admin/api/2025-01/graphql.json`.
-
-**Credenciales:** `ds.config.accessToken` (OAuth offline token permanente). Se obtienen de `db.getPrimaryDataSource(orgId)`.
+GraphQL directo a `https://{shop}/admin/api/2025-01/graphql.json`.
 
 ```js
 const ds = await db.getPrimaryDataSource(orgId);
@@ -94,70 +242,128 @@ const { shop, token } = shopifyApi.credentialsFrom(ds);
 - `fulfillmentStatus` → `displayFulfillmentStatus`
 - `totalSpentV2` → `amountSpent`
 
-**NO usar raigentic** para datos de Shopify. Raigentic tiene `expiringOfflineAccessTokens: true` que causa 401s periódicos. Toda la lógica de productos, clientes y órdenes va directo por GraphQL.
+**⚠️ NO remover de `ORDERS_QUERY`:** `shippingAddress { firstName lastName address1 address2 city province zip country phone }` y `billingAddress { ... }`. Si no están, llegan como null aunque existan en Shopify. Esto causó pérdida de teléfonos y direcciones.
 
----
-
-## Pipeline de 3 agentes
-
-```
-mensaje entrante
-  → checkEscalation()  ← en paralelo con classifyIntent
-  → classifyIntent()
-  → si escalación: setAgentMode('human'), respuesta de escalación
-  → si collecting_order: handleOrderCollection()
-  → si wants_to_order / interested: salesAgent
-  → default: salesAgent (exploring)
-```
-
-**Agente de escalación (`orchestrator.js` → `checkEscalation`):**
-- Saludos simples ("hola", "hi", "buenas") → NUNCA escalan
-- Solicitud explícita de humano → escala inmediato (high)
-- Frustración fuerte → escala inmediato (high)
-- Requiere `botResponses >= 2` antes de llamar a la IA
-- Requiere `history.length >= 8` y `botResponses >= 3` para la llamada a Haiku
-- El umbral es conservador a propósito — la IA Haiku tiende a sobre-escalar
-
-**Auto-reset de modo humano:**
-Si una conversación está en `agent_mode='human'` y el cliente escribe, el bot verifica cuánto tiempo pasó desde el último mensaje humano (`minutesSinceLastHumanReply`). Si pasaron >= 120 minutos, auto-reset a modo IA. Implementado en `kapso-webhook.js` y `webhook.js`.
+**NO usar raigentic** para datos de Shopify — tiene tokens expirables que causan 401 periódicos.
 
 ---
 
 ## Creación de órdenes en Shopify
 
-Flujo: `handleOrderCollection` → `createShopifyOrder` → `shopifyApi.createDraftOrder`
-
-**Draft Order:** Shopify necesita `variantId` o un custom line item. Si `resolveVariantId` no encuentra el producto por nombre, se usa un **custom line item** con `title` + `originalUnitPrice`. Esto es válido en la API de Draft Orders.
-
-```js
-// Con variantId:
-{ variantId: "gid://shopify/ProductVariant/123", quantity: 1 }
-
-// Sin variantId (fallback):
-{ title: "Nombre producto", originalUnitPrice: "12000", quantity: 1 }
+```
+handleOrderCollection → createShopifyOrder → shopifyApi.createDraftOrder
 ```
 
-`resolveVariantId` hace dos búsquedas: nombre completo primero, luego 3 primeras palabras como keywords.
+Si `resolveVariantId` no encuentra el producto → **custom line item** (title + price). Válido en Draft Orders API.
+
+**Prevención de duplicados:** `claimOrderCreation(conversationId)` hace un `UPDATE ... WHERE pipeline_state = 'collecting_order'`. Solo el primero en ejecutarlo gana (rowCount > 0). Usado para evitar que dos mensajes simultáneos creen dos órdenes.
 
 ---
 
-## Modelos de IA usados
+## Modelos de IA
 
-- `claude-haiku-4-5-20251001` — orquestador, escalación (rápido/barato)
+- `claude-haiku-4-5-20251001` — clasificación de intención, escalación, extracción de datos (rápido/barato)
 - `claude-sonnet-4-6` — agente de ventas, agente de órdenes (mejor calidad)
 
 ---
 
-## Base de datos
+## Direcciones — campos canónicos
 
-PostgreSQL multi-tenant. Cada org tiene `organization_id`. Nunca hacer queries sin filtrar por `orgId`.
+La tabla `contacts` tiene dos sistemas de campos de dirección:
+- **Nuevo (estructurado):** `address1`, `address2`, `city`, `province`, `zip`, `country`
+- **Legacy (texto libre):** `address` (campo viejo)
 
-Funciones clave en `database.js`:
-- `upsertConversation` — crear/obtener conversación por teléfono
-- `saveMessage` — usa `ON CONFLICT (whatsapp_message_id) DO NOTHING` para deduplicar
-- `setAgentMode(id, 'ai'|'human')` — cambiar modo de respuesta
-- `updatePipelineState(id, state, orderDraft)` — actualizar estado del pipeline
-- `minutesSinceLastHumanReply(conversationId)` — para auto-reset de modo humano
+**Regla:** siempre priorizar `address1`. Si está vacío, usar `address` como fallback.
+
+```js
+const addr = contact.address1 || contact.address || '';
+const city = contact.city || '';
+```
+
+La tabla `shopify_orders` tiene `shipping_city` (histórico) y `shipping_address1` (agregado para edición manual).
+
+---
+
+## Sistema de Re-enganche
+
+- `routes/reengagement.js` — análisis y envío
+- `services/reengagement-calibration.js` — backtesting histórico
+- Tablas: `reengagement_daily_cache`, `reengagement_predictions`, `org_reengagement_calibration`
+
+**Batches de predicción IA:**
+- Batch size: **20 clientes máximo** (más → JSON supera max_tokens)
+- `max_tokens`: **8192 mínimo** (menos → respuesta truncada, `JSON.parse` devuelve `[]` silenciosamente)
+- Fallback si IA falla: `predictedDays = avgFreqDays - daysInactive`
+
+**Caché:** una vez por día en `reengagement_daily_cache`. Refresh asíncrono (`?refresh=true`) porque Render corta conexiones a los 30s. El análisis tarda 3-5 min.
+
+---
+
+## WhatsApp Templates (ventana 24h)
+
+Para enviar a clientes que no escribieron en 24h se necesita template aprobado por Meta.
+
+```js
+kapsoService.sendTemplate(to, templateName, languageCode, components, wc)
+// components: [{ type: 'body', parameters: [{ type: 'text', text: 'Juan' }] }]
+```
+
+**Endpoints:**
+- `GET  /api/templates` → lista templates (APPROVED/PENDING/REJECTED)
+- `POST /api/templates` → crear template
+- `POST /api/templates/generate` → IA genera draft de template
+- `POST /api/reengagement/send-bulk` → envío masivo con template
+- `POST /api/conversations/:id/send-template` → desde chat individual
+
+**Pedidos agendados:** template `pedido_agendado_seguimiento` — 2 variables: `{{1}}` nombre, `{{2}}` producto. Cron job en `scheduled-follow-up.js` lo envía a las 9AM Chile (13:00 UTC).
+
+---
+
+## Agente de escalación
+
+- Saludos simples ("hola", "hi") → **NUNCA escalan**
+- Requiere `botResponses >= 2` antes de llamar a la IA
+- Requiere `history.length >= 8` y `botResponses >= 3` para la IA
+- El umbral es conservador — Haiku tiende a sobre-escalar con umbrales bajos
+
+**Auto-reset modo humano:** si pasaron >= 120 min sin respuesta humana, la conversación vuelve a modo IA automáticamente.
+
+---
+
+## Bot Logger
+
+```js
+const L = createBotLogger(orgName, phone);
+L.in(userMessage);          // mensaje entrante
+L.intent('wants_to_order'); // intención clasificada
+L.agent('sales', ms);       // agente usado + tiempo
+L.response(botReply);       // respuesta del bot
+L.done();                   // fin del flujo
+```
+
+Llamar `L.agent('nombre', Date.now() - t)` en **cada** rama de retorno de `pipeline.js`.
+
+---
+
+## Variables de entorno (Railway backend)
+
+```
+DATABASE_URL          → PostgreSQL connection string
+ANTHROPIC_API_KEY     → Claude API
+KAPSO_API_KEY         → Kapso (puede estar en DB por org)
+KAPSO_WABA_ID         → WhatsApp Business Account ID
+JWT_SECRET            → auth tokens
+```
+
+---
+
+## Scripts one-off (Railway)
+
+```bash
+railway run node backend/scripts/normalize-shopify-phones.js    # normaliza customer_phone histórico
+railway run node backend/scripts/normalize-contact-names.js     # normaliza nombres a Title Case
+railway run node backend/scripts/create-scheduled-order-template.js  # crea template pedido_agendado_seguimiento
+```
 
 ---
 
@@ -165,156 +371,31 @@ Funciones clave en `database.js`:
 
 | Error | Causa | Solución |
 |-------|-------|----------|
-| `Merchandise title is empty` | variantId null en createDraftOrder | Custom line item fallback (ya implementado) |
-| `duplicate key messages_whatsapp_message_id_key` | Meta + Kapso procesan el mismo mensaje | `ON CONFLICT DO NOTHING` + guard en webhook.js |
+| Duplicados en contacts | Teléfonos sin normalizar (`cleanPhone` vs `normalizePhone`) | Siempre usar `normalizePhone()` antes de guardar |
+| Pedidos aparecen duplicados en lista | JOIN normal con contacts duplicados | Usar `LEFT JOIN LATERAL (...) LIMIT 1` |
+| "Sin pedidos" aunque el contacto tiene historial | `customer_phone` en `shopify_orders` sin normalizar | `normalizePhone()` antes del INSERT |
+| Broadcast llega a clientes que ya pidieron | `createOrder` no actualizaba `last_order_at` | Ya corregido — lo actualiza vía `normalizePhone(customerPhone)` |
+| Historial solo muestra pedidos Shopify | Frontend solo leía `shopifyOrders` del response | Mezclar `shopifyOrders` + `botOrders` |
+| `Merchandise title is empty` | variantId null en createDraftOrder | Custom line item fallback (implementado) |
+| `duplicate key messages_whatsapp_message_id_key` | Meta + Kapso duplican el mismo mensaje | `ON CONFLICT DO NOTHING` + guard en webhook.js |
 | `Authorization: Bearer null` | Org usa Kapso, access_token es null | Guard antes de pipeline en webhook.js |
-| `131037` al enviar WhatsApp | Display name no aprobado en Meta Business Manager | Aprobar en Meta Business Manager (no es código) |
-| Escalación en "hola" | Historial sucio de mensajes sin respuesta del bot | Whitelist de saludos en checkEscalation |
-| Bot no responde tras modo humano | Conversación atascada en modo humano | Auto-reset a 120 min en webhooks |
+| Escalación en "hola" | Historial sucio | Whitelist de saludos en checkEscalation |
+| JSON.parse silencioso en predicciones | `max_tokens` muy bajo, respuesta truncada | Mantener `max_tokens: 8192` |
 
 ---
 
-## WhatsApp Templates (ventana 24h expirada)
+## LO QUE NO HACER
 
-Cuando el cliente no escribe en 24h, WhatsApp **solo permite templates pre-aprobados**.
-
-### Flujo
-1. Template se crea en Meta Business Manager → espera aprobación (1-3 días)
-2. Template aprobado tiene: `name`, `language` (ej: `es`), `components` (HEADER, BODY, FOOTER)
-3. Variables en BODY: `{{1}}`, `{{2}}` etc.
-4. Para enviar: `kapsoService.sendTemplate(to, name, languageCode, components, wc)`
-   - `components`: `[{ type: 'body', parameters: [{ type: 'text', text: 'Juan' }] }]`
-
-### Endpoints
-- `GET  /api/reengagement/templates` → lista templates aprobados de la org
-- `POST /api/reengagement/send`      → soporta `{ phone, templateName, languageCode, components }` O `{ phone, message }`
-- `POST /api/reengagement/send-bulk` → igual pero `items[]`
-- `POST /api/conversations/:id/send-template` → desde chat individual
-
-### Configuración necesaria
-- `business_account_id` en `whatsapp_configs` (WABA ID de Meta) — o env var `KAPSO_WABA_ID`
-- Para Kapso: se obtiene en app.kapso.ai → tu número → WABA ID
-
-### UI
-- ReengagementPanel: botón "📋 Usar Template" en header → activa modo template → selector + variables + preview → envío masivo
-- ChatWindow: botón "📋 Template" en header de conversación → modal con selector, variables, preview, envío
-
----
-
-## Variables de entorno (Render backend)
-
-```
-DATABASE_URL          → PostgreSQL connection string
-ANTHROPIC_API_KEY     → Claude API
-KAPSO_API_KEY         → Kapso (puede estar en DB por org también)
-KAPSO_WABA_ID         → WhatsApp Business Account ID (para listar templates)
-PUBLIC_URL            → https://whatsapp-crm-front.onrender.com
-FRONTEND_URL          → https://whatsapp-crm-6fzm.onrender.com
-JWT_SECRET            → auth tokens
-```
-
----
-
-## Sistema de Re-enganche (`/api/reengagement`)
-
-Predice qué clientes van a comprar próximamente y permite enviarles mensajes.
-
-### Arquitectura
-- `routes/reengagement.js` — endpoints y lógica de análisis
-- `services/reengagement-calibration.js` — backtesting histórico para calibrar el algoritmo
-- Tablas DB: `reengagement_daily_cache`, `reengagement_predictions`, `org_reengagement_calibration`
-
-### Fuentes de teléfono en órdenes Shopify (orden de prioridad)
-```
-1. order.customer.phone
-2. order.shippingAddress.phone
-3. order.billingAddress.phone
-4. Catálogo de clientes (getCustomers) → match por customerId o email
-```
-**⚠️ CRÍTICO:** La query GraphQL `ORDERS_QUERY` en `shopify-api.js` DEBE incluir `shippingAddress { firstName lastName phone }` y `billingAddress { firstName lastName phone }`. Si no están en la query, los campos llegan como `null` aunque existan en Shopify. Esto ya se olvidó y tuvo que re-arreglarse — no remover esos campos.
-
-### Batches de predicción IA
-- Batch size: **20 clientes** (no más). Con 40, el JSON de respuesta supera `max_tokens`.
-- `max_tokens`: **8192** (no bajar). Con 2500, la respuesta se trunca y `JSON.parse` falla silenciosamente devolviendo `[]`.
-- Si la IA falla para un cliente → **fallback heurístico**: `predictedDays = avgFreqDays - daysInactive`.
-
-### Caché y refresh
-- Análisis corre una vez por día → guarda en `reengagement_daily_cache`
-- Cache en memoria (misma sesión) → `analysisCache` Map con TTL 2h
-- **Refresh (`?refresh=true`) es asíncrono** — retorna inmediatamente `{ refreshing: true }`. El análisis corre en segundo plano (`setImmediate`). El frontend hace polling cada 60s.
-- Motivo: Render free tier corta conexiones HTTP a los 30s. El análisis tarda 3-5 min.
-
-### CORS
-- Backend acepta cualquier `*.onrender.com` (no solo el FRONTEND_URL exacto).
-- Si Render mata una conexión lenta, su proxy responde sin CORS headers → aparece como "CORS error" en el browser pero es un timeout.
-
-### Calibración
-- Primera vez: corre backtesting automático con órdenes históricas.
-- Factor de calibración: `accuracyRate / 0.75`, capped `[0.40, 1.10]`.
-- Se guarda en `org_reengagement_calibration`.
-
----
-
-## Filosofía de producto — Modelo Hooked (Nir Eyal)
-
-Esta app debe crear hábito en el dueño de la tienda. El objetivo no es que la use cuando tiene un problema — es que la abra todos los días porque siente que algo puede estar pasando sin él.
-
-### El ciclo que hay que construir
-
-```
-TRIGGER → ACCIÓN → RECOMPENSA VARIABLE → INVERSIÓN → (repite)
-```
-
-**Triggers externos** (lo traen de vuelta):
-- Notificación: "Juan escribió y el bot lo está atendiendo"
-- Digest diario: "Tienes 3 clientes listos para comprar hoy"
-- Badge con conversaciones sin leer
-
-**Triggers internos** (el miedo que ya tiene):
-- Ansiedad de perder una venta mientras no está mirando el teléfono
-- Deseo de saber si el bot está respondiendo bien
-- Curiosidad por cuánto vendió esta semana
-
-**Acciones — deben ser mínimas (1-2 clicks):**
-- Ver candidatos de re-enganche y enviar con un click
-- Aprobar o corregir una respuesta del bot
-- Ver el resumen de ventas del día
-
-**Recompensa variable (lo que hace que vuelva):**
-- *Tribal*: ver respuestas positivas de clientes ("gracias! perfecto! ya te transfiero")
-- *Caza*: descubrir qué clientes están a punto de comprar (lista con predicciones)
-- *Logro propio*: ver que el bot cerró una venta completa solo, sin intervención
-
-**Inversión (hace el producto más valioso para la próxima vez):**
-- Completar los campos de entrega → el bot mejora
-- Aprobar/rechazar respuestas del bot → retroalimentación
-- Agregar templates → más herramientas para re-enganche
-
-### Lo que falta implementar para cerrar el ciclo
-
-1. **Dashboard de victorias** — número claro de ventas recuperadas, conversaciones manejadas por el bot, dinero generado esta semana. Sin este número no hay recompensa visible.
-2. **Flujo de re-enganche en 2 clicks** — actualmente son 5+ pasos. El template debe pre-seleccionarse con IA, las variables pre-llenarse, y el usuario solo confirma.
-3. **Momento "wow" cuando el bot cierra una venta** — algún indicador visual que muestre que fue el bot, no el dueño, quien hizo el trabajo.
-4. **Digest push/email** — algo que traiga al usuario de vuelta cuando no está en la app.
-
-### Principio de diseño para cada feature nuevo
-
-Antes de construir algo, preguntar:
-- ¿En qué punto del ciclo Hooked entra esto?
-- ¿Reduce la fricción de una acción o aumenta la recompensa?
-- ¿Le hace al usuario sentir que perdería algo si no vuelve mañana?
-
----
-
-## Lo que NO hacer
-
+- No usar `cleanPhone()` — solo `normalizePhone()` de `database.js`
+- No hacer JOIN directo `contacts.phone = tabla.phone` sin LATERAL si puede haber duplicados
 - No llamar a raigentic para datos de Shopify (usa shopify-api.js directo)
-- No escalar conversaciones por saludos, preguntas normales de productos, o procesos de pedido en curso
-- No bajar el umbral de escalación de la IA — Haiku sobre-escala por naturaleza
-- No agregar `await` a `pool.query` sin verificar que el caller también use await (async bug silencioso)
-- No agregar lógica en webhook.js para orgs con provider='kapso' — kapso-webhook.js es el handler correcto
-- No remover `shippingAddress`/`billingAddress` de `ORDERS_QUERY` en shopify-api.js — son necesarios para recuperar teléfonos
-- No bajar `max_tokens` del batch de predicción IA por debajo de 8192 — el JSON se trunca silenciosamente
-- No subir el batch size de predicción IA por encima de 20 — misma razón
+- No escalar por saludos, preguntas de producto, o procesos de pedido en curso
+- No bajar el umbral de escalación — Haiku sobre-escala
+- No agregar `await` a `pool.query` sin verificar que el caller también use `async`
+- No procesar mensajes en `webhook.js` cuando `provider='kapso'` — handler es `kapso-webhook.js`
+- No remover `shippingAddress`/`billingAddress` de `ORDERS_QUERY` en shopify-api.js
+- No bajar `max_tokens` del batch de predicción por debajo de 8192
+- No subir el batch size de predicción por encima de 20
 - No hacer git directamente en el workspace NTFS — siempre usar `/tmp/crm-push`
-- No poner tokens de GitHub en ningún archivo del repo — GitHub Push Protection lo bloquea
+- No poner tokens de GitHub en ningún archivo del repo
+- No usar `upsertContact()` cuando hay datos ricos de dirección de Shopify — usar `upsertShopifyCustomerProfile()`
