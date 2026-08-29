@@ -183,11 +183,11 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   const storeCustomPrompt = [clientTypeSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
-  // NO pedir dirección, pago ni más info. Solo recordar la fecha y esperar.
+  // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.
   // El cron job enviará el template cuando llegue el día.
   if (currentState === 'scheduled') {
-    // Buscar la fecha del pedido agendado para mencionar en la respuesta
-    let scheduledMsg = '¡Tu pedido ya está agendado! 📅 Te escribiremos cuando llegue el día para confirmarte todo. Si necesitas cambiar algo, dímelo y lo ajustamos.';
+    let dateLabel = '';
+    let producto = 'tu pedido';
     try {
       const pool = getPool();
       const { rows } = await pool.query(
@@ -197,13 +197,48 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
         [conversationId]
       );
       if (rows[0]) {
-        const dateLabel = formatDateEs(rows[0].desired_date);
-        const producto  = rows[0].product_notes || 'tu pedido';
-        scheduledMsg = `¡Ya tienes ${producto} agendado para el ${dateLabel}! 📅 El día antes te escribimos para coordinar. Si necesitas cambiar algo, dímelo con gusto.`;
+        dateLabel = formatDateEs(rows[0].desired_date);
+        producto  = rows[0].product_notes || 'tu pedido';
       }
-    } catch { /* si falla la consulta, usar mensaje genérico */ }
-    L.agent('orchestrator', 0);
-    return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled' };
+    } catch { /* si falla la consulta, continuar sin fecha */ }
+
+    // Responder contextualmente con Haiku — nunca el mismo texto repetido
+    const Anthropic = require('@anthropic-ai/sdk');
+    const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const recentHistory = history.slice(-6).map(m =>
+      `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`
+    ).join('\n');
+
+    const scheduledSystemPrompt = `Eres un asistente de ventas por WhatsApp. El cliente ya tiene un pedido agendado${dateLabel ? ` para el ${dateLabel}` : ''} (${producto}).
+
+REGLAS ABSOLUTAS:
+- NO pidas dirección, horario de entrega, pago ni ningún dato adicional — eso se coordina el día del pedido.
+- NO repitas siempre el mismo mensaje de recordatorio. Lee lo que dijo el cliente y responde a ESO.
+- Si el cliente saluda → salúdalo brevemente y confirma en una frase que su pedido está apartado.
+- Si el cliente da información de horario/turno ("durante la mañana", "en la tarde") → acusa recibo ("Perfecto, lo anoto 👍") sin pedir más.
+- Si el cliente pregunta algo sobre el pedido → responde naturalmente.
+- Si el cliente quiere cambiar fecha/cantidad → dile que lo puedes ajustar y pregunta qué cambio quiere.
+- Respuestas cortas, naturales, en español latinoamericano. Máximo 2 frases.`;
+
+    try {
+      const aiResp = await aiClient.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 120,
+        system: scheduledSystemPrompt,
+        messages: [
+          { role: 'user', content: `Conversación reciente:\n${recentHistory}\n\nÚltimo mensaje del cliente: "${userMessage}"` },
+        ],
+      });
+      const scheduledMsg = aiResp.content[0]?.text?.trim()
+        || `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar.`;
+      L.agent('orchestrator', 0);
+      return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled' };
+    } catch (err) {
+      console.warn('[Pipeline] scheduled Haiku error:', err.message);
+      const fallback = `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar. Si necesitas cambiar algo, dímelo con gusto.`;
+      L.agent('orchestrator', 0);
+      return { response: fallback, agentType: 'orchestrator', newState: 'scheduled' };
+    }
   }
 
   // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
