@@ -206,7 +206,8 @@ router.get('/history/:phone', async (req, res) => {
 
     const { rows: shopifyOrders } = await pool.query(`
       SELECT shopify_order_id, shopify_name, customer_name, total_price,
-             financial_status, fulfillment_status, shopify_created_at, items
+             financial_status, fulfillment_status, shopify_created_at, items,
+             shipping_address1, shipping_city
       FROM shopify_orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])
@@ -215,7 +216,7 @@ router.get('/history/:phone', async (req, res) => {
     `, [req.orgId, variants]);
 
     const { rows: botOrders } = await pool.query(`
-      SELECT id, customer_name, total_price, status, created_at, items
+      SELECT id, customer_name, total_price, status, created_at, items, shipping_address
       FROM orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])
@@ -223,6 +224,16 @@ router.get('/history/:phone', async (req, res) => {
       ORDER BY created_at DESC
       LIMIT 10
     `, [req.orgId, variants]);
+
+    // Dirección actual del contacto (fuente autoritativa)
+    const { rows: contactRows } = await pool.query(`
+      SELECT address1, address, city FROM contacts
+      WHERE organization_id = $1 AND phone = ANY($2::text[])
+      LIMIT 1
+    `, [req.orgId, variants]);
+    const contactAddress = contactRows[0]
+      ? [contactRows[0].address1 || contactRows[0].address, contactRows[0].city].filter(Boolean).join(', ')
+      : null;
 
     // Resumen agregado
     const validShopify = shopifyOrders.filter(o => !['VOIDED','REFUNDED'].includes((o.financial_status||'').toUpperCase()));
@@ -234,6 +245,7 @@ router.get('/history/:phone', async (req, res) => {
       success: true,
       data: {
         summary: { totalPedidos, totalGastado, ultimaCompra },
+        contactAddress,
         shopifyOrders,
         botOrders,
       },

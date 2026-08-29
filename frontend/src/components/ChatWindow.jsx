@@ -874,18 +874,26 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     ].filter(Boolean).map(d => new Date(d));
                     const ultimaCompra = allDates.length ? new Date(Math.max(...allDates)) : null;
                     return (
-                      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
-                        {[
-                          { label:'Pedidos', value: totalPedidos },
-                          { label:'Total gastado', value: `$${Number(totalGastado).toLocaleString('es-CL')}` },
-                          { label:'Última compra', value: ultimaCompra ? ultimaCompra.toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—' },
-                        ].map(({ label, value }) => (
-                          <div key={label} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'10px 12px', border:`1px solid ${colors.border}` }}>
-                            <div style={{ fontSize:'10px', color:colors.textSecondary, marginBottom:'4px' }}>{label}</div>
-                            <div style={{ fontSize:'14px', fontWeight:700, color:colors.textPrimary }}>{value}</div>
+                      <>
+                        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom: historyData.contactAddress ? '10px' : '16px' }}>
+                          {[
+                            { label:'Pedidos', value: totalPedidos },
+                            { label:'Total gastado', value: `$${Number(totalGastado).toLocaleString('es-CL')}` },
+                            { label:'Última compra', value: ultimaCompra ? ultimaCompra.toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—' },
+                          ].map(({ label, value }) => (
+                            <div key={label} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'10px 12px', border:`1px solid ${colors.border}` }}>
+                              <div style={{ fontSize:'10px', color:colors.textSecondary, marginBottom:'4px' }}>{label}</div>
+                              <div style={{ fontSize:'14px', fontWeight:700, color:colors.textPrimary }}>{value}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {historyData.contactAddress && (
+                          <div style={{ display:'flex', alignItems:'center', gap:'6px', backgroundColor:colors.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${colors.border}`, marginBottom:'16px', fontSize:'12px', color:colors.textSecondary }}>
+                            <span style={{ fontSize:'13px' }}>📍</span>
+                            <span><strong style={{ color:colors.textPrimary }}>Dirección registrada:</strong> {historyData.contactAddress}</span>
                           </div>
-                        ))}
-                      </div>
+                        )}
+                      </>
                     );
                   })()}
 
@@ -922,6 +930,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                                 {items.map(it => `${it.quantity}x ${it.name || it.title}`).join(' · ')}
                               </div>
                             )}
+                            {(() => {
+                              const addr = isShopify
+                                ? [o.shipping_address1, o.shipping_city].filter(Boolean).join(', ')
+                                : (o.shipping_address || '');
+                              return addr ? (
+                                <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'4px', display:'flex', alignItems:'center', gap:'4px' }}>
+                                  📍 {addr}
+                                </div>
+                              ) : null;
+                            })()}
                           </div>
                         );
                       })}
