@@ -87,14 +87,21 @@ Responde SOLO JSON: {"desiredDate":"YYYY-MM-DD","productNotes":"texto","confiden
 }
 
 function addDays(isoDate, days) {
-  const d = new Date(isoDate + 'T12:00:00Z');
+  const str = isoDate instanceof Date
+    ? isoDate.toISOString().slice(0, 10)
+    : String(isoDate).slice(0, 10);
+  const d = new Date(str + 'T12:00:00Z');
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().split('T')[0];
 }
 
-/** Formatea fecha ISO a texto legible en español */
+/** Formatea fecha (string ISO o Date) a texto legible en español */
 function formatDateEs(isoDate) {
-  const d = new Date(isoDate + 'T12:00:00Z');
+  // pg puede devolver DATE como objeto Date o como string — normalizar siempre a YYYY-MM-DD
+  const str = isoDate instanceof Date
+    ? isoDate.toISOString().slice(0, 10)
+    : String(isoDate).slice(0, 10);
+  const d = new Date(str + 'T12:00:00Z');
   return d.toLocaleDateString('es-CL', {
     weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC',
   });
