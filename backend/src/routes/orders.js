@@ -564,4 +564,44 @@ function safeJSON(str, fallback) {
   try { return JSON.parse(str); } catch { return fallback; }
 }
 
+/**
+ * GET /api/orders/scheduled
+ * Lista todos los pedidos agendados de la organización (todas las fases).
+ */
+router.get('/scheduled', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `SELECT so.*, c.contact_name, c.phone_number AS conv_phone
+       FROM scheduled_orders so
+       LEFT JOIN conversations c ON c.id = so.conversation_id
+       WHERE so.organization_id = $1
+       ORDER BY so.desired_date ASC, so.created_at DESC`,
+      [req.orgId]
+    );
+    res.json({ success: true, orders: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/orders/scheduled/:id/cancel
+ * Cancela un pedido agendado pendiente.
+ */
+router.patch('/scheduled/:id/cancel', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rowCount } = await pool.query(
+      `UPDATE scheduled_orders SET status = 'cancelled', updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2 AND status = 'pending'`,
+      [req.params.id, req.orgId]
+    );
+    if (!rowCount) return res.status(404).json({ success: false, error: 'No encontrado o ya procesado' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;

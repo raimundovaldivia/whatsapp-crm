@@ -3,7 +3,7 @@ import { formatDateTime } from '../utils/dates.js';
 import {
   ShoppingBag, RefreshCw, ExternalLink, Send, RotateCcw,
   CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar, Download,
-  Plus, Trash2, X, MessageSquare,
+  Plus, Trash2, X, MessageSquare, CalendarClock, BanIcon,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
@@ -131,12 +131,14 @@ function getShopifyFulfillmentStyle(status, colors) {
 // ─── Componente principal ─────────────────────────────────────────
 export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const { colors } = useTheme();
-  const [botOrders,     setBotOrders]     = useState([]);
-  const [shopifyOrders, setShopifyOrders] = useState([]);
-  const [loading,       setLoading]       = useState(true);
-  const [stats,         setStats]         = useState(null);
-  const [toast,         setToast]         = useState(null);
-  const [syncing,       setSyncing]       = useState(null);
+  const [botOrders,        setBotOrders]        = useState([]);
+  const [shopifyOrders,    setShopifyOrders]    = useState([]);
+  const [scheduledOrders,  setScheduledOrders]  = useState([]);
+  const [loading,          setLoading]          = useState(true);
+  const [stats,            setStats]            = useState(null);
+  const [toast,            setToast]            = useState(null);
+  const [syncing,          setSyncing]          = useState(null);
+  const [activeTab,        setActiveTab]        = useState('orders'); // 'orders' | 'scheduled'
   const [syncingAll,    setSyncingAll]    = useState(false);
   const [lastSync,      setLastSync]      = useState(null);
 
@@ -189,14 +191,16 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [botData, statsData, shopifyRes] = await Promise.all([
+      const [botData, statsData, shopifyRes, scheduledRes] = await Promise.all([
         ordersAPI.getAll(),
         ordersAPI.getStats(),
         api.get('/orders/shopify').catch(() => ({ data: { orders: [], lastSync: null } })),
+        api.get('/orders/scheduled').catch(() => ({ data: { orders: [] } })),
       ]);
       setBotOrders(botData || []);
       setStats(statsData);
       setShopifyOrders(shopifyRes.data?.orders || []);
+      setScheduledOrders(scheduledRes.data?.orders || []);
       if (shopifyRes.data?.lastSync) setLastSync(new Date(shopifyRes.data.lastSync));
     } catch {
       showToast('Error cargando pedidos', 'error');
@@ -204,6 +208,17 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       setLoading(false);
     }
   }, []);
+
+  const cancelScheduled = async (id) => {
+    if (!window.confirm('¿Cancelar este pedido agendado?')) return;
+    try {
+      await api.patch(`/orders/scheduled/${id}/cancel`);
+      showToast('Pedido agendado cancelado');
+      await load();
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Error al cancelar', 'error');
+    }
+  };
 
   const handleSyncAll = async () => {
     setSyncingAll(true);
@@ -458,7 +473,22 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       {/* Header */}
       <div style={{ padding: '14px 24px', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px' }}>
         <ShoppingBag size={20} color={colors.green} />
-        <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600, flex: 1 }}>Pedidos</h1>
+        <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600 }}>Pedidos</h1>
+        {/* Tabs */}
+        <div style={{ display:'flex', gap:'4px', backgroundColor: colors.bgSecondary, borderRadius:'8px', padding:'3px' }}>
+          {[
+            { key: 'orders',    label: 'Todos' },
+            { key: 'scheduled', label: `📅 Agendados${scheduledOrders.filter(o=>o.status==='pending').length ? ` (${scheduledOrders.filter(o=>o.status==='pending').length})` : ''}` },
+          ].map(({ key, label }) => (
+            <button key={key} onClick={() => setActiveTab(key)} style={{
+              padding: '4px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer',
+              backgroundColor: activeTab === key ? colors.bgPanel : 'transparent',
+              color: activeTab === key ? colors.textPrimary : colors.textMuted,
+              boxShadow: activeTab === key ? `0 1px 3px rgba(0,0,0,0.2)` : 'none',
+            }}>{label}</button>
+          ))}
+        </div>
+        <div style={{ flex: 1 }} />
         <button onClick={() => setShowNewOrder(true)}
           style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.green, color: 'white', padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer' }}>
           <Plus size={13} /> Nuevo pedido
@@ -478,6 +508,71 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         </button>
       </div>
 
+      {/* ── Vista Agendados ── */}
+      {activeTab === 'scheduled' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+          {loading ? (
+            <div style={{ textAlign:'center', padding:'40px', color: colors.textMuted }}>Cargando...</div>
+          ) : scheduledOrders.length === 0 ? (
+            <div style={{ textAlign:'center', padding:'40px', color: colors.textMuted }}>
+              <CalendarClock size={32} style={{ marginBottom:'12px', opacity:0.4 }} />
+              <div>Sin pedidos agendados</div>
+            </div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+              {scheduledOrders.map(o => {
+                const isPending   = o.status === 'pending';
+                const isSent      = o.status === 'sent';
+                const isCancelled = o.status === 'cancelled';
+                const dateStr     = o.desired_date
+                  ? new Date(o.desired_date + 'T12:00:00').toLocaleDateString('es-CL', { weekday:'long', day:'numeric', month:'long' })
+                  : '—';
+                const isOverdue   = isPending && o.desired_date && new Date(o.desired_date + 'T12:00:00') < new Date();
+                const statusColor = isPending ? (isOverdue ? '#f87171' : '#a78bfa') : isSent ? '#22c55e' : colors.textMuted;
+                const statusLabel = isPending ? (isOverdue ? '⚠️ Vencido' : '📅 Pendiente') : isSent ? '✓ Enviado' : 'Cancelado';
+                return (
+                  <div key={o.id} style={{ backgroundColor: colors.bgPanel, borderRadius:'12px', border:`1px solid ${isPending ? '#a78bfa30' : colors.border}`, padding:'14px 16px', display:'flex', gap:'12px', alignItems:'flex-start' }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'4px' }}>
+                        <span style={{ fontWeight:600, color:colors.textPrimary, fontSize:'14px' }}>{o.customer_name || o.contact_name || o.phone}</span>
+                        <span style={{ fontSize:'11px', color:colors.textMuted }}>{o.phone}</span>
+                        <span style={{ marginLeft:'auto', fontSize:'11px', fontWeight:600, color:statusColor }}>{statusLabel}</span>
+                      </div>
+                      <div style={{ fontSize:'13px', color:colors.textSecondary, marginBottom:'4px' }}>
+                        📦 {o.product_notes || 'Sin detalle de producto'}
+                      </div>
+                      <div style={{ display:'flex', gap:'12px', fontSize:'12px', color:colors.textMuted }}>
+                        <span>📅 {dateStr}</span>
+                        <span>Creado: {new Date(o.created_at).toLocaleDateString('es-CL')}</span>
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', gap:'6px', flexShrink:0 }}>
+                      {o.conversation_id && (
+                        <button
+                          onClick={() => onSelectConversation?.({ id: o.conversation_id, contact_name: o.customer_name || o.contact_name, phone_number: o.phone })}
+                          title="Ver conversación"
+                          style={{ padding:'5px 10px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color:'#4db6ac', fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                          <MessageSquare size={12} /> Chat
+                        </button>
+                      )}
+                      {isPending && (
+                        <button
+                          onClick={() => cancelScheduled(o.id)}
+                          title="Cancelar pedido agendado"
+                          style={{ padding:'5px 10px', borderRadius:'6px', border:'1px solid #ef444440', background:'none', color:'#f87171', fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                          <BanIcon size={12} /> Cancelar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'orders' && (
       <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
         {/* Stats */}
@@ -648,6 +743,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           </>
         )}
       </div>
+
+      )}  {/* cierre activeTab === 'orders' */}
 
       {toast && <Toast toast={toast} />}
 
