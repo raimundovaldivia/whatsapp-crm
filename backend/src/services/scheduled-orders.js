@@ -27,6 +27,12 @@ const FUTURE_ORDER_PATTERNS = [
   /para\s+el\s+\d{1,2}\s+(de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)/i,
   /para\s+el\s+fin\s+de\s+semana/i,
   /el\s+fin\s+de\s+semana/i,
+  // Respuestas de duración de stock ("me duran una semana", "unos 5 días más")
+  /\d+\s+d[ií]as?\s+(m[aá]s|aproximadamente|m[aá]s\s+o\s+menos)?/i,
+  /una\s+semana\s+(m[aá]s|aproximadamente|m[aá]s\s+o\s+menos)?/i,
+  /dos\s+semanas?\s+(m[aá]s)?/i,
+  /unos?\s+\d+\s+d[ií]as?/i,
+  /\d+\s+semanas?\s+(m[aá]s)?/i,
 ];
 
 /**

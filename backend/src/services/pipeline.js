@@ -260,6 +260,34 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     };
   }
 
+  // ── Detectar "me queda todavía" → preguntar cuándo se termina ──────
+  // Si el cliente dice que aún tiene stock, el bot pregunta cuándo se le acaba
+  // para agendar un seguimiento automático.
+  const STOCK_REMAINING_PATTERNS = [
+    /me\s+queda[ns]?\s+(todav[ií]a|a[uú]n|bastante|algo|un\s+poco|harto)/i,
+    /todav[ií]a\s+(tengo|me\s+queda[ns]?)/i,
+    /a[uú]n\s+(tengo|me\s+queda[ns]?)/i,
+    /tengo\s+(todav[ií]a|a[uú]n|bastante|suficiente)/i,
+    /me\s+alcanza\s+(todav[ií]a|a[uú]n|para)/i,
+    /no\s+(me\s+)?(he\s+)?(acabado|terminado|agotado)/i,
+    /me\s+quedan?\s+(varios|algunos|unos|hartos)/i,
+    /tengo\s+de\s+sobra/i,
+  ];
+  const isStockRemaining = !['scheduled','future_interest','opted_out'].includes(currentState)
+    && STOCK_REMAINING_PATTERNS.some(p => p.test(userMessage));
+
+  if (isStockRemaining) {
+    const knownName = await db.getContact(orgId, conversation.phone_number).catch(() => null);
+    const firstName = knownName?.name?.split(' ')[0] || '';
+    const stockMsg = firstName
+      ? `¡Qué bueno ${firstName}! 😊 ¿Cuánto tiempo más te duran aproximadamente? Así me anoto para avisarte justo cuando se estén terminando y no te quedes sin ellos.`
+      : `¡Qué bueno! 😊 ¿Cuánto tiempo más te duran aproximadamente? Así me anoto para avisarte justo cuando se estén terminando.`;
+    await db.updatePipelineState(conversationId, 'future_interest');
+    L.agent('orchestrator', 0);
+    L.step('stock_remaining', 'preguntando cuándo se termina');
+    return { response: stockMsg, agentType: 'orchestrator', newState: 'future_interest' };
+  }
+
   // ── Agente de escalación — corre en paralelo con la clasificación ──
   const effectiveState = isTemplateReply ? 'interested' : currentState;
   const [escalationResult, intentResult] = await Promise.all([
