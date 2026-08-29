@@ -84,6 +84,50 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   const [importResult, setImportResult] = useState(null);
   const fileInputRef = useRef(null);
 
+  // ── Bulk delete leads ──
+  const [selectedLeads, setSelectedLeads] = useState(new Set());
+  const [bulkDeleting, setBulkDeleting]   = useState(false);
+  const [dedupRunning, setDedupRunning]   = useState(false);
+
+  const toggleSelectLead = useCallback((phone) => {
+    setSelectedLeads(prev => {
+      const next = new Set(prev);
+      if (next.has(phone)) next.delete(phone); else next.add(phone);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedLeads(prev => prev.size === leads.length ? new Set() : new Set(leads.map(l => l.phone)));
+  }, [leads]);
+
+  const bulkDeleteLeads = useCallback(async () => {
+    if (selectedLeads.size === 0) return;
+    if (!window.confirm(`¿Eliminar ${selectedLeads.size} lead(s) seleccionado(s)? Esta acción no se puede deshacer.`)) return;
+    setBulkDeleting(true);
+    try {
+      const res = await api.delete('/contacts/bulk', { data: { phones: [...selectedLeads] } });
+      setSelectedLeads(new Set());
+      loadLeads(leadsPage, leadsSearch);
+      alert(`${res.data.deleted} lead(s) eliminado(s).`);
+    } catch (e) {
+      alert('Error al eliminar: ' + (e.response?.data?.error || e.message));
+    } finally { setBulkDeleting(false); }
+  }, [selectedLeads, leadsPage, leadsSearch, loadLeads]);
+
+  const runDedup = useCallback(async () => {
+    if (!window.confirm('¿Buscar y fusionar contactos con el mismo teléfono en distintos formatos?\n\nSe mantendrá siempre el tipo "cliente" sobre "lead".')) return;
+    setDedupRunning(true);
+    try {
+      const res = await api.post('/contacts/dedup-phones');
+      const { checked = 0, merged = 0 } = res.data;
+      alert(`Deduplicación completada:\n• ${checked} teléfonos revisados\n• ${merged} duplicados fusionados`);
+      loadLeads(1, leadsSearch);
+    } catch (e) {
+      alert('Error: ' + (e.response?.data?.error || e.message));
+    } finally { setDedupRunning(false); }
+  }, [leadsSearch, loadLeads]);
+
   // ── Precios especiales ──
   const [priceModal, setPriceModal] = useState(null); // { phone, name }
   const [priceList, setPriceList]   = useState([]);
@@ -280,10 +324,13 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
     if (tab === 'leads') loadLeads(leadsPage, leadsSearch);
   }, [tab, leadsPage]);
 
-  // Reset leads page on search
+  // Reset leads page and selection on search
   useEffect(() => {
-    if (tab === 'leads') { setLeadsPage(1); loadLeads(1, leadsSearch); }
+    if (tab === 'leads') { setLeadsPage(1); setSelectedLeads(new Set()); loadLeads(1, leadsSearch); }
   }, [leadsSearch]);
+
+  // Reset selection when changing tabs
+  useEffect(() => { setSelectedLeads(new Set()); }, [tab]);
 
   // Filtrado local por búsqueda
   const filtered = search.trim()
@@ -364,10 +411,23 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
             />
           </div>
           {isLeads && (
-            <button onClick={() => { setImportModal(true); setImportRows([]); setImportResult(null); }} title="Importar leads desde archivo"
-              style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: `${colors.green}18`, border: `1px solid ${colors.green}33`, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.green, fontSize: '12px', fontWeight: 600 }}>
-              <Upload size={12} /> Importar leads
-            </button>
+            <>
+              {selectedLeads.size > 0 && (
+                <button onClick={bulkDeleteLeads} disabled={bulkDeleting}
+                  style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: '#ef444418', border: '1px solid #ef444433', cursor: bulkDeleting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: '#ef4444', fontSize: '12px', fontWeight: 600, opacity: bulkDeleting ? 0.7 : 1 }}>
+                  🗑 {bulkDeleting ? 'Eliminando...' : `Eliminar ${selectedLeads.size}`}
+                </button>
+              )}
+              <button onClick={runDedup} disabled={dedupRunning}
+                title="Fusionar contactos con el mismo teléfono en distintos formatos"
+                style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: '#8b5cf618', border: '1px solid #8b5cf633', cursor: dedupRunning ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: '#8b5cf6', fontSize: '12px', fontWeight: 600, opacity: dedupRunning ? 0.7 : 1 }}>
+                {dedupRunning ? 'Deduplicando...' : '🔗 Deduplicar'}
+              </button>
+              <button onClick={() => { setImportModal(true); setImportRows([]); setImportResult(null); }} title="Importar leads desde archivo"
+                style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: `${colors.green}18`, border: `1px solid ${colors.green}33`, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.green, fontSize: '12px', fontWeight: 600 }}>
+                <Upload size={12} /> Importar leads
+              </button>
+            </>
           )}
           {!isLeads && (
             <button onClick={syncShopify} disabled={syncing} title="Sincronizar clientes desde Shopify"
@@ -687,6 +747,14 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ backgroundColor: colors.bgApp, position: 'sticky', top: 0, zIndex: 1 }}>
+                  <th style={{ padding: '10px 12px', borderBottom: `1px solid ${colors.border}`, width: '36px' }}>
+                    <input type="checkbox"
+                      checked={leads.length > 0 && selectedLeads.size === leads.length}
+                      onChange={toggleSelectAll}
+                      style={{ cursor: 'pointer', width: '14px', height: '14px' }}
+                      title="Seleccionar todos"
+                    />
+                  </th>
                   {['Contacto', 'Teléfono', 'Dirección', 'Último mensaje', 'Pedidos', 'Tipo', ''].map(h => (
                     <th key={h} style={{ padding: '10px 16px', textAlign: 'left', color: colors.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${colors.border}`, whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
@@ -695,9 +763,16 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
               <tbody>
                 {leads.map(lead => (
                   <tr key={lead.phone}
-                    style={{ borderBottom: `1px solid ${colors.bgSub}`, transition: 'background-color 0.1s' }}
-                    onMouseEnter={e => e.currentTarget.style.backgroundColor = colors.bgSub}
-                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                    style={{ borderBottom: `1px solid ${colors.bgSub}`, transition: 'background-color 0.1s', backgroundColor: selectedLeads.has(lead.phone) ? `${colors.green}0a` : 'transparent' }}
+                    onMouseEnter={e => { if (!selectedLeads.has(lead.phone)) e.currentTarget.style.backgroundColor = colors.bgSub; }}
+                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = selectedLeads.has(lead.phone) ? `${colors.green}0a` : 'transparent'; }}>
+                    <td style={{ padding: '12px 12px' }} onClick={e => e.stopPropagation()}>
+                      <input type="checkbox"
+                        checked={selectedLeads.has(lead.phone)}
+                        onChange={() => toggleSelectLead(lead.phone)}
+                        style={{ cursor: 'pointer', width: '14px', height: '14px' }}
+                      />
+                    </td>
                     <td style={{ padding: '12px 16px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: colors.bgHover, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, color: lead.contact_type === 'customer' ? colors.green : '#fb923c', flexShrink: 0 }}>

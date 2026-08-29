@@ -184,24 +184,25 @@ router.post('/dedup-phones', async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
-    // Normalizar: todos los teléfonos de 9 dígitos que empiezan en 9 → anteponer 56
+    // ── Paso 1: normalizar teléfonos de 9 dígitos → anteponer 56 ──
     const { rows: toFix } = await pool.query(
-      `SELECT id, phone FROM contacts
-       WHERE organization_id = $1
-         AND phone ~ '^9[0-9]{8}$'`,
+      `SELECT id, phone, contact_type FROM contacts
+       WHERE organization_id = $1 AND phone ~ '^9[0-9]{8}$'`,
       [req.orgId]
     );
 
     let merged = 0;
     for (const row of toFix) {
       const canonical = '56' + row.phone;
-      // Buscar si ya existe la versión canónica
       const { rows: [existing] } = await pool.query(
-        `SELECT id FROM contacts WHERE organization_id = $1 AND phone = $2 LIMIT 1`,
+        `SELECT id, contact_type FROM contacts WHERE organization_id = $1 AND phone = $2 LIMIT 1`,
         [req.orgId, canonical]
       );
       if (existing) {
-        // Transferir datos relevantes de la fila corta al canónico y eliminar la corta
+        // Determinar cuál conservar: customer siempre gana sobre lead
+        const keepId   = (existing.contact_type === 'customer' || row.contact_type === 'lead') ? existing.id : row.id;
+        const deleteId = keepId === existing.id ? row.id : existing.id;
+        // Fusionar datos del eliminado al que se conserva
         await pool.query(
           `UPDATE contacts SET
              name         = COALESCE(contacts.name,     (SELECT name     FROM contacts WHERE id = $2)),
@@ -209,21 +210,70 @@ router.post('/dedup-phones', async (req, res) => {
              address      = COALESCE(contacts.address,  (SELECT address  FROM contacts WHERE id = $2)),
              address1     = COALESCE(contacts.address1, (SELECT address1 FROM contacts WHERE id = $2)),
              city         = COALESCE(contacts.city,     (SELECT city     FROM contacts WHERE id = $2)),
+             contact_type = CASE WHEN EXISTS (SELECT 1 FROM contacts WHERE id = $2 AND contact_type = 'customer')
+                                 THEN 'customer' ELSE contacts.contact_type END,
              updated_at   = NOW()
            WHERE id = $1`,
-          [existing.id, row.id]
+          [keepId, deleteId]
         );
-        await pool.query(`DELETE FROM contacts WHERE id = $1`, [row.id]);
+        // Si el que sobrevive tiene formato corto, normalizar su phone
+        if (keepId === row.id) {
+          await pool.query(
+            `UPDATE contacts SET phone = $1, updated_at = NOW() WHERE id = $2`,
+            [canonical, keepId]
+          );
+        }
+        await pool.query(`DELETE FROM contacts WHERE id = $1`, [deleteId]);
         merged++;
       } else {
-        // Solo actualizar el teléfono al formato canónico
+        // No hay duplicado — solo normalizar el teléfono
         await pool.query(
           `UPDATE contacts SET phone = $1, updated_at = NOW() WHERE id = $2`,
           [canonical, row.id]
         );
       }
     }
-    res.json({ success: true, checked: toFix.length, merged });
+
+    // ── Paso 2: buscar pares lead+customer con mismo teléfono canónico (11 dígitos) ──
+    // Puede ocurrir si ambos ya tienen 11 dígitos pero uno es lead y otro customer
+    // (no debería pasar por UNIQUE constraint, pero cubre formatos adicionales como +569...)
+    const { rows: withPlus } = await pool.query(
+      `SELECT id, phone, contact_type FROM contacts
+       WHERE organization_id = $1 AND phone ~ '^\\+569[0-9]{8}$'`,
+      [req.orgId]
+    );
+    for (const row of withPlus) {
+      const canonical = row.phone.replace(/^\+/, ''); // +56912345678 → 56912345678
+      const { rows: [existing] } = await pool.query(
+        `SELECT id, contact_type FROM contacts WHERE organization_id = $1 AND phone = $2 LIMIT 1`,
+        [req.orgId, canonical]
+      );
+      if (existing) {
+        const keepId   = existing.contact_type === 'customer' ? existing.id : row.id;
+        const deleteId = keepId === existing.id ? row.id : existing.id;
+        await pool.query(
+          `UPDATE contacts SET
+             name         = COALESCE(contacts.name,     (SELECT name FROM contacts WHERE id = $2)),
+             email        = COALESCE(contacts.email,    (SELECT email FROM contacts WHERE id = $2)),
+             address      = COALESCE(contacts.address,  (SELECT address FROM contacts WHERE id = $2)),
+             city         = COALESCE(contacts.city,     (SELECT city FROM contacts WHERE id = $2)),
+             contact_type = CASE WHEN EXISTS (SELECT 1 FROM contacts WHERE id = $2 AND contact_type = 'customer')
+                                 THEN 'customer' ELSE contacts.contact_type END,
+             updated_at   = NOW()
+           WHERE id = $1`,
+          [keepId, deleteId]
+        );
+        if (keepId === row.id) {
+          await pool.query(`UPDATE contacts SET phone = $1, updated_at = NOW() WHERE id = $2`, [canonical, keepId]);
+        }
+        await pool.query(`DELETE FROM contacts WHERE id = $1`, [deleteId]);
+        merged++;
+      } else {
+        await pool.query(`UPDATE contacts SET phone = $1, updated_at = NOW() WHERE id = $2`, [canonical, row.id]);
+      }
+    }
+
+    res.json({ success: true, checked: toFix.length + withPlus.length, merged });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -338,6 +388,34 @@ router.post('/import', async (req, res) => {
     }
 
     res.json({ success: true, imported, existingLeads, existingCustomers, invalid, errors: errors.slice(0, 20) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/contacts/bulk
+ * Elimina múltiples leads por teléfono.
+ * Solo borra contactos con contact_type = 'lead' (nunca clientes).
+ * Body: { phones: ["569...", ...] }
+ */
+router.delete('/bulk', async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  try {
+    const { phones } = req.body;
+    if (!Array.isArray(phones) || phones.length === 0) {
+      return res.status(400).json({ success: false, error: 'Se requiere un array de teléfonos' });
+    }
+    if (phones.length > 2000) {
+      return res.status(400).json({ success: false, error: 'Máximo 2000 eliminaciones a la vez' });
+    }
+    const { rowCount } = await pool.query(
+      `DELETE FROM contacts
+       WHERE organization_id = $1 AND phone = ANY($2) AND contact_type = 'lead'`,
+      [req.orgId, phones]
+    );
+    res.json({ success: true, deleted: rowCount });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
