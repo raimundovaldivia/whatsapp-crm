@@ -424,6 +424,13 @@ async function claimOrderCreation(conversationId) {
 // ─── SCHEDULED ORDERS ─────────────────────────────────────────────
 
 async function createScheduledOrder({ orgId, conversationId, phone, customerName, productNotes, desiredDate, templateName }) {
+  // Cancelar cualquier pedido agendado pendiente anterior de esta conversación
+  // antes de crear uno nuevo (evita que el cron dispare el viejo y el nuevo)
+  await pool.query(
+    `UPDATE scheduled_orders SET status = 'cancelled'
+     WHERE conversation_id = $1 AND status = 'pending'`,
+    [conversationId]
+  );
   const { rows: [row] } = await pool.query(
     `INSERT INTO scheduled_orders
        (organization_id, conversation_id, phone, customer_name, product_notes, desired_date, template_name)
@@ -439,12 +446,15 @@ async function createScheduledOrder({ orgId, conversationId, phone, customerName
  * @param {number|null} orgId - si null, trae de todas las orgs
  */
 async function getPendingScheduledOrders(orgId = null) {
+  // Excluir pedidos creados en los últimos 60 minutos: la conversación puede
+  // seguir activa y el bot ya respondió en ella — no enviar template encima.
   const { rows } = await pool.query(
     `SELECT so.*, o.name AS org_name
      FROM scheduled_orders so
      JOIN organizations o ON o.id = so.organization_id
      WHERE so.status = 'pending'
        AND so.desired_date <= CURRENT_DATE
+       AND so.created_at < NOW() - INTERVAL '60 minutes'
        ${orgId ? 'AND so.organization_id = $1' : ''}
      ORDER BY so.desired_date ASC`,
     orgId ? [orgId] : []
