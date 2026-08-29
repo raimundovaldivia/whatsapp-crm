@@ -967,7 +967,9 @@ Analiza y devuelve el JSON.`,
 
     let analysis;
     try {
-      analysis = JSON.parse(resp.content[0].text);
+      // El modelo a veces envuelve el JSON en ```json ... ``` — limpiar antes de parsear
+      const raw = resp.content[0].text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+      analysis = JSON.parse(raw);
     } catch {
       analysis = { resumen: resp.content[0].text, error: 'Formato inesperado' };
     }
