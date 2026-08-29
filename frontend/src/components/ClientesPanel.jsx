@@ -180,9 +180,9 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
         api.get('/contacts', { params: { type: 'lead', search, page: pageNum, limit: LEADS_PAGE_SIZE } }),
         api.get('/contacts/stats'),
       ]);
-      setLeads(listRes.data.contacts || []);
+      setLeads(listRes.data.data || []);
       setLeadsTotal(listRes.data.total || 0);
-      setLeadsStats(statsRes.data);
+      setLeadsStats(statsRes.data.data || statsRes.data);
     } catch (err) {
       setLeadsError(err.response?.data?.error || err.message);
     } finally {
