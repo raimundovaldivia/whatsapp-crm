@@ -79,10 +79,18 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [analysisData, setAnalysisData] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
 
+  // Mejoras del bot desde el análisis
+  const [improvementsLoading, setImprovementsLoading] = useState(false);
+  const [improvementsData, setImprovementsData]       = useState(null); // { rules: string[], existing: string[] }
+  const [savingRules, setSavingRules]                 = useState(false);
+  const [rulesSaved, setRulesSaved]                   = useState(false);
+
   const openAnalysis = useCallback(async () => {
     setShowAnalysis(true);
     setAnalysisData(null);
     setAnalysisLoading(true);
+    setImprovementsData(null);
+    setRulesSaved(false);
     try {
       const res = await api.post(`/conversations/${conversation.id}/analyze`);
       setAnalysisData(res.data?.analysis || null);
@@ -92,6 +100,46 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       setAnalysisLoading(false);
     }
   }, [conversation.id]);
+
+  const generateImprovements = useCallback(async (analysis) => {
+    setImprovementsLoading(true);
+    setImprovementsData(null);
+    setRulesSaved(false);
+    try {
+      // Obtener reglas existentes
+      const [rulesRes, genRes] = await Promise.all([
+        api.get('/settings').catch(() => ({ data: { data: {} } })),
+        api.post(`/conversations/${conversation.id}/generate-improvements`, {
+          errores: analysis.errores || [],
+          oportunidades: analysis.oportunidades || [],
+          resumen: analysis.resumen || '',
+        }),
+      ]);
+      const existing = rulesRes.data?.data?.bot_improvement_rules || [];
+      const newRules = genRes.data?.rules || [];
+      // Deduplicar
+      const combined = [...existing];
+      newRules.forEach(r => { if (!combined.includes(r)) combined.push(r); });
+      setImprovementsData({ newRules, existing, combined });
+    } catch (e) {
+      setImprovementsData({ error: e.response?.data?.error || 'Error generando mejoras' });
+    } finally {
+      setImprovementsLoading(false);
+    }
+  }, [conversation.id]);
+
+  const saveRules = useCallback(async (rules) => {
+    setSavingRules(true);
+    try {
+      await api.put('/settings', { bot_improvement_rules: rules });
+      setRulesSaved(true);
+      setImprovementsData(prev => prev ? { ...prev, existing: rules } : prev);
+    } catch (e) {
+      alert('Error guardando reglas: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setSavingRules(false);
+    }
+  }, []);
 
   // Sync si cambia de conversación
   useEffect(() => { setOptOut(!!conversation.opt_out); }, [conversation.id, conversation.opt_out]);
@@ -1253,12 +1301,70 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               })()}
             </div>
 
+            {/* Panel de mejoras del bot */}
+            {!analysisLoading && improvementsData && !improvementsData.error && (
+              <div style={{ borderTop:`1px solid ${colors.border}`, padding:'16px 20px', backgroundColor: colors.bgSecondary }}>
+                <div style={{ fontSize:'12px', fontWeight:700, color:'#f59e0b', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'10px' }}>
+                  🤖 Reglas generadas para el bot
+                </div>
+                {improvementsData.newRules.length === 0 ? (
+                  <div style={{ fontSize:'13px', color:colors.textMuted }}>No se detectaron mejoras necesarias.</div>
+                ) : (
+                  <>
+                    <div style={{ display:'flex', flexDirection:'column', gap:'6px', marginBottom:'12px' }}>
+                      {improvementsData.newRules.map((rule, i) => (
+                        <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:'8px', fontSize:'13px', color:colors.textPrimary, backgroundColor:colors.bgPanel, borderRadius:'8px', padding:'8px 10px', border:`1px solid ${colors.border}` }}>
+                          <span style={{ color:'#f59e0b', fontWeight:700, flexShrink:0 }}>{i+1}.</span>
+                          <span style={{ lineHeight:'1.4' }}>{rule}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {improvementsData.existing.length > 0 && (
+                      <div style={{ fontSize:'11px', color:colors.textMuted, marginBottom:'10px' }}>
+                        + {improvementsData.existing.length} regla(s) ya guardadas se mantienen
+                      </div>
+                    )}
+                    {rulesSaved ? (
+                      <div style={{ fontSize:'13px', color:'#22c55e', display:'flex', alignItems:'center', gap:'6px' }}>
+                        ✓ Reglas guardadas — el bot las aplicará desde ahora
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => saveRules(improvementsData.combined)}
+                        disabled={savingRules}
+                        style={{ fontSize:'13px', fontWeight:600, color:'#fff', backgroundColor:'#f59e0b', border:'none', borderRadius:'8px', padding:'8px 16px', cursor: savingRules ? 'not-allowed' : 'pointer', opacity: savingRules ? 0.7 : 1 }}
+                      >
+                        {savingRules ? 'Guardando...' : '💾 Guardar en el bot'}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {!analysisLoading && improvementsData?.error && (
+              <div style={{ borderTop:`1px solid ${colors.border}`, padding:'12px 20px', color:'#ef4444', fontSize:'13px' }}>
+                Error generando mejoras: {improvementsData.error}
+              </div>
+            )}
+
             {/* Footer */}
             {!analysisLoading && (
-              <div style={{ padding:'12px 20px', borderTop:`1px solid ${colors.border}`, display:'flex', justifyContent:'flex-end' }}>
+              <div style={{ padding:'12px 20px', borderTop:`1px solid ${colors.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                 <button onClick={openAnalysis} style={{ fontSize:'12px', color:'#a78bfa', background:'none', border:'none', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
                   <BarChart2 size={12} /> Volver a analizar
                 </button>
+                {analysisData && !analysisData.error && (analysisData.errores?.length || analysisData.oportunidades?.length) ? (
+                  improvementsLoading ? (
+                    <span style={{ fontSize:'12px', color:'#f59e0b' }}>Generando mejoras...</span>
+                  ) : !improvementsData ? (
+                    <button
+                      onClick={() => generateImprovements(analysisData)}
+                      style={{ fontSize:'12px', fontWeight:600, color:'#f59e0b', background:'none', border:`1px solid #f59e0b`, borderRadius:'6px', padding:'4px 10px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}
+                    >
+                      🚀 Mejorar bot con este análisis
+                    </button>
+                  ) : null
+                ) : null}
               </div>
             )}
           </div>

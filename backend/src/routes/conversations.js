@@ -1011,5 +1011,64 @@ Analiza y devuelve el JSON.`,
   }
 });
 
+/**
+ * POST /api/conversations/:id/generate-improvements
+ * Toma los errores/oportunidades del análisis y genera reglas concretas para mejorar el bot.
+ * Body: { errores: string[], oportunidades: string[], resumen: string }
+ */
+router.post('/:id/generate-improvements', async (req, res) => {
+  try {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const { errores = [], oportunidades = [], resumen = '' } = req.body;
+
+    if (!errores.length && !oportunidades.length) {
+      return res.json({ success: true, rules: [] });
+    }
+
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const resp = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      system: `Eres un experto en optimización de bots de ventas por WhatsApp.
+Tu tarea: convertir errores y oportunidades detectadas en una conversación en REGLAS CONCRETAS que el bot debe seguir de ahora en adelante.
+
+Las reglas deben ser:
+- En imperativo directo (ej: "Cuando el cliente mencione una fecha, confirma el día exacto")
+- Específicas y accionables, no vagas
+- Máximo 15 palabras cada una
+- En español
+
+Responde SOLO un array JSON de strings. Sin texto fuera del JSON. Sin markdown.
+Ejemplo: ["Regla 1", "Regla 2", "Regla 3"]`,
+      messages: [{
+        role: 'user',
+        content: `Contexto de la conversación: ${resumen}
+
+ERRORES del bot:
+${errores.map((e, i) => `${i + 1}. ${e}`).join('\n') || '(ninguno)'}
+
+OPORTUNIDADES de mejora:
+${oportunidades.map((o, i) => `${i + 1}. ${o}`).join('\n') || '(ninguna)'}
+
+Genera entre 2 y 5 reglas concretas para el bot basadas en estos errores y oportunidades.`,
+      }],
+    });
+
+    let rules = [];
+    try {
+      const raw = resp.content[0].text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+      rules = JSON.parse(raw);
+      if (!Array.isArray(rules)) rules = [];
+    } catch {
+      rules = [];
+    }
+
+    res.json({ success: true, rules });
+  } catch (err) {
+    console.error('[Conv/generate-improvements]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

@@ -97,6 +97,14 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
   const extraPrompt   = await db.getSetting(orgId, 'ai_system_prompt_extra') || '';
+  const botRulesRaw   = await db.getSetting(orgId, 'bot_improvement_rules');
+  let botRulesSection = '';
+  try {
+    const rules = botRulesRaw ? JSON.parse(botRulesRaw) : [];
+    if (Array.isArray(rules) && rules.length) {
+      botRulesSection = `## Reglas aprendidas de conversaciones anteriores\nSigue SIEMPRE estas reglas — fueron definidas a partir de errores reales detectados en conversaciones pasadas:\n${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
+    }
+  } catch { /* JSON inválido — ignorar */ }
   const deliveryRaw   = await db.getSetting(orgId, 'delivery_info');
   let deliverySection = '';
   if (deliveryRaw) {
@@ -161,7 +169,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     state: currentState,
   });
 
-  const storeCustomPrompt = [clientTypeSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [clientTypeSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
   // Si escribe de nuevo después de confirmar, reiniciar a exploración
