@@ -951,6 +951,11 @@ REGLAS PARA estado_final (MUY IMPORTANTE — leer con cuidado):
 
 Si el cliente dijo una fecha específica → SIEMPRE es "agendó", no "interesado".
 
+REGLA IMPORTANTE sobre pedidos agendados:
+- Si la conversación resultó en un pedido agendado ("agendó"), NO es un error que el bot no haya pedido dirección ni pago.
+- La dirección y el pago se coordinan el día del pedido, no antes. Esto es intencional.
+- Solo es error si el bot confundió la fecha (ej: dijo "hoy" cuando era para el lunes).
+
 Responde SIEMPRE en JSON con esta estructura exacta:
 {
   "resumen": "1-2 oraciones describiendo qué pasó",

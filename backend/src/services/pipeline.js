@@ -182,6 +182,30 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
 
   const storeCustomPrompt = [clientTypeSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
+  // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
+  // NO pedir dirección, pago ni más info. Solo recordar la fecha y esperar.
+  // El cron job enviará el template cuando llegue el día.
+  if (currentState === 'scheduled') {
+    // Buscar la fecha del pedido agendado para mencionar en la respuesta
+    let scheduledMsg = '¡Tu pedido ya está agendado! 📅 Te escribiremos cuando llegue el día para confirmarte todo. Si necesitas cambiar algo, dímelo y lo ajustamos.';
+    try {
+      const pool = getPool();
+      const { rows } = await pool.query(
+        `SELECT desired_date, product_notes FROM scheduled_orders
+         WHERE conversation_id = $1 AND status = 'pending'
+         ORDER BY created_at DESC LIMIT 1`,
+        [conversationId]
+      );
+      if (rows[0]) {
+        const dateLabel = formatDateEs(rows[0].desired_date);
+        const producto  = rows[0].product_notes || 'tu pedido';
+        scheduledMsg = `¡Ya tienes ${producto} agendado para el ${dateLabel}! 📅 El día antes te escribimos para coordinar. Si necesitas cambiar algo, dímelo con gusto.`;
+      }
+    } catch { /* si falla la consulta, usar mensaje genérico */ }
+    L.agent('orchestrator', 0);
+    return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled' };
+  }
+
   // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
   // Si escribe de nuevo después de confirmar, reiniciar a exploración
   if (currentState === 'confirmed' || currentState === 'awaiting_payment') {
