@@ -914,5 +914,70 @@ router.post('/scan-hot-leads', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/conversations/:id/analyze
+ * Analiza la conversación con IA y devuelve un reporte del comportamiento del bot.
+ */
+router.post('/:id/analyze', async (req, res) => {
+  try {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+
+    const messages = await db.getMessagesByConversation(conv.id, 200);
+    if (!messages.length) return res.json({ success: true, analysis: { error: 'Sin mensajes para analizar' } });
+
+    // Formatear historial para el análisis
+    const transcript = messages.map(m => {
+      const who = m.direction === 'inbound' ? '👤 Cliente' : (m.sent_by === 'human' ? '🧑 Agente humano' : '🤖 Bot');
+      const time = new Date(m.created_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      return `[${time}] ${who}: ${m.content}`;
+    }).join('\n');
+
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const resp = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: `Eres un analista de calidad para un CRM de WhatsApp con bot de ventas IA.
+Tu tarea: analizar conversaciones y evaluar el desempeño del bot.
+Responde SIEMPRE en JSON con esta estructura exacta:
+{
+  "resumen": "1-2 oraciones describiendo qué pasó",
+  "intencion_cliente": "qué quería el cliente",
+  "deteccion_correcta": true/false,
+  "estado_final": "compró | agendó | interesado | exploró | insatisfecho | se dio de baja | otro",
+  "puntaje_bot": 1-5,
+  "aciertos": ["lista de cosas que hizo bien el bot"],
+  "errores": ["lista de errores o problemas detectados"],
+  "oportunidades": ["cosas que el bot pudo hacer mejor"],
+  "proxima_accion": "qué debería hacer el negocio ahora"
+}
+Sin texto fuera del JSON. Sin markdown.`,
+      messages: [{
+        role: 'user',
+        content: `Estado actual de la conversación: ${conv.pipeline_state || 'exploring'}
+Cliente: ${conv.contact_name || conv.phone_number}
+
+CONVERSACIÓN:
+${transcript}
+
+Analiza y devuelve el JSON.`,
+      }],
+    });
+
+    let analysis;
+    try {
+      analysis = JSON.parse(resp.content[0].text);
+    } catch {
+      analysis = { resumen: resp.content[0].text, error: 'Formato inesperado' };
+    }
+
+    res.json({ success: true, analysis });
+  } catch (err) {
+    console.error('[Conv/analyze]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

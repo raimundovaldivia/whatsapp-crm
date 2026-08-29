@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2 } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -73,6 +73,25 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const isEmpresa  = conversation.client_type === 'empresa';
   const [optOut, setOptOut] = useState(!!conversation.opt_out);
   const [togglingOptOut, setTogglingOptOut] = useState(false);
+
+  // Análisis de conversación
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const [analysisData, setAnalysisData] = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+
+  const openAnalysis = useCallback(async () => {
+    setShowAnalysis(true);
+    setAnalysisData(null);
+    setAnalysisLoading(true);
+    try {
+      const res = await api.post(`/conversations/${conversation.id}/analyze`);
+      setAnalysisData(res.data?.analysis || null);
+    } catch (e) {
+      setAnalysisData({ error: e.response?.data?.error || 'Error analizando conversación' });
+    } finally {
+      setAnalysisLoading(false);
+    }
+  }, [conversation.id]);
 
   // Sync si cambia de conversación
   useEffect(() => { setOptOut(!!conversation.opt_out); }, [conversation.id, conversation.opt_out]);
@@ -542,6 +561,22 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             onMouseLeave={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#6366f1' : 'transparent'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.textMuted; }}
           >
             🏢 {isEmpresa ? 'Empresa' : 'Empresa'}
+          </button>
+          <button
+            onClick={openAnalysis}
+            title="Analizar conversación con IA"
+            style={{
+              backgroundColor: 'transparent',
+              border: `1px solid ${colors.borderStrong}`,
+              borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
+              color: '#a78bfa',
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', transition: 'all 0.15s',
+            }}
+          >
+            <BarChart2 size={13} />
+            {!isMobile && 'Analizar'}
           </button>
           <AgentToggle
             mode={conversation.agent_mode}
@@ -1115,6 +1150,118 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           <Send size={18} />
         </button>
       </div>
+
+      {/* ── Modal Análisis de conversación ── */}
+      {showAnalysis && (
+        <div onClick={() => setShowAnalysis(false)} style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.65)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ backgroundColor: colors.bgPanel, borderRadius:'14px', border:`1px solid ${colors.border}`, width:'100%', maxWidth:'560px', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }}>
+            {/* Header */}
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${colors.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                <BarChart2 size={16} color='#a78bfa' />
+                <span style={{ fontWeight:600, color:colors.textPrimary, fontSize:'14px' }}>Análisis de conversación</span>
+              </div>
+              <button onClick={() => setShowAnalysis(false)} style={{ background:'none', border:'none', cursor:'pointer', color:colors.textMuted, padding:'2px', display:'flex', alignItems:'center' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div style={{ overflowY:'auto', padding:'20px', flex:1 }}>
+              {analysisLoading && (
+                <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'12px', padding:'40px 0', color:colors.textMuted }}>
+                  <Loader size={24} style={{ animation:'spin 1s linear infinite' }} />
+                  <span style={{ fontSize:'13px' }}>Analizando conversación con IA...</span>
+                </div>
+              )}
+
+              {!analysisLoading && analysisData?.error && (
+                <div style={{ padding:'12px', backgroundColor:'#ef444420', borderRadius:'8px', color:'#ef4444', fontSize:'13px' }}>
+                  {analysisData.error}
+                </div>
+              )}
+
+              {!analysisLoading && analysisData && !analysisData.error && (() => {
+                const a = analysisData;
+                const puntaje = a.puntaje_bot || 0;
+                const puntajeColor = puntaje >= 4 ? '#22c55e' : puntaje >= 3 ? '#f59e0b' : '#ef4444';
+                const estadoColors = {
+                  'compró': '#22c55e', 'agendó': '#a78bfa', 'interesado': '#f59e0b',
+                  'exploró': colors.textMuted, 'insatisfecho': '#ef4444', 'se dio de baja': '#6b7280', 'otro': colors.textMuted,
+                };
+                const estadoColor = estadoColors[a.estado_final] || colors.textMuted;
+
+                const Section = ({ title, color, items }) => items?.length ? (
+                  <div style={{ marginBottom:'16px' }}>
+                    <div style={{ fontSize:'11px', fontWeight:700, color, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'6px' }}>{title}</div>
+                    <ul style={{ margin:0, paddingLeft:'16px', display:'flex', flexDirection:'column', gap:'4px' }}>
+                      {items.map((item, i) => (
+                        <li key={i} style={{ fontSize:'13px', color:colors.textPrimary, lineHeight:'1.4' }}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null;
+
+                return (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                    {/* Resumen */}
+                    <div style={{ backgroundColor:colors.bgSecondary, borderRadius:'10px', padding:'14px', marginBottom:'16px' }}>
+                      <div style={{ fontSize:'13px', color:colors.textPrimary, lineHeight:'1.5' }}>{a.resumen}</div>
+                    </div>
+
+                    {/* Métricas clave */}
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'16px' }}>
+                      <div style={{ backgroundColor:colors.bgSecondary, borderRadius:'10px', padding:'12px', textAlign:'center' }}>
+                        <div style={{ fontSize:'22px', fontWeight:700, color:puntajeColor }}>{puntaje}/5</div>
+                        <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'2px' }}>Puntaje bot</div>
+                      </div>
+                      <div style={{ backgroundColor:colors.bgSecondary, borderRadius:'10px', padding:'12px', textAlign:'center' }}>
+                        <div style={{ fontSize:'13px', fontWeight:600, color:estadoColor }}>{a.estado_final || '—'}</div>
+                        <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'2px' }}>Estado final</div>
+                      </div>
+                      <div style={{ backgroundColor:colors.bgSecondary, borderRadius:'10px', padding:'12px', textAlign:'center' }}>
+                        <div style={{ fontSize:'13px', fontWeight:600, color: a.deteccion_correcta ? '#22c55e' : '#ef4444' }}>
+                          {a.deteccion_correcta ? '✓ Correcto' : '✗ Falló'}
+                        </div>
+                        <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'2px' }}>Detección</div>
+                      </div>
+                    </div>
+
+                    {/* Intención */}
+                    {a.intencion_cliente && (
+                      <div style={{ marginBottom:'16px' }}>
+                        <div style={{ fontSize:'11px', fontWeight:700, color:colors.textMuted, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'4px' }}>Intención del cliente</div>
+                        <div style={{ fontSize:'13px', color:colors.textPrimary }}>{a.intencion_cliente}</div>
+                      </div>
+                    )}
+
+                    <Section title="✓ Aciertos" color="#22c55e" items={a.aciertos} />
+                    <Section title="✗ Errores detectados" color="#ef4444" items={a.errores} />
+                    <Section title="💡 Oportunidades de mejora" color="#f59e0b" items={a.oportunidades} />
+
+                    {/* Próxima acción */}
+                    {a.proxima_accion && (
+                      <div style={{ backgroundColor:'#a78bfa18', border:'1px solid #a78bfa40', borderRadius:'10px', padding:'12px' }}>
+                        <div style={{ fontSize:'11px', fontWeight:700, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'4px' }}>Próxima acción recomendada</div>
+                        <div style={{ fontSize:'13px', color:colors.textPrimary }}>{a.proxima_accion}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Footer */}
+            {!analysisLoading && (
+              <div style={{ padding:'12px 20px', borderTop:`1px solid ${colors.border}`, display:'flex', justifyContent:'flex-end' }}>
+                <button onClick={openAnalysis} style={{ fontSize:'12px', color:'#a78bfa', background:'none', border:'none', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                  <BarChart2 size={12} /> Volver a analizar
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
