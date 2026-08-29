@@ -193,6 +193,30 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     console.log(`[Pipeline] 🔥 Template reply detectado (${templateName}) — modo warm lead`);
   }
 
+  // ── Opt-out automático: cliente pide darse de baja ──────────────────
+  // Detectar ANTES de cualquier clasificación. Si el cliente dice que no quiere
+  // más mensajes, registrarlo y responder una sola vez sin pasarlo a los agentes.
+  const OPT_OUT_PATTERNS = [
+    /\bbaja\b/i, /\bstop\b/i, /\bunsubscribe\b/i,
+    /no\s*(quiero|deseo)\s*(más|mas)\s*(mensajes?|noticias?|publicidad|info)/i,
+    /no\s*me\s*(escribas?|mandes?|envíes?|molestes?)\s*(más|mas)/i,
+    /no\s*me\s*contactes?/i,
+    /dejar\s*de\s*recibir/i,
+    /sác[ae]me\s*de\s*la\s*lista/i,
+    /elimín[ae]me/i,
+    /no\s*me\s*mande[ns]?\s*m[aá]s/i,
+  ];
+  if (OPT_OUT_PATTERNS.some(r => r.test(userMessage))) {
+    console.log(`[Pipeline] 🚫 Opt-out detectado para ${conversation.phone_number}`);
+    await db.setContactOptOut(orgId, conversation.phone_number, true);
+    await db.updatePipelineState(conversationId, 'opted_out');
+    return {
+      response: 'Listo, te damos de baja. No recibirás más mensajes nuestros. Si en algún momento quieres volver, solo escríbenos. ¡Hasta pronto! 👋',
+      agentType: 'orchestrator',
+      newState: 'opted_out',
+    };
+  }
+
   // ── Agente de escalación — corre en paralelo con la clasificación ──
   const effectiveState = isTemplateReply ? 'interested' : currentState;
   const [escalationResult, intentResult] = await Promise.all([

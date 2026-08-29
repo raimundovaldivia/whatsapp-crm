@@ -85,6 +85,13 @@ router.get('/broadcast', async (req, res) => {
        FROM contacts
        WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
          AND (opt_out IS NULL OR opt_out = FALSE)
+         -- Excluir contactos con pedido agendado pendiente (ya tienen seguimiento)
+         AND NOT EXISTS (
+           SELECT 1 FROM scheduled_orders so
+           WHERE so.organization_id = contacts.organization_id
+             AND so.phone = contacts.phone
+             AND so.status = 'pending'
+         )
        ORDER BY total_orders DESC NULLS LAST, last_order_at DESC NULLS LAST`,
       [req.orgId]
     );
