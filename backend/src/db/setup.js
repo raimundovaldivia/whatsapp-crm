@@ -567,6 +567,18 @@ async function setupDatabase() {
       ALTER TABLE orders ALTER COLUMN conversation_id DROP NOT NULL;
     `);
 
+    // Migración: ampliar pipeline_state para incluir todos los estados usados en el código.
+    // El constraint original solo tenía 5 valores; se agregaron más con el tiempo.
+    await client.query(`
+      ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_pipeline_state_check;
+      ALTER TABLE conversations ADD CONSTRAINT conversations_pipeline_state_check
+        CHECK(pipeline_state IN (
+          'exploring','interested','collecting_order','confirmed',
+          'awaiting_payment','done','scheduled','future_interest',
+          'opted_out','template_sent'
+        ));
+    `);
+
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
