@@ -285,18 +285,24 @@ router.post('/import', async (req, res) => {
     const { normalizePhone } = db;
     const pool = getPool();
 
-    let imported = 0, skipped = 0, invalid = 0;
+    let imported = 0, existingLeads = 0, existingCustomers = 0, invalid = 0;
     const errors = [];
+    // Deduplicar teléfonos dentro del mismo archivo antes de procesar
+    const seen = new Set();
 
     for (const raw of leads) {
-      const phone = normalizePhone ? normalizePhone(raw.phone) : (() => {
-        if (!raw.phone) return null;
-        let p = String(raw.phone).replace(/\s/g, '').replace(/^\+/, '');
+      // Normalizar teléfono — también limpiar prefijos de fórmula Excel (=+56...)
+      const rawPhone = String(raw.phone || '').replace(/^=\+?/, '').replace(/^\+/, '').replace(/\s/g, '').replace(/\.0$/, '');
+      const phone = normalizePhone ? normalizePhone(rawPhone) : (() => {
+        if (!rawPhone) return null;
+        let p = rawPhone;
         if (/^9\d{8}$/.test(p)) p = '56' + p;
         return p.length >= 8 ? p : null;
       })();
 
-      if (!phone) { invalid++; continue; }
+      if (!phone || phone.length < 8) { invalid++; continue; }
+      if (seen.has(phone)) { existingLeads++; continue; } // duplicado en el archivo
+      seen.add(phone);
 
       const name    = (raw.name    || '').trim() || null;
       const email   = (raw.email   || '').trim().toLowerCase() || null;
@@ -304,7 +310,8 @@ router.post('/import', async (req, res) => {
       const city    = (raw.city    || '').trim() || null;
 
       try {
-        const { rowCount } = await pool.query(
+        // xmax = 0 cuando es INSERT nuevo; != 0 cuando es UPDATE (conflicto)
+        const { rows } = await pool.query(
           `INSERT INTO contacts
              (organization_id, phone, name, email, address, city, contact_type, source, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, 'lead', 'import', NOW(), NOW())
@@ -313,17 +320,24 @@ router.post('/import', async (req, res) => {
              email      = COALESCE(contacts.email,   EXCLUDED.email),
              address    = COALESCE(contacts.address, EXCLUDED.address),
              city       = COALESCE(contacts.city,    EXCLUDED.city),
-             updated_at = NOW()`,
+             updated_at = NOW()
+           RETURNING contact_type, (xmax = 0) AS is_new`,
           [req.orgId, phone, name, email, address, city]
         );
-        // rowCount = 1 si insertó o actualizó
-        if (rowCount > 0) imported++; else skipped++;
+        const row = rows[0];
+        if (row?.is_new) {
+          imported++;          // nuevo lead insertado
+        } else if (row?.contact_type === 'customer') {
+          existingCustomers++; // ya existía como cliente — no se cambia el tipo
+        } else {
+          existingLeads++;     // ya existía como lead
+        }
       } catch (err) {
         errors.push({ phone: raw.phone, error: err.message });
       }
     }
 
-    res.json({ success: true, imported, skipped, invalid, errors: errors.slice(0, 20) });
+    res.json({ success: true, imported, existingLeads, existingCustomers, invalid, errors: errors.slice(0, 20) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

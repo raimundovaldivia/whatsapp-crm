@@ -806,11 +806,22 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                 {importResult.success ? (
                   <>
                     <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '16px', marginBottom: '12px' }}>Importación completada</div>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', fontSize: '13px' }}>
-                      <div><span style={{ color: colors.green, fontWeight: 700, fontSize: '22px' }}>{importResult.imported}</span><br /><span style={{ color: colors.textSecondary }}>Nuevos</span></div>
-                      <div><span style={{ color: colors.textSecondary, fontWeight: 700, fontSize: '22px' }}>{importResult.skipped}</span><br /><span style={{ color: colors.textSecondary }}>Ya existían</span></div>
-                      <div><span style={{ color: '#f59e0b', fontWeight: 700, fontSize: '22px' }}>{importResult.invalid}</span><br /><span style={{ color: colors.textSecondary }}>Sin teléfono válido</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', fontSize: '13px', flexWrap: 'wrap' }}>
+                      <div><span style={{ color: colors.green, fontWeight: 700, fontSize: '22px' }}>{importResult.imported}</span><br /><span style={{ color: colors.textSecondary }}>Nuevos leads</span></div>
+                      <div><span style={{ color: colors.textSecondary, fontWeight: 700, fontSize: '22px' }}>{importResult.existingLeads ?? importResult.skipped ?? 0}</span><br /><span style={{ color: colors.textSecondary }}>Ya eran leads</span></div>
+                      <div><span style={{ color: '#3b82f6', fontWeight: 700, fontSize: '22px' }}>{importResult.existingCustomers ?? 0}</span><br /><span style={{ color: colors.textSecondary }}>Ya son clientes</span></div>
+                      <div><span style={{ color: '#f59e0b', fontWeight: 700, fontSize: '22px' }}>{importResult.invalid}</span><br /><span style={{ color: colors.textSecondary }}>Sin tel. válido</span></div>
                     </div>
+                    {(importResult.existingCustomers > 0) && (
+                      <div style={{ marginTop: '10px', fontSize: '12px', color: colors.textSecondary, padding: '8px', backgroundColor: colors.bgApp, borderRadius: '6px' }}>
+                        💡 {importResult.existingCustomers} ya existen como clientes — sus datos de dirección fueron actualizados. Están en la pestaña <strong>Clientes</strong>.
+                      </div>
+                    )}
+                    {importResult.errors?.length > 0 && (
+                      <div style={{ marginTop: '8px', fontSize: '11px', color: '#ef4444' }}>
+                        Errores: {importResult.errors.map(e => `${e.phone}: ${e.error}`).join(' · ')}
+                      </div>
+                    )}
                   </>
                 ) : (
                   <div style={{ color: '#ef4444', fontSize: '14px' }}>{importResult.error}</div>
