@@ -552,7 +552,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                     <div style={{ display:'flex', gap:'6px', flexShrink:0 }}>
                       {o.conversation_id && (
                         <button
-                          onClick={() => onSelectConversation?.(o.conversation_id)}
+                          onClick={() => openConvDrawer(o.conversation_id, o.customer_name || o.contact_name, o.phone)}
                           title="Ver conversación"
                           style={{ padding:'5px 10px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color:'#4db6ac', fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
                           <MessageSquare size={12} /> Chat
