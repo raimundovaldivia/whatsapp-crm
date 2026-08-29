@@ -134,7 +134,8 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
       if (!phone.startsWith('+') && phone.startsWith('56')) variants.push('+' + phone);
 
       const { rows } = await pool.query(`
-        SELECT customer_name, total_price, financial_status, shopify_created_at, items
+        SELECT customer_name, total_price, financial_status, shopify_created_at, items,
+               shipping_address1, shipping_city
         FROM shopify_orders
         WHERE organization_id = $1
           AND customer_phone = ANY($2::text[])
@@ -145,6 +146,10 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
 
       if (rows.length > 0) {
         const total = rows.reduce((s, o) => s + parseFloat(o.total_price || 0), 0);
+
+        // Dirección actual del contacto (fuente autoritativa)
+        const contactAddr = [contact?.address1 || contact?.address, contact?.city].filter(Boolean).join(', ');
+
         const lines = rows.map(o => {
           const fecha = o.shopify_created_at
             ? new Date(o.shopify_created_at).toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -152,9 +157,15 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
           const items = Array.isArray(o.items)
             ? o.items.map(i => `${i.quantity}x ${i.name || i.title}`).join(', ')
             : '';
-          return `- ${fecha}: $${parseFloat(o.total_price||0).toLocaleString('es-CL')} — ${items}`;
+          const addr = [o.shipping_address1, o.shipping_city].filter(Boolean).join(', ');
+          return `- ${fecha}: $${parseFloat(o.total_price||0).toLocaleString('es-CL')} — ${items}${addr ? ` 📍 ${addr}` : ''}`;
         });
-        purchaseHistorySection = `## Historial de compras del cliente\nEste cliente ha comprado ${rows.length} vez/veces. Total acumulado: $${total.toLocaleString('es-CL')}.\nÚltimas compras:\n${lines.join('\n')}\n\nUsa esta información para personalizar tu atención: recuerda lo que compró antes, sugiere productos complementarios y trátalo como cliente frecuente si aplica.`;
+
+        const addrLine = contactAddr
+          ? `\nDirección de entrega registrada: ${contactAddr}`
+          : '';
+
+        purchaseHistorySection = `## Historial de compras del cliente\nEste cliente ha comprado ${rows.length} vez/veces. Total acumulado: $${total.toLocaleString('es-CL')}.${addrLine}\nÚltimas compras:\n${lines.join('\n')}\n\nUsa esta información para personalizar tu atención: recuerda lo que compró antes, sugiere productos complementarios, usa la dirección registrada para agilizar el pedido, y trátalo como cliente frecuente si aplica.`;
       }
     } catch (e) {
       console.warn('[Pipeline] historial compras error:', e.message);
