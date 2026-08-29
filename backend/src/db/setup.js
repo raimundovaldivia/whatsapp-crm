@@ -580,6 +580,22 @@ async function setupDatabase() {
     `);
 
 
+    // Migración: precios especiales por empresa
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS contact_price_overrides (
+        id              SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        phone           TEXT    NOT NULL,
+        product_id      TEXT    NOT NULL,
+        product_title   TEXT,
+        custom_price    NUMERIC NOT NULL,
+        created_at      TIMESTAMP DEFAULT NOW(),
+        updated_at      TIMESTAMP DEFAULT NOW(),
+        UNIQUE(organization_id, phone, product_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_cpo_org_phone ON contact_price_overrides(organization_id, phone);
+    `);
+
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

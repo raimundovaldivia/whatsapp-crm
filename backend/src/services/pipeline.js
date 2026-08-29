@@ -86,6 +86,37 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     L.error('catálogo', err);
   }
 
+  // ── Precios especiales para esta empresa ───────────────────────────
+  let specialPricesSection = '';
+  if (isEmpresa && conversation.phone_number) {
+    try {
+      const pool = getPool();
+      const contactPhone = conversation.phone_number;
+      const { rows: priceRows } = await pool.query(
+        `SELECT product_id, product_title, custom_price
+         FROM contact_price_overrides
+         WHERE organization_id = $1 AND phone = $2`,
+        [orgId, contactPhone]
+      );
+      if (priceRows.length > 0) {
+        // Reemplazar precios en productosTexto con los precios especiales
+        for (const pr of priceRows) {
+          const fmtPrice = Number(pr.custom_price).toLocaleString('es-CL');
+          // Reemplazar en el texto del catálogo si el producto aparece
+          if (pr.product_title) {
+            productosTexto = productosTexto; // no modificar el texto base
+          }
+        }
+        const lista = priceRows.map(p =>
+          `- ${p.product_title || p.product_id}: $${Number(p.custom_price).toLocaleString('es-CL')}`
+        ).join('\n');
+        specialPricesSection = `## Precios especiales para esta empresa\nEste cliente tiene precios acordados específicamente para ellos. USA SIEMPRE estos precios — NO los del catálogo general:\n${lista}\n\nPara los productos que NO están en esta lista, usa el precio normal del catálogo.`;
+      }
+    } catch (e) {
+      console.warn('[Pipeline] precios especiales error:', e.message);
+    }
+  }
+
   // ── Contexto de tipo de cliente para el agente ─────────────────────
   const clientTypeSection = isEmpresa
     ? `## Tipo de cliente: EMPRESA\nEste cliente es una empresa (cliente B2B). Puedes mostrarle todos los productos disponibles, incluyendo los productos y precios especiales para empresa.`
@@ -180,7 +211,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     state: currentState,
   });
 
-  const storeCustomPrompt = [clientTypeSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [clientTypeSection, specialPricesSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
   // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.

@@ -84,6 +84,70 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   const [importResult, setImportResult] = useState(null);
   const fileInputRef = useRef(null);
 
+  // ── Precios especiales ──
+  const [priceModal, setPriceModal] = useState(null); // { phone, name }
+  const [priceList, setPriceList]   = useState([]);
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [availableProducts, setAvailableProducts] = useState([]);
+  const [newPriceProductId, setNewPriceProductId]   = useState('');
+  const [newPriceProductTitle, setNewPriceProductTitle] = useState('');
+  const [newPriceValue, setNewPriceValue] = useState('');
+  const [priceSaving, setPriceSaving] = useState(false);
+
+  const openPriceModal = useCallback(async (contact) => {
+    setPriceModal(contact);
+    setPriceList([]);
+    setNewPriceProductId('');
+    setNewPriceProductTitle('');
+    setNewPriceValue('');
+    setPriceLoading(true);
+    try {
+      const [pricesRes, prodsRes] = await Promise.all([
+        api.get(`/contacts/${contact.phone}/prices`),
+        api.get('/products').catch(() => ({ data: { data: [] } })),
+      ]);
+      setPriceList(pricesRes.data.data || []);
+      const prods = prodsRes.data?.data || prodsRes.data?.products || [];
+      setAvailableProducts(prods);
+    } catch (e) {
+      console.error('Error cargando precios:', e);
+    } finally {
+      setPriceLoading(false);
+    }
+  }, []);
+
+  const saveSpecialPrice = useCallback(async () => {
+    if (!priceModal || !newPriceProductId || !newPriceValue) return;
+    setPriceSaving(true);
+    try {
+      await api.put(`/contacts/${priceModal.phone}/prices`, {
+        product_id: newPriceProductId,
+        product_title: newPriceProductTitle,
+        custom_price: parseFloat(String(newPriceValue).replace(/\./g, '').replace(',', '.')),
+      });
+      // Recargar lista
+      const res = await api.get(`/contacts/${priceModal.phone}/prices`);
+      setPriceList(res.data.data || []);
+      setNewPriceProductId('');
+      setNewPriceProductTitle('');
+      setNewPriceValue('');
+    } catch (e) {
+      alert('Error guardando precio: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setPriceSaving(false);
+    }
+  }, [priceModal, newPriceProductId, newPriceProductTitle, newPriceValue]);
+
+  const deleteSpecialPrice = useCallback(async (productId) => {
+    if (!priceModal) return;
+    try {
+      await api.delete(`/contacts/${priceModal.phone}/prices/${encodeURIComponent(productId)}`);
+      setPriceList(prev => prev.filter(p => p.product_id !== productId));
+    } catch (e) {
+      alert('Error eliminando precio: ' + (e.response?.data?.error || e.message));
+    }
+  }, [priceModal]);
+
   // Una sola llamada al backend — el backend hace el loop internamente (servidor a servidor)
   const loadAll = useCallback(async () => {
     abortRef.current = false;
@@ -487,6 +551,12 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                               <UserCheck size={11} /> Reenganche
                             </button>
                           )}
+                          {c.phone && (
+                            <button onClick={e => { e.stopPropagation(); openPriceModal({ phone: c.phone, name: c.name }); }} title="Precios especiales"
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: `${'#f59e0b'}18`, color: '#f59e0b', padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: '1px solid #f59e0b33', cursor: 'pointer' }}>
+                              💰 Precios
+                            </button>
+                          )}
                           <ChevronRight size={14} color={colors.borderStrong}
                             style={{ transform: expanded === c.id ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
                         </div>
@@ -674,6 +744,10 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                             <UserCheck size={11} /> Reenganche
                           </button>
                         )}
+                        <button onClick={() => openPriceModal({ phone: lead.phone, name: lead.display_name || lead.name || lead.phone })} title="Precios especiales"
+                          style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: '#f59e0b18', color: '#f59e0b', padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: '1px solid #f59e0b33', cursor: 'pointer' }}>
+                          💰
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -704,6 +778,84 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
       )}
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+
+      {/* Modal precios especiales */}
+      {priceModal && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '14px', border: `1px solid ${colors.border}`, width: '500px', maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ color: colors.textPrimary, fontSize: '16px', fontWeight: 700 }}>💰 Precios especiales</div>
+                <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px' }}>{priceModal.name} · {priceModal.phone}</div>
+              </div>
+              <button onClick={() => setPriceModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Lista de precios actuales */}
+            {priceLoading ? (
+              <div style={{ textAlign: 'center', padding: '24px', color: colors.textSecondary, fontSize: '13px' }}>Cargando...</div>
+            ) : priceList.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '16px', color: colors.textSecondary, fontSize: '13px' }}>Sin precios especiales configurados</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {priceList.map(p => (
+                  <div key={p.product_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '8px 12px', border: `1px solid ${colors.border}` }}>
+                    <div>
+                      <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 500 }}>{p.product_title || p.product_id}</div>
+                      <div style={{ color: '#f59e0b', fontSize: '14px', fontWeight: 700 }}>${Number(p.custom_price).toLocaleString('es-CL')}</div>
+                    </div>
+                    <button onClick={() => deleteSpecialPrice(p.product_id)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '18px', lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Agregar precio */}
+            <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: '14px' }}>
+              <div style={{ color: colors.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginBottom: '8px' }}>Agregar / actualizar precio</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* Selector de producto */}
+                {availableProducts.length > 0 ? (
+                  <select
+                    value={newPriceProductId}
+                    onChange={e => {
+                      const opt = e.target.options[e.target.selectedIndex];
+                      setNewPriceProductId(e.target.value);
+                      setNewPriceProductTitle(opt.text);
+                    }}
+                    style={{ padding: '7px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '13px' }}>
+                    <option value="">— Seleccionar producto —</option>
+                    {availableProducts.map(p => (
+                      <option key={p.id || p.external_id} value={String(p.id || p.external_id)}>{p.title || p.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input value={newPriceProductTitle} onChange={e => { setNewPriceProductTitle(e.target.value); setNewPriceProductId(e.target.value); }}
+                    placeholder="Nombre del producto"
+                    style={{ padding: '7px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '13px' }} />
+                )}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    value={newPriceValue}
+                    onChange={e => setNewPriceValue(e.target.value)}
+                    placeholder="Precio especial (ej: 9500)"
+                    type="number"
+                    min="0"
+                    style={{ flex: 1, padding: '7px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '13px' }} />
+                  <button onClick={saveSpecialPrice} disabled={priceSaving || !newPriceProductId || !newPriceValue}
+                    style={{ padding: '7px 18px', borderRadius: '7px', backgroundColor: '#f59e0b', border: 'none', color: '#000', fontSize: '13px', fontWeight: 700, cursor: priceSaving || !newPriceProductId || !newPriceValue ? 'not-allowed' : 'pointer', opacity: priceSaving || !newPriceProductId || !newPriceValue ? 0.5 : 1 }}>
+                    {priceSaving ? '...' : 'Guardar'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal importar leads */}
       {importModal && (

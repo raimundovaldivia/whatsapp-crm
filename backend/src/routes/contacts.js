@@ -410,4 +410,77 @@ router.patch('/:phone/opt-out', async (req, res) => {
   }
 });
 
+// ── Precios especiales por empresa ────────────────────────────────────────
+
+/**
+ * GET /api/contacts/:phone/prices
+ * Lista los precios especiales configurados para este contacto.
+ */
+router.get('/:phone/prices', async (req, res) => {
+  try {
+    const { getPool } = require('../db/database');
+    const { rows } = await getPool().query(
+      `SELECT id, product_id, product_title, custom_price, updated_at
+       FROM contact_price_overrides
+       WHERE organization_id = $1 AND phone = $2
+       ORDER BY product_title`,
+      [req.orgId, req.params.phone]
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PUT /api/contacts/:phone/prices
+ * Crea o actualiza un precio especial para un producto.
+ * Body: { product_id, product_title, custom_price }
+ */
+router.put('/:phone/prices', async (req, res) => {
+  try {
+    const { product_id, product_title, custom_price } = req.body;
+    if (!product_id || custom_price == null) {
+      return res.status(400).json({ success: false, error: 'product_id y custom_price son requeridos' });
+    }
+    const price = parseFloat(custom_price);
+    if (isNaN(price) || price < 0) {
+      return res.status(400).json({ success: false, error: 'custom_price debe ser un número >= 0' });
+    }
+    const { getPool } = require('../db/database');
+    const { rows: [row] } = await getPool().query(
+      `INSERT INTO contact_price_overrides
+         (organization_id, phone, product_id, product_title, custom_price, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (organization_id, phone, product_id) DO UPDATE SET
+         product_title = EXCLUDED.product_title,
+         custom_price  = EXCLUDED.custom_price,
+         updated_at    = NOW()
+       RETURNING *`,
+      [req.orgId, req.params.phone, product_id, product_title || null, price]
+    );
+    res.json({ success: true, data: row });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/contacts/:phone/prices/:product_id
+ * Elimina un precio especial.
+ */
+router.delete('/:phone/prices/:product_id', async (req, res) => {
+  try {
+    const { getPool } = require('../db/database');
+    await getPool().query(
+      `DELETE FROM contact_price_overrides
+       WHERE organization_id = $1 AND phone = $2 AND product_id = $3`,
+      [req.orgId, req.params.phone, req.params.product_id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
