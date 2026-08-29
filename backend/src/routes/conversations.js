@@ -974,6 +974,25 @@ Analiza y devuelve el JSON.`,
       analysis = { resumen: resp.content[0].text, error: 'Formato inesperado' };
     }
 
+    // Aplicar automáticamente el estado detectado al pipeline
+    const STATE_MAP = {
+      'compró':         'confirmed',
+      'agendó':         'scheduled',
+      'interesado':     'interested',
+      'exploró':        'exploring',
+      'insatisfecho':   'exploring',
+      'se dio de baja': 'opted_out',
+    };
+    const newState = STATE_MAP[analysis.estado_final];
+    if (newState && newState !== conv.pipeline_state) {
+      await db.updatePipelineState(conv.id, newState);
+      analysis.estado_aplicado = newState;
+      // Opt-out automático si el análisis detecta baja
+      if (analysis.estado_final === 'se dio de baja' && conv.phone_number) {
+        await db.setContactOptOut(req.orgId, conv.phone_number, true);
+      }
+    }
+
     res.json({ success: true, analysis });
   } catch (err) {
     console.error('[Conv/analyze]', err.message);

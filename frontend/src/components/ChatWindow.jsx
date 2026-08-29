@@ -1217,7 +1217,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                       </div>
                       <div style={{ backgroundColor:colors.bgSecondary, borderRadius:'10px', padding:'12px', textAlign:'center' }}>
                         <div style={{ fontSize:'13px', fontWeight:600, color:estadoColor }}>{a.estado_final || '—'}</div>
-                        <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'2px' }}>Estado final</div>
+                        <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'2px' }}>
+                          {a.estado_aplicado ? `✓ Aplicado (${a.estado_aplicado})` : 'Estado final'}
+                        </div>
                       </div>
                       <div style={{ backgroundColor:colors.bgSecondary, borderRadius:'10px', padding:'12px', textAlign:'center' }}>
                         <div style={{ fontSize:'13px', fontWeight:600, color: a.deteccion_correcta ? '#22c55e' : '#ef4444' }}>
