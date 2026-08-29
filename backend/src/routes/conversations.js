@@ -940,6 +940,17 @@ router.post('/:id/analyze', async (req, res) => {
       max_tokens: 1024,
       system: `Eres un analista de calidad para un CRM de WhatsApp con bot de ventas IA.
 Tu tarea: analizar conversaciones y evaluar el desempeño del bot.
+
+REGLAS PARA estado_final (MUY IMPORTANTE — leer con cuidado):
+- "compró"         → el cliente confirmó y pagó o hay orden creada
+- "agendó"         → el cliente mencionó explícitamente una fecha futura para recibir o pedir (ej: "el viernes", "el 2 de septiembre", "la próxima semana cuando llegue"), aunque no haya dado aún su dirección
+- "interesado"     → mostró interés pero SIN comprometerse a una fecha concreta
+- "exploró"        → solo preguntó precios o info, sin intención clara de compra
+- "insatisfecho"   → se fue molesto o sin resolver su problema
+- "se dio de baja" → pidió no recibir más mensajes
+
+Si el cliente dijo una fecha específica → SIEMPRE es "agendó", no "interesado".
+
 Responde SIEMPRE en JSON con esta estructura exacta:
 {
   "resumen": "1-2 oraciones describiendo qué pasó",
