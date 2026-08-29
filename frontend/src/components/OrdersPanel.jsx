@@ -524,10 +524,13 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                 const isPending   = o.status === 'pending';
                 const isSent      = o.status === 'sent';
                 const isCancelled = o.status === 'cancelled';
-                const dateStr     = o.desired_date
-                  ? new Date(o.desired_date + 'T12:00:00').toLocaleDateString('es-CL', { weekday:'long', day:'numeric', month:'long' })
+                // desired_date puede llegar como objeto Date (pg lo parsea) o string ISO
+                const rawDate     = o.desired_date;
+                const parsedDate  = rawDate ? new Date(rawDate instanceof Date ? rawDate : String(rawDate).slice(0, 10) + 'T12:00:00') : null;
+                const dateStr     = parsedDate && !isNaN(parsedDate)
+                  ? parsedDate.toLocaleDateString('es-CL', { weekday:'long', day:'numeric', month:'long' })
                   : '—';
-                const isOverdue   = isPending && o.desired_date && new Date(o.desired_date + 'T12:00:00') < new Date();
+                const isOverdue   = isPending && parsedDate && !isNaN(parsedDate) && parsedDate < new Date();
                 const statusColor = isPending ? (isOverdue ? '#f87171' : '#a78bfa') : isSent ? '#22c55e' : colors.textMuted;
                 const statusLabel = isPending ? (isOverdue ? '⚠️ Vencido' : '📅 Pendiente') : isSent ? '✓ Enviado' : 'Cancelado';
                 return (
@@ -549,7 +552,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                     <div style={{ display:'flex', gap:'6px', flexShrink:0 }}>
                       {o.conversation_id && (
                         <button
-                          onClick={() => onSelectConversation?.({ id: o.conversation_id, contact_name: o.customer_name || o.contact_name, phone_number: o.phone })}
+                          onClick={() => onSelectConversation?.(o.conversation_id)}
                           title="Ver conversación"
                           style={{ padding:'5px 10px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color:'#4db6ac', fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
                           <MessageSquare size={12} /> Chat
