@@ -298,24 +298,25 @@ router.post('/import', async (req, res) => {
 
       if (!phone) { invalid++; continue; }
 
-      const name  = (raw.name  || '').trim() || null;
-      const email = (raw.email || '').trim().toLowerCase() || null;
+      const name    = (raw.name    || '').trim() || null;
+      const email   = (raw.email   || '').trim().toLowerCase() || null;
+      const address = (raw.address || '').trim() || null;
+      const city    = (raw.city    || '').trim() || null;
 
       try {
         const { rowCount } = await pool.query(
           `INSERT INTO contacts
-             (organization_id, phone, name, email, contact_type, source, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 'lead', 'import', NOW(), NOW())
+             (organization_id, phone, name, email, address, city, contact_type, source, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'lead', 'import', NOW(), NOW())
            ON CONFLICT (organization_id, phone) DO UPDATE SET
-             name       = CASE WHEN EXCLUDED.name IS NOT NULL AND contacts.name IS NULL
-                               THEN EXCLUDED.name ELSE contacts.name END,
-             email      = CASE WHEN EXCLUDED.email IS NOT NULL AND contacts.email IS NULL
-                               THEN EXCLUDED.email ELSE contacts.email END,
-             updated_at = NOW()
-           WHERE contacts.name IS NULL OR contacts.email IS NULL`,
-          [req.orgId, phone, name, email]
+             name       = COALESCE(contacts.name,    EXCLUDED.name),
+             email      = COALESCE(contacts.email,   EXCLUDED.email),
+             address    = COALESCE(contacts.address, EXCLUDED.address),
+             city       = COALESCE(contacts.city,    EXCLUDED.city),
+             updated_at = NOW()`,
+          [req.orgId, phone, name, email, address, city]
         );
-        // rowCount = 1 si insertó o actualizó, 0 si ya existía y no había nada que actualizar
+        // rowCount = 1 si insertó o actualizó
         if (rowCount > 0) imported++; else skipped++;
       } catch (err) {
         errors.push({ phone: raw.phone, error: err.message });

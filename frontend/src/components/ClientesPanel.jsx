@@ -161,10 +161,11 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
       setImportHeaders(headers);
       setImportRows(rows);
       // Auto-detectar columnas
-      const phoneCol = headers.find(h => /phone|tel[eé]|celular|m[oó]vil|whatsapp/i.test(h)) || headers[0];
-      const nameCol  = headers.find(h => /nombre|name/i.test(h)) || '';
-      const emailCol = headers.find(h => /email|correo/i.test(h)) || '';
-      setImportCols({ phone: phoneCol, name: nameCol, email: emailCol });
+      const phoneCol   = headers.find(h => /phone|tel[eé]|celular|m[oó]vil|whatsapp/i.test(h)) || headers[0];
+      const nameCol    = headers.find(h => /nombre|name|t[ií]tulo/i.test(h)) || '';
+      const emailCol   = headers.find(h => /email|correo/i.test(h)) || '';
+      const addressCol = headers.find(h => /direcci[oó]n|address|domicilio/i.test(h)) || '';
+      setImportCols({ phone: phoneCol, name: nameCol, email: emailCol, address: addressCol });
     } catch (e) {
       alert('Error leyendo el archivo: ' + e.message);
     }
@@ -175,11 +176,29 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
     setImporting(true);
     setImportResult(null);
     try {
-      const leads = importRows.map(r => ({
-        phone: r[importCols.phone] || '',
-        name:  importCols.name  ? r[importCols.name]  : '',
-        email: importCols.email ? r[importCols.email] : '',
-      })).filter(l => l.phone);
+      const leads = importRows.map(r => {
+        // Limpiar nombre: quitar prefijo tipo "#2973JACQUELINE" → "JACQUELINE"
+        const rawName = importCols.name ? r[importCols.name] : '';
+        const cleanName = rawName.replace(/^#\d+\s*/,'').trim();
+        // Parsear dirección: "Calle 123, Depto, Ciudad, Región, Chile, 1700000"
+        const rawAddr = importCols.address ? r[importCols.address] : '';
+        let address = '', city = '';
+        if (rawAddr) {
+          const parts = rawAddr.split(',').map(p => p.trim()).filter(Boolean);
+          // Eliminar Chile y códigos postales al final
+          const filtered = parts.filter(p => !/^chile$/i.test(p) && !/^\d{5,}$/.test(p));
+          // La primera parte es la calle, la penúltima (antes de región) es la ciudad
+          address = filtered[0] || rawAddr;
+          city = filtered.length >= 2 ? filtered[filtered.length - 2] : (filtered[1] || '');
+        }
+        return {
+          phone:   r[importCols.phone] || '',
+          name:    cleanName,
+          email:   importCols.email ? r[importCols.email] : '',
+          address,
+          city,
+        };
+      }).filter(l => l.phone);
       const res = await api.post('/contacts/import', { leads });
       setImportResult(res.data);
       if (res.data.success) loadLeads(1, leadsSearch);
@@ -722,11 +741,12 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                 <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
                   <strong style={{ color: colors.textPrimary }}>{importRows.length}</strong> filas detectadas. Asigná qué columna es cada campo:
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   {[
-                    { key: 'phone', label: 'Teléfono *', required: true },
-                    { key: 'name',  label: 'Nombre',     required: false },
-                    { key: 'email', label: 'Email',       required: false },
+                    { key: 'phone',   label: 'Teléfono *',  required: true },
+                    { key: 'name',    label: 'Nombre',       required: false },
+                    { key: 'address', label: 'Dirección',    required: false },
+                    { key: 'email',   label: 'Email',        required: false },
                   ].map(({ key, label, required }) => (
                     <div key={key}>
                       <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '4px' }}>{label}</div>
@@ -746,7 +766,7 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
-                        {['Teléfono', 'Nombre', 'Email'].map(h => (
+                        {['Teléfono', 'Nombre', 'Dirección', 'Email'].map(h => (
                           <th key={h} style={{ padding: '6px 10px', color: colors.textSecondary, textAlign: 'left', borderBottom: `1px solid ${colors.border}` }}>{h}</th>
                         ))}
                       </tr>
@@ -754,9 +774,10 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                     <tbody>
                       {importRows.slice(0, 6).map((r, i) => (
                         <tr key={i}>
-                          <td style={{ padding: '5px 10px', color: colors.textPrimary }}>{importCols.phone ? r[importCols.phone] : '—'}</td>
-                          <td style={{ padding: '5px 10px', color: colors.textSecondary }}>{importCols.name  ? r[importCols.name]  : '—'}</td>
-                          <td style={{ padding: '5px 10px', color: colors.textSecondary }}>{importCols.email ? r[importCols.email] : '—'}</td>
+                          <td style={{ padding: '5px 10px', color: colors.textPrimary }}>{importCols.phone   ? r[importCols.phone]   : '—'}</td>
+                          <td style={{ padding: '5px 10px', color: colors.textSecondary }}>{importCols.name    ? r[importCols.name]?.replace(/^#\d+\s*/,'') : '—'}</td>
+                          <td style={{ padding: '5px 10px', color: colors.textSecondary }}>{importCols.address ? r[importCols.address] : '—'}</td>
+                          <td style={{ padding: '5px 10px', color: colors.textSecondary }}>{importCols.email   ? r[importCols.email]   : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
