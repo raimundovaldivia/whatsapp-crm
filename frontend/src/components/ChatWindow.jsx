@@ -93,13 +93,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setRulesSaved(false);
     try {
       const res = await api.post(`/conversations/${conversation.id}/analyze`);
-      setAnalysisData(res.data?.analysis || null);
+      const analysis = res.data?.analysis || null;
+      setAnalysisData(analysis);
+      // Si el estado cambió, recargar la lista de conversaciones
+      if (analysis?.estado_aplicado) onRefresh?.();
     } catch (e) {
       setAnalysisData({ error: e.response?.data?.error || 'Error analizando conversación' });
     } finally {
       setAnalysisLoading(false);
     }
-  }, [conversation.id]);
+  }, [conversation.id, onRefresh]);
 
   const generateImprovements = useCallback(async (analysis) => {
     setImprovementsLoading(true);
