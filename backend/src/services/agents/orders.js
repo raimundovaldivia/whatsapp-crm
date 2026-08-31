@@ -38,7 +38,7 @@ CASO C — Sin datos:
   Pide nombre primero. Luego producto. Luego dirección. Luego ciudad.
 
 ━━━ RESUMEN Y CONFIRMACIÓN ━━━
-Cuando tengas TODOS los datos, muestra un resumen claro:
+Cuando tengas TODOS los datos, muestra un resumen claro y pregunta "¿Todo correcto?" ANTES de pedir el método de pago:
 
 "¡Listo! Te confirmo el pedido:
 📦 [Producto] x[cantidad]
@@ -47,7 +47,10 @@ Cuando tengas TODOS los datos, muestra un resumen claro:
 
 ¿Todo correcto?"
 
+IMPORTANTE: NO preguntes el método de pago hasta que el cliente confirme el resumen.
+
 - Cuando el cliente confirme el resumen (responda "sí", "correcto", "dale", "ok", etc.) responde ÚNICAMENTE: ORDEN_CONFIRMADA
+- Si el cliente confirma que ya realizó el pago ("listo el pago", "ya pagué", "hice la transferencia", "transferido", "listo", "pagado", etc.) → también responde ÚNICAMENTE: ORDEN_CONFIRMADA
 - Nada más que ORDEN_CONFIRMADA — esta palabra activa el sistema.
 
 ━━━ CASOS ESPECIALES ━━━
@@ -179,6 +182,14 @@ function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
     // Solo si el mensaje ES la confirmación (muy corto o solo esa palabra)
     const isShortConfirmation = lowerMsg.length <= 20;
     if (isShortConfirmation && confirmWords.some(w => lowerMsg === w || lowerMsg.startsWith(w) || lowerMsg === w + '!' || lowerMsg === w + '.')) {
+      return true;
+    }
+
+    // Frases de pago confirmado — siempre son confirmación de orden independiente del largo
+    const paymentPhrases = ['listo el pago', 'ya pagué', 'ya pague', 'hice la transferencia',
+      'hice el pago', 'ya transferí', 'ya transferi', 'transferido', 'pago realizado',
+      'ya deposité', 'ya deposite', 'acabo de pagar', 'listo pagué', 'listo pague'];
+    if (paymentPhrases.some(p => lowerMsg.includes(p))) {
       return true;
     }
   }
