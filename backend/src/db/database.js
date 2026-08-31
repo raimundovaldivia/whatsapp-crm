@@ -1139,6 +1139,11 @@ async function bulkUpdateShopifyOrderStatus(orgId, shopifyOrderIds, crmStatus) {
 async function upsertShopifyOrders(orgId, orders) {
   if (!orders?.length) return;
   for (const o of orders) {
+    // Saltar órdenes canceladas — no deben afectar historial ni métricas
+    if (o.cancelledAt || o.financialStatus === 'VOIDED' ||
+        (typeof o.financialStatus === 'string' && o.financialStatus.toLowerCase() === 'voided')) {
+      continue;
+    }
     // getAllOrders devuelve formato GraphQL camelCase:
     // o.createdAt, o.totalPrice (number), o.financialStatus, o.fulfillmentStatus
     // o.customer.name (ya formateado), o.customer.phone/email

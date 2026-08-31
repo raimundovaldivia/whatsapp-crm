@@ -343,8 +343,12 @@ async function getOrders(shop, token, opts = {}) {
   const { limit = 50, cursor = null, status = 'any' } = opts;
   const client = graphqlClient(shop, token);
 
-  // Sin filtro de query devuelve todas las órdenes (abiertas, cerradas, canceladas)
-  const query = (status && status !== 'any') ? `financial_status:${status}` : null;
+  // Siempre excluir órdenes canceladas — no aportan al historial de compras
+  // financial_status filter adicional si se pasa uno específico
+  const baseFilter = '-status:cancelled';
+  const query = (status && status !== 'any')
+    ? `${baseFilter} financial_status:${status}`
+    : baseFilter;
 
   const { data } = await client.post('/graphql.json', {
     query:     ORDERS_QUERY,
