@@ -199,13 +199,20 @@ function PreciosEmpresasTab({ products, colors, isDark }) {
       .finally(() => setLoadingEmpresas(false));
   }, []);
 
-  // Cargar overrides cuando cambia el producto seleccionado
+  // Cargar overrides cuando cambia el producto seleccionado y pre-marcar empresas que ya lo tienen
   useEffect(() => {
-    if (!selectedProduct) { setOverrides({}); return; }
+    if (!selectedProduct) { setOverrides({}); setSelected(new Set()); setSelectAll(false); return; }
     api.get(`/contacts/prices/by-product/${encodeURIComponent(selectedProduct)}`)
-      .then(({ data }) => setOverrides(data.data || {}))
-      .catch(() => setOverrides({}));
-  }, [selectedProduct]);
+      .then(({ data }) => {
+        const map = data.data || {};
+        setOverrides(map);
+        // Pre-seleccionar las empresas que ya tienen este producto asignado
+        const preSelected = new Set(Object.keys(map));
+        setSelected(preSelected);
+        setSelectAll(preSelected.size > 0 && preSelected.size === empresas.length);
+      })
+      .catch(() => { setOverrides({}); setSelected(new Set()); setSelectAll(false); });
+  }, [selectedProduct, empresas.length]);
 
   // Pre-llenar precio con precio base cuando se elige un producto
   useEffect(() => {
@@ -279,8 +286,8 @@ function PreciosEmpresasTab({ products, colors, isDark }) {
         <div>
           <label style={s.label}>Producto</label>
           <select value={selectedProduct} onChange={e => setSelectedProduct(e.target.value)} style={s.select}>
-            <option value=''>— Seleccionar producto —</option>
-            {products.filter(p => p.active !== false).map(p => (
+            <option value=''>— Seleccionar producto empresa —</option>
+            {products.filter(p => p.active !== false && (p.is_business === true || p.is_business === 1 || p.is_business === 'true')).map(p => (
               <option key={p.id} value={String(p.id)}>
                 {p.title} — ${Number(p.price).toLocaleString('es-CL')}
               </option>

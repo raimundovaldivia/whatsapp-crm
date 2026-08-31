@@ -380,25 +380,27 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       const normalProds  = all.filter(p => !p.is_business);
       let displayProds;
       if (isEmpresa) {
-        displayProds = empresaProds.length > 0 ? empresaProds : all;
-        if (empresaProds.length === 0) console.warn('[Nueva orden] Cliente es empresa pero no hay productos con is_business=true. Mostrando todos.');
-      } else {
-        displayProds = normalProds.length > 0 ? normalProds : all;
-      }
-      // Aplicar precios especiales de esta empresa si los tiene
-      if (isEmpresa) {
+        // Para empresas: intentar mostrar SOLO los productos que tienen precio asignado para este cliente
         try {
           const ov = await api.get(`/contacts/${encodeURIComponent(conversation.phone_number)}/prices`);
           const overrides = ov.data.data || [];
           if (overrides.length > 0) {
+            // La empresa tiene productos asignados → mostrar SOLO esos con su precio especial
             const overrideMap = {};
             for (const o of overrides) overrideMap[String(o.product_id)] = o.custom_price;
-            displayProds = displayProds.map(p => {
-              const special = overrideMap[String(p.id)];
-              return special != null ? { ...p, price: special, _specialPrice: true } : p;
-            });
+            // Filtrar al catálogo completo (no solo B2B) para encontrar el producto aunque sea mixto
+            displayProds = all
+              .filter(p => overrideMap[String(p.id)] != null)
+              .map(p => ({ ...p, price: overrideMap[String(p.id)], _specialPrice: true }));
+          } else {
+            // Sin overrides → fallback a todos los productos B2B del catálogo
+            displayProds = empresaProds.length > 0 ? empresaProds : all;
           }
-        } catch { /* ignorar si falla */ }
+        } catch {
+          displayProds = empresaProds.length > 0 ? empresaProds : all;
+        }
+      } else {
+        displayProds = normalProds.length > 0 ? normalProds : all;
       }
       setProducts(displayProds);
     } catch { setProducts([]); }
