@@ -467,6 +467,66 @@ async function runFullAnalysis(orgId, ds) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+   Helpers para anti-duplicate template sending
+───────────────────────────────────────────────────────────────────── */
+
+/**
+ * Enriquece los candidatos con last_template_sent_at en vivo desde contacts.
+ * Siempre se consulta en tiempo real (no cacheado) para reflejar envíos recientes.
+ */
+async function enrichCandidatesWithTemplateSent(candidates, orgId) {
+  if (!candidates || !candidates.length) return candidates;
+  try {
+    const { getPool } = require('../db/database');
+    const pool = getPool();
+    const phones = candidates.map(c => c.phone).filter(Boolean);
+    const { rows } = await pool.query(
+      `SELECT phone, last_template_sent_at
+       FROM contacts
+       WHERE organization_id = $1 AND phone = ANY($2::text[])
+         AND last_template_sent_at IS NOT NULL`,
+      [orgId, phones]
+    );
+    const sentMap = {};
+    for (const r of rows) sentMap[r.phone] = r.last_template_sent_at;
+    return candidates.map(c => ({ ...c, last_template_sent_at: sentMap[c.phone] || null }));
+  } catch { return candidates; }
+}
+
+/**
+ * Marca un contacto como "template enviado ahora" en la tabla contacts.
+ */
+async function markTemplateSent(orgId, phone) {
+  try {
+    const { getPool } = require('../db/database');
+    const pool = getPool();
+    await pool.query(
+      `UPDATE contacts SET last_template_sent_at = NOW()
+       WHERE organization_id = $1 AND phone = $2`,
+      [orgId, phone]
+    );
+  } catch (e) { console.error('[markTemplateSent]', e.message); }
+}
+
+/**
+ * ¿Ya se envió un template hoy a este teléfono?
+ */
+async function templateSentToday(orgId, phone) {
+  try {
+    const { getPool } = require('../db/database');
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `SELECT 1 FROM contacts
+       WHERE organization_id = $1 AND phone = $2
+         AND last_template_sent_at >= DATE_TRUNC('day', NOW())
+       LIMIT 1`,
+      [orgId, phone]
+    );
+    return rows.length > 0;
+  } catch { return false; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
    GET /api/reengagement/candidates?refresh=false
 ───────────────────────────────────────────────────────────────────── */
 router.get('/candidates', async (req, res) => {
@@ -480,7 +540,8 @@ router.get('/candidates', async (req, res) => {
     // ── 1. Cache en memoria ──────────────────────────────────────────
     const memCached = analysisCache.get(req.orgId);
     if (!refresh && memCached && Date.now() - memCached.ts < CACHE_TTL) {
-      return res.json({ success: true, data: memCached.data, total: memCached.data.length, fromCache: true, cacheSource: 'memory' });
+      const enrichedMem = await enrichCandidatesWithTemplateSent(memCached.data, req.orgId);
+      return res.json({ success: true, data: enrichedMem, total: enrichedMem.length, fromCache: true, cacheSource: 'memory' });
     }
 
     // ── 2. Refresh solicitado → iniciar en SEGUNDO PLANO y retornar ──
@@ -513,7 +574,8 @@ router.get('/candidates', async (req, res) => {
     if (dbCached && (Array.isArray(dbCached) ? dbCached.length > 0 : JSON.parse(dbCached).length > 0)) {
       const candidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
       analysisCache.set(req.orgId, { data: candidates, ts: Date.now() });
-      return res.json({ success: true, data: candidates, total: candidates.length, fromCache: true, cacheSource: 'db', cacheDate: today });
+      const enriched = await enrichCandidatesWithTemplateSent(candidates, req.orgId);
+      return res.json({ success: true, data: enriched, total: enriched.length, fromCache: true, cacheSource: 'db', cacheDate: today });
     }
 
     // ── 4. Análisis completo (primera carga del día) ─────────────────
@@ -522,10 +584,11 @@ router.get('/candidates', async (req, res) => {
 
     if (!result) return res.json({ success: true, data: [], total: 0, message: 'Sin órdenes o teléfonos en Shopify' });
 
+    const enrichedFresh = await enrichCandidatesWithTemplateSent(result.enriched, req.orgId);
     res.json({
       success:     true,
-      data:        result.enriched,
-      total:       result.enriched.length,
+      data:        enrichedFresh,
+      total:       enrichedFresh.length,
       fromCache:   false,
       diagnostico: result.diagnostico,
     });
@@ -1324,6 +1387,9 @@ router.post('/send', async (req, res) => {
       }
     }
 
+    // Registrar envío para prevenir duplicados el mismo día
+    if (isTemplate) await markTemplateSent(req.orgId, phone);
+
     res.json({ success: true, phone });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1351,6 +1417,15 @@ router.post('/send-bulk', async (req, res) => {
     item.phone = db.normalizePhone(item.phone);
     try {
       const isTemplate = !!item.templateName;
+
+      // ── Anti-duplicado: saltar si ya recibió un template hoy ─────
+      if (isTemplate && !item.force) {
+        const alreadySent = await templateSentToday(req.orgId, item.phone);
+        if (alreadySent) {
+          results.push({ phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' });
+          continue;
+        }
+      }
       let sentResult;
       let savedContent;
 
@@ -1413,6 +1488,9 @@ router.post('/send-bulk', async (req, res) => {
         // No tocamos pipeline_state — 'template_sent' no es un valor válido
       }
 
+      // Registrar envío para prevenir duplicados el mismo día
+      if (isTemplate) await markTemplateSent(req.orgId, item.phone);
+
       results.push({ phone: item.phone, success: true });
     } catch (err) {
       const metaDetail = err.response?.data ? JSON.stringify(err.response.data) : null;
@@ -1424,9 +1502,10 @@ router.post('/send-bulk', async (req, res) => {
     }
   }
 
-  const sent   = results.filter(r => r.success).length;
-  const failed = results.filter(r => !r.success).length;
-  res.json({ success: true, sent, failed, results });
+  const sent    = results.filter(r => r.success).length;
+  const skipped = results.filter(r => r.skipped).length;
+  const failed  = results.filter(r => !r.success && !r.skipped).length;
+  res.json({ success: true, sent, skipped, failed, results });
 });
 
 /* ─────────────────────────────────────────────────────────────────────

@@ -580,6 +580,11 @@ async function setupDatabase() {
     `);
 
 
+    // Migración: rastrear cuándo se envió el último template a cada contacto
+    await client.query(`
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_template_sent_at TIMESTAMPTZ;
+    `);
+
     // Migración: precios especiales por empresa
     await client.query(`
       CREATE TABLE IF NOT EXISTS contact_price_overrides (

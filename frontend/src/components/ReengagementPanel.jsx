@@ -323,7 +323,9 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
       if (testMode) {
         showToast(`🧪 ${res.sent} mensajes enviados a tu número (${TEST_PHONE})`);
       } else {
-        showToast(`✅ ${res.sent} enviados${res.failed > 0 ? ` · ${res.failed} fallaron` : ''}`);
+        const skippedMsg = res.skipped > 0 ? ` · ${res.skipped} omitidos (ya enviado hoy)` : '';
+        const failedMsg  = res.failed  > 0 ? ` · ${res.failed} fallaron` : '';
+        showToast(`✅ ${res.sent} enviados${skippedMsg}${failedMsg}`);
         const sent = new Set(res.results.filter(r => r.success).map(r => r.phone));
         setCandidates(prev => prev.filter(c => !sent.has(c.phone)));
         setSelected(new Set());
@@ -855,6 +857,16 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
   const cColor  = confColor(conf, colors);
   const overdue = c.avgFreqDays && c.daysInactive > c.avgFreqDays;
 
+  // ¿Ya se le envió un template hoy?
+  const sentToday = (() => {
+    if (!c.last_template_sent_at) return null;
+    const sent = new Date(c.last_template_sent_at);
+    const now  = new Date();
+    if (sent.toDateString() !== now.toDateString()) return null;
+    const h = sent.getHours(), m = String(sent.getMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+  })();
+
   const predDays  = c.predictedDays ?? 0;
   const predLabel = predDays < 0
     ? `vencido hace ${Math.abs(predDays)}d`
@@ -917,6 +929,20 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
             {predLabel}
           </span>
         </Tooltip>
+
+        {/* Badge "Enviado hoy" */}
+        {sentToday && (
+          <Tooltip text={`Ya se le envió un template hoy a las ${sentToday}. El backend lo omitirá si intentas enviarlo de nuevo.`}>
+            <span style={{
+              backgroundColor: '#f59e0b22', color: '#f59e0b',
+              borderRadius: '6px', padding: '3px 8px',
+              fontSize: '11px', fontWeight: 700, flexShrink: 0,
+              border: '1px solid #f59e0b44',
+            }}>
+              📬 {sentToday}
+            </span>
+          </Tooltip>
+        )}
 
         {/* Confianza */}
         <Tooltip text={`Confianza de la predicción. ${conf >= 80 ? 'Alta — patrón de compra muy regular.' : conf >= 60 ? 'Media — patrón moderadamente consistente.' : 'Baja — pocos datos o compras irregulares.'}`}>
