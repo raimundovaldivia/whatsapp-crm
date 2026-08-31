@@ -403,9 +403,22 @@ router.delete('/bulk', async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
-    const { phones } = req.body;
+    const { phones, all, search } = req.body;
+
+    // Modo "seleccionar todos": elimina todos los leads de la org (filtrado por búsqueda)
+    if (all) {
+      let q = `DELETE FROM contacts WHERE organization_id = $1 AND contact_type = 'lead'`;
+      const params = [req.orgId];
+      if (search && search.trim()) {
+        params.push(`%${search.trim()}%`);
+        q += ` AND (name ILIKE $2 OR phone ILIKE $2)`;
+      }
+      const { rowCount } = await pool.query(q, params);
+      return res.json({ success: true, deleted: rowCount });
+    }
+
     if (!Array.isArray(phones) || phones.length === 0) {
-      return res.status(400).json({ success: false, error: 'Se requiere un array de teléfonos' });
+      return res.status(400).json({ success: false, error: 'Se requiere un array de teléfonos o all=true' });
     }
     if (phones.length > 2000) {
       return res.status(400).json({ success: false, error: 'Máximo 2000 eliminaciones a la vez' });

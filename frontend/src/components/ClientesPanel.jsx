@@ -106,10 +106,12 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
 
   // ── Bulk delete leads ──
   const [selectedLeads, setSelectedLeads] = useState(new Set());
+  const [selectAllLeads, setSelectAllLeads] = useState(false); // true = todas las páginas
   const [bulkDeleting, setBulkDeleting]   = useState(false);
   const [dedupRunning, setDedupRunning]   = useState(false);
 
   const toggleSelectLead = useCallback((phone) => {
+    setSelectAllLeads(false);
     setSelectedLeads(prev => {
       const next = new Set(prev);
       if (next.has(phone)) next.delete(phone); else next.add(phone);
@@ -118,22 +120,37 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   }, []);
 
   const toggleSelectAll = useCallback(() => {
-    setSelectedLeads(prev => prev.size === leads.length ? new Set() : new Set(leads.map(l => l.phone)));
-  }, [leads]);
+    if (selectAllLeads) {
+      // Ya estaban todos → deseleccionar todo
+      setSelectAllLeads(false);
+      setSelectedLeads(new Set());
+    } else if (leads.length > 0 && selectedLeads.size === leads.length) {
+      // Página actual completa → deseleccionar todo
+      setSelectedLeads(new Set());
+    } else {
+      // Seleccionar página actual
+      setSelectedLeads(new Set(leads.map(l => l.phone)));
+    }
+  }, [leads, selectedLeads, selectAllLeads]);
 
   const bulkDeleteLeads = useCallback(async () => {
-    if (selectedLeads.size === 0) return;
-    if (!window.confirm(`¿Eliminar ${selectedLeads.size} lead(s) seleccionado(s)? Esta acción no se puede deshacer.`)) return;
+    const count = selectAllLeads ? leadsTotal : selectedLeads.size;
+    if (count === 0) return;
+    if (!window.confirm(`¿Eliminar ${count} lead(s)? Esta acción no se puede deshacer.`)) return;
     setBulkDeleting(true);
     try {
-      const res = await api.delete('/contacts/bulk', { data: { phones: [...selectedLeads] } });
+      const body = selectAllLeads
+        ? { all: true, search: leadsSearch }
+        : { phones: [...selectedLeads] };
+      const res = await api.delete('/contacts/bulk', { data: body });
+      setSelectAllLeads(false);
       setSelectedLeads(new Set());
-      loadLeads(leadsPage, leadsSearch);
+      loadLeads(1, leadsSearch);
       alert(`${res.data.deleted} lead(s) eliminado(s).`);
     } catch (e) {
       alert('Error al eliminar: ' + (e.response?.data?.error || e.message));
     } finally { setBulkDeleting(false); }
-  }, [selectedLeads, leadsPage, leadsSearch, loadLeads]);
+  }, [selectAllLeads, leadsTotal, selectedLeads, leadsSearch, loadLeads]);
 
   const runDedup = useCallback(async () => {
     if (!window.confirm('¿Buscar y fusionar contactos con el mismo teléfono en distintos formatos?\n\nSe mantendrá siempre el tipo "cliente" sobre "lead".')) return;
@@ -328,11 +345,11 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
 
   // Reset leads page and selection on search
   useEffect(() => {
-    if (tab === 'leads') { setLeadsPage(1); setSelectedLeads(new Set()); loadLeads(1, leadsSearch); }
+    if (tab === 'leads') { setLeadsPage(1); setSelectedLeads(new Set()); setSelectAllLeads(false); loadLeads(1, leadsSearch); }
   }, [leadsSearch]);
 
   // Reset selection when changing tabs
-  useEffect(() => { setSelectedLeads(new Set()); }, [tab]);
+  useEffect(() => { setSelectedLeads(new Set()); setSelectAllLeads(false); }, [tab]);
 
   // Filtrado local por búsqueda
   const filtered = search.trim()
@@ -414,10 +431,10 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
           </div>
           {isLeads && (
             <>
-              {selectedLeads.size > 0 && (
+              {(selectAllLeads || selectedLeads.size > 0) && (
                 <button onClick={bulkDeleteLeads} disabled={bulkDeleting}
                   style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: '#ef444418', border: '1px solid #ef444433', cursor: bulkDeleting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: '#ef4444', fontSize: '12px', fontWeight: 600, opacity: bulkDeleting ? 0.7 : 1 }}>
-                  🗑 {bulkDeleting ? 'Eliminando...' : `Eliminar ${selectedLeads.size}`}
+                  🗑 {bulkDeleting ? 'Eliminando...' : `Eliminar ${selectAllLeads ? leadsTotal : selectedLeads.size}`}
                 </button>
               )}
               <button onClick={runDedup} disabled={dedupRunning}
@@ -751,7 +768,8 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                 <tr style={{ backgroundColor: colors.bgApp, position: 'sticky', top: 0, zIndex: 1 }}>
                   <th style={{ padding: '10px 12px', borderBottom: `1px solid ${colors.border}`, width: '36px' }}>
                     <input type="checkbox"
-                      checked={leads.length > 0 && selectedLeads.size === leads.length}
+                      checked={leads.length > 0 && (selectAllLeads || selectedLeads.size === leads.length)}
+                      ref={el => { if (el) el.indeterminate = !selectAllLeads && selectedLeads.size > 0 && selectedLeads.size < leads.length; }}
                       onChange={toggleSelectAll}
                       style={{ cursor: 'pointer', width: '14px', height: '14px' }}
                       title="Seleccionar todos"
@@ -763,6 +781,29 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                 </tr>
               </thead>
               <tbody>
+                {/* Banner seleccionar todas las páginas */}
+                {!selectAllLeads && leads.length > 0 && selectedLeads.size === leads.length && leadsTotal > leads.length && (
+                  <tr>
+                    <td colSpan={8} style={{ padding: '8px 16px', backgroundColor: `${colors.green}0d`, textAlign: 'center', fontSize: '12px', color: colors.textSecondary, borderBottom: `1px solid ${colors.border}` }}>
+                      Los {leads.length} leads de esta página están seleccionados.{' '}
+                      <button onClick={() => setSelectAllLeads(true)}
+                        style={{ background: 'none', border: 'none', color: colors.green, cursor: 'pointer', fontWeight: 700, fontSize: '12px', padding: 0 }}>
+                        Seleccionar todos los {leadsTotal} leads →
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {selectAllLeads && (
+                  <tr>
+                    <td colSpan={8} style={{ padding: '8px 16px', backgroundColor: `${colors.green}18`, textAlign: 'center', fontSize: '12px', color: colors.green, fontWeight: 600, borderBottom: `1px solid ${colors.green}33` }}>
+                      ✓ Todos los {leadsTotal} leads están seleccionados.{' '}
+                      <button onClick={() => { setSelectAllLeads(false); setSelectedLeads(new Set()); }}
+                        style={{ background: 'none', border: 'none', color: colors.textSecondary, cursor: 'pointer', fontWeight: 500, fontSize: '12px', padding: 0, textDecoration: 'underline' }}>
+                        Cancelar selección
+                      </button>
+                    </td>
+                  </tr>
+                )}
                 {leads.map(lead => (
                   <tr key={lead.phone}
                     style={{ borderBottom: `1px solid ${colors.bgSub}`, transition: 'background-color 0.1s', backgroundColor: selectedLeads.has(lead.phone) ? `${colors.green}0a` : 'transparent' }}
