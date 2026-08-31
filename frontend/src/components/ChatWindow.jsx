@@ -45,6 +45,10 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [sendSummary, setSendSummary]         = useState(true);
   const [creatingOrder, setCreatingOrder]     = useState(false);
   const [orderError, setOrderError]           = useState('');
+  const [showNewProdForm, setShowNewProdForm] = useState(false);
+  const [newProdForm, setNewProdForm]         = useState({ title: '', price: '', description: '' });
+  const [savingNewProd, setSavingNewProd]     = useState(false);
+  const [newProdError, setNewProdError]       = useState('');
 
   // Merge modal state
   const [showMergeModal, setShowMergeModal]     = useState(false);
@@ -408,6 +412,27 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     } catch (err) {
       setOrderError(err.response?.data?.error || err.message);
     } finally { setCreatingOrder(false); }
+  };
+
+  const handleSaveNewProduct = async () => {
+    if (!newProdForm.title.trim() || !newProdForm.price) return;
+    setSavingNewProd(true); setNewProdError('');
+    try {
+      const { data } = await api.post('/products', {
+        title: newProdForm.title.trim(),
+        price: parseFloat(newProdForm.price),
+        description: newProdForm.description.trim() || null,
+        active: true,
+        stock: -1,
+        isBusiness: isEmpresa,
+      });
+      const newProd = data.product || data;
+      setProducts(prev => [...prev, newProd]);
+      setNewProdForm({ title: '', price: '', description: '' });
+      setShowNewProdForm(false);
+    } catch (e) {
+      setNewProdError(e.response?.data?.error || e.message);
+    } finally { setSavingNewProd(false); }
   };
 
   const orderTotal = Object.entries(orderItems).reduce((s, [id, qty]) => {
@@ -1008,6 +1033,52 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   </div>
                 );
               })}
+
+              {/* Botón + formulario nuevo producto */}
+              {!showNewProdForm ? (
+                <button
+                  onClick={() => { setShowNewProdForm(true); setNewProdError(''); }}
+                  style={{ display:'flex', alignItems:'center', gap:'6px', marginTop:'10px', background:'none', border:`1px dashed ${colors.border}`, borderRadius:'8px', padding:'8px 14px', cursor:'pointer', color:colors.textSecondary, fontSize:'13px', width:'100%', justifyContent:'center' }}>
+                  <Plus size={14} /> Nuevo producto
+                </button>
+              ) : (
+                <div style={{ marginTop:'12px', padding:'12px', borderRadius:'10px', border:`1px solid ${colors.border}`, background: colors.bgSub, display:'flex', flexDirection:'column', gap:'8px' }}>
+                  <div style={{ fontSize:'12px', fontWeight:700, color:colors.textSecondary, marginBottom:'2px' }}>NUEVO PRODUCTO</div>
+                  <input
+                    autoFocus
+                    placeholder='Nombre del producto *'
+                    value={newProdForm.title}
+                    onChange={e => setNewProdForm(f => ({ ...f, title: e.target.value }))}
+                    style={{ padding:'8px 10px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:colors.bgPanel, color:colors.textPrimary, fontSize:'13px' }}
+                  />
+                  <input
+                    type='number' min='0' placeholder='Precio *'
+                    value={newProdForm.price}
+                    onChange={e => setNewProdForm(f => ({ ...f, price: e.target.value }))}
+                    style={{ padding:'8px 10px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:colors.bgPanel, color:colors.textPrimary, fontSize:'13px' }}
+                  />
+                  <input
+                    placeholder='Descripción (opcional)'
+                    value={newProdForm.description}
+                    onChange={e => setNewProdForm(f => ({ ...f, description: e.target.value }))}
+                    style={{ padding:'8px 10px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:colors.bgPanel, color:colors.textPrimary, fontSize:'13px' }}
+                  />
+                  {newProdError && <div style={{ color:colors.red, fontSize:'12px' }}>{newProdError}</div>}
+                  <div style={{ display:'flex', gap:'8px' }}>
+                    <button
+                      onClick={handleSaveNewProduct}
+                      disabled={savingNewProd || !newProdForm.title.trim() || !newProdForm.price}
+                      style={{ flex:1, padding:'7px', borderRadius:'7px', border:'none', background:colors.green, color:'#fff', fontWeight:700, fontSize:'13px', cursor:'pointer', opacity:(savingNewProd || !newProdForm.title.trim() || !newProdForm.price)?0.6:1 }}>
+                      {savingNewProd ? 'Guardando...' : 'Guardar'}
+                    </button>
+                    <button
+                      onClick={() => { setShowNewProdForm(false); setNewProdForm({ title:'', price:'', description:'' }); setNewProdError(''); }}
+                      style={{ padding:'7px 14px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, fontSize:'13px', cursor:'pointer' }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Footer */}
