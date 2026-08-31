@@ -49,6 +49,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [newProdForm, setNewProdForm]         = useState({ title: '', price: '', description: '' });
   const [savingNewProd, setSavingNewProd]     = useState(false);
   const [newProdError, setNewProdError]       = useState('');
+  const [newProdEmpresas, setNewProdEmpresas] = useState([]); // lista de empresa contacts
+  const [newProdSelEmpresas, setNewProdSelEmpresas] = useState(new Set()); // seleccionadas
+  const [newProdForEmpresas, setNewProdForEmpresas] = useState(false); // toggle "solo ciertas empresas"
 
   // Merge modal state
   const [showMergeModal, setShowMergeModal]     = useState(false);
@@ -427,8 +430,19 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         isBusiness: isEmpresa,
       });
       const newProd = data.product || data;
+      // Si se eligieron empresas específicas → asignar precio especial a cada una
+      if (newProdForEmpresas && newProdSelEmpresas.size > 0) {
+        await api.post('/contacts/prices/bulk', {
+          product_id:    String(newProd.id),
+          product_title: newProd.title,
+          custom_price:  parseFloat(newProdForm.price),
+          phones:        [...newProdSelEmpresas],
+        }).catch(() => {}); // no bloquear si falla
+      }
       setProducts(prev => [...prev, newProd]);
       setNewProdForm({ title: '', price: '', description: '' });
+      setNewProdForEmpresas(false);
+      setNewProdSelEmpresas(new Set());
       setShowNewProdForm(false);
     } catch (e) {
       setNewProdError(e.response?.data?.error || e.message);
@@ -1063,6 +1077,71 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     onChange={e => setNewProdForm(f => ({ ...f, description: e.target.value }))}
                     style={{ padding:'8px 10px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:colors.bgPanel, color:colors.textPrimary, fontSize:'13px' }}
                   />
+
+                  {/* Toggle: asignar a empresas específicas */}
+                  <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', fontSize:'13px', color:colors.textSecondary, userSelect:'none' }}
+                    onClick={() => {
+                      const next = !newProdForEmpresas;
+                      setNewProdForEmpresas(next);
+                      if (next && newProdEmpresas.length === 0) {
+                        api.get('/contacts/empresas').then(({ data }) => setNewProdEmpresas(data.data || [])).catch(() => {});
+                      }
+                      if (!next) setNewProdSelEmpresas(new Set());
+                    }}>
+                    <input type='checkbox' checked={newProdForEmpresas} readOnly style={{ pointerEvents:'none' }} />
+                    🏢 Asignar a empresas específicas
+                  </label>
+
+                  {/* Lista de empresas */}
+                  {newProdForEmpresas && (
+                    <div style={{ border:`1px solid ${colors.border}`, borderRadius:'8px', overflow:'hidden', maxHeight:'160px', overflowY:'auto' }}>
+                      {newProdEmpresas.length === 0 ? (
+                        <div style={{ padding:'12px', fontSize:'12px', color:colors.textSecondary, textAlign:'center' }}>
+                          No hay contactos empresa. Marca un contacto como 🏢 Empresa desde el chat.
+                        </div>
+                      ) : (
+                        <>
+                          {/* Seleccionar todas */}
+                          <div
+                            onClick={() => {
+                              if (newProdSelEmpresas.size === newProdEmpresas.length) {
+                                setNewProdSelEmpresas(new Set());
+                              } else {
+                                setNewProdSelEmpresas(new Set(newProdEmpresas.map(e => e.phone)));
+                              }
+                            }}
+                            style={{ display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px', borderBottom:`1px solid ${colors.border}`, cursor:'pointer', background: colors.bgPanel }}>
+                            <input type='checkbox' readOnly style={{ pointerEvents:'none' }}
+                              checked={newProdSelEmpresas.size === newProdEmpresas.length && newProdEmpresas.length > 0} />
+                            <span style={{ fontSize:'11px', fontWeight:600, color:colors.textSecondary }}>Seleccionar todas</span>
+                          </div>
+                          {newProdEmpresas.map(e => (
+                            <div key={e.phone}
+                              onClick={() => {
+                                const next = new Set(newProdSelEmpresas);
+                                next.has(e.phone) ? next.delete(e.phone) : next.add(e.phone);
+                                setNewProdSelEmpresas(next);
+                              }}
+                              style={{ display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px',
+                                background: newProdSelEmpresas.has(e.phone) ? (colors.green + '18') : 'transparent',
+                                cursor:'pointer', borderBottom:`1px solid ${colors.border}` }}>
+                              <input type='checkbox' readOnly style={{ pointerEvents:'none' }} checked={newProdSelEmpresas.has(e.phone)} />
+                              <div>
+                                <div style={{ fontSize:'12px', fontWeight:500, color:colors.textPrimary }}>{e.name || e.phone}</div>
+                                {e.name && <div style={{ fontSize:'11px', color:colors.textSecondary }}>{e.phone}</div>}
+                              </div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {newProdForEmpresas && newProdSelEmpresas.size > 0 && (
+                    <div style={{ fontSize:'11px', color:'#059669', fontWeight:600 }}>
+                      ✓ Se asignará a {newProdSelEmpresas.size} empresa{newProdSelEmpresas.size !== 1 ? 's' : ''}
+                    </div>
+                  )}
+
                   {newProdError && <div style={{ color:colors.red, fontSize:'12px' }}>{newProdError}</div>}
                   <div style={{ display:'flex', gap:'8px' }}>
                     <button
@@ -1072,7 +1151,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                       {savingNewProd ? 'Guardando...' : 'Guardar'}
                     </button>
                     <button
-                      onClick={() => { setShowNewProdForm(false); setNewProdForm({ title:'', price:'', description:'' }); setNewProdError(''); }}
+                      onClick={() => { setShowNewProdForm(false); setNewProdForm({ title:'', price:'', description:'' }); setNewProdError(''); setNewProdForEmpresas(false); setNewProdSelEmpresas(new Set()); }}
                       style={{ padding:'7px 14px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, fontSize:'13px', cursor:'pointer' }}>
                       Cancelar
                     </button>
