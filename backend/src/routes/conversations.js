@@ -269,10 +269,15 @@ router.post('/:id/orders', async (req, res) => {
     const conv   = await db.getConversationById(convId, req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
-    const { items = [], sendSummary = true, shippingAddress = {} } = req.body;
+    const { items = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent' } = req.body;
     if (!items.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
 
-    const totalPrice = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
+    const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
+    const discountNum   = parseFloat(discount) || 0;
+    const discountAmount = discountNum > 0
+      ? (discountType === 'percent' ? subtotal * (discountNum / 100) : Math.min(discountNum, subtotal))
+      : 0;
+    const totalPrice    = Math.max(0, subtotal - discountAmount);
 
     // Resolver nombre y dirección desde contacts (fuente de verdad)
     let customerName = conv.contact_name;
@@ -306,7 +311,12 @@ router.post('/:id/orders', async (req, res) => {
     // Guardar mensaje de resumen en el chat y enviarlo al cliente
     if (sendSummary) {
       const lines = items.map(i => `• ${i.title} x${i.quantity || 1} — $${(parseFloat(i.price) * parseInt(i.quantity || 1)).toLocaleString('es-CL')}`);
-      const summary = `🛒 *Pedido #${order.id} generado*\n\n${lines.join('\n')}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
+      const discountLine = discountAmount > 0
+        ? `\n_Descuento (${discountType === 'percent' ? `${discountNum}%` : `$${Math.round(discountAmount).toLocaleString('es-CL')}`}): -$${Math.round(discountAmount).toLocaleString('es-CL')}_`
+        : '';
+      const subtotalLine = discountAmount > 0
+        ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
+      const summary = `🛒 *Pedido #${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
 
       const wc = await db.getWhatsappConfig(req.orgId);
       if (wc) {

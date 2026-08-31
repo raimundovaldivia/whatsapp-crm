@@ -52,6 +52,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [newProdEmpresas, setNewProdEmpresas] = useState([]); // lista de empresa contacts
   const [newProdSelEmpresas, setNewProdSelEmpresas] = useState(new Set()); // seleccionadas
   const [newProdForEmpresas, setNewProdForEmpresas] = useState(false); // toggle "solo ciertas empresas"
+  const [orderDiscount, setOrderDiscount]           = useState('');
+  const [orderDiscountType, setOrderDiscountType]   = useState('percent'); // 'percent' | 'fixed'
 
   // Merge modal state
   const [showMergeModal, setShowMergeModal]     = useState(false);
@@ -359,6 +361,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setOrderItems({});
     setOrderAddress('');
     setOrderCity('');
+    setOrderDiscount('');
+    setOrderDiscountType('percent');
     setOrderError('');
     setProductsLoading(true);
     // Precargar dirección del contacto
@@ -425,11 +429,17 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setCreatingOrder(true); setOrderError('');
     try {
       const shippingAddress = orderAddress.trim() ? { address: orderAddress.trim(), city: orderCity.trim() } : {};
-      await api.post(`/conversations/${conversation.id}/orders`, { items, sendSummary, shippingAddress });
+      await api.post(`/conversations/${conversation.id}/orders`, {
+        items, sendSummary, shippingAddress,
+        discount: discountNum,
+        discountType: orderDiscountType,
+      });
       setShowOrderModal(false);
       setOrderItems({});
       setOrderAddress('');
       setOrderCity('');
+      setOrderDiscount('');
+      setOrderDiscountType('percent');
     } catch (err) {
       setOrderError(err.response?.data?.error || err.message);
     } finally { setCreatingOrder(false); }
@@ -467,10 +477,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     } finally { setSavingNewProd(false); }
   };
 
-  const orderTotal = Object.entries(orderItems).reduce((s, [id, qty]) => {
+  const orderSubtotal = Object.entries(orderItems).reduce((s, [id, qty]) => {
     const p = products.find(p => String(p.id) === String(id));
     return s + (parseFloat(p?.price || 0) * qty);
   }, 0);
+  const discountNum    = parseFloat(orderDiscount) || 0;
+  const discountAmount = discountNum > 0
+    ? (orderDiscountType === 'percent' ? orderSubtotal * (discountNum / 100) : Math.min(discountNum, orderSubtotal))
+    : 0;
+  const orderTotal = Math.max(0, orderSubtotal - discountAmount);
 
   // ── Merge modal handlers ────────────────────────────────────────
   const openMergeModal = async () => {
@@ -1206,15 +1221,46 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   style={{ backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', outline:'none' }}
                 />
               </div>
+              {/* Descuento */}
+              <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
+                <div style={{ fontSize:'11px', color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'0.5px' }}>Descuento (opcional)</div>
+                <div style={{ display:'flex', gap:'6px' }}>
+                  <input
+                    type='number' min='0'
+                    value={orderDiscount}
+                    onChange={e => setOrderDiscount(e.target.value)}
+                    placeholder={orderDiscountType === 'percent' ? 'Ej: 10' : 'Ej: 5000'}
+                    style={{ flex:1, backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', outline:'none' }}
+                  />
+                  <select value={orderDiscountType} onChange={e => setOrderDiscountType(e.target.value)}
+                    style={{ backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', cursor:'pointer', outline:'none' }}>
+                    <option value="percent">%</option>
+                    <option value="fixed">$</option>
+                  </select>
+                </div>
+              </div>
+
               <label style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px', cursor:'pointer', fontSize:'13px', color:colors.textSecondary }}>
                 <input type="checkbox" checked={sendSummary} onChange={e => setSendSummary(e.target.checked)} />
                 Enviar resumen por WhatsApp al cliente
               </label>
               {orderError && <div style={{ color:colors.red, fontSize:'12px', marginBottom:'8px' }}>{orderError}</div>}
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                <div>
-                  <span style={{ fontSize:'12px', color:colors.textMuted }}>Total: </span>
-                  <span style={{ fontWeight:700, fontSize:'16px', color:colors.green }}>${orderTotal.toLocaleString('es-CL')}</span>
+                <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+                  {discountAmount > 0 && (
+                    <div style={{ fontSize:'11px', color:colors.textMuted }}>
+                      Subtotal: <span style={{ fontWeight:600 }}>${orderSubtotal.toLocaleString('es-CL')}</span>
+                    </div>
+                  )}
+                  {discountAmount > 0 && (
+                    <div style={{ fontSize:'11px', color:'#f87171' }}>
+                      Descuento ({orderDiscountType === 'percent' ? `${discountNum}%` : `$${discountNum.toLocaleString('es-CL')}`}): <span style={{ fontWeight:600 }}>-${Math.round(discountAmount).toLocaleString('es-CL')}</span>
+                    </div>
+                  )}
+                  <div>
+                    <span style={{ fontSize:'12px', color:colors.textMuted }}>Total: </span>
+                    <span style={{ fontWeight:700, fontSize:'16px', color:colors.green }}>${orderTotal.toLocaleString('es-CL')}</span>
+                  </div>
                 </div>
                 <button onClick={handleCreateOrder} disabled={creatingOrder || Object.keys(orderItems).length===0} style={{ display:'flex', alignItems:'center', gap:'6px', padding:'8px 20px', borderRadius:'8px', border:'none', backgroundColor:Object.keys(orderItems).length>0?colors.green:colors.bgHover, color:Object.keys(orderItems).length>0?'#fff':colors.textMuted, fontWeight:700, fontSize:'13px', cursor:creatingOrder||Object.keys(orderItems).length===0?'not-allowed':'pointer', opacity:creatingOrder?0.7:1 }}>
                   <ShoppingCart size={14} />
