@@ -84,6 +84,26 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
   const [importResult, setImportResult] = useState(null);
   const fileInputRef = useRef(null);
 
+  // ── loadLeads definido aquí arriba para que bulkDeleteLeads/runDedup puedan
+  //    referenciarlo en su array de dependencias sin TDZ ──
+  const loadLeads = useCallback(async (pageNum = 1, search = '') => {
+    setLeadsLoading(true);
+    setLeadsError(null);
+    try {
+      const [listRes, statsRes] = await Promise.all([
+        api.get('/contacts', { params: { type: 'lead', search, page: pageNum, limit: LEADS_PAGE_SIZE } }),
+        api.get('/contacts/stats'),
+      ]);
+      setLeads(listRes.data.data || []);
+      setLeadsTotal(listRes.data.total || 0);
+      setLeadsStats(statsRes.data.data || statsRes.data);
+    } catch (err) {
+      setLeadsError(err.response?.data?.error || err.message);
+    } finally {
+      setLeadsLoading(false);
+    }
+  }, []);
+
   // ── Bulk delete leads ──
   const [selectedLeads, setSelectedLeads] = useState(new Set());
   const [bulkDeleting, setBulkDeleting]   = useState(false);
@@ -213,24 +233,6 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
       setError(err.response?.data?.error || err.message);
     } finally {
       setLoading(false);
-    }
-  }, []);
-
-  const loadLeads = useCallback(async (pageNum = 1, search = '') => {
-    setLeadsLoading(true);
-    setLeadsError(null);
-    try {
-      const [listRes, statsRes] = await Promise.all([
-        api.get('/contacts', { params: { type: 'lead', search, page: pageNum, limit: LEADS_PAGE_SIZE } }),
-        api.get('/contacts/stats'),
-      ]);
-      setLeads(listRes.data.data || []);
-      setLeadsTotal(listRes.data.total || 0);
-      setLeadsStats(statsRes.data.data || statsRes.data);
-    } catch (err) {
-      setLeadsError(err.response?.data?.error || err.message);
-    } finally {
-      setLeadsLoading(false);
     }
   }, []);
 
