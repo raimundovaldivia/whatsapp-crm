@@ -700,7 +700,7 @@ router.get('/search-messages', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (m.conversation_id)
         c.id, c.contact_name, c.phone_number, c.agent_mode, c.pipeline_state,
-        c.unread_count, c.client_type, c.last_message_at,
+        c.unread_count, c.last_message_at,
         m.content  AS matched_content,
         m.direction,
         m.created_at AS matched_at
