@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -6,8 +6,11 @@ import { useTheme } from '../theme.js';
 
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
-  const [search, setSearch]       = useState('');
-  const [activeTab, setActiveTab] = useState('all');
+  const [search, setSearch]           = useState('');
+  const [msgResults, setMsgResults]   = useState([]); // resultados de búsqueda en mensajes
+  const [msgLoading, setMsgLoading]   = useState(false);
+  const msgTimerRef                   = useRef(null);
+  const [activeTab, setActiveTab]     = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
   const [name, setName]           = useState('');
@@ -25,6 +28,21 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [mergingId, setMergingId]           = useState(null);
   const [mergingAll, setMergingAll]         = useState(false);
   const [mergeAllResult, setMergeAllResult] = useState(null);
+
+  // Búsqueda de mensajes con debounce
+  useEffect(() => {
+    clearTimeout(msgTimerRef.current);
+    if (search.trim().length < 2) { setMsgResults([]); setMsgLoading(false); return; }
+    setMsgLoading(true);
+    msgTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get(`/conversations/search-messages?q=${encodeURIComponent(search.trim())}`);
+        setMsgResults(res.data.data || []);
+      } catch { setMsgResults([]); }
+      finally { setMsgLoading(false); }
+    }, 450);
+    return () => clearTimeout(msgTimerRef.current);
+  }, [search]);
 
   const HOT_STATES   = ['interested', 'collecting_order'];
   const now          = Date.now();
@@ -345,9 +363,10 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       {/* Buscador */}
       <div style={{ padding: '8px 12px 4px', backgroundColor: colors.bgSub }}>
         <div style={{ backgroundColor: colors.bgPanel, borderRadius: '8px', display: 'flex', alignItems: 'center', padding: '8px 12px', gap: '8px', border: `1px solid ${colors.border}` }}>
-          <Search size={16} color={colors.textSecondary} />
-          <input type="text" placeholder="Buscar conversación..." value={search} onChange={e => setSearch(e.target.value)}
+          {msgLoading ? <Loader size={16} color={colors.textSecondary} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} /> : <Search size={16} color={colors.textSecondary} />}
+          <input type="text" placeholder="Buscar conversación o mensaje..." value={search} onChange={e => setSearch(e.target.value)}
             style={{ background: 'none', border: 'none', color: colors.textPrimary, fontSize: '14px', flex: 1, outline: 'none' }} />
+          {search && <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: '0', display: 'flex' }}><X size={14} /></button>}
         </div>
       </div>
 
@@ -418,14 +437,85 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary, fontSize: '14px' }}>Cargando...</div>
-        ) : filtered.length === 0 ? (
+        ) : filtered.length === 0 && msgResults.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>
             <MessageSquare size={40} color={colors.textMuted} style={{ marginBottom: '12px' }} />
             <div style={{ fontSize: '14px' }}>{search ? 'Sin resultados' : 'Sin conversaciones aún'}</div>
           </div>
-        ) : filtered.map(conv => (
-          <ConversationItem key={conv.id} conversation={conv} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />
-        ))}
+        ) : (
+          <>
+            {filtered.map(conv => (
+              <ConversationItem key={conv.id} conversation={conv} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />
+            ))}
+
+            {/* Resultados de búsqueda en mensajes */}
+            {search.trim().length >= 2 && (
+              <>
+                {/* Separador solo si hay resultados de conversaciones arriba */}
+                {filtered.length > 0 && msgResults.filter(r => !filtered.find(f => f.id === r.id)).length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px 4px' }}>
+                    <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
+                    <span style={{ fontSize: '10px', color: colors.textMuted, fontWeight: 600, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Mensajes</span>
+                    <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
+                  </div>
+                )}
+                {/* Mostrar resultados de mensajes que no aparecen ya en la lista normal */}
+                {msgResults
+                  .filter(r => !filtered.find(f => f.id === r.id))
+                  .map(r => {
+                    const q = search.trim().toLowerCase();
+                    const content = r.matched_content || '';
+                    const idx = content.toLowerCase().indexOf(q);
+                    let snippet = content;
+                    if (idx >= 0) {
+                      const start = Math.max(0, idx - 30);
+                      const end   = Math.min(content.length, idx + q.length + 50);
+                      snippet = (start > 0 ? '...' : '') + content.slice(start, end) + (end < content.length ? '...' : '');
+                    }
+                    const parts = snippet.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+                    const name = r.contact_name && r.contact_name !== r.phone_number ? r.contact_name : r.phone_number;
+                    const initials = name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+                    const isSelected = r.id === selectedId;
+                    return (
+                      <div key={r.id} onClick={() => onSelect(r.id)}
+                        style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: `1px solid ${colors.border}`,
+                          backgroundColor: isSelected ? colors.bgHover : 'transparent',
+                          transition: 'background 0.1s',
+                        }}
+                        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = colors.bgHover; }}
+                        onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#4db6ac', flexShrink: 0,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, color: 'white', fontSize: '12px' }}>
+                            {initials}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '13px', color: colors.textPrimary,
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+                            <div style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '2px', lineHeight: '1.4',
+                              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                              {r.direction === 'inbound' ? '← ' : '→ '}
+                              {parts.map((p, i) =>
+                                p.toLowerCase() === q
+                                  ? <mark key={i} style={{ backgroundColor: '#f59e0b55', color: colors.textPrimary, borderRadius: '2px', padding: '0 1px' }}>{p}</mark>
+                                  : <span key={i}>{p}</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                {msgResults.filter(r => !filtered.find(f => f.id === r.id)).length === 0 && filtered.length === 0 && !msgLoading && (
+                  <div style={{ textAlign: 'center', padding: '30px', color: colors.textSecondary }}>
+                    <MessageSquare size={32} color={colors.textMuted} style={{ marginBottom: '8px' }} />
+                    <div style={{ fontSize: '13px' }}>Sin resultados</div>
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
       </div>
 
       {/* Footer */}

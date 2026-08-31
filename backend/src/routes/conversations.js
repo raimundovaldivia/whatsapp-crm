@@ -687,6 +687,39 @@ router.post('/merge-duplicates', async (req, res) => {
 });
 
 /**
+ * GET /api/conversations/search-messages?q=xxx
+ * Busca en el contenido de los mensajes de todas las conversaciones de la organización.
+ * Devuelve hasta 25 conversaciones con el mensaje más reciente que coincide.
+ */
+router.get('/search-messages', async (req, res) => {
+  const pool = getPool();
+  try {
+    const q = (req.query.q || '').trim();
+    if (q.length < 2) return res.json({ success: true, data: [] });
+
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (m.conversation_id)
+        c.id, c.contact_name, c.phone_number, c.agent_mode, c.pipeline_state,
+        c.unread_count, c.client_type, c.last_message_at,
+        m.content  AS matched_content,
+        m.direction,
+        m.created_at AS matched_at
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.organization_id = $1
+        AND m.content ILIKE $2
+      ORDER BY m.conversation_id, m.created_at DESC
+      LIMIT 25
+    `, [req.orgId, `%${q}%`]);
+
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('[Conversations/searchMessages]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/conversations/search-by-phone?phone=xxx
  * Busca TODAS las conversaciones de un número en cualquier formato (56xxx, +56xxx, xxx sin prefijo).
  * Útil para diagnosticar chats perdidos y encontrar duplicados.
