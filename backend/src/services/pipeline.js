@@ -587,20 +587,40 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
  * Maneja la recopilación de datos para el pedido
  */
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto) {
-  // 0. Pre-llenar con datos del cliente si ya existe en CRM o en Shopify
-  if (Object.keys(orderDraft).length === 0) {
-    const ds   = await db.getPrimaryDataSource(orgId);
+  // 0. Siempre fusionar datos del cliente desde CRM/Shopify — no solo la primera vez.
+  //    Esto evita que se pierda el nombre si el draft fue reseteado por alguna razón
+  //    y también garantiza que campos conocidos nunca sean pedidos de nuevo.
+  try {
+    const ds    = await db.getPrimaryDataSource(orgId);
     const known = await getKnownCustomerData(orgId, conversation.phone_number, ds);
     if (Object.keys(known).length > 0) {
-      orderDraft = { ...known };
+      // Solo rellenar campos que el draft todavía no tiene — no pisar lo que el cliente ya dio
+      for (const [key, val] of Object.entries(known)) {
+        if (val && !orderDraft[key]) orderDraft[key] = val;
+      }
       const fuente = known.found_in_shopify ? 'Shopify' : 'historial CRM';
-      console.log(`[Pipeline] Cliente pre-llenado desde ${fuente}: ${known.customer_name || '?'}`);
+      console.log(`[Pipeline] Datos del cliente fusionados desde ${fuente}: ${known.customer_name || '?'}`);
     }
+  } catch (e) {
+    console.warn('[Pipeline] Error fusionando datos del cliente:', e.message);
   }
 
   // 1. Extraer datos del mensaje del cliente y actualizar el draft
   const updatedDraft = await ordersAgent.extractOrderData(history, orderDraft);
   await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
+
+  // 1b. Si el cliente acaba de dar dirección o ciudad que no teníamos → guardar en contacts de inmediato.
+  //     Así no se pierde si el pedido no se completa.
+  const addrChanged = (updatedDraft.address && updatedDraft.address !== orderDraft.address)
+                   || (updatedDraft.city    && updatedDraft.city    !== orderDraft.city);
+  if (addrChanged) {
+    db.upsertContact(orgId, {
+      phone:   conversation.phone_number,
+      name:    updatedDraft.customer_name || null,
+      address: updatedDraft.address       || null,
+      city:    updatedDraft.city          || null,
+    }).catch(e => console.warn('[Pipeline] No se pudo guardar dirección en contacto:', e.message));
+  }
 
   // 2. Generar respuesta del agente de órdenes
   const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto);
