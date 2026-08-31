@@ -289,30 +289,38 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
     : 'c.organization_id = $1';
   // JOIN con contacts para mostrar el nombre real cuando el de la conversación es genérico
   // contacts.phone está normalizado (sin +, con código de país) igual que conversations.phone_number
+  // DISTINCT ON evita duplicados cuando hay múltiples contactos con el mismo teléfono
+  // en distintos formatos (ej: 9XXXXXXXX y 569XXXXXXXX). El subquery reordena por
+  // last_message_at después de eliminar duplicados por id.
   return query(
-    `SELECT c.*,
-       CASE
-         WHEN c.contact_name IS NOT NULL
-           AND c.contact_name <> 'Cliente'
-           AND c.contact_name <> c.phone_number
-           AND c.contact_name !~ '^[0-9]+$'
-         THEN c.contact_name
-         WHEN co.name IS NOT NULL AND co.name !~ '^[0-9]+$' AND co.name <> 'Cliente'
-         THEN co.name
-         ELSE c.contact_name
-       END AS contact_name,
-       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
-       co.client_type
-     FROM conversations c
-     LEFT JOIN contacts co ON co.organization_id = c.organization_id
-                           AND co.phone = ANY(ARRAY[
-                                 c.phone_number,
-                                 CASE WHEN c.phone_number ~ '^9[0-9]{8}$'   THEN '56' || c.phone_number END,
-                                 CASE WHEN c.phone_number ~ '^569[0-9]{8}$' THEN SUBSTRING(c.phone_number FROM 3) END,
-                                 CASE WHEN c.phone_number LIKE '+%'          THEN SUBSTRING(c.phone_number FROM 2) END,
-                                 '+' || c.phone_number
-                               ])
-     WHERE ${where} ORDER BY c.last_message_at DESC`,
+    `SELECT * FROM (
+       SELECT DISTINCT ON (c.id)
+         c.*,
+         CASE
+           WHEN c.contact_name IS NOT NULL
+             AND c.contact_name <> 'Cliente'
+             AND c.contact_name <> c.phone_number
+             AND c.contact_name !~ '^[0-9]+$'
+           THEN c.contact_name
+           WHEN co.name IS NOT NULL AND co.name !~ '^[0-9]+$' AND co.name <> 'Cliente'
+           THEN co.name
+           ELSE c.contact_name
+         END AS contact_name,
+         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
+         co.client_type
+       FROM conversations c
+       LEFT JOIN contacts co ON co.organization_id = c.organization_id
+                             AND co.phone = ANY(ARRAY[
+                                   c.phone_number,
+                                   CASE WHEN c.phone_number ~ '^9[0-9]{8}$'   THEN '56' || c.phone_number END,
+                                   CASE WHEN c.phone_number ~ '^569[0-9]{8}$' THEN SUBSTRING(c.phone_number FROM 3) END,
+                                   CASE WHEN c.phone_number LIKE '+%'          THEN SUBSTRING(c.phone_number FROM 2) END,
+                                   '+' || c.phone_number
+                                 ])
+       WHERE ${where}
+       ORDER BY c.id, c.last_message_at DESC
+     ) sub
+     ORDER BY last_message_at DESC`,
     [orgId]
   );
 }
