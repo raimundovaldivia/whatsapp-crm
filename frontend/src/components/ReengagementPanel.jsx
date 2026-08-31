@@ -5,7 +5,7 @@ import {
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
   FileText, Download, MoreVertical, X, Check,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
@@ -345,8 +345,9 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
   const filteredTotal    = candidates.filter(c => c.confidence >= minConf).length;
   const hiddenByFilter   = totalCandidates - filteredTotal;
 
-  const exportToExcel = () => {
+  const exportToExcel = async () => {
     if (!candidates.length) return;
+    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
 
     const windowLabel = { hoy: 'Hoy-Mañana', semana: 'Esta semana', mes: 'Este mes', lejano: '1-6 meses', desconocido: 'Desconocido' };
 
@@ -553,7 +554,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               </button>
             </div>
           )}
-        </div>}
+        </div>
       </div>
 
       {/* ── Modo Envío Masivo ── */}

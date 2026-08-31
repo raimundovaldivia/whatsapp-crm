@@ -8,7 +8,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone, Download } from 'lucide-react';
-import * as XLSX from 'xlsx';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -159,8 +158,9 @@ function NuevoReparto({ colors }) {
     }
   }
 
-  function handleExportXlsx() {
+  async function handleExportXlsx() {
     if (selectedOrders.length === 0) return;
+    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
 
     // ── Hoja 1: Despacho (formato software externo) ──────────────
     const HEADERS = [

@@ -5,7 +5,7 @@ import {
   CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar, Download,
   Plus, Trash2, X, MessageSquare, CalendarClock, BanIcon,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
@@ -354,9 +354,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   };
 
   // ─── Export para despacho ─────────────────────────────────────────
-  const handleExportXlsx = () => {
+  const handleExportXlsx = async () => {
     const selOrders = getSelOrders();
     if (selOrders.length === 0) return;
+    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
 
     const HEADERS = [
       'Título* Requerido', 'Dirección completa* Requerida', 'Carga',
