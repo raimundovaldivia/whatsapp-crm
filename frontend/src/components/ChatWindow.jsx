@@ -1079,16 +1079,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   />
 
                   {/* Toggle: asignar a empresas específicas */}
-                  <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', fontSize:'13px', color:colors.textSecondary, userSelect:'none' }}
-                    onClick={() => {
-                      const next = !newProdForEmpresas;
-                      setNewProdForEmpresas(next);
-                      if (next && newProdEmpresas.length === 0) {
-                        api.get('/contacts/empresas').then(({ data }) => setNewProdEmpresas(data.data || [])).catch(() => {});
-                      }
-                      if (!next) setNewProdSelEmpresas(new Set());
-                    }}>
-                    <input type='checkbox' checked={newProdForEmpresas} readOnly style={{ pointerEvents:'none' }} />
+                  <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', fontSize:'13px', color:colors.textSecondary, userSelect:'none' }}>
+                    <input type='checkbox' checked={newProdForEmpresas}
+                      onChange={e => {
+                        const next = e.target.checked;
+                        setNewProdForEmpresas(next);
+                        if (next && newProdEmpresas.length === 0) {
+                          api.get('/contacts/empresas').then(({ data }) => setNewProdEmpresas(data.data || [])).catch(() => {});
+                        }
+                        if (!next) setNewProdSelEmpresas(new Set());
+                      }} />
                     🏢 Asignar a empresas específicas
                   </label>
 
