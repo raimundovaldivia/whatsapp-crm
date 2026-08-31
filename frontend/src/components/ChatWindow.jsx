@@ -378,13 +378,29 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       // Si el cliente es empresa, mostrar solo productos empresa (is_business=true); si no, solo productos normales
       const empresaProds = all.filter(p => p.is_business === true || p.is_business === 1 || p.is_business === 'true');
       const normalProds  = all.filter(p => !p.is_business);
+      let displayProds;
       if (isEmpresa) {
-        // Si no hay productos empresa configurados, mostrar todos con advertencia
-        setProducts(empresaProds.length > 0 ? empresaProds : all);
-        if (empresaProds.length === 0) console.warn('[Nueva orden] Cliente es empresa pero no hay productos con is_business=true. Mostrando todos.', all.map(p => ({ id: p.id, title: p.title, is_business: p.is_business })));
+        displayProds = empresaProds.length > 0 ? empresaProds : all;
+        if (empresaProds.length === 0) console.warn('[Nueva orden] Cliente es empresa pero no hay productos con is_business=true. Mostrando todos.');
       } else {
-        setProducts(normalProds.length > 0 ? normalProds : all);
+        displayProds = normalProds.length > 0 ? normalProds : all;
       }
+      // Aplicar precios especiales de esta empresa si los tiene
+      if (isEmpresa) {
+        try {
+          const ov = await api.get(`/contacts/${encodeURIComponent(conversation.phone_number)}/prices`);
+          const overrides = ov.data.data || [];
+          if (overrides.length > 0) {
+            const overrideMap = {};
+            for (const o of overrides) overrideMap[String(o.product_id)] = o.custom_price;
+            displayProds = displayProds.map(p => {
+              const special = overrideMap[String(p.id)];
+              return special != null ? { ...p, price: special, _specialPrice: true } : p;
+            });
+          }
+        } catch { /* ignorar si falla */ }
+      }
+      setProducts(displayProds);
     } catch { setProducts([]); }
     finally { setProductsLoading(false); }
   };
@@ -1033,7 +1049,10 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     {p.image_url && <img src={p.image_url} alt={p.title} style={{ width:'44px', height:'44px', borderRadius:'8px', objectFit:'cover', flexShrink:0 }} />}
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontWeight:600, fontSize:'13px', color:colors.textPrimary }}>{p.title}</div>
-                      <div style={{ fontSize:'12px', color:colors.green, fontWeight:700 }}>${parseFloat(p.price).toLocaleString('es-CL')}</div>
+                      <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                        <span style={{ fontSize:'12px', color:colors.green, fontWeight:700 }}>${parseFloat(p.price).toLocaleString('es-CL')}</span>
+                        {p._specialPrice && <span style={{ fontSize:'10px', backgroundColor:'#05966922', color:'#059669', borderRadius:'4px', padding:'1px 5px', fontWeight:700 }}>precio especial</span>}
+                      </div>
                     </div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>
                       <button onClick={() => setQty(p.id, -1)} disabled={qty===0} style={{ width:'28px', height:'28px', borderRadius:'50%', border:`1px solid ${colors.border}`, background:'none', cursor:qty===0?'not-allowed':'pointer', color:colors.textSecondary, display:'flex', alignItems:'center', justifyContent:'center', opacity:qty===0?0.4:1 }}>
@@ -1085,7 +1104,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                         const next = e.target.checked;
                         setNewProdForEmpresas(next);
                         if (next && newProdEmpresas.length === 0) {
-                          api.get('/contacts/empresas').then(({ data }) => setNewProdEmpresas(data.data || [])).catch(() => {});
+                          api.get('/contacts/empresas').then(({ data }) => {
+                            let list = data.data || [];
+                            // Garantizar que el contacto actual siempre aparezca si es empresa
+                            if (isEmpresa) {
+                              const phone = conversation.phone_number;
+                              const ya = list.find(e => e.phone === phone);
+                              if (!ya) list = [{ phone, name: conversation.contact_name || null, address: null, city: null }, ...list];
+                            }
+                            setNewProdEmpresas(list);
+                          }).catch(() => {});
                         }
                         if (!next) setNewProdSelEmpresas(new Set());
                       }} />
