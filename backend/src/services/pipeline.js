@@ -502,14 +502,19 @@ REGLAS ABSOLUTAS:
     const hasShopifyUrl = shop && salesResponse.includes(shop);
     if ((hasShopUrl || hasShopifyUrl) && (intent === 'wants_to_order' || isTemplateReply)) {
       console.warn('[Pipeline] ⚠️  Agente mandó URL de tienda al cerrar venta — forzando collecting_order');
-      newState = 'collecting_order';
-      await db.updatePipelineState(conversationId, 'collecting_order', {});
-      const forceMsg = '¡Perfecto! Para hacer tu pedido necesito algunos datos. ¿Me das tu nombre completo?';
+      // Delegar a handleOrderCollection para que pre-llene los datos del cliente
       L.agent('orders', Date.now() - tWarm);
-      return { response: forceMsg, agentType: 'orders', newState: 'collecting_order' };
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto);
     }
 
-    await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
+    // Si el agente de ventas decidió pasar a pedido, delegar a handleOrderCollection en lugar
+    // de usar su respuesta genérica — así el bot pre-llena datos conocidos y no repregunta el nombre
+    if (newState === 'collecting_order') {
+      L.agent('orders', Date.now() - tWarm);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto);
+    }
+
+    await db.updatePipelineState(conversationId, newState, undefined);
     L.agent('sales', Date.now() - tWarm);
     return { response: salesResponse, agentType: 'sales', newState };
   }
@@ -518,7 +523,11 @@ REGLAS ABSOLUTAS:
   const tGen = Date.now();
   const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
   const finalState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : (intent === 'interested' ? 'interested' : effectiveState);
-  await db.updatePipelineState(conversationId, finalState, finalState === 'collecting_order' ? {} : undefined);
+  if (finalState === 'collecting_order') {
+    L.agent('orders', Date.now() - tGen);
+    return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto);
+  }
+  await db.updatePipelineState(conversationId, finalState, undefined);
   L.agent('sales', Date.now() - tGen);
   return { response: salesResponse, agentType: 'sales', newState: finalState };
 }
