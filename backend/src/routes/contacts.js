@@ -501,6 +501,49 @@ router.patch('/:phone/opt-out', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/contacts/empresas
+ * Devuelve todos los contactos marcados como empresa (sin paginación).
+ * Usado para la pantalla de asignación masiva de precios.
+ */
+router.get('/empresas', async (req, res) => {
+  try {
+    const { getPool } = require('../db/database');
+    const { rows } = await getPool().query(
+      `SELECT phone, name, address, city
+       FROM contacts
+       WHERE organization_id = $1 AND client_type = 'empresa'
+       ORDER BY name ASC NULLS LAST`,
+      [req.orgId]
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/contacts/prices/by-product/:product_id
+ * Devuelve todos los overrides de precio para un producto dado.
+ * Responde { phone → custom_price } para mostrar precios actuales por empresa.
+ */
+router.get('/prices/by-product/:product_id', async (req, res) => {
+  try {
+    const { getPool } = require('../db/database');
+    const { rows } = await getPool().query(
+      `SELECT phone, custom_price
+       FROM contact_price_overrides
+       WHERE organization_id = $1 AND product_id = $2`,
+      [req.orgId, req.params.product_id]
+    );
+    const map = {};
+    for (const r of rows) map[r.phone] = r.custom_price;
+    res.json({ success: true, data: map });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── Precios especiales por empresa ────────────────────────────────────────
 
 /**
@@ -551,6 +594,50 @@ router.put('/:phone/prices', async (req, res) => {
       [req.orgId, req.params.phone, product_id, product_title || null, price]
     );
     res.json({ success: true, data: row });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/contacts/prices/bulk
+ * Asigna un precio especial de un producto a múltiples empresas de una vez.
+ * Body: { product_id, product_title, custom_price, phones: string[] }
+ */
+router.post('/prices/bulk', async (req, res) => {
+  try {
+    const { product_id, product_title, custom_price, phones } = req.body;
+    if (!product_id || custom_price == null || !Array.isArray(phones) || phones.length === 0) {
+      return res.status(400).json({ success: false, error: 'product_id, custom_price y phones[] son requeridos' });
+    }
+    const price = parseFloat(custom_price);
+    if (isNaN(price) || price < 0) {
+      return res.status(400).json({ success: false, error: 'custom_price debe ser un número >= 0' });
+    }
+    const { getPool } = require('../db/database');
+    const pool = getPool();
+    // Upsert one row per phone — unnest paralelo para una sola query
+    const values = phones.map((ph, i) => `($1, $${i + 4}, $2, $3, NOW())`).join(', ');
+    const params = [req.orgId, product_id, price, ...phones];
+    // product_title es opcional — update si ya existe
+    await pool.query(
+      `INSERT INTO contact_price_overrides
+         (organization_id, phone, product_id, custom_price, updated_at)
+       VALUES ${values}
+       ON CONFLICT (organization_id, phone, product_id) DO UPDATE SET
+         custom_price = EXCLUDED.custom_price,
+         updated_at   = NOW()`,
+      params
+    );
+    // Guardar product_title en una query separada si viene (es texto, no bloquea)
+    if (product_title) {
+      await pool.query(
+        `UPDATE contact_price_overrides SET product_title = $1
+         WHERE organization_id = $2 AND product_id = $3`,
+        [product_title, req.orgId, product_id]
+      );
+    }
+    res.json({ success: true, updated: phones.length });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

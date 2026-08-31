@@ -5,7 +5,7 @@
  * Botón "Importar desde Shopify" para migración con un clic.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink, Copy, Check, Settings, Store, Phone, Sparkles, Save, Loader } from 'lucide-react';
+import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink, Copy, Check, Settings, Store, Phone, Sparkles, Save, Loader, Tag, Building2 } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
@@ -178,6 +178,230 @@ function StoreConfigTab({ orgSlug, colors }) {
   );
 }
 
+/* ── Precios Empresas ─────────────────────────────────────────────────── */
+function PreciosEmpresasTab({ products, colors, isDark }) {
+  const [empresas,        setEmpresas]        = useState([]);
+  const [overrides,       setOverrides]       = useState({}); // phone → custom_price
+  const [selectedProduct, setSelectedProduct] = useState('');
+  const [customPrice,     setCustomPrice]     = useState('');
+  const [selected,        setSelected]        = useState(new Set());
+  const [selectAll,       setSelectAll]       = useState(false);
+  const [saving,          setSaving]          = useState(false);
+  const [status,          setStatus]          = useState(null); // { ok, msg }
+  const [loadingEmpresas, setLoadingEmpresas] = useState(true);
+  const [search,          setSearch]          = useState('');
+
+  // Cargar empresas al montar
+  useEffect(() => {
+    api.get('/contacts/empresas')
+      .then(({ data }) => setEmpresas(data.data || []))
+      .catch(() => setEmpresas([]))
+      .finally(() => setLoadingEmpresas(false));
+  }, []);
+
+  // Cargar overrides cuando cambia el producto seleccionado
+  useEffect(() => {
+    if (!selectedProduct) { setOverrides({}); return; }
+    api.get(`/contacts/prices/by-product/${encodeURIComponent(selectedProduct)}`)
+      .then(({ data }) => setOverrides(data.data || {}))
+      .catch(() => setOverrides({}));
+  }, [selectedProduct]);
+
+  // Pre-llenar precio con precio base cuando se elige un producto
+  useEffect(() => {
+    if (!selectedProduct) { setCustomPrice(''); return; }
+    const prod = products.find(p => String(p.id) === selectedProduct);
+    if (prod) setCustomPrice(String(prod.price));
+  }, [selectedProduct, products]);
+
+  const filtered = empresas.filter(e =>
+    !search.trim() || (e.name || '').toLowerCase().includes(search.toLowerCase()) ||
+    (e.phone || '').includes(search)
+  );
+
+  const toggleAll = () => {
+    if (selectAll) {
+      setSelectAll(false);
+      setSelected(new Set());
+    } else {
+      setSelectAll(true);
+      setSelected(new Set(filtered.map(e => e.phone)));
+    }
+  };
+
+  const toggleOne = (phone) => {
+    const next = new Set(selected);
+    if (next.has(phone)) next.delete(phone); else next.add(phone);
+    setSelectAll(next.size === filtered.length && filtered.length > 0);
+    setSelected(next);
+  };
+
+  const handleApply = async () => {
+    if (!selectedProduct || !customPrice || selected.size === 0) return;
+    const prod = products.find(p => String(p.id) === selectedProduct);
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.post('/contacts/prices/bulk', {
+        product_id:    selectedProduct,
+        product_title: prod?.title || selectedProduct,
+        custom_price:  parseFloat(customPrice),
+        phones:        [...selected],
+      });
+      setStatus({ ok: true, msg: `✅ Precio $${Number(customPrice).toLocaleString('es-CL')} aplicado a ${selected.size} empresa(s)` });
+      // Refrescar overrides
+      const { data } = await api.get(`/contacts/prices/by-product/${encodeURIComponent(selectedProduct)}`);
+      setOverrides(data.data || {});
+      setSelected(new Set());
+      setSelectAll(false);
+    } catch (e) {
+      setStatus({ ok: false, msg: '❌ Error al guardar: ' + (e.response?.data?.error || e.message) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const prodBase = products.find(p => String(p.id) === selectedProduct);
+  const s = { // estilos comunes
+    card:    { background: isDark ? '#1a1a2e' : '#f8fafc', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '16px' },
+    label:   { fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '6px', display: 'block' },
+    input:   { width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, background: colors.surface, color: colors.text, fontSize: '14px', boxSizing: 'border-box' },
+    select:  { width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, background: colors.surface, color: colors.text, fontSize: '14px', boxSizing: 'border-box' },
+    badge:   (special) => ({ fontSize: '11px', padding: '2px 7px', borderRadius: '5px', fontWeight: 600,
+                backgroundColor: special ? '#059669' + '22' : colors.border, color: special ? '#059669' : colors.textSecondary }),
+  };
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+      {/* Fila superior: producto + precio */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 200px', gap: '12px' }}>
+        <div>
+          <label style={s.label}>Producto</label>
+          <select value={selectedProduct} onChange={e => setSelectedProduct(e.target.value)} style={s.select}>
+            <option value=''>— Seleccionar producto —</option>
+            {products.filter(p => p.active !== false).map(p => (
+              <option key={p.id} value={String(p.id)}>
+                {p.title} — ${Number(p.price).toLocaleString('es-CL')}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={s.label}>Precio especial ($)</label>
+          <input
+            type='number' min='0' value={customPrice}
+            onChange={e => setCustomPrice(e.target.value)}
+            placeholder={prodBase ? String(prodBase.price) : '0'}
+            style={s.input}
+            disabled={!selectedProduct}
+          />
+          {prodBase && customPrice && parseFloat(customPrice) !== parseFloat(prodBase.price) && (
+            <div style={{ fontSize: '11px', color: '#059669', marginTop: '4px' }}>
+              {Math.round((1 - parseFloat(customPrice) / parseFloat(prodBase.price)) * 100)}% menos que el precio base (${Number(prodBase.price).toLocaleString('es-CL')})
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Lista de empresas */}
+      <div style={s.card}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: colors.text }}>
+            <Building2 size={14} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+            Empresas ({filtered.length})
+          </span>
+          <input
+            placeholder='Buscar empresa...'
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ ...s.input, width: '180px', padding: '6px 10px', fontSize: '12px' }}
+          />
+        </div>
+
+        {loadingEmpresas ? (
+          <div style={{ color: colors.textSecondary, fontSize: '13px', padding: '20px', textAlign: 'center' }}>Cargando...</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ color: colors.textSecondary, fontSize: '13px', padding: '20px', textAlign: 'center' }}>
+            {empresas.length === 0
+              ? 'No hay contactos marcados como empresa. Ve a un chat, abre el detalle del contacto y activa el badge 🏢 Empresa.'
+              : 'Sin resultados para esta búsqueda.'}
+          </div>
+        ) : (
+          <>
+            {/* Header con checkbox seleccionar todo */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 8px', borderBottom: `1px solid ${colors.border}`, marginBottom: '6px' }}>
+              <input type='checkbox' checked={selectAll} onChange={toggleAll} style={{ width: '15px', height: '15px', cursor: 'pointer' }} />
+              <span style={{ fontSize: '12px', color: colors.textSecondary, flex: 1 }}>Seleccionar todas</span>
+              {selected.size > 0 && (
+                <span style={{ fontSize: '12px', fontWeight: 600, color: colors.green }}>{selected.size} seleccionada{selected.size !== 1 ? 's' : ''}</span>
+              )}
+            </div>
+
+            {/* Lista de empresas */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '340px', overflowY: 'auto' }}>
+              {filtered.map(e => {
+                const override = overrides[e.phone];
+                const hasOverride = override !== undefined && override !== null;
+                return (
+                  <div key={e.phone}
+                    onClick={() => toggleOne(e.phone)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '7px',
+                      background: selected.has(e.phone) ? (isDark ? '#059669' + '20' : '#d1fae5') : 'transparent',
+                      cursor: 'pointer', border: selected.has(e.phone) ? `1px solid #05966940` : '1px solid transparent' }}>
+                    <input type='checkbox' checked={selected.has(e.phone)} onChange={() => {}} style={{ width: '14px', height: '14px', pointerEvents: 'none' }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: 500, color: colors.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {e.name || e.phone}
+                      </div>
+                      {e.name && (
+                        <div style={{ fontSize: '11px', color: colors.textSecondary }}>{e.phone}</div>
+                      )}
+                    </div>
+                    {selectedProduct && (
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <span style={s.badge(hasOverride)}>
+                          {hasOverride ? `$${Number(override).toLocaleString('es-CL')} especial` : 'precio base'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Status */}
+      {status && (
+        <div style={{ padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
+          background: status.ok ? '#d1fae5' : '#fee2e2', color: status.ok ? '#065f46' : '#991b1b' }}>
+          {status.msg}
+        </div>
+      )}
+
+      {/* Botón aplicar */}
+      <button
+        onClick={handleApply}
+        disabled={!selectedProduct || !customPrice || selected.size === 0 || saving}
+        style={{ padding: '11px 20px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+          background: (!selectedProduct || !customPrice || selected.size === 0 || saving) ? colors.border : colors.green,
+          color: (!selectedProduct || !customPrice || selected.size === 0 || saving) ? colors.textSecondary : '#fff',
+          fontWeight: 600, fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+        {saving ? <><Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Guardando...</> : (
+          <>
+            <Tag size={14} />
+            {selected.size === 0
+              ? 'Selecciona empresas para aplicar'
+              : `Aplicar $${customPrice ? Number(customPrice).toLocaleString('es-CL') : '—'} a ${selected.size} empresa${selected.size !== 1 ? 's' : ''}`}
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+
 export default function ProductsPanel({ orgSlug }) {
   const { colors, isDark } = useTheme();
   const [activeTab, setActiveTab] = useState('productos');
@@ -336,7 +560,11 @@ export default function ProductsPanel({ orgSlug }) {
 
       {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: `1px solid ${colors.border}`, padding: '0 24px', gap: '2px', flexShrink: 0 }}>
-        {[{ key: 'productos', label: 'Productos', icon: Package }, { key: 'configuracion', label: 'Configuración', icon: Settings }].map(t => (
+        {[
+          { key: 'productos',        label: 'Productos',        icon: Package },
+          { key: 'precios-empresas', label: 'Precios Empresas', icon: Tag },
+          { key: 'configuracion',    label: 'Configuración',    icon: Settings },
+        ].map(t => (
           <button key={t.key} onClick={() => setActiveTab(t.key)}
             style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 14px', border: 'none',
               backgroundColor: 'transparent', cursor: 'pointer', fontSize: '13px', fontWeight: activeTab === t.key ? 600 : 400,
@@ -350,6 +578,9 @@ export default function ProductsPanel({ orgSlug }) {
 
       {/* Tab: Configuración */}
       {activeTab === 'configuracion' && <StoreConfigTab orgSlug={orgSlug} colors={colors} />}
+
+      {/* Tab: Precios Empresas */}
+      {activeTab === 'precios-empresas' && <PreciosEmpresasTab products={products} colors={colors} isDark={isDark} />}
 
       {/* Tab: Productos — Lista */}
       {activeTab === 'productos' && <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
