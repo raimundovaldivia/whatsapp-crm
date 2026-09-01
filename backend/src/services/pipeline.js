@@ -149,6 +149,12 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
       if (lines.length) deliverySection = `## Información de Entrega\n${lines.join('\n')}`;
     } catch { /* JSON inválido — ignorar */ }
   }
+
+  // Instrucciones de pago — sección EXPLÍCITA para que el bot las comparta cuando el cliente pregunte
+  const paymentInfoRaw = await db.getSetting(orgId, 'payment_info') || '';
+  const paymentSection = paymentInfoRaw.trim()
+    ? `## Instrucciones de Pago ⚠️ IMPORTANTE\nCuando el cliente pregunte cómo pagar, dónde transferir, los datos bancarios, o cualquier duda sobre el pago → copia y pega EXACTAMENTE esta información:\n\n${paymentInfoRaw.trim()}\n\nNO inventes ni modifiques esta información.`
+    : '';
   const tiendaSection = tiendaUrl
     ? `## Tienda online\nURL de la tienda: ${tiendaUrl}\nUsa este link SOLO cuando el cliente pida explícitamente ver la tienda, el catálogo completo o la página web (ej: "¿tienes web?", "mándame el link del catálogo", "quiero ver todos los productos"). NUNCA uses este link para cerrar una venta ni como respuesta a "si", "dale", "sí quiero" o cualquier confirmación de compra — en ese caso, usa SIEMPRE las frases de cierre del pedido para recopilar los datos del cliente.`
     : '';
@@ -211,7 +217,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     state: currentState,
   });
 
-  const storeCustomPrompt = [clientTypeSection, specialPricesSection, purchaseHistorySection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
   // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.

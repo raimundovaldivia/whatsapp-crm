@@ -32,6 +32,7 @@ router.get('/', async (req, res) => {
       ai_enabled_global:      (await db.getSetting(req.orgId, 'ai_enabled_global')) === 'true',
       ai_system_prompt_extra: (await db.getSetting(req.orgId, 'ai_system_prompt_extra')) || '',
       payment_mode:           (await db.getSetting(req.orgId, 'payment_mode')) || 'link',
+      payment_info:           (await db.getSetting(req.orgId, 'payment_info')) || '',
       admin_alert_phone:      (await db.getSetting(req.orgId, 'admin_alert_phone')) || '',
       bot_improvement_rules,
     };
@@ -46,13 +47,15 @@ router.get('/', async (req, res) => {
  */
 router.put('/', async (req, res) => {
   try {
-    const { ai_enabled_global, ai_system_prompt_extra, payment_mode, admin_alert_phone, bot_improvement_rules } = req.body;
+    const { ai_enabled_global, ai_system_prompt_extra, payment_mode, payment_info, admin_alert_phone, bot_improvement_rules } = req.body;
     if (ai_enabled_global !== undefined)
       await db.setSetting(req.orgId, 'ai_enabled_global', ai_enabled_global ? 'true' : 'false');
     if (ai_system_prompt_extra !== undefined)
       await db.setSetting(req.orgId, 'ai_system_prompt_extra', ai_system_prompt_extra);
     if (payment_mode !== undefined)
       await db.setSetting(req.orgId, 'payment_mode', payment_mode);
+    if (payment_info !== undefined)
+      await db.setSetting(req.orgId, 'payment_info', payment_info);
     if (admin_alert_phone !== undefined)
       await db.setSetting(req.orgId, 'admin_alert_phone', admin_alert_phone.replace(/\D/g, ''));
     if (bot_improvement_rules !== undefined)

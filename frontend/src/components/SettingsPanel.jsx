@@ -890,6 +890,7 @@ function IATab({ onSwitchTab }) {
   const [zone,           setZone]           = useState('');
   const [minimum,        setMinimum]        = useState('');
   const [paymentMethods, setPaymentMethods] = useState('');
+  const [paymentInfo,    setPaymentInfo]    = useState(''); // instrucciones de pago para el bot
   const [deliverySaved,  setDeliverySaved]  = useState(false);
 
   // Modo de pago: 'link' (link Shopify) | 'cod' (despacho por pagar)
@@ -953,6 +954,7 @@ function IATab({ onSwitchTab }) {
       setMinimum(di.minimum || '');
       setPaymentMethods(di.paymentMethods || '');
       if (d?.payment_mode) setPaymentMode(d.payment_mode);
+      if (d?.payment_info !== undefined) setPaymentInfo(d.payment_info || '');
       if (d?.admin_alert_phone) setAdminAlertPhone(d.admin_alert_phone);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
@@ -1060,7 +1062,7 @@ function IATab({ onSwitchTab }) {
     setSaving(true); setError(''); setSuccess('');
     try {
       await Promise.all([
-        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, admin_alert_phone: adminAlertPhone }),
+        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone }),
         reengagementAPI.saveStoreContext(storeContext),
         reengagementAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
@@ -1238,6 +1240,26 @@ function IATab({ onSwitchTab }) {
             </div>
             <p style={{ ...hintStyle, marginTop: '10px' }}>
               El bot usa estos datos para responder preguntas de clientes sobre entregas y pagos. Se guardan automáticamente.
+            </p>
+          </div>
+
+          {/* Instrucciones de pago para el bot */}
+          <div>
+            <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <CreditCard size={11} color={colors.green} />
+              <span>Instrucciones de pago <span style={{ color: colors.green, fontWeight: 700 }}>(el bot las envía cuando el cliente pregunte cómo pagar)</span></span>
+            </label>
+            <textarea
+              value={paymentInfo}
+              onChange={e => setPaymentInfo(e.target.value)}
+              rows={4}
+              placeholder={'Ejemplo:\nTransferencia bancaria:\nBanco Estado — Cta. Cte. 123456789\nRUT: 12.345.678-9\nNombre: Diez Ríos SpA\nEmail: pagos@diezrios.cl\n\nEnviar comprobante por WhatsApp.'}
+              style={{ ...inp, resize: 'vertical', lineHeight: '1.5', borderColor: paymentInfo ? `${colors.green}66` : colors.borderStrong }}
+            />
+            <p style={{ ...hintStyle, marginTop: '6px', color: paymentInfo ? colors.green : colors.textMuted }}>
+              {paymentInfo
+                ? '✓ Configurado — el bot enviará estos datos cuando un cliente pregunte cómo pagar.'
+                : 'Escribe aquí los datos bancarios o instrucciones de pago. El bot los enviará textualmente cuando alguien pregunte "¿cómo pago?", "¿dónde transfiero?", etc.'}
             </p>
           </div>
 
