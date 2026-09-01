@@ -12,7 +12,6 @@ import StatsPanel         from './components/StatsPanel.jsx';
 import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
-import AssistantPanel       from './components/AssistantPanel.jsx';
 import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
 import ProductsPanel        from './components/ProductsPanel.jsx';
 import RepartosPanel        from './components/RepartosPanel.jsx';
@@ -66,7 +65,7 @@ export default function App() {
       .then(data => {
         setUser(data.user);
         setOrg(data.organization);
-        if (!data.organization.setup_done) setView('asistente');
+        if (!data.organization.setup_done) setView('settings');
         setAppState('crm');
       })
       .catch(() => { localStorage.removeItem('crm_token'); setAppState('auth'); });
@@ -75,7 +74,7 @@ export default function App() {
   const handleAuth = useCallback((data) => {
     setUser(data.user);
     setOrg(data.organization);
-    if (!data.organization.setup_done) setView('asistente');
+    if (!data.organization.setup_done) setView('settings');
     setAppState('crm');
   }, []);
 
@@ -100,24 +99,24 @@ export default function App() {
           .then(() => {
             // Si está en onboarding → volver al asistente para continuar el flujo
             setOrg(o => ({ ...o, display_phone_number: displayPhoneNumber }));
-            setView(org?.setup_done ? 'settings' : 'asistente');
+            setView('settings');
           })
           .catch(console.error);
       }
     }
     if (params.get('kapso_error') === '1') {
       window.history.replaceState({}, '', window.location.pathname);
-      setView(org?.setup_done ? 'settings' : 'asistente');
+      setView('settings');
     }
 
     // Shopify OAuth
     if (params.get('shopify_success') === '1') {
       window.history.replaceState({}, '', window.location.pathname);
-      setView(org?.setup_done ? 'settings' : 'asistente');
+      setView('settings');
     }
     if (params.get('shopify_error')) {
       window.history.replaceState({}, '', window.location.pathname);
-      setView(org?.setup_done ? 'settings' : 'asistente');
+      setView('settings');
     }
   }, [appState]);
 
@@ -452,14 +451,6 @@ export default function App() {
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}
 
-      {/* Vista Asistente IA */}
-      {view === 'asistente' && (
-        <AssistantPanel
-          org={org}
-          onSetupComplete={handleSetupComplete}
-          onClose={() => setView('dashboard')}
-        />
-      )}
     </div>
     </ThemeCtx.Provider>
   );
