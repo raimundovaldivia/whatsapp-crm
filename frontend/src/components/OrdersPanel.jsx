@@ -176,6 +176,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   }, [drawerMsgs]);
 
   // Filtros
+  const [searchQuery,  setSearchQuery]  = useState('');
   const [dateFilter,   setDateFilter]   = useState('all');
   const [customDate,   setCustomDate]   = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
@@ -258,6 +259,15 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       return effective === statusFilter;
     });
   }
+  if (searchQuery.trim()) {
+    const q = searchQuery.trim().toLowerCase();
+    filtered = filtered.filter(o =>
+      (o.customerName || '').toLowerCase().includes(q) ||
+      (o.phone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '')) ||
+      String(o.rawId || '').toLowerCase().includes(q) ||
+      (o.shopifyName || '').toLowerCase().includes(q)
+    );
+  }
 
   const totalPages  = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated   = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -291,6 +301,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   }[dateFilter] || 'Ventas';
 
   // Reset página + selección si el filtro cambia
+  const setSearchQueryR  = v => { setSearchQuery(v); setPage(1); setSelected(new Set()); };
   const setDateFilterR   = v => { setDateFilter(v); if (v !== 'custom') setCustomDate(''); setPage(1); setSelected(new Set()); };
   const setSourceFilterR = v => { setSourceFilter(v); setPage(1); setSelected(new Set()); };
   const setStatusFilterR = v => { setStatusFilter(v); setPage(1); setSelected(new Set()); };
@@ -592,6 +603,29 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               <div style={{ fontSize: '20px', fontWeight: 700, color }}>{value}</div>
             </div>
           ))}
+        </div>
+
+        {/* Buscador */}
+        <div style={{ position: 'relative', maxWidth: '320px' }}>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQueryR(e.target.value)}
+            placeholder="Buscar por nombre, teléfono o #pedido..."
+            style={{
+              width: '100%', padding: '8px 32px 8px 36px', borderRadius: '10px',
+              border: `1px solid ${searchQuery ? colors.green : colors.border}`,
+              backgroundColor: colors.bgPanel, color: colors.textPrimary,
+              fontSize: '13px', outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+          <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: colors.textSecondary, pointerEvents: 'none', fontSize: '14px' }}>🔍</span>
+          {searchQuery && (
+            <button onClick={() => setSearchQueryR('')}
+              style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: '2px', display: 'flex', alignItems: 'center' }}>
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* Filtros */}
