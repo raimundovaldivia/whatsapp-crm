@@ -24,6 +24,23 @@ let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 /**
+ * Debounce por conversación — evita múltiples respuestas del bot cuando
+ * el cliente manda varios mensajes rápidos en sucesión.
+ * El pipeline se ejecuta 3 segundos después del ÚLTIMO mensaje recibido.
+ */
+const pendingPipeline = new Map(); // key: `${orgId}:${conversationId}` → timer
+
+function schedulePipeline(orgId, conversationId, fn) {
+  const key = `${orgId}:${conversationId}`;
+  if (pendingPipeline.has(key)) clearTimeout(pendingPipeline.get(key));
+  const timer = setTimeout(async () => {
+    pendingPipeline.delete(key);
+    await fn();
+  }, 3000); // esperar 3s desde el último mensaje
+  pendingPipeline.set(key, timer);
+}
+
+/**
  * POST /kapso-webhook
  * Kapso envía JSON; ya está parseado por express.json() en index.js
  */
@@ -125,9 +142,6 @@ router.post('/', async (req, res) => {
 
   if (!parsed.text) return;
 
-  const log = createBotLogger(org.name, parsed.from);
-  log.in(parsed.text);
-
   try {
     // 1. Obtener/crear conversación
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
@@ -149,7 +163,7 @@ router.post('/', async (req, res) => {
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig);
 
-    // 3. Emitir al CRM en tiempo real
+    // 3. Emitir al CRM en tiempo real (el mensaje siempre aparece inmediatamente)
     const msgForSocket = savedMsg || { conversationId: conversation.id, direction: 'inbound', content: parsed.text };
     const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, { message: msgForSocket, conversation: updatedConv });
@@ -158,101 +172,107 @@ router.post('/', async (req, res) => {
     if (updatedConv.agent_mode !== 'ai') {
       const AUTO_RESET_MINUTES = 1440;
       const mins = await db.minutesSinceLastHumanReply(conversation.id);
-      if (mins < AUTO_RESET_MINUTES) {
-        log.humanMode(mins);
-        log.done();
-        return;
-      }
-      log.autoReset(mins);
+      if (mins < AUTO_RESET_MINUTES) return;
+      // Auto-reset a modo IA
       await db.setAgentMode(conversation.id, 'ai');
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
       if (typeof db.clearLastEscalation === 'function') {
         await db.clearLastEscalation(conversation.id).catch(() => {});
       }
       await db.updatePipelineState(conversation.id, 'exploring', {}).catch(() => {});
-      log.done();
       return;
     }
 
-    // 5. Ejecutar pipeline de 3 agentes
-    io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
-    const tPipeline = Date.now();
-    const result = await pipeline.processMessage(org.id, conversation.id, parsed.text, log);
-    io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
+    // 5. Debounce: esperar 3s desde el ÚLTIMO mensaje antes de ejecutar pipeline.
+    //    Si el cliente manda varios mensajes rápidos, solo se procesa el último.
+    const capturedText  = parsed.text;
+    const capturedFrom  = parsed.from;
+    const capturedConvId = conversation.id;
 
-    // Si el pipeline detectó un pedido duplicado, no enviar ni guardar nada
-    if (result.duplicate) {
-      console.warn(`[KapsoWebhook] Pedido duplicado ignorado para conv ${conversation.id}`);
-      log.step('duplicate', 'pedido ya creado por otro proceso — respuesta silenciada');
-      log.done();
-      return;
-    }
+    schedulePipeline(org.id, capturedConvId, async () => {
+      const log = createBotLogger(org.name, capturedFrom);
+      // Leer el último mensaje inbound de la DB (puede haber llegado algo nuevo durante el debounce)
+      const lastMessages = await db.getLastMessages(capturedConvId, 3).catch(() => []);
+      const lastInbound  = lastMessages?.find(m => m.direction === 'inbound');
+      const textToProcess = lastInbound?.content || capturedText;
+      log.in(textToProcess);
 
-    log.response(result.response, Date.now() - tPipeline);
+      try {
+        io?.emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: true });
+        const tPipeline = Date.now();
+        const result = await pipeline.processMessage(org.id, capturedConvId, textToProcess, log);
+        io?.emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
 
-    // 6. Enviar respuesta por WhatsApp via Kapso
-    let sentResult = null;
-    let windowExpired = false;
-    const tSend = Date.now();
-    try {
-      sentResult = await kapsoService.sendTextMessage(
-        parsed.from,
-        result.response,
-        whatsappConfig
-      );
-      log.sent(Date.now() - tSend);
-    } catch (sendErr) {
-      if (sendErr.is24hWindow) {
-        windowExpired = true;
-        log.windowExpired(parsed.from);
-        io?.emit(`window_expired_${org.id}`, { conversationId: conversation.id, phone: parsed.from });
-      } else {
-        throw sendErr;
+        if (result.duplicate) {
+          log.step('duplicate', 'pedido ya creado por otro proceso — respuesta silenciada');
+          log.done();
+          return;
+        }
+
+        log.response(result.response, Date.now() - tPipeline);
+
+        // Enviar respuesta por WhatsApp via Kapso
+        let sentResult = null;
+        let windowExpired = false;
+        const tSend = Date.now();
+        try {
+          sentResult = await kapsoService.sendTextMessage(capturedFrom, result.response, whatsappConfig);
+          log.sent(Date.now() - tSend);
+        } catch (sendErr) {
+          if (sendErr.is24hWindow) {
+            windowExpired = true;
+            log.windowExpired(capturedFrom);
+            io?.emit(`window_expired_${org.id}`, { conversationId: capturedConvId, phone: capturedFrom });
+          } else {
+            throw sendErr;
+          }
+        }
+
+        const outMsg = await db.saveMessage({
+          conversationId:    capturedConvId,
+          whatsappMessageId: sentResult?.messages?.[0]?.id || null,
+          direction:         'outbound',
+          content:           windowExpired
+            ? `⏰ [Mensaje bloqueado — ventana 24h expirada]\n${result.response}`
+            : result.response,
+          sentBy:            'ai',
+          agentType:         result.agentType,
+          status:            windowExpired ? 'failed' : 'sent',
+        });
+
+        await db.updateConversationLastMessage(capturedConvId, result.response);
+
+        if (result.switchToHuman) {
+          io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
+          const reason = result.escalationReason || 'El cliente solicitó hablar con un asesor';
+          notifyAdminHandoff(org.id, conversation, reason);
+        }
+
+        if (result.orderCreated) {
+          io?.emit(`order_created_${org.id}`, {
+            conversationId: capturedConvId,
+            order: result.orderCreated,
+          });
+        }
+
+        const finalConv = await db.getConversationById(capturedConvId);
+        io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+
+        log.done();
+
+      } catch (err) {
+        io?.emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
+        if (err.response) {
+          log.error('HTTP', new Error(`${err.response.status} ${err.config?.url} — ${JSON.stringify(err.response.data)}`));
+        } else {
+          log.error('pipeline', err);
+        }
+        log.done();
       }
-    }
-
-    // 7. Guardar respuesta en DB (aunque no se haya podido enviar)
-    const outMsg = await db.saveMessage({
-      conversationId:    conversation.id,
-      whatsappMessageId: sentResult?.messages?.[0]?.id || null,
-      direction:         'outbound',
-      content:           windowExpired
-        ? `⏰ [Mensaje bloqueado — ventana 24h expirada]\n${result.response}`
-        : result.response,
-      sentBy:            'ai',
-      agentType:         result.agentType,
-      status:            windowExpired ? 'failed' : 'sent',
     });
 
-    await db.updateConversationLastMessage(conversation.id, result.response);
-
-    // 8. Si el pipeline indica cambiar a modo humano
-    if (result.switchToHuman) {
-      io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
-      const reason = result.escalationReason || 'El cliente solicitó hablar con un asesor';
-      notifyAdminHandoff(org.id, conversation, reason);
-    }
-
-    const finalConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
-
-    // 9. Si se creó una orden, notificar al CRM
-    if (result.orderCreated) {
-      io?.emit(`order_created_${org.id}`, {
-        conversationId: conversation.id,
-        order: result.orderCreated,
-      });
-    }
-
-    log.done();
-
-  } catch (err) {
-    if (err.response) {
-      log.error('HTTP', new Error(`${err.response.status} ${err.config?.url} — ${JSON.stringify(err.response.data)}`));
-    } else {
-      log.error('pipeline', err);
-    }
-    log.done();
+  } catch (outerErr) {
+    console.error('[KapsoWebhook] Error procesando mensaje entrante:', outerErr.message);
   }
 });
 
