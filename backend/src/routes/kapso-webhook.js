@@ -265,6 +265,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     console.log(`[KapsoWebhook] 📸 Imagen de ${parsed.from} — analizando con IA...`);
 
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
+    db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
 
     // ── 1. Descargar imagen y analizar con Claude Vision ────────────

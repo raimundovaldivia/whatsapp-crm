@@ -891,6 +891,8 @@ async function touchLead(orgId, phone, name = null) {
      VALUES ($1, $2, $3, 'lead', 'whatsapp', NOW(), NOW())
      ON CONFLICT (organization_id, phone) DO UPDATE SET
        name         = COALESCE(EXCLUDED.name, contacts.name),
+       contact_type = COALESCE(contacts.contact_type, 'lead'),
+       source       = COALESCE(contacts.source, 'whatsapp'),
        last_seen_at = NOW(),
        updated_at   = NOW()`,
     [orgId, phone, name || null]
