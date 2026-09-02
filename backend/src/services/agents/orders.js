@@ -21,6 +21,7 @@ const ORDERS_SYSTEM = `Eres el asistente de pedidos de una tienda. El cliente ya
 - NUNCA inventes ni supongas datos que no están en DATOS RECOPILADOS.
 - Si el cliente dice una cantidad ("uno", "dos", "un par", "3"), intégrala directamente.
 - Cantidad no especificada = 1 (asúmelo y menciona "1 unidad" en el resumen para que confirme).
+- IMPORTANTE — PRODUCTO YA ELEGIDO: Si en el historial de la conversación el cliente ya mencionó un producto (ej: "1 xl", "la de 12 mil", "huevos XL"), y el agente ya le había presentado opciones con precios, DEDUCE el producto completo desde el historial y NO vuelvas a preguntar "¿qué producto quieres?". Usar la conversación completa como contexto.
 
 ━━━ CLIENTE CON DATOS PREVIOS ━━━
 
@@ -83,7 +84,7 @@ async function generateOrderResponse(conversationHistory, userMessage, orderDraf
     .replace('{PRODUCTOS}', productContext);
 
   // Más historial para el agente de pedidos — necesita recordar el contexto completo
-  const messages = conversationHistory.slice(-14).map(m => ({
+  const messages = conversationHistory.slice(-20).map(m => ({
     role: m.direction === 'inbound' ? 'user' : 'assistant',
     content: m.content,
   }));
@@ -112,7 +113,7 @@ Devuelve SOLO un JSON con los campos que encuentres. Si no encuentras un campo, 
 
 Campos posibles:
 - customer_name: nombre completo del cliente (ej: "Juan Pérez")
-- product_name: nombre del producto + variante mencionada por el cliente (ej: "Huevos XL Bandeja 30")
+- product_name: nombre del producto + variante (ej: "Huevos XL Bandeja 30")
 - quantity: número entero de unidades. Si dice "uno" → 1, "un par" → 2, "media docena" → 6. Si no especifica → omite el campo.
 - address: dirección de envío incluyendo calle, número y sector si los menciona
 - city: ciudad de envío
@@ -121,16 +122,18 @@ Campos posibles:
 - notes: instrucciones especiales de entrega si las hay (ej: "dejar en conserjería", "tocar timbre 2")
 - price: precio unitario si fue mencionado en la conversación
 
-REGLAS:
-- Solo extrae lo que el CLIENTE dijo claramente — no inferir de respuestas del agente.
+REGLAS CRÍTICAS:
+- Para product_name: si el cliente eligió de una lista presentada por el Agente (ej: cliente dijo "el de 12 mil", "ese", "la XL", "la bandeja grande"), deduce el producto completo mirando qué opción corresponde al precio o descripción elegida por el cliente en el historial del Agente.
+- Si el agente listó opciones y el cliente confirmó una (por precio, tamaño o "ese/esa"), extrae el nombre completo de esa opción.
 - Si el cliente corrije un dato (ej: "no, mi nombre es..."), usa el valor corregido.
-- Para product_name: usa el nombre tal como lo dijo el cliente, no como aparece en el catálogo.
+- Si el cliente no especificó cantidad pero sí dijo "uno" o pidió "1 XL" → quantity = 1.
 
-Ejemplo: {"customer_name": "Juan Pérez", "product_name": "Huevos XL Bandeja 30", "quantity": 2, "address": "Av. Principal 123, Depto 4B", "city": "La Serena"}
+Ejemplo: Si Agente dijo "Bandeja 30 huevos XL — $12.000" y cliente respondió "De 12 mil" o "la XL" → product_name = "Bandeja 30 huevos XL", price = 12000.
 
 Solo el JSON, nada más.`;
 
-  const recent = conversationHistory.slice(-12).map(m =>
+  // Usar más historial para capturar el producto aunque se haya mencionado antes
+  const recent = conversationHistory.slice(-20).map(m =>
     `${m.direction === 'inbound' ? 'Cliente' : 'Agente'}: ${m.content}`
   ).join('\n');
 
