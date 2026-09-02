@@ -101,25 +101,32 @@ export default function MessageBubble({ message }) {
               </div>
             </div>
           ) : message.type === 'image' ? (
-            /* ── Comprobante de pago (imagen sin media_id o comprobante explícito) ── */
-            <div style={{ padding: '8px 10px 6px' }}>
+            /* ── Comprobante de pago ── */
+            <div style={{ padding: '4px 4px 0' }}>
+              {message.media_id && (
+                <img
+                  src={`${API_BASE}/conversations/media/${message.media_id}`}
+                  alt="Comprobante de pago"
+                  style={{ maxWidth: '240px', maxHeight: '280px', borderRadius: '8px 8px 0 0', display: 'block', cursor: 'pointer', objectFit: 'cover', width: '100%' }}
+                  onClick={() => window.open(`${API_BASE}/conversations/media/${message.media_id}`, '_blank')}
+                  onError={e => { e.target.style.display='none'; }}
+                />
+              )}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '8px',
-                padding: '10px 12px', borderRadius: '8px',
+                padding: '8px 10px',
                 backgroundColor: isDark ? `${colors.yellow}18` : `${colors.yellow}15`,
                 border: `1px solid ${colors.yellow}44`,
+                borderRadius: message.media_id ? '0 0 6px 6px' : '8px',
+                marginTop: message.media_id ? '0' : '0',
               }}>
-                <Image size={20} color={colors.yellow} />
+                <Image size={16} color={colors.yellow} />
                 <div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>
-                    Comprobante de pago
-                  </div>
-                  <div style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '2px' }}>
-                    Ver en Pedidos → Comprobantes
-                  </div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: colors.textPrimary }}>Comprobante de pago</div>
+                  <div style={{ fontSize: '10px', color: colors.textSecondary }}>Ver en Pedidos → Comprobantes</div>
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 4px 4px' }}>
                 <span style={{ fontSize: '11px', color: colors.textSecondary }}>{time}</span>
               </div>
             </div>
