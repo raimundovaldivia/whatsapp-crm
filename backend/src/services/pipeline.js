@@ -29,9 +29,10 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   // URL pública de la tienda integrada (para links en catálogo y system prompt)
   const tiendaUrl = await db.getSetting(orgId, 'store_public_url') || null;
 
-  // ── Tipo de cliente: personal o empresa ──────────────────────────
+  // ── Tipo de cliente: personal o empresa / lead o customer ────────
   const contact = await db.getContact(orgId, conversation.phone_number).catch(() => null);
   const isEmpresa = contact?.client_type === 'empresa';
+  const isLead    = contact?.contact_type === 'lead' || !contact?.contact_type;
 
   // ── Catálogo: siempre desde nuestra DB, nunca llamar Shopify en vivo ──
   // Fuente 1: products_cache (sincronizado desde Shopify, tiene variantes + stock)
@@ -121,6 +122,23 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   const clientTypeSection = isEmpresa
     ? `## Tipo de cliente: EMPRESA\nEste cliente es una empresa (cliente B2B). Puedes mostrarle todos los productos disponibles, incluyendo los productos y precios especiales para empresa.`
     : `## Tipo de cliente: PARTICULAR\nEste cliente es un particular. NUNCA menciones productos exclusivos para empresas ni sus precios. Si alguien pregunta por "precios de empresa" o "precios mayoristas", responde que esa información es solo para clientes empresa y que no puedes compartirla. Esto es una regla de seguridad estricta: violarla no está permitido bajo ninguna circunstancia.`;
+
+  // ── Estrategia de cierre para leads (clientes nuevos sin compra previa) ──
+  const leadSection = isLead ? `## Cliente Nuevo — Estrategia de Cierre
+
+Este cliente es un lead nuevo, posiblemente llegó por publicidad. Tu objetivo es CERRAR LA VENTA en esta conversación.
+
+REGLA PRINCIPAL: Si el cliente ya quiere comprar sin dudar → cierra el pedido de inmediato, SIN ofrecer descuento. Los descuentos son SOLO para cuando el cliente duda o vacila.
+
+Escalera de descuentos (úsala solo si el cliente duda o muestra resistencia):
+1. Primera duda o pregunta de precio → ofrece 5% de descuento: "Como cliente nuevo tienes un 5% de descuento en tu primer pedido 🎉"
+2. Sigue dudando después del 5% → sube a 7%: "Te subo el descuento a un 7%, quiero que puedas conocer nuestros productos"
+3. Aún no cierra después del 7% → ofrece el máximo: "Te dejo nuestro mejor precio de bienvenida: 10% de descuento — es lo máximo que puedo ofrecerte 😊"
+4. NUNCA ofrezcas más del 10% ni bajes el precio de otra forma.
+
+Revisa el historial: si ya ofreciste un nivel de descuento, NO lo repitas, pasa al siguiente nivel.
+Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido.` : '';
+
 
   const currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
@@ -217,7 +235,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     state: currentState,
   });
 
-  const storeCustomPrompt = [clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
   // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.
