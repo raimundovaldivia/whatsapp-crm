@@ -253,6 +253,7 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   if (currentState === 'scheduled') {
     let dateLabel = '';
     let producto = 'tu pedido';
+    let scheduledProductNotes = null;
     try {
       const pool = getPool();
       const { rows } = await pool.query(
@@ -264,8 +265,40 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
       if (rows[0]) {
         dateLabel = formatDateEs(rows[0].desired_date);
         producto  = rows[0].product_notes || 'tu pedido';
+        scheduledProductNotes = rows[0].product_notes;
       }
     } catch { /* si falla la consulta, continuar sin fecha */ }
+
+    // ── Detectar si el cliente está llegando o dando dirección de entrega ──
+    // En ese caso, ya no es un pedido futuro — es un pedido para ya. Transicionar.
+    const ARRIVAL_SIGNALS = [
+      /llegando/i, /llegamos/i, /estamos\s+llegando/i, /ya\s+(vengo|voy|llego)/i,
+      /ma[ñn]ana.*llegar/i, /llegar.*ma[ñn]ana/i, /al\s+llegar/i,
+      /cuando\s+llegue/i, /ya\s+estoy\s+en/i,
+    ];
+    const ADDRESS_SIGNALS = [
+      /\b(calle|av(enida)?|pasaje|pje\.?|#\s*\d|\d{3,5})\b/i,
+      /\b(block|depto|casa\s+\d|villa|sector|parque|condominio|pobla(ci[oó]n)?|bosque)\b/i,
+    ];
+    const isArriving = ARRIVAL_SIGNALS.some(p => p.test(userMessage));
+    const hasAddress = ADDRESS_SIGNALS.some(p => p.test(userMessage));
+
+    if (isArriving || hasAddress) {
+      // El cliente está listo para recibir ahora → activar pedido real
+      console.log(`[Pipeline] 📦 Cliente scheduled llega/da dirección — transicionando a collecting_order`);
+      const preDraft = {};
+      if (scheduledProductNotes) preDraft.product_name = scheduledProductNotes;
+      // Marcar la scheduled_order como activada para que no la vuelva a procesar el cron
+      try {
+        const pool = getPool();
+        await pool.query(
+          `UPDATE scheduled_orders SET status = 'sent' WHERE conversation_id = $1 AND status = 'pending'`,
+          [conversationId]
+        );
+      } catch { /* continuar aunque falle */ }
+      L.agent('orders', 0);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, preDraft, productosTexto);
+    }
 
     // Responder contextualmente con Haiku — nunca el mismo texto repetido
     const Anthropic = require('@anthropic-ai/sdk');
