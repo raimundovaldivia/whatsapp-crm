@@ -604,6 +604,20 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_cpo_org_phone ON contact_price_overrides(organization_id, phone);
     `);
 
+    // Migración: respuestas pendientes del admin via WhatsApp personal
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_pending_replies (
+        id              SERIAL PRIMARY KEY,
+        org_id          INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        customer_phone  TEXT NOT NULL,
+        context         TEXT,
+        status          TEXT NOT NULL DEFAULT 'pending',
+        created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_apr_org_status ON admin_pending_replies(org_id, status, created_at DESC);
+    `);
+
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

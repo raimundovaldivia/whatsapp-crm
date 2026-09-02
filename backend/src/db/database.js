@@ -1260,6 +1260,32 @@ async function getShopifyOrdersSyncedAt(orgId) {
   return row?.last_sync || null;
 }
 
+// ─── ADMIN RELAY (respuestas del admin vía WhatsApp personal) ────────────────
+
+async function createAdminPendingReply(orgId, conversationId, customerPhone, context) {
+  await pool.query(
+    `INSERT INTO admin_pending_replies (org_id, conversation_id, customer_phone, context)
+     VALUES ($1, $2, $3, $4)`,
+    [orgId, conversationId, customerPhone, context || null]
+  );
+}
+
+async function getLatestPendingAdminReply(orgId) {
+  return queryOne(
+    `SELECT * FROM admin_pending_replies
+     WHERE org_id = $1 AND status = 'pending'
+     ORDER BY created_at DESC LIMIT 1`,
+    [orgId]
+  );
+}
+
+async function markAdminReplyHandled(id) {
+  await pool.query(
+    `UPDATE admin_pending_replies SET status = 'replied' WHERE id = $1`,
+    [id]
+  );
+}
+
 module.exports = {
   getPool,
   normalizePhone, normalizeName,
@@ -1306,4 +1332,6 @@ module.exports = {
   bulkDeleteBotOrders, bulkDeleteShopifyOrders,
   // Shopify orders cache
   upsertShopifyOrders, getShopifyOrders, getShopifyOrdersSyncedAt,
+  // Admin relay
+  createAdminPendingReply, getLatestPendingAdminReply, markAdminReplyHandled,
 };

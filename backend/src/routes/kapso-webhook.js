@@ -99,6 +99,12 @@ router.post('/', async (req, res) => {
   const parsed = kapsoService.parseWebhookMessage(body, event);
   if (!parsed) return;
 
+  // ── Admin relay: si el mensaje viene del teléfono del admin → enrutar al cliente ──
+  const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
+  if (adminPhone && parsed.from && db.normalizePhone(parsed.from) === db.normalizePhone(adminPhone)) {
+    await handleAdminReply(org, whatsappConfig, parsed);
+    return;
+  }
   // ── Imagen entrante → posible comprobante de pago ─────────────────
   if (parsed.type === 'image' && parsed.mediaId) {
     await handlePaymentProof(org, whatsappConfig, parsed);
@@ -275,6 +281,68 @@ router.post('/', async (req, res) => {
     console.error('[KapsoWebhook] Error procesando mensaje entrante:', outerErr.message);
   }
 });
+
+/**
+ * Maneja respuestas del admin desde su WhatsApp personal.
+ * Cuando el admin responde, su mensaje se reenvía al cliente pendiente más reciente.
+ */
+async function handleAdminReply(org, whatsappConfig, parsed) {
+  if (!parsed.text) return; // ignorar imágenes/audios del admin por ahora
+
+  try {
+    const pending = await db.getLatestPendingAdminReply(org.id);
+
+    if (!pending) {
+      // El admin escribió pero no hay nadie esperando respuesta
+      const noOneMsg = 'ℹ️ No hay clientes esperando tu respuesta en este momento.';
+      await kapsoService.sendTextMessage(parsed.from, noOneMsg, whatsappConfig).catch(() => {});
+      return;
+    }
+
+    console.log(`[AdminRelay] 📨 Admin responde a conv #${pending.conversation_id} (${pending.customer_phone})`);
+
+    // Enviar la respuesta del admin al cliente
+    const sentMsg = await kapsoService.sendTextMessage(pending.customer_phone, parsed.text, whatsappConfig);
+
+    // Guardar en la conversación como mensaje humano outbound
+    const outMsg = await db.saveMessage({
+      conversationId:    pending.conversation_id,
+      whatsappMessageId: sentMsg?.messages?.[0]?.id || null,
+      direction:         'outbound',
+      content:           parsed.text,
+      sentBy:            'human',
+      status:            'sent',
+    });
+    await db.updateConversationLastMessage(pending.conversation_id, parsed.text);
+
+    // Marcar como atendido
+    await db.markAdminReplyHandled(pending.id);
+
+    // Emitir al CRM en tiempo real
+    const finalConv = await db.getConversationById(pending.conversation_id);
+    io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+
+    // Confirmar al admin
+    const clientName = finalConv?.contact_name || pending.customer_phone;
+    const confirmMsg = `✅ Enviado a *${clientName}*.`;
+    await kapsoService.sendTextMessage(parsed.from, confirmMsg, whatsappConfig).catch(() => {});
+
+    // Verificar si hay más pendientes
+    const nextPending = await db.getLatestPendingAdminReply(org.id);
+    if (nextPending) {
+      const nextConv = await db.getConversationById(nextPending.conversation_id).catch(() => null);
+      const nextName = nextConv?.contact_name || nextPending.customer_phone;
+      await kapsoService.sendTextMessage(
+        parsed.from,
+        `📨 Tienes otro cliente esperando: *${nextName}*\n"${nextPending.context || '(sin contexto)'}"\n\nResponde aquí para enviarle tu mensaje.`,
+        whatsappConfig
+      ).catch(() => {});
+    }
+
+  } catch (err) {
+    console.error('[AdminRelay] Error procesando respuesta del admin:', err.message);
+  }
+}
 
 /**
  * Maneja una imagen entrante como posible comprobante de pago.
