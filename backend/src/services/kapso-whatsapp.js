@@ -153,8 +153,9 @@ function parseWebhookMessage(body, event) {
 
     if (message.type === 'text') {
       text = message.text?.body;
-    } else if (message.type === 'audio' && message.kapso?.transcript?.text) {
-      text = `🎤 ${message.kapso.transcript.text}`;
+    } else if (message.type === 'audio') {
+      mediaId = message.audio?.id || message.media?.id || null;
+      text = message.kapso?.transcript?.text ? `🎤 ${message.kapso.transcript.text}` : null;
     } else if (message.type === 'image') {
       // Las imágenes no tienen texto — se manejan como comprobantes de pago
       mediaId = message.image?.id || message.media?.id || null;

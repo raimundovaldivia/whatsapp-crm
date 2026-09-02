@@ -486,14 +486,14 @@ async function cancelScheduledOrder(id) {
 
 // ─── MESSAGES ─────────────────────────────────────────────────────
 
-async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = 'sent', sentBy = 'ai', agentType = null }) {
+async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = 'sent', sentBy = 'ai', agentType = null, mediaId = null }) {
   try {
     return await queryOne(
-      `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type, media_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (whatsapp_message_id) DO NOTHING
        RETURNING *`,
-      [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType]
+      [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType, mediaId || null]
     );
   } catch (err) {
     if (err.code === '23505') return null; // fallback por si acaso

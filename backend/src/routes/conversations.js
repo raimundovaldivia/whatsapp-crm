@@ -1118,5 +1118,23 @@ Genera entre 2 y 5 reglas concretas para el bot basadas en estos errores y oport
   }
 });
 
+// ── Proxy de media (imágenes, audio) ─────────────────────────────
+router.get('/media/:mediaId', async (req, res) => {
+  try {
+    const { mediaId } = req.params;
+    const kapsoSvc = require('../services/kapso-whatsapp');
+    const whatsappConfig = await db.getWhatsappConfig(req.orgId);
+    if (!whatsappConfig?.kapso_api_key) return res.status(503).json({ error: 'WhatsApp no configurado' });
+    const mediaInfo = await kapsoSvc.getMediaUrl(mediaId, whatsappConfig);
+    const { data, contentType } = await kapsoSvc.downloadMedia(mediaInfo.url, whatsappConfig);
+    res.set('Content-Type', contentType);
+    res.set('Cache-Control', 'private, max-age=3600');
+    res.send(Buffer.from(data));
+  } catch (err) {
+    console.error('[Media proxy] Error:', err.message);
+    res.status(404).json({ error: 'Media no disponible' });
+  }
+});
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

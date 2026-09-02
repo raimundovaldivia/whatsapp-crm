@@ -122,6 +122,9 @@ async function setupDatabase() {
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       );
 
+      -- Migración: media_id para mensajes con imagen o audio
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_id TEXT;
+
       -- ─── ÓRDENES CREADAS ─────────────────────────────────────────
 
       CREATE TABLE IF NOT EXISTS orders (

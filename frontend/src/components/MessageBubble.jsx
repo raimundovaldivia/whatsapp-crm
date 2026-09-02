@@ -71,8 +71,37 @@ export default function MessageBubble({ message }) {
           minWidth: templateData ? '200px' : undefined,
         }}>
 
-          {message.type === 'image' ? (
-            /* ── Comprobante de pago (imagen) ── */
+          {message.type === 'image' && message.media_id && message.content !== '📸 [Comprobante de pago]' ? (
+            /* ── Imagen real ── */
+            <div style={{ padding: '4px 4px 0' }}>
+              <img
+                src={`${API_BASE}/conversations/media/${message.media_id}`}
+                alt="Imagen"
+                style={{ maxWidth: '240px', maxHeight: '280px', borderRadius: '8px', display: 'block', cursor: 'pointer', objectFit: 'cover' }}
+                onClick={() => window.open(`${API_BASE}/conversations/media/${message.media_id}`, '_blank')}
+                onError={e => { e.target.style.display='none'; }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 4px 4px' }}>
+                <span style={{ fontSize: '11px', color: colors.textSecondary }}>{time}</span>
+              </div>
+            </div>
+          ) : message.type === 'audio' && message.media_id ? (
+            /* ── Audio con player ── */
+            <div style={{ padding: '8px 10px 6px', minWidth: '220px' }}>
+              <audio controls style={{ width: '100%', height: '36px', display: 'block', borderRadius: '6px' }}
+                src={`${API_BASE}/conversations/media/${message.media_id}`} />
+              {message.content && message.content !== '🎤 [Audio]' && (
+                <p style={{ fontSize: '12px', margin: '5px 0 0', color: colors.textSecondary, fontStyle: 'italic', lineHeight: 1.4 }}>
+                  {message.content.replace(/^🎤\s*/, '')}
+                </p>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '3px', justifyContent: 'flex-end', marginTop: '3px' }}>
+                <span style={{ fontSize: '11px', color: colors.textSecondary }}>{time}</span>
+                {isOutbound && <StatusIcon status={message.status} />}
+              </div>
+            </div>
+          ) : message.type === 'image' ? (
+            /* ── Comprobante de pago (imagen sin media_id o comprobante explícito) ── */
             <div style={{ padding: '8px 10px 6px' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '8px',
