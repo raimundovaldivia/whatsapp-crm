@@ -1141,11 +1141,13 @@ router.get('/media/:mediaRef', async (req, res) => {
     let data, contentType;
 
     if (ref.startsWith('https://')) {
-      // URL directa de Kapso (almacenada en media_id) — descargar directamente
+      // URL directa — api.kapso.ai necesita X-API-Key, Active Storage es auto-autenticada
+      const dlHeaders = ref.includes('api.kapso.ai') ? { 'X-API-Key': apiKey } : {};
       const resp = await axios.get(ref, {
-        headers: { 'X-API-Key': apiKey },
+        headers: dlHeaders,
         responseType: 'arraybuffer',
-        timeout: 15000,
+        maxRedirects: 5,
+        timeout: 20000,
       });
       data = resp.data;
       contentType = resp.headers['content-type'] || 'image/jpeg';

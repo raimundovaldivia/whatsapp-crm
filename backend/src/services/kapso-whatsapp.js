@@ -156,12 +156,14 @@ function parseWebhookMessage(body, event) {
       text = message.text?.body;
     } else if (message.type === 'audio') {
       mediaId  = message.audio?.id || message.media?.id || null;
-      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || null;
+      // URL directa: Kapso puede proveerla en kapso.media_url, kapso.media_data.url, o audio.link
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.audio?.link || null;
       text = message.kapso?.transcript?.text ? `🎤 ${message.kapso.transcript.text}` : null;
     } else if (message.type === 'image') {
       // Las imágenes no tienen texto — se manejan aparte en el webhook
       mediaId  = message.image?.id || message.media?.id || null;
-      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || null;
+      // URL directa: Kapso puede proveerla en kapso.media_url, kapso.media_data.url, o image.link
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.image?.link || null;
       if (!mediaId && !mediaUrl) {
         console.warn('[KapsoWA] parseWebhookMessage: imagen sin mediaId ni mediaUrl — payload:', JSON.stringify(message).slice(0, 500));
       }
@@ -373,13 +375,22 @@ async function getMediaUrl(mediaId, config) {
 }
 
 /**
- * Descarga el binario de un media dado su URL (obtenida con getMediaUrl).
+ * Descarga el binario de un media dado su URL.
+ * - URLs de api.kapso.ai → necesitan X-API-Key
+ * - URLs de app.kapso.ai/rails/active_storage → auto-autenticadas (firmadas), sin auth
+ * - URLs de lookaside.fbsbx.com (Facebook CDN) → sin auth
  */
 async function downloadMedia(url, config) {
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  const headers = {};
+  if (url.includes('api.kapso.ai')) {
+    headers['X-API-Key'] = apiKey;
+  }
   const resp = await axios.get(url, {
-    headers: { 'X-API-Key': apiKey },
+    headers,
     responseType: 'arraybuffer',
+    maxRedirects: 5,
+    timeout: 20000,
   });
   return { data: resp.data, contentType: resp.headers['content-type'] || 'image/jpeg' };
 }
