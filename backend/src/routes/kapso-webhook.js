@@ -350,7 +350,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
  */
 async function handlePaymentProof(org, whatsappConfig, parsed) {
   try {
-    console.log(`[KapsoWebhook] 📸 Imagen de ${parsed.from} — analizando con IA...`);
+    console.log(`[KapsoWebhook] 📸 Imagen de ${parsed.from} | mediaId: ${parsed.mediaId} — analizando con IA...`);
 
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
     db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
@@ -365,10 +365,12 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       analysis = await analyzePaymentProof(data, contentType);
       console.log(`[KapsoWebhook] 🤖 Análisis IA:`, JSON.stringify(analysis));
     } catch (aiErr) {
-      console.warn('[KapsoWebhook] Error en análisis IA, asumiendo comprobante:', aiErr.message);
-      // Si Claude falla, tratar como comprobante por seguridad
+      console.warn('[KapsoWebhook] Error descargando/analizando imagen:', aiErr.message);
+      // Si descarga o análisis falla, tratar como comprobante por seguridad
       analysis = { is_payment_proof: true, confidence: 'low' };
     }
+
+    console.log(`[KapsoWebhook] 🔍 is_payment_proof=${analysis.is_payment_proof} | data=${!!data} | mediaId=${parsed.mediaId}`);
 
     // ── 2. Si NO es comprobante → analizar con Vision y pasar al bot ────────
     if (!analysis.is_payment_proof) {
@@ -534,7 +536,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     io?.emit(`payment_proof_${org.id}`, { proof, conversationId: conversation.id });
 
   } catch (err) {
-    console.error('[KapsoWebhook] Error procesando imagen:', err.message);
+    console.error('[KapsoWebhook] Error procesando imagen:', err.message, err.stack?.split('\n')[1]);
   }
 }
 

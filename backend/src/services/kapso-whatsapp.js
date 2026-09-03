@@ -158,7 +158,16 @@ function parseWebhookMessage(body, event) {
       text = message.kapso?.transcript?.text ? `🎤 ${message.kapso.transcript.text}` : null;
     } else if (message.type === 'image') {
       // Las imágenes no tienen texto — se manejan como comprobantes de pago
-      mediaId = message.image?.id || message.media?.id || null;
+      // Intentar todas las variantes posibles del campo media_id en Kapso v2
+      mediaId = message.image?.id
+             || message.media?.id
+             || message.kapso?.media_id
+             || message.kapso?.mediaId
+             || message.id   // fallback: usar el message_id como referencia
+             || null;
+      if (!mediaId) {
+        console.warn('[KapsoWA] parseWebhookMessage: imagen sin mediaId — payload:', JSON.stringify(message).slice(0, 500));
+      }
       text = null; // se maneja por separado en el webhook
     } else {
       text = message.kapso?.content || null;
@@ -357,10 +366,10 @@ async function createTemplate(templateData, config) {
  * La URL expira, pero el media_id es permanente.
  */
 async function getMediaUrl(mediaId, config) {
-  const { kapso_api_key } = config;
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   const resp = await axios.get(
     `${BASE_URL}/${API_VER}/${mediaId}`,
-    { headers: { Authorization: `Bearer ${kapso_api_key}` } }
+    { headers: { 'X-API-Key': apiKey } }
   );
   return resp.data; // { url, mime_type, file_size, id }
 }
@@ -369,9 +378,9 @@ async function getMediaUrl(mediaId, config) {
  * Descarga el binario de un media dado su URL (obtenida con getMediaUrl).
  */
 async function downloadMedia(url, config) {
-  const { kapso_api_key } = config;
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   const resp = await axios.get(url, {
-    headers: { Authorization: `Bearer ${kapso_api_key}` },
+    headers: { 'X-API-Key': apiKey },
     responseType: 'arraybuffer',
   });
   return { data: resp.data, contentType: resp.headers['content-type'] || 'image/jpeg' };
