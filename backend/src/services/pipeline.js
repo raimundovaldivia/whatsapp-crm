@@ -340,18 +340,13 @@ REGLAS ABSOLUTAS:
   }
 
   // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
-  // Si escribe de nuevo después de confirmar, reiniciar a exploración
-  if (currentState === 'confirmed' || currentState === 'awaiting_payment') {
-    const inboundAfterConfirm = history.filter(m => m.direction === 'inbound').length;
-    // Si es el primer mensaje post-confirmación, responder con continuación natural
-    if (inboundAfterConfirm <= 1) {
-      await db.updatePipelineState(conversationId, 'exploring');
-      const afterOrderMsg = '¡Ya tenemos tu pedido registrado! 😊 ¿Puedo ayudarte con algo más?';
-      L.agent('sales', 0);
-      return { response: afterOrderMsg, agentType: 'sales', newState: 'exploring' };
-    }
-    // Si ya hay más mensajes, solo reiniciar el estado y seguir normalmente
+  // Responder con mensaje simple y reiniciar a exploración.
+  // Incluye 'done' (estado que se graba en DB tras guardar el pedido).
+  if (currentState === 'confirmed' || currentState === 'done' || currentState === 'awaiting_payment') {
     await db.updatePipelineState(conversationId, 'exploring');
+    const afterOrderMsg = '¡Ya tenemos tu pedido registrado! 😊 ¿Puedo ayudarte con algo más?';
+    L.agent('sales', 0);
+    return { response: afterOrderMsg, agentType: 'sales', newState: 'exploring' };
   }
 
   // ── Detectar respuesta a template de re-engagement ─────────────────

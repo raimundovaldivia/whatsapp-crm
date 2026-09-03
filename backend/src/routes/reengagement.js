@@ -509,6 +509,44 @@ async function markTemplateSent(orgId, phone) {
 }
 
 /**
+ * ¿El cliente respondió explícitamente "no quiero" en las últimas 48 horas?
+ * Si es así, no enviarle re-engagement.
+ */
+const DECLINE_PATTERNS = [
+  /no\s+(quiero|me\s+interesa|estoy\s+interesado|gracias|necesito)/i,
+  /ya\s+(no\s+quiero|te\s+dije|chao|gracias)/i,
+  /no\s+por\s+ahora/i,
+  /d[eé]jame\s+en\s+paz/i,
+  /\bno\b.*\bcomprar\b/i,
+  /\bno\b.*\bnecesito\b/i,
+  /\bno\s+gracias\b/i,
+  /\bno\s+me\s+mand/i,
+  /\bya\s+chao\b/i,
+];
+
+async function customerRecentlyDeclined(orgId, phone) {
+  try {
+    const { getPool } = require('../db/database');
+    const pool = getPool();
+    // Buscar últimos 5 mensajes entrantes del cliente en las últimas 48 horas
+    const { rows } = await pool.query(
+      `SELECT m.content
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       WHERE c.organization_id = $1
+         AND c.phone_number = $2
+         AND m.direction = 'inbound'
+         AND m.content IS NOT NULL
+         AND m.created_at > NOW() - INTERVAL '48 hours'
+       ORDER BY m.created_at DESC
+       LIMIT 5`,
+      [orgId, phone]
+    );
+    return rows.some(r => DECLINE_PATTERNS.some(p => p.test(r.content)));
+  } catch { return false; }
+}
+
+/**
  * ¿Ya se envió un template hoy a este teléfono?
  */
 async function templateSentToday(orgId, phone) {
@@ -623,7 +661,14 @@ Escribe un mensaje de WhatsApp CORTO (máximo 3 líneas) y cálido.
 - Si está próximo a su ciclo de compra, puedes insinuarlo sutilmente
 - Máximo 2 emojis
 - Termina con una pregunta o invitación suave
-- Escribe SOLO el mensaje, nada más`;
+- Escribe SOLO el mensaje, nada más
+
+PROHIBIDO — no incluyas nada de esto:
+- Stock limitado, últimas unidades, "se acaban", "pocas quedan" → no tienes esa info real
+- Fechas de entrega inventadas ("mañana en tu zona", "hoy") → no las conoces
+- "Gallinas llegadas del campo" ni eventos especiales → vendes HUEVOS, no gallinas
+- Urgencia fabricada de cualquier tipo
+- Más de 3 líneas`;
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001', max_tokens: 200,
@@ -1423,6 +1468,15 @@ router.post('/send-bulk', async (req, res) => {
         const alreadySent = await templateSentToday(req.orgId, item.phone);
         if (alreadySent) {
           results.push({ phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' });
+          continue;
+        }
+      }
+
+      // ── No molestar: saltar si el cliente declinó en las últimas 48h ─
+      if (!item.force) {
+        const declined = await customerRecentlyDeclined(req.orgId, item.phone);
+        if (declined) {
+          results.push({ phone: item.phone, success: false, skipped: true, error: 'Cliente declinó recientemente' });
           continue;
         }
       }
