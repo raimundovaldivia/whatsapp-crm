@@ -423,4 +423,76 @@ router.post('/kapso/reregister-webhook', async (req, res) => {
   }
 });
 
+/* ─── Store Context ─────────────────────────────────────────────────────── */
+
+router.get('/store-context', async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const savedContext = await db.getSetting(orgId, 'store_context');
+    if (savedContext) {
+      return res.json({ success: true, context: savedContext, fromDb: true });
+    }
+    const ds = await db.getPrimaryDataSource(orgId);
+    if (!ds) return res.json({ success: true, context: '', fromDb: false });
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const org = await db.getOrgById(orgId);
+    const orgName = org?.name || shop.replace('.myshopify.com', '').replace(/-/g, ' ');
+    const context = await shopifyApi.buildFullStoreContext(shop, token, orgName);
+    if (context) await db.setSetting(orgId, 'store_context', context);
+    return res.json({ success: true, context: context || '', fromDb: false });
+  } catch (err) {
+    console.error('[settings/store-context]', err.message);
+    res.json({ success: false, context: '' });
+  }
+});
+
+router.post('/store-context', async (req, res) => {
+  try {
+    const { context } = req.body;
+    if (typeof context !== 'string') return res.status(400).json({ success: false, error: 'context requerido' });
+    await db.setSetting(req.orgId, 'store_context', context.trim());
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/store-context/sync', async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ds = await db.getPrimaryDataSource(orgId);
+    if (!ds) return res.status(400).json({ success: false, error: 'Shopify no conectado' });
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const org = await db.getOrgById(orgId);
+    const orgName = org?.name || shop.replace('.myshopify.com', '').replace(/-/g, ' ');
+    const context = await shopifyApi.buildFullStoreContext(shop, token, orgName);
+    await db.setSetting(orgId, 'store_context', context);
+    res.json({ success: true, context });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─── Delivery Info ──────────────────────────────────────────────────────── */
+
+router.get('/delivery-info', async (req, res) => {
+  try {
+    const raw = await db.getSetting(req.orgId, 'delivery_info');
+    const info = raw ? JSON.parse(raw) : {};
+    res.json({ success: true, info });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/delivery-info', async (req, res) => {
+  try {
+    const { schedule = '', zone = '', minimum = '', paymentMethods = '' } = req.body;
+    await db.setSetting(req.orgId, 'delivery_info', JSON.stringify({ schedule, zone, minimum, paymentMethods }));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;

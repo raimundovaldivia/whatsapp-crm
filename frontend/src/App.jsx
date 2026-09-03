@@ -9,7 +9,6 @@ import OrdersPanel    from './components/OrdersPanel.jsx';
 import CatalogoPanel  from './components/CatalogoPanel.jsx';
 import DashboardPanel     from './components/DashboardPanel.jsx';
 import StatsPanel         from './components/StatsPanel.jsx';
-import ReengagementPanel from './components/ReengagementPanel.jsx';
 import ClientesPanel    from './components/ClientesPanel.jsx';
 import SettingsPanel     from './components/SettingsPanel.jsx';
 import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
@@ -50,7 +49,6 @@ export default function App() {
   const [pendingOrders, setPendingOrders]   = useState(0);
   const [pendingProofs, setPendingProofs]   = useState(0);
   const [botTypingConvs, setBotTypingConvs] = useState(new Set());
-  const [reengagementPhone, setReengagementPhone] = useState(null);
 
   // Deduplicar mensajes entre optimistic update y socket event
   const seenMessageIds = useRef(new Set());
@@ -415,17 +413,6 @@ export default function App() {
       {view === 'clientes' && (
         <ClientesPanel
           onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
-          onOpenReengagement={(phone) => { setReengagementPhone(phone); setView('reengagement'); }}
-        />
-      )}
-
-      {/* Vista Re-enganche */}
-      {view === 'reengagement' && (
-        <ReengagementPanel
-          filterPhone={reengagementPhone}
-          onClearFilter={() => setReengagementPhone(null)}
-          testPhone={org?.display_phone_number}
-          onNavigateToSettings={() => setView('settings')}
         />
       )}
 

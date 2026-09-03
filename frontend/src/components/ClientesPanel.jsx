@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users, Search, RefreshCw, MessageSquare, ShoppingBag,
-  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, UserCheck, Zap, Upload, X, CheckCircle, AlertCircle,
+  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, Zap, Upload, X, CheckCircle, AlertCircle,
 } from 'lucide-react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -22,7 +22,7 @@ function formatDate(dateStr) {
 const PAGE_SIZE = 50;
 const LEADS_PAGE_SIZE = 100;
 
-export default function ClientesPanel({ onOpenConversation, onOpenReengagement }) {
+export default function ClientesPanel({ onOpenConversation }) {
   const { colors, isDark } = useTheme();
 
   // Tabs: 'clientes' = Shopify customers | 'leads' = WhatsApp leads from contacts DB
@@ -624,12 +624,6 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                               <MessageSquare size={11} /> Chat
                             </button>
                           )}
-                          {c.phone && onOpenReengagement && (
-                            <button onClick={e => { e.stopPropagation(); onOpenReengagement(c.phone); }} title="Re-enganchar"
-                              style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: `${colors.green}18`, color: colors.green, padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: `1px solid ${colors.green}33`, cursor: 'pointer' }}>
-                              <UserCheck size={11} /> Reenganche
-                            </button>
-                          )}
                           {c.phone && (
                             <button onClick={e => { e.stopPropagation(); openPriceModal({ phone: c.phone, name: c.name }); }} title="Precios especiales"
                               style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: `${'#f59e0b'}18`, color: '#f59e0b', padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: '1px solid #f59e0b33', cursor: 'pointer' }}>
@@ -854,12 +848,6 @@ export default function ClientesPanel({ onOpenConversation, onOpenReengagement }
                           <button onClick={() => onOpenConversation(lead.phone)} title="Abrir chat"
                             style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: colors.bgHover, color: colors.textSecondary, padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: 'none', cursor: 'pointer' }}>
                             <MessageSquare size={11} /> Chat
-                          </button>
-                        )}
-                        {onOpenReengagement && (
-                          <button onClick={() => onOpenReengagement(lead.phone)} title="Re-enganchar"
-                            style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: `${colors.green}18`, color: colors.green, padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: `1px solid ${colors.green}33`, cursor: 'pointer' }}>
-                            <UserCheck size={11} /> Reenganche
                           </button>
                         )}
                         <button onClick={() => openPriceModal({ phone: lead.phone, name: lead.display_name || lead.name || lead.phone })} title="Precios especiales"

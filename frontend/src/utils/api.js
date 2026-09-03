@@ -66,25 +66,13 @@ export const assistantAPI = {
   clearHistory:   ()     => api.delete('/assistant/history').then(r => r.data),
 };
 
-export const reengagementAPI = {
-  getCandidates:        (refresh = false) => api.get(`/reengagement/candidates${refresh ? '?refresh=true' : ''}`, { timeout: 180000 }).then(r => r.data),
-  generate:             (phone) => api.post('/reengagement/generate', { phone }).then(r => r.data),
-  send:                 (data) => api.post('/reengagement/send', data).then(r => r.data),
-  sendBulk:             (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
-  getTemplates:         () => api.get('/reengagement/templates').then(r => r.data),
-  fillTemplateVars:     (phone, templateBody) => api.post('/reengagement/fill-template-vars', { phone, templateBody }).then(r => r.data),
-  aiPickTemplate:       (phone, templates)    => api.post('/reengagement/ai-pick-template', { phone, templates }, { timeout: 30000 }).then(r => r.data),
-  calibrate:            () => api.post('/reengagement/calibrate', {}, { timeout: 120000 }).then(r => r.data),
-  getCalibration:       () => api.get('/reengagement/calibration').then(r => r.data),
-  getAccuracy:          () => api.get('/reengagement/accuracy').then(r => r.data),
-  // Bulk template generation from Shopify catalog
-  getStoreContext:       () => api.get('/reengagement/store-context', { timeout: 20000 }).then(r => r.data),
-  saveStoreContext:      (context) => api.post('/reengagement/store-context', { context }).then(r => r.data),
-  syncStoreContext:      () => api.post('/reengagement/store-context/sync', {}, { timeout: 30000 }).then(r => r.data),
-  generateBulkTemplates: (storeContext) => api.post('/reengagement/generate-templates', { storeContext }, { timeout: 60000 }).then(r => r.data),
-  submitTemplates:       (templates) => api.post('/reengagement/submit-templates', { templates }, { timeout: 60000 }).then(r => r.data),
-  getDeliveryInfo:       () => api.get('/reengagement/delivery-info').then(r => r.data),
-  saveDeliveryInfo:      (info) => api.post('/reengagement/delivery-info', info).then(r => r.data),
+// Store context and delivery info — now served from /api/settings
+export const storeSettingsAPI = {
+  getStoreContext:  () => api.get('/settings/store-context', { timeout: 20000 }).then(r => r.data),
+  saveStoreContext: (context) => api.post('/settings/store-context', { context }).then(r => r.data),
+  syncStoreContext: () => api.post('/settings/store-context/sync', {}, { timeout: 30000 }).then(r => r.data),
+  getDeliveryInfo:  () => api.get('/settings/delivery-info').then(r => r.data),
+  saveDeliveryInfo: (info) => api.post('/settings/delivery-info', info).then(r => r.data),
 };
 
 export const templatesAPI = {

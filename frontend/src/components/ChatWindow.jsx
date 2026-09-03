@@ -241,7 +241,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       } catch {}
       try {
         const { api } = await import('../utils/api.js');
-        const res = await api.get('/reengagement/templates');
+        const res = await api.get('/templates');
         setTemplates(res.data.data || []);
       } catch (err) {
         setTemplatesError(err.response?.data?.error || err.message);

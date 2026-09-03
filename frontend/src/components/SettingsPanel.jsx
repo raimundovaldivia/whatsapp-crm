@@ -11,7 +11,7 @@ import {
   Sparkles, ArrowRight, Clock, MapPin, DollarSign, CreditCard,
   Bot, X, Send, RotateCcw, FlaskConical, Store,
 } from 'lucide-react';
-import { setupAPI, api, reengagementAPI, settingsAPI } from '../utils/api.js';
+import { setupAPI, api, storeSettingsAPI, settingsAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
 import { useTheme } from '../theme.js';
 
@@ -878,7 +878,7 @@ function IATab({ onSwitchTab }) {
 
   // Estado de conexiones (para tarjetas de acceso rápido)
   const [setupStatus,    setSetupStatus]    = useState(null);
-  const [templateCount,  setTemplateCount]  = useState(null);
+  const [templateCount] = useState(null);
 
   // Configuración del bot
   const [aiEnabled,     setAiEnabled]     = useState(true);
@@ -934,12 +934,11 @@ function IATab({ onSwitchTab }) {
   useEffect(() => {
     Promise.all([
       api.get('/settings'),
-      reengagementAPI.getStoreContext(),
+      storeSettingsAPI.getStoreContext(),
       setupAPI.shopifyStatus().catch(() => null),
       setupAPI.whatsappStatus().catch(() => null),
-      reengagementAPI.getTemplates().catch(() => ({ data: [] })),
-      reengagementAPI.getDeliveryInfo().catch(() => ({ info: {} })),
-    ]).then(([settings, ctx, shopify, whatsapp, tpls, delivery]) => {
+      storeSettingsAPI.getDeliveryInfo().catch(() => ({ info: {} })),
+    ]).then(([settings, ctx, shopify, whatsapp, delivery]) => {
       const d = settings.data?.data;
       if (d) {
         setAiEnabled(d.ai_enabled_global !== false);
@@ -947,7 +946,6 @@ function IATab({ onSwitchTab }) {
       }
       setStoreContext(ctx.context || '');
       setSetupStatus({ shopify, whatsapp });
-      setTemplateCount((tpls.data || []).length);
       const di = delivery.info || {};
       setSchedule(di.schedule || '');
       setZone(di.zone || '');
@@ -965,7 +963,7 @@ function IATab({ onSwitchTab }) {
     setCtxSaved(false);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      try { await reengagementAPI.saveStoreContext(val); setCtxSaved(true); setTimeout(() => setCtxSaved(false), 2500); }
+      try { await storeSettingsAPI.saveStoreContext(val); setCtxSaved(true); setTimeout(() => setCtxSaved(false), 2500); }
       catch {}
     }, 1500);
   };
@@ -979,7 +977,7 @@ function IATab({ onSwitchTab }) {
     deliveryTimer.current = setTimeout(async () => {
       const current = { schedule, zone, minimum, paymentMethods, [field]: val };
       try {
-        await reengagementAPI.saveDeliveryInfo(current);
+        await storeSettingsAPI.saveDeliveryInfo(current);
         setDeliverySaved(true);
         setTimeout(() => setDeliverySaved(false), 2500);
       } catch {}
@@ -996,7 +994,7 @@ function IATab({ onSwitchTab }) {
     setSyncing(true);
     setSyncMsg('');
     try {
-      const res = await reengagementAPI.syncStoreContext();
+      const res = await storeSettingsAPI.syncStoreContext();
       // Always update textarea — even if empty, so the user sees sync ran
       setStoreContext(res.context ?? '');
       if (res.context) {
@@ -1063,8 +1061,8 @@ function IATab({ onSwitchTab }) {
     try {
       await Promise.all([
         api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone }),
-        reengagementAPI.saveStoreContext(storeContext),
-        reengagementAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
+        storeSettingsAPI.saveStoreContext(storeContext),
+        storeSettingsAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
       setSuccess('✅ Configuración guardada correctamente');
     } catch (err) {

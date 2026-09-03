@@ -387,13 +387,6 @@ export default function DashboardPanel({ onChangeView }) {
                   <div style={{ color: colors.textMuted, fontSize: '12px', marginTop: '4px' }}>
                     Tu primera venta está a un mensaje de distancia
                   </div>
-                  <button onClick={() => onChangeView?.('reengagement')}
-                    style={{ marginTop: '14px', padding: '8px 18px', borderRadius: '8px',
-                      backgroundColor: `${colors.green}18`, color: colors.green,
-                      border: `1px solid ${colors.green}44`, cursor: 'pointer',
-                      fontSize: '12px', fontWeight: 600 }}>
-                    Enviar re-enganche →
-                  </button>
                 </div>
               ) : (
                 <div>
@@ -455,12 +448,6 @@ export default function DashboardPanel({ onChangeView }) {
                     Usa el re-enganche para activar clientes que no han comprado recientemente.
                   </div>
                 </div>
-                <button onClick={() => onChangeView?.('reengagement')}
-                  style={{ padding: '9px 16px', borderRadius: '9px', backgroundColor: colors.yellow,
-                    color: '#1a1a1a', border: 'none', cursor: 'pointer',
-                    fontSize: '12px', fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap' }}>
-                  Re-enganchar →
-                </button>
               </div>
             )}
 

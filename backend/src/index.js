@@ -35,7 +35,6 @@ const conversationsRouter  = require('./routes/conversations');
 const ordersRouter         = require('./routes/orders');
 const settingsRouter       = require('./routes/settings');
 const catalogoRouter       = require('./routes/catalogo');
-const reengagementRouter   = require('./routes/reengagement');
 const clientesRouter       = require('./routes/clientes');
 const templatesRouter      = require('./routes/templates');
 const dashboardRouter      = require('./routes/dashboard');
@@ -70,7 +69,6 @@ twilioWebhookRouter.setSocketIO(io);
 kapsoWebhookRouter.setSocketIO(io);
 shopifyWebhookRouter.setSocketIO(io);
 conversationsRouter.setSocketIO(io);
-reengagementRouter.setSocketIO(io);
 
 io.on('connection', (socket) => {
   socket.on('join_org', (orgId) => {
@@ -129,7 +127,6 @@ app.use('/api/conversations', conversationsRouter);  // Chats y mensajes
 app.use('/api/orders',        ordersRouter);         // Pedidos
 app.use('/api/settings',      settingsRouter);       // Ajustes del CRM
 app.use('/api/catalogo',      catalogoRouter);       // Catálogo de productos
-app.use('/api/reengagement',  reengagementRouter);  // Re-enganche de clientes dormidos
 app.use('/api/clientes',      clientesRouter);      // Lista completa de clientes
 app.use('/api/templates',     templatesRouter);     // WhatsApp Message Templates
 app.use('/api/dashboard',     dashboardRouter);     // Dashboard de victorias
