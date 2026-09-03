@@ -125,8 +125,9 @@ router.post('/', async (req, res) => {
     await handleAdminReply(org, whatsappConfig, parsed);
     return;
   }
-  // ── Imagen entrante → posible comprobante de pago ─────────────────
-  if (parsed.type === 'image' && (parsed.mediaId || parsed.mediaUrl)) {
+  // ── Imagen o documento-imagen entrante → posible comprobante de pago ────
+  // WhatsApp puede enviar imágenes como type:'image' o type:'document' (PNG/JPG como archivo)
+  if ((parsed.type === 'image' || parsed.type === 'document') && (parsed.mediaId || parsed.mediaUrl)) {
     await handlePaymentProof(org, whatsappConfig, parsed);
     return;
   }

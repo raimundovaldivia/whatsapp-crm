@@ -168,6 +168,16 @@ function parseWebhookMessage(body, event) {
         console.warn('[KapsoWA] parseWebhookMessage: imagen sin mediaId ni mediaUrl — payload:', JSON.stringify(message).slice(0, 500));
       }
       text = null;
+    } else if (message.type === 'document') {
+      // Documentos que pueden ser imágenes (PNG/JPG enviados como archivo)
+      mediaId  = message.document?.id || null;
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.document?.link || null;
+      // Fallback: extraer URL del campo kapso.content ("... URL: https://...")
+      if (!mediaUrl && message.kapso?.content) {
+        const urlMatch = message.kapso.content.match(/URL:\s*(https?:\/\/\S+)/);
+        if (urlMatch) mediaUrl = urlMatch[1];
+      }
+      text = null;
     } else {
       text = message.kapso?.content || null;
     }
