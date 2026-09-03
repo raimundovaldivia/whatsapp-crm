@@ -23,6 +23,18 @@ const { createBotLogger }       = require('../services/bot-logger');
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
+// ── Debug store: últimos 20 webhooks recibidos (en memoria) ─────────
+const debugLog = [];
+function pushDebug(entry) {
+  debugLog.unshift({ ts: new Date().toISOString(), ...entry });
+  if (debugLog.length > 20) debugLog.pop();
+}
+
+// GET /kapso-webhook/debug — retorna los últimos webhooks (sin auth para facilitar debug)
+router.get('/debug', (req, res) => {
+  res.json({ count: debugLog.length, entries: debugLog });
+});
+
 /**
  * Debounce por conversación — evita múltiples respuestas del bot cuando
  * el cliente manda varios mensajes rápidos en sucesión.
@@ -54,7 +66,9 @@ router.post('/', async (req, res) => {
   // Fallback a body.event por compatibilidad futura
   const event = req.headers['x-webhook-event'] || body?.event;
 
-  console.log(`[KapsoWebhook] ← ${event || '(sin evento)'} | phone_number_id: ${body?.phone_number_id || '?'}`);
+  const msgType = body?.message?.type || '—';
+  console.log(`[KapsoWebhook] ← ${event || '(sin evento)'} | type:${msgType} | phone_number_id: ${body?.phone_number_id || '?'}`);
+  pushDebug({ event, msgType, phone_number_id: body?.phone_number_id, raw: JSON.stringify(body).slice(0, 800) });
 
   if (!event) {
     console.warn('[KapsoWebhook] Sin X-Webhook-Event ni body.event. Ignorando.');
@@ -97,7 +111,13 @@ router.post('/', async (req, res) => {
 
   // ── Parsear mensaje entrante ─────────────────────────────────────────
   const parsed = kapsoService.parseWebhookMessage(body, event);
-  if (!parsed) return;
+  if (!parsed) {
+    if (event === 'whatsapp.message.received') {
+      console.warn('[KapsoWebhook] parseWebhookMessage retornó null — body.message:', JSON.stringify(body?.message).slice(0, 600));
+    }
+    return;
+  }
+  console.log(`[KapsoWebhook] ✅ parsed: type=${parsed.type} | from=${parsed.from} | mediaId=${parsed.mediaId} | mediaUrl=${parsed.mediaUrl?.slice(0,60)}`);
 
   // ── Admin relay: si el mensaje viene del teléfono del admin → enrutar al cliente ──
   const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
