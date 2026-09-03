@@ -423,6 +423,13 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       await db.updateConversationLastMessage(conversation.id, '📷 [Imagen]', true);
       await db.updateLastInbound(conversation.id);
 
+      // Emitir al CRM inmediatamente — no esperar Vision ni pipeline
+      const earlyConv = await db.getConversationById(conversation.id);
+      io?.emit(`new_message_${org.id}`, {
+        message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
+        conversation: earlyConv,
+      });
+
       // Analizar imagen con Claude Vision y pasar contexto al pipeline
       let imageContext = '[imagen]';
       if (data && contentType) {
@@ -491,6 +498,13 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     });
     await db.updateConversationLastMessage(conversation.id, '📸 [Comprobante de pago]', true);
     await db.updateLastInbound(conversation.id);
+
+    // Emitir al CRM inmediatamente — no esperar análisis ni notificaciones
+    const earlyConv2 = await db.getConversationById(conversation.id);
+    io?.emit(`new_message_${org.id}`, {
+      message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image', media_id: mediaRef },
+      conversation: earlyConv2,
+    });
 
     // ── 4. Comparar monto con el pedido pendiente ────────────────────
     const pendingOrder = await db.getLatestPendingOrderByConversation(conversation.id);
