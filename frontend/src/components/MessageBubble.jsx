@@ -11,7 +11,7 @@ function mediaUrl(mediaId) {
   const token = localStorage.getItem('crm_token') || '';
   // Base64url encode: permite embeber cualquier string (incluyendo URLs) sin romper el routing
   const encoded = btoa(mediaId).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  return `${API_BASE}/conversations/media/${encoded}?_token=${encodeURIComponent(token)}`;
+  return `${API_BASE}/api/conversations/media/${encoded}?_token=${encodeURIComponent(token)}`;
 }
 
 /** Detecta si el contenido es un template y separa nombre + body */
