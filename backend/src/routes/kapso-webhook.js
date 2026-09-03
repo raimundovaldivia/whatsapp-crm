@@ -106,7 +106,7 @@ router.post('/', async (req, res) => {
     return;
   }
   // ── Imagen entrante → posible comprobante de pago ─────────────────
-  if (parsed.type === 'image' && parsed.mediaId) {
+  if (parsed.type === 'image' && (parsed.mediaId || parsed.mediaUrl)) {
     await handlePaymentProof(org, whatsappConfig, parsed);
     return;
   }
