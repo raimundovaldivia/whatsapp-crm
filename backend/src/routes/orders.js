@@ -74,14 +74,18 @@ router.get('/', async (req, res) => {
         ct.province  AS contact_province
       FROM orders o
       LEFT JOIN conversations c ON o.conversation_id = c.id
-      LEFT JOIN contacts ct
-        ON ct.organization_id = o.organization_id
-       AND ct.phone = ANY(ARRAY[
-             o.customer_phone,
-             CASE WHEN o.customer_phone ~ '^569' THEN SUBSTRING(o.customer_phone FROM 3) END,
-             CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
-             CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
-           ])
+      LEFT JOIN LATERAL (
+        SELECT name, address1, address, city, province
+        FROM contacts
+        WHERE organization_id = o.organization_id
+          AND phone = ANY(ARRAY[
+                o.customer_phone,
+                CASE WHEN o.customer_phone ~ '^569' THEN SUBSTRING(o.customer_phone FROM 3) END,
+                CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
+                CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
+              ])
+        LIMIT 1
+      ) ct ON true
       WHERE o.organization_id = $1
       ORDER BY o.created_at DESC`,
       [req.orgId]
