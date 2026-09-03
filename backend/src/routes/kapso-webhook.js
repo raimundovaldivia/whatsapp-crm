@@ -19,6 +19,7 @@ const pipeline       = require('../services/pipeline');
 const { notifyAdminHandoff }    = require('../services/notifications');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
+const mediaCache                = require('../services/media-cache');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -397,6 +398,9 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       }
       pushDebug({ step: 'download_ok', bytes: data?.byteLength, contentType });
       if (data) {
+        // Guardar en cache para que el proxy del browser pueda servirlo sin re-descargar
+        const cacheKey = downloadUrl || parsed.mediaId;
+        mediaCache.set(cacheKey, data, contentType);
         analysis = await analyzePaymentProof(data, contentType);
         console.log(`[KapsoWebhook] 🤖 Análisis IA:`, JSON.stringify(analysis));
       }

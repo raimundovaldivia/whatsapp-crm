@@ -1122,6 +1122,7 @@ Genera entre 2 y 5 reglas concretas para el bot basadas en estos errores y oport
 router.get('/media/:mediaRef', async (req, res) => {
   try {
     const kapsoSvc = require('../services/kapso-whatsapp');
+    const mediaCache = require('../services/media-cache');
     const axios = require('axios');
     const whatsappConfig = await db.getWhatsappConfig(req.orgId);
     const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
@@ -1137,6 +1138,17 @@ router.get('/media/:mediaRef', async (req, res) => {
         ref = decoded;
       }
     } catch (_) {}
+
+    console.log(`[Media proxy] Request for: ${ref.slice(0,80)}`);
+
+    // ── 1. Verificar cache en memoria primero (evita re-descargar URLs expiradas) ──
+    const cached = mediaCache.get(ref);
+    if (cached) {
+      console.log(`[Media proxy] Cache hit — ${cached.data.byteLength} bytes | ${cached.contentType}`);
+      res.set('Content-Type', cached.contentType);
+      res.set('Cache-Control', 'private, max-age=3600');
+      return res.send(cached.data);
+    }
 
     let data, contentType;
 
@@ -1163,6 +1175,10 @@ router.get('/media/:mediaRef', async (req, res) => {
     }
 
     console.log(`[Media proxy] OK — ${data?.byteLength} bytes | ${contentType}`);
+
+    // Guardar en cache para futuras requests
+    mediaCache.set(ref, data, contentType);
+
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'private, max-age=3600');
     res.send(Buffer.from(data));
