@@ -1143,6 +1143,7 @@ router.get('/media/:mediaRef', async (req, res) => {
     if (ref.startsWith('https://')) {
       // Ambos dominios de Kapso (api.kapso.ai y app.kapso.ai/Active Storage) requieren X-API-Key
       const dlHeaders = ref.includes('kapso.ai') ? { 'X-API-Key': apiKey } : {};
+      console.log(`[Media proxy] Fetching URL: ${ref.slice(0,80)} | auth:${!!dlHeaders['X-API-Key']}`);
       const resp = await axios.get(ref, {
         headers: dlHeaders,
         responseType: 'arraybuffer',
@@ -1153,18 +1154,21 @@ router.get('/media/:mediaRef', async (req, res) => {
       contentType = resp.headers['content-type'] || 'image/jpeg';
     } else {
       // WhatsApp media ID — obtener URL de descarga primero
+      console.log(`[Media proxy] Getting media URL for ID: ${ref}`);
       const mediaInfo = await kapsoSvc.getMediaUrl(ref, whatsappConfig);
+      console.log(`[Media proxy] Got URL: ${String(mediaInfo?.url).slice(0,80)}`);
       const result = await kapsoSvc.downloadMedia(mediaInfo.url, whatsappConfig);
       data = result.data;
       contentType = result.contentType;
     }
 
+    console.log(`[Media proxy] OK — ${data?.byteLength} bytes | ${contentType}`);
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'private, max-age=3600');
     res.send(Buffer.from(data));
   } catch (err) {
-    console.error('[Media proxy] Error:', err.message);
-    res.status(404).json({ error: 'Media no disponible' });
+    console.error('[Media proxy] Error:', err.message, '| status:', err.response?.status, '| ref:', err.config?.url?.slice(0,80));
+    res.status(404).json({ error: 'Media no disponible', detail: err.message });
   }
 });
 
