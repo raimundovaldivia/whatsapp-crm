@@ -383,7 +383,8 @@ async function getMediaUrl(mediaId, config) {
 async function downloadMedia(url, config) {
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   const headers = {};
-  if (url.includes('api.kapso.ai')) {
+  // Ambos dominios de Kapso (api.kapso.ai y app.kapso.ai/Active Storage) requieren X-API-Key
+  if (url.includes('kapso.ai')) {
     headers['X-API-Key'] = apiKey;
   }
   const resp = await axios.get(url, {

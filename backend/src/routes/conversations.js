@@ -1141,8 +1141,8 @@ router.get('/media/:mediaRef', async (req, res) => {
     let data, contentType;
 
     if (ref.startsWith('https://')) {
-      // URL directa — api.kapso.ai necesita X-API-Key, Active Storage es auto-autenticada
-      const dlHeaders = ref.includes('api.kapso.ai') ? { 'X-API-Key': apiKey } : {};
+      // Ambos dominios de Kapso (api.kapso.ai y app.kapso.ai/Active Storage) requieren X-API-Key
+      const dlHeaders = ref.includes('kapso.ai') ? { 'X-API-Key': apiKey } : {};
       const resp = await axios.get(ref, {
         headers: dlHeaders,
         responseType: 'arraybuffer',
