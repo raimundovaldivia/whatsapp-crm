@@ -162,20 +162,46 @@ function parseWebhookMessage(body, event) {
     } else if (message.type === 'image') {
       // Las imágenes no tienen texto — se manejan aparte en el webhook
       mediaId  = message.image?.id || message.media?.id || null;
-      // URL directa: Kapso puede proveerla en kapso.media_url, kapso.media_data.url, o image.link
-      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.image?.link || null;
-      if (!mediaId && !mediaUrl) {
-        console.warn('[KapsoWA] parseWebhookMessage: imagen sin mediaId ni mediaUrl — payload:', JSON.stringify(message).slice(0, 500));
+      // URL directa: intentar múltiples campos donde Kapso puede proveerla
+      mediaUrl = message.kapso?.media_url
+             || message.kapso?.media_data?.url
+             || message.image?.link
+             || message.image?.url
+             || body.media_url       // top-level fallback
+             || body.kapso?.media_url
+             || null;
+      // Último recurso: regex en el body completo buscando cualquier URL de app.kapso.ai
+      if (!mediaUrl) {
+        const bodyStr = JSON.stringify(body);
+        const match = bodyStr.match(/"(https:\/\/app\.kapso\.ai\/rails\/active_storage[^"]+)"/);
+        if (match) {
+          mediaUrl = match[1];
+          console.log('[KapsoWA] mediaUrl extraído via regex fallback:', mediaUrl.slice(0, 80));
+        }
+      }
+      if (!mediaUrl) {
+        console.warn('[KapsoWA] imagen sin mediaUrl — raw body:', JSON.stringify(body).slice(0, 1500));
       }
       text = null;
     } else if (message.type === 'document') {
       // Documentos que pueden ser imágenes (PNG/JPG enviados como archivo)
       mediaId  = message.document?.id || null;
-      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.document?.link || null;
+      mediaUrl = message.kapso?.media_url
+             || message.kapso?.media_data?.url
+             || message.document?.link
+             || message.document?.url
+             || body.media_url
+             || null;
       // Fallback: extraer URL del campo kapso.content ("... URL: https://...")
       if (!mediaUrl && message.kapso?.content) {
         const urlMatch = message.kapso.content.match(/URL:\s*(https?:\/\/\S+)/);
         if (urlMatch) mediaUrl = urlMatch[1];
+      }
+      // Último recurso: regex en body
+      if (!mediaUrl) {
+        const bodyStr = JSON.stringify(body);
+        const match = bodyStr.match(/"(https:\/\/app\.kapso\.ai\/rails\/active_storage[^"]+)"/);
+        if (match) mediaUrl = match[1];
       }
       text = null;
     } else {
