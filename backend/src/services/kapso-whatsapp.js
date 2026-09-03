@@ -150,30 +150,27 @@ function parseWebhookMessage(body, event) {
     // Para otros tipos usa message.kapso.content como fallback
     let text = null;
     let mediaId = null;
+    let mediaUrl = null; // URL directa de Kapso (disponible en message.kapso.media_url)
 
     if (message.type === 'text') {
       text = message.text?.body;
     } else if (message.type === 'audio') {
-      mediaId = message.audio?.id || message.media?.id || null;
+      mediaId  = message.audio?.id || message.media?.id || null;
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || null;
       text = message.kapso?.transcript?.text ? `🎤 ${message.kapso.transcript.text}` : null;
     } else if (message.type === 'image') {
-      // Las imágenes no tienen texto — se manejan como comprobantes de pago
-      // Intentar todas las variantes posibles del campo media_id en Kapso v2
-      mediaId = message.image?.id
-             || message.media?.id
-             || message.kapso?.media_id
-             || message.kapso?.mediaId
-             || message.id   // fallback: usar el message_id como referencia
-             || null;
-      if (!mediaId) {
-        console.warn('[KapsoWA] parseWebhookMessage: imagen sin mediaId — payload:', JSON.stringify(message).slice(0, 500));
+      // Las imágenes no tienen texto — se manejan aparte en el webhook
+      mediaId  = message.image?.id || message.media?.id || null;
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || null;
+      if (!mediaId && !mediaUrl) {
+        console.warn('[KapsoWA] parseWebhookMessage: imagen sin mediaId ni mediaUrl — payload:', JSON.stringify(message).slice(0, 500));
       }
-      text = null; // se maneja por separado en el webhook
+      text = null;
     } else {
       text = message.kapso?.content || null;
     }
-    // Solo retornar null si no hay texto NI es una imagen con mediaId
-    if (!text && !mediaId) return null;
+    // Solo retornar null si no hay texto NI media
+    if (!text && !mediaId && !mediaUrl) return null;
 
     // Número del remitente: v2 usa conversation.phone_number (con +)
     // Fallback a message.from (también presente en v2)
@@ -188,6 +185,7 @@ function parseWebhookMessage(body, event) {
       type:        message.type,
       text,
       mediaId,
+      mediaUrl,   // URL directa de descarga (usar esta cuando esté disponible)
     };
   } catch { return null; }
 }

@@ -1119,14 +1119,44 @@ Genera entre 2 y 5 reglas concretas para el bot basadas en estos errores y oport
 });
 
 // ── Proxy de media (imágenes, audio) ─────────────────────────────
-router.get('/media/:mediaId', async (req, res) => {
+router.get('/media/:mediaRef', async (req, res) => {
   try {
-    const { mediaId } = req.params;
     const kapsoSvc = require('../services/kapso-whatsapp');
+    const axios = require('axios');
     const whatsappConfig = await db.getWhatsappConfig(req.orgId);
-    if (!whatsappConfig?.kapso_api_key) return res.status(503).json({ error: 'WhatsApp no configurado' });
-    const mediaInfo = await kapsoSvc.getMediaUrl(mediaId, whatsappConfig);
-    const { data, contentType } = await kapsoSvc.downloadMedia(mediaInfo.url, whatsappConfig);
+    const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
+
+    // El valor guardado en media_id puede ser una URL directa de Kapso
+    // o un WhatsApp media ID. Descodificar base64url si aplica.
+    let ref = req.params.mediaRef;
+    try {
+      const decoded = Buffer.from(ref.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+      // Validar que la decodificación produjo algo coherente
+      if (decoded.startsWith('https://') || /^[\w.\-]+$/.test(decoded)) {
+        ref = decoded;
+      }
+    } catch (_) {}
+
+    let data, contentType;
+
+    if (ref.startsWith('https://')) {
+      // URL directa de Kapso (almacenada en media_id) — descargar directamente
+      const resp = await axios.get(ref, {
+        headers: { 'X-API-Key': apiKey },
+        responseType: 'arraybuffer',
+        timeout: 15000,
+      });
+      data = resp.data;
+      contentType = resp.headers['content-type'] || 'image/jpeg';
+    } else {
+      // WhatsApp media ID — obtener URL de descarga primero
+      const mediaInfo = await kapsoSvc.getMediaUrl(ref, whatsappConfig);
+      const result = await kapsoSvc.downloadMedia(mediaInfo.url, whatsappConfig);
+      data = result.data;
+      contentType = result.contentType;
+    }
+
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'private, max-age=3600');
     res.send(Buffer.from(data));

@@ -113,6 +113,7 @@ router.post('/', async (req, res) => {
 
   // ── Audio sin transcript → guardar y responder ───────────────────
   if (parsed.type === 'audio' && !parsed.text) {
+    const audioMediaRef = parsed.mediaUrl || parsed.mediaId;
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
     db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
     await db.saveMessage({
@@ -122,7 +123,7 @@ router.post('/', async (req, res) => {
       content:           '🎤 [Audio]',
       type:              'audio',
       sentBy:            'client',
-      mediaId:           parsed.mediaId,
+      mediaId:           audioMediaRef,
     });
     await db.updateConversationLastMessage(conversation.id, '🎤 [Audio]', true);
     await db.updateLastInbound(conversation.id);
@@ -140,7 +141,7 @@ router.post('/', async (req, res) => {
     }
     const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, {
-      message: { conversationId: conversation.id, direction: 'inbound', content: '🎤 [Audio]', type: 'audio', media_id: parsed.mediaId },
+      message: { conversationId: conversation.id, direction: 'inbound', content: '🎤 [Audio]', type: 'audio', media_id: audioMediaRef },
       conversation: updatedConv,
     });
     return;
@@ -357,20 +358,31 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
 
     // ── 1. Descargar imagen y analizar con Claude Vision ────────────
+    // Kapso provee media_url directa en el webhook — usarla sin llamar getMediaUrl
     let analysis = { is_payment_proof: false };
     let data, contentType;
+    const downloadUrl = parsed.mediaUrl; // URL directa de Kapso (preferred)
     try {
-      const mediaInfo = await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig);
-      ({ data, contentType } = await kapsoService.downloadMedia(mediaInfo.url, whatsappConfig));
-      analysis = await analyzePaymentProof(data, contentType);
-      console.log(`[KapsoWebhook] 🤖 Análisis IA:`, JSON.stringify(analysis));
+      if (downloadUrl) {
+        ({ data, contentType } = await kapsoService.downloadMedia(downloadUrl, whatsappConfig));
+      } else if (parsed.mediaId) {
+        // Fallback: obtener URL a partir del media_id (más lento)
+        const mediaInfo = await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig);
+        ({ data, contentType } = await kapsoService.downloadMedia(mediaInfo.url, whatsappConfig));
+      }
+      if (data) {
+        analysis = await analyzePaymentProof(data, contentType);
+        console.log(`[KapsoWebhook] 🤖 Análisis IA:`, JSON.stringify(analysis));
+      }
     } catch (aiErr) {
       console.warn('[KapsoWebhook] Error descargando/analizando imagen:', aiErr.message);
       // Si descarga o análisis falla, tratar como comprobante por seguridad
       analysis = { is_payment_proof: true, confidence: 'low' };
     }
 
-    console.log(`[KapsoWebhook] 🔍 is_payment_proof=${analysis.is_payment_proof} | data=${!!data} | mediaId=${parsed.mediaId}`);
+    // Referencia de media a guardar en DB: preferir URL directa, fallback a ID
+    const mediaRef = downloadUrl || parsed.mediaId;
+    console.log(`[KapsoWebhook] 🔍 is_payment_proof=${analysis.is_payment_proof} | mediaRef=${mediaRef?.slice(0,60)}`);
 
     // ── 2. Si NO es comprobante → analizar con Vision y pasar al bot ────────
     if (!analysis.is_payment_proof) {
@@ -381,7 +393,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         content:           '📷 [Imagen]',
         type:              'image',
         sentBy:            'client',
-        mediaId:           parsed.mediaId,
+        mediaId:           mediaRef,
       });
       await db.updateConversationLastMessage(conversation.id, '📷 [Imagen]', true);
       await db.updateLastInbound(conversation.id);
@@ -428,14 +440,14 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         await db.updateConversationLastMessage(conversation.id, imgResult.response);
         const updatedConv = await db.getConversationById(conversation.id);
         io?.emit(`new_message_${org.id}`, {
-          message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: parsed.mediaId },
+          message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
           conversation: updatedConv,
         });
         io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
       } else {
         const updatedConv = await db.getConversationById(conversation.id);
         io?.emit(`new_message_${org.id}`, {
-          message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: parsed.mediaId },
+          message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
           conversation: updatedConv,
         });
       }
@@ -450,7 +462,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       content:           '📸 [Comprobante de pago]',
       type:              'image',
       sentBy:            'client',
-      mediaId:           parsed.mediaId,
+      mediaId:           mediaRef,
     });
     await db.updateConversationLastMessage(conversation.id, '📸 [Comprobante de pago]', true);
     await db.updateLastInbound(conversation.id);
@@ -475,7 +487,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       orgId:              org.id,
       conversationId:     conversation.id,
       orderId:            pendingOrder?.id || null,
-      mediaId:            parsed.mediaId,
+      mediaId:            mediaRef,
       customerPhone:      parsed.from,
       customerName:       conversation.contact_name || parsed.contactName,
       orderSummary:       pendingOrder ? `${pendingOrder.customer_name || ''} — $${pendingOrder.total_price || '?'}` : null,
@@ -530,7 +542,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     // ── 8. Emitir al CRM en tiempo real ─────────────────────────────
     const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, {
-      message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image', media_id: parsed.mediaId },
+      message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image', media_id: mediaRef },
       conversation: updatedConv,
     });
     io?.emit(`payment_proof_${org.id}`, { proof, conversationId: conversation.id });

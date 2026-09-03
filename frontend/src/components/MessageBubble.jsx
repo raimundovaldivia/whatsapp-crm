@@ -3,10 +3,15 @@ import { Bot, User, Check, CheckCheck, FileText, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { API_BASE } from '../utils/api.js';
 
-/** URL autenticada para media (imagen/audio) — requiere _token en query param */
+/** URL autenticada para media (imagen/audio) — requiere _token en query param.
+ *  El mediaId puede ser un WhatsApp media ID o una URL directa de Kapso.
+ *  Se codifica en base64url para que sea seguro en el path. */
 function mediaUrl(mediaId) {
+  if (!mediaId) return '';
   const token = localStorage.getItem('crm_token') || '';
-  return `${API_BASE}/conversations/media/${mediaId}?_token=${encodeURIComponent(token)}`;
+  // Base64url encode: permite embeber cualquier string (incluyendo URLs) sin romper el routing
+  const encoded = btoa(mediaId).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${API_BASE}/conversations/media/${encoded}?_token=${encodeURIComponent(token)}`;
 }
 
 /** Detecta si el contenido es un template y separa nombre + body */
