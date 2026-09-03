@@ -3,6 +3,12 @@ import { Bot, User, Check, CheckCheck, FileText, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { API_BASE } from '../utils/api.js';
 
+/** URL autenticada para media (imagen/audio) — requiere _token en query param */
+function mediaUrl(mediaId) {
+  const token = localStorage.getItem('crm_token') || '';
+  return `${API_BASE}/conversations/media/${mediaId}?_token=${encodeURIComponent(token)}`;
+}
+
 /** Detecta si el contenido es un template y separa nombre + body */
 function parseTemplateContent(content) {
   if (!content?.startsWith('[Template:')) return null;
@@ -75,10 +81,10 @@ export default function MessageBubble({ message }) {
             /* ── Imagen real ── */
             <div style={{ padding: '4px 4px 0' }}>
               <img
-                src={`${API_BASE}/conversations/media/${message.media_id}`}
+                src={mediaUrl(message.media_id)}
                 alt="Imagen"
                 style={{ maxWidth: '240px', maxHeight: '280px', borderRadius: '8px', display: 'block', cursor: 'pointer', objectFit: 'cover' }}
-                onClick={() => window.open(`${API_BASE}/conversations/media/${message.media_id}`, '_blank')}
+                onClick={() => window.open(mediaUrl(message.media_id), '_blank')}
                 onError={e => { e.target.style.display='none'; }}
               />
               <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 4px 4px' }}>
@@ -89,7 +95,7 @@ export default function MessageBubble({ message }) {
             /* ── Audio con player ── */
             <div style={{ padding: '8px 10px 6px', minWidth: '220px' }}>
               <audio controls style={{ width: '100%', height: '36px', display: 'block', borderRadius: '6px' }}
-                src={`${API_BASE}/conversations/media/${message.media_id}`} />
+                src={mediaUrl(message.media_id)} />
               {message.content && message.content !== '🎤 [Audio]' && (
                 <p style={{ fontSize: '12px', margin: '5px 0 0', color: colors.textSecondary, fontStyle: 'italic', lineHeight: 1.4 }}>
                   {message.content.replace(/^🎤\s*/, '')}
@@ -105,10 +111,10 @@ export default function MessageBubble({ message }) {
             <div style={{ padding: '4px 4px 0' }}>
               {message.media_id && (
                 <img
-                  src={`${API_BASE}/conversations/media/${message.media_id}`}
+                  src={mediaUrl(message.media_id)}
                   alt="Comprobante de pago"
                   style={{ maxWidth: '240px', maxHeight: '280px', borderRadius: '8px 8px 0 0', display: 'block', cursor: 'pointer', objectFit: 'cover', width: '100%' }}
-                  onClick={() => window.open(`${API_BASE}/conversations/media/${message.media_id}`, '_blank')}
+                  onClick={() => window.open(mediaUrl(message.media_id), '_blank')}
                   onError={e => { e.target.style.display='none'; }}
                 />
               )}
