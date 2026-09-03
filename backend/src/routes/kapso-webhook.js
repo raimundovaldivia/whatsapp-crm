@@ -407,8 +407,10 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       analysis = { is_payment_proof: true, confidence: 'low' };
     }
 
-    // Referencia de media a guardar en DB: preferir URL directa, fallback a ID
-    const mediaRef = downloadUrl || parsed.mediaId;
+    // Referencia de media: preferir mediaId (estable, no expira, no IP-restricted).
+    // El proxy de media llama a getMediaUrl(id) para obtener URL fresca.
+    // Fallback a URL solo si no hay mediaId.
+    const mediaRef = parsed.mediaId || downloadUrl;
     pushDebug({ step: 'will_save', is_payment_proof: analysis.is_payment_proof, mediaRef: mediaRef?.slice(0, 80) });
     console.log(`[KapsoWebhook] 🔍 is_payment_proof=${analysis.is_payment_proof} | mediaRef=${mediaRef?.slice(0,60)}`);
 
