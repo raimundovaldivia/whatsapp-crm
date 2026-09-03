@@ -420,6 +420,17 @@ async function getOrderDraft(id) {
  * Previene pedidos duplicados cuando dos mensajes llegan casi simultáneamente.
  */
 async function claimOrderCreation(conversationId) {
+  // Verificar si ya existe un pedido para esta conversación en los últimos 10 minutos
+  // Esto evita duplicados cuando el pipeline se ejecuta dos veces seguidas
+  const { rows: recentOrders } = await pool.query(
+    `SELECT id FROM orders
+     WHERE conversation_id = $1
+       AND created_at > NOW() - INTERVAL '10 minutes'
+     LIMIT 1`,
+    [conversationId]
+  );
+  if (recentOrders.length > 0) return false; // ya existe un pedido reciente
+
   const { rowCount } = await pool.query(
     `UPDATE conversations
      SET pipeline_state = 'done', updated_at = NOW()
