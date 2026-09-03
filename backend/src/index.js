@@ -124,6 +124,7 @@ app.use('/api/shopify-oauth', shopifyOAuthRouter);  // API  — /status y /disco
 app.use('/api/auth',          authRouter);           // POST login/register
 app.use('/api/setup',         setupRouter);          // Wizard configuración
 app.use('/api/conversations', conversationsRouter);  // Chats y mensajes
+app.use('/conversations',     conversationsRouter);  // compat: media proxy sin /api prefix
 app.use('/api/orders',        ordersRouter);         // Pedidos
 app.use('/api/settings',      settingsRouter);       // Ajustes del CRM
 app.use('/api/catalogo',      catalogoRouter);       // Catálogo de productos
