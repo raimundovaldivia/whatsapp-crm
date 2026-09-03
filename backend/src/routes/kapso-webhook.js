@@ -383,6 +383,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     let analysis = { is_payment_proof: false };
     let data, contentType;
     const downloadUrl = parsed.mediaUrl; // URL directa de Kapso (preferred)
+    pushDebug({ step: 'download_start', downloadUrl: downloadUrl?.slice(0, 80), mediaId: parsed.mediaId });
     try {
       if (downloadUrl) {
         ({ data, contentType } = await kapsoService.downloadMedia(downloadUrl, whatsappConfig));
@@ -391,11 +392,13 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         const mediaInfo = await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig);
         ({ data, contentType } = await kapsoService.downloadMedia(mediaInfo.url, whatsappConfig));
       }
+      pushDebug({ step: 'download_ok', bytes: data?.byteLength, contentType });
       if (data) {
         analysis = await analyzePaymentProof(data, contentType);
         console.log(`[KapsoWebhook] 🤖 Análisis IA:`, JSON.stringify(analysis));
       }
     } catch (aiErr) {
+      pushDebug({ step: 'download_error', error: aiErr.message });
       console.warn('[KapsoWebhook] Error descargando/analizando imagen:', aiErr.message);
       // Si descarga o análisis falla, tratar como comprobante por seguridad
       analysis = { is_payment_proof: true, confidence: 'low' };
@@ -403,6 +406,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
     // Referencia de media a guardar en DB: preferir URL directa, fallback a ID
     const mediaRef = downloadUrl || parsed.mediaId;
+    pushDebug({ step: 'will_save', is_payment_proof: analysis.is_payment_proof, mediaRef: mediaRef?.slice(0, 80) });
     console.log(`[KapsoWebhook] 🔍 is_payment_proof=${analysis.is_payment_proof} | mediaRef=${mediaRef?.slice(0,60)}`);
 
     // ── 2. Si NO es comprobante → analizar con Vision y pasar al bot ────────
