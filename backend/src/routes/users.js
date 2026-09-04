@@ -2,7 +2,7 @@
  * /api/users — gestión de usuarios de la organización (solo admin/owner)
  */
 const express = require('express');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const router = express.Router();
 const db = require('../db/database');
 const { requireAuth, requireRole, generateToken } = require('../middleware/auth');
