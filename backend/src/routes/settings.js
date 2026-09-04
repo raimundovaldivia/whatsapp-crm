@@ -15,9 +15,10 @@ const orchestrator    = require('../services/agents/orchestrator');
 const salesAgent      = require('../services/agents/sales');
 const ordersAgent     = require('../services/agents/orders');
 const kapsoPlatform   = require('../services/kapso-platform');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
+router.use(requireRole('owner', 'admin'));
 
 /**
  * GET /api/settings

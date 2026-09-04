@@ -618,6 +618,28 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_apr_org_status ON admin_pending_replies(org_id, status, created_at DESC);
     `);
 
+    // Migración: agregar rol 'supervisor' al CHECK constraint de users
+    // DROP CONSTRAINT no es idempotente, así que verificamos primero
+    await client.query(`
+      DO $$
+      BEGIN
+        -- Eliminar constraint viejo si todavía excluye 'supervisor'
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_name = 'users' AND constraint_name = 'users_role_check'
+        ) THEN
+          ALTER TABLE users DROP CONSTRAINT users_role_check;
+        END IF;
+        -- Agregar constraint actualizado con supervisor
+        ALTER TABLE users
+          ADD CONSTRAINT users_role_check
+          CHECK (role IN ('owner','admin','supervisor','agent'));
+      EXCEPTION WHEN OTHERS THEN
+        NULL; -- ignorar si ya existe con nombre distinto
+      END
+      $$;
+    `);
+
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

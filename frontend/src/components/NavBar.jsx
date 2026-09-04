@@ -1,7 +1,15 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck, UserCog } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
-const NAV_ITEMS = [
+// Qué vistas puede ver cada rol
+const ROLE_VIEWS = {
+  owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'users'],
+  admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'users'],
+  supervisor: ['chats', 'orders', 'repartos', 'pagos'],
+  agent:      ['chats'],
+};
+
+const ALL_NAV_ITEMS = [
   { key: 'chats',        icon: MessageSquare, label: 'Chats' },
   { key: 'stats',        icon: BarChart2,     label: 'Estadísticas' },
   { key: 'orders',       icon: ShoppingBag,   label: 'Pedidos' },
@@ -12,17 +20,22 @@ const NAV_ITEMS = [
 ];
 
 // Items visibles en la barra móvil (los más usados)
-const MOBILE_ITEMS = ['chats', 'orders', 'repartos', 'clientes', 'settings'];
+const MOBILE_KEYS = ['chats', 'orders', 'repartos', 'clientes', 'settings'];
 
-export default function NavBar({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, pendingProofs, isMobile }) {
+export default function NavBar({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, pendingProofs, isMobile, userRole }) {
   const { colors, isDark, toggle } = useTheme();
   const initial = (orgName || 'W')[0].toUpperCase();
+
+  const allowed = ROLE_VIEWS[userRole] || ROLE_VIEWS.agent;
+  const canSettings = allowed.includes('settings');
+  const canUsers = allowed.includes('users');
+  const navItems = ALL_NAV_ITEMS.filter(i => allowed.includes(i.key));
 
   /* ── Barra inferior móvil ── */
   if (isMobile) {
     const mobileItems = [
-      ...NAV_ITEMS.filter(i => MOBILE_ITEMS.slice(0, 4).includes(i.key)),
-      { key: 'settings', icon: Settings, label: 'Ajustes' },
+      ...navItems.filter(i => MOBILE_KEYS.slice(0, 4).includes(i.key)),
+      ...(canSettings ? [{ key: 'settings', icon: Settings, label: 'Ajustes' }] : []),
     ];
 
     return (
@@ -110,7 +123,7 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
 
       <div style={{ width: '32px', height: '1px', backgroundColor: colors.border, marginBottom: '4px' }} />
 
-      {NAV_ITEMS.map(({ key, icon: Icon, label }) => {
+      {navItems.map(({ key, icon: Icon, label }) => {
         const active = view === key;
         const badge = key === 'chats' ? unreadCount : key === 'orders' ? pendingOrders : key === 'pagos' ? (pendingProofs || 0) : 0;
         return (
@@ -127,9 +140,19 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
       <NavItem label={isDark ? 'Modo claro' : 'Modo oscuro'} onClick={toggle} colors={colors}>
         {isDark ? <Sun size={18} /> : <Moon size={18} />}
       </NavItem>
-      <NavItem active={view === 'settings'} label="Ajustes" onClick={() => onChangeView('settings')} colors={colors}>
-        <Settings size={20} />
-      </NavItem>
+
+      {canUsers && (
+        <NavItem active={view === 'users'} label="Equipo" onClick={() => onChangeView('users')} colors={colors}>
+          <UserCog size={20} />
+        </NavItem>
+      )}
+
+      {canSettings && (
+        <NavItem active={view === 'settings'} label="Ajustes" onClick={() => onChangeView('settings')} colors={colors}>
+          <Settings size={20} />
+        </NavItem>
+      )}
+
       <NavItem label="Cerrar sesión" onClick={onLogout} danger colors={colors}>
         <LogOut size={18} />
       </NavItem>

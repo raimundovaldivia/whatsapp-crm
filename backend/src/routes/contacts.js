@@ -9,13 +9,18 @@
 const express = require('express');
 const router  = express.Router();
 const db      = require('../db/database');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
 
+// Roles con acceso al panel de contactos completo
+const requireContactsAccess = requireRole('owner', 'admin', 'supervisor');
+// Roles con acceso solo a operaciones de escritura sensibles
+const requireAdminAccess = requireRole('owner', 'admin');
+
 const PAGE_SIZE = 100;
 
-router.get('/', async (req, res) => {
+router.get('/', requireContactsAccess, async (req, res) => {
   try {
     const { type, search, page = 1 } = req.query;
     const offset  = (parseInt(page) - 1) * PAGE_SIZE;
@@ -74,7 +79,7 @@ router.get('/stats', async (req, res) => {
  * Todos los contactos con teléfono desde la tabla contacts.
  * Los clientes de Shopify se sincronizan automáticamente en upsertShopifyOrders.
  */
-router.get('/broadcast', async (req, res) => {
+router.get('/broadcast', requireContactsAccess, async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
@@ -126,7 +131,7 @@ router.get('/broadcast', async (req, res) => {
  * Rellena la tabla contacts con todos los clientes ya cacheados en shopify_orders.
  * Ahora también extrae address1 del raw_json de la orden más reciente.
  */
-router.post('/backfill-shopify', async (req, res) => {
+router.post('/backfill-shopify', requireAdminAccess, async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
@@ -180,7 +185,7 @@ router.post('/backfill-shopify', async (req, res) => {
  * Fusiona contactos duplicados que tienen el mismo número en formatos distintos
  * (ej: 912345678 y 56912345678). Conserva la fila con más datos.
  */
-router.post('/dedup-phones', async (req, res) => {
+router.post('/dedup-phones', requireAdminAccess, async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
@@ -283,7 +288,7 @@ router.post('/dedup-phones', async (req, res) => {
  * POST /api/contacts/normalize-names
  * Aplica Title Case a todos los nombres de contactos de esta organización.
  */
-router.post('/normalize-names', async (req, res) => {
+router.post('/normalize-names', requireAdminAccess, async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {
@@ -321,7 +326,7 @@ router.post('/normalize-names', async (req, res) => {
  * Normaliza phones y upsertea sin pisar contactos existentes.
  * Retorna: { imported, skipped, invalid, errors[] }
  */
-router.post('/import', async (req, res) => {
+router.post('/import', requireAdminAccess, async (req, res) => {
   try {
     const { leads = [] } = req.body;
     if (!Array.isArray(leads) || leads.length === 0) {
@@ -399,7 +404,7 @@ router.post('/import', async (req, res) => {
  * Solo borra contactos con contact_type = 'lead' (nunca clientes).
  * Body: { phones: ["569...", ...] }
  */
-router.delete('/bulk', async (req, res) => {
+router.delete('/bulk', requireAdminAccess, async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
   try {

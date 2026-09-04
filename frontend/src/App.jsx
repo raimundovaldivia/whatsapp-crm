@@ -14,6 +14,7 @@ import SettingsPanel     from './components/SettingsPanel.jsx';
 import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
 import ProductsPanel        from './components/ProductsPanel.jsx';
 import RepartosPanel        from './components/RepartosPanel.jsx';
+import UsersPanel           from './components/UsersPanel.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
@@ -256,11 +257,23 @@ export default function App() {
     setConversations([]); setMessages({}); setSelectedId(null);
   }, []);
 
+  // Qué vistas puede ver cada rol
+  const ROLE_VIEWS = {
+    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'dashboard', 'users']),
+    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'dashboard', 'users']),
+    supervisor: new Set(['chats', 'orders', 'repartos', 'pagos']),
+    agent:      new Set(['chats']),
+  };
+  const userRole = user?.role || 'agent';
+  const allowedViews = ROLE_VIEWS[userRole] || ROLE_VIEWS.agent;
+
   // ── Cambiar vista ───────────────────────────────────────────────
   const handleChangeView = useCallback((newView) => {
+    const allowed = ROLE_VIEWS[user?.role] || ROLE_VIEWS.agent;
+    if (!allowed.has(newView)) return; // silently block unauthorized navigation
     setView(newView);
-    // Si vamos a chats y no hay conv seleccionada, limpiar selección no hace falta
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
 
   // ── Render ──────────────────────────────────────────────────────
   if (appState === 'loading') return (
@@ -354,6 +367,7 @@ export default function App() {
         pendingProofs={pendingProofs}
         colors={colors}
         isMobile={isMobile}
+        userRole={userRole}
       />
 
       {/* Vista Chats */}
@@ -440,6 +454,9 @@ export default function App() {
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}
+
+      {/* Vista Equipo (admin/owner only) */}
+      {view === 'users' && allowedViews.has('users') && <UsersPanel />}
 
     </div>
     </ThemeCtx.Provider>

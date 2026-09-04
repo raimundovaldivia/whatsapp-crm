@@ -7,9 +7,10 @@
 const express      = require('express');
 const router       = express.Router();
 const { getPool }  = require('../db/database');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
+router.use(requireRole('owner', 'admin'));
 
 /**
  * GET /api/dashboard/wins

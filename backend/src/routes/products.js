@@ -13,9 +13,10 @@ const router     = express.Router();
 const db         = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
 const r2         = require('../services/r2-storage');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
+router.use(requireRole('owner', 'admin'));
 
 // ── GET /api/products ──────────────────────────────────────────────
 router.get('/', async (req, res) => {

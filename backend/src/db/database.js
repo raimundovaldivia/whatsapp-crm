@@ -58,6 +58,33 @@ async function getUserById(id) {
   );
 }
 
+async function listOrgUsers(orgId) {
+  return query(
+    `SELECT id, email, name, role, created_at
+     FROM users
+     WHERE organization_id = $1
+     ORDER BY created_at ASC`,
+    [orgId]
+  );
+}
+
+async function updateUserRole(userId, orgId, role) {
+  return queryOne(
+    `UPDATE users SET role = $1
+     WHERE id = $2 AND organization_id = $3
+     RETURNING id, email, name, role`,
+    [role, userId, orgId]
+  );
+}
+
+async function deleteOrgUser(userId, orgId) {
+  const result = await pool.query(
+    'DELETE FROM users WHERE id = $1 AND organization_id = $2',
+    [userId, orgId]
+  );
+  return result.rowCount > 0;
+}
+
 // ─── WHATSAPP CONFIG ──────────────────────────────────────────────
 
 async function upsertWhatsappConfig(orgId, config) {
@@ -1347,4 +1374,6 @@ module.exports = {
   upsertShopifyOrders, getShopifyOrders, getShopifyOrdersSyncedAt,
   // Admin relay
   createAdminPendingReply, getLatestPendingAdminReply, markAdminReplyHandled,
+  // User management (RBAC)
+  listOrgUsers, updateUserRole, deleteOrgUser,
 };
