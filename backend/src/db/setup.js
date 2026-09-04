@@ -618,6 +618,13 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_apr_org_status ON admin_pending_replies(org_id, status, created_at DESC);
     `);
 
+    // Migración: columnas WA para agentes
+    await client.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS whatsapp_phone   TEXT,
+        ADD COLUMN IF NOT EXISTS wa_notifications JSONB DEFAULT '{"new_messages":false,"escalations":true,"payments":false}'::jsonb;
+    `);
+
     // Migración: agregar rol 'supervisor' al CHECK constraint de users
     // DROP CONSTRAINT no es idempotente, así que verificamos primero
     await client.query(`

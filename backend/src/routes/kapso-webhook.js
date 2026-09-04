@@ -16,10 +16,11 @@ const router         = express.Router();
 const db             = require('../db/database');
 const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
-const { notifyAdminHandoff }    = require('../services/notifications');
+const { notifyAdminHandoff, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
 const mediaCache                = require('../services/media-cache');
+const { handleAgentCommand }    = require('../services/agent-commands');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -129,6 +130,17 @@ router.post('/', async (req, res) => {
     await handleAdminReply(org, whatsappConfig, parsed);
     return;
   }
+
+  // ── Agente registrado: si el sender es un agente WA → procesar como comando ──
+  if (parsed.from && parsed.type === 'text' && parsed.text) {
+    const agent = await db.getUserByWhatsappPhone(org.id, parsed.from).catch(() => null);
+    if (agent) {
+      console.log(`[KapsoWebhook] 🤖 Comando de agente ${agent.name || agent.email}: "${parsed.text.slice(0, 80)}"`);
+      await handleAgentCommand(org, whatsappConfig, agent, parsed.text);
+      return;
+    }
+  }
+
   // ── Imagen o documento-imagen entrante → posible comprobante de pago ────
   // WhatsApp puede enviar imágenes como type:'image' o type:'document' (PNG/JPG como archivo)
   if ((parsed.type === 'image' || parsed.type === 'document') && (parsed.mediaId || parsed.mediaUrl)) {
@@ -199,6 +211,9 @@ router.post('/', async (req, res) => {
     const msgForSocket = savedMsg || { conversationId: conversation.id, direction: 'inbound', content: parsed.text };
     const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, { message: msgForSocket, conversation: updatedConv });
+
+    // 3b. Notificar a agentes con new_messages habilitado (sin await para no bloquear)
+    notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
 
     // 4. Si está en modo humano, verificar si hace mucho que no responde un humano
     if (updatedConv.agent_mode !== 'ai') {
@@ -602,6 +617,11 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         await kapsoService.sendTextMessage(adminPhone, adminMsg, wc).catch(() => {});
       }
     }
+
+    // ── 7b. Notificar a agentes con payments habilitado ──────────────
+    const clientName  = conversation.contact_name || parsed.from;
+    const amountStr   = analysis.amount ? `$${Number(analysis.amount).toLocaleString('es-CL')} ${analysis.currency || ''}` : null;
+    notifyAgentsPayment(org.id, clientName, parsed.from, amountStr).catch(() => {});
 
     // ── 8. Emitir al CRM en tiempo real ─────────────────────────────
     const updatedConv = await db.getConversationById(conversation.id);

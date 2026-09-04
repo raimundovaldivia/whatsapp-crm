@@ -67,6 +67,37 @@ router.post('/', async (req, res) => {
 });
 
 /**
+ * PATCH /api/users/:id
+ * Actualiza whatsapp_phone y/o wa_notifications de un usuario
+ * Body: { whatsapp_phone?, wa_notifications? }
+ */
+router.patch('/:id', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const { whatsapp_phone, wa_notifications } = req.body;
+
+    let updated = null;
+
+    if (whatsapp_phone !== undefined) {
+      updated = await db.updateUserWaPhone(userId, req.orgId, whatsapp_phone || null);
+      if (!updated) return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
+    }
+
+    if (wa_notifications !== undefined) {
+      updated = await db.updateUserNotifications(userId, req.orgId, wa_notifications);
+      if (!updated) return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
+    }
+
+    if (!updated) return res.status(400).json({ success: false, error: 'Sin campos para actualizar' });
+
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('[Users] PATCH /:id', err);
+    res.status(500).json({ success: false, error: 'Error al actualizar usuario' });
+  }
+});
+
+/**
  * PATCH /api/users/:id/role
  * Cambia el rol de un usuario
  * Body: { role }

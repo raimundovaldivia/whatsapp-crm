@@ -60,10 +60,50 @@ async function getUserById(id) {
 
 async function listOrgUsers(orgId) {
   return query(
-    `SELECT id, email, name, role, created_at
+    `SELECT id, email, name, role, whatsapp_phone, wa_notifications, created_at
      FROM users
      WHERE organization_id = $1
      ORDER BY created_at ASC`,
+    [orgId]
+  );
+}
+
+async function getUserByWhatsappPhone(orgId, phone) {
+  const normalized = normalizePhone(phone);
+  const result = await query(
+    `SELECT id, organization_id, email, name, role, whatsapp_phone, wa_notifications
+     FROM users
+     WHERE organization_id = $1
+       AND (whatsapp_phone = $2 OR whatsapp_phone = $3)`,
+    [orgId, phone, normalized]
+  );
+  return result[0] || null;
+}
+
+async function updateUserWaPhone(userId, orgId, waPhone) {
+  return queryOne(
+    `UPDATE users SET whatsapp_phone = $1 WHERE id = $2 AND organization_id = $3
+     RETURNING id, email, name, role, whatsapp_phone, wa_notifications`,
+    [waPhone || null, userId, orgId]
+  );
+}
+
+async function updateUserNotifications(userId, orgId, notifications) {
+  return queryOne(
+    `UPDATE users SET wa_notifications = $1 WHERE id = $2 AND organization_id = $3
+     RETURNING id, email, name, role, whatsapp_phone, wa_notifications`,
+    [JSON.stringify(notifications), userId, orgId]
+  );
+}
+
+async function getAgentsWithNotification(orgId, notifKey) {
+  return query(
+    `SELECT id, name, email, whatsapp_phone, wa_notifications
+     FROM users
+     WHERE organization_id = $1
+       AND whatsapp_phone IS NOT NULL
+       AND whatsapp_phone <> ''
+       AND (wa_notifications->>'${notifKey}')::boolean = true`,
     [orgId]
   );
 }
@@ -1376,4 +1416,6 @@ module.exports = {
   createAdminPendingReply, getLatestPendingAdminReply, markAdminReplyHandled,
   // User management (RBAC)
   listOrgUsers, updateUserRole, deleteOrgUser,
+  // Agentes WA
+  getUserByWhatsappPhone, updateUserWaPhone, updateUserNotifications, getAgentsWithNotification,
 };
