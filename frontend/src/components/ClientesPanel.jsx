@@ -1,8 +1,101 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users, Search, RefreshCw, MessageSquare, ShoppingBag,
-  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, Zap, Upload, X, CheckCircle, AlertCircle,
+  TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, Zap, Upload, X, CheckCircle, AlertCircle, ChevronDown, Check,
 } from 'lucide-react';
+
+/**
+ * ProductSelect — dropdown estilizado para seleccionar productos
+ */
+function ProductSelect({ value, onChange, options, placeholder = '— Seleccionar producto —', colors }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const selected = options.find(o => String(o.value) === String(value));
+
+  return (
+    <div ref={ref} style={{ position: 'relative', width: '100%' }}>
+      {/* Trigger */}
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 12px', borderRadius: '8px',
+          border: `1px solid ${open ? colors.green : colors.border}`,
+          backgroundColor: colors.bgCard,
+          color: selected ? colors.textPrimary : colors.textSecondary,
+          fontSize: '13px', cursor: 'pointer', textAlign: 'left',
+          transition: 'border-color 0.15s',
+          boxShadow: open ? `0 0 0 2px ${colors.green}22` : 'none',
+        }}>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <ChevronDown size={14} color={colors.textSecondary} style={{ flexShrink: 0, marginLeft: '6px', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 100,
+          backgroundColor: colors.bgCard,
+          border: `1px solid ${colors.border}`,
+          borderRadius: '10px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+          overflow: 'hidden',
+          maxHeight: '220px', overflowY: 'auto',
+        }}>
+          {/* Opción vacía */}
+          <button
+            type="button"
+            onClick={() => { onChange('', ''); setOpen(false); }}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+              padding: '9px 14px', background: 'none', border: 'none',
+              cursor: 'pointer', textAlign: 'left', fontSize: '12px',
+              color: colors.textSecondary,
+              borderBottom: `1px solid ${colors.border}`,
+            }}>
+            {placeholder}
+          </button>
+
+          {options.map(o => {
+            const isActive = String(o.value) === String(value);
+            return (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => { onChange(String(o.value), o.label); setOpen(false); }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '10px 14px', background: isActive ? `${colors.green}18` : 'none',
+                  border: 'none', borderBottom: `1px solid ${colors.border}`,
+                  cursor: 'pointer', textAlign: 'left', fontSize: '13px',
+                  color: isActive ? colors.green : colors.textPrimary,
+                  fontWeight: isActive ? 600 : 400,
+                  transition: 'background 0.1s',
+                }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.backgroundColor = colors.bgHover; }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {o.label}
+                </span>
+                {isActive && <Check size={13} color={colors.green} style={{ flexShrink: 0 }} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
@@ -926,19 +1019,13 @@ export default function ClientesPanel({ onOpenConversation }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {/* Selector de producto */}
                 {availableProducts.length > 0 ? (
-                  <select
+                  <ProductSelect
                     value={newPriceProductId}
-                    onChange={e => {
-                      const opt = e.target.options[e.target.selectedIndex];
-                      setNewPriceProductId(e.target.value);
-                      setNewPriceProductTitle(opt.text);
-                    }}
-                    style={{ padding: '7px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '13px' }}>
-                    <option value="">— Seleccionar producto —</option>
-                    {availableProducts.map(p => (
-                      <option key={p.id || p.external_id} value={String(p.id || p.external_id)}>{p.title || p.name}</option>
-                    ))}
-                  </select>
+                    onChange={(val, label) => { setNewPriceProductId(val); setNewPriceProductTitle(label); }}
+                    options={availableProducts.map(p => ({ value: String(p.id || p.external_id), label: p.title || p.name }))}
+                    placeholder="— Seleccionar producto —"
+                    colors={colors}
+                  />
                 ) : (
                   <input value={newPriceProductTitle} onChange={e => { setNewPriceProductTitle(e.target.value); setNewPriceProductId(e.target.value); }}
                     placeholder="Nombre del producto"
