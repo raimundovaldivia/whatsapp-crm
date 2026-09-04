@@ -347,8 +347,10 @@ async function updateConversationLastMessage(id, message, incrementUnread = fals
 }
 
 async function updateLastInbound(id) {
+  // Resetear follow_up_sent_at cuando el cliente escribe — el timer empieza desde cero.
+  // Esto evita que el bot siga siguiendo indefinidamente después de que el cliente responde.
   await pool.query(
-    'UPDATE conversations SET last_inbound_at = CURRENT_TIMESTAMP WHERE id = $1',
+    'UPDATE conversations SET last_inbound_at = CURRENT_TIMESTAMP, follow_up_sent_at = NULL WHERE id = $1',
     [id]
   );
 }
@@ -377,9 +379,9 @@ async function getStalledConversations() {
       c.agent_mode    = 'ai'
       AND c.pipeline_state IN ('interested', 'collecting_order')
       AND c.last_inbound_at IS NOT NULL
-      AND c.last_inbound_at < NOW() - INTERVAL '2 hours'
-      AND c.last_inbound_at > NOW() - INTERVAL '22 hours'
-      AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '8 hours')
+      AND c.last_inbound_at < NOW() - INTERVAL '4 hours'
+      AND c.last_inbound_at > NOW() - INTERVAL '20 hours'
+      AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '16 hours')
   `);
   return rows;
 }

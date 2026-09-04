@@ -89,7 +89,8 @@ async function runFollowUp(io = null) {
         // Generar mensaje con IA
         const message = await generateFollowUpMessage(conv, history, storeContext);
 
-        if (!message || message === 'SKIP') {
+        // Claude a veces devuelve "SKIP (explicación...)" en vez de solo "SKIP" — normalizar
+        if (!message || message.trim().toUpperCase().startsWith('SKIP')) {
           console.log(`[FollowUp] SKIP conv ${conv.id} (${conv.contact_name})`);
           skipped++;
           continue;
