@@ -390,6 +390,9 @@ export default function App() {
                   const updated = await conversationsAPI.getAll();
                   setConversations(updated);
                 }}
+                onConversationUpdated={(updatedConv) => {
+                  setConversations(prev => prev.map(c => c.id === updatedConv.id ? { ...c, ...updatedConv } : c));
+                }}
               />
             ) : !isMobile ? (
               <EmptyState orgName={org?.name} onChangeView={handleChangeView} />

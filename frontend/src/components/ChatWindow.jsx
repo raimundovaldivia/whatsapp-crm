@@ -7,13 +7,57 @@ import { useTheme } from '../theme.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping }) {
+export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
+
+  // ── Editar contacto ──────────────────────────────────────────────
+  const [showEditContact, setShowEditContact]     = useState(false);
+  const [editContactName, setEditContactName]     = useState('');
+  const [editContactAddress, setEditContactAddress] = useState('');
+  const [editContactCity, setEditContactCity]     = useState('');
+  const [savingContact, setSavingContact]         = useState(false);
+  const [localContactName, setLocalContactName]   = useState(null); // override local del nombre
+
+  const openEditContact = useCallback(async () => {
+    setEditContactName(conversation.contact_name || '');
+    setEditContactAddress('');
+    setEditContactCity('');
+    // Intentar cargar datos actuales del contacto
+    try {
+      const r = await api.get('/contacts/by-phone', { params: { phone: conversation.phone_number } });
+      const ct = r.data?.contact;
+      if (ct) {
+        setEditContactName(ct.name || conversation.contact_name || '');
+        setEditContactAddress(ct.address || '');
+        setEditContactCity(ct.city || '');
+      }
+    } catch (_) {}
+    setShowEditContact(true);
+  }, [conversation.contact_name, conversation.phone_number]);
+
+  const handleSaveContact = useCallback(async () => {
+    if (!editContactName.trim()) return;
+    setSavingContact(true);
+    try {
+      await api.patch(`/contacts/${encodeURIComponent(conversation.phone_number)}`, {
+        name:    editContactName.trim(),
+        address: editContactAddress.trim() || undefined,
+        city:    editContactCity.trim() || undefined,
+      });
+      setLocalContactName(editContactName.trim());
+      setShowEditContact(false);
+      onConversationUpdated?.({ ...conversation, contact_name: editContactName.trim() });
+    } catch (err) {
+      alert('Error guardando: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setSavingContact(false);
+    }
+  }, [conversation, editContactName, editContactAddress, editContactCity, onConversationUpdated]);
 
   // Historial de compras
   const [showHistory, setShowHistory]       = useState(false);
@@ -350,7 +394,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
   };
 
-  const _rawName = conversation.contact_name;
+  const _rawName = localContactName ?? conversation.contact_name;
   const _isGenericName = !_rawName || _rawName === 'Cliente' || /^\d+$/.test(_rawName);
   const displayContactName = _isGenericName ? (conversation.phone_number || '?') : _rawName;
   const initials = displayContactName.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
@@ -558,11 +602,17 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             {initials}
           </div>
           <div style={{ minWidth: 0 }}>
-            <div style={{
-              fontWeight: 600, fontSize: isMobile ? '14px' : '15px', color: colors.textPrimary,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              maxWidth: isMobile ? '110px' : 'none',
-            }}>
+            <div
+              onClick={openEditContact}
+              title="Editar contacto"
+              style={{
+                fontWeight: 600, fontSize: isMobile ? '14px' : '15px', color: colors.textPrimary,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                maxWidth: isMobile ? '110px' : 'none',
+                cursor: 'pointer',
+                borderBottom: `1px dashed ${colors.border}`,
+                display: 'inline-block',
+              }}>
               {displayContactName}
             </div>
             {!isMobile && (
@@ -911,6 +961,69 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           textAlign: 'center',
         }}>
           {error}
+        </div>
+      )}
+
+      {/* ── Modal Editar Contacto ── */}
+      {showEditContact && (
+        <div onClick={() => setShowEditContact(false)} style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.55)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ backgroundColor: colors.bgPanel, borderRadius:'14px', border:`1px solid ${colors.border}`, width:'100%', maxWidth:'420px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)', padding:'24px' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
+              <span style={{ fontWeight:700, fontSize:'16px', color: colors.textPrimary }}>Editar contacto</span>
+              <button onClick={() => setShowEditContact(false)} style={{ background:'none', border:'none', cursor:'pointer', color: colors.textSecondary, padding:'4px' }}><X size={18}/></button>
+            </div>
+
+            <div style={{ fontSize:'12px', color: colors.textMuted, marginBottom:'16px' }}>
+              {conversation.phone_number}
+            </div>
+
+            {/* Nombre */}
+            <div style={{ marginBottom:'14px' }}>
+              <label style={{ fontSize:'12px', color: colors.textSecondary, display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.5px' }}>Nombre</label>
+              <input
+                value={editContactName}
+                onChange={e => setEditContactName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleSaveContact()}
+                placeholder="Nombre del contacto"
+                autoFocus
+                style={{ width:'100%', padding:'9px 12px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor: colors.bgSub, color: colors.textPrimary, fontSize:'14px', boxSizing:'border-box' }}
+              />
+            </div>
+
+            {/* Dirección */}
+            <div style={{ marginBottom:'14px' }}>
+              <label style={{ fontSize:'12px', color: colors.textSecondary, display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección</label>
+              <input
+                value={editContactAddress}
+                onChange={e => setEditContactAddress(e.target.value)}
+                placeholder="Calle, número, depto..."
+                style={{ width:'100%', padding:'9px 12px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor: colors.bgSub, color: colors.textPrimary, fontSize:'14px', boxSizing:'border-box' }}
+              />
+            </div>
+
+            {/* Ciudad */}
+            <div style={{ marginBottom:'22px' }}>
+              <label style={{ fontSize:'12px', color: colors.textSecondary, display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.5px' }}>Ciudad</label>
+              <input
+                value={editContactCity}
+                onChange={e => setEditContactCity(e.target.value)}
+                placeholder="La Serena, Coquimbo..."
+                style={{ width:'100%', padding:'9px 12px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor: colors.bgSub, color: colors.textPrimary, fontSize:'14px', boxSizing:'border-box' }}
+              />
+            </div>
+
+            <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
+              <button onClick={() => setShowEditContact(false)} style={{ padding:'9px 18px', borderRadius:'8px', border:`1px solid ${colors.border}`, background:'none', color: colors.textSecondary, cursor:'pointer', fontSize:'14px' }}>
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveContact}
+                disabled={savingContact || !editContactName.trim()}
+                style={{ padding:'9px 18px', borderRadius:'8px', border:'none', backgroundColor: colors.green, color:'white', cursor: savingContact ? 'wait' : 'pointer', fontSize:'14px', fontWeight:600, opacity: !editContactName.trim() ? 0.5 : 1 }}>
+                {savingContact ? 'Guardando...' : 'Guardar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

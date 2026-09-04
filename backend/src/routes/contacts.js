@@ -459,11 +459,12 @@ router.patch('/:phone/type', async (req, res) => {
  */
 router.patch('/:phone', async (req, res) => {
   try {
-    const { getPool } = require('../db/database');
+    const pool = require('../db/database').getPool();
     const { name, address, city } = req.body;
     const phone = req.params.phone;
-    // Upsert: inserta o actualiza dirección/nombre
-    const { rows: [contact] } = await getPool().query(
+
+    // Upsert en tabla contacts
+    const { rows: [contact] } = await pool.query(
       `INSERT INTO contacts (organization_id, phone, name, address, city, updated_at)
        VALUES ($1, $2, $3, $4, $5, NOW())
        ON CONFLICT (organization_id, phone)
@@ -475,6 +476,16 @@ router.patch('/:phone', async (req, res) => {
        RETURNING *`,
       [req.orgId, phone, name || null, address || null, city || null]
     );
+
+    // Sincronizar contact_name en conversaciones para que el sidebar/header reflejen el cambio
+    if (name) {
+      await pool.query(
+        `UPDATE conversations SET contact_name = $1
+         WHERE organization_id = $2 AND phone_number IN ($3, $4)`,
+        [name, req.orgId, phone, `+${phone}`]
+      );
+    }
+
     res.json({ success: true, data: contact });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
