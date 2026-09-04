@@ -696,6 +696,20 @@ async function getLatestPendingOrderByConversation(conversationId) {
   );
 }
 
+/**
+ * Busca el pedido activo más reciente de una conversación para inyectar
+ * contexto al bot. Incluye todos los estados no terminales.
+ */
+async function getActiveOrderForBot(conversationId) {
+  return queryOne(
+    `SELECT * FROM orders
+     WHERE conversation_id = $1
+       AND status IN ('nuevo','sent','payment_received','por_despachar','en_camino')
+     ORDER BY created_at DESC LIMIT 1`,
+    [conversationId]
+  );
+}
+
 // ─── PRODUCTS PROPIOS ─────────────────────────────────────────────
 
 async function getProducts(orgId, onlyActive = false) {
@@ -1393,7 +1407,7 @@ module.exports = {
   // Products propios
   getProducts, getProductById, createProduct, updateProduct, deleteProduct,
   // Orders
-  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation,
+  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation, getActiveOrderForBot,
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts

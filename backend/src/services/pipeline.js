@@ -238,6 +238,61 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
     }
   }
 
+  // ── Pedido activo de esta conversación (para contexto del bot) ─────────
+  let pendingOrderSection = '';
+  try {
+    const activeOrder = await db.getActiveOrderForBot(conversationId);
+    if (activeOrder) {
+      const STATUS_LABEL = {
+        nuevo:            'Confirmado — en preparación',
+        sent:             'Confirmado — pendiente de pago',
+        payment_received: 'Pago recibido — en preparación',
+        por_despachar:    'Listo para despachar 📦',
+        en_camino:        'En camino 🚚',
+      };
+      const statusLabel = STATUS_LABEL[activeOrder.status] || activeOrder.status;
+
+      let itemsLine = '';
+      try {
+        const items = typeof activeOrder.items === 'string'
+          ? JSON.parse(activeOrder.items)
+          : activeOrder.items;
+        if (Array.isArray(items) && items.length) {
+          itemsLine = items
+            .map(i => `${i.quantity || 1}x ${i.name || i.title || i.variant_title || ''}`.trim())
+            .join(', ');
+        }
+      } catch (_) {}
+
+      let addrLine = '';
+      try {
+        const addr = typeof activeOrder.shipping_address === 'string'
+          ? JSON.parse(activeOrder.shipping_address)
+          : activeOrder.shipping_address;
+        const parts = [addr?.address1 || addr?.address, addr?.city].filter(Boolean);
+        if (parts.length) addrLine = parts.join(', ');
+      } catch (_) {}
+
+      const totalLine = activeOrder.total_price
+        ? `$${Number(activeOrder.total_price).toLocaleString('es-CL')}`
+        : '';
+
+      pendingOrderSection = `## Pedido activo del cliente ⚠️ LEE ESTO PRIMERO
+Este cliente ya tiene un pedido registrado en nuestro sistema:
+- Estado: **${statusLabel}**${itemsLine ? `\n- Productos: ${itemsLine}` : ''}${totalLine ? `\n- Total: ${totalLine}` : ''}${addrLine ? `\n- Dirección registrada: ${addrLine}` : ''}
+
+Reglas estrictas para responder sobre este pedido:
+1. Si el cliente pregunta "¿cuándo llega?", "¿cómo va mi pedido?", "¿ya lo mandaron?" o similar → responde que su pedido está ${statusLabel.replace(/\*\*/g, '').toLowerCase()} y que pronto recibirá más novedades.
+2. NO vuelvas a pedir datos de entrega, dirección ni de pago — el pedido ya está registrado.
+3. NO ofrezcas iniciar un nuevo pedido para los mismos productos.
+4. Si el cliente quiere modificar o cancelar → dile que lo puede coordinar con el equipo escribiendo aquí mismo.`;
+
+      console.log(`[Pipeline] 📦 Pedido activo inyectado al contexto: id=${activeOrder.id} status=${activeOrder.status}`);
+    }
+  } catch (e) {
+    console.warn('[Pipeline] activeOrder bot context error:', e.message);
+  }
+
   L.context({
     products: products.length,
     history:  purchaseHistorySection ? (purchaseHistorySection.match(/\n-/g) || []).length : 0,
@@ -245,7 +300,8 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
     state: currentState,
   });
 
-  const storeCustomPrompt = [leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  // pendingOrderSection va PRIMERO para que el LLM lo lea antes de cualquier otro contexto
+  const storeCustomPrompt = [pendingOrderSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
   // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.
