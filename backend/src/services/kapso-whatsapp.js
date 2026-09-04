@@ -145,6 +145,12 @@ function parseWebhookMessage(body, event) {
     const direction = message.kapso?.direction;
     if (direction && direction !== 'inbound') return null;
 
+    // Ignorar reacciones (👍, ❤️, etc.) — no son mensajes que requieran respuesta del bot
+    if (message.type === 'reaction') {
+      console.log(`[KapsoWA] Reacción ignorada (${message.reaction?.emoji || '?'}) — no activa pipeline`);
+      return null;
+    }
+
     // Texto: v2 usa message.text.body para texto;
     // Para audio Kapso genera transcript en message.kapso.transcript
     // Para otros tipos usa message.kapso.content como fallback
