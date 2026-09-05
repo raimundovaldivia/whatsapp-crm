@@ -899,6 +899,9 @@ function IATab({ onSwitchTab }) {
   // Teléfono del admin para alertas de modo humano
   const [adminAlertPhone, setAdminAlertPhone] = useState('');
 
+  // Template de despacho para pedidos agendados
+  const [dispatchTemplate, setDispatchTemplate] = useState('');
+
   // Test bot
   const [testOpen,         setTestOpen]         = useState(false);
   const [testMessages,     setTestMessages]     = useState([]);
@@ -954,6 +957,7 @@ function IATab({ onSwitchTab }) {
       if (d?.payment_mode) setPaymentMode(d.payment_mode);
       if (d?.payment_info !== undefined) setPaymentInfo(d.payment_info || '');
       if (d?.admin_alert_phone) setAdminAlertPhone(d.admin_alert_phone);
+      if (d?.scheduled_dispatch_template !== undefined) setDispatchTemplate(d.scheduled_dispatch_template || '');
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -1060,7 +1064,7 @@ function IATab({ onSwitchTab }) {
     setSaving(true); setError(''); setSuccess('');
     try {
       await Promise.all([
-        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone }),
+        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone, scheduled_dispatch_template: dispatchTemplate }),
         storeSettingsAPI.saveStoreContext(storeContext),
         storeSettingsAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
@@ -1309,6 +1313,26 @@ function IATab({ onSwitchTab }) {
             />
             <p style={{ ...hintStyle, marginTop: '6px' }}>
               Cuando una conversación pase a modo humano (por el bot o manualmente), este número recibirá un WhatsApp de alerta. Sin código +, con código de país (ej: 56912345678).
+            </p>
+          </div>
+
+          {/* Template de despacho para pedidos agendados */}
+          <div>
+            <label style={labelStyle}>📅 Template de despacho (pedidos agendados)</label>
+            <input
+              value={dispatchTemplate}
+              onChange={e => setDispatchTemplate(e.target.value.trim())}
+              placeholder="nombre_de_tu_template"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
+                borderRadius: '8px', padding: '10px 14px',
+                color: colors.textPrimary, fontSize: '14px', outline: 'none',
+                fontFamily: 'monospace',
+              }}
+            />
+            <p style={{ ...hintStyle, marginTop: '6px' }}>
+              Nombre del template aprobado por Meta que se enviará automáticamente el día que corresponde despachar un pedido agendado. El template debe tener {'{{1}}'} = nombre del cliente y {'{{2}}'} = producto.
             </p>
           </div>
 

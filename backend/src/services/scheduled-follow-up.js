@@ -47,26 +47,64 @@ async function runScheduledFollowUp(io = null) {
 async function processScheduledOrder(order, io) {
   const { id, organization_id: orgId, conversation_id: convId, phone, customer_name, product_notes, desired_date, template_name } = order;
 
+  const name    = customer_name || 'Cliente';
+  const product = product_notes || 'tu pedido';
+
   // 1. Obtener config de WhatsApp de la org
   const wc = await db.getWhatsappConfig(orgId);
+
+  // ─── PASO A: Crear pedido real en la tabla orders ───────────────────────
+  // Siempre hacemos esto cuando llega el día, independientemente del template.
+  // Verificamos primero que no exista ya un pedido activo para esta conversación.
+  try {
+    const existing = await db.getActiveOrderForBot(convId);
+    if (!existing) {
+      // Intentar obtener dirección del contacto
+      const contact = await db.getContact(orgId, phone).catch(() => null);
+      const shippingAddress = (contact?.address1 || contact?.address)
+        ? { address1: contact.address1 || contact.address, city: contact.city || '' }
+        : null;
+
+      const newOrder = await db.createOrder({
+        conversationId:  convId,
+        organizationId:  orgId,
+        items:           [{ name: product, quantity: 1 }],
+        customerName:    name,
+        customerPhone:   phone,
+        shippingAddress: shippingAddress,
+        totalPrice:      null,
+        status:          'por_despachar',
+      });
+      console.log(`[ScheduledFollowUp] 📦 Orden real creada: id=${newOrder?.id} para scheduled_order #${id}`);
+    } else {
+      console.log(`[ScheduledFollowUp] 📦 Ya existe orden activa (id=${existing.id}) para conv ${convId} — no se duplica`);
+    }
+  } catch (orderErr) {
+    console.error(`[ScheduledFollowUp] ⚠️ Error creando orden real para scheduled_order #${id}:`, orderErr.message);
+    // No interrumpimos — seguimos con el template
+  }
+
+  // ─── PASO B: Enviar template de despacho ────────────────────────────────
   if (!wc || wc.provider !== 'kapso') {
-    console.warn(`[ScheduledFollowUp] Org ${orgId}: sin config Kapso — saltando scheduled_order #${id}`);
+    console.warn(`[ScheduledFollowUp] Org ${orgId}: sin config Kapso — saltando envío de template #${id}`);
+    await db.markScheduledOrderSent(id);
     return;
   }
 
   // 2. Determinar qué template usar
-  const tplName = template_name || (await db.getSetting(orgId, 'scheduled_order_template'));
+  const tplName = template_name
+    || (await db.getSetting(orgId, 'scheduled_dispatch_template'))
+    || (await db.getSetting(orgId, 'scheduled_order_template'));
+
   if (!tplName) {
-    console.warn(`[ScheduledFollowUp] Org ${orgId}: sin 'scheduled_order_template' configurado — saltando #${id}. Configúralo en Ajustes.`);
+    console.warn(`[ScheduledFollowUp] Org ${orgId}: sin template de despacho configurado — la orden se creó pero no se enviará mensaje. Configura 'scheduled_dispatch_template' en Ajustes.`);
+    await db.markScheduledOrderSent(id);
     return;
   }
 
   // 3. Construir los components del template
   //    El template debe tener {{1}} = nombre del cliente, {{2}} = producto
   //    Si solo tiene {{1}}, se usa el nombre. Ajustamos según la cantidad de parámetros.
-  const name    = customer_name || 'Cliente';
-  const product = product_notes || 'tu pedido';
-
   const components = [{
     type: 'body',
     parameters: [
@@ -76,7 +114,7 @@ async function processScheduledOrder(order, io) {
   }];
 
   // 4. Enviar template vía Kapso
-  console.log(`[ScheduledFollowUp] Enviando template '${tplName}' a ${phone} (scheduled_order #${id})`);
+  console.log(`[ScheduledFollowUp] Enviando template de despacho '${tplName}' a ${phone} (scheduled_order #${id})`);
   let sentResult;
   try {
     sentResult = await kapsoService.sendTemplate(phone, tplName, 'es', components, wc);
@@ -95,7 +133,7 @@ async function processScheduledOrder(order, io) {
   }
 
   // 5. Guardar mensaje en DB y actualizar pipeline_state → template_sent (warm lead)
-  const content = `[Template: ${tplName}]\n\n📅 Follow-up pedido agendado: ${product}`;
+  const content = `[Template: ${tplName}]\n\n📅 Despacho de pedido agendado: ${product}`;
   await db.saveMessage({
     conversationId:    convId,
     whatsappMessageId: sentResult?.messages?.[0]?.id || null,
@@ -121,7 +159,7 @@ async function processScheduledOrder(order, io) {
     });
   }
 
-  console.log(`[ScheduledFollowUp] ✅ Template enviado a ${phone} — scheduled_order #${id}`);
+  console.log(`[ScheduledFollowUp] ✅ Template de despacho enviado a ${phone} — scheduled_order #${id}`);
 }
 
 /**

@@ -652,11 +652,11 @@ async function getProductsCacheAge(orgId) {
 
 // ─── ORDERS ───────────────────────────────────────────────────────
 
-async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice }) {
+async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice, status = 'draft' }) {
   const order = await queryOne(
-    `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice]
+    `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice, status]
   );
   // Actualizar last_order_at en contacts para que el broadcast lo excluya correctamente
   if (customerPhone) {
