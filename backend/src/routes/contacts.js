@@ -465,21 +465,22 @@ router.patch('/:phone/type', async (req, res) => {
 router.patch('/:phone', async (req, res) => {
   try {
     const pool = require('../db/database').getPool();
-    const { name, address, city } = req.body;
+    const { name, email, address, city } = req.body;
     const phone = req.params.phone;
 
     // Upsert en tabla contacts
     const { rows: [contact] } = await pool.query(
-      `INSERT INTO contacts (organization_id, phone, name, address, city, updated_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
+      `INSERT INTO contacts (organization_id, phone, name, email, address, city, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
        ON CONFLICT (organization_id, phone)
        DO UPDATE SET
          name       = CASE WHEN $3 IS NOT NULL THEN $3 ELSE contacts.name END,
-         address    = CASE WHEN $4 IS NOT NULL THEN $4 ELSE contacts.address END,
-         city       = CASE WHEN $5 IS NOT NULL THEN $5 ELSE contacts.city END,
+         email      = CASE WHEN $4 IS NOT NULL THEN $4 ELSE contacts.email END,
+         address    = CASE WHEN $5 IS NOT NULL THEN $5 ELSE contacts.address END,
+         city       = CASE WHEN $6 IS NOT NULL THEN $6 ELSE contacts.city END,
          updated_at = NOW()
        RETURNING *`,
-      [req.orgId, phone, name || null, address || null, city || null]
+      [req.orgId, phone, name || null, email || null, address || null, city || null]
     );
 
     // Sincronizar contact_name en conversaciones para que el sidebar/header reflejen el cambio

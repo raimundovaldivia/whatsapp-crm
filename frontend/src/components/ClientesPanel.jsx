@@ -134,25 +134,36 @@ export default function ClientesPanel({ onOpenConversation }) {
   const abortRef = useRef(false);
   // Edición de dirección inline
   const [addrEditId,  setAddrEditId]  = useState(null);
+  const [addrName,    setAddrName]    = useState('');
+  const [addrEmail,   setAddrEmail]   = useState('');
   const [addrStreet,  setAddrStreet]  = useState('');
   const [addrCity,    setAddrCity]    = useState('');
   const [addrSaving,  setAddrSaving]  = useState(false);
   const [addrErr,     setAddrErr]     = useState('');
   const startAddrEdit = (c) => {
     setAddrEditId(c.id);
+    setAddrName(c.name || '');
+    setAddrEmail(c.email || '');
     setAddrStreet(c.address?.address1 || '');
     setAddrCity(c.address?.city || '');
     setAddrErr('');
   };
   const cancelAddrEdit = () => { setAddrEditId(null); setAddrErr(''); };
   const saveAddr = async (c) => {
-    if (!addrStreet.trim()) { setAddrErr('La dirección es requerida'); return; }
     setAddrSaving(true); setAddrErr('');
     try {
-      await api.patch(`/contacts/${c.phone}`, { address: addrStreet.trim(), city: addrCity.trim() });
+      await api.patch(`/contacts/${c.phone}`, {
+        name:    addrName.trim()   || undefined,
+        email:   addrEmail.trim()  || undefined,
+        address: addrStreet.trim() || undefined,
+        city:    addrCity.trim()   || undefined,
+      });
       // Actualizar localmente sin refetch completo
       setAllCustomers(prev => prev.map(x => x.id === c.id
-        ? { ...x, address: { ...x.address, address1: addrStreet.trim(), city: addrCity.trim() } }
+        ? { ...x,
+            name:  addrName.trim()  || x.name,
+            email: addrEmail.trim() || x.email,
+            address: { ...x.address, address1: addrStreet.trim(), city: addrCity.trim() } }
         : x
       ));
       setAddrEditId(null);
@@ -756,8 +767,12 @@ export default function ClientesPanel({ onOpenConversation }) {
                                 {/* Dirección — editable */}
                                 {addrEditId === c.id ? (
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
-                                    <input value={addrStreet} onChange={e => setAddrStreet(e.target.value)} placeholder="Calle y número *"
-                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${addrStreet ? colors.border : '#f8717166'}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                                    <input value={addrName} onChange={e => setAddrName(e.target.value)} placeholder="Nombre completo"
+                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                                    <input value={addrEmail} onChange={e => setAddrEmail(e.target.value)} placeholder="Email" type="email"
+                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                                    <input value={addrStreet} onChange={e => setAddrStreet(e.target.value)} placeholder="Dirección (calle y número)"
+                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
                                     <input value={addrCity} onChange={e => setAddrCity(e.target.value)} placeholder="Ciudad / Comuna"
                                       style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
                                     {addrErr && <div style={{ color: '#f87171', fontSize: '11px' }}>{addrErr}</div>}
@@ -774,6 +789,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                                   </div>
                                 ) : (
                                   <>
+                                    {c.email && <div><span style={{ color: colors.textPrimary }}>Email:</span> {c.email}</div>}
                                     {c.address?.address1
                                       ? <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {[c.address.address1, c.address.address2].filter(Boolean).join(', ')}</div>
                                       : <div style={{ color: '#f87171', fontStyle: 'italic' }}>⚠ Sin dirección de calle</div>
@@ -782,7 +798,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                                     {c.address?.zip  && <div><span style={{ color: colors.textPrimary }}>CP:</span> {c.address.zip}</div>}
                                     <button onClick={() => startAddrEdit(c)}
                                       style={{ alignSelf: 'flex-start', marginTop: '2px', padding: '3px 10px', borderRadius: '6px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '11px', cursor: 'pointer' }}>
-                                      ✏️ {c.address?.address1 ? 'Editar dirección' : 'Agregar dirección'}
+                                      ✏️ Editar contacto
                                     </button>
                                   </>
                                 )}
