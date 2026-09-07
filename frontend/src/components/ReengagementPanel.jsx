@@ -328,6 +328,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         languageCode: tpl.language,
         components:   buildComponents(c),
         previewText:  getPreviewText(c),
+        ...(testMode ? { force: true } : {}),
       };
     });
     setSendingBulk(true);
@@ -1269,6 +1270,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         components,
         contactName: nombre,
         previewText,
+        ...(testMode && TEST_PHONE ? { force: true } : {}),
       };
     });
     try {
