@@ -15,6 +15,7 @@ import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
 import ProductsPanel        from './components/ProductsPanel.jsx';
 import RepartosPanel        from './components/RepartosPanel.jsx';
 import UsersPanel           from './components/UsersPanel.jsx';
+import ReengagementPanel    from './components/ReengagementPanel.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
@@ -259,8 +260,8 @@ export default function App() {
 
   // Qué vistas puede ver cada rol
   const ROLE_VIEWS = {
-    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'dashboard', 'users']),
-    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'dashboard', 'users']),
+    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'dashboard', 'users']),
+    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'dashboard', 'users']),
     supervisor: new Set(['chats', 'orders', 'repartos', 'pagos']),
     agent:      new Set(['chats']),
   };
@@ -431,6 +432,11 @@ export default function App() {
         <ClientesPanel
           onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
         />
+      )}
+
+      {/* Vista Mensajería Masiva */}
+      {view === 'mensajeria' && allowedViews.has('mensajeria') && (
+        <ReengagementPanel onNavigateToSettings={() => handleChangeView('settings')} />
       )}
 
       {/* Vista Dashboard */}

@@ -1,10 +1,10 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck, UserCog } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck, UserCog, Megaphone } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 // Qué vistas puede ver cada rol
 const ROLE_VIEWS = {
-  owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'users'],
-  admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'productos', 'settings', 'users'],
+  owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'users'],
+  admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'users'],
   supervisor: ['chats', 'orders', 'repartos', 'pagos'],
   agent:      ['chats'],
 };
@@ -16,6 +16,7 @@ const ALL_NAV_ITEMS = [
   { key: 'repartos',     icon: Truck,         label: 'Repartos' },
   { key: 'pagos',        icon: Receipt,       label: 'Pagos' },
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
+  { key: 'mensajeria',   icon: Megaphone,     label: 'Mensajería' },
   { key: 'productos',    icon: Store,         label: 'Mi Tienda' },
 ];
 
