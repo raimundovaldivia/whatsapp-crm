@@ -90,6 +90,7 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
        FROM contacts
        WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
          AND (opt_out IS NULL OR opt_out = FALSE)
+         AND (client_type IS NULL OR client_type <> 'empresa')
          -- Excluir contactos con pedido agendado pendiente (ya tienen seguimiento)
          AND NOT EXISTS (
            SELECT 1 FROM scheduled_orders so
