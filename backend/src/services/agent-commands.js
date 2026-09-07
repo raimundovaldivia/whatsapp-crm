@@ -1,138 +1,263 @@
 /**
- * agent-commands.js — Manejo de comandos WA desde agentes registrados
+ * agent-commands.js — Agente IA para consultas CRM vía WhatsApp
  *
- * Cuando un agente con whatsapp_phone registrado envía un mensaje al número
- * del negocio, este servicio lo interpreta como un comando CRM.
+ * Los agentes registrados envían mensajes con prefijo # al número del negocio.
+ * Este servicio usa Claude Haiku para interpretar lenguaje natural:
+ *   - Preguntas de datos → genera SQL seguro (solo SELECT), ejecuta, formatea respuesta
+ *   - Acciones de gestión → PAUSAR/ACTIVAR/MSG/PAGAR/etc.
+ *   - Preguntas generales → responde directamente con IA
  *
- * Comandos disponibles:
- *   AYUDA                          — lista de comandos
- *   CHATS                          — conversaciones activas (con mensajes sin leer primero)
- *   VER <phone>                    — últimos mensajes de un cliente
- *   MSG <phone> <texto>            — enviar mensaje a un cliente
- *   PEDIDOS                        — pedidos pendientes
- *   PAGAR <id>                     — marcar pedido como pagado
- *   PAUSAR <phone>                 — pausar bot para esa conversación (agente toma el control)
- *   ACTIVAR <phone>                — reactivar bot para esa conversación
- *   MI ESTADO                      — estado de mis notificaciones
+ * Ejemplo: "#cuántos pedidos tenemos pendientes?"
+ *          "#pausar 56987654321"
+ *          "#quién compró más este mes?"
  */
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
+const Anthropic    = require('@anthropic-ai/sdk');
 
-const HELP_TEXT = `🤖 *Comandos CRM disponibles:*
-_Todos los comandos empiezan con *#*_
+const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-*#CHATS* — ver conversaciones activas
-*#VER <tel>* — últimos mensajes de un cliente
-*#MSG <tel> <texto>* — enviar mensaje a cliente
-*#PEDIDOS* — pedidos pendientes
-*#PAGAR <id>* — marcar pedido como pagado
-*#PAUSAR <tel>* — pausar bot (tú atiendes)
-*#ACTIVAR <tel>* — reactivar bot
-*#ESTADO* — tus ajustes de notificaciones
+// ─── Schema del DB (read-only, para el prompt del agente IA) ──────────────────
+const DB_SCHEMA = `
+Tablas disponibles (PostgreSQL). Siempre filtra por organization_id = <org_id>.
 
-_Ejemplo: #MSG 56987654321 Hola, tu pedido está listo_
-_Mensajes sin # van al chat normal del bot._`;
+conversations (id, organization_id, phone_number, contact_name, agent_mode['ai'|'human'], unread_count, last_message, last_message_at, created_at)
+messages (id, conversation_id, direction['inbound'|'outbound'], content, type, status, sent_by, agent_type, created_at)
+contacts (id, organization_id, phone, name, email, city, address, client_type['empresa'|'persona'|null], created_at, updated_at)
+orders (id, organization_id, conversation_id, customer_phone, customer_name, status['draft'|'sent'|'payment_received'|'completed'|'cancelled'], total_price, items jsonb, created_at, updated_at)
+products (id, organization_id, title, handle, price, compare_at_price, available, vendor, product_type, tags, created_at)
+users (id, organization_id, email, name, role, whatsapp_phone, wa_notifications jsonb)
+`.trim();
 
-/**
- * Procesa un mensaje de un agente registrado y devuelve la respuesta.
- * @param {object} org            — {id, name}
- * @param {object} wc             — whatsapp config (para enviar respuesta al agente)
- * @param {object} agent          — usuario/agente registrado
- * @param {string} text           — texto del mensaje del agente
- * @returns {Promise<void>}
- */
+// ─── Prompt del sistema para el agente IA ────────────────────────────────────
+function buildSystemPrompt(orgId) {
+  return `Eres un asistente CRM inteligente para un negocio. Respondes consultas de los agentes del negocio que te escriben por WhatsApp.
+
+Tienes acceso a la base de datos PostgreSQL del negocio. El organization_id de este negocio es ${orgId}.
+
+${DB_SCHEMA}
+
+REGLAS CRÍTICAS:
+1. NUNCA generes SQL que modifique datos (INSERT, UPDATE, DELETE, DROP, etc.). Solo SELECT.
+2. SIEMPRE incluye WHERE organization_id = ${orgId} (o filtra por conversation que pertenece a la org).
+3. Para consultas de datos, devuelve un objeto JSON con este formato exacto:
+   {"action":"sql","query":"SELECT ... FROM ... WHERE organization_id = ${orgId} ...","explanation":"qué hace esta consulta"}
+4. Para acciones de gestión (pausar bot, activar bot, enviar mensaje, marcar pago), devuelve:
+   {"action":"manage","command":"PAUSAR|ACTIVAR|MSG|PAGAR","params":{"phone":"...","text":"...","orderId":123}}
+5. Para preguntas generales o conversacionales que no requieren datos ni acciones, devuelve:
+   {"action":"answer","text":"tu respuesta en español"}
+6. Para mostrar ayuda, devuelve:
+   {"action":"help"}
+
+Responde ÚNICAMENTE con el JSON, sin texto adicional, sin markdown, sin explicaciones fuera del JSON.
+
+Ejemplos:
+- "cuántos pedidos pendientes hay" → {"action":"sql","query":"SELECT COUNT(*) FROM orders WHERE organization_id = ${orgId} AND status IN ('sent','draft','payment_received')","explanation":"pedidos pendientes"}
+- "pausar 56987654321" → {"action":"manage","command":"PAUSAR","params":{"phone":"56987654321"}}
+- "qué hace este sistema" → {"action":"answer","text":"Soy tu asistente CRM..."}
+- "ayuda" → {"action":"help"}`;
+}
+
+// ─── Texto de ayuda ───────────────────────────────────────────────────────────
+const HELP_TEXT = `🤖 *Asistente CRM con IA*
+_Escribe con # para activar el agente_
+
+Puedes preguntarme cualquier cosa sobre el negocio en lenguaje natural:
+
+📊 *Consultas de datos:*
+• _#cuántos pedidos hay pendientes?_
+• _#qué clientes no compran hace 2 semanas?_
+• _#cuál fue la venta total este mes?_
+• _#quién es el cliente que más compra?_
+
+⚙️ *Gestión:*
+• _#pausar 56987654321_ — pausa el bot
+• _#activar 56987654321_ — reactiva el bot
+• _#msg 56987654321 Hola!_ — envía mensaje
+• _#pagar 42_ — marca pedido como pagado
+• _#chats_ — conversaciones activas
+• _#pedidos_ — pedidos pendientes
+
+_Los mensajes sin # van al chat normal del bot._`;
+
+// ─── Función principal ────────────────────────────────────────────────────────
 async function handleAgentCommand(org, wc, agent, text) {
   const raw = (text || '').trim();
-  const reply = await processCommand(org, agent, raw);
-  if (reply) {
-    await kapsoService.sendTextMessage(agent.whatsapp_phone, reply, wc).catch(err =>
-      console.warn('[AgentCmd] No se pudo enviar respuesta al agente:', err.message)
-    );
+  try {
+    const reply = await processAICommand(org, wc, agent, raw);
+    if (reply) {
+      await kapsoService.sendTextMessage(agent.whatsapp_phone, reply, wc).catch(err =>
+        console.warn('[AgentCmd] No se pudo enviar respuesta al agente:', err.message)
+      );
+    }
+  } catch (err) {
+    console.error('[AgentCmd] Error procesando comando:', err.message);
+    await kapsoService.sendTextMessage(
+      agent.whatsapp_phone,
+      `❌ Error procesando tu consulta: ${err.message.slice(0, 100)}`,
+      wc
+    ).catch(() => {});
   }
 }
 
-async function processCommand(org, agent, raw) {
-  const upper = raw.toUpperCase();
-  const first  = upper.split(/\s+/)[0];
+async function processAICommand(org, wc, agent, raw) {
+  console.log(`[AgentCmd] 🤖 ${agent.name || agent.email}: "${raw.slice(0, 100)}"`);
 
-  // AYUDA / HELP
-  if (first === 'AYUDA' || first === 'HELP' || first === '/AYUDA') {
+  // ── Parsear intención con Claude Haiku ──
+  let parsed;
+  try {
+    const aiRes = await aiClient.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      system: buildSystemPrompt(org.id),
+      messages: [{ role: 'user', content: raw }],
+    });
+    const jsonText = aiRes.content[0]?.text?.trim() || '{}';
+    parsed = JSON.parse(jsonText);
+  } catch (err) {
+    console.error('[AgentCmd] Error llamando IA:', err.message);
+    // Fallback: tratar como ayuda
     return HELP_TEXT;
   }
 
-  // MI ESTADO
-  if (upper.startsWith('MI ESTADO') || upper.startsWith('ESTADO')) {
-    const prefs = agent.wa_notifications || {};
-    return [
-      `👤 *${agent.name || agent.email}* (${agent.role})`,
-      '',
-      '*Notificaciones activas:*',
-      `${prefs.new_messages  ? '✅' : '❌'} Nuevos mensajes`,
-      `${prefs.escalations   ? '✅' : '❌'} Escalaciones`,
-      `${prefs.payments      ? '✅' : '❌'} Comprobantes de pago`,
-    ].join('\n');
+  const action = parsed.action;
+
+  // ── Ayuda ──
+  if (action === 'help') {
+    return HELP_TEXT;
   }
 
-  // CHATS
-  if (first === 'CHATS' || first === 'CONVERSACIONES') {
-    return await cmdChats(org);
+  // ── Respuesta directa ──
+  if (action === 'answer') {
+    return parsed.text || '🤔 No entendí tu consulta.';
   }
 
-  // PEDIDOS
-  if (first === 'PEDIDOS') {
-    return await cmdPedidos(org);
+  // ── Consulta SQL ──
+  if (action === 'sql') {
+    return await executeSqlQuery(org, parsed.query, parsed.explanation, raw);
   }
 
-  // PAGAR <id>
-  if (first === 'PAGAR') {
-    const orderId = parseInt(raw.split(/\s+/)[1]);
-    if (!orderId) return '❌ Uso: PAGAR <id_pedido>\nEjemplo: PAGAR 42';
-    return await cmdPagar(org, orderId);
+  // ── Acciones de gestión ──
+  if (action === 'manage') {
+    return await executeManageCommand(org, wc, agent, parsed.command, parsed.params || {});
   }
 
-  // VER <phone>
-  if (first === 'VER') {
-    const phone = extractPhone(raw, 1);
-    if (!phone) return '❌ Uso: VER <teléfono>\nEjemplo: VER 56987654321';
-    return await cmdVer(org, phone);
-  }
-
-  // MSG <phone> <text>
-  if (first === 'MSG' || first === 'RESPONDER' || first === 'R') {
-    const parts = raw.split(/\s+/);
-    if (parts.length < 3) return '❌ Uso: MSG <teléfono> <mensaje>\nEjemplo: MSG 56987654321 Hola, tu pedido ya salió';
-    const phone = extractPhone(raw, 1);
-    const msgText = parts.slice(2).join(' ');
-    if (!phone || !msgText) return '❌ Uso: MSG <teléfono> <mensaje>';
-    return await cmdMsg(org, phone, msgText, agent, wc);
-  }
-
-  // PAUSAR <phone>
-  if (first === 'PAUSAR' || first === 'PAUSA') {
-    const phone = extractPhone(raw, 1);
-    if (!phone) return '❌ Uso: PAUSAR <teléfono>';
-    return await cmdPausar(org, phone, agent);
-  }
-
-  // ACTIVAR <phone>
-  if (first === 'ACTIVAR' || first === 'REACTIVAR') {
-    const phone = extractPhone(raw, 1);
-    if (!phone) return '❌ Uso: ACTIVAR <teléfono>';
-    return await cmdActivar(org, phone);
-  }
-
-  // Comando no reconocido
-  return `❓ Comando no reconocido: _${raw.slice(0, 40)}_\n\nEscribe *AYUDA* para ver los comandos disponibles.`;
+  return `🤔 No entendí tu consulta. Escribe _#ayuda_ para ver qué puedo hacer.`;
 }
 
-// ─── Implementaciones de cada comando ─────────────────────────────
+// ─── Ejecutar consulta SQL segura ─────────────────────────────────────────────
+async function executeSqlQuery(org, query, explanation, originalQuestion) {
+  // Validación de seguridad: solo permitir SELECT
+  const normalized = (query || '').trim().toUpperCase();
+  if (!normalized.startsWith('SELECT')) {
+    return `❌ Solo puedo ejecutar consultas de lectura (SELECT).`;
+  }
+  // Bloquear keywords peligrosas
+  const dangerous = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE|EXEC|EXECUTE|pg_sleep|pg_read_file)\b/i;
+  if (dangerous.test(query)) {
+    return `❌ Consulta no permitida por seguridad.`;
+  }
+
+  let rows;
+  try {
+    const pool = db.getPool();
+    const result = await pool.query(query);
+    rows = result.rows;
+  } catch (err) {
+    console.error('[AgentCmd] Error SQL:', err.message, '\nQuery:', query);
+    return `❌ Error en la consulta: ${err.message.slice(0, 120)}`;
+  }
+
+  if (!rows || rows.length === 0) {
+    return `📭 No encontré resultados para: _${explanation || originalQuestion}_`;
+  }
+
+  // Formatear resultado con IA
+  const formattedResult = await formatSqlResult(rows, originalQuestion, explanation);
+  return formattedResult;
+}
+
+// ─── Formatear resultado de SQL en lenguaje natural ───────────────────────────
+async function formatSqlResult(rows, question, explanation) {
+  const MAX_ROWS = 20;
+  const truncated = rows.length > MAX_ROWS;
+  const sample = rows.slice(0, MAX_ROWS);
+
+  const dataStr = JSON.stringify(sample, null, 2);
+
+  const prompt = `Eres un asistente CRM. Formatea estos datos de base de datos como una respuesta clara y concisa en español para WhatsApp.
+
+Pregunta original: "${question}"
+${explanation ? `Consulta ejecutada: ${explanation}` : ''}
+${truncated ? `Nota: Se muestran ${MAX_ROWS} de ${rows.length} resultados totales.` : ''}
+
+Datos:
+${dataStr}
+
+Responde de forma directa y útil, usando formato WhatsApp (*negrita*, _cursiva_). Máximo 600 caracteres. Si son números, muéstralos con formato legible (ej: $1.234.567). No incluyas el JSON crudo.`;
+
+  try {
+    const res = await aiClient.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    let text = res.content[0]?.text?.trim() || '';
+    if (truncated) {
+      text += `\n\n_Mostrando ${MAX_ROWS} de ${rows.length} resultados_`;
+    }
+    return text;
+  } catch (err) {
+    // Fallback: mostrar datos en texto plano
+    const lines = sample.map(r => Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(' | '));
+    return `📊 *${explanation || 'Resultado'}*\n\n` + lines.join('\n');
+  }
+}
+
+// ─── Ejecutar comandos de gestión ─────────────────────────────────────────────
+async function executeManageCommand(org, wc, agent, command, params) {
+  switch ((command || '').toUpperCase()) {
+    case 'PAUSAR':
+    case 'PAUSA':
+      if (!params.phone) return '❌ Indica el teléfono. Ej: _#pausar 56987654321_';
+      return await cmdPausar(org, params.phone, agent);
+
+    case 'ACTIVAR':
+    case 'REACTIVAR':
+      if (!params.phone) return '❌ Indica el teléfono. Ej: _#activar 56987654321_';
+      return await cmdActivar(org, params.phone);
+
+    case 'MSG':
+    case 'RESPONDER':
+      if (!params.phone || !params.text) return '❌ Indica teléfono y mensaje. Ej: _#msg 56987654321 Hola!_';
+      return await cmdMsg(org, params.phone, params.text, agent, wc);
+
+    case 'PAGAR':
+      if (!params.orderId) return '❌ Indica el ID del pedido. Ej: _#pagar 42_';
+      return await cmdPagar(org, parseInt(params.orderId));
+
+    case 'CHATS':
+    case 'CONVERSACIONES':
+      return await cmdChats(org);
+
+    case 'PEDIDOS':
+      return await cmdPedidos(org);
+
+    case 'ESTADO':
+      return cmdEstado(agent);
+
+    default:
+      return `❓ Acción no reconocida: ${command}\n\nEscribe _#ayuda_ para ver las opciones.`;
+  }
+}
+
+// ─── Implementaciones de acciones ─────────────────────────────────────────────
 
 async function cmdChats(org) {
   const convs = await db.getAllConversations(org.id);
   if (!convs.length) return '📭 No hay conversaciones activas.';
 
-  // Ordenar: primero las con mensajes sin leer, luego por última actividad
   const sorted = [...convs].sort((a, b) => {
     const unreadDiff = (b.unread_count || 0) - (a.unread_count || 0);
     if (unreadDiff !== 0) return unreadDiff;
@@ -148,8 +273,7 @@ async function cmdChats(org) {
   });
 
   const total = convs.length;
-  const header = `💬 *Conversaciones* (${Math.min(10, total)} de ${total})\n🔴 = sin leer  🟡 = agente activo\n`;
-  return header + lines.join('\n');
+  return `💬 *Conversaciones* (${Math.min(10, total)} de ${total})\n🔴 = sin leer  🟡 = agente activo\n\n` + lines.join('\n');
 }
 
 async function cmdPedidos(org) {
@@ -165,7 +289,7 @@ async function cmdPedidos(org) {
     return `• *#${o.id}* ${name} — ${total} — _{${st}}_  (${date})`;
   });
 
-  return `📦 *Pedidos pendientes* (${pending.length})\n\n` + lines.join('\n') + '\n\n_Escribe PAGAR <id> para confirmar pago_';
+  return `📦 *Pedidos pendientes* (${pending.length})\n\n` + lines.join('\n') + '\n\n_Escribe #pagar <id> para confirmar pago_';
 }
 
 async function cmdPagar(org, orderId) {
@@ -187,7 +311,6 @@ async function cmdVer(org, phone) {
   const normalized = db.normalizePhone(phone);
   const pool = db.getPool();
 
-  // Buscar conversación por variantes del teléfono
   const { rows: convRows } = await pool.query(
     `SELECT id, contact_name, phone_number, agent_mode, unread_count
      FROM conversations
@@ -217,7 +340,7 @@ async function cmdVer(org, phone) {
     '',
     ...lines,
     '',
-    `_Usa MSG ${conv.phone_number} <texto> para responder_`,
+    `_Usa #msg ${conv.phone_number} <texto> para responder_`,
   ].join('\n');
 }
 
@@ -234,13 +357,11 @@ async function cmdMsg(org, phone, msgText, agent, wc) {
     [org.id, phone, normalized, '+' + normalized]
   );
 
-  // Si no existe conversación, crearla
   const targetPhone = convRows.length ? convRows[0].phone_number : normalized;
   const conv = convRows.length
     ? convRows[0]
     : await db.upsertConversation(org.id, targetPhone, null);
 
-  // Enviar mensaje al cliente
   const sent = await kapsoService.sendTextMessage(targetPhone, msgText, wc).catch(err => {
     console.error('[AgentCmd] Error enviando msg al cliente:', err.message);
     return null;
@@ -248,7 +369,6 @@ async function cmdMsg(org, phone, msgText, agent, wc) {
 
   if (!sent) return `❌ No se pudo enviar el mensaje a ${targetPhone}.`;
 
-  // Guardar en DB
   await db.saveMessage({
     conversationId:    conv.id,
     whatsappMessageId: sent?.messages?.[0]?.id,
@@ -277,12 +397,12 @@ async function cmdPausar(org, phone, agent) {
   const conv = rows[0];
 
   if (conv.agent_mode === 'human') {
-    return `ℹ️ El bot ya estaba pausado para *${conv.contact_name || phone}*.\nUsa ACTIVAR ${phone} para reactivarlo.`;
+    return `ℹ️ El bot ya estaba pausado para *${conv.contact_name || phone}*.\nUsa _#activar ${phone}_ para reactivarlo.`;
   }
 
   await db.setAgentMode(conv.id, 'human');
   const name = conv.contact_name && conv.contact_name !== phone ? conv.contact_name : phone;
-  return `🟡 Bot pausado para *${name}*.\nAhora puedes atenderle directamente. Escribe MSG ${conv.phone_number} <texto> para responder.\nUsa ACTIVAR ${conv.phone_number} cuando termines.`;
+  return `🟡 Bot pausado para *${name}*.\nAhora puedes atenderle directamente. Escribe _#msg ${conv.phone_number} <texto>_ para responder.\nUsa _#activar ${conv.phone_number}_ cuando termines.`;
 }
 
 async function cmdActivar(org, phone) {
@@ -307,16 +427,16 @@ async function cmdActivar(org, phone) {
   return `🤖 Bot reactivado para *${name}*. El bot retomará las respuestas automáticas.`;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────
-
-function extractPhone(raw, tokenIndex) {
-  const parts = raw.split(/\s+/);
-  const token = parts[tokenIndex];
-  if (!token) return null;
-  // Aceptar formatos: 56987654321, +56987654321, 987654321
-  const digits = token.replace(/[^\d]/g, '');
-  if (digits.length < 8) return null;
-  return digits;
+function cmdEstado(agent) {
+  const prefs = agent.wa_notifications || {};
+  return [
+    `👤 *${agent.name || agent.email}* (${agent.role})`,
+    '',
+    '*Notificaciones activas:*',
+    `${prefs.new_messages  ? '✅' : '❌'} Nuevos mensajes`,
+    `${prefs.escalations   ? '✅' : '❌'} Escalaciones`,
+    `${prefs.payments      ? '✅' : '❌'} Comprobantes de pago`,
+  ].join('\n');
 }
 
 module.exports = { handleAgentCommand };
