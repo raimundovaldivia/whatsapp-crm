@@ -116,7 +116,7 @@ export const reengagementAPI = {
   aiPickTemplate: (phone, templates) =>
     api.post('/reengagement/ai-pick-template', { phone, templates }).then(r => r.data),
   send:     (data) => api.post('/reengagement/send', data).then(r => r.data),
-  sendBulk: (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
+  sendBulk: (items) => api.post('/reengagement/send-bulk', { items }, { timeout: 600000 }).then(r => r.data),
 };
 
 export const API_BASE = BASE_URL;

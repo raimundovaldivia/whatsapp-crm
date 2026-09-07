@@ -300,8 +300,22 @@ Reglas estrictas para responder sobre este pedido:
     state: currentState,
   });
 
+  // ── Dirección registrada del contacto ─────────────────────────────────────
+  let contactAddressSection = '';
+  try {
+    const cAddr = contact?.address || contact?.address1;
+    const cCity = contact?.city;
+    if (cAddr && cCity) {
+      contactAddressSection = `## Dirección del cliente ✅ NO PEDIR\nTienes la dirección completa registrada: **${cAddr}, ${cCity}**.\n⚠️ NO pidas la dirección al cliente — ya está en el sistema. Cuando registres un pedido, usa esta dirección directamente sin pedírsela.`;
+    } else if (cAddr) {
+      contactAddressSection = `## Dirección del cliente ✅ NO PEDIR\nDirección registrada: **${cAddr}**.\n⚠️ NO pidas la dirección — ya la tienes. Úsala para el pedido.`;
+    } else if (cCity) {
+      contactAddressSection = `## Dirección del cliente (ciudad conocida)\nCiudad: **${cCity}**. Si necesitas la dirección de calle para el pedido, pide SOLO la calle y número (ya conoces la ciudad).`;
+    }
+  } catch (_) {}
+
   // pendingOrderSection va PRIMERO para que el LLM lo lea antes de cualquier otro contexto
-  const storeCustomPrompt = [pendingOrderSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [pendingOrderSection, contactAddressSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
   // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.

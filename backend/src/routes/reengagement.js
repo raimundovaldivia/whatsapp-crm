@@ -1553,7 +1553,7 @@ router.post('/send-bulk', async (req, res) => {
     }
 
     if (items.indexOf(item) < items.length - 1) {
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 300));
     }
   }
 

@@ -1276,7 +1276,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       };
     });
     try {
-      const res = await api.post('/reengagement/send-bulk', { items });
+      const res = await api.post('/reengagement/send-bulk', { items }, { timeout: 600000 });
       const sent   = res.data.results?.filter(r => r.success).length || 0;
       const failed = res.data.results?.filter(r => !r.success).length || 0;
       setResults({ sent, failed });
