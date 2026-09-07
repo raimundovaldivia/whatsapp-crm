@@ -54,6 +54,8 @@ export const conversationsAPI = {
   deleteMessages: (id) => api.delete(`/conversations/${id}/messages`).then(r => r.data),
   startConversation: (data) => api.post('/conversations/start', data).then(r => r.data),
   sendTemplate: (id, data) => api.post(`/conversations/${id}/send-template`, data).then(r => r.data),
+  getUnanswered: (hours = 48) => api.get(`/conversations/unanswered?hours=${hours}`).then(r => r.data),
+  retryUnanswered: (hours = 48) => api.post('/conversations/retry-unanswered', { hours }, { timeout: 120000 }).then(r => r.data),
 };
 
 export const settingsAPI = {

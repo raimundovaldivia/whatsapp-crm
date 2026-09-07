@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge } from 'lucide-react';
+import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge, RotateCcw, AlertCircle } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -13,6 +13,25 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [activeTab, setActiveTab]     = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
+  const [retrying, setRetrying]   = useState(false);
+  const [retryResult, setRetryResult] = useState(null); // { sent, retried }
+
+  async function handleRetryUnanswered() {
+    if (retrying) return;
+    setRetrying(true);
+    setRetryResult(null);
+    try {
+      const res = await api.post('/conversations/retry-unanswered', { hours: 48 }, { timeout: 120000 });
+      setRetryResult({ sent: res.data.sent, retried: res.data.retried });
+      if (res.data.sent > 0) onRefresh?.();
+      setTimeout(() => setRetryResult(null), 6000);
+    } catch (err) {
+      setRetryResult({ error: err.message });
+      setTimeout(() => setRetryResult(null), 5000);
+    } finally {
+      setRetrying(false);
+    }
+  }
   const [name, setName]           = useState('');
   const [text, setText]           = useState('');
   const [sending, setSending]     = useState(false);
@@ -352,6 +371,25 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = colors.textSecondary; }}
             title="Diagnosticar número (chats perdidos)"><Stethoscope size={16} /></button>
+          {/* Reintentar mensajes sin respuesta */}
+          <div style={{ position: 'relative' }}>
+            <button onClick={handleRetryUnanswered} disabled={retrying}
+              style={{ background: 'none', color: retryResult?.error ? '#f87171' : retryResult ? '#4ade80' : colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: retrying ? 'wait' : 'pointer', opacity: retrying ? 0.7 : 1 }}
+              onMouseEnter={e => { if (!retrying) { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = '#fb923c'; } }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = retryResult?.error ? '#f87171' : retryResult ? '#4ade80' : colors.textSecondary; }}
+              title="Reintentar mensajes sin respuesta (últimas 48h)">
+              {retrying
+                ? <RotateCcw size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                : retryResult?.error
+                  ? <AlertCircle size={16} />
+                  : <RotateCcw size={16} />}
+            </button>
+            {retryResult && !retryResult.error && (
+              <span style={{ position: 'absolute', top: '-6px', right: '-4px', background: retryResult.sent > 0 ? '#4ade80' : '#6b7280', color: '#000', borderRadius: '999px', fontSize: '9px', fontWeight: 700, padding: '1px 4px', pointerEvents: 'none' }}>
+                {retryResult.sent > 0 ? `+${retryResult.sent}` : '0'}
+              </span>
+            )}
+          </div>
           <button onClick={onRefresh}
             style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: 'pointer' }}
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}

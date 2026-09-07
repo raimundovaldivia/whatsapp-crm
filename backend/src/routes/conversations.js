@@ -1188,5 +1188,120 @@ router.get('/media/:mediaRef', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/conversations/unanswered
+ * Conversaciones donde el último mensaje es inbound (sin respuesta del bot) en las últimas N horas.
+ */
+router.get('/unanswered', async (req, res) => {
+  const pool = getPool();
+  const hours = parseInt(req.query.hours) || 48;
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        c.id,
+        c.phone_number,
+        c.contact_name,
+        c.agent_mode,
+        m.content   AS last_message,
+        m.created_at AS last_message_at
+      FROM conversations c
+      JOIN LATERAL (
+        SELECT content, direction, created_at
+        FROM messages
+        WHERE conversation_id = c.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) m ON true
+      WHERE c.organization_id = $1
+        AND c.agent_mode = 'ai'
+        AND m.direction   = 'inbound'
+        AND m.created_at  > NOW() - ($2 || ' hours')::interval
+      ORDER BY m.created_at DESC
+    `, [req.orgId, hours]);
+
+    res.json({ success: true, count: rows.length, conversations: rows });
+  } catch (err) {
+    console.error('[Unanswered] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/conversations/retry-unanswered
+ * Re-ejecuta el pipeline para cada conversación sin respuesta (bot mode, últimas N horas).
+ */
+router.post('/retry-unanswered', async (req, res) => {
+  const pool = getPool();
+  const hours = parseInt(req.body?.hours) || 48;
+
+  try {
+    // 1. Buscar conversaciones sin respuesta
+    const { rows } = await pool.query(`
+      SELECT
+        c.id,
+        c.phone_number,
+        m.content AS last_inbound
+      FROM conversations c
+      JOIN LATERAL (
+        SELECT content, direction, created_at
+        FROM messages
+        WHERE conversation_id = c.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) m ON true
+      WHERE c.organization_id = $1
+        AND c.agent_mode = 'ai'
+        AND m.direction   = 'inbound'
+        AND m.created_at  > NOW() - ($2 || ' hours')::interval
+      ORDER BY m.created_at ASC
+    `, [req.orgId, hours]);
+
+    if (!rows.length) {
+      return res.json({ success: true, retried: 0, results: [] });
+    }
+
+    // 2. Obtener config de WhatsApp y pipeline
+    const wc       = await db.getWhatsappConfig(req.orgId);
+    const pipeline = require('../services/pipeline');
+
+    const results = [];
+    for (const conv of rows) {
+      try {
+        const result = await pipeline.processMessage(req.orgId, conv.id, conv.last_inbound);
+
+        if (result?.response && !result?.duplicate) {
+          // Enviar y guardar en DB
+          const sent = await kapsoService.sendTextMessage(conv.phone_number, result.response, wc).catch(() => null);
+          await db.saveMessage({
+            conversationId: conv.id,
+            whatsappMessageId: sent?.messages?.[0]?.id,
+            direction: 'outbound',
+            content: result.response,
+            sentBy: 'ai',
+          }).catch(() => {});
+          await db.updateConversationLastMessage(conv.id, result.response, false).catch(() => {});
+
+          results.push({ phone: conv.phone_number, success: true });
+          console.log(`[RetryUnanswered] ✅ ${conv.phone_number}: respondido`);
+        } else {
+          results.push({ phone: conv.phone_number, success: false, reason: result?.duplicate ? 'duplicate' : 'no_response' });
+        }
+      } catch (err) {
+        console.error(`[RetryUnanswered] ❌ ${conv.phone_number}:`, err.message);
+        results.push({ phone: conv.phone_number, success: false, reason: err.message });
+      }
+
+      // pequeña pausa entre mensajes para no saturar la API
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    const sent = results.filter(r => r.success).length;
+    res.json({ success: true, retried: rows.length, sent, results });
+  } catch (err) {
+    console.error('[RetryUnanswered] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;
