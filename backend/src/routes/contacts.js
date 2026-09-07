@@ -84,13 +84,12 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
   const pool = getPool();
   try {
     const { rows } = await pool.query(
-      `SELECT phone, name, email, city, contact_type,
+      `SELECT phone, name, email, city, contact_type, client_type,
               shopify_id, total_orders, last_order_at, opt_out,
               CASE WHEN shopify_id IS NOT NULL THEN 'shopify' ELSE 'whatsapp' END AS source
        FROM contacts
        WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
          AND (opt_out IS NULL OR opt_out = FALSE)
-         AND (client_type IS NULL OR client_type <> 'empresa')
          -- Excluir contactos con pedido agendado pendiente (ya tienen seguimiento)
          AND NOT EXISTS (
            SELECT 1 FROM scheduled_orders so

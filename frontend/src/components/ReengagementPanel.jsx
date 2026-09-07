@@ -1143,6 +1143,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [loading,        setLoading]        = useState(true);
   const [search,         setSearch]         = useState('');
   const [excludeRecent,  setExcludeRecent]  = useState(false);
+  const [excludeEmpresas, setExcludeEmpresas] = useState(false);
   const [selected,       setSelected]       = useState(new Set());
   const [templates,      setTemplates]      = useState(parentTemplates);
   const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
@@ -1215,6 +1216,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     if (excludeRecent && c.last_order_at) {
       if (new Date(c.last_order_at).getTime() >= ONE_WEEK_AGO) return false;
     }
+    if (excludeEmpresas && c.client_type === 'empresa') return false;
     return true;
   });
 
@@ -1340,6 +1342,34 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           }}
         >
           {excludeRecent ? '✓ ' : ''}Sin compras esta semana
+        </button>
+
+        {/* Filtro: excluir empresas */}
+        <button
+          onClick={() => {
+            const next = !excludeEmpresas;
+            setExcludeEmpresas(next);
+            if (next) {
+              setSelected(prev => {
+                const n = new Set();
+                contacts.forEach(c => {
+                  if (!prev.has(c.phone)) return;
+                  if (c.client_type === 'empresa') return;
+                  n.add(c.phone);
+                });
+                return n;
+              });
+            }
+          }}
+          style={{
+            padding: '6px 11px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
+            cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+            border: `1px solid ${excludeEmpresas ? colors.yellow + '66' : colors.border}`,
+            backgroundColor: excludeEmpresas ? colors.yellow + '22' : 'transparent',
+            color: excludeEmpresas ? colors.yellow : colors.textMuted,
+          }}
+        >
+          {excludeEmpresas ? '✓ ' : ''}Sin empresas
         </button>
 
         {/* Template selector */}
