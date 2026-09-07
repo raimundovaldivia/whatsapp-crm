@@ -59,7 +59,7 @@ const confColor = (conf, colors) =>
 export default function ReengagementPanel({ filterPhone = null, onClearFilter = null, testPhone = null, onNavigateToSettings = null }) {
   const { colors } = useTheme();
   const WINDOWS = getWINDOWS(colors);
-  const [mainTab, setMainTab] = useState('ia'); // 'ia' | 'masivo'
+  const [mainTab, setMainTab] = useState('masivo'); // 'ia' | 'masivo'
 
   const [candidates, setCandidates]   = useState([]);
   const [loading, setLoading]         = useState(true);
@@ -160,9 +160,22 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
     setTemplatesError(null);
     try {
       const res = await reengagementAPI.getTemplates();
-      setTemplates(res.data || []);
+      let tpls = res.data || [];
+      // Fallback: si no vienen templates del endpoint de reengagement, usar /api/templates
+      if (tpls.length === 0) {
+        const r2 = await api.get('/api/templates').catch(() => ({ data: { data: [] } }));
+        tpls = (r2.data.data || []).filter(t => !t.status || t.status === 'APPROVED' || t.status === 'approved');
+      }
+      setTemplates(tpls);
     } catch (err) {
-      setTemplatesError(err.response?.data?.error || err.message);
+      // Si falla completamente, intentar fallback
+      try {
+        const r2 = await api.get('/api/templates');
+        const tpls = (r2.data.data || []).filter(t => !t.status || t.status === 'APPROVED' || t.status === 'approved');
+        setTemplates(tpls);
+      } catch {
+        setTemplatesError(err.response?.data?.error || err.message);
+      }
     } finally {
       setTemplatesLoading(false);
     }
@@ -472,10 +485,9 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Selector de modo principal */}
+        {/* Selector de modo principal — solo Envío masivo visible */}
         <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '2px', border: `1px solid ${colors.border}`, gap: '2px', flexShrink: 0 }}>
           {[
-            { key: 'ia',     label: '⚡ IA Predictiva' },
             { key: 'masivo', label: '📢 Envío masivo' },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setMainTab(key)} style={{
@@ -1167,14 +1179,28 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
     // Solo cargar templates si el padre no los pasó
     if (parentTemplates.length === 0) {
-      api.get('/reengagement/templates')
-        .then(r => {
-          const tpls = r.data.data || r.data.templates || [];
-          setTemplates(tpls);
-          if (tpls.length > 0) setSelTpl(tpls[0]);
-        })
-        .catch(() => {})
-        .finally(() => setTplLoading(false));
+      // Intentar /reengagement/templates primero; si falla o devuelve vacío, usar /api/templates
+      const loadTpls = () =>
+        api.get('/reengagement/templates')
+          .then(r => {
+            const tpls = r.data.data || r.data.templates || [];
+            if (tpls.length > 0) return tpls;
+            // fallback: traer todos los templates y filtrar APPROVED
+            return api.get('/api/templates').then(r2 =>
+              (r2.data.data || []).filter(t => !t.status || t.status === 'APPROVED' || t.status === 'approved')
+            ).catch(() => []);
+          })
+          .catch(() =>
+            // fallback directo si el primer endpoint falla
+            api.get('/api/templates').then(r2 =>
+              (r2.data.data || []).filter(t => !t.status || t.status === 'APPROVED' || t.status === 'approved')
+            ).catch(() => [])
+          );
+
+      loadTpls().then(tpls => {
+        setTemplates(tpls);
+        if (tpls.length > 0) setSelTpl(tpls[0]);
+      }).finally(() => setTplLoading(false));
     }
     // si ya vienen del padre, tplLoading ya es false
   }, []);
