@@ -19,18 +19,20 @@
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
 
-const HELP_TEXT = `🤖 *Comandos disponibles:*
+const HELP_TEXT = `🤖 *Comandos CRM disponibles:*
+_Todos los comandos empiezan con *#*_
 
-*CHATS* — ver conversaciones activas
-*VER <tel>* — últimos mensajes de un cliente
-*MSG <tel> <texto>* — enviar mensaje a cliente
-*PEDIDOS* — pedidos pendientes
-*PAGAR <id>* — marcar pedido como pagado
-*PAUSAR <tel>* — pausar bot (tú atiendes)
-*ACTIVAR <tel>* — reactivar bot
-*MI ESTADO* — tus ajustes de notificaciones
+*#CHATS* — ver conversaciones activas
+*#VER <tel>* — últimos mensajes de un cliente
+*#MSG <tel> <texto>* — enviar mensaje a cliente
+*#PEDIDOS* — pedidos pendientes
+*#PAGAR <id>* — marcar pedido como pagado
+*#PAUSAR <tel>* — pausar bot (tú atiendes)
+*#ACTIVAR <tel>* — reactivar bot
+*#ESTADO* — tus ajustes de notificaciones
 
-_Ejemplo: MSG 56987654321 Hola, tu pedido está listo_`;
+_Ejemplo: #MSG 56987654321 Hola, tu pedido está listo_
+_Mensajes sin # van al chat normal del bot._`;
 
 /**
  * Procesa un mensaje de un agente registrado y devuelve la respuesta.

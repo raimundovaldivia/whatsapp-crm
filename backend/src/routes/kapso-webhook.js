@@ -131,12 +131,14 @@ router.post('/', async (req, res) => {
     return;
   }
 
-  // ── Agente registrado: si el sender es un agente WA → procesar como comando ──
-  if (parsed.from && parsed.type === 'text' && parsed.text) {
+  // ── Agente registrado: solo si el mensaje empieza con "#" → procesar como comando ──
+  // Mensajes sin "#" van al flujo normal (el agente puede chatear con el bot o aparecer como conversación)
+  if (parsed.from && parsed.type === 'text' && parsed.text && parsed.text.trimStart().startsWith('#')) {
     const agent = await db.getUserByWhatsappPhone(org.id, parsed.from).catch(() => null);
     if (agent) {
-      console.log(`[KapsoWebhook] 🤖 Comando de agente ${agent.name || agent.email}: "${parsed.text.slice(0, 80)}"`);
-      await handleAgentCommand(org, whatsappConfig, agent, parsed.text);
+      const commandText = parsed.text.trimStart().slice(1).trim(); // quitar el "#"
+      console.log(`[KapsoWebhook] 🤖 Comando de agente ${agent.name || agent.email}: "${commandText.slice(0, 80)}"`);
+      await handleAgentCommand(org, whatsappConfig, agent, commandText);
       return;
     }
   }
