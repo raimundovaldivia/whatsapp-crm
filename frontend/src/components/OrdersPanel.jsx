@@ -3,7 +3,7 @@ import { formatDateTime } from '../utils/dates.js';
 import {
   ShoppingBag, RefreshCw, ExternalLink, Send, RotateCcw,
   CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar, Download,
-  Plus, Trash2, X, MessageSquare, CalendarClock, BanIcon,
+  Plus, Trash2, X, MessageSquare, CalendarClock, BanIcon, Truck,
 } from 'lucide-react';
 
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
@@ -253,8 +253,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
     filtered = filtered.filter(o => {
       // Estado CRM unificado: bot usa botStatus, Shopify usa crmStatus
       const crmKey = o.source === 'bot' ? o.botStatus : o.crmStatus;
-      // Mapeos legacy bot → CRM
-      const legacyMap = { draft: 'nuevo', sent: 'nuevo', payment_received: 'paid' };
+      // Mapeos legacy bot → CRM (payment_received = pagado pero pendiente envío)
+      const legacyMap = { draft: 'nuevo', sent: 'nuevo', payment_received: 'por_despachar' };
       const effective = legacyMap[crmKey] || crmKey;
       return effective === statusFilter;
     });
@@ -467,7 +467,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   // Sin despachar = solo nuevo y por_despachar
   const totalUnfulfilled = filtered.filter(o => {
     const crmKey  = o.source === 'bot' ? o.botStatus : o.crmStatus;
-    const legacyMap = { draft: 'nuevo', sent: 'nuevo', payment_received: 'paid' };
+    // payment_received = pagado pero pendiente de envío → cuenta como sin despachar
+    const legacyMap = { draft: 'nuevo', sent: 'nuevo', payment_received: 'por_despachar' };
     const effective = legacyMap[crmKey] || crmKey;
     return ['nuevo', 'por_despachar'].includes(effective);
   }).length;
@@ -1102,12 +1103,29 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
                 {syncing ? 'Sincronizando...' : 'Sincronizar'}
               </button>
             )}
-            {order.status === 'sent' && (
+            {/* Botones logísticos en cadena según estado */}
+            {['sent', 'nuevo', 'draft', 'payment_received'].includes(order.status) && (
+              <button onClick={() => onStatusChange(order.id, 'por_despachar')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#2e1500', color: '#fb923c', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #fb923c33', cursor: 'pointer' }}>
+                <Package size={12} /> Por despachar
+              </button>
+            )}
+            {order.status === 'por_despachar' && (
+              <button onClick={() => onStatusChange(order.id, 'en_camino')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#0c2030', color: '#38bdf8', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #38bdf833', cursor: 'pointer' }}>
+                <Truck size={12} /> Marcar enviado
+              </button>
+            )}
+            {order.status === 'en_camino' && (
+              <button onClick={() => onStatusChange(order.id, 'entregado')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#0a2015', color: '#4ade80', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #4ade8033', cursor: 'pointer' }}>
+                <CheckCircle size={12} /> Marcar entregado
+              </button>
+            )}
+            {/* Marcar pagado: disponible en cualquier estado no pagado/cancelado */}
+            {!['paid', 'cancelled', 'entregado'].includes(order.status) && (
               <button onClick={() => onStatusChange(order.id, 'paid')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: colors.bgAccent, color: colors.green, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${colors.green}33`, cursor: 'pointer' }}>
                 <CheckCircle size={12} /> Marcar pagado
               </button>
             )}
-            {!['cancelled', 'paid'].includes(order.status) && (
+            {!['cancelled', 'paid', 'entregado'].includes(order.status) && (
               <button onClick={() => onStatusChange(order.id, 'cancelled')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#2d1a1a', color: colors.red, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #5c262633', cursor: 'pointer' }}>
                 <XCircle size={12} /> Cancelar
               </button>

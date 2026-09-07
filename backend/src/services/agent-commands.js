@@ -25,7 +25,9 @@ Tablas disponibles (PostgreSQL). Siempre filtra por organization_id = <org_id>.
 conversations (id, organization_id, phone_number, contact_name, agent_mode['ai'|'human'], unread_count, last_message, last_message_at, created_at)
 messages (id, conversation_id, direction['inbound'|'outbound'], content, type, status, sent_by, agent_type, created_at)
 contacts (id, organization_id, phone, name, email, city, address, client_type['empresa'|'persona'|null], created_at, updated_at)
-orders (id, organization_id, conversation_id, customer_phone, customer_name, status['draft'|'sent'|'payment_received'|'completed'|'cancelled'], total_price, items jsonb, created_at, updated_at)
+orders (id, organization_id, conversation_id, customer_phone, customer_name, status['draft'|'sent'|'payment_received'|'nuevo'|'por_despachar'|'en_camino'|'entregado'|'paid'|'cancelled'], total_price, items jsonb, created_at, updated_at)
+-- Flujo regular: draft → sent → payment_received → por_despachar → en_camino → entregado/paid
+-- Flujo COD: draft → sent → por_despachar → en_camino → entregado (pago al entregar)
 products (id, organization_id, title, handle, price, compare_at_price, available, vendor, product_type, tags, created_at)
 users (id, organization_id, email, name, role, whatsapp_phone, wa_notifications jsonb)
 `.trim();
@@ -53,7 +55,7 @@ REGLAS CRÍTICAS:
 Responde ÚNICAMENTE con el JSON, sin texto adicional, sin markdown, sin explicaciones fuera del JSON.
 
 Ejemplos:
-- "cuántos pedidos pendientes hay" → {"action":"sql","query":"SELECT COUNT(*) FROM orders WHERE organization_id = ${orgId} AND status IN ('sent','draft','payment_received')","explanation":"pedidos pendientes"}
+- "cuántos pedidos pendientes hay" → {"action":"sql","query":"SELECT COUNT(*) FROM orders WHERE organization_id = ${orgId} AND status NOT IN ('paid','entregado','cancelled')","explanation":"pedidos pendientes"}
 - "pausar 56987654321" → {"action":"manage","command":"PAUSAR","params":{"phone":"56987654321"}}
 - "qué hace este sistema" → {"action":"answer","text":"Soy tu asistente CRM..."}
 - "ayuda" → {"action":"help"}`;
@@ -278,15 +280,22 @@ async function cmdChats(org) {
 
 async function cmdPedidos(org) {
   const orders = await db.getOrdersByOrg(org.id);
-  const pending = orders.filter(o => ['sent', 'draft', 'payment_received'].includes(o.status));
+  const DONE = ['paid', 'entregado', 'cancelled'];
+  const pending = orders.filter(o => !DONE.includes(o.status));
   if (!pending.length) return '✅ No hay pedidos pendientes.';
+
+  const STATUS_LABEL = {
+    draft: 'borrador', sent: 'confirmado', nuevo: 'nuevo',
+    payment_received: '💰 pago recibido', por_despachar: '📦 por despachar',
+    en_camino: '🚚 en camino', entregado: '✅ entregado', paid: '✅ pagado',
+  };
 
   const lines = pending.slice(0, 10).map(o => {
     const date  = new Date(o.created_at).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
     const total = o.total_price ? `$${Number(o.total_price).toLocaleString('es-CL')}` : '?';
     const name  = o.customer_name || o.customer_phone || '?';
-    const st    = { sent: 'enviado', draft: 'borrador', payment_received: 'pago recibido' }[o.status] || o.status;
-    return `• *#${o.id}* ${name} — ${total} — _{${st}}_  (${date})`;
+    const st    = STATUS_LABEL[o.status] || o.status;
+    return `• *#${o.id}* ${name} — ${total} — _${st}_  (${date})`;
   });
 
   return `📦 *Pedidos pendientes* (${pending.length})\n\n` + lines.join('\n') + '\n\n_Escribe #pagar <id> para confirmar pago_';
