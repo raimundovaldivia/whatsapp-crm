@@ -1489,6 +1489,7 @@ router.post('/send-bulk', async (req, res) => {
           sentResult = await kapsoService.sendTemplate(
             item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
           );
+          console.log(`[SendBulk] Kapso response for ${item.phone} / ${item.templateName}:`, JSON.stringify(sentResult));
         } catch (tplErr) {
           // Error 132000: faltan parámetros — reintenta con la cantidad correcta
           const metaCode = tplErr.response?.data?.error?.code;
