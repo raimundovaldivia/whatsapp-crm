@@ -107,6 +107,18 @@ export const paymentProofsAPI = {
   update:  (id, data) => api.patch(`/payment-proofs/${id}`, data).then(r => r.data.proof),
 };
 
+export const reengagementAPI = {
+  getCandidates: (forceRefresh = false) =>
+    api.get(`/reengagement/candidates${forceRefresh ? '?refresh=true' : ''}`).then(r => r.data),
+  getCalibration: () => api.get('/reengagement/calibration').then(r => r.data),
+  calibrate:      () => api.post('/reengagement/calibrate').then(r => r.data),
+  getTemplates:   () => api.get('/reengagement/templates').then(r => r.data),
+  aiPickTemplate: (phone, templates) =>
+    api.post('/reengagement/ai-pick-template', { phone, templates }).then(r => r.data),
+  send:     (data) => api.post('/reengagement/send', data).then(r => r.data),
+  sendBulk: (items) => api.post('/reengagement/send-bulk', { items }).then(r => r.data),
+};
+
 export const API_BASE = BASE_URL;
 
 export { api };
