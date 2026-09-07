@@ -46,6 +46,7 @@ const storeSettingsRouter  = require('./routes/store-settings'); // Ajustes edit
 const contactsRouter       = require('./routes/contacts');        // Contactos (leads y clientes)
 const deliveryRouter       = require('./routes/delivery');         // App mobile de repartidor
 const usersRouter          = require('./routes/users');            // Gestión de usuarios (RBAC)
+const reengagementRouter   = require('./routes/reengagement');     // Mensajería masiva y re-enganche
 
 const app    = express();
 const server = http.createServer(app);
@@ -139,6 +140,7 @@ app.use('/api/store-settings', storeSettingsRouter); // Ajustes editables de la 
 app.use('/api/contacts',      contactsRouter);       // Contactos: leads y clientes
 app.use('/api/delivery',      deliveryRouter);        // App mobile repartidor
 app.use('/api/users',         usersRouter);           // Gestión de usuarios (RBAC)
+app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-enganche
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
