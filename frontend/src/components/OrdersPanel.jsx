@@ -261,9 +261,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   }
   if (searchQuery.trim()) {
     const q = searchQuery.trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, '');
     filtered = filtered.filter(o =>
       (o.customerName || '').toLowerCase().includes(q) ||
-      (o.phone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '')) ||
+      (qDigits && (o.phone || '').replace(/\D/g, '').includes(qDigits)) ||
       String(o.rawId || '').toLowerCase().includes(q) ||
       (o.shopifyName || '').toLowerCase().includes(q)
     );
