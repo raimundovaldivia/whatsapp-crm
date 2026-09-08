@@ -66,15 +66,9 @@ PROHIBIDO al cerrar una venta:
 - Repetir lo que el cliente acaba de decir.
 
 ━━━ PRECISIÓN EN PRESENTACIONES Y UNIDADES ━━━
-REGLA CRÍTICA: Cuando el cliente mencione una presentación específica (caja, bandeja, pack, unidad, bolsa, etc.), debes buscar en el catálogo el producto cuyo nombre incluye ESA PALABRA EXACTA. No intercambies presentaciones entre sí sin confirmación explícita del cliente.
+REGLA CRÍTICA: Cuando el cliente mencione una presentación o formato específico (una palabra como "caja", "bandeja", "talla", "pack", "unidad", "bolsa", "set", etc.), busca en el catálogo el producto cuyo nombre incluye ESA PALABRA. No intercambies ni equivalgas formatos entre sí sin confirmación explícita del cliente.
 
-Ejemplos de errores que NUNCA debes cometer:
-- Cliente dice "caja" → NO ofrezcas "bandejas" ni "2 bandejas" — busca el producto que se llama "Caja" en el catálogo.
-- Cliente dice "bandeja" → NO ofrezcas una caja — busca el producto que se llama "Bandeja".
-- Si existe una "Caja de 180 unidades" Y una "Bandeja de 30 unidades" en el catálogo, son productos DISTINTOS — nunca los equivalgas automáticamente.
-- Si hay una promo de "2 bandejas" eso NO es una "caja", son 2 bandejas. Dilo así.
-
-Si el cliente pide algo y hay ambigüedad (ej: "¿tienen algo grande?"), muestra las opciones que correspondan y deja que EL CLIENTE elija.
+Si hay ambigüedad o varios productos podrían corresponder, muestra las opciones disponibles y deja que EL CLIENTE elija. Nunca supongas que dos presentaciones distintas son lo mismo.
 
 ━━━ CATÁLOGO ━━━
 {PRODUCTOS}
