@@ -218,18 +218,25 @@ export default function App() {
   const handleSelectConversation = useCallback(async (id) => {
     setView('chats');
     setSelectedId(id);
-    if (!loadedConvIds.current.has(id)) {
-      try {
-        const { messages: msgs } = await conversationsAPI.getMessages(id);
-        loadedConvIds.current.add(id);
-        setMessages(prev => ({ ...prev, [id]: msgs }));
-        setConversations(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c));
-      } catch (err) { console.error(err); }
-    } else {
-      conversationsAPI.markAsRead(id).catch(() => {});
+    // Siempre re-fetchear al seleccionar para no perder mensajes que llegaron
+    // mientras el socket estaba caído o la conversación no estaba abierta.
+    // Hacemos merge (no reemplazo) para evitar flash visual.
+    try {
+      const { messages: msgs } = await conversationsAPI.getMessages(id);
+      loadedConvIds.current.add(id);
+      setMessages(prev => {
+        const existing = prev[id] || [];
+        if (!existing.length) return { ...prev, [id]: msgs };
+        // Agregar solo mensajes nuevos que no están en el estado local
+        const existingIds = new Set(existing.map(m => m.id));
+        const newMsgs = msgs.filter(m => !existingIds.has(m.id));
+        if (!newMsgs.length) return prev;
+        const merged = [...existing, ...newMsgs].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        return { ...prev, [id]: merged };
+      });
       setConversations(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c));
-    }
-  }, [messages]);
+    } catch (err) { console.error(err); }
+  }, []);
 
   const handleSendMessage = useCallback(async (convId, text) => {
     const msg = await conversationsAPI.sendMessage(convId, text);
