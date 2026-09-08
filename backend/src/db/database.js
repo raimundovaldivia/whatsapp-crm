@@ -581,11 +581,13 @@ async function saveMessage({ conversationId, whatsappMessageId, direction, conte
   }
 }
 
-async function getMessagesByConversation(conversationId, limit = 50) {
-  return query(
-    'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT $2',
+async function getMessagesByConversation(conversationId, limit = 80) {
+  // Traer los N más recientes (DESC) y luego invertir para mostrar en orden cronológico (ASC)
+  const rows = await query(
+    'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2',
     [conversationId, limit]
   );
+  return rows.reverse();
 }
 
 async function getLastMessages(conversationId, limit = 10) {
