@@ -195,7 +195,7 @@ router.post('/', async (req, res) => {
     // 1b. Registrar como lead (sin pisar tipo si ya es customer)
     db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
 
-    // 2. Guardar mensaje del cliente (puede ser duplicado si otro webhook llegó primero)
+    // 2. Guardar mensaje del cliente — retorna null si ya existe (webhook duplicado)
     const savedMsg = await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: parsed.messageId,
@@ -205,14 +205,20 @@ router.post('/', async (req, res) => {
       mediaId:           parsed.mediaId,
     });
 
+    // Si el mensaje ya estaba en DB (otro webhook / otra instancia lo procesó primero),
+    // salir sin ejecutar el pipeline para evitar respuestas duplicadas.
+    if (!savedMsg) {
+      console.log(`[KapsoWebhook] ⚠️ Mensaje duplicado ignorado: ${parsed.messageId}`);
+      return;
+    }
+
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig);
 
     // 3. Emitir al CRM en tiempo real (el mensaje siempre aparece inmediatamente)
-    const msgForSocket = savedMsg || { conversationId: conversation.id, direction: 'inbound', content: parsed.text };
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: msgForSocket, conversation: updatedConv });
+    io?.emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
     // 3b. Notificar a agentes con new_messages habilitado (sin await para no bloquear)
     notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
