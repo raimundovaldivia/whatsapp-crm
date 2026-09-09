@@ -314,6 +314,8 @@ router.post('/', async (req, res) => {
         await db.updateConversationLastMessage(capturedConvId, result.response);
 
         if (result.switchToHuman) {
+          // Guardar en DB primero — sin esto el bot sigue respondiendo en próximos mensajes
+          await db.setAgentMode(capturedConvId, 'human');
           io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
           const reason = result.escalationReason || 'El cliente solicitó hablar con un asesor';
           notifyAdminHandoff(org.id, conversation, reason);
