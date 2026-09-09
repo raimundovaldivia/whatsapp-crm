@@ -617,7 +617,7 @@ router.patch('/bulk-status', async (req, res) => {
 });
 
 function safeJSON(str, fallback) {
-  try { return JSON.parse(str); } catch { return fallback; }
+  try { return JSON.parse(str) ?? fallback; } catch { return fallback; }
 }
 
 module.exports = router;
