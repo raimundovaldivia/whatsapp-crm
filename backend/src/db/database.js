@@ -449,6 +449,19 @@ async function getStalledConversations() {
       AND c.last_inbound_at < NOW() - INTERVAL '4 hours'
       AND c.last_inbound_at > NOW() - INTERVAL '20 hours'
       AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '16 hours')
+      -- No mandar follow-up si ya existe un pedido activo (no cancelado) en las últimas 48h
+      AND NOT EXISTS (
+        SELECT 1 FROM orders o2
+        WHERE o2.conversation_id = c.id
+          AND o2.status NOT IN ('cancelled')
+          AND o2.created_at > NOW() - INTERVAL '48 hours'
+      )
+      -- No mandar follow-up si ya hay un comprobante de pago reciente
+      AND NOT EXISTS (
+        SELECT 1 FROM payment_proofs pp
+        WHERE pp.conversation_id = c.id
+          AND pp.created_at > NOW() - INTERVAL '48 hours'
+      )
   `);
   return rows;
 }
