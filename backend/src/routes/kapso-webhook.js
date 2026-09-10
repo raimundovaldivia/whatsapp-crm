@@ -16,7 +16,7 @@ const router         = express.Router();
 const db             = require('../db/database');
 const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
-const { notifyAdminHandoff, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
+const { notifyAdminHandoff, notifyAdminHelp, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
 const mediaCache                = require('../services/media-cache');
@@ -223,11 +223,13 @@ router.post('/', async (req, res) => {
     // 3b. Notificar a agentes con new_messages habilitado (sin await para no bloquear)
     notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
 
-    // 4. Si está en modo humano, verificar si hace mucho que no responde un humano
+    // 4. Si está en modo humano/pendiente, verificar si corresponde auto-reset
     if (updatedConv.agent_mode !== 'ai') {
       const AUTO_RESET_MINUTES = 1440;
       const mins = await db.minutesSinceLastHumanReply(conversation.id);
-      if (mins < AUTO_RESET_MINUTES) return;
+      // Solo auto-reset si algún humano YA respondió antes y lleva > 24h sin hacerlo.
+      // Si nunca respondió un humano (Infinity), mantener en espera — no interrumpir.
+      if (mins < AUTO_RESET_MINUTES || !isFinite(mins)) return;
       // Auto-reset a modo IA
       await db.setAgentMode(conversation.id, 'ai');
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
@@ -314,11 +316,13 @@ router.post('/', async (req, res) => {
         await db.updateConversationLastMessage(capturedConvId, result.response);
 
         if (result.switchToHuman) {
-          // Guardar en DB primero — sin esto el bot sigue respondiendo en próximos mensajes
-          await db.setAgentMode(capturedConvId, 'human');
+          // Nuevo flujo: consulta silenciosa al admin.
+          // El bot le pregunta al admin cómo responder — sin decirle al cliente que hay un asesor.
+          // El admin responde con el texto a enviar, o "TOMAR" para tomar control directo.
+          await db.setAgentMode(capturedConvId, 'human'); // pausa el bot mientras admin decide
           io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
-          const reason = result.escalationReason || 'El cliente solicitó hablar con un asesor';
-          notifyAdminHandoff(org.id, conversation, reason);
+          const reason = result.escalationReason || 'Necesita validación de asesor';
+          notifyAdminHelp(org.id, updatedConv || conversation, result.response, reason).catch(() => {});
         }
 
         if (result.orderCreated) {
@@ -360,7 +364,6 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     const pending = await db.getLatestPendingAdminReply(org.id);
 
     if (!pending) {
-      // El admin escribió pero no hay nadie esperando respuesta
       const noOneMsg = 'ℹ️ No hay clientes esperando tu respuesta en este momento.';
       await kapsoService.sendTextMessage(parsed.from, noOneMsg, whatsappConfig).catch(() => {});
       return;
@@ -368,31 +371,63 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
 
     console.log(`[AdminRelay] 📨 Admin responde a conv #${pending.conversation_id} (${pending.customer_phone})`);
 
-    // Enviar la respuesta del admin al cliente
+    // ── TOMAR: admin quiere atender directamente ──────────────────────
+    if (parsed.text.trim().toUpperCase() === 'TOMAR') {
+      // Decirle al cliente que viene un humano
+      const handoffMsg = 'En un momento alguien del equipo te escribe directamente 🙏';
+      const sentHandoff = await kapsoService.sendTextMessage(pending.customer_phone, handoffMsg, whatsappConfig).catch(() => null);
+      if (sentHandoff) {
+        const hMsg = await db.saveMessage({
+          conversationId:    pending.conversation_id,
+          whatsappMessageId: sentHandoff?.messages?.[0]?.id || null,
+          direction:         'outbound',
+          content:           handoffMsg,
+          sentBy:            'ai',
+          status:            'sent',
+        });
+        await db.updateConversationLastMessage(pending.conversation_id, handoffMsg);
+        const hConv = await db.getConversationById(pending.conversation_id);
+        io?.emit(`new_message_${org.id}`, { message: hMsg, conversation: hConv });
+      }
+      // Mantener human mode — el admin seguirá respondiendo directamente
+      await db.markAdminReplyHandled(pending.id);
+      const conv = await db.getConversationById(pending.conversation_id);
+      const clientName = conv?.contact_name || pending.customer_phone;
+      await kapsoService.sendTextMessage(
+        parsed.from,
+        `✅ Tomaste el control de *${clientName}*.\nResponde aquí y te reenvío al cliente, o atiéndelo desde el CRM.`,
+        whatsappConfig
+      ).catch(() => {});
+      return;
+    }
+
+    // ── Respuesta de guía: enviar al cliente como mensaje del bot ─────
+    // El admin le dice al bot qué responder — el cliente no sabe que fue el admin.
     const sentMsg = await kapsoService.sendTextMessage(pending.customer_phone, parsed.text, whatsappConfig);
 
-    // Guardar en la conversación como mensaje humano outbound
     const outMsg = await db.saveMessage({
       conversationId:    pending.conversation_id,
       whatsappMessageId: sentMsg?.messages?.[0]?.id || null,
       direction:         'outbound',
       content:           parsed.text,
-      sentBy:            'human',
+      sentBy:            'ai',      // aparece como bot en el CRM
+      agentType:         'human_guided', // distinguible en logs
       status:            'sent',
     });
     await db.updateConversationLastMessage(pending.conversation_id, parsed.text);
 
-    // Marcar como atendido
+    // Volver a modo IA — el bot puede seguir respondiendo
+    await db.setAgentMode(pending.conversation_id, 'ai');
+    io?.emit(`agent_mode_changed_${org.id}`, { conversationId: pending.conversation_id, mode: 'ai' });
+
     await db.markAdminReplyHandled(pending.id);
 
-    // Emitir al CRM en tiempo real
     const finalConv = await db.getConversationById(pending.conversation_id);
     io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
     // Confirmar al admin
     const clientName = finalConv?.contact_name || pending.customer_phone;
-    const confirmMsg = `✅ Enviado a *${clientName}*.`;
-    await kapsoService.sendTextMessage(parsed.from, confirmMsg, whatsappConfig).catch(() => {});
+    await kapsoService.sendTextMessage(parsed.from, `✅ Enviado a *${clientName}* como bot. El bot retoma el hilo.`, whatsappConfig).catch(() => {});
 
     // Verificar si hay más pendientes
     const nextPending = await db.getLatestPendingAdminReply(org.id);
@@ -401,7 +436,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
       const nextName = nextConv?.contact_name || nextPending.customer_phone;
       await kapsoService.sendTextMessage(
         parsed.from,
-        `📨 Tienes otro cliente esperando: *${nextName}*\n"${nextPending.context || '(sin contexto)'}"\n\nResponde aquí para enviarle tu mensaje.`,
+        `📨 Hay otro cliente esperando: *${nextName}*\n"${nextPending.context || '(sin contexto)'}"\n\nRespondé aquí o escribí *TOMAR* para atenderle directamente.`,
         whatsappConfig
       ).catch(() => {});
     }

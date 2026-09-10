@@ -143,4 +143,61 @@ async function notifyAgentsPayment(orgId, clientName, clientPhone, amount) {
   }
 }
 
-module.exports = { notifyAdminHandoff, notifyAgentsNewMessage, notifyAgentsPayment };
+/**
+ * Consulta silenciosa al admin: el bot no sabe cómo responder y le pide guía.
+ * El admin responde con el texto a enviar (bot lo manda como si fuera él),
+ * o escribe "TOMAR" para tomar el control directamente.
+ *
+ * @param {number} orgId
+ * @param {object} conversation     - objeto conversación (id, contact_name, phone_number)
+ * @param {string} botWasGoingToSay - lo que el bot iba a responder (contexto para el admin)
+ * @param {string} reason           - motivo de la consulta
+ */
+async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
+  try {
+    const adminPhone = await db.getSetting(orgId, 'admin_alert_phone');
+    if (!adminPhone) return;
+
+    const wc = await db.getWhatsappConfig(orgId);
+    if (!wc || wc.provider !== 'kapso') return;
+
+    const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
+    const clientPhone = conversation.phone_number || '';
+
+    // Últimos mensajes del cliente para dar contexto
+    let contextLines = [];
+    try {
+      const lastMessages = await db.getLastMessages(conversation.id, 6);
+      contextLines = lastMessages
+        .filter(m => m.content && !m.content.startsWith('🎤') && !m.content.startsWith('[Template'))
+        .slice(-4)
+        .map(m => `${m.direction === 'inbound' ? '→' : '←'} ${m.content.slice(0, 120)}`);
+    } catch { /* continuar sin contexto */ }
+
+    // Crear registro pendiente para el admin relay
+    await db.createAdminPendingReply(
+      orgId, conversation.id, clientPhone,
+      contextLines.filter(l => l.startsWith('→')).map(l => l.slice(2)).join(' | ')
+    );
+
+    const msg = [
+      `❓ *${clientName}* necesita respuesta`,
+      clientPhone && clientPhone !== clientName ? `📱 ${clientPhone}` : '',
+      reason ? `📋 ${reason}` : '',
+      '',
+      contextLines.length ? contextLines.join('\n') : '(sin historial)',
+      '',
+      botWasGoingToSay ? `💬 _El bot iba a decir: "${botWasGoingToSay.slice(0, 120)}..."_` : '',
+      '',
+      '👆 *Respondé aquí* → lo envío como bot (el cliente no sabe que sos vos).',
+      '📲 Escribí *TOMAR* → te paso el control para que lo atiendas directamente.',
+    ].filter(Boolean).join('\n');
+
+    await kapsoService.sendTextMessage(adminPhone, msg, wc);
+    console.log(`[Notifications] ❓ Admin consultado (${adminPhone}) — conv #${conversation.id}`);
+  } catch (err) {
+    console.warn('[Notifications] notifyAdminHelp error:', err.message);
+  }
+}
+
+module.exports = { notifyAdminHandoff, notifyAdminHelp, notifyAgentsNewMessage, notifyAgentsPayment };
