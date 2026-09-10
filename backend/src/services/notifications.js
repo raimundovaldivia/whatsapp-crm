@@ -174,11 +174,17 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
         .map(m => `${m.direction === 'inbound' ? '→' : '←'} ${m.content.slice(0, 120)}`);
     } catch { /* continuar sin contexto */ }
 
-    // Crear registro pendiente para el admin relay
-    await db.createAdminPendingReply(
-      orgId, conversation.id, clientPhone,
-      contextLines.filter(l => l.startsWith('→')).map(l => l.slice(2)).join(' | ')
-    );
+    // No crear pendiente duplicado si ya hay uno activo para esta conversación
+    const existingPending = await db.getLatestPendingAdminReply(orgId);
+    if (existingPending && existingPending.conversation_id === conversation.id) {
+      console.log(`[Notifications] Ya hay pendiente activo para conv #${conversation.id} — actualizando contexto`);
+      // Solo re-notificar si cambió algo sustancial (no crear nuevo registro)
+    } else {
+      await db.createAdminPendingReply(
+        orgId, conversation.id, clientPhone,
+        contextLines.filter(l => l.startsWith('→')).map(l => l.slice(2)).join(' | ')
+      );
+    }
 
     const msg = [
       `❓ *${clientName}* necesita respuesta`,
