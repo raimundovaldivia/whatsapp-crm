@@ -902,6 +902,7 @@ function IATab({ onSwitchTab }) {
 
   // Template de despacho para pedidos agendados
   const [dispatchTemplate, setDispatchTemplate] = useState('');
+  const [driverSell, setDriverSell] = useState(false);
 
   // Test bot
   const [testOpen,         setTestOpen]         = useState(false);
@@ -959,6 +960,7 @@ function IATab({ onSwitchTab }) {
       if (d?.payment_info !== undefined) setPaymentInfo(d.payment_info || '');
       if (d?.admin_alert_phone) setAdminAlertPhone(d.admin_alert_phone);
       if (d?.scheduled_dispatch_template !== undefined) setDispatchTemplate(d.scheduled_dispatch_template || '');
+      setDriverSell(d?.driver_sell_enabled === true);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -1065,7 +1067,7 @@ function IATab({ onSwitchTab }) {
     setSaving(true); setError(''); setSuccess('');
     try {
       await Promise.all([
-        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone, scheduled_dispatch_template: dispatchTemplate }),
+        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone, scheduled_dispatch_template: dispatchTemplate, driver_sell_enabled: driverSell }),
         storeSettingsAPI.saveStoreContext(storeContext),
         storeSettingsAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
@@ -1335,6 +1337,21 @@ function IATab({ onSwitchTab }) {
             <p style={{ ...hintStyle, marginTop: '6px' }}>
               Nombre del template aprobado por Meta que se enviará automáticamente el día que corresponde despachar un pedido agendado. El template debe tener {'{{1}}'} = nombre del cliente y {'{{2}}'} = producto.
             </p>
+          </div>
+
+          {/* Toggle: venta en ruta (bandejas extras) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.bgApp, borderRadius: '10px', padding: '14px 16px' }}>
+            <div>
+              <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>🥚 Venta en ruta (bandejas extras)</div>
+              <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px' }}>El repartidor puede vender productos extra desde tu catálogo al entregar. Se suma a lo que cobra y queda registrado en el reparto.</div>
+            </div>
+            <button onClick={() => setDriverSell(v => !v)}
+              style={{ width: '44px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
+                backgroundColor: driverSell ? colors.green : colors.borderStrong,
+                position: 'relative', transition: 'background-color 0.2s', flexShrink: 0 }}>
+              <span style={{ position: 'absolute', top: '2px', left: driverSell ? '22px' : '2px',
+                width: '20px', height: '20px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+            </button>
           </div>
 
           {/* Contexto de la tienda */}

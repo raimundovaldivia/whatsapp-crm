@@ -575,6 +575,33 @@ router.get('/drivers', async (req, res) => {
 });
 
 /**
+ * Catálogo para venta en ruta ("bandejas extras"). Solo devuelve productos si la
+ * tienda activó driver_sell_enabled. Accesible por el repartidor (rutas /delivery).
+ */
+router.get('/catalog', async (req, res) => {
+  try {
+    const enabled = (await db.getSetting(req.orgId, 'driver_sell_enabled').catch(() => null)) === 'true';
+    if (!enabled) return res.json({ success: true, enabled: false, products: [] });
+
+    let rows = [];
+    try { rows = await db.getProducts(req.orgId, true); } catch { rows = []; }
+    if (!rows || rows.length === 0) {
+      try { rows = await db.getCachedProducts(req.orgId); } catch { rows = []; }
+    }
+    const products = (rows || [])
+      .map(p => ({
+        id:    String(p.id ?? p.external_id ?? ''),
+        title: p.title || p.name || 'Producto',
+        price: Math.round(parseFloat(p.price) || 0),
+      }))
+      .filter(p => p.title && p.id);
+    res.json({ success: true, enabled: true, products });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * Resuelve el repartidor asignado: valida que el usuario exista en la org con
  * rol repartidor y completa nombre/teléfono si el admin no los escribió.
  */
@@ -759,7 +786,17 @@ function splitStopKey(stopKey) {
 }
 
 async function applyStopUpdate(req, res, id, stopKey) {
-  const { status, paymentMethod } = req.body;  // status: 'entregado' | 'cancelled' | 'pending'
+  const { status, paymentMethod, note, extras } = req.body;  // status: 'entregado' | 'cancelled' | 'pending'
+  const cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
+  // Venta extra del repartidor (bandejas extras). No toca el pedido original:
+  // se guarda en stop_extras y suma al total a cobrar de esa entrega.
+  const cleanExtras = Array.isArray(extras)
+    ? extras.map(e => ({
+        name:     String(e?.name || '').slice(0, 120),
+        quantity: Math.max(0, parseInt(e?.quantity) || 0),
+        price:    Math.max(0, Math.round(parseFloat(e?.price) || 0)),
+      })).filter(e => e.name && e.quantity > 0).slice(0, 30)
+    : [];
   const pool = getPool();
 
   const VALID = ['entregado', 'cancelled', 'pending'];
@@ -779,15 +816,21 @@ async function applyStopUpdate(req, res, id, stopKey) {
     const paymentJson = status === 'entregado' && paymentMethod
       ? JSON.stringify({ [stopKey]: paymentMethod })
       : '{}';
+    // Nota del repartidor por parada (se guarda si viene; si va vacía no borra la anterior)
+    const noteJson = cleanNote ? JSON.stringify({ [stopKey]: cleanNote }) : '{}';
+    // Venta extra por parada (solo se escribe si viene alguna)
+    const extrasJson = cleanExtras.length ? JSON.stringify({ [stopKey]: cleanExtras }) : '{}';
     const { rows: [route] } = await pool.query(
       `UPDATE delivery_routes
           SET stop_statuses = stop_statuses || jsonb_build_object($1::text, $2::text),
               stop_payments = COALESCE(stop_payments, '{}'::jsonb) || $6::jsonb,
+              stop_notes    = COALESCE(stop_notes, '{}'::jsonb) || $7::jsonb,
+              stop_extras   = COALESCE(stop_extras, '{}'::jsonb) || $8::jsonb,
               status = CASE WHEN status = 'sent' THEN 'in_progress' ELSE status END
         WHERE id = $3 AND organization_id = $4
           AND ($5::int IS NULL OR driver_user_id = $5 OR driver_user_id IS NULL)
-        RETURNING stop_statuses, stop_payments, orders`,
-      [stopKey, status, parseInt(id), req.orgId, driverScope, paymentJson]
+        RETURNING stop_statuses, stop_payments, stop_notes, stop_extras, orders`,
+      [stopKey, status, parseInt(id), req.orgId, driverScope, paymentJson, noteJson, extrasJson]
     );
     if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada o no asignada a ti' });
 

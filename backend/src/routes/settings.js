@@ -38,6 +38,7 @@ router.get('/', async (req, res) => {
       payment_info:           (await db.getSetting(req.orgId, 'payment_info')) || '',
       admin_alert_phone:           (await db.getSetting(req.orgId, 'admin_alert_phone')) || '',
       scheduled_dispatch_template: (await db.getSetting(req.orgId, 'scheduled_dispatch_template')) || '',
+      driver_sell_enabled:         (await db.getSetting(req.orgId, 'driver_sell_enabled')) === 'true',
       bot_improvement_rules,
     };
     res.json({ success: true, data: settings });
@@ -51,7 +52,7 @@ router.get('/', async (req, res) => {
  */
 router.put('/', async (req, res) => {
   try {
-    const { ai_enabled_global, ai_system_prompt_extra, payment_mode, payment_info, admin_alert_phone, bot_improvement_rules, scheduled_dispatch_template } = req.body;
+    const { ai_enabled_global, ai_system_prompt_extra, payment_mode, payment_info, admin_alert_phone, bot_improvement_rules, scheduled_dispatch_template, driver_sell_enabled } = req.body;
     if (ai_enabled_global !== undefined)
       await db.setSetting(req.orgId, 'ai_enabled_global', ai_enabled_global ? 'true' : 'false');
     if (ai_system_prompt_extra !== undefined)
@@ -66,6 +67,8 @@ router.put('/', async (req, res) => {
       await db.setSetting(req.orgId, 'bot_improvement_rules', JSON.stringify(bot_improvement_rules));
     if (scheduled_dispatch_template !== undefined)
       await db.setSetting(req.orgId, 'scheduled_dispatch_template', scheduled_dispatch_template.trim());
+    if (driver_sell_enabled !== undefined)
+      await db.setSetting(req.orgId, 'driver_sell_enabled', driver_sell_enabled ? 'true' : 'false');
 
     res.json({ success: true });
   } catch (err) {

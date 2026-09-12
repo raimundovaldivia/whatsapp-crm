@@ -9,16 +9,13 @@
  * optimización con Google Maps). Sin coordenadas, la lista ocupa toda la
  * pantalla en vez de mostrar un mapa vacío de otra ciudad.
  */
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Dimensions, Linking, Platform, ActivityIndicator,
+  Linking, Platform, ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { getRoute } from '../services/api';
-
-const { height: SCREEN_H } = Dimensions.get('window');
 
 const C = {
   bg:     '#0f172a',
@@ -49,13 +46,28 @@ function stopsOf(route) {
 
 const stopKeyOf = stop => `${stop.source}_${stop.id}`;
 
+// Orden de despacho: suma cantidad por producto de las paradas de la ruta.
+// Devuelve [[nombre, cantidad], ...] de mayor a menor.
+function buildManifest(stops) {
+  const totals = {};
+  for (const st of (stops || [])) {
+    for (const it of (st.items || [])) {
+      const name = (it.name || it.title || it.product_name || 'Sin nombre').toString().trim() || 'Sin nombre';
+      const qty  = Number(it.quantity) || 0;
+      if (!qty) continue;
+      totals[name] = (totals[name] || 0) + qty;
+    }
+  }
+  return Object.entries(totals).sort((a, b) => b[1] - a[1]);
+}
+
 export default function RouteScreen({ route: navRoute, navigation }) {
   const { routeId } = navRoute.params;
-  const mapRef = useRef(null);
 
   const [route,   setRoute]   = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
+  const [showManifest, setShowManifest] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -89,20 +101,12 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   }
 
   const stops      = stopsOf(route);
+  const manifest   = buildManifest(stops);
+  const manifestUnits = manifest.reduce((acc, [, q]) => acc + q, 0);
   const statuses   = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
   const payments   = route?.stop_payments && typeof route.stop_payments === 'object' ? route.stop_payments : {};
   const stateOf    = stop => statuses[stopKeyOf(stop)] || 'pending';
   const colorOf    = stop => STOP_COLORS[stateOf(stop)] || STOP_COLORS.pending;
-
-  const stopsWithCoords = stops.filter(st => typeof st.lat === 'number' && typeof st.lng === 'number');
-  const hasMap = stopsWithCoords.length > 0;
-
-  const initialRegion = hasMap ? {
-    latitude:       stopsWithCoords.reduce((acc, p) => acc + p.lat, 0) / stopsWithCoords.length,
-    longitude:      stopsWithCoords.reduce((acc, p) => acc + p.lng, 0) / stopsWithCoords.length,
-    latitudeDelta:  0.08,
-    longitudeDelta: 0.08,
-  } : null;
 
   const doneCount   = stops.filter(st => stateOf(st) === 'entregado').length;
   const failedCount = stops.filter(st => stateOf(st) === 'cancelled').length;
@@ -111,17 +115,10 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   // Próxima parada pendiente: se resalta para que el chofer no tenga que buscar
   const nextPending = stops.find(st => stateOf(st) === 'pending');
 
-  function focusStop(stop) {
-    if (hasMap && typeof stop.lat === 'number' && mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: stop.lat, longitude: stop.lng, latitudeDelta: 0.005, longitudeDelta: 0.005,
-      }, 600);
-    }
-  }
-
   function openStopDetail(stop) {
+    const notes = route?.stop_notes && typeof route.stop_notes === 'object' ? route.stop_notes : {};
     navigation.navigate('Stop', {
-      stop,
+      stop: { ...stop, note: notes[stopKeyOf(stop)] || '' },
       routeId,
       stopKey:    stopKeyOf(stop),
       stopNumber: stop.stopNumber,
@@ -142,51 +139,11 @@ export default function RouteScreen({ route: navRoute, navigation }) {
 
   return (
     <View style={s.container}>
-      {/* Mapa (solo con coordenadas) */}
-      {hasMap && (
-        <View style={s.mapContainer}>
-          <MapView
-            ref={mapRef}
-            style={s.map}
-            // Google en Android (Expo Go trae su key; el build necesita la tuya).
-            // En iOS se usa Apple Maps, que no requiere key.
-            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-            initialRegion={initialRegion}
-            showsUserLocation
-            showsMyLocationButton>
-            {stopsWithCoords.map(stop => (
-              <Marker
-                key={stopKeyOf(stop)}
-                coordinate={{ latitude: stop.lat, longitude: stop.lng }}
-                onPress={() => openStopDetail(stop)}>
-                <View style={[s.markerBubble, { backgroundColor: colorOf(stop) }]}>
-                  <Text style={s.markerNum}>{stop.stopNumber}</Text>
-                </View>
-              </Marker>
-            ))}
-            {stopsWithCoords.length >= 2 && (
-              <Polyline
-                coordinates={stopsWithCoords.map(st => ({ latitude: st.lat, longitude: st.lng }))}
-                strokeColor={C.green}
-                strokeWidth={3}
-                lineDashPattern={[10, 5]}
-              />
-            )}
-          </MapView>
-
-          <View style={s.statsOverlay}>
-            {!!route.total_distance && <Text style={s.statText}>{route.total_distance}</Text>}
-            {!!route.total_duration && <Text style={s.statText}>{route.total_duration}</Text>}
-            <Text style={[s.statText, { color: C.green }]}>✓ {doneCount}/{stops.length}</Text>
-          </View>
-        </View>
-      )}
-
-      {/* Lista de paradas */}
+      {/* Lista de paradas (sin mapa embebido: el chofer navega con "Abrir en Maps") */}
       <View style={s.listContainer}>
         <View style={s.listHeader}>
           <Text style={s.listTitle}>
-            Paradas ({stops.length}){!hasMap ? `  ·  ✓ ${doneCount}/${stops.length}` : ''}
+            Paradas ({stops.length})  ·  ✓ {doneCount}/{stops.length}
           </Text>
           <TouchableOpacity onPress={openFullRouteInMaps} style={s.mapsBtn}>
             <Text style={s.mapsBtnText}>Abrir en Maps</Text>
@@ -198,6 +155,20 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           keyExtractor={stopKeyOf}
           refreshing={loading}
           onRefresh={load}
+          ListHeaderComponent={manifest.length > 0 ? (
+            <View style={s.manifestCard}>
+              <TouchableOpacity style={s.manifestHead} onPress={() => setShowManifest(v => !v)} activeOpacity={0.7}>
+                <Text style={s.manifestTitle}>📦 Lo que llevas · {manifestUnits} u.</Text>
+                <Text style={s.manifestToggle}>{showManifest ? 'Ocultar' : 'Ver'}</Text>
+              </TouchableOpacity>
+              {showManifest && manifest.map(([name, qty]) => (
+                <View key={name} style={s.manifestRow}>
+                  <Text style={s.manifestName} numberOfLines={1}>{name}</Text>
+                  <Text style={s.manifestQty}>{qty}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
           renderItem={({ item: stop }) => {
             const state  = stateOf(stop);
             const color  = colorOf(stop);
@@ -207,7 +178,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             return (
               <TouchableOpacity
                 style={[s.stopCard, isDone && s.stopDone, isNext && s.stopNext]}
-                onPress={() => { focusStop(stop); openStopDetail(stop); }}
+                onPress={() => openStopDetail(stop)}
                 activeOpacity={0.75}>
                 <View style={[s.stopNum, { backgroundColor: color }]}>
                   <Text style={s.stopNumText}>{stop.stopNumber}</Text>
@@ -252,18 +223,13 @@ const s = StyleSheet.create({
   retryBtn:     { backgroundColor: C.card, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10, borderWidth: 1, borderColor: C.border },
   retryText:    { color: C.text, fontWeight: '600' },
 
-  mapContainer: { height: SCREEN_H * 0.38, position: 'relative' },
-  map:          { ...StyleSheet.absoluteFillObject },
-
-  markerBubble: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
-  markerNum:    { color: '#fff', fontWeight: '800', fontSize: 13 },
-
-  statsOverlay: {
-    position: 'absolute', top: 12, right: 12,
-    backgroundColor: 'rgba(15,23,42,0.85)', borderRadius: 10, padding: 10, gap: 4,
-    borderWidth: 1, borderColor: C.border,
-  },
-  statText:     { color: C.muted, fontSize: 12, fontWeight: '600' },
+  manifestCard: { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, marginHorizontal: 12, marginTop: 10, marginBottom: 10, overflow: 'hidden' },
+  manifestHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 11 },
+  manifestTitle:{ color: C.text, fontWeight: '700', fontSize: 14 },
+  manifestToggle:{ color: C.green, fontWeight: '600', fontSize: 13 },
+  manifestRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 7, borderTopWidth: 1, borderTopColor: C.border },
+  manifestName: { color: C.muted, fontSize: 14, flex: 1, marginRight: 10 },
+  manifestQty:  { color: C.text, fontWeight: '800', fontSize: 15 },
 
   listContainer:{ flex: 1 },
   listHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.border },

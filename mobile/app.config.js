@@ -11,7 +11,10 @@
  * Ver README.md para cómo obtener la key y hacer el build.
  */
 
-const ANDROID_MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY_ANDROID || '';
+// EXPO_PUBLIC_ hace que la key también quede disponible en el código JS (para
+// no montar el mapa —y evitar el crash nativo— si no hay key). Se mantiene el
+// nombre viejo como respaldo.
+const ANDROID_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID || process.env.GOOGLE_MAPS_API_KEY_ANDROID || '';
 const IOS_MAPS_KEY     = process.env.GOOGLE_MAPS_API_KEY_IOS || '';
 
 module.exports = {
@@ -57,6 +60,7 @@ module.exports = {
     ],
     extra: {
       apiUrl: process.env.EXPO_PUBLIC_API_URL || null,
+      eas: { projectId: '2a8cb9c5-30f8-44bc-812b-35c51e758b49' },
     },
   },
 };

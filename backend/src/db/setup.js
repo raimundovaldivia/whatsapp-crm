@@ -696,10 +696,15 @@ async function setupDatabase() {
     //   se mantienen como texto libre para repartidores sin cuenta.
     // - stop_payments: medio de pago por parada ({ "bot_12": "efectivo" }),
     //   para que la web y la app lo muestren sin cruzar con orders.
+    // - stop_notes: nota del repartidor por parada ({ "bot_12": "dejé con conserje" }).
+    // - stop_extras: venta extra del repartidor por parada
+    //   ({ "bot_12": [{ name, quantity, price }] }). No toca el pedido original.
     await client.query(`
       ALTER TABLE delivery_routes
         ADD COLUMN IF NOT EXISTS driver_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}';
+        ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_notes     JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}';
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
         ON delivery_routes(organization_id, driver_user_id, status);
     `);

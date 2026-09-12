@@ -961,7 +961,10 @@ function HistorialRepartos({ colors }) {
                   {(() => {
                     const ordersList = Array.isArray(route.orders) ? route.orders : [];
                     const payments   = typeof route.stop_payments === 'object' && route.stop_payments ? route.stop_payments : {};
+                    const notes      = typeof route.stop_notes === 'object' && route.stop_notes ? route.stop_notes : {};
+                    const extrasMap  = typeof route.stop_extras === 'object' && route.stop_extras ? route.stop_extras : {};
                     const PAY = { efectivo: '💵 Efectivo', transferencia: '🏦 Transferencia', otro: 'Otro' };
+                    const clp = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
                     if (ordersList.length === 0) return null;
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -970,19 +973,34 @@ function HistorialRepartos({ colors }) {
                           const st  = statuses[key] || 'pending';
                           const col = st === 'entregado' ? '#22c55e' : st === 'cancelled' ? '#f87171' : '#fb923c';
                           const pay = payments[key];
+                          const note = notes[key];
+                          const stopExtras = Array.isArray(extrasMap[key]) ? extrasMap[key] : [];
+                          const extrasTotal = stopExtras.reduce((s, e) => s + (Number(e.price) || 0) * (Number(e.quantity) || 0), 0);
                           return (
-                            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '12px' }}>
-                              <span style={{ width: '20px', height: '20px', borderRadius: '10px', backgroundColor: col, color: '#fff', fontWeight: 800, fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                {idx + 1}
-                              </span>
-                              <span style={{ color: colors.textPrimary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                                {o.customerName || key}
-                                <span style={{ color: colors.textMuted, fontWeight: 400 }}> · {o.orderName}</span>
-                              </span>
-                              {pay && <span style={{ color: colors.textMuted }}>{PAY[pay] || pay}</span>}
-                              <span style={{ color: col, fontWeight: 700, flexShrink: 0 }}>
-                                {st === 'entregado' ? '✓ Entregado' : st === 'cancelled' ? '✕ No encontrado' : 'Pendiente'}
-                              </span>
+                            <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '12px' }}>
+                                <span style={{ width: '20px', height: '20px', borderRadius: '10px', backgroundColor: col, color: '#fff', fontWeight: 800, fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                  {idx + 1}
+                                </span>
+                                <span style={{ color: colors.textPrimary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                  {o.customerName || key}
+                                  <span style={{ color: colors.textMuted, fontWeight: 400 }}> · {o.orderName}</span>
+                                </span>
+                                {pay && <span style={{ color: colors.textMuted }}>{PAY[pay] || pay}</span>}
+                                <span style={{ color: col, fontWeight: 700, flexShrink: 0 }}>
+                                  {st === 'entregado' ? '✓ Entregado' : st === 'cancelled' ? '✕ No encontrado' : 'Pendiente'}
+                                </span>
+                              </div>
+                              {note && (
+                                <div style={{ marginLeft: '30px', fontSize: '12px', color: colors.textSecondary, fontStyle: 'italic' }}>
+                                  📝 {note}
+                                </div>
+                              )}
+                              {stopExtras.length > 0 && (
+                                <div style={{ marginLeft: '30px', fontSize: '12px', color: '#8b5cf6' }}>
+                                  🛒 Venta extra: {stopExtras.map(e => `${e.quantity}× ${e.name}`).join(', ')} = {clp(extrasTotal)}
+                                </div>
+                              )}
                             </div>
                           );
                         })}

@@ -165,11 +165,20 @@ export async function getRoute(routeId) {
  *        Si es transferencia, el pedido queda en "Por cobrar" en el CRM
  *        hasta que llegue el comprobante.
  */
-export async function updateStopStatus(routeId, stopKey, status, paymentMethod) {
+export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras) {
   const client = await getClient();
   const body = { stopKey, status };
   if (paymentMethod) body.paymentMethod = paymentMethod;
+  if (note && note.trim()) body.note = note.trim();
+  if (Array.isArray(extras) && extras.length) body.extras = extras;
   const res = await client.patch(`/api/delivery/routes/${routeId}/stops`, body);
+  return res.data;
+}
+
+// Catálogo para venta en ruta ("bandejas extras"). Devuelve { enabled, products }.
+export async function getSellCatalog() {
+  const client = await getClient();
+  const res = await client.get('/api/delivery/catalog');
   return res.data;
 }
 
