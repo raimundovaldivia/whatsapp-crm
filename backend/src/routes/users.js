@@ -10,6 +10,22 @@ const { requireAuth, requireRole, generateToken } = require('../middleware/auth'
 // 'repartidor': solo accede a la app de despachos (ver REPARTIDOR_ALLOWED_PREFIXES en middleware/auth.js)
 const VALID_ROLES = ['admin', 'supervisor', 'agent', 'repartidor'];
 
+/**
+ * Normaliza un "usuario" de login para repartidores (que no tienen email).
+ * El identificador de login se guarda en la columna email, así que el usuario
+ * pasa a ser un handle sin espacios ni acentos: "Juan Pérez" → "juan.perez".
+ */
+function normalizeUsername(s) {
+  return (s || '')
+    .toString().trim().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar acentos
+    .replace(/\s+/g, '.')                              // espacios → punto
+    .replace(/[^a-z0-9._-]/g, '')                      // solo caracteres seguros
+    .replace(/\.+/g, '.')
+    .replace(/^[.]+|[.]+$/g, '')
+    .slice(0, 40);
+}
+
 // Todos los endpoints requieren auth + rol admin/owner
 router.use(requireAuth);
 router.use(requireRole('owner', 'admin'));
@@ -35,25 +51,46 @@ router.get('/', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   try {
-    const { email, password, name, role } = req.body;
-    if (!email || !password || !role) {
-      return res.status(400).json({ success: false, error: 'Email, password y rol son requeridos' });
+    const { email, username, password, name, role } = req.body;
+    if (!password || !role) {
+      return res.status(400).json({ success: false, error: 'Password y rol son requeridos' });
     }
     if (!VALID_ROLES.includes(role)) {
       return res.status(400).json({ success: false, error: `Rol inválido. Válidos: ${VALID_ROLES.join(', ')}` });
     }
 
-    const existing = await db.getUserByEmail(email);
+    // Identificador de login. Los repartidores no tienen email: usan un "usuario"
+    // (handle) que se guarda igual en la columna email (la clave de login).
+    let loginId;
+    let displayName = name;
+    if (role === 'repartidor') {
+      loginId = normalizeUsername(username || name);
+      if (!loginId) {
+        return res.status(400).json({ success: false, error: 'El usuario es requerido para un repartidor' });
+      }
+      displayName = name || username;
+    } else {
+      if (!email) {
+        return res.status(400).json({ success: false, error: 'Email es requerido' });
+      }
+      loginId = email.trim().toLowerCase();
+      displayName = name || loginId.split('@')[0];
+    }
+
+    const existing = await db.getUserByEmail(loginId);
     if (existing) {
-      return res.status(409).json({ success: false, error: 'Este email ya está registrado' });
+      return res.status(409).json({
+        success: false,
+        error: role === 'repartidor' ? 'Ese usuario ya existe, elige otro' : 'Este email ya está registrado',
+      });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await db.createUser({
       organizationId: req.orgId,
-      email,
+      email: loginId,
       passwordHash,
-      name: name || email.split('@')[0],
+      name: displayName,
       role,
     });
 

@@ -82,18 +82,18 @@ export default function LoginScreen({ onLogin }) {
 
         {/* Formulario */}
         <View style={s.card}>
-          <Text style={s.label}>Correo</Text>
+          <Text style={s.label}>Usuario o correo</Text>
           <TextInput
             style={s.input}
             value={email}
             onChangeText={setEmail}
-            placeholder="repartidor@mitienda.cl"
+            placeholder="usuario o repartidor@mitienda.cl"
             placeholderTextColor={C.muted}
             autoCapitalize="none"
-            keyboardType="email-address"
+            keyboardType="default"
             autoCorrect={false}
-            autoComplete="email"
-            textContentType="emailAddress"
+            autoComplete="username"
+            textContentType="username"
             returnKeyType="next"
           />
 

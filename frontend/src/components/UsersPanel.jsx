@@ -32,7 +32,7 @@ export default function UsersPanel() {
 
   // Crear usuario
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ email: '', password: '', name: '', role: 'agent' });
+  const [form, setForm] = useState({ email: '', username: '', password: '', name: '', role: 'agent' });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
 
@@ -66,7 +66,7 @@ export default function UsersPanel() {
     try {
       await api.post('/users', form);
       setShowCreate(false);
-      setForm({ email: '', password: '', name: '', role: 'agent' });
+      setForm({ email: '', username: '', password: '', name: '', role: 'agent' });
       await loadUsers();
     } catch (e) {
       setFormError(e.response?.data?.error || 'Error al crear usuario');
@@ -173,24 +173,37 @@ export default function UsersPanel() {
               <button onClick={() => setShowCreate(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary }}><X size={18} /></button>
             </div>
             <form onSubmit={handleCreate}>
-              {[
-                { label: 'Email', key: 'email', type: 'email', placeholder: 'usuario@empresa.com' },
-                { label: 'Contraseña', key: 'password', type: 'password', placeholder: 'Mínimo 6 caracteres' },
-                { label: 'Nombre (opcional)', key: 'name', type: 'text', placeholder: 'Nombre del usuario' },
-              ].map(({ label, key, type, placeholder }) => (
-                <div key={key} style={{ marginBottom: '14px' }}>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '4px' }}>{label}</label>
-                  <input type={type} value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} placeholder={placeholder} required={key !== 'name'}
-                    style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgInput, color: colors.textPrimary, fontSize: '14px' }} />
-                </div>
-              ))}
-              <div style={{ marginBottom: '20px' }}>
+              {/* Rol primero: define qué campos se piden */}
+              <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '4px' }}>Rol</label>
                 <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgInput, color: colors.textPrimary, fontSize: '14px' }}>
                   {ROLES.map(r => <option key={r.value} value={r.value}>{r.label} — {r.desc}</option>)}
                 </select>
               </div>
+
+              {(form.role === 'repartidor'
+                ? [
+                    { label: 'Nombre', key: 'name', type: 'text', placeholder: 'Ej: Juan Pérez', req: true },
+                    { label: 'Usuario (para entrar a la app)', key: 'username', type: 'text', placeholder: 'Ej: juan', req: true },
+                    { label: 'Contraseña', key: 'password', type: 'password', placeholder: 'Clave del repartidor', req: true },
+                  ]
+                : [
+                    { label: 'Email', key: 'email', type: 'email', placeholder: 'usuario@empresa.com', req: true },
+                    { label: 'Contraseña', key: 'password', type: 'password', placeholder: 'Mínimo 6 caracteres', req: true },
+                    { label: 'Nombre (opcional)', key: 'name', type: 'text', placeholder: 'Nombre del usuario', req: false },
+                  ]
+              ).map(({ label, key, type, placeholder, req }) => (
+                <div key={key} style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '4px' }}>{label}</label>
+                  <input type={type} value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} placeholder={placeholder} required={req}
+                    autoCapitalize={key === 'username' ? 'none' : undefined}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgInput, color: colors.textPrimary, fontSize: '14px' }} />
+                  {key === 'username' && (
+                    <p style={{ margin: '4px 0 0', fontSize: '11px', color: colors.textSecondary }}>Sin espacios ni email. El repartidor entra con este usuario y su contraseña.</p>
+                  )}
+                </div>
+              ))}
               {formError && <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#ef4444' }}>{formError}</p>}
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button type="button" onClick={() => setShowCreate(false)}
