@@ -181,6 +181,11 @@ router.post('/', async (req, res) => {
   }
   console.log(`[KapsoWebhook] ✅ parsed: type=${parsed.type} | from=${parsed.from} | mediaId=${parsed.mediaId} | mediaUrl=${parsed.mediaUrl?.slice(0,60)}`);
 
+  // Si quien escribe es un miembro del equipo (admin, coordinador, agente con
+  // teléfono cargado), reabrir su ventana de 24h. Así el aviso preventivo de
+  // cierre se mide por persona y sus respuestas por WhatsApp siguen entregándose.
+  if (parsed.from) db.touchUserWaWindow(org.id, parsed.from).catch(() => {});
+
   // ── Admin relay: si el mensaje viene del teléfono del admin → enrutar al cliente ──
   const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
   if (adminPhone && parsed.from && db.normalizePhone(parsed.from) === db.normalizePhone(adminPhone)) {

@@ -108,6 +108,24 @@ async function getAgentsWithNotification(orgId, notifKey) {
   );
 }
 
+/**
+ * Registra que un miembro del equipo escribió al número (reabre su ventana de
+ * 24h). Se llama en el webhook con el teléfono del remitente: si coincide con el
+ * whatsapp_phone de algún usuario, actualiza su wa_last_inbound y limpia el aviso
+ * de cierre. Para clientes no coincide con nadie y no hace nada.
+ */
+async function touchUserWaWindow(orgId, phone) {
+  if (!phone) return;
+  return query(
+    `UPDATE users
+        SET wa_last_inbound = NOW(), wa_window_warned = NULL
+      WHERE organization_id = $1
+        AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
+        AND regexp_replace(whatsapp_phone, '[^0-9]', '', 'g') = regexp_replace($2, '[^0-9]', '', 'g')`,
+    [orgId, phone]
+  );
+}
+
 async function updateUserRole(userId, orgId, role) {
   return queryOne(
     `UPDATE users SET role = $1
@@ -1446,5 +1464,5 @@ module.exports = {
   // User management (RBAC)
   listOrgUsers, updateUserRole, deleteOrgUser,
   // Agentes WA
-  getUserByWhatsappPhone, updateUserWaPhone, updateUserNotifications, getAgentsWithNotification,
+  getUserByWhatsappPhone, updateUserWaPhone, updateUserNotifications, getAgentsWithNotification, touchUserWaWindow,
 };

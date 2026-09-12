@@ -682,6 +682,12 @@ async function setupDatabase() {
         NULL; -- ignorar si ya existe con nombre distinto
       END
       $$;
+
+      -- Ventana de 24h POR usuario: último mensaje entrante de cada miembro del
+      -- equipo al número, para avisarle antes de que su canal de WhatsApp se
+      -- cierre (igual que el aviso del admin, pero individual).
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_last_inbound  TIMESTAMP;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_window_warned TIMESTAMP;
     `);
 
     // ─── DESPACHOS: módulo de repartos ───────────────────────────────

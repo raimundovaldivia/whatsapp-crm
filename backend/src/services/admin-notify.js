@@ -188,18 +188,96 @@ async function drainAdminOutbox(orgId, wc = null) {
 
 // ─── Aviso preventivo (cron) ────────────────────────────────────────────────────
 
+/** Texto del aviso de cierre de ventana. */
+function windowWarnMessage(msLeft, pendingCount = 0) {
+  const mins   = Math.max(1, Math.round(msLeft / 60000));
+  const tiempo = mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} h`;
+  const extra  = pendingCount > 0
+    ? `\n\nHay ${pendingCount} aviso(s) en espera que te llegarán apenas escribas.`
+    : '';
+  return (
+    `⏰ *Tu canal de alertas se cierra en ~${tiempo}.*\n\n` +
+    `WhatsApp deja de dejarme escribirte si pasan 24h sin que me escribas. ` +
+    `Mandame cualquier mensaje (una palabra basta) para seguir recibiendo los avisos de clientes.${extra}`
+  );
+}
+
 /**
- * Revisa todas las orgs y avisa al admin cuando su ventana está por cerrarse,
- * para que escriba algo y no deje de recibir alertas. Solo tiene sentido avisar
- * si hay actividad (una ventana abierta que nadie usa no necesita aviso), así
- * que solo se avisa cuando quedan ≤ WARN_BEFORE_MS y la ventana sigue abierta.
+ * Aviso al número admin (admin_alert_phone). Su ventana se mide por org en el
+ * setting admin_window_last_inbound.
+ */
+async function warnAdminPhone(orgId, wc, adminPhone) {
+  if (!adminPhone) return;
+  const pool = getPool();
+  const lastInbound = await db.getSetting(orgId, 'admin_window_last_inbound').catch(() => null);
+  const { open, msLeft } = windowState(lastInbound);
+  if (!open || msLeft > WARN_BEFORE_MS) return;   // cerrada o con tiempo de sobra
+
+  const warnedFor = await db.getSetting(orgId, 'admin_window_warning_sent').catch(() => null);
+  if (warnedFor && warnedFor === lastInbound) return;  // ya avisado en esta ventana
+
+  const { rows: [{ n }] } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM admin_outbox WHERE organization_id = $1 AND status = 'pending'`,
+    [orgId]
+  );
+  await kapsoService.sendTextMessage(adminPhone, windowWarnMessage(msLeft, n), wc);
+  await db.setSetting(orgId, 'admin_window_warning_sent', lastInbound);
+  console.log(`[AdminNotify] ⏰ Aviso preventivo enviado al admin (org ${orgId})`);
+}
+
+/**
+ * Aviso a cada miembro del equipo con notificaciones activadas — cada uno con su
+ * propia ventana (users.wa_last_inbound). Se salta al que coincide con el
+ * admin_alert_phone (ya avisado en warnAdminPhone) para no duplicar.
+ */
+async function warnUserWindows(orgId, wc, adminPhone) {
+  const pool = getPool();
+  const { rows: users } = await pool.query(
+    `SELECT id, name, whatsapp_phone, wa_last_inbound, wa_window_warned
+       FROM users
+      WHERE organization_id = $1
+        AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
+        AND (wa_notifications->>'new_messages')::boolean = true`,
+    [orgId]
+  );
+  const adminDigits = (adminPhone || '').replace(/[^0-9]/g, '');
+
+  for (const u of users) {
+    try {
+      if (adminDigits && u.whatsapp_phone.replace(/[^0-9]/g, '') === adminDigits) continue;
+      if (!u.wa_last_inbound) continue;   // nunca escribió: no hay ventana abierta que avisar
+      const { open, msLeft } = windowState(u.wa_last_inbound);
+      if (!open || msLeft > WARN_BEFORE_MS) continue;
+      // no repetir dentro de la misma ventana
+      if (u.wa_window_warned && new Date(u.wa_window_warned) >= new Date(u.wa_last_inbound)) continue;
+
+      await kapsoService.sendTextMessage(u.whatsapp_phone, windowWarnMessage(msLeft), wc);
+      await pool.query(`UPDATE users SET wa_window_warned = NOW() WHERE id = $1`, [u.id]);
+      console.log(`[AdminNotify] ⏰ Aviso preventivo enviado a ${u.name || u.whatsapp_phone} (org ${orgId})`);
+    } catch (err) {
+      console.warn(`[AdminNotify] aviso a usuario ${u.id}:`, err.message);
+    }
+  }
+}
+
+/**
+ * Revisa todas las orgs y avisa —al número admin y a cada miembro del equipo con
+ * notificaciones— cuando su ventana de 24h está por cerrarse, para que escriban
+ * algo y no dejen de recibir alertas. Solo se avisa con la ventana abierta y
+ * quedando ≤ WARN_BEFORE_MS (una ventana cerrada no recibiría el aviso).
  */
 async function sweepAdminWindowWarnings() {
   const pool = getPool();
   let orgs;
   try {
-    const { rows } = await pool.query(
-      `SELECT DISTINCT organization_id FROM settings WHERE key = 'admin_alert_phone' AND value <> ''`
+    const { rows } = await pool.query(`
+      SELECT DISTINCT organization_id FROM (
+        SELECT organization_id FROM settings WHERE key = 'admin_alert_phone' AND value <> ''
+        UNION
+        SELECT organization_id FROM users
+          WHERE whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
+            AND (wa_notifications->>'new_messages')::boolean = true
+      ) t`
     );
     orgs = rows.map(r => r.organization_id);
   } catch (err) {
@@ -209,34 +287,11 @@ async function sweepAdminWindowWarnings() {
 
   for (const orgId of orgs) {
     try {
-      const lastInbound = await db.getSetting(orgId, 'admin_window_last_inbound').catch(() => null);
-      const { open, msLeft } = windowState(lastInbound);
-      if (!open) continue;                       // ya cerrada: el aviso no se entregaría
-      if (msLeft > WARN_BEFORE_MS) continue;     // todavía hay tiempo
-
-      // No repetir el aviso dentro de la misma ventana
-      const warnedFor = await db.getSetting(orgId, 'admin_window_warning_sent').catch(() => null);
-      if (warnedFor && warnedFor === lastInbound) continue;
-
       const wc = await db.getWhatsappConfig(orgId).catch(() => null);
       if (!wc || wc.provider !== 'kapso') continue;
-      const adminPhone = await db.getSetting(orgId, 'admin_alert_phone');
-
-      // ¿Hay algo que se perdería? Mencionarlo si hay pendientes en cola.
-      const { rows: [{ n }] } = await pool.query(
-        `SELECT COUNT(*)::int AS n FROM admin_outbox WHERE organization_id = $1 AND status = 'pending'`,
-        [orgId]
-      );
-      const mins = Math.max(1, Math.round(msLeft / 60000));
-      const extra = n > 0 ? `\n\nHay ${n} aviso(s) en espera que te llegarán apenas escribas.` : '';
-      const msg =
-        `⏰ *Tu canal de alertas se cierra en ~${mins < 60 ? mins + ' min' : Math.round(mins / 60) + ' h'}.*\n\n` +
-        `WhatsApp deja de dejarme escribirte si pasan 24h sin que me escribas. ` +
-        `Mandame cualquier mensaje (una palabra basta) para seguir recibiendo los avisos de clientes.${extra}`;
-
-      await kapsoService.sendTextMessage(adminPhone, msg, wc);
-      await db.setSetting(orgId, 'admin_window_warning_sent', lastInbound);
-      console.log(`[AdminNotify] ⏰ Aviso preventivo de cierre enviado (org ${orgId})`);
+      const adminPhone = await db.getSetting(orgId, 'admin_alert_phone').catch(() => null);
+      await warnAdminPhone(orgId, wc, adminPhone);
+      await warnUserWindows(orgId, wc, adminPhone);
     } catch (err) {
       console.warn(`[AdminNotify] sweep org ${orgId}:`, err.message);
     }
