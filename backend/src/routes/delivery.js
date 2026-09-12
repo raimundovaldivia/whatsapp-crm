@@ -633,7 +633,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor'), async (req, 
       const botIds     = orders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
       await Promise.all([
         shopifyIds.length && pool.query(
-          `UPDATE shopify_orders SET crm_status = 'en_camino', updated_at = NOW()
+          `UPDATE shopify_orders SET crm_status = 'en_camino'
            WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
           [req.orgId, shopifyIds]
         ),
@@ -694,7 +694,7 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor'), async (
       const botIds     = orders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
       await Promise.all([
         shopifyIds.length && pool.query(
-          `UPDATE shopify_orders SET crm_status = 'en_camino', updated_at = NOW() WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
+          `UPDATE shopify_orders SET crm_status = 'en_camino' WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
           [req.orgId, shopifyIds]
         ),
         botIds.length && pool.query(
@@ -804,7 +804,6 @@ async function applyStopUpdate(req, res, id, stopKey) {
       await pool.query(
         `UPDATE shopify_orders
             SET crm_status = $1,
-                updated_at = NOW(),
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
