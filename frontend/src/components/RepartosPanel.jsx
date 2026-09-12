@@ -187,6 +187,22 @@ function WarehouseEditor({ colors, warehouse, onSaved }) {
 const VEHICLE_COLORS = ['#22c55e', '#38bdf8', '#f59e0b', '#a78bfa', '#f87171', '#2dd4bf', '#fb923c', '#e879f9'];
 const vehicleColor = (i) => VEHICLE_COLORS[i % VEHICLE_COLORS.length];
 
+// Orden de despacho: suma la cantidad por producto de una lista de paradas.
+// Devuelve [[nombre, cantidad], ...] ordenado de mayor a menor.
+function buildManifest(stops) {
+  const totals = {};
+  for (const st of (stops || [])) {
+    for (const it of (st.items || [])) {
+      const name = (it.name || it.title || it.product_name || 'Sin nombre').trim() || 'Sin nombre';
+      const qty  = Number(it.quantity) || 0;
+      if (!qty) continue;
+      totals[name] = (totals[name] || 0) + qty;
+    }
+  }
+  return Object.entries(totals).sort((a, b) => b[1] - a[1]);
+}
+const manifestUnits = (manifest) => manifest.reduce((s, [, q]) => s + q, 0);
+
 // ─── Componente principal ────────────────────────────────────────────────────
 
 export default function RepartosPanel() {
@@ -665,6 +681,32 @@ function NuevoReparto({ colors }) {
               </div>
             )}
 
+            {/* Orden de despacho total: qué preparar en bodega */}
+            {(() => {
+              const manifest = buildManifest(optRoutes.flatMap(rt => rt.stops || []));
+              if (!manifest.length) return null;
+              return (
+                <div style={{ border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '14px', marginBottom: '20px', backgroundColor: colors.bgCard }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                    <Package size={16} color={colors.green} />
+                    <span style={{ color: colors.textPrimary, fontWeight: 800, fontSize: '14px' }}>Orden de despacho</span>
+                    <span style={{ marginLeft: 'auto', color: colors.textMuted, fontSize: '12px' }}>{manifestUnits(manifest)} u. en total</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {manifest.map(([name, qty]) => (
+                      <div key={name} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px', paddingBottom: '5px', borderBottom: `1px solid ${colors.border}` }}>
+                        <span style={{ color: colors.textSecondary }}>{name}</span>
+                        <span style={{ color: colors.textPrimary, fontWeight: 700, flexShrink: 0 }}>{qty}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {optRoutes.length > 1 && (
+                    <p style={{ margin: '10px 0 0', fontSize: '11px', color: colors.textMuted }}>Abajo, el detalle de qué cargar en cada vehículo.</p>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Mapa general con todas las rutas (una por color) */}
             {optRoutes.some(rt => (rt.stops || []).some(s => typeof s.lat === 'number')) && (
               <div style={{ height: '300px', marginBottom: '20px' }}>
@@ -697,6 +739,28 @@ function NuevoReparto({ colors }) {
                       {(rt.stops || []).length} paradas{rt.totalDistance ? ` · ${rt.totalDistance}` : ''}{rt.totalDuration ? ` · ${rt.totalDuration}` : ''}
                     </span>
                   </div>
+
+                  {/* Orden de despacho: qué cargar en este vehículo */}
+                  {optRoutes.length > 1 && (() => {
+                    const manifest = buildManifest(rt.stops);
+                    if (!manifest.length) return null;
+                    return (
+                      <div style={{ padding: '10px 14px', borderTop: `1px solid ${colors.border}`, backgroundColor: `${color}0d` }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                          <Package size={14} color={color} />
+                          <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '12px' }}>Cargar en este vehículo · {manifestUnits(manifest)} u.</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          {manifest.map(([name, qty]) => (
+                            <div key={name} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '13px' }}>
+                              <span style={{ color: colors.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                              <span style={{ color: colors.textPrimary, fontWeight: 700, flexShrink: 0 }}>{qty}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Selector de repartidor de esta ruta */}
                   {drivers.length > 0 && (
