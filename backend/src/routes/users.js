@@ -8,7 +8,7 @@ const db = require('../db/database');
 const { requireAuth, requireRole, generateToken } = require('../middleware/auth');
 
 // 'repartidor': solo accede a la app de despachos (ver REPARTIDOR_ALLOWED_PREFIXES en middleware/auth.js)
-const VALID_ROLES = ['admin', 'supervisor', 'agent', 'repartidor'];
+const VALID_ROLES = ['admin', 'supervisor', 'agent', 'repartidor', 'coordinador'];
 
 /**
  * Normaliza un "usuario" de login para repartidores (que no tienen email).

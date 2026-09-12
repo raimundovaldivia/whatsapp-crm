@@ -178,7 +178,7 @@ function normalizeBotOrder(row) {
 
 // ─── ADMIN: Pedidos pendientes para seleccionar ──────────────────────────────
 
-router.get('/orders', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const pool = getPool();
   try {
     const [shopifyRes, botRes] = await Promise.all([
@@ -394,7 +394,7 @@ async function optimizeOneRoute(stops, warehouse, apiKey) {
 // entre vehículos por cercanía y optimiza cada ruta por separado.
 // Devuelve `routes: [{ vehicle, stops, totalDistance, totalDuration, mapsUrl }]`.
 
-router.post('/optimize', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const { orders, vehicles: vehiclesRaw } = req.body;
   const vehicles = Math.max(1, Math.min(parseInt(vehiclesRaw) || 1, 10));
   if (!orders || orders.length === 0)
@@ -474,7 +474,7 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor'), async (req
 
 // ─── ADMIN: Listar rutas ─────────────────────────────────────────────────────
 
-router.get('/routes', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+router.get('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   // IMPORTANTE: Esta ruta debe estar antes de /routes/active para no ser interceptada
   const pool = getPool();
   const { status, limit = 20, page = 1 } = req.query;
@@ -513,7 +513,7 @@ router.get('/routes', requireRole('owner', 'admin', 'supervisor'), async (req, r
  */
 router.get('/routes/active', async (req, res) => {
   const pool = getPool();
-  const driverScope = req.role === 'repartidor' ? req.userId : null;
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   try {
     const { rows } = await pool.query(`
       SELECT r.*, u.name AS driver_user_name
@@ -537,7 +537,7 @@ router.get('/routes/active', async (req, res) => {
  */
 router.get('/routes/:id', async (req, res) => {
   const pool = getPool();
-  const driverScope = req.role === 'repartidor' ? req.userId : null;
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   try {
     const { rows: [route] } = await pool.query(`
       SELECT r.*, u.name AS driver_user_name
@@ -565,7 +565,7 @@ router.get('/drivers', async (req, res) => {
              (SELECT COUNT(*) FROM delivery_routes r
                WHERE r.driver_user_id = u.id AND r.status IN ('sent','in_progress'))::int AS active_routes
         FROM users u
-       WHERE u.organization_id = $1 AND u.role = 'repartidor'
+       WHERE u.organization_id = $1 AND u.role IN ('repartidor', 'coordinador')
        ORDER BY u.name ASC NULLS LAST, u.email ASC
     `, [req.orgId]);
     res.json({ success: true, drivers: rows });
@@ -582,10 +582,10 @@ async function resolveDriver(pool, orgId, { driverUserId, driverName, driverPhon
   if (!driverUserId) return { driverUserId: null, driverName: driverName || null, driverPhone: driverPhone || null };
   const { rows: [u] } = await pool.query(
     `SELECT id, name, email, whatsapp_phone FROM users
-      WHERE id = $1 AND organization_id = $2 AND role = 'repartidor'`,
+      WHERE id = $1 AND organization_id = $2 AND role IN ('repartidor', 'coordinador')`,
     [parseInt(driverUserId), orgId]
   );
-  if (!u) throw Object.assign(new Error('El repartidor seleccionado no existe o no tiene rol repartidor'), { status: 400 });
+  if (!u) throw Object.assign(new Error('El usuario seleccionado no existe o no puede repartir'), { status: 400 });
   return {
     driverUserId: u.id,
     driverName:   driverName || u.name || u.email,
@@ -595,7 +595,7 @@ async function resolveDriver(pool, orgId, { driverUserId, driverName, driverPhon
 
 // ─── ADMIN: Crear ruta ───────────────────────────────────────────────────────
 
-router.post('/routes', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const { name, orders, optimizedRoute, totalDistance, totalDuration, mapsUrl, driverName, driverPhone, driverUserId, send } = req.body;
   if (!orders || orders.length === 0)
     return res.status(400).json({ success: false, error: 'La ruta debe tener pedidos' });
@@ -654,7 +654,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor'), async (req, 
 
 // ─── ADMIN: Actualizar ruta (enviar, cancelar, cambiar datos) ────────────────
 
-router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const { id } = req.params;
   const { status, driverName, driverPhone, driverUserId, name } = req.body;
   const pool = getPool();
@@ -712,7 +712,7 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor'), async (
 
 // ─── ADMIN: Eliminar ruta borrador ───────────────────────────────────────────
 
-router.delete('/routes/:id', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+router.delete('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const pool = getPool();
   try {
     const { rows: [r] } = await pool.query(
@@ -772,7 +772,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
 
   // Un repartidor solo puede tocar rutas asignadas a él (o sin asignar).
   // Admin/supervisor pueden corregir cualquier ruta desde la web.
-  const driverScope = req.role === 'repartidor' ? req.userId : null;
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
 
   try {
     // Actualizar stop_statuses (y el medio de pago, si se entregó) en la ruta
@@ -816,16 +816,21 @@ async function applyStopUpdate(req, res, id, stopKey) {
       );
     } else if (source === 'bot') {
       // Pedidos del bot marcan "pagado" con status = 'paid' (igual que al
-      // verificar un comprobante de transferencia).
-      const botStatus = paidByCash ? 'paid' : newOrderStatus;
+      // verificar un comprobante de transferencia). El pago manda sobre la
+      // entrega: si ya estaba pagado (transferencia verificada antes), entregarlo
+      // NO lo baja a 'entregado'. Efectivo al entregar = queda 'paid'.
       await pool.query(
         `UPDATE orders
-            SET status = $1,
+            SET status = CASE
+                           WHEN status = 'paid' AND $1 = 'entregado' THEN 'paid'
+                           WHEN $6::boolean THEN 'paid'
+                           ELSE $1
+                         END,
                 updated_at = NOW(),
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END
           WHERE id = $2 AND organization_id = $3`,
-        [botStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null]
+        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash]
       );
     }
 

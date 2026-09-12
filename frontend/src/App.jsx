@@ -67,6 +67,7 @@ export default function App() {
         setUser(data.user);
         setOrg(data.organization);
         if (!data.organization.setup_done) setView('settings');
+        else if (data.user.role === 'coordinador') setView('repartos');
         setAppState('crm');
       })
       .catch(() => { localStorage.removeItem('crm_token'); setAppState('auth'); });
@@ -76,6 +77,7 @@ export default function App() {
     setUser(data.user);
     setOrg(data.organization);
     if (!data.organization.setup_done) setView('settings');
+    else if (data.user.role === 'coordinador') setView('repartos');
     setAppState('crm');
   }, []);
 
@@ -271,6 +273,7 @@ export default function App() {
     owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'dashboard', 'users']),
     admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'dashboard', 'users']),
     supervisor: new Set(['chats', 'orders', 'repartos', 'pagos']),
+    coordinador: new Set(['repartos']),
     agent:      new Set(['chats']),
   };
   const userRole = user?.role || 'agent';

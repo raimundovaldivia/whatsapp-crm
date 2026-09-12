@@ -6,6 +6,7 @@ const ROLE_VIEWS = {
   owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'users'],
   admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'users'],
   supervisor: ['chats', 'orders', 'repartos', 'pagos'],
+  coordinador: ['repartos'],
   agent:      ['chats'],
 };
 

@@ -21,6 +21,17 @@ function generateToken(user) {
  */
 const REPARTIDOR_ALLOWED_PREFIXES = ['/api/delivery', '/api/auth'];
 
+// 'coordinador': cargo mixto. Reparte (app) Y arma/optimiza rutas en la web,
+// pero SOLO ve el módulo de despachos: rutas, la bodega y los pedidos (para
+// editar direcciones antes de optimizar). Nada de chats, clientes ni config.
+const COORDINADOR_ALLOWED_PREFIXES = ['/api/delivery', '/api/auth', '/api/settings/warehouse', '/api/orders'];
+
+// Roles restringidos a un subconjunto de rutas (por prefijo de URL).
+const RESTRICTED_ROLE_PREFIXES = {
+  repartidor:  REPARTIDOR_ALLOWED_PREFIXES,
+  coordinador: COORDINADOR_ALLOWED_PREFIXES,
+};
+
 function requireAuth(req, res, next) {
   // Aceptar token por header Authorization O por query param _token (para redirects OAuth)
   let token;
@@ -44,11 +55,12 @@ function requireAuth(req, res, next) {
     return res.status(401).json({ success: false, error: 'Token inválido o expirado' });
   }
 
-  if (req.role === 'repartidor') {
+  const allowedPrefixes = RESTRICTED_ROLE_PREFIXES[req.role];
+  if (allowedPrefixes) {
     const url = req.originalUrl || req.url || '';
-    const allowed = REPARTIDOR_ALLOWED_PREFIXES.some(p => url.startsWith(p));
+    const allowed = allowedPrefixes.some(p => url.startsWith(p));
     if (!allowed) {
-      return res.status(403).json({ success: false, error: 'Esta cuenta solo tiene acceso a la app de despachos' });
+      return res.status(403).json({ success: false, error: 'Esta cuenta solo tiene acceso al módulo de despachos' });
     }
   }
 
@@ -64,4 +76,4 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { generateToken, requireAuth, requireRole, JWT_SECRET, REPARTIDOR_ALLOWED_PREFIXES };
+module.exports = { generateToken, requireAuth, requireRole, JWT_SECRET, REPARTIDOR_ALLOWED_PREFIXES, COORDINADOR_ALLOWED_PREFIXES };

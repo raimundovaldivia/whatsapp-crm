@@ -677,7 +677,7 @@ async function setupDatabase() {
         -- Agregar constraint actualizado con supervisor y repartidor
         ALTER TABLE users
           ADD CONSTRAINT users_role_check
-          CHECK (role IN ('owner','admin','supervisor','agent','repartidor'));
+          CHECK (role IN ('owner','admin','supervisor','agent','repartidor','coordinador'));
       EXCEPTION WHEN OTHERS THEN
         NULL; -- ignorar si ya existe con nombre distinto
       END

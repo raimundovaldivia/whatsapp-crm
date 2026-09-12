@@ -7,6 +7,7 @@ const ROLES = [
   { value: 'admin',      label: 'Admin',      desc: 'Acceso completo' },
   { value: 'supervisor', label: 'Supervisor',  desc: 'Chats, pedidos, repartos, pagos' },
   { value: 'agent',      label: 'Agente',      desc: 'Solo chats' },
+  { value: 'coordinador', label: 'Coordinador', desc: 'Solo Repartos: optimiza rutas y también reparte en la app' },
   { value: 'repartidor', label: 'Repartidor',  desc: 'Solo la app de despachos — no entra al CRM web' },
 ];
 
@@ -15,6 +16,7 @@ const ROLE_BADGES = {
   admin:      { label: 'Admin',      bg: '#16a34a22', color: '#16a34a' },
   supervisor: { label: 'Supervisor', bg: '#d9770622', color: '#d97706' },
   agent:      { label: 'Agente',     bg: '#64748b22', color: '#64748b' },
+  coordinador: { label: '🧭 Coordinador', bg: '#8b5cf622', color: '#8b5cf6' },
   repartidor: { label: '🚚 Repartidor', bg: '#0ea5e922', color: '#0ea5e9' },
 };
 
