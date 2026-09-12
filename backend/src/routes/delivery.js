@@ -25,6 +25,7 @@
 const express = require('express');
 const router  = express.Router();
 const axios   = require('axios');
+const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
 const { requireAuth, requireRole } = require('../middleware/auth');
