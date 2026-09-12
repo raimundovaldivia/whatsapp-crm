@@ -799,17 +799,25 @@ async function applyStopUpdate(req, res, id, stopKey) {
                          : status === 'cancelled' ? 'cancelled'
                          : 'en_camino';
     const savePayment = status === 'entregado' && !!paymentMethod;
+    // Pago en efectivo al entregar = el pedido queda pagado de inmediato.
+    // (Transferencia queda "por cobrar" hasta que llegue el comprobante.)
+    const paidByCash = status === 'entregado' && paymentMethod === 'efectivo';
 
     if (source === 'shopify') {
+      // Shopify marca "pagado" con financial_status = 'paid'.
       await pool.query(
         `UPDATE shopify_orders
             SET crm_status = $1,
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
-                payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END
+                payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
+                financial_status  = CASE WHEN $6::boolean THEN 'paid' ELSE financial_status END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
-        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null]
+        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash]
       );
     } else if (source === 'bot') {
+      // Pedidos del bot marcan "pagado" con status = 'paid' (igual que al
+      // verificar un comprobante de transferencia).
+      const botStatus = paidByCash ? 'paid' : newOrderStatus;
       await pool.query(
         `UPDATE orders
             SET status = $1,
@@ -817,7 +825,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END
           WHERE id = $2 AND organization_id = $3`,
-        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null]
+        [botStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null]
       );
     }
 
