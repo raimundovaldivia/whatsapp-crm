@@ -18,10 +18,15 @@ const C = {
 };
 
 export default function StopScreen({ route: navRoute, navigation }) {
+  // onComplete es opcional y legacy: RouteScreen se refresca sola al volver.
   const { stop, routeId, stopKey, stopNumber, totalStops, onComplete } = navRoute.params;
   const [loading, setLoading] = useState(false);
   const [done,    setDone]    = useState(false);
   const [status,  setStatus]  = useState(null);
+  // Al entregar hay que registrar cómo pagó el cliente: se pregunta acá mismo,
+  // con botones grandes, en vez de un Alert encadenado.
+  const [askingPayment, setAskingPayment] = useState(false);
+  const [paidWith,      setPaidWith]      = useState(null);
 
   function openMaps() {
     const addr = encodeURIComponent(stop.fullAddress);
@@ -33,39 +38,53 @@ export default function StopScreen({ route: navRoute, navigation }) {
     );
   }
 
+  const phoneDigits = (stop.phone || '').replace(/\D/g, '');
+
   function callCustomer() {
-    if (!stop.phone) {
+    if (!phoneDigits) {
       Alert.alert('Sin teléfono', 'Este pedido no tiene número de teléfono registrado.');
       return;
     }
-    Linking.openURL(`tel:${stop.phone.replace(/\D/g, '')}`);
+    Linking.openURL(`tel:${phoneDigits}`);
   }
 
-  async function markAs(newStatus) {
-    const labels = { entregado: 'entregado', cancelled: 'no encontrado' };
+  function whatsappCustomer() {
+    if (!phoneDigits) return;
+    const text = encodeURIComponent(`Hola ${stop.customerName?.split(' ')[0] || ''}, soy el repartidor. Voy en camino con tu pedido ${stop.orderName || ''}.`);
+    Linking.openURL(`https://wa.me/${phoneDigits}?text=${text}`).catch(() =>
+      Alert.alert('WhatsApp', 'No se pudo abrir WhatsApp en este teléfono.')
+    );
+  }
+
+  /** Envía el estado al backend y cierra la parada. */
+  async function submit(newStatus, paymentMethod) {
+    setLoading(true);
+    try {
+      await updateStopStatus(routeId, stopKey, newStatus, paymentMethod);
+      setStatus(newStatus);
+      setPaidWith(paymentMethod || null);
+      setDone(true);
+      setAskingPayment(false);
+      if (typeof onComplete === 'function') onComplete(newStatus);
+      setTimeout(() => navigation.goBack(), 1400);
+    } catch (err) {
+      if (err.response?.status === 401) return; // la app vuelve al login sola
+      const msg = err.response?.data?.error
+        || (err.code === 'ECONNABORTED' ? 'Sin conexión. Intenta de nuevo cuando tengas señal.' : err.message);
+      Alert.alert('No se pudo guardar', msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** "No encontrado" — sigue pidiendo confirmación porque cancela el pedido. */
+  function markNotFound() {
     Alert.alert(
-      `Marcar como ${labels[newStatus] || newStatus}`,
-      `¿Confirmas que el pedido de ${stop.customerName} fue ${labels[newStatus] || newStatus}?`,
+      'Marcar como no encontrado',
+      `¿Confirmas que no pudiste entregar el pedido de ${stop.customerName}?`,
       [
         { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          style: newStatus === 'cancelled' ? 'destructive' : 'default',
-          onPress: async () => {
-            setLoading(true);
-            try {
-              await updateStopStatus(routeId, stopKey, newStatus);
-              setStatus(newStatus);
-              setDone(true);
-              if (onComplete) onComplete(newStatus);
-              setTimeout(() => navigation.goBack(), 1200);
-            } catch (err) {
-              Alert.alert('Error', err.response?.data?.error || err.message);
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
+        { text: 'Confirmar', style: 'destructive', onPress: () => submit('cancelled') },
       ]
     );
   }
@@ -125,35 +144,93 @@ export default function StopScreen({ route: navRoute, navigation }) {
       </View>
 
       {/* ─── Acciones ─── */}
-      {!done ? (
+      {done ? (
+        <View style={s.doneBox}>
+          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : '❌'}</Text>
+          <Text style={s.doneText}>
+            {status === 'entregado' ? '¡Entregado!' : 'No encontrado'}
+          </Text>
+          {paidWith === 'efectivo'     && <Text style={s.donePay}>💵 Pagado en efectivo</Text>}
+          {paidWith === 'transferencia' && <Text style={s.donePay}>🏦 Por transferencia — queda pendiente el comprobante</Text>}
+          <Text style={s.doneSub}>Volviendo a la ruta...</Text>
+        </View>
+      ) : askingPayment ? (
+        /* ── Paso 2: ¿cómo pagó? ── */
+        <View style={s.payBox}>
+          <Text style={s.payTitle}>¿Cómo pagó {stop.customerName?.split(' ')[0] || 'el cliente'}?</Text>
+
+          <TouchableOpacity
+            style={[s.payBtn, s.payCash, loading && s.btnDisabled]}
+            onPress={() => submit('entregado', 'efectivo')}
+            disabled={loading}
+            activeOpacity={0.85}>
+            {loading ? <ActivityIndicator color="#fff" /> : (
+              <>
+                <Text style={s.payIcon}>💵</Text>
+                <Text style={s.payBtnText}>Efectivo</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[s.payBtn, s.payTransfer, loading && s.btnDisabled]}
+            onPress={() => submit('entregado', 'transferencia')}
+            disabled={loading}
+            activeOpacity={0.85}>
+            {loading ? <ActivityIndicator color="#fff" /> : (
+              <>
+                <Text style={s.payIcon}>🏦</Text>
+                <Text style={s.payBtnText}>Transferencia</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[s.payBtn, s.payOther, loading && s.btnDisabled]}
+            onPress={() => submit('entregado', 'otro')}
+            disabled={loading}
+            activeOpacity={0.85}>
+            <Text style={[s.payBtnText, { color: C.muted }]}>Otro / no corresponde</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setAskingPayment(false)}
+            disabled={loading}
+            activeOpacity={0.7}>
+            <Text style={s.payCancel}>← Volver</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        /* ── Paso 1: acciones de la parada ── */
         <>
           <TouchableOpacity style={s.navBtn} onPress={openMaps} activeOpacity={0.85}>
             <Text style={s.navBtnText}>🗺  Navegar con Google Maps</Text>
           </TouchableOpacity>
 
-          {stop.phone && (
-            <TouchableOpacity style={s.callBtn} onPress={callCustomer} activeOpacity={0.85}>
-              <Text style={s.callBtnText}>📞  Llamar al cliente</Text>
-            </TouchableOpacity>
+          {!!phoneDigits && (
+            <View style={s.contactRow}>
+              <TouchableOpacity style={[s.callBtn, { flex: 1 }]} onPress={callCustomer} activeOpacity={0.85}>
+                <Text style={s.callBtnText}>📞  Llamar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.callBtn, { flex: 1 }]} onPress={whatsappCustomer} activeOpacity={0.85}>
+                <Text style={s.callBtnText}>💬  WhatsApp</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
           <View style={s.statusRow}>
             <TouchableOpacity
               style={[s.statusBtn, s.deliveredBtn, loading && s.btnDisabled]}
-              onPress={() => markAs('entregado')}
+              onPress={() => setAskingPayment(true)}
               disabled={loading}
               activeOpacity={0.85}>
-              {loading ? <ActivityIndicator color="#fff" /> : (
-                <>
-                  <Text style={s.statusIcon}>✓</Text>
-                  <Text style={s.statusBtnText}>Entregado</Text>
-                </>
-              )}
+              <Text style={s.statusIcon}>✓</Text>
+              <Text style={s.statusBtnText}>Entregado</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[s.statusBtn, s.failedBtn, loading && s.btnDisabled]}
-              onPress={() => markAs('cancelled')}
+              onPress={markNotFound}
               disabled={loading}
               activeOpacity={0.85}>
               <Text style={s.statusIcon}>✕</Text>
@@ -161,14 +238,6 @@ export default function StopScreen({ route: navRoute, navigation }) {
             </TouchableOpacity>
           </View>
         </>
-      ) : (
-        <View style={s.doneBox}>
-          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : '❌'}</Text>
-          <Text style={s.doneText}>
-            {status === 'entregado' ? '¡Entregado!' : 'No encontrado'}
-          </Text>
-          <Text style={s.doneSub}>Volviendo a la ruta...</Text>
-        </View>
       )}
     </ScrollView>
   );
@@ -191,6 +260,7 @@ const s = StyleSheet.create({
   navBtn:       { backgroundColor: C.blue, borderRadius: 14, padding: 18, alignItems: 'center', marginTop: 8 },
   navBtnText:   { color: '#fff', fontWeight: '800', fontSize: 16 },
 
+  contactRow:   { flexDirection: 'row', gap: 10 },
   callBtn:      { backgroundColor: C.card, borderRadius: 14, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: C.border },
   callBtnText:  { color: C.text, fontWeight: '700', fontSize: 15 },
 
@@ -205,5 +275,16 @@ const s = StyleSheet.create({
   doneBox:      { alignItems: 'center', padding: 40, gap: 10 },
   doneIcon:     { fontSize: 64 },
   doneText:     { color: C.text, fontSize: 20, fontWeight: '800' },
+  donePay:      { color: C.muted, fontSize: 14, textAlign: 'center', paddingHorizontal: 20 },
   doneSub:      { color: C.muted, fontSize: 14 },
+
+  payBox:       { gap: 12, marginTop: 8 },
+  payTitle:     { color: C.text, fontSize: 19, fontWeight: '800', textAlign: 'center', marginBottom: 4 },
+  payBtn:       { borderRadius: 14, padding: 20, alignItems: 'center', gap: 4 },
+  payCash:      { backgroundColor: C.green },
+  payTransfer:  { backgroundColor: C.blue },
+  payOther:     { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, padding: 14 },
+  payIcon:      { fontSize: 30 },
+  payBtnText:   { color: '#fff', fontWeight: '800', fontSize: 17 },
+  payCancel:    { color: C.muted, fontSize: 15, textAlign: 'center', padding: 12 },
 });

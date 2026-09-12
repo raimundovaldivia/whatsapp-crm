@@ -150,7 +150,7 @@ Revisa el historial: si ya ofreciste un nivel de descuento, NO lo repitas, pasa 
 Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido.` : '';
 
 
-  const currentState = conversation.pipeline_state || 'exploring';
+  let currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
@@ -317,27 +317,52 @@ Reglas estrictas para responder sobre este pedido:
   // pendingOrderSection va PRIMERO para que el LLM lo lea antes de cualquier otro contexto
   const storeCustomPrompt = [pendingOrderSection, contactAddressSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
-  // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
-  // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.
-  // El cron job enviará el template cuando llegue el día.
+  // ── Agendado vigente? ──────────────────────────────────────────────────────
+  // Solo cuenta un pedido agendado cuya fecha NO haya pasado todavía.
+  // Si la fecha ya pasó, el pedido se entregó (o se perdió): seguir tratándolo
+  // como "apartado" hace que el bot le ofrezca al cliente algo que ya recibió,
+  // y con una fecha vieja ("está apartado para el jueves 3" un día 11).
+  let activeScheduled = null;
   if (currentState === 'scheduled') {
-    let dateLabel = '';
-    let producto = 'tu pedido';
-    let scheduledProductNotes = null;
     try {
       const pool = getPool();
       const { rows } = await pool.query(
-        `SELECT desired_date, product_notes FROM scheduled_orders
+        `SELECT id, desired_date, product_notes FROM scheduled_orders
          WHERE conversation_id = $1 AND status = 'pending'
-         ORDER BY created_at DESC LIMIT 1`,
+           AND desired_date >= CURRENT_DATE
+         ORDER BY desired_date ASC LIMIT 1`,
         [conversationId]
       );
-      if (rows[0]) {
-        dateLabel = formatDateEs(rows[0].desired_date);
-        producto  = rows[0].product_notes || 'tu pedido';
-        scheduledProductNotes = rows[0].product_notes;
+      activeScheduled = rows[0] || null;
+
+      if (!activeScheduled) {
+        // Cerrar los agendados vencidos para que no vuelvan a aparecer, y
+        // devolver la conversación al flujo normal.
+        const { rowCount } = await pool.query(
+          `UPDATE scheduled_orders SET status = 'sent', sent_at = COALESCE(sent_at, NOW())
+           WHERE conversation_id = $1 AND status = 'pending' AND desired_date < CURRENT_DATE`,
+          [conversationId]
+        );
+        console.log(`[Pipeline] 📅 Agendado vencido en conv ${conversationId} (${rowCount} cerrado${rowCount === 1 ? '' : 's'}) — volviendo a exploring`);
+        await db.updatePipelineState(conversationId, 'exploring').catch(() => {});
+        currentState = 'exploring';
       }
-    } catch { /* si falla la consulta, continuar sin fecha */ }
+    } catch (err) {
+      // Si la consulta falla, no asumir que hay un agendado vigente: es peor
+      // afirmarle al cliente una fecha equivocada que perder el contexto.
+      console.warn('[Pipeline] No se pudo verificar el pedido agendado:', err.message);
+      activeScheduled = null;
+      currentState = 'exploring';
+    }
+  }
+
+  // ── Estado agendado: el cliente ya tiene un pedido futuro registrado ──
+  // NO pedir dirección, pago ni más info. Responder contextualmente y esperar el día.
+  // El cron job enviará el template cuando llegue el día.
+  if (currentState === 'scheduled' && activeScheduled) {
+    const dateLabel = formatDateEs(activeScheduled.desired_date);
+    const producto  = activeScheduled.product_notes || 'tu pedido';
+    const scheduledProductNotes = activeScheduled.product_notes;
 
     // ── Detectar si el cliente está llegando o dando dirección de entrega ──
     // En ese caso, ya no es un pedido futuro — es un pedido para ya. Transicionar.

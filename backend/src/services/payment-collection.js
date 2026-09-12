@@ -1,0 +1,293 @@
+/**
+ * payment-collection.js — Cobranza de pedidos pagados por transferencia
+ *
+ * Un pedido queda "por cobrar" cuando el repartidor lo marcó como entregado
+ * con medio de pago = transferencia, y el cliente todavía no mandó el
+ * comprobante (no hay payment_proof verificado ni pre-verificado).
+ *
+ * Este servicio arma y envía el mensaje de cobro. Lo usan dos caminos:
+ *   1. Envío manual desde el tab "Por cobrar" del CRM (selección múltiple).
+ *   2. Envío automático cuando el repartidor marca transferencia, si está
+ *      activado el setting `auto_charge_on_transfer`.
+ *
+ * En ambos casos se registra charge_requested_at y charge_request_count en el
+ * pedido, para no cobrarle dos veces al mismo cliente por error.
+ */
+
+const db            = require('../db/database');
+const { getPool }   = require('../db/database');
+const kapsoService  = require('./kapso-whatsapp');
+const twilioService = require('./twilio-whatsapp');
+const metaService   = require('./whatsapp');
+
+// Espera mínima entre dos cobros al mismo pedido (evita spam por doble click
+// o por reintentos de la app del repartidor).
+const MIN_HOURS_BETWEEN_CHARGES = 6;
+
+const DEFAULT_TEMPLATE =
+  'Hola {nombre} 👋 Te dejamos el detalle de tu pedido {pedido} por {total}.\n\n' +
+  'Nos quedó pendiente el comprobante de la transferencia. Cuando puedas, ' +
+  'mándanos la captura por acá y lo damos por pagado. ¡Gracias!';
+
+// ─── Settings de cobranza ────────────────────────────────────────────────────
+
+/**
+ * Lee la configuración de cobranza de la org.
+ * @returns {{ template: string, bankDetails: string, autoSendOnTransfer: boolean }}
+ */
+async function getChargeSettings(orgId) {
+  let raw = null;
+  try {
+    raw = await db.getSetting(orgId, 'charge_settings');
+  } catch { /* settings no disponible → defaults */ }
+
+  let parsed = {};
+  if (raw) {
+    try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+  }
+
+  return {
+    template:           parsed.template           || DEFAULT_TEMPLATE,
+    bankDetails:        parsed.bankDetails        || '',
+    autoSendOnTransfer: parsed.autoSendOnTransfer === true,
+  };
+}
+
+async function saveChargeSettings(orgId, { template, bankDetails, autoSendOnTransfer } = {}) {
+  const current = await getChargeSettings(orgId);
+  const next = {
+    template:           template           ?? current.template,
+    bankDetails:        bankDetails        ?? current.bankDetails,
+    autoSendOnTransfer: autoSendOnTransfer ?? current.autoSendOnTransfer,
+  };
+  await db.setSetting(orgId, 'charge_settings', JSON.stringify(next));
+  return next;
+}
+
+// ─── Armado del mensaje ──────────────────────────────────────────────────────
+
+function formatCLP(value) {
+  const n = Math.round(parseFloat(value) || 0);
+  return `$${n.toLocaleString('es-CL')}`;
+}
+
+function firstName(name) {
+  const clean = (name || '').trim();
+  if (!clean || /^\d+$/.test(clean)) return '';
+  return clean.split(/\s+/)[0];
+}
+
+/**
+ * Reemplaza los placeholders del template con los datos del pedido.
+ * Placeholders soportados: {nombre} {pedido} {total} {datos_banco}
+ */
+function buildChargeMessage(order, settings) {
+  const name = firstName(order.customer_name);
+  let msg = settings.template
+    .replace(/\{nombre\}/g,       name || 'Hola')
+    .replace(/\{pedido\}/g,       order.order_label || `#${order.id}`)
+    .replace(/\{total\}/g,        formatCLP(order.total_price))
+    .replace(/\{datos_banco\}/g,  settings.bankDetails || '');
+
+  // Si el template no usa {datos_banco} pero hay datos configurados, anexarlos.
+  if (settings.bankDetails && !/\{datos_banco\}/.test(settings.template)) {
+    msg += `\n\n${settings.bankDetails}`;
+  }
+
+  // Si el nombre venía vacío, "Hola Hola" queda feo.
+  return msg.replace(/^Hola Hola\b/, 'Hola').trim();
+}
+
+// ─── Envío ───────────────────────────────────────────────────────────────────
+
+async function sendByProvider(phone, text, wc) {
+  if (wc.provider === 'twilio') return twilioService.sendTextMessage(phone, text, wc);
+  if (wc.provider === 'kapso')  return kapsoService.sendTextMessage(phone, text, wc);
+  return metaService.sendTextMessage(phone, text, wc);
+}
+
+/**
+ * Marca el cobro como enviado en la tabla que corresponda.
+ */
+async function registerChargeSent(source, orderId, orgId) {
+  const pool = getPool();
+  if (source === 'shopify') {
+    await pool.query(
+      `UPDATE shopify_orders
+          SET charge_requested_at  = NOW(),
+              charge_request_count = COALESCE(charge_request_count, 0) + 1
+        WHERE shopify_order_id = $1 AND organization_id = $2`,
+      [String(orderId), orgId]
+    );
+  } else {
+    await pool.query(
+      `UPDATE orders
+          SET charge_requested_at  = NOW(),
+              charge_request_count = COALESCE(charge_request_count, 0) + 1
+        WHERE id = $1 AND organization_id = $2`,
+      [parseInt(orderId), orgId]
+    );
+  }
+}
+
+/**
+ * Envía el cobro de UN pedido.
+ *
+ * @param {number} orgId
+ * @param {object} order  - fila de pending-charge: { source, id, customer_name, customer_phone, total_price, order_label, charge_requested_at }
+ * @param {object} [opts] - { force: ignora la espera mínima entre cobros, io: socket.io }
+ * @returns {{ ok: boolean, reason?: string, message?: string }}
+ */
+async function sendChargeRequest(orgId, order, opts = {}) {
+  const { force = false, io = null } = opts;
+
+  if (!order?.customer_phone) {
+    return { ok: false, reason: 'sin_telefono' };
+  }
+
+  // Anti-duplicado: no volver a cobrar si se cobró hace poco.
+  if (!force && order.charge_requested_at) {
+    const hours = (Date.now() - new Date(order.charge_requested_at).getTime()) / 3600000;
+    if (hours < MIN_HOURS_BETWEEN_CHARGES) {
+      return { ok: false, reason: 'cobrado_recien', hoursAgo: Math.round(hours * 10) / 10 };
+    }
+  }
+
+  const wc = await db.getWhatsappConfig(orgId);
+  if (!wc) return { ok: false, reason: 'whatsapp_no_configurado' };
+
+  const settings = await getChargeSettings(orgId);
+  const text     = buildChargeMessage(order, settings);
+
+  let sent = null;
+  try {
+    sent = await sendByProvider(order.customer_phone, text, wc);
+  } catch (err) {
+    if (err.is24hWindow) {
+      // Fuera de la ventana de 24h solo se pueden mandar templates aprobados.
+      // No se registra el cobro: queda en el tab para reintentar con template.
+      return { ok: false, reason: 'ventana_24h', message: text };
+    }
+    return { ok: false, reason: 'error_envio', error: err.message };
+  }
+
+  // Dejar el mensaje en el hilo de la conversación, para que quede trazabilidad
+  // en el CRM y el bot vea el contexto.
+  try {
+    const conv = await db.upsertConversation(orgId, order.customer_phone, order.customer_name);
+    if (conv?.id) {
+      const outMsg = await db.saveMessage({
+        conversationId:    conv.id,
+        whatsappMessageId: sent?.messageId || sent?.messages?.[0]?.id || null,
+        direction:         'outbound',
+        content:           text,
+        sentBy:            'system',
+        agentType:         'cobranza',
+        status:            'sent',
+      });
+      await db.updateConversationLastMessage(conv.id, text);
+      if (io && outMsg) {
+        const finalConv = await db.getConversationById(conv.id);
+        io.emit(`new_message_${orgId}`, { message: outMsg, conversation: finalConv });
+      }
+    }
+  } catch (err) {
+    console.error('[Cobranza] Mensaje enviado pero no se pudo guardar en el hilo:', err.message);
+  }
+
+  await registerChargeSent(order.source, order.id, orgId);
+  console.log(`[Cobranza] 💸 Cobro enviado a ${order.customer_phone} — pedido ${order.order_label}`);
+
+  return { ok: true, message: text };
+}
+
+// ─── Consulta: pedidos por cobrar ────────────────────────────────────────────
+
+/**
+ * Pedidos entregados, marcados como transferencia, sin comprobante válido.
+ *
+ * Une pedidos del bot (orders) y de Shopify (shopify_orders) en una sola lista.
+ * Un comprobante cuenta como válido si está 'verified' o 'pre_verified'.
+ * Los 'pending' y 'rejected' NO cuentan: el pedido sigue por cobrar.
+ */
+async function getPendingCharges(orgId) {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT 'bot'                        AS source,
+            o.id::text                   AS id,
+            COALESCE(NULLIF(o.customer_name, ''), c.contact_name) AS customer_name,
+            COALESCE(NULLIF(o.customer_phone, ''), c.phone_number) AS customer_phone,
+            o.total_price                AS total_price,
+            CONCAT('#', o.id::text)      AS order_label,
+            o.status                     AS order_status,
+            o.created_at                 AS created_at,
+            o.payment_marked_at          AS payment_marked_at,
+            o.charge_requested_at        AS charge_requested_at,
+            COALESCE(o.charge_request_count, 0) AS charge_request_count,
+            (SELECT COUNT(*) FROM payment_proofs pp
+              WHERE pp.order_id = o.id
+                AND pp.status = 'pending')::int AS proofs_pending
+       FROM orders o
+       LEFT JOIN conversations c ON c.id = o.conversation_id
+      WHERE o.organization_id = $1
+        AND o.payment_method = 'transferencia'
+        AND o.status = 'entregado'
+        AND NOT EXISTS (
+          SELECT 1 FROM payment_proofs pp
+           WHERE pp.order_id = o.id
+             AND pp.status IN ('verified', 'pre_verified')
+        )
+
+      UNION ALL
+
+     SELECT 'shopify'                    AS source,
+            s.shopify_order_id           AS id,
+            s.customer_name              AS customer_name,
+            s.customer_phone             AS customer_phone,
+            s.total_price                AS total_price,
+            COALESCE(NULLIF(s.shopify_name, ''), CONCAT('#', s.shopify_order_id)) AS order_label,
+            s.crm_status                 AS order_status,
+            s.shopify_created_at         AS created_at,
+            s.payment_marked_at          AS payment_marked_at,
+            s.charge_requested_at        AS charge_requested_at,
+            COALESCE(s.charge_request_count, 0) AS charge_request_count,
+            0                            AS proofs_pending
+       FROM shopify_orders s
+      WHERE s.organization_id = $1
+        AND s.payment_method = 'transferencia'
+        AND s.crm_status = 'entregado'
+        AND s.financial_status IS DISTINCT FROM 'paid'
+
+      ORDER BY payment_marked_at DESC NULLS LAST, created_at DESC`,
+    [orgId]
+  );
+
+  return rows.map(r => ({
+    ...r,
+    total_price: parseFloat(r.total_price) || 0,
+    // Horas desde que se marcó la entrega — para ordenar por antigüedad de la deuda
+    hours_owed: r.payment_marked_at
+      ? Math.round((Date.now() - new Date(r.payment_marked_at).getTime()) / 3600000)
+      : null,
+  }));
+}
+
+/**
+ * Busca un pedido puntual con la misma forma que getPendingCharges, para poder
+ * cobrarlo desde el hook automático del repartidor.
+ */
+async function getOrderForCharge(orgId, source, orderId) {
+  const all = await getPendingCharges(orgId);
+  return all.find(o => o.source === source && String(o.id) === String(orderId)) || null;
+}
+
+module.exports = {
+  getChargeSettings,
+  saveChargeSettings,
+  buildChargeMessage,
+  sendChargeRequest,
+  getPendingCharges,
+  getOrderForCharge,
+  MIN_HOURS_BETWEEN_CHARGES,
+  DEFAULT_TEMPLATE,
+};

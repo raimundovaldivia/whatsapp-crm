@@ -9,12 +9,14 @@
 
 const express         = require('express');
 const router          = express.Router();
+const axios           = require('axios');
 const db              = require('../db/database');
 const shopifyApi      = require('../services/shopify-api');
 const orchestrator    = require('../services/agents/orchestrator');
 const salesAgent      = require('../services/agents/sales');
 const ordersAgent     = require('../services/agents/orders');
 const kapsoPlatform   = require('../services/kapso-platform');
+const collection      = require('../services/payment-collection');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -494,6 +496,88 @@ router.post('/delivery-info', async (req, res) => {
     const { schedule = '', zone = '', minimum = '', paymentMethods = '' } = req.body;
     await db.setSetting(req.orgId, 'delivery_info', JSON.stringify({ schedule, zone, minimum, paymentMethods }));
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─── Cobranza por transferencia ──────────────────────────────────────────── */
+
+/* ─── Bodega / punto de partida de los repartos ───────────────────────────── */
+
+router.get('/warehouse', async (req, res) => {
+  try {
+    const address = await db.getSetting(req.orgId, 'warehouse_address') || '';
+    const lat     = parseFloat(await db.getSetting(req.orgId, 'warehouse_lat')) || null;
+    const lng     = parseFloat(await db.getSetting(req.orgId, 'warehouse_lng')) || null;
+    res.json({ success: true, warehouse: { address, lat, lng, geocoded: lat != null && lng != null } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/warehouse', async (req, res) => {
+  try {
+    const address = (req.body?.address || '').trim();
+    if (!address) {
+      // Vaciar la bodega
+      await db.setSetting(req.orgId, 'warehouse_address', '');
+      await db.setSetting(req.orgId, 'warehouse_lat', '');
+      await db.setSetting(req.orgId, 'warehouse_lng', '');
+      return res.json({ success: true, warehouse: { address: '', lat: null, lng: null, geocoded: false } });
+    }
+
+    await db.setSetting(req.orgId, 'warehouse_address', address);
+
+    // Geocodificar la dirección de la bodega (una sola llamada, al guardar)
+    let lat = null, lng = null;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (apiKey) {
+      try {
+        const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
+          params: { address, key: apiKey, region: 'cl', language: 'es' },
+          timeout: 8000,
+        });
+        const loc = data?.results?.[0]?.geometry?.location;
+        if (loc && data.status === 'OK') { lat = loc.lat; lng = loc.lng; }
+      } catch (e) {
+        console.warn('[Settings/warehouse] geocode falló:', e.message);
+      }
+    }
+    await db.setSetting(req.orgId, 'warehouse_lat', lat != null ? String(lat) : '');
+    await db.setSetting(req.orgId, 'warehouse_lng', lng != null ? String(lng) : '');
+
+    res.json({
+      success: true,
+      warehouse: { address, lat, lng, geocoded: lat != null },
+      warning: lat == null ? (apiKey ? 'No se pudo ubicar esa dirección — revísala.' : 'Falta GOOGLE_MAPS_API_KEY: se guardó la dirección pero sin coordenadas.') : null,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/charge-settings', async (req, res) => {
+  try {
+    const settings = await collection.getChargeSettings(req.orgId);
+    res.json({ success: true, settings, defaultTemplate: collection.DEFAULT_TEMPLATE });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/charge-settings', async (req, res) => {
+  try {
+    const { template, bankDetails, autoSendOnTransfer } = req.body;
+    if (template !== undefined && typeof template !== 'string') {
+      return res.status(400).json({ success: false, error: 'template debe ser texto' });
+    }
+    const settings = await collection.saveChargeSettings(req.orgId, {
+      template,
+      bankDetails,
+      autoSendOnTransfer: autoSendOnTransfer === undefined ? undefined : !!autoSendOnTransfer,
+    });
+    res.json({ success: true, settings });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

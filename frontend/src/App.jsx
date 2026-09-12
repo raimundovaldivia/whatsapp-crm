@@ -16,6 +16,7 @@ import ProductsPanel        from './components/ProductsPanel.jsx';
 import RepartosPanel        from './components/RepartosPanel.jsx';
 import UsersPanel           from './components/UsersPanel.jsx';
 import ReengagementPanel    from './components/ReengagementPanel.jsx';
+import AdminAlertsBanner    from './components/AdminAlertsBanner.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
@@ -345,6 +346,24 @@ export default function App() {
   );
   // setup state ya no existe — el asistente maneja el onboarding desde el CRM
 
+  // Un repartidor no tiene vistas en el CRM web: su herramienta es la app.
+  // Sin esto caería en 'chats' y vería puros errores 403.
+  if (user?.role === 'repartidor') return (
+    <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgApp, padding: '24px', textAlign: 'center', gap: '14px' }}>
+        <div style={{ fontSize: '56px' }}>🚚</div>
+        <h2 style={{ color: colors.textPrimary, margin: 0, fontSize: '20px', fontWeight: 700 }}>Hola {user?.name?.split(' ')[0] || ''}, tu cuenta es de repartidor</h2>
+        <p style={{ color: colors.textSecondary, margin: 0, maxWidth: '420px', lineHeight: 1.6, fontSize: '14px' }}>
+          Las rutas se ven y se marcan desde la app <strong>Despachos</strong> en tu teléfono, con este mismo correo y contraseña.
+          Si necesitas entrar al CRM, pídele al administrador que te cambie el rol.
+        </p>
+        <button onClick={handleLogout} style={{ marginTop: '8px', padding: '10px 20px', borderRadius: '10px', border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, cursor: 'pointer', fontSize: '13px' }}>
+          Cerrar sesión
+        </button>
+      </div>
+    </ThemeCtx.Provider>
+  );
+
   const selectedConv = conversations.find(c => c.id === selectedId);
   const selectedMsgs = messages[selectedId] || [];
   const totalUnread  = conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
@@ -362,6 +381,10 @@ export default function App() {
       paddingBottom: isMobile ? '60px' : 0,
       boxSizing: 'border-box',
     }}>
+
+      {/* Control de alertas al admin en cola (tarjeta flotante; se autooculta si no hay nada).
+          Solo para roles con acceso de gestión. */}
+      {['owner', 'admin', 'supervisor'].includes(userRole) && <AdminAlertsBanner />}
 
       {/* Barra de navegación (lateral desktop / inferior móvil) */}
       <NavBar

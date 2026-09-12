@@ -7,6 +7,7 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "setup-db": "node src/db/setup.js",
+    "audit-stale": "node scripts/audit-stale-state.js",
     "deploy": "NODE_ENV=production node src/index.js"
   },
   "dependencies": {

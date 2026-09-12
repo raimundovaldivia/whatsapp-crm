@@ -20,6 +20,7 @@ const TABS = [
   { key: 'whatsapp',  label: 'WhatsApp',   icon: MessageCircle },
   { key: 'ia',        label: 'IA & Bot',   icon: Brain },
   { key: 'templates', label: 'Templates',  icon: FileText },
+  { key: 'cobranza',  label: 'Cobranza',   icon: DollarSign },
 ];
 
 function Field({ label: lbl, hint: h, type = 'text', value, onChange, placeholder, password, colors }) {
@@ -1718,6 +1719,235 @@ function TiendaTab() {
 }
 
 /* ══════════════════════════════════════════════
+   TAB COBRANZA
+   Mensaje de cobro para los pedidos entregados por transferencia
+   que todavía no tienen comprobante.
+══════════════════════════════════════════════ */
+
+const PLACEHOLDERS = [
+  { tag: '{nombre}',      desc: 'primer nombre del cliente' },
+  { tag: '{pedido}',      desc: 'número del pedido' },
+  { tag: '{total}',       desc: 'monto a cobrar' },
+  { tag: '{datos_banco}', desc: 'tus datos de transferencia' },
+];
+
+// Datos ficticios para la previsualización
+const SAMPLE = { nombre: 'María', pedido: '#1042', total: '$40.000' };
+
+function CobranzaTab() {
+  const { colors } = useTheme();
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [error,       setError]       = useState('');
+  const [success,     setSuccess]     = useState('');
+  const [template,    setTemplate]    = useState('');
+  const [bankDetails, setBankDetails] = useState('');
+  const [autoSend,    setAutoSend]    = useState(false);
+  const [defaultTpl,  setDefaultTpl]  = useState('');
+  const templateRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get('/settings/charge-settings');
+        const s = res.data?.settings || {};
+        setTemplate(s.template || '');
+        setBankDetails(s.bankDetails || '');
+        setAutoSend(!!s.autoSendOnTransfer);
+        setDefaultTpl(res.data?.defaultTemplate || '');
+      } catch (err) {
+        setError(err.response?.data?.error || 'No se pudo cargar la configuración de cobranza');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      await api.post('/settings/charge-settings', {
+        template,
+        bankDetails,
+        autoSendOnTransfer: autoSend,
+      });
+      setSuccess('Configuración de cobranza guardada');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Error guardando');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** Inserta un placeholder donde está el cursor del textarea. */
+  const insertPlaceholder = (tag) => {
+    const el = templateRef.current;
+    if (!el) { setTemplate(t => t + tag); return; }
+    const start = el.selectionStart ?? template.length;
+    const end   = el.selectionEnd   ?? template.length;
+    setTemplate(template.slice(0, start) + tag + template.slice(end));
+    // Dejar el cursor justo después del placeholder insertado
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(start + tag.length, start + tag.length);
+    });
+  };
+
+  // Previsualización con los mismos reemplazos que hace el backend
+  const preview = (() => {
+    let msg = (template || '')
+      .replace(/\{nombre\}/g,      SAMPLE.nombre)
+      .replace(/\{pedido\}/g,      SAMPLE.pedido)
+      .replace(/\{total\}/g,       SAMPLE.total)
+      .replace(/\{datos_banco\}/g, bankDetails || '(sin datos bancarios configurados)');
+    if (bankDetails && !/\{datos_banco\}/.test(template || '')) msg += `\n\n${bankDetails}`;
+    return msg.trim();
+  })();
+
+  const card = {
+    backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
+    borderRadius: '12px', overflow: 'hidden',
+  };
+  const inp = {
+    width: '100%', backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
+    borderRadius: '8px', padding: '10px 14px', color: colors.textPrimary, fontSize: '14px',
+    outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit',
+  };
+  const labelStyle = { fontSize: '12px', color: colors.textSecondary, marginBottom: '5px', display: 'block' };
+  const hintStyle  = { fontSize: '11px', color: colors.textMuted, margin: '4px 0 0' };
+
+  if (loading) {
+    return (
+      <div style={{ ...card, padding: '40px', textAlign: 'center', color: colors.textMuted }}>
+        <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+      {error   && <Alert type="error"   msg={error}   colors={colors} />}
+      {success && <Alert type="success" msg={success} colors={colors} />}
+
+      <div style={card}>
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <DollarSign size={15} color={colors.green} />
+          <span style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>Cobranza por transferencia</span>
+        </div>
+
+        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+
+          <p style={{ fontSize: '12px', color: colors.textSecondary, margin: 0, lineHeight: 1.6 }}>
+            Cuando el repartidor marca un pedido como pagado por transferencia, queda en el tab{' '}
+            <strong style={{ color: colors.textPrimary }}>💸 Por cobrar</strong> de Pedidos hasta que llegue
+            el comprobante. Acá defines el mensaje que se le envía al cliente.
+          </p>
+
+          {/* Envío automático */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.bgApp, borderRadius: '10px', padding: '14px 16px' }}>
+            <div style={{ paddingRight: '14px' }}>
+              <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>Enviar el cobro automáticamente</div>
+              <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px', lineHeight: 1.5 }}>
+                {autoSend
+                  ? 'El mensaje sale solo, en el momento en que el repartidor marca transferencia. Nadie lo revisa antes.'
+                  : 'Apagado: los cobros se envían a mano desde el tab Por cobrar, con selección múltiple.'}
+              </div>
+            </div>
+            <button onClick={() => setAutoSend(v => !v)}
+              style={{ width: '44px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
+                backgroundColor: autoSend ? colors.green : colors.borderStrong,
+                position: 'relative', transition: 'background-color 0.2s', flexShrink: 0 }}>
+              <span style={{ position: 'absolute', top: '2px', left: autoSend ? '22px' : '2px',
+                width: '20px', height: '20px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+            </button>
+          </div>
+
+          {autoSend && (
+            <div style={{ fontSize: '12px', color: '#fbbf24', backgroundColor: '#2a1f08', border: '1px solid #78350f', borderRadius: '8px', padding: '10px 14px', lineHeight: 1.5 }}>
+              Con el envío automático activado, revisa bien el texto: sale tal cual, sin que nadie lo lea antes.
+              Igual se respeta la espera de 6 horas entre dos cobros al mismo pedido.
+            </div>
+          )}
+
+          {/* Template del mensaje */}
+          <div>
+            <label style={labelStyle}>Mensaje de cobro</label>
+            <textarea
+              ref={templateRef}
+              value={template}
+              onChange={e => setTemplate(e.target.value)}
+              rows={6}
+              placeholder="Hola {nombre}, nos quedó pendiente el comprobante de tu pedido {pedido} por {total}..."
+              style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }}
+            />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: colors.textMuted }}>Insertar:</span>
+              {PLACEHOLDERS.map(p => (
+                <button key={p.tag} onClick={() => insertPlaceholder(p.tag)} title={p.desc}
+                  style={{ fontSize: '11px', fontFamily: 'monospace', padding: '3px 8px', borderRadius: '5px',
+                    border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp,
+                    color: '#4db6ac', cursor: 'pointer' }}>
+                  {p.tag}
+                </button>
+              ))}
+              {defaultTpl && template !== defaultTpl && (
+                <button onClick={() => setTemplate(defaultTpl)}
+                  style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '5px', border: 'none',
+                    background: 'none', color: colors.textMuted, cursor: 'pointer', marginLeft: 'auto',
+                    display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <RotateCcw size={10} /> Texto por defecto
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Datos bancarios */}
+          <div>
+            <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <CreditCard size={11} color={colors.textMuted} /> Datos de transferencia
+            </label>
+            <textarea
+              value={bankDetails}
+              onChange={e => setBankDetails(e.target.value)}
+              rows={4}
+              placeholder={'Diez Ríos SpA\nRUT 77.123.456-7\nBanco Estado · Cuenta Corriente 123456789\npagos@diezrios.cl'}
+              style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }}
+            />
+            <p style={hintStyle}>
+              Se insertan donde pongas <code style={{ color: '#4db6ac' }}>{'{datos_banco}'}</code>.
+              Si no usas el placeholder, se agregan al final del mensaje.
+            </p>
+          </div>
+
+          {/* Previsualización */}
+          <div>
+            <label style={labelStyle}>Así le llega al cliente</label>
+            <div style={{ backgroundColor: '#075e54', color: '#fff', borderRadius: '10px', padding: '12px 14px',
+              fontSize: '13px', lineHeight: 1.5, whiteSpace: 'pre-wrap', minHeight: '40px' }}>
+              {preview || <span style={{ opacity: 0.6 }}>(mensaje vacío)</span>}
+            </div>
+            <p style={hintStyle}>
+              Ejemplo con datos ficticios: {SAMPLE.nombre}, pedido {SAMPLE.pedido}, {SAMPLE.total}.
+            </p>
+          </div>
+
+          <SaveBtn loading={saving} onClick={save} colors={colors} />
+        </div>
+      </div>
+
+      <div style={{ fontSize: '11px', color: colors.textMuted, textAlign: 'center', lineHeight: 1.6 }}>
+        Si el cliente no escribe hace más de 24 horas, WhatsApp no permite mensajes de texto libre.
+        Esos cobros no se envían y quedan marcados en el tab Por cobrar para mandarlos con un template aprobado.
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
    PANEL PRINCIPAL
 ══════════════════════════════════════════════ */
 export default function SettingsPanel({ successMessage, onClearMessage }) {
@@ -1773,6 +2003,7 @@ export default function SettingsPanel({ successMessage, onClearMessage }) {
             <TemplateManager />
           </div>
         )}
+        {activeTab === 'cobranza'  && <CobranzaTab />}
       </div>
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

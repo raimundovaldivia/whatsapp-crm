@@ -11,6 +11,7 @@
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
+const { notifyAdmin } = require('./admin-notify');
 
 /**
  * Notifica al administrador que una conversación necesita atención humana.
@@ -66,8 +67,10 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
       '_Si hay varios clientes esperando, se responde el más reciente primero._',
     ].filter(Boolean).join('\n');
 
-    await kapsoService.sendTextMessage(adminPhone, msg, wc);
-    console.log(`[Notifications] ✅ Admin notificado (${adminPhone}) — conv #${conversation.id}`);
+    // Va por notifyAdmin: si tu ventana de 24h está cerrada, queda en cola y se
+    // entrega apenas escribas al número, en vez de perderse.
+    await notifyAdmin(orgId, { body: msg, kind: 'handoff', conversationId: conversation.id, wc });
+    console.log(`[Notifications] Handoff encaminado al admin — conv #${conversation.id}`);
   } catch (err) {
     console.warn('[Notifications] No se pudo notificar al admin:', err.message);
   }
@@ -199,8 +202,10 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
       '📲 Escribí *TOMAR* → te paso el control para que lo atiendas directamente.',
     ].filter(Boolean).join('\n');
 
-    await kapsoService.sendTextMessage(adminPhone, msg, wc);
-    console.log(`[Notifications] ❓ Admin consultado (${adminPhone}) — conv #${conversation.id}`);
+    // Va por notifyAdmin: si la ventana está cerrada, la consulta queda en cola
+    // (deduplicada por conversación) y llega cuando el admin reabra el canal.
+    const r = await notifyAdmin(orgId, { body: msg, kind: 'help', conversationId: conversation.id, wc });
+    console.log(`[Notifications] ❓ Admin consultado — conv #${conversation.id} (${r.sent ? 'entregado' : r.queued ? 'en cola' : r.reason})`);
   } catch (err) {
     console.warn('[Notifications] notifyAdminHelp error:', err.message);
   }

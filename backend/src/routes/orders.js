@@ -13,7 +13,11 @@ const router      = express.Router();
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
+const collection  = require('../services/payment-collection');
 const { requireAuth } = require('../middleware/auth');
+
+let io;
+function setSocketIO(socketIO) { io = socketIO; }
 
 router.use(requireAuth);
 
@@ -470,6 +474,125 @@ router.patch('/scheduled/:id/cancel', async (req, res) => {
   }
 });
 
+/* ─── COBRANZA ─────────────────────────────────────────────────────────────
+ * OJO: estas rutas van ANTES de router.get('/:id'), si no Express matchea
+ * '/pending-charge' como un id de pedido.
+ */
+
+/**
+ * GET /api/orders/pending-charge
+ * Pedidos entregados, marcados como transferencia por el repartidor, que
+ * todavía no tienen comprobante verificado. Alimenta el tab "Por cobrar".
+ */
+router.get('/pending-charge', async (req, res) => {
+  try {
+    const [orders, settings] = await Promise.all([
+      collection.getPendingCharges(req.orgId),
+      collection.getChargeSettings(req.orgId),
+    ]);
+    // Preview del mensaje tal como le llegaría a cada cliente
+    const withPreview = orders.map(o => ({
+      ...o,
+      preview: collection.buildChargeMessage(o, settings),
+    }));
+    res.json({
+      success: true,
+      orders:  withPreview,
+      total:   withPreview.reduce((s, o) => s + o.total_price, 0),
+      settings,
+    });
+  } catch (err) {
+    console.error('[Orders/pending-charge]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/orders/send-charge
+ * Envía el mensaje de cobro a los pedidos seleccionados.
+ * Body: { orders: [{ source: 'bot'|'shopify', id }], force?: boolean }
+ *
+ * Nunca falla en bloque: devuelve el resultado pedido por pedido, para que el
+ * panel pueda mostrar cuáles salieron y cuáles no (y por qué).
+ */
+router.post('/send-charge', async (req, res) => {
+  const { orders: selection = [], force = false } = req.body;
+  if (!Array.isArray(selection) || selection.length === 0) {
+    return res.status(400).json({ success: false, error: 'Selecciona al menos un pedido' });
+  }
+  if (selection.length > 100) {
+    return res.status(400).json({ success: false, error: 'Máximo 100 pedidos por envío' });
+  }
+
+  try {
+    const pending = await collection.getPendingCharges(req.orgId);
+    const results = [];
+
+    for (const sel of selection) {
+      const order = pending.find(
+        o => o.source === sel.source && String(o.id) === String(sel.id)
+      );
+      if (!order) {
+        results.push({ ...sel, ok: false, reason: 'no_por_cobrar' });
+        continue;
+      }
+      const r = await collection.sendChargeRequest(req.orgId, order, { force, io });
+      results.push({
+        source: order.source,
+        id:     order.id,
+        label:  order.order_label,
+        name:   order.customer_name,
+        ...r,
+      });
+    }
+
+    const sent = results.filter(r => r.ok).length;
+    res.json({ success: true, sent, failed: results.length - sent, results });
+  } catch (err) {
+    console.error('[Orders/send-charge]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/orders/payment-method
+ * Corregir a mano el medio de pago de un pedido (si el repartidor se equivocó).
+ * Body: { source: 'bot'|'shopify', id, paymentMethod: 'efectivo'|'transferencia'|'otro'|null }
+ */
+router.patch('/payment-method', async (req, res) => {
+  const { source, id, paymentMethod } = req.body;
+  const VALID = ['efectivo', 'transferencia', 'otro', null];
+  if (!['bot', 'shopify'].includes(source)) {
+    return res.status(400).json({ success: false, error: "source debe ser 'bot' o 'shopify'" });
+  }
+  if (!VALID.includes(paymentMethod ?? null)) {
+    return res.status(400).json({ success: false, error: 'Medio de pago inválido' });
+  }
+
+  try {
+    const pool = getPool();
+    const method = paymentMethod ?? null;
+    const { rowCount } = source === 'shopify'
+      ? await pool.query(
+          `UPDATE shopify_orders
+              SET payment_method = $1, payment_marked_at = NOW()
+            WHERE shopify_order_id = $2 AND organization_id = $3`,
+          [method, String(id), req.orgId]
+        )
+      : await pool.query(
+          `UPDATE orders
+              SET payment_method = $1, payment_marked_at = NOW(), updated_at = NOW()
+            WHERE id = $2 AND organization_id = $3`,
+          [method, parseInt(id), req.orgId]
+        );
+
+    if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const { rows: [order] } = await getPool().query(
@@ -621,3 +744,4 @@ function safeJSON(str, fallback) {
 }
 
 module.exports = router;
+module.exports.setSocketIO = setSocketIO;

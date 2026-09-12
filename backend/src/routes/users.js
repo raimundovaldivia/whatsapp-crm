@@ -7,7 +7,8 @@ const router = express.Router();
 const db = require('../db/database');
 const { requireAuth, requireRole, generateToken } = require('../middleware/auth');
 
-const VALID_ROLES = ['admin', 'supervisor', 'agent'];
+// 'repartidor': solo accede a la app de despachos (ver REPARTIDOR_ALLOWED_PREFIXES en middleware/auth.js)
+const VALID_ROLES = ['admin', 'supervisor', 'agent', 'repartidor'];
 
 // Todos los endpoints requieren auth + rol admin/owner
 router.use(requireAuth);

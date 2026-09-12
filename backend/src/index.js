@@ -27,6 +27,7 @@ const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Tw
 const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
 const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follow-up
 const { startScheduledFollowUpJob } = require('./services/scheduled-follow-up'); // Job pedidos agendados
+const { startAdminWindowJob } = require('./services/admin-notify');              // Aviso previo + cola de alertas admin
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
 const shopifyOAuthRouter   = require('./routes/shopify-oauth');   // Shopify OAuth flow
 const authRouter           = require('./routes/auth');
@@ -46,6 +47,7 @@ const storeSettingsRouter  = require('./routes/store-settings'); // Ajustes edit
 const contactsRouter       = require('./routes/contacts');        // Contactos (leads y clientes)
 const deliveryRouter       = require('./routes/delivery');         // App mobile de repartidor
 const usersRouter          = require('./routes/users');            // Gestión de usuarios (RBAC)
+const adminAlertsRouter    = require('./routes/admin-alerts');      // Cola de alertas al admin
 const reengagementRouter   = require('./routes/reengagement');     // Mensajería masiva y re-enganche
 
 const app    = express();
@@ -71,6 +73,8 @@ twilioWebhookRouter.setSocketIO(io);
 kapsoWebhookRouter.setSocketIO(io);
 shopifyWebhookRouter.setSocketIO(io);
 conversationsRouter.setSocketIO(io);
+ordersRouter.setSocketIO(io);
+deliveryRouter.setSocketIO(io);
 
 io.on('connection', (socket) => {
   socket.on('join_org', (orgId) => {
@@ -140,6 +144,7 @@ app.use('/api/store-settings', storeSettingsRouter); // Ajustes editables de la 
 app.use('/api/contacts',      contactsRouter);       // Contactos: leads y clientes
 app.use('/api/delivery',      deliveryRouter);        // App mobile repartidor
 app.use('/api/users',         usersRouter);           // Gestión de usuarios (RBAC)
+app.use('/api/admin-alerts',  adminAlertsRouter);     // Cola de alertas al admin
 app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-enganche
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
@@ -158,6 +163,7 @@ setupDatabase().then(() => {
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
     startFollowUpJob(io);
     startScheduledFollowUpJob(io);
+    startAdminWindowJob();
   });
 }).catch(err => {
   console.error('Error iniciando DB:', err);

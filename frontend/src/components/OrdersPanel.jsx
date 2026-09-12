@@ -138,9 +138,17 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [stats,            setStats]            = useState(null);
   const [toast,            setToast]            = useState(null);
   const [syncing,          setSyncing]          = useState(null);
-  const [activeTab,        setActiveTab]        = useState('orders'); // 'orders' | 'scheduled'
+  const [activeTab,        setActiveTab]        = useState('orders'); // 'orders' | 'scheduled' | 'charge'
   const [syncingAll,    setSyncingAll]    = useState(false);
   const [lastSync,      setLastSync]      = useState(null);
+
+  // Cobranza: pedidos entregados con pago por transferencia y sin comprobante
+  const [charges,        setCharges]        = useState([]);
+  const [chargeSettings, setChargeSettings] = useState(null);
+  const [chargeSel,      setChargeSel]      = useState(new Set()); // Set de `${source}:${id}`
+  const [sendingCharge,  setSendingCharge]  = useState(false);
+  const [chargePreview,  setChargePreview]  = useState(null);      // pedido cuyo mensaje se está mirando
+  const [chargeResults,  setChargeResults]  = useState(null);      // resumen del último envío
 
   // Nuevo pedido manual
   const [showNewOrder,   setShowNewOrder]  = useState(false);
@@ -209,6 +217,68 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       setLoading(false);
     }
   }, []);
+
+  // ─── Cobranza ───────────────────────────────────────────────────
+  const loadCharges = useCallback(async () => {
+    try {
+      const res = await api.get('/orders/pending-charge');
+      setCharges(res.data?.orders || []);
+      setChargeSettings(res.data?.settings || null);
+      // Limpiar de la selección lo que ya no está por cobrar
+      setChargeSel(prev => {
+        const validKeys = new Set((res.data?.orders || []).map(o => `${o.source}:${o.id}`));
+        return new Set([...prev].filter(k => validKeys.has(k)));
+      });
+    } catch {
+      setCharges([]);
+    }
+  }, []);
+
+  useEffect(() => { loadCharges(); }, [loadCharges]);
+
+  const chargeKey = (o) => `${o.source}:${o.id}`;
+
+  const toggleCharge = (o) => {
+    setChargeSel(prev => {
+      const next = new Set(prev);
+      const k = chargeKey(o);
+      next.has(k) ? next.delete(k) : next.add(k);
+      return next;
+    });
+  };
+
+  const toggleAllCharges = () => {
+    setChargeSel(prev =>
+      prev.size === charges.length ? new Set() : new Set(charges.map(chargeKey))
+    );
+  };
+
+  const sendCharges = async () => {
+    const selection = charges
+      .filter(o => chargeSel.has(chargeKey(o)))
+      .map(o => ({ source: o.source, id: o.id }));
+    if (selection.length === 0) return;
+
+    const label = selection.length === 1 ? 'este pedido' : `estos ${selection.length} pedidos`;
+    if (!window.confirm(`¿Enviar el mensaje de cobro de ${label} por WhatsApp?`)) return;
+
+    setSendingCharge(true);
+    setChargeResults(null);
+    try {
+      const res = await api.post('/orders/send-charge', { orders: selection });
+      const { sent = 0, failed = 0, results = [] } = res.data || {};
+      setChargeResults(results);
+      if (failed === 0) showToast(`✅ ${sent} cobro${sent === 1 ? '' : 's'} enviado${sent === 1 ? '' : 's'}`);
+      else if (sent === 0) showToast(`No se pudo enviar ninguno de los ${failed}`, 'error');
+      else showToast(`${sent} enviado${sent === 1 ? '' : 's'}, ${failed} sin enviar`, 'error');
+      setChargeSel(new Set());
+      await loadCharges();
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Error enviando los cobros', 'error');
+    } finally {
+      setSendingCharge(false);
+    }
+  };
 
   const cancelScheduled = async (id) => {
     if (!window.confirm('¿Cancelar este pedido agendado?')) return;
@@ -493,6 +563,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           {[
             { key: 'orders',    label: 'Todos' },
             { key: 'scheduled', label: `📅 Agendados${scheduledOrders.filter(o=>o.status==='pending').length ? ` (${scheduledOrders.filter(o=>o.status==='pending').length})` : ''}` },
+            { key: 'charge',    label: `💸 Por cobrar${charges.length ? ` (${charges.length})` : ''}` },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setActiveTab(key)} style={{
               padding: '4px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer',
@@ -588,6 +659,192 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           )}
         </div>
       )}
+
+      {/* ── Vista Por cobrar ── */}
+      {activeTab === 'charge' && (() => {
+        const totalDeuda    = charges.reduce((s, o) => s + (o.total_price || 0), 0);
+        const selCount      = chargeSel.size;
+        const selTotal      = charges.filter(o => chargeSel.has(chargeKey(o)))
+                                     .reduce((s, o) => s + (o.total_price || 0), 0);
+        const fmt = n => `$${Math.round(n || 0).toLocaleString('es-CL')}`;
+
+        return (
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+            {/* Resumen + acción */}
+            <div style={{ display:'flex', alignItems:'center', gap:'16px', backgroundColor: colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:'12px', padding:'14px 18px', flexWrap:'wrap' }}>
+              <div>
+                <div style={{ fontSize:'11px', color: colors.textMuted, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em' }}>Por cobrar</div>
+                <div style={{ fontSize:'22px', fontWeight:700, color:'#fbbf24' }}>{fmt(totalDeuda)}</div>
+                <div style={{ fontSize:'12px', color: colors.textMuted }}>
+                  {charges.length} pedido{charges.length === 1 ? '' : 's'} por transferencia sin comprobante
+                </div>
+              </div>
+
+              <div style={{ flex: 1 }} />
+
+              {selCount > 0 && (
+                <div style={{ fontSize:'12px', color: colors.textSecondary, textAlign:'right' }}>
+                  <div style={{ fontWeight:600, color: colors.textPrimary }}>{selCount} seleccionado{selCount === 1 ? '' : 's'}</div>
+                  <div>{fmt(selTotal)}</div>
+                </div>
+              )}
+
+              <button
+                onClick={sendCharges}
+                disabled={selCount === 0 || sendingCharge}
+                style={{
+                  display:'flex', alignItems:'center', gap:'7px',
+                  backgroundColor: selCount === 0 ? colors.bgHover : '#f59e0b',
+                  color: selCount === 0 ? colors.textMuted : '#1c1206',
+                  padding:'9px 16px', borderRadius:'8px', fontSize:'13px', fontWeight:700,
+                  border:'none', cursor: selCount === 0 || sendingCharge ? 'not-allowed' : 'pointer',
+                }}>
+                <Send size={14} />
+                {sendingCharge ? 'Enviando...' : selCount > 1 ? `Enviar cobro a ${selCount}` : 'Enviar cobro'}
+              </button>
+
+              <button onClick={loadCharges} title="Recargar"
+                style={{ background:'none', color: colors.textSecondary, padding:'7px', borderRadius:'50%', display:'flex', border:'none', cursor:'pointer' }}>
+                <RefreshCw size={15} />
+              </button>
+            </div>
+
+            {/* Aviso de envío automático */}
+            {chargeSettings && !chargeSettings.autoSendOnTransfer && charges.length > 0 && (
+              <div style={{ fontSize:'12px', color: colors.textMuted, backgroundColor: colors.bgSecondary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'9px 13px' }}>
+                El envío automático al marcar transferencia está <strong>apagado</strong>. Se activa en Ajustes → Cobranza.
+              </div>
+            )}
+
+            {/* Resultado del último envío */}
+            {chargeResults?.some(r => !r.ok) && (
+              <div style={{ fontSize:'12px', backgroundColor:'#3f1d1d', border:'1px solid #7f1d1d', borderRadius:'8px', padding:'10px 13px', color:'#fca5a5' }}>
+                <div style={{ fontWeight:700, marginBottom:'5px' }}>No se pudieron enviar:</div>
+                {chargeResults.filter(r => !r.ok).map((r, i) => (
+                  <div key={i}>
+                    {r.label || r.id} — {
+                      r.reason === 'ventana_24h'     ? 'pasaron más de 24h desde su último mensaje: hay que usar un template aprobado'
+                      : r.reason === 'sin_telefono'  ? 'el pedido no tiene teléfono'
+                      : r.reason === 'cobrado_recien'? `ya se le cobró hace ${r.hoursAgo}h`
+                      : r.reason === 'no_por_cobrar' ? 'ya no está por cobrar'
+                      : r.error || r.reason
+                    }
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Lista */}
+            {charges.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'48px', color: colors.textMuted }}>
+                <CheckCircle size={32} style={{ marginBottom:'12px', opacity:0.4 }} />
+                <div>Nada por cobrar</div>
+                <div style={{ fontSize:'12px', marginTop:'6px' }}>
+                  Acá aparecen los pedidos que el repartidor marcó como transferencia y todavía no tienen comprobante.
+                </div>
+              </div>
+            ) : (
+              <>
+                <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'12px', color: colors.textSecondary, cursor:'pointer', paddingLeft:'4px' }}>
+                  <input type="checkbox"
+                    checked={chargeSel.size === charges.length && charges.length > 0}
+                    onChange={toggleAllCharges}
+                    style={{ cursor:'pointer' }} />
+                  Seleccionar todos
+                </label>
+
+                <div style={{ display:'flex', flexDirection:'column', gap:'9px' }}>
+                  {charges.map(o => {
+                    const k         = chargeKey(o);
+                    const isSel     = chargeSel.has(k);
+                    const days      = o.hours_owed != null ? Math.floor(o.hours_owed / 24) : null;
+                    const antiguo   = o.hours_owed != null && o.hours_owed >= 48;
+                    const yaCobrado = !!o.charge_requested_at;
+                    return (
+                      <div key={k} onClick={() => toggleCharge(o)}
+                        style={{
+                          backgroundColor: isSel ? colors.bgHover : colors.bgPanel,
+                          borderRadius:'12px',
+                          border:`1px solid ${isSel ? '#f59e0b' : antiguo ? '#f59e0b40' : colors.border}`,
+                          padding:'13px 16px', display:'flex', gap:'12px', alignItems:'center', cursor:'pointer',
+                        }}>
+                        <input type="checkbox" checked={isSel} onChange={() => toggleCharge(o)}
+                          onClick={e => e.stopPropagation()} style={{ cursor:'pointer', flexShrink:0 }} />
+
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'3px', flexWrap:'wrap' }}>
+                            <span style={{ fontWeight:600, color: colors.textPrimary, fontSize:'14px' }}>
+                              {o.customer_name || o.customer_phone}
+                            </span>
+                            <span style={{ fontSize:'11px', color: colors.textMuted }}>{o.customer_phone || 'sin teléfono'}</span>
+                            <span style={{ fontSize:'10px', fontWeight:700, padding:'1px 6px', borderRadius:'4px', backgroundColor: o.source === 'bot' ? '#0d292940' : '#1e293b', color: o.source === 'bot' ? '#4db6ac' : '#94a3b8', display:'flex', alignItems:'center', gap:'3px' }}>
+                              {o.source === 'bot' ? <><Bot size={9} /> Bot</> : <><Store size={9} /> Shopify</>}
+                            </span>
+                          </div>
+                          <div style={{ display:'flex', gap:'12px', fontSize:'12px', color: colors.textMuted, flexWrap:'wrap' }}>
+                            <span>🧾 {o.order_label}</span>
+                            {days != null && (
+                              <span style={{ color: antiguo ? '#fbbf24' : colors.textMuted }}>
+                                ⏱ entregado {days >= 1 ? `hace ${days} día${days === 1 ? '' : 's'}` : `hace ${o.hours_owed}h`}
+                              </span>
+                            )}
+                            {o.proofs_pending > 0 && <span style={{ color:'#60a5fa' }}>📎 comprobante sin revisar</span>}
+                            {yaCobrado && (
+                              <span>
+                                💬 cobrado {o.charge_request_count > 1 ? `${o.charge_request_count} veces` : '1 vez'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ fontSize:'15px', fontWeight:700, color:'#fbbf24', flexShrink:0 }}>
+                          {fmt(o.total_price)}
+                        </div>
+
+                        <div style={{ display:'flex', gap:'6px', flexShrink:0 }}>
+                          <button
+                            onClick={e => { e.stopPropagation(); setChargePreview(o); }}
+                            title="Ver el mensaje que se le va a enviar"
+                            style={{ padding:'5px 9px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color: colors.textSecondary, fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                            <MessageSquare size={12} /> Ver mensaje
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {/* Preview del mensaje */}
+            {chargePreview && (
+              <div onClick={() => setChargePreview(null)}
+                style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:60, padding:'20px' }}>
+                <div onClick={e => e.stopPropagation()}
+                  style={{ backgroundColor: colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:'14px', padding:'20px', maxWidth:'460px', width:'100%' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'14px' }}>
+                    <span style={{ fontSize:'14px', fontWeight:700, color: colors.textPrimary }}>
+                      Mensaje para {chargePreview.customer_name || chargePreview.customer_phone}
+                    </span>
+                    <div style={{ flex:1 }} />
+                    <button onClick={() => setChargePreview(null)}
+                      style={{ background:'none', border:'none', color: colors.textMuted, cursor:'pointer', display:'flex' }}>
+                      <X size={17} />
+                    </button>
+                  </div>
+                  <div style={{ backgroundColor:'#075e54', color:'#fff', borderRadius:'10px', padding:'12px 14px', fontSize:'13px', lineHeight:1.5, whiteSpace:'pre-wrap' }}>
+                    {chargePreview.preview}
+                  </div>
+                  <div style={{ fontSize:'11px', color: colors.textMuted, marginTop:'10px' }}>
+                    El texto se edita en Ajustes → Cobranza.
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {activeTab === 'orders' && (
       <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>

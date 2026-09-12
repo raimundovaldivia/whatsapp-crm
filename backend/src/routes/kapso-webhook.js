@@ -22,6 +22,8 @@ const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
 const mediaCache                = require('../services/media-cache');
 const { handleAgentCommand }    = require('../services/agent-commands');
+const guardrail                 = require('../services/response-guardrail');
+const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -43,16 +45,70 @@ router.get('/debug', (req, res) => {
  * el cliente manda varios mensajes rápidos en sucesión.
  * El pipeline se ejecuta 3 segundos después del ÚLTIMO mensaje recibido.
  */
-const pendingPipeline = new Map(); // key: `${orgId}:${conversationId}` → timer
+const DEBOUNCE_MS   = 3000; // espera desde el último mensaje antes de procesar
+const MAX_RERUNS    = 2;    // reejecuciones seguidas tras una corrida (anti-bucle)
 
+const pendingPipeline = new Map(); // key: `${orgId}:${conversationId}` → timer
+const runningPipeline = new Map(); // key → { rerunFn, reruns } mientras se ejecuta
+
+/**
+ * Encola la ejecución del pipeline con debounce Y candado por conversación.
+ *
+ * El debounce por sí solo no alcanzaba: cancelaba el TIMER pendiente, pero no
+ * la ejecución ya en curso. Como una corrida del pipeline tarda varios segundos
+ * (llamadas al LLM), los mensajes que llegaban durante ese rato agendaban una
+ * corrida nueva que arrancaba en paralelo. Cada una leía un estado distinto de
+ * la conversación y contestaba por su cuenta: el cliente recibía varias
+ * respuestas que se contradecían entre sí (dos confirmaciones del mismo pedido
+ * con precios distintos, preguntas por datos que ya había dado).
+ *
+ * Ahora solo puede haber UNA corrida por conversación a la vez. Lo que llega
+ * mientras se ejecuta no abre una corrida paralela: queda como reejecución
+ * pendiente — y solo la última, porque el pipeline relee de la DB el mensaje
+ * más reciente, así que las intermedias no aportan nada.
+ */
 function schedulePipeline(orgId, conversationId, fn) {
   const key = `${orgId}:${conversationId}`;
   if (pendingPipeline.has(key)) clearTimeout(pendingPipeline.get(key));
-  const timer = setTimeout(async () => {
+
+  const timer = setTimeout(() => {
     pendingPipeline.delete(key);
-    await fn();
-  }, 3000); // esperar 3s desde el último mensaje
+
+    // Ya hay una corrida en vuelo: dejar esta como la próxima y salir.
+    const inFlight = runningPipeline.get(key);
+    if (inFlight) {
+      inFlight.rerunFn = fn;
+      console.log(`[KapsoWebhook] ⏸️ Pipeline en curso para conv ${conversationId} — se encola una reejecución`);
+      return;
+    }
+
+    runPipelineLocked(key, conversationId, fn, 0);
+  }, DEBOUNCE_MS);
+
   pendingPipeline.set(key, timer);
+}
+
+async function runPipelineLocked(key, conversationId, fn, reruns) {
+  const entry = { rerunFn: null, reruns };
+  runningPipeline.set(key, entry);
+
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[KapsoWebhook] Pipeline falló para conv ${conversationId}:`, err.message);
+  } finally {
+    runningPipeline.delete(key);
+  }
+
+  // Llegaron mensajes mientras se ejecutaba → procesar el más reciente.
+  if (entry.rerunFn) {
+    if (reruns >= MAX_RERUNS) {
+      console.warn(`[KapsoWebhook] ⚠️ Conv ${conversationId} alcanzó el máximo de reejecuciones — se descarta la última`);
+      return;
+    }
+    console.log(`[KapsoWebhook] 🔄 Reejecutando pipeline de conv ${conversationId} (${reruns + 1}/${MAX_RERUNS})`);
+    await runPipelineLocked(key, conversationId, entry.rerunFn, reruns + 1);
+  }
 }
 
 /**
@@ -128,6 +184,10 @@ router.post('/', async (req, res) => {
   // ── Admin relay: si el mensaje viene del teléfono del admin → enrutar al cliente ──
   const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
   if (adminPhone && parsed.from && db.normalizePhone(parsed.from) === db.normalizePhone(adminPhone)) {
+    // El admin escribió → su ventana de 24h se reabre. Registrarlo y entregar
+    // las alertas que quedaron en cola mientras el canal estaba cerrado.
+    markAdminWindowOpen(org.id, whatsappConfig).catch(e =>
+      console.warn('[KapsoWebhook] drenado de cola admin falló:', e.message));
     await handleAdminReply(org, whatsappConfig, parsed);
     return;
   }
@@ -249,10 +309,18 @@ router.post('/', async (req, res) => {
 
     schedulePipeline(org.id, capturedConvId, async () => {
       const log = createBotLogger(org.name, capturedFrom);
-      // Leer el último mensaje inbound de la DB (puede haber llegado algo nuevo durante el debounce)
+      // Leer el último mensaje inbound de la DB (puede haber llegado algo nuevo durante el debounce).
+      // OJO: getLastMessages() devuelve orden ASCENDENTE (más antiguo primero), así que hay que
+      // tomar el ÚLTIMO inbound con .pop(), no el primero con .find(). Con .find() el bot
+      // reprocesaba un mensaje viejo de la conversación (p.ej. un "Stop" de días atrás)
+      // y respondía a eso en vez de al mensaje recién llegado.
       const lastMessages = await db.getLastMessages(capturedConvId, 3).catch(() => []);
-      const lastInbound  = lastMessages?.find(m => m.direction === 'inbound');
-      const textToProcess = lastInbound?.content || capturedText;
+      const lastInbound  = lastMessages?.filter(m => m.direction === 'inbound').pop();
+      // Red de seguridad: si por lo que sea el inbound recuperado es anterior al mensaje
+      // que disparó este pipeline, usar el texto capturado en el webhook.
+      const inboundIsStale = lastInbound && savedMsg?.created_at
+        && new Date(lastInbound.created_at).getTime() < new Date(savedMsg.created_at).getTime();
+      const textToProcess = (!inboundIsStale && lastInbound?.content) || capturedText;
       log.in(textToProcess);
 
       try {
@@ -283,6 +351,29 @@ router.post('/', async (req, res) => {
         if (INTERNAL_REASONING_PATTERNS.some(p => p.test(result.response.trim()))) {
           console.error(`[KapsoWebhook] ⛔ Respuesta con razonamiento interno bloqueada para ${capturedFrom}:`, result.response.slice(0, 100));
           return;
+        }
+
+        // ── Guardrail de frescura ──────────────────────────────────────────
+        // Último filtro antes de enviar: si el mensaje le afirma al cliente algo
+        // que la DB no respalda (una fecha que ya pasó, un pedido cerrado o
+        // estancado), no sale. El bot no se equivoca al razonar — se equivoca
+        // porque le pasamos un dato viejo. Ante eso, mejor que hable un humano.
+        if (!result.switchToHuman) {
+          const fresh = await guardrail.checkResponseFreshness(org.id, capturedConvId, result.response);
+          if (!fresh.ok) {
+            console.error(`[KapsoWebhook] ⛔ Dato rancio (${fresh.reason}) para ${capturedFrom}: ${fresh.detail}`);
+            log.step('guardrail', `bloqueado: ${fresh.reason}`);
+            await db.setAgentMode(capturedConvId, 'human');
+            io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
+            notifyAdminHelp(
+              org.id,
+              updatedConv || conversation,
+              result.response,
+              `Dato desactualizado — ${fresh.detail}`
+            ).catch(() => {});
+            log.done();
+            return; // el cliente no recibe nada: responde el ejecutivo
+          }
         }
 
         // ── Si el pipeline escala, no decirle al cliente "te conectaré con un asesor".
@@ -436,15 +527,21 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
       whatsappMessageId: sentMsg?.messages?.[0]?.id || null,
       direction:         'outbound',
       content:           customerMessage,
-      sentBy:            'ai',
+      // 'human': lo dictó el admin. Además es lo que mira minutesSinceLastHumanReply()
+      // para el auto-reset de 24h — si se guardara como 'ai', la conversación
+      // quedaría en modo humano para siempre.
+      sentBy:            'human',
       agentType:         'human_guided',
       status:            'sent',
     });
     await db.updateConversationLastMessage(session.convId, customerMessage);
 
-    // Volver a modo IA y limpiar estado
-    await db.setAgentMode(session.convId, 'ai');
-    io?.emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'ai' });
+    // Mantener modo humano: el admin está conversando él mismo con el cliente.
+    // El auto-reset de 24h (paso 4 del webhook) devuelve el hilo al bot cuando
+    // pasan 24h sin respuesta humana. Antes acá se reseteaba a 'ai' de inmediato
+    // y el bot contestaba encima del admin, con información desactualizada.
+    await db.setAgentMode(session.convId, 'human');
+    io?.emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'human' });
     if (pending) await db.markAdminReplyHandled(pending.id);
     secretary.closeSession(org.id);
 
@@ -455,7 +552,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     const preview = customerMessage.slice(0, 100);
     await kapsoService.sendTextMessage(
       parsed.from,
-      `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nEl bot retoma el hilo con *${session.customerName}*.`,
+      `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nEl hilo con *${session.customerName}* queda en modo humano — el bot no responde hasta que pasen 24h sin respuesta tuya, o lo devuelvas a IA desde el CRM.`,
       whatsappConfig
     ).catch(() => {});
 
@@ -676,21 +773,18 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     });
     await db.updateConversationLastMessage(conversation.id, reply);
 
-    // ── 7. Notificar al admin ────────────────────────────────────────
-    const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
-    if (adminPhone) {
-      const wc = await db.getWhatsappConfig(org.id);
-      if (wc) {
-        const clientName  = conversation.contact_name || parsed.from;
-        const orderLine   = pendingOrder ? `\n📦 *Pedido:* ${pendingOrder.customer_name || ''} — $${pendingOrder.total_price || '?'}` : '';
-        const amountLine  = analysis.amount  ? `\n💵 *Monto pagado:* $${analysis.amount?.toLocaleString('es-CL')} ${analysis.currency || ''}` : '';
-        const bankLine    = analysis.bank    ? `\n🏦 *Banco:* ${analysis.bank}` : '';
-        const matchLine   = amountMatches === true  ? '\n✅ *Monto coincide — pre-verificado*'
-                          : amountMatches === false ? '\n⚠️ *Monto NO coincide — revisar manualmente*'
-                          : '';
-        const adminMsg = `📸 *Comprobante de pago recibido*\n\n👤 *Cliente:* ${clientName} (${parsed.from})${orderLine}${amountLine}${bankLine}${matchLine}\n\nRevísalo en el CRM → Pagos.`;
-        await kapsoService.sendTextMessage(adminPhone, adminMsg, wc).catch(() => {});
-      }
+    // ── 7. Notificar al admin (con cola si la ventana está cerrada) ───
+    {
+      const clientName  = conversation.contact_name || parsed.from;
+      const orderLine   = pendingOrder ? `\n📦 *Pedido:* ${pendingOrder.customer_name || ''} — $${pendingOrder.total_price || '?'}` : '';
+      const amountLine  = analysis.amount  ? `\n💵 *Monto pagado:* $${analysis.amount?.toLocaleString('es-CL')} ${analysis.currency || ''}` : '';
+      const bankLine    = analysis.bank    ? `\n🏦 *Banco:* ${analysis.bank}` : '';
+      const matchLine   = amountMatches === true  ? '\n✅ *Monto coincide — pre-verificado*'
+                        : amountMatches === false ? '\n⚠️ *Monto NO coincide — revisar manualmente*'
+                        : '';
+      const adminMsg = `📸 *Comprobante de pago recibido*\n\n👤 *Cliente:* ${clientName} (${parsed.from})${orderLine}${amountLine}${bankLine}${matchLine}\n\nRevísalo en el CRM → Pagos.`;
+      notifyAdmin(org.id, { body: adminMsg, kind: 'payment', conversationId: conversation.id })
+        .catch(() => {});
     }
 
     // ── 7b. Notificar a agentes con payments habilitado ──────────────

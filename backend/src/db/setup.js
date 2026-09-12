@@ -368,6 +368,39 @@ async function setupDatabase() {
       -- Migración: estado CRM local para órdenes Shopify
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS crm_status TEXT DEFAULT 'nuevo';
 
+      -- ─── COBRANZA: medio de pago y seguimiento del cobro ─────────────
+      -- payment_method lo marca el repartidor al entregar (app móvil).
+      -- 'transferencia' sin comprobante verificado = pedido por cobrar.
+      -- charge_requested_at / charge_request_count registran los recordatorios
+      -- enviados, para no cobrarle dos veces al mismo cliente por error.
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
+
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
+
+      DO $$
+      BEGIN
+        ALTER TABLE orders ADD CONSTRAINT orders_payment_method_check
+          CHECK(payment_method IS NULL OR payment_method IN ('efectivo','transferencia','otro')) NOT VALID;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+      DO $$
+      BEGIN
+        ALTER TABLE shopify_orders ADD CONSTRAINT shopify_orders_payment_method_check
+          CHECK(payment_method IS NULL OR payment_method IN ('efectivo','transferencia','otro')) NOT VALID;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+
+      CREATE INDEX IF NOT EXISTS idx_orders_por_cobrar
+        ON orders(organization_id, payment_method, status);
+      CREATE INDEX IF NOT EXISTS idx_shopify_orders_por_cobrar
+        ON shopify_orders(organization_id, payment_method, crm_status);
+
       -- ─── COMPROBANTES DE PAGO ────────────────────────────────────────
       -- Se crea automáticamente cuando el cliente envía una foto de transferencia.
       -- El admin verifica desde el panel y marca como verificado/rechazado.
@@ -637,15 +670,70 @@ async function setupDatabase() {
         ) THEN
           ALTER TABLE users DROP CONSTRAINT users_role_check;
         END IF;
-        -- Agregar constraint actualizado con supervisor
+        -- Agregar constraint actualizado con supervisor y repartidor
         ALTER TABLE users
           ADD CONSTRAINT users_role_check
-          CHECK (role IN ('owner','admin','supervisor','agent'));
+          CHECK (role IN ('owner','admin','supervisor','agent','repartidor'));
       EXCEPTION WHEN OTHERS THEN
         NULL; -- ignorar si ya existe con nombre distinto
       END
       $$;
     `);
+
+    // ─── DESPACHOS: módulo de repartos ───────────────────────────────
+    // - driver_user_id: la ruta se asigna a un usuario con rol 'repartidor'.
+    //   Así cada chofer ve solo sus rutas en la app. driver_name/driver_phone
+    //   se mantienen como texto libre para repartidores sin cuenta.
+    // - stop_payments: medio de pago por parada ({ "bot_12": "efectivo" }),
+    //   para que la web y la app lo muestren sin cruzar con orders.
+    await client.query(`
+      ALTER TABLE delivery_routes
+        ADD COLUMN IF NOT EXISTS driver_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}';
+      CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
+        ON delivery_routes(organization_id, driver_user_id, status);
+    `);
+
+    // ─── COLA DE ALERTAS AL ADMIN ────────────────────────────────────
+    // WhatsApp no permite texto libre a un número que no escribió en 24h.
+    // Cuando una alerta al admin no se puede entregar por ventana cerrada,
+    // se guarda acá y se reenvía apenas el admin vuelve a escribir al número.
+    // 'kind' distingue el tipo (help = "cómo respondo", handoff, payment).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_outbox (
+        id              SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        admin_phone     TEXT NOT NULL,
+        body            TEXT NOT NULL,
+        kind            TEXT DEFAULT 'help',
+        conversation_id INTEGER,
+        status          TEXT DEFAULT 'pending' CHECK(status IN ('pending','sent','expired')),
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        sent_at         TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_admin_outbox_pending
+        ON admin_outbox(organization_id, status, created_at);
+    `);
+    // ─── CACHÉ DE GEOCODIFICACIÓN ────────────────────────────────────
+    // Convertir una dirección a lat/lng cuesta una llamada a Google. Se cachea
+    // por (org, dirección) para no re-geocodificar la misma dirección cada vez
+    // que se abre el panel de repartos.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geocode_cache (
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        address_key     TEXT NOT NULL,
+        lat             DOUBLE PRECISION,
+        lng             DOUBLE PRECISION,
+        found           BOOLEAN DEFAULT TRUE,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (organization_id, address_key)
+      );
+    `);
+
+    // Estado de la ventana de 24h del admin (para el aviso preventivo):
+    //   admin_window_last_inbound  → ISO del último mensaje del admin al número
+    //   admin_window_warning_sent  → ISO de la ventana en que ya se avisó (para no repetir)
+    // Se guardan como settings por org; no requieren columnas nuevas.
 
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {

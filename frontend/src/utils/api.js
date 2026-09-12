@@ -121,6 +121,12 @@ export const reengagementAPI = {
   sendBulk: (items) => api.post('/reengagement/send-bulk', { items }, { timeout: 600000 }).then(r => r.data),
 };
 
+export const adminAlertsAPI = {
+  list:    ()   => api.get('/admin-alerts').then(r => r.data),
+  flush:   ()   => api.post('/admin-alerts/flush').then(r => r.data),
+  dismiss: (id) => api.delete(`/admin-alerts/${id}`).then(r => r.data),
+};
+
 export const API_BASE = BASE_URL;
 
 export { api };

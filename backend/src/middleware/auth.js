@@ -11,6 +11,16 @@ function generateToken(user) {
   );
 }
 
+/**
+ * Rutas a las que puede acceder un usuario con rol 'repartidor'.
+ *
+ * El repartidor usa la app de despachos y nada más: no debe poder leer
+ * conversaciones, clientes ni pedidos del CRM aunque tenga un token válido.
+ * Se compara contra req.originalUrl porque requireAuth se monta por router
+ * y req.path ahí ya viene recortado.
+ */
+const REPARTIDOR_ALLOWED_PREFIXES = ['/api/delivery', '/api/auth'];
+
 function requireAuth(req, res, next) {
   // Aceptar token por header Authorization O por query param _token (para redirects OAuth)
   let token;
@@ -30,10 +40,19 @@ function requireAuth(req, res, next) {
     req.userId = payload.userId;
     req.orgId  = payload.orgId;
     req.role   = payload.role;
-    next();
   } catch {
-    res.status(401).json({ success: false, error: 'Token inválido o expirado' });
+    return res.status(401).json({ success: false, error: 'Token inválido o expirado' });
   }
+
+  if (req.role === 'repartidor') {
+    const url = req.originalUrl || req.url || '';
+    const allowed = REPARTIDOR_ALLOWED_PREFIXES.some(p => url.startsWith(p));
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Esta cuenta solo tiene acceso a la app de despachos' });
+    }
+  }
+
+  next();
 }
 
 function requireRole(...roles) {
@@ -45,4 +64,4 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { generateToken, requireAuth, requireRole, JWT_SECRET };
+module.exports = { generateToken, requireAuth, requireRole, JWT_SECRET, REPARTIDOR_ALLOWED_PREFIXES };

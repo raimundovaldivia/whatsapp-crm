@@ -1,0 +1,18 @@
+{
+  "cli": { "version": ">= 5.0.0" },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://whatsapp-crm-api-production-f804.up.railway.app"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://whatsapp-crm-api-production-f804.up.railway.app"
+      }
+    }
+  }
+}
