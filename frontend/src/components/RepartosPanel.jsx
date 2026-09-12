@@ -308,7 +308,7 @@ function NuevoReparto({ colors }) {
     setOptimizing(true);
     setError(null);
     try {
-      const r = await api.post('/delivery/optimize', { orders: selectedOrders, vehicles });
+      const r = await api.post('/delivery/optimize', { orders: selectedOrders, vehicles }, { timeout: 90000 });
       const routes = r.data.routes || (r.data.route ? [{ vehicle: 1, stops: r.data.route }] : []);
       setOptRoutes(routes);
       setOptimizedRoute(r.data);        // conserva warning/optimized/warehouse
@@ -351,7 +351,7 @@ function NuevoReparto({ colors }) {
           driverPhone:    drv?.whatsapp_phone || null,
           driverUserId:   drvId,
           send:           true,
-        });
+        }, { timeout: 60000 });
         sentCount++;
       }
       setSentRoute({ count: sentCount });
