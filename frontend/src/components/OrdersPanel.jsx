@@ -80,7 +80,7 @@ const CRM_STATUSES = [
   { key: 'nuevo',         label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
   { key: 'por_despachar', label: 'Por despachar',  color: '#fb923c', bg: '#2e1500' },
   { key: 'en_camino',     label: 'En camino',      color: '#38bdf8', bg: '#0c2030' },
-  { key: 'entregado',     label: 'Entregado',      color: '#4ade80', bg: '#0a2015' },
+  { key: 'entregado',     label: 'Entregado',      color: '#2dd4bf', bg: '#07231f' },
   { key: 'paid',          label: 'Pagado',          color: '#22c55e', bg: '#052010' },
   { key: 'cancelled',     label: 'Cancelado',      color: '#f87171', bg: '#2d1a1a' },
 ];
@@ -1210,6 +1210,13 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
           {status.label}
         </div>
 
+        {/* Badge: modificado/vendido en reparto */}
+        {(order.raw?.delivery_modified || order.delivery_modified) && (
+          <div style={{ backgroundColor: '#2a1a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #8b5cf655', flexShrink: 0 }}>
+            🛒 Modificado en reparto
+          </div>
+        )}
+
         {/* Badge financiero — Pendiente para draft/sent */}
         {(order.status === 'draft' || order.status === 'sent') && (
           <div style={{ backgroundColor: '#2e2100', color: colors.yellow, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 500, border: `1px solid ${colors.yellow}33`, flexShrink: 0 }}>
@@ -1373,7 +1380,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
               </button>
             )}
             {order.status === 'en_camino' && (
-              <button onClick={() => onStatusChange(order.id, 'entregado')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#0a2015', color: '#4ade80', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #4ade8033', cursor: 'pointer' }}>
+              <button onClick={() => onStatusChange(order.id, 'entregado')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#07231f', color: '#2dd4bf', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #2dd4bf33', cursor: 'pointer' }}>
                 <CheckCircle size={12} /> Marcar entregado
               </button>
             )}
@@ -1455,6 +1462,13 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
         <div style={{ backgroundColor: financial.bg, color: financial.color, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 500, border: `1px solid ${financial.color}33`, flexShrink: 0 }}>
           {financial.label}
         </div>
+
+        {/* Badge: modificado/vendido en reparto */}
+        {(order.raw?.delivery_modified || order.delivery_modified) && (
+          <div style={{ backgroundColor: '#2a1a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #8b5cf655', flexShrink: 0 }}>
+            🛒 Modificado en reparto
+          </div>
+        )}
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 500 }}>{order.customerName}</div>
