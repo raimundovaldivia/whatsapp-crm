@@ -74,7 +74,10 @@ const STATE_CLAIMS = [
   },
   {
     id: 'en_camino',
-    pattern: /(en\s+camino|en\s+ruta|va\s+en\s+camino|sali[oó]\s+el\s+reparto|el\s+repartidor\s+va)/i,
+    // Solo AFIRMACIONES en presente ("tu pedido va/está en camino", "salió el
+    // reparto"). Se excluye la promesa a futuro "te avisamos cuando ESTÉ en
+    // camino" (que aparece en el mensaje de confirmación y no afirma nada).
+    pattern: /(va\s+en\s+camino|est[aá]\s+en\s+camino|en\s+ruta\b|sali[oó]\s+(a|el)\s+reparto|el\s+repartidor\s+va)/i,
     requires: 'order_activa',
     describe: 'le dice que su pedido va en camino',
   },
@@ -171,7 +174,11 @@ async function loadConversationFacts(conversationId) {
 
   const sched = scheduled.rows[0] || null;
   const order = orders.rows[0] || null;
-  const ACTIVE = ['nuevo', 'sent', 'payment_received', 'por_despachar', 'en_camino'];
+  // 'draft' incluido: un pedido recién creado por el bot nace como 'draft'
+  // y el mensaje de confirmación sale en el mismo turno. Sin esto, la
+  // afirmación "pedido confirmado" no encontraba un pedido activo y el
+  // guardrail escalaba al ejecutivo justo al confirmar.
+  const ACTIVE = ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar', 'en_camino'];
 
   const ageDays = ts => ts ? (Date.now() - new Date(ts).getTime()) / 86400000 : null;
 
