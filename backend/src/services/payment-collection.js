@@ -50,15 +50,20 @@ async function getChargeSettings(orgId) {
     template:           parsed.template           || DEFAULT_TEMPLATE,
     bankDetails:        parsed.bankDetails        || '',
     autoSendOnTransfer: parsed.autoSendOnTransfer === true,
+    // Nombre del template APROBADO por Meta que se usa cuando el cliente lleva
+    // más de 24 h sin escribir (ahí WhatsApp no deja mandar texto libre).
+    // Parámetros del body, en orden: {{1}} nombre · {{2}} pedido · {{3}} total · {{4}} datos banco
+    waTemplate:         (parsed.waTemplate || '').trim(),
   };
 }
 
-async function saveChargeSettings(orgId, { template, bankDetails, autoSendOnTransfer } = {}) {
+async function saveChargeSettings(orgId, { template, bankDetails, autoSendOnTransfer, waTemplate } = {}) {
   const current = await getChargeSettings(orgId);
   const next = {
     template:           template           ?? current.template,
     bankDetails:        bankDetails        ?? current.bankDetails,
     autoSendOnTransfer: autoSendOnTransfer ?? current.autoSendOnTransfer,
+    waTemplate:         waTemplate         ?? current.waTemplate,
   };
   await db.setSetting(orgId, 'charge_settings', JSON.stringify(next));
   return next;
@@ -160,15 +165,25 @@ async function sendChargeRequest(orgId, order, opts = {}) {
   const text     = buildChargeMessage(order, settings);
 
   let sent = null;
+  let via  = 'texto';
   try {
     sent = await sendByProvider(order.customer_phone, text, wc);
   } catch (err) {
-    if (err.is24hWindow) {
-      // Fuera de la ventana de 24h solo se pueden mandar templates aprobados.
-      // No se registra el cobro: queda en el tab para reintentar con template.
+    if (!err.is24hWindow) return { ok: false, reason: 'error_envio', error: err.message };
+
+    // Fuera de la ventana de 24h solo se pueden mandar templates aprobados.
+    // Si la org configuró uno, se usa; si no, queda en "Por cobrar" para reintentar.
+    if (!settings.waTemplate || wc.provider !== 'kapso') {
       return { ok: false, reason: 'ventana_24h', message: text };
     }
-    return { ok: false, reason: 'error_envio', error: err.message };
+    try {
+      sent = await sendChargeTemplate(order, settings, wc);
+      via  = `template:${settings.waTemplate}`;
+    } catch (tplErr) {
+      const detail = tplErr.response?.data?.error?.message || tplErr.message;
+      console.error(`[Cobranza] Template "${settings.waTemplate}" falló:`, detail);
+      return { ok: false, reason: 'template_fallo', error: detail, message: text };
+    }
   }
 
   // Dejar el mensaje en el hilo de la conversación, para que quede trazabilidad
@@ -180,7 +195,7 @@ async function sendChargeRequest(orgId, order, opts = {}) {
         conversationId:    conv.id,
         whatsappMessageId: sent?.messageId || sent?.messages?.[0]?.id || null,
         direction:         'outbound',
-        content:           text,
+        content:           via.startsWith('template:') ? `[Template: ${settings.waTemplate}] ${text}` : text,
         sentBy:            'system',
         agentType:         'cobranza',
         status:            'sent',
@@ -196,9 +211,39 @@ async function sendChargeRequest(orgId, order, opts = {}) {
   }
 
   await registerChargeSent(order.source, order.id, orgId);
-  console.log(`[Cobranza] 💸 Cobro enviado a ${order.customer_phone} — pedido ${order.order_label}`);
+  console.log(`[Cobranza] 💸 Cobro enviado a ${order.customer_phone} — pedido ${order.order_label} (${via})`);
 
-  return { ok: true, message: text };
+  return { ok: true, message: text, via };
+}
+
+/**
+ * Envía el cobro como template aprobado (cliente fuera de la ventana de 24 h).
+ * Prueba con 4 parámetros (nombre, pedido, total, datos banco) y, si Meta
+ * responde que el template tiene menos (código 132000), reintenta con 3 y
+ * luego con 1, igual que el template de despacho.
+ */
+async function sendChargeTemplate(order, settings, wc) {
+  const kapso = require('./kapso-whatsapp');
+  // Los parámetros de template no admiten saltos de línea ni tabs.
+  const oneLine = v => String(v || '').replace(/\s+/g, ' ').trim();
+  const params = [
+    oneLine(firstName(order.customer_name) || 'Hola'),
+    oneLine(order.order_label || `#${order.id}`),
+    oneLine(formatCLP(order.total_price)),
+    oneLine(settings.bankDetails || '-'),
+  ];
+  const attempt = n => kapso.sendTemplate(order.customer_phone, settings.waTemplate, 'es', [{
+    type: 'body',
+    parameters: params.slice(0, n).map(text => ({ type: 'text', text })),
+  }], wc);
+
+  for (const n of [4, 3, 1]) {
+    try { return await attempt(n); }
+    catch (err) {
+      if (err.response?.data?.error?.code === 132000 && n > 1) continue;
+      throw err;
+    }
+  }
 }
 
 // ─── Consulta: pedidos por cobrar ────────────────────────────────────────────

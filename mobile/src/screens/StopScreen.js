@@ -88,12 +88,23 @@ export default function StopScreen({ route: navRoute, navigation }) {
   async function submit(newStatus, paymentMethod) {
     setLoading(true);
     try {
-      await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, note, extrasArray);
+      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, note, extrasArray);
       setStatus(newStatus);
       setPaidWith(paymentMethod || null);
       setDone(true);
       setAskingPayment(false);
       if (typeof onComplete === 'function') onComplete(newStatus);
+      // Transferencia: avisar al repartidor si el cobro salió solo o quedó pendiente
+      const ac = resp?.autoCharge;
+      if (paymentMethod === 'transferencia' && ac?.attempted) {
+        const detail = ac.ok
+          ? '💸 Se le envió al cliente el mensaje de cobro por WhatsApp.'
+          : ac.reason === 'ventana_24h' ? '⏳ El cliente no ha escrito en 24 h: el cobro quedó en "Por cobrar" para mandarlo desde el CRM.'
+          : ac.reason === 'cobrado_recien' ? 'ℹ️ Ya se le cobró hace poco; no se repite.'
+          : '⚠️ No se pudo enviar el cobro automático; quedó en "Por cobrar".';
+        Alert.alert('Entrega registrada', detail, [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        return;
+      }
       setTimeout(() => navigation.goBack(), 1400);
     } catch (err) {
       if (err.response?.status === 401) return; // la app vuelve al login sola

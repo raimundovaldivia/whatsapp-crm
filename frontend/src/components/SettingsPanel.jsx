@@ -1760,6 +1760,7 @@ function CobranzaTab() {
   const [template,    setTemplate]    = useState('');
   const [bankDetails, setBankDetails] = useState('');
   const [autoSend,    setAutoSend]    = useState(false);
+  const [waTemplate,  setWaTemplate]  = useState('');
   const [defaultTpl,  setDefaultTpl]  = useState('');
   const templateRef = useRef(null);
 
@@ -1771,6 +1772,7 @@ function CobranzaTab() {
         setTemplate(s.template || '');
         setBankDetails(s.bankDetails || '');
         setAutoSend(!!s.autoSendOnTransfer);
+        setWaTemplate(s.waTemplate || '');
         setDefaultTpl(res.data?.defaultTemplate || '');
       } catch (err) {
         setError(err.response?.data?.error || 'No se pudo cargar la configuración de cobranza');
@@ -1789,6 +1791,7 @@ function CobranzaTab() {
         template,
         bankDetails,
         autoSendOnTransfer: autoSend,
+        waTemplate: waTemplate.trim(),
       });
       setSuccess('Configuración de cobranza guardada');
       setTimeout(() => setSuccess(''), 3000);
@@ -1937,6 +1940,30 @@ function CobranzaTab() {
             <p style={hintStyle}>
               Se insertan donde pongas <code style={{ color: '#4db6ac' }}>{'{datos_banco}'}</code>.
               Si no usas el placeholder, se agregan al final del mensaje.
+            </p>
+          </div>
+
+          {/* Template aprobado de Meta — respaldo fuera de la ventana de 24 h */}
+          <div>
+            <label style={labelStyle}>Template de Meta para cobrar fuera de 24 h (opcional)</label>
+            <input
+              value={waTemplate}
+              onChange={e => setWaTemplate(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+              placeholder="cobro_transferencia"
+              style={inp}
+            />
+            <p style={hintStyle}>
+              Si el cliente lleva más de 24 h sin escribir, WhatsApp bloquea el mensaje de arriba y el cobro
+              sale con este template aprobado. Créalo en Meta (categoría <b>Utilidad</b>, idioma español) con este texto,
+              respetando el orden de los parámetros:
+            </p>
+            <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`, borderRadius: '8px',
+              padding: '10px 12px', fontSize: '12px', fontFamily: 'monospace', whiteSpace: 'pre-wrap', lineHeight: 1.5, color: colors.textPrimary }}>
+{`Hola {{1}}, te entregamos tu pedido {{2}} por {{3}} y quedó pendiente el comprobante de la transferencia. Datos: {{4}}. Cuando lo tengas, mándalo por este chat y listo. ¡Gracias!`}
+            </div>
+            <p style={hintStyle}>
+              {'{{1}}'} nombre · {'{{2}}'} pedido · {'{{3}}'} total · {'{{4}}'} datos de transferencia (en una línea).
+              Si tu template tiene menos parámetros, se envían solo los primeros.
             </p>
           </div>
 

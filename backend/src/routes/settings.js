@@ -571,14 +571,18 @@ router.get('/charge-settings', async (req, res) => {
 
 router.post('/charge-settings', async (req, res) => {
   try {
-    const { template, bankDetails, autoSendOnTransfer } = req.body;
+    const { template, bankDetails, autoSendOnTransfer, waTemplate } = req.body;
     if (template !== undefined && typeof template !== 'string') {
       return res.status(400).json({ success: false, error: 'template debe ser texto' });
+    }
+    if (waTemplate !== undefined && waTemplate !== null && !/^[a-z0-9_]*$/.test(String(waTemplate).trim())) {
+      return res.status(400).json({ success: false, error: 'El nombre del template de Meta solo admite minúsculas, números y guion bajo' });
     }
     const settings = await collection.saveChargeSettings(req.orgId, {
       template,
       bankDetails,
       autoSendOnTransfer: autoSendOnTransfer === undefined ? undefined : !!autoSendOnTransfer,
+      waTemplate: waTemplate === undefined ? undefined : String(waTemplate || '').trim(),
     });
     res.json({ success: true, settings });
   } catch (err) {

@@ -587,7 +587,31 @@ router.patch('/payment-method', async (req, res) => {
         );
 
     if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
-    res.json({ success: true });
+
+    // ── Cobro automático: mismo comportamiento que la app de reparto ──────
+    // Si la org activó autoSendOnTransfer y el pedido ya está entregado (y
+    // sin comprobante), el mensaje de cobro sale al marcar "transferencia".
+    let autoCharge = null;
+    if (method === 'transferencia') {
+      try {
+        const settings = await collection.getChargeSettings(req.orgId);
+        if (settings.autoSendOnTransfer) {
+          const order = await collection.getOrderForCharge(req.orgId, source, id);
+          if (order) {
+            const r = await collection.sendChargeRequest(req.orgId, order, { io });
+            autoCharge = { attempted: true, ...r };
+          } else {
+            // No está "por cobrar" todavía (p. ej. aún no se entregó): saldrá al entregar.
+            autoCharge = { attempted: false, reason: 'pedido_no_por_cobrar' };
+          }
+        }
+      } catch (err) {
+        console.error('[Orders/payment-method] Cobro automático falló:', err.message);
+        autoCharge = { attempted: true, ok: false, reason: 'error', error: err.message };
+      }
+    }
+
+    res.json({ success: true, autoCharge });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
