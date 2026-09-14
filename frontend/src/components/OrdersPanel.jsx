@@ -1216,6 +1216,12 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
             🛒 Modificado en reparto
           </div>
         )}
+        {/* Badge: el cliente cambió su pedido desde WhatsApp (modify_order del bot) */}
+        {(order.raw?.customer_modified || order.customer_modified) && (
+          <div style={{ backgroundColor: '#1a2a3d', color: '#93c5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #3b82f655', flexShrink: 0 }}>
+            ✏️ Modificado por el cliente
+          </div>
+        )}
 
         {/* Badge financiero — Pendiente para draft/sent */}
         {(order.status === 'draft' || order.status === 'sent') && (
@@ -1467,6 +1473,12 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
         {(order.raw?.delivery_modified || order.delivery_modified) && (
           <div style={{ backgroundColor: '#2a1a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #8b5cf655', flexShrink: 0 }}>
             🛒 Modificado en reparto
+          </div>
+        )}
+        {/* Badge: el cliente cambió su pedido desde WhatsApp (modify_order del bot) */}
+        {(order.raw?.customer_modified || order.customer_modified) && (
+          <div style={{ backgroundColor: '#1a2a3d', color: '#93c5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #3b82f655', flexShrink: 0 }}>
+            ✏️ Modificado por el cliente
           </div>
         )}
 

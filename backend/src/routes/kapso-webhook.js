@@ -216,24 +216,56 @@ router.post('/', async (req, res) => {
     return;
   }
 
-  // ── Audio sin transcript → guardar y responder ───────────────────
-  if (parsed.type === 'audio' && !parsed.text) {
-    const audioMediaRef = parsed.mediaUrl || parsed.mediaId;
+  // ── Ubicación compartida → convertir a texto para el pipeline ────────
+  // Antes un pin de Google Maps no generaba nada: ni respuesta ni registro.
+  if (parsed.type === 'location' && parsed.location) {
+    const addr = await reverseGeocode(parsed.location).catch(() => null);
+    const label = addr
+      || [parsed.location.name, parsed.location.address].filter(Boolean).join(', ')
+      || `${parsed.location.lat.toFixed(5)}, ${parsed.location.lng.toFixed(5)}`;
+    parsed.text = `📍 [Ubicación compartida: ${label}]`;
+    console.log(`[KapsoWebhook] 📍 Ubicación de ${parsed.from} → ${label}`);
+  }
+
+  // ── Audio sin transcript → transcribir si hay OPENAI_API_KEY (Whisper) ──
+  // Kapso ya transcribe si la opción está activa en su panel; esto es el
+  // respaldo cuando no viene transcript.
+  if (parsed.type === 'audio' && !parsed.text && process.env.OPENAI_API_KEY && (parsed.mediaUrl || parsed.mediaId)) {
+    const transcript = await transcribeAudio(parsed, whatsappConfig).catch(e => {
+      console.warn('[KapsoWebhook] transcripción falló:', e.message);
+      return null;
+    });
+    if (transcript) parsed.text = `🎤 ${transcript}`;
+  }
+
+  // ── Audio (sin transcript) o video → avisar que no se puede procesar ──
+  if ((parsed.type === 'audio' || parsed.type === 'video') && !parsed.text) {
+    const isVideo   = parsed.type === 'video';
+    const mediaRef  = parsed.mediaUrl || parsed.mediaId;
+    const label     = isVideo ? '🎥 [Video]' : '🎤 [Audio]';
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
     db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
     await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: parsed.messageId,
       direction:         'inbound',
-      content:           '🎤 [Audio]',
-      type:              'audio',
+      content:           label,
+      type:              parsed.type,
       sentBy:            'client',
-      mediaId:           audioMediaRef,
+      mediaId:           mediaRef,
     });
-    await db.updateConversationLastMessage(conversation.id, '🎤 [Audio]', true);
+    await db.updateConversationLastMessage(conversation.id, label, true);
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
-    const reply = '¡Hola! No puedo escuchar audios 😊 ¿Puedes escribirme lo que necesitas?';
+    // En modo humano el ejecutivo lo ve en el CRM — no contestar encima
+    if (conversation.agent_mode && conversation.agent_mode !== 'ai') {
+      const updatedConv = await db.getConversationById(conversation.id);
+      io?.emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
+      return;
+    }
+    const reply = isVideo
+      ? 'Recibí tu video, pero no puedo verlo por aquí 😊 ¿Me cuentas por escrito qué necesitas?'
+      : '¡Hola! No puedo escuchar audios 😊 ¿Puedes escribirme lo que necesitas?';
     const sentMsg = await kapsoService.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
     if (sentMsg) {
       await db.saveMessage({
@@ -246,7 +278,7 @@ router.post('/', async (req, res) => {
     }
     const updatedConv = await db.getConversationById(conversation.id);
     io?.emit(`new_message_${org.id}`, {
-      message: { conversationId: conversation.id, direction: 'inbound', content: '🎤 [Audio]', type: 'audio', media_id: audioMediaRef },
+      message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef },
       conversation: updatedConv,
     });
     return;
@@ -289,21 +321,28 @@ router.post('/', async (req, res) => {
     // 3b. Notificar a agentes con new_messages habilitado (sin await para no bloquear)
     notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
 
-    // 4. Si está en modo humano/pendiente, verificar si corresponde auto-reset
+    // 4. Si está en modo humano/pendiente, verificar si corresponde auto-reset.
+    //    Referencia = lo MÁS RECIENTE entre la última respuesta humana y la
+    //    última escalación del bot. Antes, si ningún humano respondía nunca,
+    //    la conversación quedaba muda para siempre; ahora vuelve al bot a las
+    //    24 h de la escalación. Un takeover manual desde el CRM (sin
+    //    escalación ni respuesta) sigue esperando al humano, como antes.
     if (updatedConv.agent_mode !== 'ai') {
       const AUTO_RESET_MINUTES = 1440;
-      const mins = await db.minutesSinceLastHumanReply(conversation.id);
-      // Solo auto-reset si algún humano YA respondió antes y lleva > 24h sin hacerlo.
-      // Si nunca respondió un humano (Infinity), mantener en espera — no interrumpir.
-      if (mins < AUTO_RESET_MINUTES || !isFinite(mins)) return;
-      // Auto-reset a modo IA
+      const humanMins = await db.minutesSinceLastHumanReply(conversation.id);
+      const escMins   = updatedConv.last_escalation_at
+        ? (Date.now() - new Date(updatedConv.last_escalation_at).getTime()) / 60000
+        : Infinity;
+      const refMins = Math.min(humanMins, escMins);
+      if (!isFinite(refMins) || refMins < AUTO_RESET_MINUTES) return;
+      // Auto-reset a modo IA y SEGUIR procesando este mensaje (antes se descartaba)
       await db.setAgentMode(conversation.id, 'ai');
       io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
       if (typeof db.clearLastEscalation === 'function') {
         await db.clearLastEscalation(conversation.id).catch(() => {});
       }
       await db.updatePipelineState(conversation.id, 'exploring', {}).catch(() => {});
-      return;
+      console.log(`[KapsoWebhook] 🔁 Conv ${conversation.id} vuelve a IA tras ${Math.round(refMins / 60)}h sin atención humana`);
     }
 
     // 5. Debounce: esperar 3s desde el ÚLTIMO mensaje antes de ejecutar pipeline.
@@ -363,35 +402,58 @@ router.post('/', async (req, res) => {
         // que la DB no respalda (una fecha que ya pasó, un pedido cerrado o
         // estancado), no sale. El bot no se equivoca al razonar — se equivoca
         // porque le pasamos un dato viejo. Ante eso, mejor que hable un humano.
+        // Acuse al cliente cuando el bot pausa y pasa el hilo al equipo.
+        // Antes el cliente recibía silencio; si nadie respondía, se quedaba
+        // así para siempre. Ahora: acuse inmediato + recordatorio si el equipo
+        // tarda (escalation-watch.js) + vuelta al bot a las 24 h.
+        const escalateWithAck = async (ackText, reason, botWasGoingToSay) => {
+          await db.setAgentMode(capturedConvId, 'human');
+          await db.setLastEscalation(capturedConvId, textToProcess, reason).catch(() => {});
+          io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
+          notifyAdminHelp(org.id, updatedConv || conversation, botWasGoingToSay, reason).catch(() => {});
+
+          let ackSent = null;
+          try {
+            ackSent = await kapsoService.sendTextMessage(capturedFrom, ackText, whatsappConfig);
+          } catch (e) {
+            if (!e.is24hWindow) console.warn('[KapsoWebhook] no se pudo enviar acuse de escalación:', e.message);
+          }
+          const ackMsg = await db.saveMessage({
+            conversationId:    capturedConvId,
+            whatsappMessageId: ackSent?.messages?.[0]?.id || null,
+            direction:         'outbound',
+            content:           ackText,
+            sentBy:            'ai',
+            agentType:         'orchestrator',
+            status:            ackSent ? 'sent' : 'failed',
+          });
+          await db.updateConversationLastMessage(capturedConvId, ackText);
+          const convNow = await db.getConversationById(capturedConvId);
+          io?.emit(`new_message_${org.id}`, { message: ackMsg, conversation: convNow });
+        };
+
         if (!result.switchToHuman) {
           const fresh = await guardrail.checkResponseFreshness(org.id, capturedConvId, result.response);
           if (!fresh.ok) {
             console.error(`[KapsoWebhook] ⛔ Dato rancio (${fresh.reason}) para ${capturedFrom}: ${fresh.detail}`);
             log.step('guardrail', `bloqueado: ${fresh.reason}`);
-            await db.setAgentMode(capturedConvId, 'human');
-            io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
-            notifyAdminHelp(
-              org.id,
-              updatedConv || conversation,
-              result.response,
-              `Dato desactualizado — ${fresh.detail}`
-            ).catch(() => {});
+            await escalateWithAck(
+              'Déjame revisar esto con el equipo para darte la información correcta y te escribo por aquí 🙏',
+              `Dato desactualizado — ${fresh.detail}`,
+              result.response
+            );
             log.done();
-            return; // el cliente no recibe nada: responde el ejecutivo
+            return;
           }
         }
 
-        // ── Si el pipeline escala, no decirle al cliente "te conectaré con un asesor".
-        //    El bot pausa y le pregunta al admin en privado.
-        //    El cliente recibe silencio (o nada) — el admin decide qué responder.
         if (result.switchToHuman) {
-          await db.setAgentMode(capturedConvId, 'human');
-          io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
           const reason = result.escalationReason || 'Necesita validación del ejecutivo';
-          notifyAdminHelp(org.id, updatedConv || conversation, result.response, reason).catch(() => {});
-          log.step('switchToHuman', `admin consultado — conv ${capturedConvId} en pausa`);
+          const ack = result.response || 'Déjame consultarlo con el equipo y te confirmo por aquí 🙏';
+          await escalateWithAck(ack, reason, result.response);
+          log.step('switchToHuman', `admin consultado — conv ${capturedConvId} en pausa, cliente avisado`);
           log.done();
-          return; // no enviar nada al cliente todavía
+          return;
         }
 
         // Enviar respuesta por WhatsApp via Kapso
@@ -430,6 +492,18 @@ router.post('/', async (req, res) => {
             conversationId: capturedConvId,
             order: result.orderCreated,
           });
+        }
+        if (result.orderUpdated || result.orderCancelled) {
+          const ev = result.orderUpdated ? 'modificó' : 'canceló';
+          const oid = (result.orderUpdated || result.orderCancelled).orderId;
+          io?.emit(`order_updated_${org.id}`, { conversationId: capturedConvId, orderId: oid, event: result.orderUpdated ? 'updated' : 'cancelled' });
+          const who = (updatedConv || conversation).contact_name || capturedFrom;
+          const shopifyNote = result.orderUpdated?.shopifyDraftId ? '\n⚠️ Este pedido tiene Draft Order en Shopify — ajústalo allá también.' : '';
+          notifyAdmin(org.id, {
+            body: `✏️ *${who}* ${ev} su pedido #${oid} desde WhatsApp.${shopifyNote}\n\nRevísalo en el CRM → Pedidos.`,
+            kind: 'order',
+            conversationId: capturedConvId,
+          }).catch(() => {});
         }
 
         const finalConv = await db.getConversationById(capturedConvId);
@@ -808,6 +882,54 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
   } catch (err) {
     console.error('[KapsoWebhook] Error procesando imagen:', err.message, err.stack?.split('\n')[1]);
   }
+}
+
+/**
+ * Ubicación → dirección legible con la Geocoding API de Google (la misma key
+ * que usa la optimización de rutas). Sin key devuelve null y se usa lo que
+ * mandó WhatsApp (nombre/dirección del lugar) o las coordenadas.
+ */
+async function reverseGeocode({ lat, lng }) {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return null;
+  const axios = require('axios');
+  const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
+    params: { latlng: `${lat},${lng}`, key: apiKey, language: 'es', region: 'cl' },
+    timeout: 8000,
+  });
+  if (data?.status !== 'OK' || !data.results?.length) return null;
+  // Preferir el resultado con número de calle; quitar el país del final
+  const best = data.results.find(r => r.types?.includes('street_address')) || data.results[0];
+  return (best.formatted_address || '').replace(/,\s*Chile$/i, '').trim() || null;
+}
+
+/**
+ * Transcribe un audio de WhatsApp con Whisper (OpenAI). Solo se usa si hay
+ * OPENAI_API_KEY y Kapso no entregó transcript. Node 18+ trae fetch/FormData/Blob.
+ */
+async function transcribeAudio(parsed, whatsappConfig) {
+  let data, contentType;
+  if (parsed.mediaUrl) {
+    ({ data, contentType } = await kapsoService.downloadMedia(parsed.mediaUrl, whatsappConfig));
+  } else {
+    const info = await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig);
+    ({ data, contentType } = await kapsoService.downloadMedia(info.url, whatsappConfig));
+  }
+  if (!data) return null;
+  const ext = /mpeg|mp3/.test(contentType || '') ? 'mp3' : /ogg|opus/.test(contentType || '') ? 'ogg' : /mp4|m4a|aac/.test(contentType || '') ? 'm4a' : 'ogg';
+  const form = new FormData();
+  form.append('file', new Blob([Buffer.from(data)], { type: contentType || 'audio/ogg' }), `audio.${ext}`);
+  form.append('model', 'whisper-1');
+  form.append('language', 'es');
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Whisper HTTP ${res.status}`);
+  const json = await res.json();
+  const text = (json.text || '').trim();
+  return text || null;
 }
 
 module.exports = router;

@@ -382,6 +382,11 @@ async function setupDatabase() {
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
       -- Marca: el repartidor vendió/modificó algo al entregar (bandejas extras).
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_modified BOOLEAN DEFAULT FALSE;
+      -- Modificado por el propio cliente desde WhatsApp (modify_order del bot)
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_modified BOOLEAN DEFAULT FALSE;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS notes TEXT;
+      -- Recordatorio enviado al cliente cuando una escalación lleva mucho sin respuesta humana
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS escalation_reminder_at TIMESTAMP;
 
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;

@@ -6,7 +6,17 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
  * Agente Orquestador — Clasifica la intención del cliente
  * Usa claude-haiku (rápido y barato) para esta tarea simple
  */
-async function classifyIntent(userMessage, conversationHistory, pipelineState) {
+async function classifyIntent(userMessage, conversationHistory, pipelineState, opts = {}) {
+  const { hasActiveOrder = false, activeOrderSummary = '' } = opts;
+
+  const orderIntents = hasActiveOrder ? `
+- modify_order: El cliente quiere CAMBIAR su pedido ya registrado: agregar o quitar productos, cambiar cantidad, cambiar dirección ("agrégame 2 más", "mejor mándame la de color", "cambia la dirección a...")
+- cancel_order: El cliente quiere CANCELAR su pedido ya registrado ("cancela mi pedido", "ya no lo quiero", "anúlalo")` : '';
+
+  const orderRules = hasActiveOrder ? `
+- El cliente YA TIENE un pedido registrado: ${activeOrderSummary || 'sí'}. Si pide agregar/quitar/cambiar algo, es "modify_order", NO "wants_to_order". Si quiere pedir productos claramente ADICIONALES como un pedido nuevo y separado, usa "wants_to_order".
+- "puedo cancelar?" (pregunta) es "post_sale"; "cancela mi pedido" (instrucción) es "cancel_order".` : '';
+
   const SYSTEM = `Eres un clasificador de intenciones para un chat de ventas de WhatsApp.
 Tu ÚNICA tarea es clasificar el mensaje del cliente en UNA de estas categorías:
 
@@ -18,12 +28,12 @@ Tu ÚNICA tarea es clasificar el mensaje del cliente en UNA de estas categorías
 - delivery_inquiry: Pregunta sobre envíos, tiempos de entrega, zonas de despacho, horarios
 - support: Pregunta sobre estado de pedido, devoluciones, cambios, reclamos de pedido anterior
 - post_sale: El cliente ya compró y tiene preguntas de seguimiento ("cuándo llega", "puedo cancelar", "no me llegó")
-- human_request: El cliente quiere hablar con una persona real explícitamente
+- human_request: El cliente quiere hablar con una persona real explícitamente${orderIntents}
 
 REGLAS:
 - Si el mensaje es MUY corto (1-3 palabras) y es el inicio, probablemente es "greeting"
 - Si ya hay historial de conversación largo, no es "greeting"
-- "delivery_inquiry" es distinto de "support": delivery_inquiry es ANTES de comprar, support es DESPUÉS
+- "delivery_inquiry" es distinto de "support": delivery_inquiry es ANTES de comprar, support es DESPUÉS${orderRules}
 - Estado actual de la conversación: ${pipelineState}
 
 Responde SOLO con el JSON: {"intent": "categoria", "confidence": 0.0-1.0, "reason": "una linea"}

@@ -157,6 +157,8 @@ function parseWebhookMessage(body, event) {
     let text = null;
     let mediaId = null;
     let mediaUrl = null; // URL directa de Kapso (disponible en message.kapso.media_url)
+    let location = null;      // { lat, lng, name, address } para type 'location'
+    let interactiveId = null; // id del botón / opción elegida (interactive)
 
     if (message.type === 'text') {
       text = message.text?.body;
@@ -210,11 +212,42 @@ function parseWebhookMessage(body, event) {
         if (match) mediaUrl = match[1];
       }
       text = null;
+    } else if (message.type === 'location') {
+      // Pin de ubicación: lo más natural para dar una dirección de reparto.
+      // El webhook lo convierte a texto (con geocodificación inversa si hay key).
+      location = {
+        lat:     Number(message.location?.latitude),
+        lng:     Number(message.location?.longitude),
+        name:    message.location?.name    || null,
+        address: message.location?.address || null,
+      };
+      if (!Number.isFinite(location.lat) || !Number.isFinite(location.lng)) location = null;
+      text = null;
+    } else if (message.type === 'interactive') {
+      // Respuesta a botones o lista interactiva → el título elegido es el texto
+      const r = message.interactive?.button_reply || message.interactive?.list_reply || null;
+      text = r?.title || r?.description || message.kapso?.content || null;
+      interactiveId = r?.id || null;
+    } else if (message.type === 'button') {
+      // Quick reply de un template aprobado
+      text = message.button?.text || message.button?.payload || message.kapso?.content || null;
+    } else if (message.type === 'sticker') {
+      console.log('[KapsoWA] Sticker ignorado — no activa pipeline');
+      return null;
+    } else if (message.type === 'video') {
+      mediaId  = message.video?.id || null;
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.video?.link || null;
+      text = null;
+    } else if (message.type === 'contacts') {
+      const c = message.contacts?.[0];
+      const cname = c?.name?.formatted_name || [c?.name?.first_name, c?.name?.last_name].filter(Boolean).join(' ');
+      const cphone = c?.phones?.[0]?.phone || c?.phones?.[0]?.wa_id || '';
+      text = (cname || cphone) ? `[Contacto compartido: ${[cname, cphone].filter(Boolean).join(' ')}]` : null;
     } else {
       text = message.kapso?.content || null;
     }
-    // Solo retornar null si no hay texto NI media
-    if (!text && !mediaId && !mediaUrl) return null;
+    // Solo retornar null si no hay texto NI media NI ubicación
+    if (!text && !mediaId && !mediaUrl && !location) return null;
 
     // Número del remitente: v2 usa conversation.phone_number (con +)
     // Fallback a message.from (también presente en v2)
@@ -230,6 +263,8 @@ function parseWebhookMessage(body, event) {
       text,
       mediaId,
       mediaUrl,   // URL directa de descarga (usar esta cuando esté disponible)
+      location,
+      interactiveId,
     };
   } catch { return null; }
 }

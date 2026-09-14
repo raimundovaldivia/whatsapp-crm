@@ -14,6 +14,7 @@ const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
+const pricing      = require('./order-pricing');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 
 /**
@@ -89,6 +90,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
 
   // ── Precios especiales para esta empresa ───────────────────────────
   let specialPricesSection = '';
+  const specialPrices = {};   // product_id | título normalizado → precio (lo usa order-pricing)
   if (isEmpresa && conversation.phone_number) {
     try {
       const pool = getPool();
@@ -100,12 +102,11 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
         [orgId, contactPhone]
       );
       if (priceRows.length > 0) {
-        // Reemplazar precios en productosTexto con los precios especiales
         for (const pr of priceRows) {
-          const fmtPrice = Number(pr.custom_price).toLocaleString('es-CL');
-          // Reemplazar en el texto del catálogo si el producto aparece
+          if (pr.product_id != null) specialPrices[String(pr.product_id)] = Number(pr.custom_price);
           if (pr.product_title) {
-            productosTexto = productosTexto; // no modificar el texto base
+            const key = String(pr.product_title).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+            specialPrices[key] = Number(pr.custom_price);
           }
         }
         const lista = priceRows.map(p =>
@@ -152,6 +153,9 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
 
   let currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
+
+  // Contexto que necesita el agente de pedidos para valorizar el carrito
+  const orderCtx = { products, specialPrices, isLead };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
@@ -240,8 +244,10 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
 
   // ── Pedido activo de esta conversación (para contexto del bot) ─────────
   let pendingOrderSection = '';
+  let activeOrder = null;          // visible para modificar / cancelar más abajo
+  let activeOrderSummary = '';
   try {
-    const activeOrder = await db.getActiveOrderForBot(conversationId);
+    activeOrder = await db.getActiveOrderForBot(conversationId);
     if (activeOrder) {
       const STATUS_LABEL = {
         draft:            'Confirmado — en preparación',
@@ -278,6 +284,8 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
         ? `$${Number(activeOrder.total_price).toLocaleString('es-CL')}`
         : '';
 
+      activeOrderSummary = [itemsLine, totalLine, statusLabel.replace(/\*\*/g, '')].filter(Boolean).join(' · ');
+
       pendingOrderSection = `## Pedido activo del cliente ⚠️ LEE ESTO PRIMERO
 Este cliente ya tiene un pedido registrado en nuestro sistema:
 - Estado: **${statusLabel}**${itemsLine ? `\n- Productos: ${itemsLine}` : ''}${totalLine ? `\n- Total: ${totalLine}` : ''}${addrLine ? `\n- Dirección registrada: ${addrLine}` : ''}
@@ -286,7 +294,7 @@ Reglas estrictas para responder sobre este pedido:
 1. Si el cliente pregunta "¿cuándo llega?", "¿cómo va mi pedido?", "¿ya lo mandaron?" o similar → responde que su pedido está ${statusLabel.replace(/\*\*/g, '').toLowerCase()} y que pronto recibirá más novedades.
 2. NO vuelvas a pedir datos de entrega, dirección ni de pago — el pedido ya está registrado.
 3. NO ofrezcas iniciar un nuevo pedido para los mismos productos.
-4. Si el cliente quiere modificar o cancelar → dile que lo puede coordinar con el equipo escribiendo aquí mismo.`;
+4. Si el cliente quiere modificar o cancelar → dile que sí se puede hacer aquí mismo y pregúntale qué quiere cambiar (el sistema lo procesa automáticamente cuando lo diga).`;
 
       console.log(`[Pipeline] 📦 Pedido activo inyectado al contexto: id=${activeOrder.id} status=${activeOrder.status}`);
     }
@@ -393,7 +401,7 @@ Reglas estrictas para responder sobre este pedido:
         );
       } catch { /* continuar aunque falle */ }
       L.agent('orders', 0);
-      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, preDraft, productosTexto);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, preDraft, productosTexto, orderCtx);
     }
 
     // Responder contextualmente con Haiku — nunca el mismo texto repetido
@@ -435,14 +443,21 @@ REGLAS ABSOLUTAS:
     }
   }
 
-  // ── Estado ya confirmado: el cliente ya hizo un pedido este sesión ─
-  // Responder con mensaje simple y reiniciar a exploración.
-  // Incluye 'done' (estado que se graba en DB tras guardar el pedido).
+  // ── Estado ya confirmado: el cliente ya hizo un pedido en esta sesión ─
+  // Antes se respondía SIEMPRE "¡Ya tenemos tu pedido registrado!" sin leer el
+  // mensaje: "agrégame dos más" o "cambia la dirección" recibían eso. Ahora
+  // solo un agradecimiento/cierre corto recibe respuesta enlatada (sin LLM);
+  // cualquier otra cosa sigue el flujo normal, que ya conoce el pedido activo
+  // y puede modificarlo o cancelarlo.
   if (currentState === 'confirmed' || currentState === 'done' || currentState === 'awaiting_payment') {
-    await db.updatePipelineState(conversationId, 'exploring');
-    const afterOrderMsg = '¡Ya tenemos tu pedido registrado! 😊 ¿Puedo ayudarte con algo más?';
-    L.agent('sales', 0);
-    return { response: afterOrderMsg, agentType: 'sales', newState: 'exploring' };
+    await db.updatePipelineState(conversationId, 'exploring', {});
+    currentState = 'exploring';
+    orderDraft = {};
+    const closingMsg = /^(gracias|muchas gracias|mil gracias|ok|oka|okey|listo|perfecto|genial|dale|vale|buenísimo|buenisimo|excelente|👍|🙏|😊)[\s!.]*$/i;
+    if (closingMsg.test(userMessage.trim())) {
+      L.agent('sales', 0);
+      return { response: '¡Gracias a ti! 😊 Cualquier cosa me escribes por aquí.', agentType: 'sales', newState: 'exploring' };
+    }
   }
 
   // ── Detectar respuesta a template de re-engagement ─────────────────
@@ -518,7 +533,7 @@ REGLAS ABSOLUTAS:
     orchestrator.checkEscalation(userMessage, history, effectiveState, orgId),
     (currentState === 'collecting_order')
       ? Promise.resolve(null)
-      : orchestrator.classifyIntent(userMessage, history, effectiveState),
+      : orchestrator.classifyIntent(userMessage, history, effectiveState, { hasActiveOrder: !!activeOrder, activeOrderSummary }),
   ]);
 
   L.escalation(escalationResult.escalate, escalationResult.urgency, escalationResult.reason);
@@ -530,10 +545,13 @@ REGLAS ABSOLUTAS:
     await db.setLastEscalation(conversationId, userMessage, escalationResult.reason);
     await db.updatePipelineState(conversationId, currentState); // mantiene el estado actual
 
+    // Acuse honesto: no prometer "ya te atienden" — el equipo puede tardar.
+    // El webhook envía este texto y, si nadie responde, manda un recordatorio
+    // (ver escalation-watch.js).
     const escalationMessages = {
-      high: '⚠️ Entiendo tu situación. Voy a conectarte ahora mismo con un asesor para que te ayude personalmente. ¡Ya te atienden! 👋',
-      medium: 'Quiero asegurarme de que recibas la mejor atención. Te voy a conectar con uno de nuestros asesores. En un momento alguien te escribe 😊',
-      low: 'Para darte una mejor atención, voy a pasarte con un asesor que podrá ayudarte con esto. ¡Un momento! 👋',
+      high: 'Entiendo, y lo siento por la molestia 🙏 Le paso tu caso al equipo para que lo revise personalmente y te respondan por aquí mismo.',
+      medium: 'Esto lo tiene que ver alguien del equipo. Ya se lo pasé y te escriben por aquí en cuanto lo revisen 🙏',
+      low: 'Déjame consultarlo con el equipo y te confirmo por aquí 🙏',
     };
 
     return {
@@ -548,7 +566,7 @@ REGLAS ABSOLUTAS:
   // ── Si estamos en proceso de recopilación de datos ──────────────
   if (currentState === 'collecting_order') {
     L.agent('orders', 0);
-    return await handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto);
+    return await handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx);
   }
 
   // ── Paso 1: Orquestador clasifica la intención ──────────────────
@@ -563,6 +581,65 @@ REGLAS ABSOLUTAS:
   const customerName = knownCustomerData?.name?.split(' ')[0] || '';
 
   const salesOpts = { isWarmLead: isTemplateReply, templateName, customerName, intent };
+
+  // ── Modificar / cancelar un pedido ya registrado ───────────────────
+  // Editable mientras no salió a reparto. Si ya está por despachar o en
+  // camino, se avisa al equipo (con acuse al cliente) en vez de tocarlo.
+  const EDITABLE = ['draft', 'nuevo', 'sent', 'payment_received'];
+  if ((intent === 'cancel_order' || intent === 'modify_order') && activeOrder) {
+    const editable = EDITABLE.includes(activeOrder.status);
+    const orderItemsText = (() => {
+      try {
+        const its = typeof activeOrder.items === 'string' ? JSON.parse(activeOrder.items) : activeOrder.items;
+        return Array.isArray(its) ? its.map(i => `${i.quantity || 1}x ${i.name || i.title || ''}`).join(', ') : '';
+      } catch { return ''; }
+    })();
+
+    if (!editable) {
+      const verb = intent === 'cancel_order' ? 'cancelar' : 'cambiar';
+      L.step(intent, `pedido ${activeOrder.id} en estado ${activeOrder.status} — no editable, se avisa al equipo`);
+      return {
+        response: `Tu pedido ya salió a reparto, así que no lo puedo ${verb} desde aquí 😕 Le aviso al equipo ahora mismo para ver qué se puede hacer y te confirman por este chat 🙏`,
+        agentType: 'orders',
+        newState: currentState,
+        switchToHuman: true,
+        escalationReason: `Cliente quiere ${verb} el pedido #${activeOrder.id} (${orderItemsText}) que ya está ${activeOrder.status}`,
+      };
+    }
+
+    if (intent === 'cancel_order') {
+      await db.updateOrder(activeOrder.id, { status: 'cancelled', updated_at: new Date() });
+      await db.updatePipelineState(conversationId, 'exploring', {});
+      L.step('cancel_order', `pedido ${activeOrder.id} cancelado por el cliente`);
+      return {
+        response: `Listo, cancelé tu pedido${orderItemsText ? ` (${orderItemsText})` : ''} ✅ Si más adelante quieres pedir de nuevo, aquí estoy 😊`,
+        agentType: 'orders',
+        newState: 'exploring',
+        orderCancelled: { orderId: activeOrder.id },
+      };
+    }
+
+    // modify_order → volver a recopilar sobre el pedido existente
+    let addr = {};
+    try { addr = typeof activeOrder.shipping_address === 'string' ? JSON.parse(activeOrder.shipping_address) : (activeOrder.shipping_address || {}); } catch { addr = {}; }
+    let items = [];
+    try {
+      const its = typeof activeOrder.items === 'string' ? JSON.parse(activeOrder.items) : activeOrder.items;
+      items = (Array.isArray(its) ? its : []).filter(i => i && !i._deliveryExtra)
+        .map(i => ({ product_name: i.name || i.title || i.product_name, quantity: parseInt(i.quantity, 10) || 1 }));
+    } catch { items = []; }
+    const editDraft = {
+      editing_order_id: activeOrder.id,
+      customer_name: activeOrder.customer_name || undefined,
+      address: addr.address || addr.address1 || undefined,
+      city:    addr.city || undefined,
+      items,
+    };
+    Object.keys(editDraft).forEach(k => editDraft[k] === undefined && delete editDraft[k]);
+    L.step('modify_order', `editando pedido ${activeOrder.id}`);
+    L.agent('orders', 0);
+    return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, editDraft, productosTexto, orderCtx);
+  }
 
   // ── Pedido futuro: el cliente quiere pedir para después ────────────
   // Detectar ANTES del mapeo normal. Solo aplica cuando el cliente muestra
@@ -641,7 +718,7 @@ REGLAS ABSOLUTAS:
     await db.updatePipelineState(conversationId, 'exploring');
     L.agent('orchestrator', 0);
     return {
-      response: '¡Claro! Te conecto con uno de nuestros asesores ahora mismo. En un momento alguien te atiende 👋',
+      response: '¡Claro! Le aviso al equipo para que te atienda una persona. Te escriben por aquí mismo en cuanto puedan 🙏',
       agentType: 'orchestrator',
       newState: 'exploring',
       switchToHuman: true,
@@ -662,14 +739,14 @@ REGLAS ABSOLUTAS:
       console.warn('[Pipeline] ⚠️  Agente mandó URL de tienda al cerrar venta — forzando collecting_order');
       // Delegar a handleOrderCollection para que pre-llene los datos del cliente
       L.agent('orders', Date.now() - tWarm);
-      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
     }
 
     // Si el agente de ventas decidió pasar a pedido, delegar a handleOrderCollection en lugar
     // de usar su respuesta genérica — así el bot pre-llena datos conocidos y no repregunta el nombre
     if (newState === 'collecting_order') {
       L.agent('orders', Date.now() - tWarm);
-      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
     }
 
     await db.updatePipelineState(conversationId, newState, undefined);
@@ -683,7 +760,7 @@ REGLAS ABSOLUTAS:
   const finalState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : (intent === 'interested' ? 'interested' : effectiveState);
   if (finalState === 'collecting_order') {
     L.agent('orders', Date.now() - tGen);
-    return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto);
+    return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
   }
   await db.updatePipelineState(conversationId, finalState, undefined);
   L.agent('sales', Date.now() - tGen);
@@ -751,17 +828,35 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
 }
 
 /**
- * Maneja la recopilación de datos para el pedido
+ * Maneja la recopilación de datos para el pedido.
+ *
+ * El borrador lleva `items: [{product_name, quantity}]` (varios productos).
+ * Los precios NO vienen del modelo: cada turno se valoriza el carrito contra
+ * el catálogo (order-pricing.js) y el total se calcula en código. Si el
+ * borrador trae `editing_order_id`, al confirmar se ACTUALIZA ese pedido en
+ * vez de crear uno nuevo.
+ *
+ * @param {object} orderCtx — { products, specialPrices, isLead }
  */
-async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto) {
-  // 0. Siempre fusionar datos del cliente desde CRM/Shopify — no solo la primera vez.
-  //    Esto evita que se pierda el nombre si el draft fue reseteado por alguna razón
-  //    y también garantiza que campos conocidos nunca sean pedidos de nuevo.
+async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx = {}) {
+  const { products = [], specialPrices = {}, isLead = false } = orderCtx;
+  orderDraft = pricing.normalizeDraft(orderDraft || {});
+
+  // 0a. ¿Se arrepintió a mitad del pedido? Antes el estado quedaba pegado en
+  //     collecting_order para siempre y cada mensaje iba al agente de pedidos.
+  if (ordersAgent.isCancelDuringCollection(userMessage)) {
+    await db.updatePipelineState(conversationId, 'exploring', {});
+    const msg = orderDraft.editing_order_id
+      ? 'Entendido, dejo tu pedido tal como estaba 😊 ¿Te ayudo con algo más?'
+      : 'Entendido, no hay problema 😊 Si más adelante quieres pedir, aquí estoy.';
+    return { response: msg, agentType: 'orders', newState: 'exploring' };
+  }
+
+  // 0b. Siempre fusionar datos del cliente desde CRM/Shopify — no solo la primera vez.
   try {
     const ds    = await db.getPrimaryDataSource(orgId);
     const known = await getKnownCustomerData(orgId, conversation.phone_number, ds);
     if (Object.keys(known).length > 0) {
-      // Solo rellenar campos que el draft todavía no tiene — no pisar lo que el cliente ya dio
       for (const [key, val] of Object.entries(known)) {
         if (val && !orderDraft[key]) orderDraft[key] = val;
       }
@@ -772,12 +867,36 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     console.warn('[Pipeline] Error fusionando datos del cliente:', e.message);
   }
 
-  // 1. Extraer datos del mensaje del cliente y actualizar el draft
-  const updatedDraft = await ordersAgent.extractOrderData(history, orderDraft);
+  // 1. Extraer datos del historial y actualizar el draft.
+  //    Si se está editando un pedido, el extractor necesita saber qué había
+  //    registrado (el pedido pudo crearse hace días, fuera de los últimos 20
+  //    mensajes) para que "agrégame 2 más" parta de la lista real.
+  let extractHistory = history;
+  if (orderDraft.editing_order_id && orderDraft.items?.length) {
+    const base = orderDraft.items.map(i => `${i.quantity}x ${i.product_name || i.name}`).join(', ');
+    extractHistory = [
+      { direction: 'outbound', content: `[Sistema] Pedido registrado actualmente: ${base}. El cliente quiere modificarlo: la lista final de items debe partir de este pedido y aplicar solo los cambios que pida.` },
+      ...history,
+    ];
+  }
+  const updatedDraft = await ordersAgent.extractOrderData(extractHistory, orderDraft);
+
+  // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a
+  //     leads (es la escalera de bienvenida del prompt de ventas); para
+  //     clientes existentes cualquier descuento lo maneja el equipo.
+  const priced = pricing.priceItems(updatedDraft.items, products, {
+    specialPrices,
+    discountPct: isLead ? updatedDraft.discount_pct : 0,
+  });
+  updatedDraft.items    = priced.items;
+  updatedDraft.subtotal = priced.subtotal;
+  updatedDraft.discount_pct = priced.discountPct;
+  updatedDraft.discount_amount = priced.discountAmount;
+  updatedDraft.total    = priced.total;
+  if (priced.unmatched.length) console.log(`[Pipeline] 🛒 Ítems sin match en catálogo: ${priced.unmatched.join(' | ')}`);
   await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
 
-  // 1b. Si el cliente acaba de dar dirección o ciudad que no teníamos → guardar en contacts de inmediato.
-  //     Así no se pierde si el pedido no se completa.
+  // 1b. Si el cliente acaba de dar dirección o ciudad que no teníamos → guardar en contacts.
   const addrChanged = (updatedDraft.address && updatedDraft.address !== orderDraft.address)
                    || (updatedDraft.city    && updatedDraft.city    !== orderDraft.city);
   if (addrChanged) {
@@ -789,25 +908,22 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     }).catch(e => console.warn('[Pipeline] No se pudo guardar dirección en contacto:', e.message));
   }
 
-  // 2. Generar respuesta del agente de órdenes
-  const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto);
+  // 2. Respuesta del agente de órdenes (con el carrito valorizado en el prompt)
+  const pricingText   = pricing.pricingContext(priced);
+  const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
 
-  // 3. Verificar si el cliente confirmó
+  // 3. ¿Confirmó?
   const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft);
+  const allMatched = priced.items.length > 0 && priced.items.every(it => it.matched);
 
-  if (confirmed && ordersAgent.hasRequiredData(updatedDraft)) {
-    // ── Lock atómico anti-duplicado ──────────────────────────────────
-    // Cambia pipeline_state collecting_order → done solo si aún no lo hizo otro proceso.
-    // Si dos mensajes llegan casi simultáneamente (ej: "Genial" + "Gracias"),
-    // solo el primero en hacer el UPDATE gana; el segundo retorna null y se ignora.
-    const claimed = await db.claimOrderCreation(conversationId);
-    if (!claimed) {
-      console.warn(`[Pipeline] ⚠️  Pedido duplicado bloqueado para conv ${conversationId}`);
-      return { response: null, agentType: 'orders', newState: 'confirmed', duplicate: true };
-    }
-
-    // Default 'cod' — si no está configurado asumimos pago contra entrega
-    const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
+  if (confirmed && ordersAgent.hasRequiredData(updatedDraft) && allMatched) {
+    const itemsForDb = priced.items.map(it => ({
+      name: it.name, title: it.name, quantity: it.quantity, price: it.price,
+      product_id: it.product_id || null, variant_id: it.variant_id || null,
+    }));
+    const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city };
+    const summary = pricing.summaryBlock(priced);
+    const who = `👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}`;
 
     const saveContact = () => Promise.all([
       db.upsertContact(orgId, {
@@ -822,46 +938,83 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       db.promoteToCustomer(orgId, conversation.phone_number),
     ]).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
 
-    // ── COD: solo guardar en nuestra DB, sin tocar Shopify ────────
+    // ── Edición de un pedido existente ─────────────────────────────
+    if (updatedDraft.editing_order_id) {
+      const orderId = updatedDraft.editing_order_id;
+      try {
+        const updated = await db.updateOrder(orderId, {
+          items: JSON.stringify(itemsForDb),
+          total_price: priced.total,
+          customer_name: updatedDraft.customer_name,
+          shipping_address: JSON.stringify(shippingAddress),
+          customer_modified: true,
+          updated_at: new Date(),
+        });
+        // Dejar rastro en las notas del pedido (el CRM muestra la marca "modificado por el cliente")
+        getPool().query(
+          `UPDATE orders SET notes = COALESCE(notes, '') || $1 WHERE id = $2`,
+          [`\n[bot] Modificado por el cliente por WhatsApp (${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })})`, orderId]
+        ).catch(() => {});
+        saveContact();
+        await db.updatePipelineState(conversationId, 'done', updatedDraft);
+        console.log(`[Pipeline] ✏️ Pedido ${orderId} modificado por el cliente`);
+        const msg = `✅ ¡Pedido actualizado!\n\n${summary}\n${who}\n\n¡Te avisamos cuando esté en camino! 🚀`;
+        return {
+          response: msg, agentType: 'orders', newState: 'confirmed',
+          orderUpdated: { orderId, shopifyDraftId: updated?.shopify_draft_id || null },
+        };
+      } catch (err) {
+        console.error('[Pipeline] ❌ Error modificando pedido:', err.message);
+        await db.setAgentMode(conversationId, 'human');
+        return {
+          response: `Recibí los cambios 📝 pero hubo un problema técnico al actualizar tu pedido 😔 Se lo paso al equipo para que lo corrija y te confirmen por aquí.`,
+          agentType: 'orders', newState: 'collecting_order', switchToHuman: true,
+          escalationReason: `Error actualizando pedido #${orderId}: ${err.message}`,
+        };
+      }
+    }
+
+    // ── Lock atómico anti-duplicado ────────────────────────────────
+    const claimed = await db.claimOrderCreation(conversationId);
+    if (!claimed) {
+      console.warn(`[Pipeline] ⚠️  Pedido duplicado bloqueado para conv ${conversationId}`);
+      return { response: null, agentType: 'orders', newState: 'confirmed', duplicate: true };
+    }
+
+    const paymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
+    const techErrorMsg = `Recibí todos tus datos 📝\n\n${summary}\n\nHubo un problema técnico al registrar tu pedido 😔 Se lo paso al equipo para que lo confirme por aquí. ¡Gracias por tu paciencia!`;
+
+    // ── COD: solo guardar en nuestra DB ────────────────────────────
     if (paymentMode === 'cod') {
-      const qty = parseInt(updatedDraft.quantity) || 1;
       try {
         const order = await db.createOrder({
           conversationId,
           organizationId: orgId,
-          items:           [{ name: updatedDraft.product_name, quantity: qty }],
+          items:           itemsForDb,
           customerName:    updatedDraft.customer_name,
           customerPhone:   updatedDraft.customer_phone || conversation.phone_number,
-          shippingAddress: { address: updatedDraft.address, city: updatedDraft.city },
-          totalPrice:      updatedDraft.price
-            ? parseFloat(updatedDraft.price) * qty
-            : null,
+          shippingAddress,
+          totalPrice:      priced.total,
         });
+        if (updatedDraft.notes) db.updateOrder(order.id, { notes: updatedDraft.notes }).catch(() => {});
         saveContact();
         await db.updatePipelineState(conversationId, 'done', updatedDraft);
-        console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id}`);
-        const successMsg = `✅ ¡Pedido confirmado!\n\n📦 ${updatedDraft.product_name} x${qty}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\nEl pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
+        console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id} (${itemsForDb.length} ítems, total ${priced.total})`);
+        const successMsg = `✅ ¡Pedido confirmado!\n\n${summary}\n${who}\n\nEl pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
         return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id } };
       } catch (err) {
         console.error('[Pipeline] ❌ Error guardando pedido COD:', err.message);
-        const productInfo = updatedDraft.product_name
-          ? `📦 *${updatedDraft.product_name}* x${updatedDraft.quantity || 1}\n📍 ${updatedDraft.address || ''}, ${updatedDraft.city || ''}`
-          : '';
-        const errorMsg = productInfo
-          ? `Recibí todos tus datos 📝\n\n${productInfo}\n\nHubo un problema técnico al registrar tu pedido 😔 Un asesor te confirmará en unos minutos. ¡Gracias por tu paciencia!`
-          : 'Recibí tu pedido pero hubo un problema técnico 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
         await db.setAgentMode(conversationId, 'human');
-        return { response: errorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true };
+        return { response: techErrorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true, escalationReason: `Error creando pedido: ${err.message}` };
       }
     }
 
-    // ── Link de pago: crear draft en Shopify + guardar en DB ──────
-    const qty = parseInt(updatedDraft.quantity) || 1;
+    // ── Link de pago: crear draft en Shopify + guardar en DB ───────
     try {
-      const result = await createShopifyOrder(orgId, conversationId, { ...updatedDraft, quantity: qty });
+      const result = await createShopifyOrder(orgId, conversationId, { ...updatedDraft, items: itemsForDb, total: priced.total });
       saveContact();
       await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
-      const successMsg = `✅ ¡Pedido creado!\n\n📦 ${updatedDraft.product_name} x${qty}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Te avisamos cuando esté en camino! 🚀`;
+      const successMsg = `✅ ¡Pedido creado!\n\n${summary}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Te avisamos cuando esté en camino! 🚀`;
       return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
     } catch (err) {
       const status  = err.response?.status;
@@ -870,22 +1023,24 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       if (status === 401 || detail?.includes('Invalid API key') || detail?.includes('access token')) {
         console.error('[Pipeline] ⚠️  Token de Shopify inválido — reconecta Shopify desde Ajustes del CRM.');
       }
-      const productInfo = updatedDraft.product_name
-        ? `📦 *${updatedDraft.product_name}* x${updatedDraft.quantity || 1}\n📍 ${updatedDraft.address || ''}, ${updatedDraft.city || ''}`
-        : '';
-      const errorMsg = productInfo
-        ? `Recibí todos tus datos 📝\n\n${productInfo}\n\nHubo un problema técnico al registrar tu pedido 😔 Un asesor te confirmará en unos minutos. ¡Gracias por tu paciencia!`
-        : 'Recibí tu pedido pero hubo un problema técnico 😔 Un asesor te ayudará a completarlo en breve. ¡Gracias!';
       await db.setAgentMode(conversationId, 'human');
-      return { response: errorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true };
+      return { response: techErrorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true, escalationReason: `Error creando orden Shopify: ${detail}` };
     }
+  }
+
+  // Confirmó pero hay ítems que no calzan con el catálogo → pedir aclaración (sin crear pedido)
+  if (confirmed && ordersAgent.hasRequiredData(updatedDraft) && !allMatched) {
+    const amb = priced.items.find(it => it.ambiguous);
+    const dudosos = priced.items.filter(it => !it.matched && !it.ambiguous).map(it => it.name);
+    const askMsg = amb
+      ? `Casi listo 😊 Para "${amb.name}", ¿cuál prefieres: ${amb.alternatives.join(' o ')}?`
+      : `Casi listo 😊 Solo necesito confirmar un producto: "${dudosos.join('", "')}" no lo encuentro tal cual en el catálogo. ¿Cuál de los productos de la lista es?`;
+    return { response: askMsg, agentType: 'orders', newState: 'collecting_order' };
   }
 
   // Si la IA dijo ORDEN_CONFIRMADA pero faltan datos, pedirlos amablemente
   if (confirmed && !ordersAgent.hasRequiredData(updatedDraft)) {
-    const missing = ['customer_name','product_name','quantity','address','city']
-      .filter(f => !updatedDraft[f])
-      .map(f => ({ customer_name:'nombre completo', product_name:'producto', quantity:'cantidad', address:'dirección', city:'ciudad' }[f]));
+    const missing = ordersAgent.missingFields(updatedDraft);
     const missingMsg = `Casi listo 😊 Solo me falta: ${missing.join(', ')}. ¿Me lo puedes confirmar?`;
     return { response: missingMsg, agentType: 'orders', newState: 'collecting_order' };
   }
@@ -952,23 +1107,33 @@ async function resolveVariantId(ds, productName) {
 }
 
 /**
- * Crea la orden en Shopify vía GraphQL directo y la guarda en la DB local
+ * Crea la orden en Shopify vía GraphQL directo y la guarda en la DB local.
+ * Acepta varios ítems; cada uno intenta resolverse a una variante de Shopify
+ * (por variant_id si order-pricing lo encontró, si no por nombre) y cae a
+ * custom line item con el precio ya calculado.
  */
 async function createShopifyOrder(orgId, conversationId, draft) {
   const ds = await db.getPrimaryDataSource(orgId);
   if (!ds?.config?.accessToken) throw new Error('No hay tienda Shopify conectada. Reconecta desde Ajustes.');
-  const shop = ds.config.storeUrl;
 
   const conversation = await db.getConversationById(conversationId);
   const customerPhone = draft.customer_phone || conversation.phone_number;
 
-  let variantId = draft.variant_id || null;
-  let price = draft.price || null;
-  if (!variantId) {
-    const resolved = await resolveVariantId(ds, draft.product_name);
-    variantId = resolved.variantId;
-    price = price || resolved.price;
-    if (variantId) console.log(`[Pipeline] variantId resuelto por nombre: ${variantId}`);
+  const items = Array.isArray(draft.items) && draft.items.length
+    ? draft.items
+    : [{ name: draft.product_name, quantity: parseInt(draft.quantity) || 1, price: draft.price || 0 }];
+
+  const lineItems = [];
+  for (const it of items) {
+    let variantId = it.variant_id || null;
+    let price = it.price || null;
+    if (!variantId) {
+      const resolved = await resolveVariantId(ds, it.name || it.product_name);
+      variantId = resolved.variantId;
+      price = price || resolved.price;
+    }
+    if (!variantId) console.warn(`[Pipeline] ⚠️  Sin variantId para "${it.name}" — custom line item`);
+    lineItems.push({ variantId, title: it.name || it.product_name, price: price || 0, quantity: parseInt(it.quantity) || 1 });
   }
 
   const customer = {
@@ -980,38 +1145,27 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     city:       draft.city            || null,
     country:    'CL',
   };
-
   if (draft.shopify_customer_id) {
     console.log(`[Pipeline] Linkeando orden al cliente Shopify existente: ${draft.shopify_customer_id}`);
   }
 
   const { shop: shopDomain, token: shopToken } = shopifyApi.credentialsFrom(ds);
-
-  if (!variantId) {
-    console.warn(`[Pipeline] ⚠️  No se encontró variantId para "${draft.product_name}" — usando custom line item`);
-  }
-
   const shopifyResult = await shopifyApi.createDraftOrder(
     shopDomain,
     shopToken,
     customer,
-    [{
-      variantId,
-      title:    draft.product_name,
-      price:    price || draft.price || 0,
-      quantity: parseInt(draft.quantity) || 1,
-    }],
-    `WhatsApp CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}`,
+    lineItems,
+    `WhatsApp CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}${draft.discount_pct ? ` | Desc. ${draft.discount_pct}%` : ''}`,
   );
 
   const order = await db.createOrder({
     conversationId,
     organizationId: orgId,
-    items: [{ name: draft.product_name, quantity: draft.quantity }],
+    items: items.map(it => ({ name: it.name || it.product_name, title: it.name || it.product_name, quantity: it.quantity, price: it.price, product_id: it.product_id || null, variant_id: it.variant_id || null })),
     customerName: draft.customer_name,
     customerPhone,
     shippingAddress: { address: draft.address, city: draft.city },
-    totalPrice: shopifyResult.totalPrice,
+    totalPrice: shopifyResult.totalPrice || draft.total || null,
   });
 
   await db.updateOrder(order.id, {

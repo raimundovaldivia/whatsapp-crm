@@ -845,7 +845,8 @@ async function getEscalationNegativeExamples(orgId, limit = 8) {
 async function setLastEscalation(conversationId, triggerMessage, reason) {
   await pool.query(
     `UPDATE conversations
-     SET last_escalation_trigger = $1, last_escalation_reason = $2, last_escalation_at = CURRENT_TIMESTAMP
+     SET last_escalation_trigger = $1, last_escalation_reason = $2, last_escalation_at = CURRENT_TIMESTAMP,
+         escalation_reminder_at = NULL
      WHERE id = $3`,
     [triggerMessage, reason, conversationId]
   );
@@ -854,7 +855,8 @@ async function setLastEscalation(conversationId, triggerMessage, reason) {
 async function clearLastEscalation(conversationId) {
   await pool.query(
     `UPDATE conversations
-     SET last_escalation_trigger = NULL, last_escalation_reason = NULL, last_escalation_at = NULL
+     SET last_escalation_trigger = NULL, last_escalation_reason = NULL, last_escalation_at = NULL,
+         escalation_reminder_at = NULL
      WHERE id = $1`,
     [conversationId]
   );

@@ -27,7 +27,8 @@ const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Tw
 const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
 const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follow-up
 const { startScheduledFollowUpJob } = require('./services/scheduled-follow-up'); // Job pedidos agendados
-const { startAdminWindowJob } = require('./services/admin-notify');              // Aviso previo + cola de alertas admin
+const { startAdminWindowJob } = require('./services/admin-notify');
+const { startEscalationWatchJob } = require('./services/escalation-watch'); // Recordatorio si una escalación queda sin respuesta              // Aviso previo + cola de alertas admin
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
 const shopifyOAuthRouter   = require('./routes/shopify-oauth');   // Shopify OAuth flow
 const authRouter           = require('./routes/auth');
@@ -164,6 +165,7 @@ setupDatabase().then(() => {
     startFollowUpJob(io);
     startScheduledFollowUpJob(io);
     startAdminWindowJob();
+    startEscalationWatchJob();
   });
 }).catch(err => {
   console.error('Error iniciando DB:', err);
