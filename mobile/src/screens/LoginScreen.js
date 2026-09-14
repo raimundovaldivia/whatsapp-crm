@@ -11,7 +11,8 @@ import {
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
 import { login, getSavedSession } from '../services/api';
-import { DEFAULT_API_URL, APP_NAME, APP_VERSION } from '../config';
+import { DEFAULT_API_URL, APP_NAME } from '../config';
+import UpdateStatus from '../components/UpdateStatus';
 
 const C = {
   bg:      '#0f172a',
@@ -145,7 +146,7 @@ export default function LoginScreen({ onLogin }) {
           )}
         </View>
 
-        <Text style={s.version}>v{APP_VERSION}</Text>
+        <UpdateStatus />
       </ScrollView>
     </KeyboardAvoidingView>
   );

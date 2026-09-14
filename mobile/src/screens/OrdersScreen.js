@@ -14,6 +14,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getActiveRoutes } from '../services/api';
+import UpdateStatus from '../components/UpdateStatus';
 
 const C = {
   bg:     '#0f172a',
@@ -231,6 +232,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
             </TouchableOpacity>
           );
         })}
+        <UpdateStatus style={{ marginBottom: 24 }} />
       </ScrollView>
     </View>
   );
