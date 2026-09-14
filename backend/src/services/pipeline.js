@@ -244,6 +244,7 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
     const activeOrder = await db.getActiveOrderForBot(conversationId);
     if (activeOrder) {
       const STATUS_LABEL = {
+        draft:            'Confirmado — en preparación',
         nuevo:            'Confirmado — en preparación',
         sent:             'Confirmado — pendiente de pago',
         payment_received: 'Pago recibido — en preparación',

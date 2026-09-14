@@ -737,11 +737,14 @@ async function getActiveOrderForBot(conversationId) {
   return queryOne(
     `SELECT * FROM orders
      WHERE conversation_id = $1
-       AND status IN ('nuevo','sent','payment_received','por_despachar','en_camino')
+       AND status IN ('draft','nuevo','sent','payment_received','por_despachar','en_camino')
      ORDER BY created_at DESC LIMIT 1`,
     [conversationId]
   );
 }
+// Nota: 'draft' incluido — los pedidos COD que crea el bot nacen como 'draft'
+// y nadie los mueve a 'nuevo' hasta que el CRM lo hace. Sin 'draft' el bot
+// "olvidaba" el pedido en el siguiente mensaje del cliente.
 
 // ─── PRODUCTS PROPIOS ─────────────────────────────────────────────
 
