@@ -17,6 +17,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { getRoute, createExpense } from '../services/api';
+import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const EXPENSE_CATS = ['Combustible', 'Peaje', 'Comida', 'Mantención', 'Otro'];
@@ -72,6 +73,14 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [showManifest, setShowManifest] = useState(false);
+  // Rótulo de paradas: números (1, 2, 3…) o letras (A, B, C… como Google Maps).
+  const [labelMode, setLabelMode] = useState('numbers');
+  useFocusEffect(useCallback(() => { loadStopLabelMode().then(setLabelMode); }, []));
+  function toggleLabelMode() {
+    const next = labelMode === 'letters' ? 'numbers' : 'letters';
+    setLabelMode(next);
+    saveStopLabelMode(next);
+  }
   // Rendición de gastos (petróleo, peaje, etc.)
   const [expOpen,  setExpOpen]  = useState(false);
   const [expAmt,   setExpAmt]   = useState('');
@@ -157,6 +166,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
       routeId,
       stopKey:    stopKeyOf(stop),
       stopNumber: stop.stopNumber,
+      stopLabel:  stopLabel(stop.stopNumber, labelMode),
       totalStops: stops.length,
     });
   }
@@ -181,6 +191,11 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             Paradas ({stops.length}) · ✓{doneCount}/{stops.length}
           </Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity onPress={toggleLabelMode} style={s.labelBtn} accessibilityLabel="Cambiar numeración de paradas">
+              <Text style={[s.labelBtnText, labelMode === 'numbers' && s.labelBtnOn]}>123</Text>
+              <Text style={s.labelBtnSep}>|</Text>
+              <Text style={[s.labelBtnText, labelMode === 'letters' && s.labelBtnOn]}>ABC</Text>
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => setExpOpen(true)} style={s.gastoBtn}>
               <Text style={s.gastoBtnText}>💸 Gasto</Text>
             </TouchableOpacity>
@@ -221,7 +236,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                 onPress={() => openStopDetail(stop)}
                 activeOpacity={0.75}>
                 <View style={[s.stopNum, { backgroundColor: color }]}>
-                  <Text style={s.stopNumText}>{stop.stopNumber}</Text>
+                  <Text style={[s.stopNumText, labelMode === 'letters' && String(stopLabel(stop.stopNumber, labelMode)).length > 1 && { fontSize: 12 }]}>{stopLabel(stop.stopNumber, labelMode)}</Text>
                 </View>
                 <View style={s.stopBody}>
                   <Text style={[s.stopName, isDone && s.textDone]} numberOfLines={1}>
@@ -319,6 +334,10 @@ const s = StyleSheet.create({
   listTitle:    { color: C.text, fontWeight: '700', fontSize: 15 },
   mapsBtn:      { backgroundColor: C.blue + '22', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: C.blue + '44' },
   mapsBtnText:  { color: C.blue, fontSize: 12, fontWeight: '600' },
+  labelBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: C.card, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, borderWidth: 1, borderColor: C.border, gap: 4 },
+  labelBtnText: { color: C.muted, fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+  labelBtnOn:   { color: C.text },
+  labelBtnSep:  { color: C.border, fontSize: 11 },
   gastoBtn:     { backgroundColor: C.orange + '22', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: C.orange + '55' },
   gastoBtnText: { color: C.orange, fontSize: 12, fontWeight: '700' },
 

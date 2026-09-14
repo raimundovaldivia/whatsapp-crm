@@ -21,7 +21,7 @@ const C = {
 
 export default function StopScreen({ route: navRoute, navigation }) {
   // onComplete es opcional y legacy: RouteScreen se refresca sola al volver.
-  const { stop, routeId, stopKey, stopNumber, totalStops, onComplete } = navRoute.params;
+  const { stop, routeId, stopKey, stopNumber, stopLabel, totalStops, onComplete } = navRoute.params;
   const [loading, setLoading] = useState(false);
   const [done,    setDone]    = useState(false);
   const [status,  setStatus]  = useState(null);
@@ -121,7 +121,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
     <ScrollView style={s.container} contentContainerStyle={s.content}>
       {/* Parada número */}
       <View style={s.badge}>
-        <Text style={s.badgeText}>Parada {stopNumber} de {totalStops}</Text>
+        <Text style={s.badgeText}>Parada {stopLabel || stopNumber} de {totalStops}</Text>
       </View>
 
       {/* Nombre */}
