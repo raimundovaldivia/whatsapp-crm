@@ -5,7 +5,7 @@
  *   - Tab "Historial": ver rutas enviadas/en progreso/completadas
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { api } from '../utils/api.js';
+import { api, API_BASE } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone, Download } from 'lucide-react';
 
@@ -221,6 +221,7 @@ export default function RepartosPanel() {
           {[
             { key: 'nuevo',     label: '+ Nuevo reparto' },
             { key: 'historial', label: 'Historial' },
+            { key: 'gastos',    label: '💸 Gastos' },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setTab(key)} style={{
               padding: '8px 16px', borderRadius: '8px 8px 0 0', border: 'none', cursor: 'pointer',
@@ -239,6 +240,7 @@ export default function RepartosPanel() {
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {tab === 'nuevo'     && <NuevoReparto colors={colors} />}
         {tab === 'historial' && <HistorialRepartos colors={colors} />}
+        {tab === 'gastos'    && <GastosRepartos colors={colors} />}
       </div>
     </div>
   );
@@ -1013,6 +1015,77 @@ function HistorialRepartos({ colors }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── Gastos rendidos por los repartidores ───────────────────────────────────
+function GastosRepartos({ colors }) {
+  const [expenses, setExpenses] = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [total, setTotal]       = useState(0);
+  const [photo, setPhoto]       = useState(null); // url en modal
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/delivery/expenses');
+      setExpenses(r.data.expenses || []);
+      setTotal(r.data.total || 0);
+    } catch { setExpenses([]); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const token = (() => { try { return localStorage.getItem('crm_token') || ''; } catch { return ''; } })();
+  const photoUrl = id => `${API_BASE}/api/delivery/expenses/${id}/photo?_token=${encodeURIComponent(token)}`;
+  const clp = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
+
+  async function del(id) {
+    try { await api.delete(`/delivery/expenses/${id}`); load(); } catch {}
+  }
+
+  if (loading) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textMuted, fontSize: '14px' }}>Cargando gastos...</div>;
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+        <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '15px' }}>Gastos rendidos ({expenses.length})</span>
+        <span style={{ color: colors.textPrimary, fontWeight: 800, fontSize: '16px' }}>Total: {clp(total)}</span>
+      </div>
+
+      {expenses.length === 0 ? (
+        <p style={{ color: colors.textMuted, fontSize: '14px' }}>Aún no hay gastos rendidos. El repartidor los agrega desde la app (💸 Gasto en la ruta).</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {expenses.map(e => (
+            <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '12px 14px' }}>
+              {e.has_photo ? (
+                <img src={photoUrl(e.id)} alt="boleta" onClick={() => setPhoto(photoUrl(e.id))}
+                  style={{ width: '48px', height: '48px', borderRadius: '8px', objectFit: 'cover', cursor: 'pointer', flexShrink: 0 }} />
+              ) : (
+                <div style={{ width: '48px', height: '48px', borderRadius: '8px', backgroundColor: colors.bgApp, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: colors.textMuted, fontSize: '18px' }}>🧾</div>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '14px' }}>
+                  {e.category || 'Gasto'} · {clp(e.amount)}
+                </div>
+                <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
+                  {e.driver_name || 'Repartidor'} · {new Date(e.created_at).toLocaleDateString('es-CL')} {new Date(e.created_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
+                  {e.note ? ` · ${e.note}` : ''}
+                </div>
+              </div>
+              <button onClick={() => del(e.id)} style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', fontSize: '13px' }}>Eliminar</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {photo && (
+        <div onClick={() => setPhoto(null)} style={{ position: 'fixed', inset: 0, zIndex: 60, backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '30px' }}>
+          <img src={photo} alt="boleta" style={{ maxWidth: '90%', maxHeight: '90%', borderRadius: '8px' }} />
+        </div>
+      )}
     </div>
   );
 }

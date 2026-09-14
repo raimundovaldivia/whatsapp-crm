@@ -11,11 +11,15 @@
  */
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Linking, Platform, ActivityIndicator,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput,
+  Image, Alert, ScrollView, Linking, Platform, ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getRoute } from '../services/api';
+import * as ImagePicker from 'expo-image-picker';
+import { getRoute, createExpense } from '../services/api';
+
+const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
+const EXPENSE_CATS = ['Combustible', 'Peaje', 'Comida', 'Mantención', 'Otro'];
 
 const C = {
   bg:     '#0f172a',
@@ -68,6 +72,37 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [showManifest, setShowManifest] = useState(false);
+  // Rendición de gastos (petróleo, peaje, etc.)
+  const [expOpen,  setExpOpen]  = useState(false);
+  const [expAmt,   setExpAmt]   = useState('');
+  const [expCat,   setExpCat]   = useState('Combustible');
+  const [expNote,  setExpNote]  = useState('');
+  const [expPhoto, setExpPhoto] = useState(null); // { uri, base64 }
+  const [expSaving, setExpSaving] = useState(false);
+
+  async function takeExpensePhoto() {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) { Alert.alert('Permiso', 'Necesito permiso de cámara para la foto.'); return; }
+      const r = await ImagePicker.launchCameraAsync({ quality: 0.4, base64: true });
+      if (!r.canceled && r.assets?.[0]) setExpPhoto({ uri: r.assets[0].uri, base64: r.assets[0].base64 });
+    } catch (e) { Alert.alert('Cámara', 'No se pudo abrir la cámara.'); }
+  }
+  function resetExpense() { setExpAmt(''); setExpCat('Combustible'); setExpNote(''); setExpPhoto(null); }
+  async function saveExpense() {
+    const amt = parseInt(String(expAmt).replace(/\D/g, '')) || 0;
+    if (amt <= 0) { Alert.alert('Monto', 'Ingresa el monto del gasto.'); return; }
+    setExpSaving(true);
+    try {
+      await createExpense({ amount: amt, category: expCat, note: expNote, routeId,
+        photoBase64: expPhoto?.base64 || null, photoMime: 'image/jpeg' });
+      setExpOpen(false); resetExpense();
+      Alert.alert('Listo', 'Gasto registrado ✅');
+    } catch (e) {
+      if (e.response?.status === 401) return;
+      Alert.alert('No se pudo guardar', e.response?.data?.error || e.message);
+    } finally { setExpSaving(false); }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -142,12 +177,17 @@ export default function RouteScreen({ route: navRoute, navigation }) {
       {/* Lista de paradas (sin mapa embebido: el chofer navega con "Abrir en Maps") */}
       <View style={s.listContainer}>
         <View style={s.listHeader}>
-          <Text style={s.listTitle}>
-            Paradas ({stops.length})  ·  ✓ {doneCount}/{stops.length}
+          <Text style={s.listTitle} numberOfLines={1}>
+            Paradas ({stops.length}) · ✓{doneCount}/{stops.length}
           </Text>
-          <TouchableOpacity onPress={openFullRouteInMaps} style={s.mapsBtn}>
-            <Text style={s.mapsBtnText}>Abrir en Maps</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity onPress={() => setExpOpen(true)} style={s.gastoBtn}>
+              <Text style={s.gastoBtnText}>💸 Gasto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={openFullRouteInMaps} style={s.mapsBtn}>
+              <Text style={s.mapsBtnText}>Maps</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <FlatList
@@ -212,6 +252,49 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           ) : null}
         />
       </View>
+
+      {/* Modal: rendir gasto */}
+      <Modal visible={expOpen} transparent animationType="slide" onRequestClose={() => setExpOpen(false)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <ScrollView>
+              <Text style={s.modalTitle}>💸 Rendir gasto</Text>
+
+              <Text style={s.fieldLabel}>Monto</Text>
+              <TextInput style={s.input} value={expAmt} onChangeText={setExpAmt}
+                placeholder="$" placeholderTextColor={C.muted} keyboardType="number-pad" />
+
+              <Text style={s.fieldLabel}>Categoría</Text>
+              <View style={s.catRow}>
+                {EXPENSE_CATS.map(c => (
+                  <TouchableOpacity key={c} onPress={() => setExpCat(c)}
+                    style={[s.catChip, expCat === c && s.catChipOn]}>
+                    <Text style={[s.catChipTxt, expCat === c && s.catChipTxtOn]}>{c}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={s.fieldLabel}>Nota (opcional)</Text>
+              <TextInput style={[s.input, { minHeight: 50, textAlignVertical: 'top' }]} value={expNote}
+                onChangeText={setExpNote} placeholder="Ej: petróleo estación Copec" placeholderTextColor={C.muted} multiline />
+
+              <TouchableOpacity style={s.photoBtn} onPress={takeExpensePhoto}>
+                <Text style={s.photoBtnTxt}>{expPhoto ? '📷 Cambiar foto' : '📷 Tomar foto (boleta)'}</Text>
+              </TouchableOpacity>
+              {expPhoto ? <Image source={{ uri: expPhoto.uri }} style={s.photoPreview} /> : null}
+
+              <View style={s.modalActions}>
+                <TouchableOpacity style={s.cancelBtn} onPress={() => { setExpOpen(false); }} disabled={expSaving}>
+                  <Text style={s.cancelTxt}>Cancelar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.saveBtn} onPress={saveExpense} disabled={expSaving}>
+                  <Text style={s.saveTxt}>{expSaving ? 'Guardando…' : 'Guardar gasto'}</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -236,6 +319,27 @@ const s = StyleSheet.create({
   listTitle:    { color: C.text, fontWeight: '700', fontSize: 15 },
   mapsBtn:      { backgroundColor: C.blue + '22', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: C.blue + '44' },
   mapsBtnText:  { color: C.blue, fontSize: 12, fontWeight: '600' },
+  gastoBtn:     { backgroundColor: C.orange + '22', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: C.orange + '55' },
+  gastoBtnText: { color: C.orange, fontSize: 12, fontWeight: '700' },
+
+  modalWrap:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  modalCard:    { backgroundColor: C.bg, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 20, maxHeight: '90%', borderTopWidth: 1, borderColor: C.border },
+  modalTitle:   { color: C.text, fontSize: 18, fontWeight: '800', marginBottom: 14 },
+  fieldLabel:   { color: C.muted, fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 10 },
+  input:        { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 12, color: C.text, fontSize: 16 },
+  catRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  catChip:      { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
+  catChipOn:    { backgroundColor: C.orange + '22', borderColor: C.orange },
+  catChipTxt:   { color: C.muted, fontSize: 13, fontWeight: '600' },
+  catChipTxtOn: { color: C.orange },
+  photoBtn:     { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 14 },
+  photoBtnTxt:  { color: C.blue, fontSize: 14, fontWeight: '600' },
+  photoPreview: { width: '100%', height: 180, borderRadius: 12, marginTop: 10, resizeMode: 'cover' },
+  modalActions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  cancelBtn:    { flex: 1, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: C.border, alignItems: 'center' },
+  cancelTxt:    { color: C.muted, fontWeight: '600' },
+  saveBtn:      { flex: 2, padding: 14, borderRadius: 12, backgroundColor: C.green, alignItems: 'center' },
+  saveTxt:      { color: '#04210f', fontWeight: '800', fontSize: 15 },
 
   stopCard:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border, gap: 12 },
   stopDone:     { opacity: 0.55 },

@@ -182,6 +182,15 @@ export async function getSellCatalog() {
   return res.data;
 }
 
+// Rendir un gasto (petróleo, peaje, etc.) con foto opcional en base64.
+export async function createExpense({ amount, category, note, routeId, photoBase64, photoMime }) {
+  const client = await getClient();
+  const res = await client.post('/api/delivery/expenses',
+    { amount, category, note, routeId, photoBase64, photoMime },
+    { timeout: 60000 });
+  return res.data;
+}
+
 // ── Resumen del día ───────────────────────────────────────────────────
 export async function getDailySummary() {
   const client = await getClient();

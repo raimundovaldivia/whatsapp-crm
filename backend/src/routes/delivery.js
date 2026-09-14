@@ -601,6 +601,84 @@ router.get('/catalog', async (req, res) => {
   }
 });
 
+// ─── Gastos del repartidor (rendición: petróleo, peaje, comida, etc.) ────────
+// El repartidor crea gastos con foto opcional; el admin los ve en Repartos.
+
+router.post('/expenses', async (req, res) => {
+  const pool = getPool();
+  try {
+    const { amount, category, note, routeId, photoBase64, photoMime } = req.body;
+    const amt = Math.round(parseFloat(amount) || 0);
+    if (!amt || amt <= 0) return res.status(400).json({ success: false, error: 'Monto inválido' });
+    let photoBuf = null;
+    if (photoBase64) {
+      photoBuf = Buffer.from(String(photoBase64).replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (photoBuf.length > 9 * 1024 * 1024) return res.status(400).json({ success: false, error: 'La foto es muy pesada' });
+    }
+    let driverName = null;
+    try { const u = await db.getUserById(req.userId); driverName = u?.name || u?.email || null; } catch {}
+    const { rows: [row] } = await pool.query(
+      `INSERT INTO delivery_expenses
+         (organization_id, route_id, driver_user_id, driver_name, amount, category, note, photo, photo_mime)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
+      [req.orgId, routeId ? parseInt(routeId) : null, req.userId, driverName, amt,
+       (category || '').slice(0, 40), (note || '').slice(0, 300),
+       photoBuf, photoBuf ? (photoMime || 'image/jpeg') : null]
+    );
+    res.status(201).json({ success: true, id: row.id, created_at: row.created_at });
+  } catch (err) {
+    console.error('[Delivery/expenses POST]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/expenses', async (req, res) => {
+  const pool = getPool();
+  try {
+    const own = req.role === 'repartidor';
+    const params = [req.orgId];
+    let where = 'organization_id = $1';
+    if (own) { params.push(req.userId); where += ` AND driver_user_id = $${params.length}`; }
+    if (req.query.from) { params.push(req.query.from); where += ` AND created_at >= $${params.length}`; }
+    if (req.query.to)   { params.push(req.query.to + ' 23:59:59'); where += ` AND created_at <= $${params.length}`; }
+    const { rows } = await pool.query(
+      `SELECT id, route_id, driver_user_id, driver_name, amount, category, note,
+              (photo IS NOT NULL) AS has_photo, created_at
+         FROM delivery_expenses WHERE ${where}
+        ORDER BY created_at DESC LIMIT 500`, params);
+    const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
+    res.json({ success: true, expenses: rows, total });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/expenses/:id/photo', async (req, res) => {
+  const pool = getPool();
+  try {
+    const own = req.role === 'repartidor';
+    const params = [parseInt(req.params.id), req.orgId];
+    let q = 'SELECT photo, photo_mime FROM delivery_expenses WHERE id = $1 AND organization_id = $2';
+    if (own) { params.push(req.userId); q += ` AND driver_user_id = $3`; }
+    const { rows: [row] } = await pool.query(q, params);
+    if (!row || !row.photo) return res.status(404).send('Sin foto');
+    res.set('Content-Type', row.photo_mime || 'image/jpeg');
+    res.send(row.photo);
+  } catch (err) {
+    res.status(500).send('error');
+  }
+});
+
+router.delete('/expenses/:id', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  try {
+    await getPool().query('DELETE FROM delivery_expenses WHERE id = $1 AND organization_id = $2',
+      [parseInt(req.params.id), req.orgId]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 /**
  * Resuelve el repartidor asignado: valida que el usuario exista en la org con
  * rol repartidor y completa nombre/teléfono si el admin no los escribió.
@@ -785,6 +863,59 @@ function splitStopKey(stopKey) {
   return [stopKey.slice(0, i), stopKey.slice(i + 1)];
 }
 
+/**
+ * Suma la venta extra del repartidor al pedido: agrega los ítems, recalcula el
+ * total y marca delivery_modified. Es idempotente: los ítems agregados se marcan
+ * con _deliveryExtra, así que reenviar la parada reemplaza los extras anteriores
+ * en vez de duplicarlos. No sincroniza con Shopify (es la copia local del CRM).
+ */
+async function applyExtraToOrder(pool, source, orderId, orgId, extras) {
+  if (!extras || !extras.length) return;
+  const isShopify = source === 'shopify';
+  const table = isShopify ? 'shopify_orders' : 'orders';
+  const idCol = isShopify ? 'shopify_order_id' : 'id';
+  const idVal = isShopify ? orderId : parseInt(orderId);
+
+  const { rows: [row] } = await pool.query(
+    `SELECT items, total_price FROM ${table} WHERE ${idCol} = $1 AND organization_id = $2`,
+    [idVal, orgId]
+  );
+  if (!row) return;
+
+  let items = [];
+  try {
+    items = Array.isArray(row.items) ? row.items
+          : (typeof row.items === 'string' ? JSON.parse(row.items || '[]') : (row.items || []));
+  } catch { items = []; }
+  if (!Array.isArray(items)) items = [];
+
+  const sum = arr => arr.reduce((s, e) => s + (Number(e.price) || 0) * (Number(e.quantity) || 0), 0);
+  const priorExtras = items.filter(it => it && it._deliveryExtra);
+  const baseItems   = items.filter(it => !(it && it._deliveryExtra));
+  const baseTotal   = (parseFloat(row.total_price) || 0) - sum(priorExtras);
+
+  const newExtraItems = extras.map(e => ({
+    name: e.name, title: e.name, quantity: e.quantity, price: e.price, _deliveryExtra: true,
+  }));
+  const newItems = [...baseItems, ...newExtraItems];
+  const newTotal = baseTotal + sum(newExtraItems);
+  const itemsParam = JSON.stringify(newItems);
+
+  if (isShopify) {
+    await pool.query(
+      `UPDATE shopify_orders SET items = $1::jsonb, total_price = $2, delivery_modified = TRUE
+        WHERE shopify_order_id = $3 AND organization_id = $4`,
+      [itemsParam, newTotal, idVal, orgId]
+    );
+  } else {
+    await pool.query(
+      `UPDATE orders SET items = $1, total_price = $2, delivery_modified = TRUE, updated_at = NOW()
+        WHERE id = $3 AND organization_id = $4`,
+      [itemsParam, String(Math.round(newTotal)), idVal, orgId]
+    );
+  }
+}
+
 async function applyStopUpdate(req, res, id, stopKey) {
   const { status, paymentMethod, note, extras } = req.body;  // status: 'entregado' | 'cancelled' | 'pending'
   const cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
@@ -875,6 +1006,12 @@ async function applyStopUpdate(req, res, id, stopKey) {
           WHERE id = $2 AND organization_id = $3`,
         [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash]
       );
+    }
+
+    // ── Venta extra: sumar a la orden y marcarla como modificada en reparto ──
+    if (status === 'entregado' && cleanExtras.length) {
+      try { await applyExtraToOrder(pool, source, orderId, req.orgId, cleanExtras); }
+      catch (e) { console.error('[Delivery/extra]', e.message); }
     }
 
     // ── Cerrar el pedido agendado al entregar ─────────────────────────────

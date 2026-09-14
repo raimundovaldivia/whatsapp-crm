@@ -380,12 +380,15 @@ async function setupDatabase() {
       -- Varias rutas (cambios de estado, entrega, cobranza) escriben updated_at.
       -- La tabla original solo tenía created_at, así que la agregamos aquí.
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+      -- Marca: el repartidor vendió/modificó algo al entregar (bandejas extras).
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_modified BOOLEAN DEFAULT FALSE;
 
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS delivery_modified BOOLEAN DEFAULT FALSE;
 
       DO $$
       BEGIN
@@ -707,6 +710,29 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}';
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
         ON delivery_routes(organization_id, driver_user_id, status);
+    `);
+
+    // ─── DESPACHOS: gastos rendidos por el repartidor (petróleo, peaje, etc.) ──
+    // El repartidor rinde gastos del efectivo que recibe, con foto opcional
+    // (boleta/surtidor). El admin los ve en Repartos. La foto se guarda como
+    // BYTEA y se sirve por /api/delivery/expenses/:id/photo.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS delivery_expenses (
+        id               SERIAL PRIMARY KEY,
+        organization_id  INTEGER NOT NULL,
+        route_id         INTEGER,
+        driver_user_id   INTEGER,
+        driver_name      TEXT,
+        amount           INTEGER NOT NULL,
+        category         TEXT,
+        note             TEXT,
+        photo            BYTEA,
+        photo_mime       TEXT,
+        created_at       TIMESTAMP DEFAULT NOW(),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_delivery_expenses_org
+        ON delivery_expenses(organization_id, created_at DESC);
     `);
 
     // ─── COLA DE ALERTAS AL ADMIN ────────────────────────────────────
