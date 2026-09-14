@@ -14,6 +14,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as Updates from 'expo-updates';
 
 import LoginScreen   from './src/screens/LoginScreen';
 import OrdersScreen  from './src/screens/OrdersScreen';
@@ -59,6 +60,27 @@ export default function App() {
 
   // Cuando cualquier llamada devuelve 401 → volver al login
   useEffect(() => onSessionExpired(() => setUser(null)), []);
+
+  // Actualización OTA al abrir: si hay una versión nueva publicada con
+  // `eas update`, se descarga y la app se reinicia sola (tarda 1-3 s con
+  // buena señal). Sin esto había que cerrar y abrir dos veces, y nadie sabía
+  // si la actualización había llegado. Si falla (sin red, APK sin
+  // expo-updates), se sigue con lo que hay — nunca bloquea el arranque.
+  useEffect(() => {
+    if (!Updates.isEnabled || __DEV__) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await Updates.checkForUpdateAsync();
+        if (cancelled || !r.isAvailable) return;
+        await Updates.fetchUpdateAsync();
+        if (!cancelled) await Updates.reloadAsync();
+      } catch (e) {
+        console.log('[OTA] sin actualización aplicable:', e?.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleLogout = useCallback(async () => {
     await logout();
