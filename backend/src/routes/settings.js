@@ -578,15 +578,47 @@ router.post('/charge-settings', async (req, res) => {
     if (waTemplate !== undefined && waTemplate !== null && !/^[a-z0-9_]*$/.test(String(waTemplate).trim())) {
       return res.status(400).json({ success: false, error: 'El nombre del template de Meta solo admite minúsculas, números y guion bajo' });
     }
-    const settings = await collection.saveChargeSettings(req.orgId, {
+    let settings = await collection.saveChargeSettings(req.orgId, {
       template,
       bankDetails,
       autoSendOnTransfer: autoSendOnTransfer === undefined ? undefined : !!autoSendOnTransfer,
       waTemplate: waTemplate === undefined ? undefined : String(waTemplate || '').trim(),
     });
-    res.json({ success: true, settings });
+
+    // Al ACTIVAR el envío automático, mandar el template a aprobación de Meta
+    // de inmediato si todavía no existe. Así el cobro fuera de 24 h queda
+    // operativo apenas Meta apruebe, sin pasos extra.
+    let templateSubmission = null;
+    if (autoSendOnTransfer === true && !settings.waTemplate) {
+      templateSubmission = await collection.submitChargeTemplate(req.orgId).catch(e => ({ ok: false, error: e.message }));
+      settings = await collection.getChargeSettings(req.orgId);
+    }
+    res.json({ success: true, settings, templateSubmission });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Crear/enviar a aprobación el template de cobranza (botón en la pestaña Cobranza)
+router.post('/charge-settings/template', async (req, res) => {
+  try {
+    const r = await collection.submitChargeTemplate(req.orgId, { resubmit: !!req.body?.resubmit });
+    if (!r.ok) return res.status(400).json({ success: false, error: r.error });
+    const settings = await collection.getChargeSettings(req.orgId);
+    res.json({ success: true, ...r, settings });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.response?.data ? JSON.stringify(err.response.data) : err.message });
+  }
+});
+
+// Consultar en Meta el estado del template de cobranza
+router.get('/charge-settings/template-status', async (req, res) => {
+  try {
+    const r = await collection.fetchTemplateStatus(req.orgId);
+    if (!r.ok) return res.status(400).json({ success: false, error: r.error });
+    res.json({ success: true, ...r });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.response?.data ? JSON.stringify(err.response.data) : err.message });
   }
 });
 

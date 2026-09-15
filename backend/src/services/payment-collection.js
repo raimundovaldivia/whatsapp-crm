@@ -50,23 +50,133 @@ async function getChargeSettings(orgId) {
     template:           parsed.template           || DEFAULT_TEMPLATE,
     bankDetails:        parsed.bankDetails        || '',
     autoSendOnTransfer: parsed.autoSendOnTransfer === true,
-    // Nombre del template APROBADO por Meta que se usa cuando el cliente lleva
-    // más de 24 h sin escribir (ahí WhatsApp no deja mandar texto libre).
+    // Template de Meta para cobrar cuando el cliente lleva más de 24 h sin
+    // escribir (ahí WhatsApp no deja mandar texto libre). Lo crea el CRM
+    // (submitChargeTemplate) y queda PENDING hasta que Meta lo apruebe.
     // Parámetros del body, en orden: {{1}} nombre · {{2}} pedido · {{3}} total · {{4}} datos banco
-    waTemplate:         (parsed.waTemplate || '').trim(),
+    waTemplate:            (parsed.waTemplate || '').trim(),
+    waTemplateStatus:      parsed.waTemplateStatus || null,      // PENDING | APPROVED | REJECTED | null
+    waTemplateReason:      parsed.waTemplateReason || null,
+    waTemplateSubmittedAt: parsed.waTemplateSubmittedAt || null,
   };
 }
 
-async function saveChargeSettings(orgId, { template, bankDetails, autoSendOnTransfer, waTemplate } = {}) {
+async function saveChargeSettings(orgId, { template, bankDetails, autoSendOnTransfer, waTemplate, waTemplateStatus, waTemplateReason, waTemplateSubmittedAt } = {}) {
   const current = await getChargeSettings(orgId);
   const next = {
-    template:           template           ?? current.template,
-    bankDetails:        bankDetails        ?? current.bankDetails,
-    autoSendOnTransfer: autoSendOnTransfer ?? current.autoSendOnTransfer,
-    waTemplate:         waTemplate         ?? current.waTemplate,
+    template:              template              ?? current.template,
+    bankDetails:           bankDetails           ?? current.bankDetails,
+    autoSendOnTransfer:    autoSendOnTransfer    ?? current.autoSendOnTransfer,
+    waTemplate:            waTemplate            ?? current.waTemplate,
+    waTemplateStatus:      waTemplateStatus      ?? current.waTemplateStatus,
+    waTemplateReason:      waTemplateReason      ?? current.waTemplateReason,
+    waTemplateSubmittedAt: waTemplateSubmittedAt ?? current.waTemplateSubmittedAt,
   };
   await db.setSetting(orgId, 'charge_settings', JSON.stringify(next));
   return next;
+}
+
+// ─── Template de Meta: crear y consultar ─────────────────────────────────────
+
+const CHARGE_TEMPLATE_NAME = 'cobro_transferencia';
+const CHARGE_TEMPLATE_BODY =
+  'Hola {{1}}, te entregamos tu pedido {{2}} por {{3}} y quedó pendiente el comprobante de la transferencia. ' +
+  'Datos: {{4}}. Cuando lo tengas, mándalo por este chat y listo. ¡Gracias!';
+
+function kapsoCreds(wc) {
+  return {
+    apiKey: wc?.kapso_api_key || process.env.KAPSO_API_KEY,
+    wabaId: wc?.business_account_id || process.env.KAPSO_WABA_ID,
+  };
+}
+
+/**
+ * Crea el template de cobranza en Meta (vía Kapso) y lo deja registrado en
+ * charge_settings. Idempotente: si Meta dice que ya existe, se adopta y se
+ * consulta su estado. Con { resubmit: true } primero lo borra (para reenviar
+ * uno rechazado).
+ *
+ * @returns {{ ok, name, status, reason?, error? }}
+ */
+async function submitChargeTemplate(orgId, { resubmit = false } = {}) {
+  const wc = await db.getWhatsappConfig(orgId);
+  if (!wc || wc.provider !== 'kapso') return { ok: false, error: 'La creación de templates solo está disponible con Kapso.' };
+  const { apiKey, wabaId } = kapsoCreds(wc);
+  if (!apiKey) return { ok: false, error: 'Falta la API Key de Kapso (Ajustes → WhatsApp).' };
+  if (!wabaId) return { ok: false, error: 'Falta el WABA ID (Ajustes → WhatsApp).' };
+
+  const axios    = require('axios');
+  const settings = await getChargeSettings(orgId);
+  const oneLine  = v => String(v || '').replace(/\s+/g, ' ').trim();
+  const bankSample = oneLine(settings.bankDetails) || 'Banco Ejemplo, Cta. Cte. 123456789, RUT 76.123.456-7';
+  const name = CHARGE_TEMPLATE_NAME;
+  const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
+  const base = `https://api.kapso.ai/meta/whatsapp/v24.0/${wabaId}/message_templates`;
+
+  if (resubmit) {
+    try { await axios.delete(`${base}?name=${encodeURIComponent(name)}`, { headers }); }
+    catch (e) { console.warn('[Cobranza] no se pudo borrar el template anterior:', e.response?.data ? JSON.stringify(e.response.data) : e.message); }
+  }
+
+  const payload = {
+    name,
+    language: 'es',
+    category: 'UTILITY',
+    components: [{
+      type: 'BODY',
+      text: CHARGE_TEMPLATE_BODY,
+      example: { body_text: [[ 'María', '#1042', '$40.000', bankSample.slice(0, 120) ]] },
+    }],
+  };
+
+  let status = 'PENDING', reason = null;
+  try {
+    const { data } = await axios.post(base, payload, { headers });
+    status = data?.status || 'PENDING';
+    console.log(`[Cobranza] 📤 Template "${name}" enviado a Meta — status ${status}`);
+  } catch (err) {
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    if (/already exists|ya existe|duplicate/i.test(detail)) {
+      console.log(`[Cobranza] Template "${name}" ya existía en Meta — se adopta`);
+      const st = await fetchTemplateStatus(orgId, name).catch(() => null);
+      status = st?.status || 'PENDING'; reason = st?.reason || null;
+    } else {
+      console.error('[Cobranza] createTemplate falló:', detail);
+      return { ok: false, error: detail };
+    }
+  }
+
+  await saveChargeSettings(orgId, {
+    waTemplate: name, waTemplateStatus: status, waTemplateReason: reason,
+    waTemplateSubmittedAt: new Date().toISOString(),
+  });
+  return { ok: true, name, status, reason };
+}
+
+/** Consulta en Meta el estado actual del template (cualquier estado) y lo guarda. */
+async function fetchTemplateStatus(orgId, name = null) {
+  const settings = await getChargeSettings(orgId);
+  const tplName = name || settings.waTemplate;
+  if (!tplName) return { ok: false, error: 'No hay template configurado' };
+  const wc = await db.getWhatsappConfig(orgId);
+  const { apiKey, wabaId } = kapsoCreds(wc);
+  if (!apiKey || !wabaId) return { ok: false, error: 'Kapso no configurado' };
+
+  const axios = require('axios');
+  const { data } = await axios.get(
+    `https://api.kapso.ai/meta/whatsapp/v24.0/${wabaId}/message_templates?limit=100&name=${encodeURIComponent(tplName)}`,
+    { headers: { 'X-API-Key': apiKey } }
+  );
+  const list = (data?.data || data || []).filter(t => t.name === tplName);
+  if (!list.length) {
+    await saveChargeSettings(orgId, { waTemplateStatus: 'MISSING' });
+    return { ok: true, name: tplName, status: 'MISSING', reason: 'Meta no tiene un template con ese nombre' };
+  }
+  // Preferir español; si hay varios idiomas, el aprobado
+  const t = list.find(x => String(x.language).startsWith('es') && x.status === 'APPROVED') || list.find(x => String(x.language).startsWith('es')) || list[0];
+  const reason = t.rejected_reason || t.rejection_reason || t.quality_score?.reasons?.[0] || null;
+  await saveChargeSettings(orgId, { waTemplateStatus: t.status || 'PENDING', waTemplateReason: reason });
+  return { ok: true, name: tplName, status: t.status || 'PENDING', reason, language: t.language };
 }
 
 // ─── Armado del mensaje ──────────────────────────────────────────────────────
@@ -173,7 +283,7 @@ async function sendChargeRequest(orgId, order, opts = {}) {
 
     // Fuera de la ventana de 24h solo se pueden mandar templates aprobados.
     // Si la org configuró uno, se usa; si no, queda en "Por cobrar" para reintentar.
-    if (!settings.waTemplate || wc.provider !== 'kapso') {
+    if (!settings.waTemplate || wc.provider !== 'kapso' || ['REJECTED', 'MISSING'].includes(settings.waTemplateStatus)) {
       return { ok: false, reason: 'ventana_24h', message: text };
     }
     try {
@@ -327,6 +437,10 @@ async function getOrderForCharge(orgId, source, orderId) {
 }
 
 module.exports = {
+  submitChargeTemplate,
+  fetchTemplateStatus,
+  CHARGE_TEMPLATE_NAME,
+  CHARGE_TEMPLATE_BODY,
   getChargeSettings,
   saveChargeSettings,
   buildChargeMessage,

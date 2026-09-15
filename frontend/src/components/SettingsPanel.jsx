@@ -1761,6 +1761,9 @@ function CobranzaTab() {
   const [bankDetails, setBankDetails] = useState('');
   const [autoSend,    setAutoSend]    = useState(false);
   const [waTemplate,  setWaTemplate]  = useState('');
+  const [tplStatus,   setTplStatus]   = useState(null);   // PENDING | APPROVED | REJECTED | MISSING | null
+  const [tplReason,   setTplReason]   = useState(null);
+  const [tplBusy,     setTplBusy]     = useState(false);
   const [defaultTpl,  setDefaultTpl]  = useState('');
   const templateRef = useRef(null);
 
@@ -1773,7 +1776,15 @@ function CobranzaTab() {
         setBankDetails(s.bankDetails || '');
         setAutoSend(!!s.autoSendOnTransfer);
         setWaTemplate(s.waTemplate || '');
+        setTplStatus(s.waTemplateStatus || null);
+        setTplReason(s.waTemplateReason || null);
         setDefaultTpl(res.data?.defaultTemplate || '');
+        // Si está pendiente, preguntarle a Meta si ya lo aprobó
+        if (s.waTemplate && s.waTemplateStatus !== 'APPROVED') {
+          api.get('/settings/charge-settings/template-status')
+            .then(r => { if (r.data?.status) { setTplStatus(r.data.status); setTplReason(r.data.reason || null); } })
+            .catch(() => {});
+        }
       } catch (err) {
         setError(err.response?.data?.error || 'No se pudo cargar la configuración de cobranza');
       } finally {
@@ -1782,18 +1793,47 @@ function CobranzaTab() {
     })();
   }, []);
 
+  const submitTemplate = async (resubmit = false) => {
+    setTplBusy(true); setError(''); setSuccess('');
+    try {
+      const r = await api.post('/settings/charge-settings/template', { resubmit });
+      setWaTemplate(r.data.name); setTplStatus(r.data.status); setTplReason(r.data.reason || null);
+      setSuccess(r.data.status === 'APPROVED'
+        ? `Template "${r.data.name}" ya está aprobado en Meta.`
+        : `Template "${r.data.name}" enviado a aprobación de Meta. Suele tardar minutos u horas.`);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo enviar el template a Meta');
+    } finally { setTplBusy(false); }
+  };
+
+  const refreshTemplateStatus = async () => {
+    setTplBusy(true); setError('');
+    try {
+      const r = await api.get('/settings/charge-settings/template-status');
+      setTplStatus(r.data.status); setTplReason(r.data.reason || null);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo consultar el estado en Meta');
+    } finally { setTplBusy(false); }
+  };
+
   const save = async () => {
     setSaving(true);
     setError('');
     setSuccess('');
     try {
-      await api.post('/settings/charge-settings', {
+      const res = await api.post('/settings/charge-settings', {
         template,
         bankDetails,
         autoSendOnTransfer: autoSend,
-        waTemplate: waTemplate.trim(),
       });
-      setSuccess('Configuración de cobranza guardada');
+      const st = res.data?.settings || {};
+      setWaTemplate(st.waTemplate || '');
+      setTplStatus(st.waTemplateStatus || null);
+      setTplReason(st.waTemplateReason || null);
+      const sub = res.data?.templateSubmission;
+      if (sub?.ok) setSuccess(`Configuración guardada. Template "${sub.name}" enviado a aprobación de Meta.`);
+      else if (sub && !sub.ok) setError(`Guardado, pero no se pudo enviar el template a Meta: ${sub.error}`);
+      else setSuccess('Configuración de cobranza guardada');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
       setError(err.response?.data?.error || 'Error guardando');
@@ -1943,28 +1983,58 @@ function CobranzaTab() {
             </p>
           </div>
 
-          {/* Template aprobado de Meta — respaldo fuera de la ventana de 24 h */}
+          {/* Template de Meta — respaldo fuera de la ventana de 24 h (lo crea el CRM) */}
           <div>
-            <label style={labelStyle}>Template de Meta para cobrar fuera de 24 h (opcional)</label>
-            <input
-              value={waTemplate}
-              onChange={e => setWaTemplate(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-              placeholder="cobro_transferencia"
-              style={inp}
-            />
+            <label style={labelStyle}>Cobro fuera de 24 h (template aprobado por Meta)</label>
             <p style={hintStyle}>
-              Si el cliente lleva más de 24 h sin escribir, WhatsApp bloquea el mensaje de arriba y el cobro
-              sale con este template aprobado. Créalo en Meta (categoría <b>Utilidad</b>, idioma español) con este texto,
-              respetando el orden de los parámetros:
+              Si el cliente lleva más de 24 h sin escribir, WhatsApp bloquea el mensaje de arriba. Para ese caso el CRM
+              usa un template de categoría <b>Utilidad</b> (el más barato) que Meta tiene que aprobar una vez.
+              Al activar el envío automático se manda solo; también puedes enviarlo desde aquí.
             </p>
-            <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`, borderRadius: '8px',
-              padding: '10px 12px', fontSize: '12px', fontFamily: 'monospace', whiteSpace: 'pre-wrap', lineHeight: 1.5, color: colors.textPrimary }}>
+            {(() => {
+              const STATUS = {
+                APPROVED: { label: '✅ Aprobado por Meta — operativo', color: colors.green,  bg: '#0f2a1a' },
+                PENDING:  { label: '⏳ Pendiente de aprobación en Meta', color: '#fbbf24', bg: '#2a1f08' },
+                REJECTED: { label: '❌ Rechazado por Meta',                color: '#f87171', bg: '#3a1515' },
+                MISSING:  { label: '⚠️ No existe en Meta',                color: '#f87171', bg: '#3a1515' },
+              };
+              const st = waTemplate ? (STATUS[tplStatus] || STATUS.PENDING) : null;
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                  {st ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', backgroundColor: st.bg, border: `1px solid ${st.color}44` }}>
+                      <span style={{ fontFamily: 'monospace', fontSize: '12px', color: colors.textPrimary }}>{waTemplate}</span>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: st.color }}>{st.label}</span>
+                      {tplReason && <span style={{ fontSize: '11px', color: colors.textMuted, width: '100%' }}>Motivo: {tplReason}</span>}
+                      <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
+                        <button onClick={refreshTemplateStatus} disabled={tplBusy}
+                          style={{ fontSize: '11px', padding: '4px 9px', borderRadius: '6px', border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp, color: colors.textSecondary, cursor: 'pointer' }}>
+                          {tplBusy ? '…' : '🔄 Actualizar estado'}
+                        </button>
+                        {(tplStatus === 'REJECTED' || tplStatus === 'MISSING') && (
+                          <button onClick={() => submitTemplate(true)} disabled={tplBusy}
+                            style={{ fontSize: '11px', padding: '4px 9px', borderRadius: '6px', border: 'none', backgroundColor: colors.green, color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
+                            📤 Volver a enviar
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={() => submitTemplate(false)} disabled={tplBusy}
+                      style={{ alignSelf: 'flex-start', fontSize: '12px', padding: '8px 14px', borderRadius: '8px', border: 'none', backgroundColor: colors.green, color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
+                      {tplBusy ? 'Enviando a Meta…' : '📤 Crear template y enviar a aprobación'}
+                    </button>
+                  )}
+                  <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`, borderRadius: '8px',
+                    padding: '10px 12px', fontSize: '12px', fontFamily: 'monospace', whiteSpace: 'pre-wrap', lineHeight: 1.5, color: colors.textMuted }}>
 {`Hola {{1}}, te entregamos tu pedido {{2}} por {{3}} y quedó pendiente el comprobante de la transferencia. Datos: {{4}}. Cuando lo tengas, mándalo por este chat y listo. ¡Gracias!`}
-            </div>
-            <p style={hintStyle}>
-              {'{{1}}'} nombre · {'{{2}}'} pedido · {'{{3}}'} total · {'{{4}}'} datos de transferencia (en una línea).
-              Si tu template tiene menos parámetros, se envían solo los primeros.
-            </p>
+                  </div>
+                  <p style={hintStyle}>
+                    {'{{1}}'} nombre · {'{{2}}'} pedido · {'{{3}}'} total · {'{{4}}'} tus datos de transferencia en una línea. Texto fijo: es lo que Meta aprueba.
+                  </p>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Previsualización */}
