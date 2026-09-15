@@ -712,7 +712,8 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS driver_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_notes     JSONB DEFAULT '{}',
-        ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}';
+        ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_times     JSONB DEFAULT '{}';
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
         ON delivery_routes(organization_id, driver_user_id, status);
     `);

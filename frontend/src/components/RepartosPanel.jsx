@@ -220,6 +220,7 @@ export default function RepartosPanel() {
         <div style={{ display: 'flex', gap: '4px' }}>
           {[
             { key: 'nuevo',     label: '+ Nuevo reparto' },
+            { key: 'despachos', label: '📦 Despachos' },
             { key: 'historial', label: 'Historial' },
             { key: 'gastos',    label: '💸 Gastos' },
           ].map(({ key, label }) => (
@@ -239,6 +240,7 @@ export default function RepartosPanel() {
       {/* Contenido */}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {tab === 'nuevo'     && <NuevoReparto colors={colors} />}
+        {tab === 'despachos' && <DespachosRepartos colors={colors} />}
         {tab === 'historial' && <HistorialRepartos colors={colors} />}
         {tab === 'gastos'    && <GastosRepartos colors={colors} />}
       </div>
@@ -833,6 +835,237 @@ function NuevoReparto({ colors }) {
 }
 
 // ─── Tab: Historial de rutas ─────────────────────────────────────────────────
+
+// ─── DESPACHOS: qué entregó el repartidor, por día ───────────────────────────
+//
+// Una fila por parada: estado que dejó el repartidor, hora, medio de pago y
+// situación de cobranza. Agrupado por día con totales. Filtros por rango,
+// repartidor, medio de pago y estado. Exporta CSV.
+
+const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
+const isoDay = d => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+const PAY_META = {
+  efectivo:      { label: 'Efectivo',      icon: '💵', color: '#22c55e' },
+  transferencia: { label: 'Transferencia', icon: '🏦', color: '#38bdf8' },
+  otro:          { label: 'Otro',          icon: '💳', color: '#a78bfa' },
+};
+const STOP_META = {
+  entregado: { label: 'Entregado', color: '#2dd4bf' },
+  cancelled: { label: 'Fallido',   color: '#f87171' },
+  pending:   { label: 'Pendiente', color: '#fb923c' },
+};
+
+function chargeInfo(row) {
+  if (row.status !== 'entregado') return null;
+  if (row.paid) return { label: 'Pagado', color: '#22c55e', icon: '✅' };
+  if (row.payment_method === 'efectivo') return { label: 'Efectivo al entregar', color: '#22c55e', icon: '💵' };
+  if (row.payment_method !== 'transferencia') return null;
+  if (row.charge?.sent_at) {
+    const when = new Date(row.charge.sent_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
+    return { label: `Cobro enviado ${when}${row.charge.count > 1 ? ` (×${row.charge.count})` : ''}${row.charge.pending ? ' · sin comprobante' : ''}`, color: row.charge.pending ? '#fbbf24' : '#22c55e', icon: '💸' };
+  }
+  if (row.charge?.pending) return { label: 'Cobro NO enviado — por cobrar', color: '#f87171', icon: '⚠️' };
+  return { label: 'Transferencia', color: '#38bdf8', icon: '🏦' };
+}
+
+function DespachosRepartos({ colors }) {
+  const today = isoDay(new Date());
+  const weekAgo = isoDay(Date.now() - 6 * 86400000);
+  const [from,    setFrom]    = useState(weekAgo);
+  const [to,      setTo]      = useState(today);
+  const [driver,  setDriver]  = useState('');
+  const [pay,     setPay]     = useState('');
+  const [status,  setStatus]  = useState('');
+  const [drivers, setDrivers] = useState([]);
+  const [rows,    setRows]    = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
+  const [openDays, setOpenDays] = useState({});
+
+  useEffect(() => {
+    api.get('/delivery/drivers').then(r => setDrivers(r.data.drivers || [])).catch(() => {});
+  }, []);
+
+  const load = useCallback(() => {
+    setLoading(true); setError(null);
+    const q = new URLSearchParams({ from, to });
+    if (driver) q.set('driver', driver);
+    api.get(`/delivery/dispatches?${q.toString()}`)
+      .then(r => setRows(r.data.rows || []))
+      .catch(e => setError(e.response?.data?.error || e.message))
+      .finally(() => setLoading(false));
+  }, [from, to, driver]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = rows.filter(r =>
+    (!pay    || r.payment_method === pay) &&
+    (!status || r.status === status)
+  );
+
+  // Agrupar por día (más reciente primero) con totales
+  const days = [];
+  const byDay = {};
+  for (const r of filtered) {
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, fallidos: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, extras: 0 }; days.push(byDay[r.day]); }
+    const d = byDay[r.day];
+    d.rows.push(r);
+    if (r.status === 'entregado') {
+      d.entregados++;
+      const amount = (r.total || 0) + (r.extra_total || 0);
+      if (r.payment_method === 'efectivo') d.efectivo += amount;
+      else if (r.payment_method === 'transferencia') d.transferencia += amount;
+      else if (r.payment_method) d.otro += amount;
+      if (r.payment_method === 'transferencia') {
+        if (r.charge?.sent_at) d.cobrosEnviados++;
+        else if (r.charge?.pending) d.cobrosPendientes++;
+      }
+      d.extras += r.extra_total || 0;
+    } else if (r.status === 'cancelled') d.fallidos++;
+    else d.pendientes++;
+  }
+
+  const totals = days.reduce((t, d) => ({
+    entregados: t.entregados + d.entregados, fallidos: t.fallidos + d.fallidos,
+    efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia,
+    cobrosEnviados: t.cobrosEnviados + d.cobrosEnviados, cobrosPendientes: t.cobrosPendientes + d.cobrosPendientes,
+  }), { entregados: 0, fallidos: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0 });
+
+  const dayLabel = day => new Date(day + 'T12:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' });
+  const timeOf = r => new Date(r.at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
+
+  function exportCSV() {
+    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Teléfono', 'Dirección', 'Productos', 'Estado', 'Medio de pago', 'Total', 'Extras', 'Cobro', 'Nota'];
+    const lines = filtered.map(r => [
+      r.day, r.time_is_exact ? timeOf(r) : '', r.driver_name || '', r.route_name, r.order_label, r.customer_name || '', r.phone || '',
+      r.address || '', (r.items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '),
+      STOP_META[r.status]?.label || r.status, PAY_META[r.payment_method]?.label || '',
+      Math.round(r.total || 0), Math.round(r.extra_total || 0), chargeInfo(r)?.label || '', r.note || '',
+    ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(';'));
+    const blob = new Blob(['﻿' + [head.join(';'), ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `despachos_${from}_${to}.csv`; a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  const inp = { padding: '6px 9px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '12px', outline: 'none' };
+  const chip = (text, color) => (
+    <span style={{ fontSize: '11px', fontWeight: 600, color, backgroundColor: color + '18', border: `1px solid ${color}44`, borderRadius: '20px', padding: '2px 9px', whiteSpace: 'nowrap' }}>{text}</span>
+  );
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/* Filtros */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+        <label style={{ fontSize: '11px', color: colors.textMuted }}>Desde</label>
+        <input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} style={inp} />
+        <label style={{ fontSize: '11px', color: colors.textMuted }}>Hasta</label>
+        <input type="date" value={to} min={from} max={today} onChange={e => setTo(e.target.value)} style={inp} />
+        <select value={driver} onChange={e => setDriver(e.target.value)} style={inp}>
+          <option value="">Todos los repartidores</option>
+          {drivers.map(d => <option key={d.id} value={d.id}>{d.name || d.email}</option>)}
+        </select>
+        <select value={pay} onChange={e => setPay(e.target.value)} style={inp}>
+          <option value="">Todo medio de pago</option>
+          <option value="efectivo">💵 Efectivo</option>
+          <option value="transferencia">🏦 Transferencia</option>
+          <option value="otro">Otro</option>
+        </select>
+        <select value={status} onChange={e => setStatus(e.target.value)} style={inp}>
+          <option value="">Todos los estados</option>
+          <option value="entregado">Entregado</option>
+          <option value="cancelled">Fallido</option>
+          <option value="pending">Pendiente</option>
+        </select>
+        <div style={{ flex: 1 }} />
+        <button onClick={load} title="Actualizar" style={{ ...inp, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><RotateCcw size={12} /></button>
+        <button onClick={exportCSV} disabled={!filtered.length} style={{ ...inp, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.green }}><Download size={12} /> CSV</button>
+      </div>
+
+      {/* Totales del período */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+        {chip(`${totals.entregados} entregados`, '#2dd4bf')}
+        {chip(`${totals.fallidos} fallidos`, '#f87171')}
+        {chip(`💵 ${CLP(totals.efectivo)} efectivo`, '#22c55e')}
+        {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
+        {chip(`💸 ${totals.cobrosEnviados} cobros enviados`, '#fbbf24')}
+        {totals.cobrosPendientes > 0 && chip(`⚠️ ${totals.cobrosPendientes} sin cobrar`, '#f87171')}
+      </div>
+
+      {loading && <div style={{ color: colors.textMuted, fontSize: '13px' }}>Cargando despachos…</div>}
+      {error && <div style={{ color: colors.red, fontSize: '13px' }}>{error}</div>}
+      {!loading && !error && days.length === 0 && (
+        <div style={{ color: colors.textMuted, fontSize: '13px', padding: '30px 0', textAlign: 'center' }}>Sin despachos en este período.</div>
+      )}
+
+      {/* Por día */}
+      {days.map(d => {
+        const open = openDays[d.day] !== false; // abiertos por defecto
+        return (
+          <div key={d.day} style={{ border: `1px solid ${colors.border}`, borderRadius: '10px', overflow: 'hidden' }}>
+            <div onClick={() => setOpenDays(o => ({ ...o, [d.day]: !open }))}
+              style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', backgroundColor: colors.bgCard, cursor: 'pointer', flexWrap: 'wrap' }}>
+              {open ? <ChevronDown size={14} color={colors.textMuted} /> : <ChevronRight size={14} color={colors.textMuted} />}
+              <span style={{ fontWeight: 700, fontSize: '13px', color: colors.textPrimary, textTransform: 'capitalize' }}>{dayLabel(d.day)}</span>
+              <span style={{ fontSize: '11px', color: colors.textMuted }}>{d.rows.length} paradas</span>
+              <div style={{ flex: 1 }} />
+              {chip(`${d.entregados} ✓`, '#2dd4bf')}
+              {d.fallidos > 0 && chip(`${d.fallidos} ✗`, '#f87171')}
+              {d.pendientes > 0 && chip(`${d.pendientes} pend.`, '#fb923c')}
+              {chip(`💵 ${CLP(d.efectivo)}`, '#22c55e')}
+              {chip(`🏦 ${CLP(d.transferencia)}`, '#38bdf8')}
+              {d.transferencia > 0 && chip(`💸 ${d.cobrosEnviados}/${d.cobrosEnviados + d.cobrosPendientes} cobrados`, d.cobrosPendientes ? '#fbbf24' : '#22c55e')}
+              {d.extras > 0 && chip(`🥚 +${CLP(d.extras)} extras`, '#c4b5fd')}
+            </div>
+            {open && (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '860px' }}>
+                  <thead>
+                    <tr style={{ color: colors.textMuted, fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {['Hora', 'Repartidor', 'Cliente', 'Productos', 'Estado', 'Pago', 'Total', 'Cobranza'].map(h => (
+                        <th key={h} style={{ textAlign: 'left', padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.rows.map(r => {
+                      const sm = STOP_META[r.status] || STOP_META.pending;
+                      const pm = PAY_META[r.payment_method];
+                      const ci = chargeInfo(r);
+                      return (
+                        <tr key={`${r.route_id}_${r.stop_key}`} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                          <td style={{ padding: '8px 12px', color: colors.textSecondary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                            {r.time_is_exact ? timeOf(r) : <span title="Ruta anterior al registro de hora por parada" style={{ opacity: 0.5 }}>~{timeOf(r)}</span>}
+                          </td>
+                          <td style={{ padding: '8px 12px', color: colors.textSecondary, whiteSpace: 'nowrap' }}>{r.driver_name || '—'}<div style={{ fontSize: '10px', opacity: 0.7 }}>{r.route_name}</div></td>
+                          <td style={{ padding: '8px 12px' }}>
+                            <div style={{ color: colors.textPrimary, fontWeight: 600 }}>{r.customer_name || '—'} <span style={{ color: colors.textMuted, fontWeight: 400 }}>{r.order_label}</span></div>
+                            <div style={{ color: colors.textMuted, fontSize: '11px' }}>{r.address || ''}</div>
+                            {r.note && <div style={{ color: '#fbbf24', fontSize: '11px' }}>📝 {r.note}</div>}
+                          </td>
+                          <td style={{ padding: '8px 12px', color: colors.textSecondary }}>
+                            {(r.items || []).map((i, k) => <div key={k}>{i.quantity}x {i.name}</div>)}
+                            {(r.extras || []).map((e, k) => <div key={'x' + k} style={{ color: '#c4b5fd' }}>+ {e.quantity}x {e.name}</div>)}
+                          </td>
+                          <td style={{ padding: '8px 12px' }}>{chip(sm.label, sm.color)}</td>
+                          <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>{pm ? chip(`${pm.icon} ${pm.label}`, pm.color) : <span style={{ color: colors.textMuted }}>—</span>}</td>
+                          <td style={{ padding: '8px 12px', color: colors.textPrimary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                            {r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>}
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: '11px', color: ci?.color || colors.textMuted, whiteSpace: 'nowrap' }}>{ci ? `${ci.icon} ${ci.label}` : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function HistorialRepartos({ colors }) {
   const [routes,   setRoutes]   = useState([]);

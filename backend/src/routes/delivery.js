@@ -957,6 +957,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
               stop_payments = COALESCE(stop_payments, '{}'::jsonb) || $6::jsonb,
               stop_notes    = COALESCE(stop_notes, '{}'::jsonb) || $7::jsonb,
               stop_extras   = COALESCE(stop_extras, '{}'::jsonb) || $8::jsonb,
+              stop_times    = COALESCE(stop_times, '{}'::jsonb) || jsonb_build_object($1::text, to_jsonb(NOW())),
               status = CASE WHEN status = 'sent' THEN 'in_progress' ELSE status END
         WHERE id = $3 AND organization_id = $4
           AND ($5::int IS NULL OR driver_user_id = $5 OR driver_user_id IS NULL)
@@ -1131,6 +1132,113 @@ router.get('/summary', async (req, res) => {
     const counts = Object.fromEntries(rows.map(r => [r.status, parseInt(r.count)]));
     res.json({ success: true, summary: counts });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── ADMIN: Despachos realizados (por parada, para agrupar por día) ──────────
+//
+// GET /api/delivery/dispatches?from=YYYY-MM-DD&to=YYYY-MM-DD&driver=<userId>
+//
+// Devuelve una fila por parada de las rutas del período, con el estado que
+// dejó el repartidor, la hora (stop_times; si la ruta es anterior a esa
+// columna, la hora de cierre/creación de la ruta), el medio de pago y la
+// situación de cobranza del pedido (enviado / pendiente / pagado).
+router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const pool = getPool();
+  const TZ = 'America/Santiago';
+  const dayOf = d => new Date(d).toLocaleDateString('sv-SE', { timeZone: TZ }); // YYYY-MM-DD
+  const today = dayOf(new Date());
+  const from  = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : dayOf(Date.now() - 6 * 86400000);
+  const to    = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to   || '') ? req.query.to   : today;
+  const driverId = req.query.driver ? parseInt(req.query.driver) : null;
+
+  try {
+    // Rutas que pueden tener paradas en el rango (margen de 3 días por rutas largas)
+    const { rows: routes } = await pool.query(`
+      SELECT id, name, status, driver_name, driver_user_id, orders, optimized_route,
+             stop_statuses, stop_payments, stop_notes, stop_extras, stop_times,
+             created_at, sent_at, completed_at
+        FROM delivery_routes
+       WHERE organization_id = $1
+         AND status <> 'draft'
+         AND created_at >= ($2::date - INTERVAL '3 days')
+         AND created_at <  ($3::date + INTERVAL '1 day')
+         AND ($4::int IS NULL OR driver_user_id = $4)
+       ORDER BY created_at DESC`,
+      [req.orgId, from, to, driverId]
+    );
+
+    // Pedidos referenciados → estado de pago/cobranza
+    const botIds = new Set(), shopIds = new Set();
+    for (const r of routes) for (const o of (r.orders || [])) (o.source === 'shopify' ? shopIds : botIds).add(String(o.id));
+    const [botRows, shopRows, pending] = await Promise.all([
+      botIds.size ? pool.query(
+        `SELECT id::text AS id, status, payment_method, charge_requested_at, charge_request_count, total_price, customer_phone,
+                delivery_modified, customer_modified
+           FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])`,
+        [req.orgId, [...botIds].map(Number)]).then(r => r.rows) : [],
+      shopIds.size ? pool.query(
+        `SELECT shopify_order_id AS id, crm_status AS status, financial_status, payment_method, charge_requested_at,
+                charge_request_count, total_price, customer_phone, delivery_modified
+           FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])`,
+        [req.orgId, [...shopIds]]).then(r => r.rows) : [],
+      collection.getPendingCharges(req.orgId).catch(() => []),
+    ]);
+    const botMap  = new Map(botRows.map(r => [r.id, r]));
+    const shopMap = new Map(shopRows.map(r => [String(r.id), r]));
+    const pendingSet = new Set(pending.map(p => `${p.source}_${p.id}`));
+
+    const rows = [];
+    for (const r of routes) {
+      const stops = Array.isArray(r.optimized_route) && r.optimized_route.length ? r.optimized_route : (r.orders || []);
+      const statuses = r.stop_statuses || {}, pays = r.stop_payments || {}, notes = r.stop_notes || {};
+      const extras = r.stop_extras || {}, times = r.stop_times || {};
+      const routeFallbackTime = r.completed_at || r.sent_at || r.created_at;
+
+      for (const st of stops) {
+        const key    = `${st.source}_${st.id}`;
+        const status = statuses[key] || 'pending';
+        const at     = times[key] || (status !== 'pending' ? routeFallbackTime : (r.sent_at || r.created_at));
+        const day    = dayOf(at);
+        if (day < from || day > to) continue;
+
+        const ord = st.source === 'shopify' ? shopMap.get(String(st.id)) : botMap.get(String(st.id));
+        const paid = st.source === 'shopify'
+          ? String(ord?.financial_status || '').toLowerCase() === 'paid'
+          : ord?.status === 'paid';
+        const paymentMethod = pays[key] || ord?.payment_method || null;
+        const extraList = Array.isArray(extras[key]) ? extras[key] : [];
+        const extraTotal = extraList.reduce((s, e) => s + (Number(e.price) || 0) * (Number(e.quantity) || 0), 0);
+
+        rows.push({
+          day, at,
+          route_id: r.id, route_name: r.name, route_status: r.status,
+          driver_name: r.driver_name || null, driver_user_id: r.driver_user_id || null,
+          stop_key: key, stop_number: st.stopNumber || null,
+          source: st.source, order_id: String(st.id), order_label: st.orderName || `#${st.id}`,
+          customer_name: st.customerName || null, phone: st.phone || ord?.customer_phone || null,
+          address: st.fullAddress || null,
+          items: Array.isArray(st.items) ? st.items.map(i => ({ name: i.name || i.title, quantity: i.quantity })) : [],
+          total: Number(ord?.total_price ?? st.totalPrice) || 0,
+          extras: extraList, extra_total: extraTotal,
+          note: notes[key] || null,
+          status,                                   // entregado | cancelled | pending
+          payment_method: paymentMethod,            // efectivo | transferencia | otro | null
+          paid,
+          charge: {
+            sent_at: ord?.charge_requested_at || null,
+            count:   Number(ord?.charge_request_count) || 0,
+            pending: pendingSet.has(key),           // sigue en "Por cobrar"
+          },
+          time_is_exact: !!times[key],
+        });
+      }
+    }
+    rows.sort((a, b) => new Date(b.at) - new Date(a.at));
+    res.json({ success: true, from, to, rows });
+  } catch (err) {
+    console.error('[Delivery/dispatches]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
