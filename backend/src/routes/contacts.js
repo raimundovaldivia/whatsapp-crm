@@ -38,6 +38,50 @@ router.get('/', requireContactsAccess, async (req, res) => {
 });
 
 /**
+ * GET /api/contacts/suggest?q=pam
+ * Autocompletar cliente por nombre o teléfono (para "Nuevo pedido" y afines).
+ * Cada palabra del texto tiene que aparecer en el nombre ("pam roj" → Pamela
+ * Rojas); si el texto son dígitos, busca por teléfono. Máx. 8 resultados,
+ * los más recientes primero.
+ */
+router.get('/suggest', async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  try {
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) return res.json({ success: true, data: [] });
+
+    const digits = q.replace(/\D/g, '');
+    const conds  = ['organization_id = $1'];
+    const params = [req.orgId];
+
+    if (digits.length >= 3 && digits.length === q.replace(/[\s+\-()]/g, '').length) {
+      // Solo números: buscar por teléfono
+      params.push(`%${digits}%`);
+      conds.push(`regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE $${params.length}`);
+    } else {
+      const words = q.split(/\s+/).filter(Boolean).slice(0, 4);
+      for (const w of words) {
+        params.push(`%${w}%`);
+        conds.push(`name ILIKE $${params.length}`);
+      }
+    }
+
+    const { rows } = await pool.query(
+      `SELECT phone, name, address, city, contact_type, client_type, total_orders, last_order_at
+         FROM contacts
+        WHERE ${conds.join(' AND ')}
+        ORDER BY last_order_at DESC NULLS LAST, last_seen_at DESC NULLS LAST, updated_at DESC
+        LIMIT 8`,
+      params
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/contacts/by-phone?phone=56987...
  * Busca un contacto por teléfono (con normalización de variantes).
  */

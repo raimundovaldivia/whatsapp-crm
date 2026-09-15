@@ -1575,8 +1575,59 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
+  // Autocompletar cliente por nombre o teléfono
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestFor, setSuggestFor]   = useState(null); // 'customerName' | 'phone' | null
+  const suggestTimer = useRef(null);
+  const suggestSeq   = useRef(0);
 
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const fetchSuggestions = (field, text) => {
+    clearTimeout(suggestTimer.current);
+    const q = (text || '').trim();
+    if (q.length < 2) { setSuggestions([]); setSuggestFor(null); return; }
+    suggestTimer.current = setTimeout(async () => {
+      const seq = ++suggestSeq.current;
+      try {
+        const res = await api.get(`/contacts/suggest?q=${encodeURIComponent(q)}`);
+        if (seq !== suggestSeq.current) return;   // llegó una respuesta vieja
+        setSuggestions(res.data?.data || []);
+        setSuggestFor(field);
+      } catch (_) { setSuggestions([]); }
+    }, 220);
+  };
+
+  const pickContact = (c) => {
+    setForm(f => ({
+      ...f,
+      customerName: c.name || f.customerName,
+      phone:        c.phone || f.phone,
+      address:      [c.address, c.city].filter(Boolean).join(', ') || f.address,
+    }));
+    setSuggestions([]); setSuggestFor(null);
+  };
+
+  const SuggestList = ({ field }) => (suggestFor === field && suggestions.length > 0) ? (
+    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, marginTop: '4px',
+      backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: '8px',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.35)', overflow: 'hidden', maxHeight: '220px', overflowY: 'auto' }}>
+      {suggestions.map(c => (
+        <div key={c.phone} onMouseDown={e => { e.preventDefault(); pickContact(c); }}
+          style={{ padding: '8px 10px', cursor: 'pointer', borderBottom: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: '2px' }}
+          onMouseEnter={e => e.currentTarget.style.backgroundColor = colors.bgHover}
+          onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+          <span style={{ fontSize: '13px', color: colors.textPrimary, fontWeight: 600 }}>
+            {c.name || '(sin nombre)'}
+            {c.client_type === 'empresa' && <span style={{ marginLeft: '6px', fontSize: '10px', color: '#93c5fd' }}>EMPRESA</span>}
+          </span>
+          <span style={{ fontSize: '11px', color: colors.textSecondary }}>
+            {c.phone}{c.address ? ` · ${[c.address, c.city].filter(Boolean).join(', ')}` : ''}{c.total_orders ? ` · ${c.total_orders} pedidos` : ''}
+          </span>
+        </div>
+      ))}
+    </div>
+  ) : null;
 
   const lookupContact = async (phone) => {
     if (!phone.trim()) return;
@@ -1642,18 +1693,23 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
 
           {/* Cliente */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <div>
+            <div style={{ position: 'relative' }}>
               <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Nombre cliente *</label>
-              <input style={inp} value={form.customerName} onChange={e => setField('customerName', e.target.value)} placeholder="Juan Pérez" />
+              <input style={inp} value={form.customerName}
+                onChange={e => { setField('customerName', e.target.value); fetchSuggestions('customerName', e.target.value); }}
+                onBlur={() => setTimeout(() => setSuggestFor(null), 150)}
+                placeholder="Escribe para buscar…" autoComplete="off" />
+              <SuggestList field="customerName" />
             </div>
-            <div>
+            <div style={{ position: 'relative' }}>
               <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>
                 Teléfono {lookingUp && <span style={{ color: colors.textSecondary, fontStyle: 'italic' }}>buscando...</span>}
               </label>
               <input style={inp} value={form.phone}
-                onChange={e => setField('phone', e.target.value)}
-                onBlur={e => lookupContact(e.target.value)}
-                placeholder="56987654321" />
+                onChange={e => { setField('phone', e.target.value); fetchSuggestions('phone', e.target.value); }}
+                onBlur={e => { setTimeout(() => setSuggestFor(null), 150); lookupContact(e.target.value); }}
+                placeholder="56987654321" autoComplete="off" />
+              <SuggestList field="phone" />
             </div>
           </div>
 
