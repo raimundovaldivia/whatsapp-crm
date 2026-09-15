@@ -122,6 +122,13 @@ async function attachCoords(orgId, orders) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+// pg entrega DATE como Date (medianoche local del servidor); devolver YYYY-MM-DD sin corrimientos
+function dateOnly(v) {
+  if (!v) return null;
+  if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  return String(v).slice(0, 10);
+}
+
 function normalizeShopifyOrder(row) {
   // shipping_address viene de raw_json JSONB (puede ser objeto o null)
   let addr = {};
@@ -140,6 +147,8 @@ function normalizeShopifyOrder(row) {
     phone: row.phone || addr.phone || '',             // customer_phone aliaseado como phone
     address: street, city, fullAddress: [street, city].filter(Boolean).join(', '),
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
+    deliveryDate: dateOnly(row.delivery_date),
+    deliveryNote: row.delivery_note || null,
   };
 }
 
@@ -173,6 +182,8 @@ function normalizeBotOrder(row) {
     phone: row.phone || '',
     address: street, city, fullAddress: [street, city].filter(Boolean).join(', '),
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
+    deliveryDate: dateOnly(row.delivery_date),
+    deliveryNote: row.delivery_note || null,
   };
 }
 
@@ -191,7 +202,9 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                raw_json->'shippingAddress'   AS shipping_address,
                items,
                total_price,
-               crm_status
+               crm_status,
+               delivery_date,
+               delivery_note
         FROM shopify_orders
         WHERE organization_id = $1
           AND (crm_status IS NULL OR crm_status NOT IN ('en_camino', 'entregado', 'cancelled'))
@@ -205,6 +218,8 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                o.items,
                o.total_price,
                o.status                AS crm_status,
+               o.delivery_date,
+               o.delivery_note,
                ct.name                 AS contact_name,
                ct.address              AS contact_address,
                ct.city                 AS contact_city,
@@ -917,8 +932,16 @@ async function applyExtraToOrder(pool, source, orderId, orgId, extras) {
 }
 
 async function applyStopUpdate(req, res, id, stopKey) {
-  const { status, paymentMethod, note, extras } = req.body;  // status: 'entregado' | 'cancelled' | 'pending'
-  const cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
+  const { status, paymentMethod, note, extras, deliverAfter } = req.body;  // status: 'entregado' | 'cancelled' | 'pending' | 'postponed'
+  let cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
+  // Reprogramado: el cliente pidió que se le entregue otro día.
+  const deliverDate = status === 'postponed' && /^\d{4}-\d{2}-\d{2}$/.test(String(deliverAfter || '')) ? deliverAfter : null;
+  if (status === 'postponed' && !deliverDate)
+    return res.status(400).json({ success: false, error: 'Para reprogramar hay que indicar la fecha (deliverAfter = YYYY-MM-DD)' });
+  if (deliverDate) {
+    const [y, m, d] = deliverDate.split('-');
+    cleanNote = `📅 Reprogramado para el ${d}/${m}${cleanNote ? ` — ${cleanNote}` : ''}`.slice(0, 500);
+  }
   // Venta extra del repartidor (bandejas extras). No toca el pedido original:
   // se guarda en stop_extras y suma al total a cobrar de esa entrega.
   const cleanExtras = Array.isArray(extras)
@@ -930,7 +953,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     : [];
   const pool = getPool();
 
-  const VALID = ['entregado', 'cancelled', 'pending'];
+  const VALID = ['entregado', 'cancelled', 'pending', 'postponed'];
   if (!VALID.includes(status))
     return res.status(400).json({ success: false, error: `Estado inválido. Opciones: ${VALID.join(', ')}` });
 
@@ -972,6 +995,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     const [source, orderId] = splitStopKey(stopKey);
     const newOrderStatus = status === 'entregado' ? 'entregado'
                          : status === 'cancelled' ? 'cancelled'
+                         : status === 'postponed' ? 'por_despachar'   // vuelve a la lista para otra ruta
                          : 'en_camino';
     const savePayment = status === 'entregado' && !!paymentMethod;
     // Pago en efectivo al entregar = el pedido queda pagado de inmediato.
@@ -985,9 +1009,11 @@ async function applyStopUpdate(req, res, id, stopKey) {
             SET crm_status = $1,
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
-                financial_status  = CASE WHEN $6::boolean THEN 'paid' ELSE financial_status END
+                financial_status  = CASE WHEN $6::boolean THEN 'paid' ELSE financial_status END,
+                delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
+                delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8 ELSE delivery_note END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
-        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash]
+        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null]
       );
     } else if (source === 'bot') {
       // Pedidos del bot marcan "pagado" con status = 'paid' (igual que al
@@ -1003,9 +1029,11 @@ async function applyStopUpdate(req, res, id, stopKey) {
                          END,
                 updated_at = NOW(),
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
-                payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END
+                payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
+                delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
+                delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8 ELSE delivery_note END
           WHERE id = $2 AND organization_id = $3`,
-        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash]
+        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null]
       );
     }
 
@@ -1096,7 +1124,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     const statuses   = route.stop_statuses || {};
     const allDone    = orders.every(o => {
       const key = `${o.source}_${o.id}`;
-      return statuses[key] === 'entregado' || statuses[key] === 'cancelled';
+      return ['entregado', 'cancelled', 'postponed'].includes(statuses[key]);
     });
     if (allDone && orders.length > 0) {
       await pool.query(

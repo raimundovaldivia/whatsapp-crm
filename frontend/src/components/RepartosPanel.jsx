@@ -591,6 +591,16 @@ function NuevoReparto({ colors }) {
                       )}
                     </div>
                     <span style={{ color: colors.textMuted, fontSize: '11px' }}>{o.orderName}</span>
+                    {o.deliveryDate && (() => {
+                      const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+                      const future = o.deliveryDate > today;
+                      const [y, m, d] = o.deliveryDate.split('-');
+                      return (
+                        <span title={o.deliveryNote || ''} style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 600, color: future ? '#c4b5fd' : '#fbbf24' }}>
+                          📅 {future ? `Entregar el ${d}/${m}` : `Pedido para el ${d}/${m}`}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
               );
@@ -850,9 +860,10 @@ const PAY_META = {
   otro:          { label: 'Otro',          icon: '💳', color: '#a78bfa' },
 };
 const STOP_META = {
-  entregado: { label: 'Entregado', color: '#2dd4bf' },
-  cancelled: { label: 'Fallido',   color: '#f87171' },
-  pending:   { label: 'Pendiente', color: '#fb923c' },
+  entregado: { label: 'Entregado',    color: '#2dd4bf' },
+  cancelled: { label: 'Fallido',      color: '#f87171' },
+  postponed: { label: 'Reprogramado', color: '#a78bfa' },
+  pending:   { label: 'Pendiente',    color: '#fb923c' },
 };
 
 function chargeInfo(row) {
@@ -907,7 +918,7 @@ function DespachosRepartos({ colors }) {
   const days = [];
   const byDay = {};
   for (const r of filtered) {
-    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, fallidos: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, extras: 0 }; days.push(byDay[r.day]); }
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, fallidos: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, extras: 0 }; days.push(byDay[r.day]); }
     const d = byDay[r.day];
     d.rows.push(r);
     if (r.status === 'entregado') {
@@ -922,6 +933,7 @@ function DespachosRepartos({ colors }) {
       }
       d.extras += r.extra_total || 0;
     } else if (r.status === 'cancelled') d.fallidos++;
+    else if (r.status === 'postponed') d.reprogramados++;
     else d.pendientes++;
   }
 
@@ -975,6 +987,7 @@ function DespachosRepartos({ colors }) {
           <option value="">Todos los estados</option>
           <option value="entregado">Entregado</option>
           <option value="cancelled">Fallido</option>
+          <option value="postponed">Reprogramado</option>
           <option value="pending">Pendiente</option>
         </select>
         <div style={{ flex: 1 }} />
@@ -1011,6 +1024,7 @@ function DespachosRepartos({ colors }) {
               <div style={{ flex: 1 }} />
               {chip(`${d.entregados} ✓`, '#2dd4bf')}
               {d.fallidos > 0 && chip(`${d.fallidos} ✗`, '#f87171')}
+              {d.reprogramados > 0 && chip(`📅 ${d.reprogramados} reprog.`, '#a78bfa')}
               {d.pendientes > 0 && chip(`${d.pendientes} pend.`, '#fb923c')}
               {chip(`💵 ${CLP(d.efectivo)}`, '#22c55e')}
               {chip(`🏦 ${CLP(d.transferencia)}`, '#38bdf8')}

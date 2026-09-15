@@ -1222,6 +1222,16 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
             ✏️ Modificado por el cliente
           </div>
         )}
+        {/* Badge: el cliente pidió que se le entregue otro día */}
+        {order.raw?.delivery_date && (() => {
+          const iso = String(order.raw.delivery_date).slice(0, 10);
+          const [y, m, d] = iso.split('-');
+          return (
+            <div title={order.raw.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #a78bfa55', flexShrink: 0 }}>
+              📅 Entregar el {d}/{m}
+            </div>
+          );
+        })()}
 
         {/* Badge financiero — Pendiente para draft/sent */}
         {(order.status === 'draft' || order.status === 'sent') && (
@@ -1481,6 +1491,16 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
             ✏️ Modificado por el cliente
           </div>
         )}
+        {/* Badge: el cliente pidió que se le entregue otro día */}
+        {order.raw?.delivery_date && (() => {
+          const iso = String(order.raw.delivery_date).slice(0, 10);
+          const [y, m, d] = iso.split('-');
+          return (
+            <div title={order.raw.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #a78bfa55', flexShrink: 0 }}>
+              📅 Entregar el {d}/{m}
+            </div>
+          );
+        })()}
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 500 }}>{order.customerName}</div>

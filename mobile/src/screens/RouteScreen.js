@@ -38,6 +38,7 @@ const STOP_COLORS = {
   pending:   C.orange,
   entregado: C.green,
   cancelled: C.red,
+  postponed: '#a78bfa',   // reprogramado: el cliente pidió otro día
 };
 
 const PAY_LABEL = { efectivo: '💵 Efectivo', transferencia: '🏦 Transferencia', otro: 'Otro' };
@@ -154,7 +155,8 @@ export default function RouteScreen({ route: navRoute, navigation }) {
 
   const doneCount   = stops.filter(st => stateOf(st) === 'entregado').length;
   const failedCount = stops.filter(st => stateOf(st) === 'cancelled').length;
-  const allDone     = stops.length > 0 && doneCount + failedCount === stops.length;
+  const postponedCount = stops.filter(st => stateOf(st) === 'postponed').length;
+  const allDone     = stops.length > 0 && doneCount + failedCount + postponedCount === stops.length;
 
   // Próxima parada pendiente: se resalta para que el chofer no tenga que buscar
   const nextPending = stops.find(st => stateOf(st) === 'pending');
@@ -252,7 +254,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                 </View>
                 <View style={[s.badge, { backgroundColor: color + '22', borderColor: color + '44' }]}>
                   <Text style={[s.badgeText, { color }]}>
-                    {state === 'entregado' ? 'Entregado' : state === 'cancelled' ? 'Fallido' : isNext ? 'Siguiente' : 'Pendiente'}
+                    {state === 'entregado' ? 'Entregado' : state === 'cancelled' ? 'Fallido' : state === 'postponed' ? 'Reprogramado' : isNext ? 'Siguiente' : 'Pendiente'}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -261,7 +263,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           ListFooterComponent={allDone ? (
             <View style={s.summary}>
               <Text style={s.summaryText}>
-                🎉 Ruta completada: {doneCount} entregados · {failedCount} fallidos
+                🎉 Ruta completada: {doneCount} entregados · {failedCount} fallidos{postponedCount ? ` · ${postponedCount} reprogramados` : ''}
               </Text>
             </View>
           ) : null}

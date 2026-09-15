@@ -165,12 +165,13 @@ export async function getRoute(routeId) {
  *        Si es transferencia, el pedido queda en "Por cobrar" en el CRM
  *        hasta que llegue el comprobante.
  */
-export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras) {
+export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras, deliverAfter) {
   const client = await getClient();
   const body = { stopKey, status };
   if (paymentMethod) body.paymentMethod = paymentMethod;
   if (note && note.trim()) body.note = note.trim();
   if (Array.isArray(extras) && extras.length) body.extras = extras;
+  if (deliverAfter) body.deliverAfter = deliverAfter;   // 'postponed': YYYY-MM-DD
   const res = await client.patch(`/api/delivery/routes/${routeId}/stops`, body);
   return res.data;
 }

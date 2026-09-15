@@ -28,6 +28,9 @@ export default function StopScreen({ route: navRoute, navigation }) {
   // Al entregar hay que registrar cómo pagó el cliente: se pregunta acá mismo,
   // con botones grandes, en vez de un Alert encadenado.
   const [askingPayment, setAskingPayment] = useState(false);
+  // "Entregar después": el cliente pidió otro día. Se elige con chips rápidos.
+  const [askingPostpone, setAskingPostpone] = useState(false);
+  const [postponeDate,   setPostponeDate]   = useState(null); // YYYY-MM-DD
   const [paidWith,      setPaidWith]      = useState(null);
   // Nota que el repartidor puede dejar en la parada (ej: "dejé con conserje").
   const [note, setNote] = useState(navRoute.params?.stop?.note || '');
@@ -85,10 +88,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
   }
 
   /** Envía el estado al backend y cierra la parada. */
-  async function submit(newStatus, paymentMethod) {
+  async function submit(newStatus, paymentMethod, deliverAfter) {
     setLoading(true);
     try {
-      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, note, extrasArray);
+      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, note, extrasArray, deliverAfter);
       setStatus(newStatus);
       setPaidWith(paymentMethod || null);
       setDone(true);
@@ -114,6 +117,29 @@ export default function StopScreen({ route: navRoute, navigation }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  /** Opciones rápidas para reprogramar (fecha local del teléfono). */
+  function postponeOptions() {
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const label = d => d.toLocaleDateString('es-CL', { weekday: 'short', day: 'numeric', month: 'short' });
+    const out = [];
+    for (const [name, days] of [['Mañana', 1], ['Pasado mañana', 2], ['En 3 días', 3]]) {
+      const d = new Date(); d.setDate(d.getDate() + days);
+      out.push({ key: fmt(d), name, sub: label(d) });
+    }
+    // Próximo lunes
+    const mon = new Date(); const delta = ((8 - mon.getDay()) % 7) || 7; mon.setDate(mon.getDate() + delta);
+    out.push({ key: fmt(mon), name: 'Próximo lunes', sub: label(mon) });
+    // Próxima semana (7 días)
+    const wk = new Date(); wk.setDate(wk.getDate() + 7);
+    if (!out.some(o => o.key === fmt(wk))) out.push({ key: fmt(wk), name: 'En una semana', sub: label(wk) });
+    return out;
+  }
+
+  function confirmPostpone() {
+    if (!postponeDate) { Alert.alert('Falta la fecha', 'Elige para qué día lo pidió el cliente.'); return; }
+    submit('postponed', null, postponeDate);
   }
 
   /** "No encontrado" — sigue pidiendo confirmación porque cancela el pedido. */
@@ -185,13 +211,37 @@ export default function StopScreen({ route: navRoute, navigation }) {
       {/* ─── Acciones ─── */}
       {done ? (
         <View style={s.doneBox}>
-          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : '❌'}</Text>
+          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : status === 'postponed' ? '📅' : '❌'}</Text>
           <Text style={s.doneText}>
-            {status === 'entregado' ? '¡Entregado!' : 'No encontrado'}
+            {status === 'entregado' ? '¡Entregado!' : status === 'postponed' ? 'Reprogramado' : 'No encontrado'}
           </Text>
+          {status === 'postponed' && <Text style={s.donePay}>Vuelve a "por despachar" para la ruta de ese día</Text>}
           {paidWith === 'efectivo'     && <Text style={s.donePay}>💵 Pagado en efectivo</Text>}
           {paidWith === 'transferencia' && <Text style={s.donePay}>🏦 Por transferencia — queda pendiente el comprobante</Text>}
           <Text style={s.doneSub}>Volviendo a la ruta...</Text>
+        </View>
+      ) : askingPostpone ? (
+        /* ── Entregar después: ¿para qué día? ── */
+        <View style={s.payBox}>
+          <Text style={s.payTitle}>¿Para cuándo lo pidió {stop.customerName?.split(' ')[0] || 'el cliente'}?</Text>
+          <View style={s.postponeGrid}>
+            {postponeOptions().map(o => (
+              <TouchableOpacity key={o.key} onPress={() => setPostponeDate(o.key)}
+                style={[s.postponeChip, postponeDate === o.key && s.postponeChipOn]} activeOpacity={0.8}>
+                <Text style={[s.postponeChipName, postponeDate === o.key && { color: '#fff' }]}>{o.name}</Text>
+                <Text style={s.postponeChipSub}>{o.sub}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={s.postponeHint}>Si dijo una hora o un detalle ("después de las 18", "dejar con el conserje"), escríbelo en la nota de arriba.</Text>
+          <TouchableOpacity style={[s.payBtn, s.postponeBtn, (!postponeDate || loading) && s.btnDisabled]}
+            onPress={confirmPostpone} disabled={!postponeDate || loading} activeOpacity={0.85}>
+            <Text style={s.payIcon}>📅</Text>
+            <Text style={s.payBtnText}>{loading ? 'Guardando…' : 'Confirmar reprogramación'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { setAskingPostpone(false); setPostponeDate(null); }} disabled={loading} activeOpacity={0.7}>
+            <Text style={s.payCancel}>← Volver</Text>
+          </TouchableOpacity>
         </View>
       ) : askingPayment ? (
         /* ── Paso 2: ¿cómo pagó? ── */
@@ -321,6 +371,14 @@ export default function StopScreen({ route: navRoute, navigation }) {
               <Text style={[s.statusBtnText, { color: C.red }]}>No encontrado</Text>
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            style={[s.postponeRowBtn, loading && s.btnDisabled]}
+            onPress={() => setAskingPostpone(true)}
+            disabled={loading}
+            activeOpacity={0.85}>
+            <Text style={s.postponeRowText}>📅 Entregar después — el cliente pidió otro día</Text>
+          </TouchableOpacity>
         </>
       )}
     </ScrollView>
@@ -367,6 +425,15 @@ const s = StyleSheet.create({
   callBtnText:  { color: C.text, fontWeight: '700', fontSize: 15 },
 
   statusRow:    { flexDirection: 'row', gap: 12, marginTop: 4 },
+  postponeRowBtn:  { marginTop: 10, borderRadius: 12, padding: 14, alignItems: 'center', backgroundColor: C.card, borderWidth: 1, borderColor: C.orange + '66' },
+  postponeRowText: { color: C.orange, fontWeight: '700', fontSize: 14 },
+  postponeGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  postponeChip:    { width: '48%', flexGrow: 1, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 12 },
+  postponeChipOn:  { backgroundColor: C.orange, borderColor: C.orange },
+  postponeChipName:{ color: C.text, fontWeight: '800', fontSize: 15 },
+  postponeChipSub: { color: C.muted, fontSize: 12, marginTop: 2, textTransform: 'capitalize' },
+  postponeHint:    { color: C.muted, fontSize: 12, marginBottom: 12, lineHeight: 17 },
+  postponeBtn:     { backgroundColor: C.orange },
   statusBtn:    { flex: 1, borderRadius: 14, padding: 18, alignItems: 'center', gap: 6 },
   btnDisabled:  { opacity: 0.5 },
   deliveredBtn: { backgroundColor: C.green },
