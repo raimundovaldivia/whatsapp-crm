@@ -188,7 +188,7 @@ export async function createExpense({ amount, category, note, routeId, photoBase
   const client = await getClient();
   const res = await client.post('/api/delivery/expenses',
     { amount, category, note, routeId, photoBase64, photoMime },
-    { timeout: 60000 });
+    { timeout: 120000 });   // fotos de 1-3 MB con señal de calle: darle tiempo
   return res.data;
 }
 

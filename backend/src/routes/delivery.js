@@ -640,6 +640,7 @@ router.post('/expenses', async (req, res) => {
        (category || '').slice(0, 40), (note || '').slice(0, 300),
        photoBuf, photoBuf ? (photoMime || 'image/jpeg') : null]
     );
+    console.log(`[Delivery/expenses POST] ✅ id=${row.id} org=${req.orgId} driver=${driverName || req.userId} $${amt} ${category || ''} foto=${photoBuf ? Math.round(photoBuf.length / 1024) + 'KB' : 'no'}`);
     res.status(201).json({ success: true, id: row.id, created_at: row.created_at });
   } catch (err) {
     console.error('[Delivery/expenses POST]', err.message);
@@ -1189,7 +1190,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
              created_at, sent_at, completed_at
         FROM delivery_routes
        WHERE organization_id = $1
-         AND status <> 'draft'
+         AND status NOT IN ('draft', 'cancelled')   -- una ruta cancelada no se repartió: sus paradas no cuentan
          AND created_at >= ($2::date - INTERVAL '3 days')
          AND created_at <  ($3::date + INTERVAL '1 day')
          AND ($4::int IS NULL OR driver_user_id = $4)
@@ -1217,6 +1218,22 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     const shopMap = new Map(shopRows.map(r => [String(r.id), r]));
     const pendingSet = new Set(pending.map(p => `${p.source}_${p.id}`));
 
+    // Rutas canceladas: solo las paradas que alcanzaron a marcarse (entregado/fallido/reprogramado)
+    const { rows: cancelledRoutes } = await pool.query(`
+      SELECT id, name, status, driver_name, driver_user_id, orders, optimized_route,
+             stop_statuses, stop_payments, stop_notes, stop_extras, stop_times,
+             created_at, sent_at, completed_at
+        FROM delivery_routes
+       WHERE organization_id = $1 AND status = 'cancelled'
+         AND stop_statuses IS NOT NULL AND stop_statuses::text <> '{}'
+         AND created_at >= ($2::date - INTERVAL '3 days')
+         AND created_at <  ($3::date + INTERVAL '1 day')
+         AND ($4::int IS NULL OR driver_user_id = $4)`,
+      [req.orgId, from, to, driverId]
+    );
+    for (const r of cancelledRoutes) r._onlyMarked = true;
+    routes.push(...cancelledRoutes);
+
     const rows = [];
     for (const r of routes) {
       const stops = Array.isArray(r.optimized_route) && r.optimized_route.length ? r.optimized_route : (r.orders || []);
@@ -1227,6 +1244,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
       for (const st of stops) {
         const key    = `${st.source}_${st.id}`;
         const status = statuses[key] || 'pending';
+        if (r._onlyMarked && status === 'pending') continue;   // ruta cancelada: lo no marcado no ocurrió
         const at     = times[key] || (status !== 'pending' ? routeFallbackTime : (r.sent_at || r.created_at));
         const day    = dayOf(at);
         if (day < from || day > to) continue;

@@ -15,6 +15,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getActiveRoutes } from '../services/api';
 import UpdateStatus from '../components/UpdateStatus';
+import { flushExpenses } from '../utils/expenseQueue';
 
 const C = {
   bg:     '#0f172a',
@@ -85,7 +86,11 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
   }, []);
 
   // Recargar cada vez que la pantalla vuelve al frente
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    load();
+    // Gastos que quedaron sin subir por falta de señal: reintentar al abrir
+    flushExpenses().then(r => { if (r.uploaded > 0) Alert.alert('Gastos subidos', `Se subieron ${r.uploaded} gasto(s) pendientes ✅`); }).catch(() => {});
+  }, [load]));
 
   function openRoute(route) {
     const stops = stopsOf(route);

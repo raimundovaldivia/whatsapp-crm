@@ -18,6 +18,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { getRoute, createExpense } from '../services/api';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
+import { enqueueExpense, flushExpenses, pendingCount, onQueueChange } from '../utils/expenseQueue';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const EXPENSE_CATS = ['Combustible', 'Peaje', 'Comida', 'Mantención', 'Otro'];
@@ -89,6 +90,18 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const [expNote,  setExpNote]  = useState('');
   const [expPhoto, setExpPhoto] = useState(null); // { uri, base64 }
   const [expSaving, setExpSaving] = useState(false);
+  const [expPending, setExpPending] = useState(0);   // gastos guardados en el teléfono sin subir
+  useFocusEffect(useCallback(() => {
+    let alive = true;
+    pendingCount().then(n => alive && setExpPending(n));
+    const off = onQueueChange(n => alive && setExpPending(n));
+    flushExpenses().then(r => {
+      if (!alive) return;
+      if (r.uploaded > 0) Alert.alert('Gastos subidos', `Se subieron ${r.uploaded} gasto(s) que estaban pendientes ✅`);
+      if (r.rejected?.length) Alert.alert('Gasto rechazado', `El servidor rechazó un gasto pendiente: ${r.rejected[0]}. Vuelve a cargarlo.`);
+    }).catch(() => {});
+    return () => { alive = false; off(); };
+  }, []));
 
   async function takeExpensePhoto() {
     try {
@@ -103,14 +116,21 @@ export default function RouteScreen({ route: navRoute, navigation }) {
     const amt = parseInt(String(expAmt).replace(/\D/g, '')) || 0;
     if (amt <= 0) { Alert.alert('Monto', 'Ingresa el monto del gasto.'); return; }
     setExpSaving(true);
+    const payload = { amount: amt, category: expCat, note: expNote, routeId,
+      photoBase64: expPhoto?.base64 || null, photoMime: 'image/jpeg' };
     try {
-      await createExpense({ amount: amt, category: expCat, note: expNote, routeId,
-        photoBase64: expPhoto?.base64 || null, photoMime: 'image/jpeg' });
+      await createExpense(payload);
       setExpOpen(false); resetExpense();
       Alert.alert('Listo', 'Gasto registrado ✅');
     } catch (e) {
-      if (e.response?.status === 401) return;
-      Alert.alert('No se pudo guardar', e.response?.data?.error || e.message);
+      const st = e.response?.status;
+      if (st === 401) return;
+      if (st === 400) { Alert.alert('No se pudo guardar', e.response?.data?.error || 'Revisa el monto o la foto.'); return; }
+      // Sin señal / timeout / error del servidor → no perder el gasto: queda en el teléfono
+      const n = await enqueueExpense(payload);
+      setExpOpen(false); resetExpense();
+      Alert.alert('Guardado en el teléfono 📵',
+        `No hay conexión ahora. El gasto quedó guardado y se subirá solo cuando vuelva la señal (${n} pendiente${n === 1 ? '' : 's'}).`);
     } finally { setExpSaving(false); }
   }
 
@@ -206,6 +226,13 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             </TouchableOpacity>
           </View>
         </View>
+
+        {expPending > 0 && (
+          <TouchableOpacity onPress={() => flushExpenses().then(r => r.uploaded ? Alert.alert('Listo', `Se subieron ${r.uploaded} gasto(s) ✅`) : Alert.alert('Sin conexión', 'Todavía no se pueden subir. Se reintenta solo.'))}
+            style={s.pendingBar} activeOpacity={0.8}>
+            <Text style={s.pendingBarText}>📵 {expPending} gasto{expPending === 1 ? '' : 's'} guardado{expPending === 1 ? '' : 's'} en el teléfono, sin subir · toca para reintentar</Text>
+          </TouchableOpacity>
+        )}
 
         <FlatList
           data={stops}
@@ -336,6 +363,8 @@ const s = StyleSheet.create({
   listTitle:    { color: C.text, fontWeight: '700', fontSize: 15 },
   mapsBtn:      { backgroundColor: C.blue + '22', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: C.blue + '44' },
   mapsBtnText:  { color: C.blue, fontSize: 12, fontWeight: '600' },
+  pendingBar:     { backgroundColor: '#3a2a10', borderBottomWidth: 1, borderBottomColor: '#fb923c55', paddingHorizontal: 14, paddingVertical: 8 },
+  pendingBarText: { color: '#fbbf24', fontSize: 12, fontWeight: '600' },
   labelBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: C.card, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, borderWidth: 1, borderColor: C.border, gap: 4 },
   labelBtnText: { color: C.muted, fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   labelBtnOn:   { color: C.text },
