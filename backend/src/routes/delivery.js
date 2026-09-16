@@ -208,6 +208,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
         FROM shopify_orders
         WHERE organization_id = $1
           AND (crm_status IS NULL OR crm_status NOT IN ('en_camino', 'entregado', 'cancelled'))
+          AND delivered_at IS NULL   -- ya se repartió: no vuelve a la lista
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
@@ -249,6 +250,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
         ) so ON true
         WHERE o.organization_id = $1
           AND (o.status IS NULL OR o.status NOT IN ('en_camino', 'entregado', 'cancelled'))
+          AND o.delivered_at IS NULL   -- ya se repartió (aunque quede en 'paid'): no vuelve a la lista
         ORDER BY o.created_at ASC
       `, [req.orgId]),
     ]);
@@ -999,6 +1001,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                          : status === 'postponed' ? 'por_despachar'   // vuelve a la lista para otra ruta
                          : 'en_camino';
     const savePayment = status === 'entregado' && !!paymentMethod;
+    const wasDelivered = status === 'entregado';   // señal de entrega, independiente del pago
     // Pago en efectivo al entregar = el pedido queda pagado de inmediato.
     // (Transferencia queda "por cobrar" hasta que llegue el comprobante.)
     const paidByCash = status === 'entregado' && paymentMethod === 'efectivo';
@@ -1011,10 +1014,11 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 financial_status  = CASE WHEN $6::boolean THEN 'paid' ELSE financial_status END,
+                delivered_at      = CASE WHEN $9::boolean THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
                 delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8 ELSE delivery_note END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
-        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null]
+        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered]
       );
     } else if (source === 'bot') {
       // Pedidos del bot marcan "pagado" con status = 'paid' (igual que al
@@ -1029,12 +1033,13 @@ async function applyStopUpdate(req, res, id, stopKey) {
                            ELSE $1
                          END,
                 updated_at = NOW(),
+                delivered_at      = CASE WHEN $9::boolean THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
                 delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8 ELSE delivery_note END
           WHERE id = $2 AND organization_id = $3`,
-        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null]
+        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered]
       );
     }
 

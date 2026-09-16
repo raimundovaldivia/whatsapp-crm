@@ -777,10 +777,17 @@ async function getRecentDeliveredOrder(conversationId, days = 7) {
 }
 
 async function getActiveOrderForBot(conversationId) {
+  // Un pedido que lleva más de 7 días sin moverse ya no es "activo" para el
+  // bot: casi siempre se entregó y nadie lo cerró en el CRM. Contarlo como
+  // activo hace que el bot diga "en preparación" de algo que el cliente
+  // recibió hace dos semanas. Excepción: pedidos con fecha de entrega
+  // programada que aún no llega (reprogramados).
   return queryOne(
     `SELECT * FROM orders
      WHERE conversation_id = $1
        AND status IN ('draft','nuevo','sent','payment_received','por_despachar','en_camino')
+       AND (COALESCE(updated_at, created_at) > NOW() - INTERVAL '7 days'
+            OR (delivery_date IS NOT NULL AND delivery_date >= CURRENT_DATE))
      ORDER BY created_at DESC LIMIT 1`,
     [conversationId]
   );

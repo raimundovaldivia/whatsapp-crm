@@ -83,7 +83,11 @@ const STATE_CLAIMS = [
   },
   {
     id: 'registrado',
-    pattern: /(ya\s+tenemos\s+tu\s+pedido|pedido\s+registrado|pedido\s+confirmado)/i,
+    // "Tu pedido queda registrado", "todo listo", "ya tenemos tu pedido",
+    // "pedido confirmado", "registré tu pedido"…
+    // ("todo listo" a secas se maneja en el pipeline, no aquí: solo es
+    // sospechoso dentro de la toma de pedido.)
+    pattern: /(ya\s+(tenemos|tengo)\s+(tu|su)\s+pedido|pedido\s+(registrado|confirmado|anotado|ingresado|tomado)|(queda|qued[oó]|est[aá])\s+(registrad|anotad|confirmad|ingresad)|(registr|anot|confirm|ingres)(é|e|amos)\s+(tu|su|el)\s+pedido)/iu,
     requires: 'order_reciente',
     describe: 'le confirma un pedido registrado',
   },
@@ -202,10 +206,14 @@ async function loadConversationFacts(conversationId) {
  * @param {number} orgId
  * @param {number} conversationId
  * @param {string} response - el texto que el bot quiere enviar
+ * @param {object} [turn]   - qué hizo el pipeline en ESTE turno:
+ *   { orderCreated, orderUpdated }. Con esto, "tu pedido queda registrado"
+ *   solo pasa si de verdad se creó/actualizó un pedido ahora (o hay uno de
+ *   hoy en la DB). Antes bastaba con que existiera cualquier pedido activo.
  * @returns {Promise<{ok: boolean, reason?: string, detail?: string}>}
  *   ok:false significa NO ENVIAR y escalar al ejecutivo.
  */
-async function checkResponseFreshness(orgId, conversationId, response) {
+async function checkResponseFreshness(orgId, conversationId, response, turn = {}) {
   if (!response || typeof response !== 'string') return { ok: true };
 
   try {
@@ -256,6 +264,21 @@ async function checkResponseFreshness(orgId, conversationId, response) {
       }
 
       if (claim.requires === 'order_reciente') {
+        // El bot afirma que el pedido quedó registrado. Tiene que respaldarlo
+        // un pedido creado/actualizado en este turno, o uno creado hoy para
+        // esta conversación. Si no, es un cierre "de palabra" sin pedido —
+        // el caso que deja al cliente esperando algo que nunca se registró.
+        const actedNow   = !!(turn && (turn.orderCreated || turn.orderUpdated));
+        const orderDeHoy = facts.hayOrder && facts.orderCreadaDias != null && facts.orderCreadaDias < 1;
+        if (!actedNow && !orderDeHoy) {
+          return {
+            ok: false,
+            reason: 'pedido_fantasma',
+            detail: facts.hayOrder
+              ? `El bot ${claim.describe}, pero en este turno no se creó ningún pedido y el último es de hace ${Math.floor(facts.orderCreadaDias)} días ("${facts.orderStatus}").`
+              : `El bot ${claim.describe}, pero no existe ningún pedido para esta conversación.`,
+          };
+        }
         if (facts.hayOrder && !facts.orderActiva && facts.orderCreadaDias > MAX_STALE_DAYS) {
           return {
             ok: false,

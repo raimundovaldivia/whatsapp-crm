@@ -430,6 +430,19 @@ async function setupDatabase() {
       ALTER TABLE orders         ADD COLUMN IF NOT EXISTS delivery_note TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS delivery_date DATE;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS delivery_note TEXT;
+      -- Momento en que la parada se marcó ENTREGADA. Señal limpia de "ya se
+      -- repartió", independiente del status (que en pedidos del bot mezcla
+      -- 'paid' = pagado con la entrega). Con esto un pedido entregado no
+      -- reaparece en la lista de Repartos aunque su status quede en 'paid'.
+      ALTER TABLE orders         ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP;
+      -- Backfill: los pedidos que hoy están entregados/pagados ya se repartieron.
+      -- (Su fecha aproximada es cuando se marcó el pago o la última actualización.)
+      UPDATE orders SET delivered_at = COALESCE(payment_marked_at, updated_at, created_at)
+        WHERE delivered_at IS NULL AND status IN ('entregado', 'paid');
+      UPDATE shopify_orders SET delivered_at = COALESCE(payment_marked_at, updated_at, synced_at)
+        WHERE delivered_at IS NULL AND crm_status = 'entregado';
+
       -- Recordatorio enviado al cliente cuando una escalación lleva mucho sin respuesta humana
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS escalation_reminder_at TIMESTAMP;
 

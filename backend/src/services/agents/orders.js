@@ -232,6 +232,29 @@ function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
 }
 
 /**
+ * ¿El texto le AFIRMA al cliente que su pedido ya quedó registrado/listo?
+ *
+ * El modelo a veces "cierra" la venta en palabras ("Tu pedido queda
+ * registrado", "todo listo!") sin emitir ORDEN_CONFIRMADA, y el pedido nunca
+ * se crea. Regla del sistema: ninguna de estas frases puede salir si no hay
+ * un pedido creado en la DB. Quien llama decide qué hacer (crear el pedido si
+ * hay datos, o pedir lo que falta), pero el texto tal cual nunca se envía.
+ */
+const REGISTERED_CLAIM_PATTERNS = [
+  /\b(queda|qued[oó]|est[aá]|ya\s+est[aá]|lo\s+dejo|lo\s+dejamos|te\s+lo\s+dejo)\s+(registrad|anotad|confirmad|ingresad|agendad|list)/iu,
+  /\bpedido\s+(registrado|confirmado|anotado|ingresado|listo|hecho|tomado)\b/iu,
+  /\b(registr|anot|confirm|ingres)(é|e|amos|ado|ada)\s+(tu|su|el)\s+pedido\b/iu,
+  /\bya\s+(tenemos|tengo|qued[oó])\s+(tu|su|el)\s+pedido\b/iu,
+  /\btodo\s+listo\b/iu,
+  /\b(tu|su)\s+pedido\s+(queda|qued[oó]|est[aá])\s+(listo|registrado|confirmado|tomado|hecho)/iu,
+];
+function claimsRegistered(text) {
+  const t = String(text || '');
+  if (!t || t.includes('ORDEN_CONFIRMADA')) return false;
+  return REGISTERED_CLAIM_PATTERNS.some(p => p.test(t));
+}
+
+/**
  * El cliente se arrepiente a mitad del proceso de pedido.
  * Solo mensajes cortos y claros — "no quiero la XL, quiero la L" NO es cancelar.
  */
@@ -269,4 +292,4 @@ function filterDraftForDisplay(draft) {
   return display;
 }
 
-module.exports = { generateOrderResponse, extractOrderData, isOrderConfirmed, isCancelDuringCollection, hasRequiredData, missingFields };
+module.exports = { generateOrderResponse, extractOrderData, isOrderConfirmed, isCancelDuringCollection, claimsRegistered, hasRequiredData, missingFields };

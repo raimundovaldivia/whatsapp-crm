@@ -362,7 +362,16 @@ Reglas estrictas:
   } catch (_) {}
 
   // pendingOrderSection va PRIMERO para que el LLM lo lea antes de cualquier otro contexto
-  const storeCustomPrompt = [chargeSection, pendingOrderSection, contactAddressSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  // Fecha y hora actual (Chile). Sin esto el bot no puede interpretar "hoy",
+  // "mañana" ni "el viernes": ante "¿mañana reparten?" respondía que no tenía
+  // información, aunque el horario de reparto estuviera en sus instrucciones.
+  const nowCl = new Date();
+  const fechaLarga = nowCl.toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const horaCl     = nowCl.toLocaleTimeString('es-CL', { timeZone: 'America/Santiago', hour: '2-digit', minute: '2-digit' });
+  const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
+  const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.`;
+
+  const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Agendado vigente? ──────────────────────────────────────────────────────
   // Solo cuenta un pedido agendado cuya fecha NO haya pasado todavía.
@@ -738,6 +747,23 @@ REGLAS ABSOLUTAS:
   // intención de compra pero indica una fecha futura.
   const BUY_INTENTS = ['wants_to_order', 'interested', 'exploring'];
 
+  // ── ¿La respuesta de ventas debe pasar al agente de pedidos? ─────────────
+  // Sí cuando usa una frase de cierre (diseño original) Y TAMBIÉN cuando le
+  // afirma al cliente que el pedido "queda registrado" sin que exista: ese
+  // texto nunca se envía; se delega a handleOrderCollection, que crea el
+  // pedido si hay datos o pide lo que falta. No aplica si el cliente está
+  // preguntando por el estado de un pedido que ya tiene.
+  const isStatusQuestion = /c[oó]mo\s+va|cu[aá]ndo\s+(llega|viene|sale|lo\s+mandan)|estado\s+de\s+mi\s+pedido|ya\s+(lo\s+)?(mandaron|enviaron|sali[oó]|despacharon)|d[oó]nde\s+(viene|est[aá])\s+mi\s+pedido/iu.test(userMessage);
+  const recentActiveOrder = !!activeOrder && (Date.now() - new Date(activeOrder.created_at || 0).getTime()) < 24 * 3600 * 1000;
+  const goesToOrders = (txt) => {
+    if (salesAgent.isReadyToOrder(txt)) return true;
+    if (BUY_INTENTS.includes(intent) && !isStatusQuestion && !recentActiveOrder && ordersAgent.claimsRegistered(txt)) {
+      console.warn(`[Pipeline] ⚠️  Ventas afirmó "pedido registrado" sin pedido — delegando al agente de pedidos (conv ${conversationId})`);
+      return true;
+    }
+    return false;
+  };
+
   // ── Intención futura SUAVE: "lo pienso", "ya te aviso", "quizás" ──
   // Sin fecha comprometida → no scheduled_order, solo cambiar estado y no presionar
   if (BUY_INTENTS.includes(intent) && !isTemplateReply && isSoftFutureIntent(userMessage)) {
@@ -798,10 +824,15 @@ REGLAS ABSOLUTAS:
     // Dejar que el agente de ventas responda — ya tiene la info de delivery en su prompt
     const tDel = Date.now();
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
-    const newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : effectiveState;
-    await db.updatePipelineState(conversationId, newState, newState === 'collecting_order' ? {} : undefined);
+    if (goesToOrders(salesResponse)) {
+      // Igual que en los otros caminos: el agente de pedidos toma el turno con
+      // los datos conocidos, en vez de mandar el texto de ventas tal cual.
+      L.agent('orders', Date.now() - tDel);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
+    }
+    await db.updatePipelineState(conversationId, effectiveState, undefined);
     L.agent('sales', Date.now() - tDel);
-    return { response: salesResponse, agentType: 'sales', newState };
+    return { response: salesResponse, agentType: 'sales', newState: effectiveState };
   }
 
   // El cliente quiere hablar con humano — salvo si ya detectamos bucle de escalación
@@ -821,7 +852,7 @@ REGLAS ABSOLUTAS:
   if (isTemplateReply || intent === 'wants_to_order' || (intent === 'interested' && confidence > 0.85)) {
     const tWarm = Date.now();
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
-    let newState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : 'interested';
+    let newState = goesToOrders(salesResponse) ? 'collecting_order' : 'interested';
 
     // Safety net: si el bot mandó la URL de la tienda pero el cliente quería comprar,
     // forzar collecting_order — el agente de ventas no debía mandar un link aquí
@@ -849,7 +880,7 @@ REGLAS ABSOLUTAS:
   // Interés, objeción, exploración, delivery, soporte → Agente de ventas
   const tGen = Date.now();
   const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
-  const finalState = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : (intent === 'interested' ? 'interested' : effectiveState);
+  const finalState = goesToOrders(salesResponse) ? 'collecting_order' : (intent === 'interested' ? 'interested' : effectiveState);
   if (finalState === 'collecting_order') {
     L.agent('orders', Date.now() - tGen);
     return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
@@ -1108,7 +1139,13 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
 
   // 3. ¿Confirmó?
-  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft);
+  //    REGLA DURA: si el modelo le dice al cliente "tu pedido queda
+  //    registrado" / "todo listo" sin emitir ORDEN_CONFIRMADA, ese texto NO
+  //    sale. Se trata como confirmación: con datos completos se crea el pedido
+  //    de verdad (y el cliente recibe el resumen real); si falta algo, se pide.
+  const claimed = ordersAgent.claimsRegistered(agentResponse);
+  if (claimed) console.warn(`[Pipeline] ⚠️  El agente afirmó "pedido registrado" sin ORDEN_CONFIRMADA — forzando cierre real (conv ${conversationId})`);
+  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft) || claimed;
   const allMatched = priced.items.length > 0 && priced.items.every(it => it.matched);
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft) && allMatched) {

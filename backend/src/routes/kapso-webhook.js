@@ -67,7 +67,15 @@ const runningPipeline = new Map(); // key → { rerunFn, reruns } mientras se ej
  * pendiente — y solo la última, porque el pipeline relee de la DB el mensaje
  * más reciente, así que las intermedias no aportan nada.
  */
-function schedulePipeline(orgId, conversationId, fn) {
+// Un mensaje que es SOLO un saludo ("Buenas tardes", "Hola") casi siempre
+// viene seguido de la pregunta real unos segundos después. Con 3 s el bot
+// alcanzaba a contestar "¿En qué te ayudo?" y luego contestaba la pregunta
+// aparte: dos respuestas para un solo mensaje. Para esos se espera más.
+const OPENER_DEBOUNCE_MS = 12000;
+const OPENER_RE = /^(hola+|holi+|buenas+(\s+(tardes|d[ií]as|noches))?|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hey|qu[eé]\s+tal|hola\s+buenas)[\s!.,?¡¿]*$/iu;
+function isOpener(text) { return OPENER_RE.test(String(text || '').trim()); }
+
+function schedulePipeline(orgId, conversationId, fn, waitMs = DEBOUNCE_MS) {
   const key = `${orgId}:${conversationId}`;
   if (pendingPipeline.has(key)) clearTimeout(pendingPipeline.get(key));
 
@@ -83,7 +91,7 @@ function schedulePipeline(orgId, conversationId, fn) {
     }
 
     runPipelineLocked(key, conversationId, fn, 0);
-  }, DEBOUNCE_MS);
+  }, waitMs);
 
   pendingPipeline.set(key, timer);
 }
@@ -351,20 +359,31 @@ router.post('/', async (req, res) => {
     const capturedFrom  = parsed.from;
     const capturedConvId = conversation.id;
 
+    const waitMs = isOpener(capturedText) ? OPENER_DEBOUNCE_MS : DEBOUNCE_MS;
     schedulePipeline(org.id, capturedConvId, async () => {
       const log = createBotLogger(org.name, capturedFrom);
-      // Leer el último mensaje inbound de la DB (puede haber llegado algo nuevo durante el debounce).
-      // OJO: getLastMessages() devuelve orden ASCENDENTE (más antiguo primero), así que hay que
-      // tomar el ÚLTIMO inbound con .pop(), no el primero con .find(). Con .find() el bot
-      // reprocesaba un mensaje viejo de la conversación (p.ej. un "Stop" de días atrás)
-      // y respondía a eso en vez de al mensaje recién llegado.
-      const lastMessages = await db.getLastMessages(capturedConvId, 3).catch(() => []);
-      const lastInbound  = lastMessages?.filter(m => m.direction === 'inbound').pop();
+      // Leer de la DB los mensajes del cliente que llegaron seguidos (pueden ser
+      // varios durante el debounce: "Buenas tardes" + "¿Mañana reparten?").
+      // Se procesan JUNTOS como un solo texto — así el bot responde una vez a
+      // la pregunta real y no una vez al saludo y otra a la pregunta.
+      // OJO: getLastMessages() devuelve orden ASCENDENTE (más antiguo primero).
+      const lastMessages = await db.getLastMessages(capturedConvId, 10).catch(() => []);
+      let trailing = [];
+      for (const m of (lastMessages || [])) {
+        if (m.direction === 'inbound') trailing.push(m); else trailing = [];
+      }
+      // Solo los de los últimos 2 minutos: lo anterior ya tuvo su turno (o el
+      // bot estaba en modo humano y no corresponde reprocesarlo).
+      const recentCut = Date.now() - 2 * 60 * 1000;
+      trailing = trailing.filter(m => !m.created_at || new Date(m.created_at).getTime() >= recentCut);
+      const lastInbound = trailing[trailing.length - 1];
       // Red de seguridad: si por lo que sea el inbound recuperado es anterior al mensaje
       // que disparó este pipeline, usar el texto capturado en el webhook.
       const inboundIsStale = lastInbound && savedMsg?.created_at
         && new Date(lastInbound.created_at).getTime() < new Date(savedMsg.created_at).getTime();
-      const textToProcess = (!inboundIsStale && lastInbound?.content) || capturedText;
+      const merged = trailing.map(m => String(m.content || '').trim()).filter(Boolean).join('\n');
+      const textToProcess = (!inboundIsStale && merged) || capturedText;
+      if (trailing.length > 1) console.log(`[KapsoWebhook] 🧩 ${trailing.length} mensajes seguidos de ${capturedFrom} se procesan juntos`);
       log.in(textToProcess);
 
       try {
@@ -433,7 +452,9 @@ router.post('/', async (req, res) => {
         };
 
         if (!result.switchToHuman) {
-          const fresh = await guardrail.checkResponseFreshness(org.id, capturedConvId, result.response);
+          const fresh = await guardrail.checkResponseFreshness(org.id, capturedConvId, result.response, {
+            orderCreated: result.orderCreated, orderUpdated: result.orderUpdated,
+          });
           if (!fresh.ok) {
             console.error(`[KapsoWebhook] ⛔ Dato rancio (${fresh.reason}) para ${capturedFrom}: ${fresh.detail}`);
             log.step('guardrail', `bloqueado: ${fresh.reason}`);
@@ -524,7 +545,7 @@ router.post('/', async (req, res) => {
         }
         log.done();
       }
-    });
+    }, waitMs);
 
   } catch (outerErr) {
     console.error('[KapsoWebhook] Error procesando mensaje entrante:', outerErr.message);
