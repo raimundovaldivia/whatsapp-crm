@@ -182,4 +182,5 @@ process.on('unhandledRejection', (err) => console.error('[Error no manejado]', e
 
 
 
-// Deploy marker: 2026-09-16T23:14:30Z (trigger auto-push tras liberar el lock)
+
+// Deploy marker: 2026-09-16T23:19:11Z (bot responde hora de entrega con dato real)
