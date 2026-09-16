@@ -177,4 +177,5 @@ setupDatabase().then(() => {
 process.on('unhandledRejection', (err) => console.error('[Error no manejado]', err));
 
 
-// Deploy marker: 2026-09-16T20:53Z (preferencia de horario de entrega anotada al pedido)
+
+// Deploy marker: 2026-09-16T21:07Z (repartos: omitir pedidos ya entregados al enviar)

@@ -354,13 +354,14 @@ function NuevoReparto({ colors }) {
     setError(null);
     try {
       let sentCount = 0;
+      let skippedAll = [];
       for (const rt of optRoutes) {
         const drvId = routeDrivers[rt.vehicle] ? parseInt(routeDrivers[rt.vehicle], 10) : null;
         const drv   = drivers.find(d => String(d.id) === String(drvId));
         const name  = optRoutes.length > 1
           ? `Reparto ${new Date().toLocaleDateString('es-CL')} — Vehículo ${rt.vehicle}`
           : `Reparto ${new Date().toLocaleDateString('es-CL')}`;
-        await api.post('/delivery/routes', {
+        const { data } = await api.post('/delivery/routes', {
           name,
           orders:         rt.stops,
           optimizedRoute: rt.stops,
@@ -372,9 +373,11 @@ function NuevoReparto({ colors }) {
           driverUserId:   drvId,
           send:           true,
         }, { timeout: 60000 });
+        if (Array.isArray(data?.skipped)) skippedAll = skippedAll.concat(data.skipped);
         sentCount++;
       }
-      setSentRoute({ count: sentCount });
+      // Avisar si el backend omitió pedidos ya entregados/pagados/cancelados
+      setSentRoute({ count: sentCount, skipped: skippedAll });
       setStep('done');
     } catch (e) {
       setError(e.response?.data?.error || e.message);
@@ -494,8 +497,18 @@ function NuevoReparto({ colors }) {
           {n > 1 ? `${n} rutas enviadas` : 'Ruta enviada'}
         </h3>
         <p style={{ color: colors.textSecondary, margin: 0, textAlign: 'center' }}>
-          {n > 1 ? `${n} vehículos · ` : ''}{selectedOrders.length} paradas en total
+          {n > 1 ? `${n} vehículos · ` : ''}{selectedOrders.length - (sentRoute.skipped?.length || 0)} paradas en total
         </p>
+        {sentRoute.skipped?.length > 0 && (
+          <div style={{ maxWidth: 420, padding: '12px 14px', backgroundColor: `${colors.orange || '#e8a33d'}18`, border: `1px solid ${colors.orange || '#e8a33d'}55`, borderRadius: '10px', color: colors.textSecondary, fontSize: '13px' }}>
+            <div style={{ fontWeight: 700, color: colors.textPrimary, marginBottom: 6 }}>
+              ⏭️ {sentRoute.skipped.length} pedido{sentRoute.skipped.length > 1 ? 's' : ''} ya entregado{sentRoute.skipped.length > 1 ? 's' : ''} — no se enviaron
+            </div>
+            {sentRoute.skipped.slice(0, 12).map((o, i) => (
+              <div key={i}>• {o.customerName || o.orderName || o.id}</div>
+            ))}
+          </div>
+        )}
         <button onClick={reset} style={{ ...s.btn, marginTop: '8px' }}>
           Crear otro reparto
         </button>
