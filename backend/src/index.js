@@ -184,4 +184,5 @@ process.on('unhandledRejection', (err) => console.error('[Error no manejado]', e
 
 
 
-// Deploy marker: 2026-09-16T23:28:53Z (rutas: solo acciones, sin duplicar despachos)
+
+// Deploy marker: 2026-09-16T23:31:22Z (push rutas)
