@@ -17,6 +17,13 @@ const ordersAgent  = require('./agents/orders');
 const pricing      = require('./order-pricing');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 
+// Un pedido al que todavía tiene sentido anotarle una preferencia de entrega:
+// registrado y no cancelado/entregado. Incluye los que ya salieron a reparto
+// (por_despachar / en_camino) porque ahí la nota es aún más útil.
+function EDITABLE_OR_ACTIVE(status) {
+  return ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar', 'en_camino'].includes(status);
+}
+
 /**
  * Procesa un mensaje entrante y genera la respuesta adecuada
  * @returns {{ response: string, agentType: string, newState: string }}
@@ -682,6 +689,59 @@ REGLAS ABSOLUTAS:
   const customerName = knownCustomerData?.name?.split(' ')[0] || '';
 
   const salesOpts = { isWarmLead: isTemplateReply, templateName, customerName, intent };
+
+  // ── Preferencia / restricción de horario de entrega ────────────────────
+  // "a las 15:00", "no tan tarde", "temprano", "tengo restricción de horario",
+  // "déjenlo en conserjería". Con un pedido activo, el bot lo ANOTA en el
+  // pedido y te avisa, en vez de deflectar con "el equipo coordina" (que
+  // obligaba a coordinar todo a mano) o de decir "pedido actualizado" en falso.
+  const DELIVERY_PREF_PATTERNS = [
+    /\ba\s+las?\s*\d{1,2}([:.]\d{2})?\s*(hrs?|horas?|am|pm|de la (ma[ñn]ana|tarde|noche))?\b/i,
+    /\b\d{1,2}[:.]\d{2}\b/,
+    /\b(antes|despu[eé]s)\s+de\s+las?\s*\d{1,2}/i,
+    /\bentre\s+las?\s*\d{1,2}\s*(y|a)\s*(las?\s*)?\d{1,2}/i,
+    /\bno\s+tan\s+(tarde|temprano)\b/i,
+    /\b(m[aá]s\s+)?(temprano|tempranito)\b/i,
+    /\b(en|por)\s+la\s+(ma[ñn]ana|tarde|noche)\b/i,
+    /\b(al\s+)?mediod[ií]a\b/i,
+    /\btengo\s+(una\s+)?restricci[oó]n\b/i,
+    /\brestricci[oó]n\s+de\s+horario\b/i,
+    /\b(d[eé]jalo|d[eé]jenlo|dejar|entregar|toca(r)?|timbre|conserjer[ií]a|port[oó]n|reja)\b.{0,30}\b(timbre|conserjer[ií]a|port[oó]n|reja|vecin|casa|depto|departamento)\b/i,
+  ];
+  // No confundir con cambiar productos o cancelar: esas van por su propio flujo.
+  const looksLikeProductChange = /\b(agrega|añade|anade|quita|saca|cambia|otra|otro|m[aá]s|bandeja|caja|docena|talla|xl|jumbo|huevos?|aceitunas?)\b/i.test(userMessage);
+  const looksLikeCancel = ordersAgent.isCancelDuringCollection(userMessage) || intent === 'cancel_order';
+  const isDeliveryPref = activeOrder
+    && EDITABLE_OR_ACTIVE(activeOrder.status)
+    && userMessage.length <= 160
+    && !looksLikeProductChange
+    && !looksLikeCancel
+    && DELIVERY_PREF_PATTERNS.some(p => p.test(userMessage));
+
+  if (isDeliveryPref) {
+    const pref = userMessage.trim().slice(0, 200);
+    const first = (conversation.contact_name || activeOrder.customer_name || '').trim().split(/\s+/)[0] || '';
+    const hi = first ? ` ${first}` : '';
+    try {
+      const stamp = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' });
+      await getPool().query(
+        `UPDATE orders
+            SET delivery_note = $1,
+                notes = COALESCE(notes, '') || $2,
+                updated_at = NOW()
+          WHERE id = $3 AND organization_id = $4`,
+        [pref, `\n[bot] Preferencia de horario del cliente (${stamp}): "${pref}"`, activeOrder.id, orgId]
+      ).catch(() => {});
+    } catch (e) { console.warn('[Pipeline] no se pudo anotar preferencia de horario:', e.message); }
+    L.agent('orders', 0);
+    L.step('delivery_pref', `pedido #${activeOrder.id}: "${pref}"`);
+    return {
+      response: `¡Anotado${hi}! 📝 Le paso al equipo tu preferencia para la entrega ("${pref}") y lo tienen en cuenta al coordinar el despacho. ¿Algo más?`,
+      agentType: 'orders',
+      newState: currentState,
+      adminNotice: `🕒 *Preferencia de entrega* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido #${activeOrder.id}: "${pref}"`,
+    };
+  }
 
   // ── Modificar / cancelar un pedido ya registrado ───────────────────
   // Editable mientras no salió a reparto. Si ya está por despachar o en
