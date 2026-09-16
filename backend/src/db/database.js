@@ -733,6 +733,21 @@ async function getLatestPendingOrderByConversation(conversationId) {
  * Busca el pedido activo más reciente de una conversación para inyectar
  * contexto al bot. Incluye todos los estados no terminales.
  */
+/**
+ * Último pedido ENTREGADO (o pagado) de la conversación en los últimos N días.
+ * Lo usa el bot para resolver reclamos de entrega incompleta ("pedí 3, llegó 1").
+ */
+async function getRecentDeliveredOrder(conversationId, days = 7) {
+  return queryOne(
+    `SELECT * FROM orders
+      WHERE conversation_id = $1
+        AND status IN ('entregado', 'paid')
+        AND COALESCE(updated_at, created_at) > NOW() - ($2 || ' days')::interval
+      ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
+    [conversationId, String(days)]
+  );
+}
+
 async function getActiveOrderForBot(conversationId) {
   return queryOne(
     `SELECT * FROM orders
@@ -1445,7 +1460,7 @@ module.exports = {
   // Products propios
   getProducts, getProductById, createProduct, updateProduct, deleteProduct,
   // Orders
-  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation, getActiveOrderForBot,
+  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation, getActiveOrderForBot, getRecentDeliveredOrder,
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts

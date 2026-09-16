@@ -527,6 +527,27 @@ REGLAS ABSOLUTAS:
     return { response: stockMsg, agentType: 'orchestrator', newState: 'future_interest' };
   }
 
+  // ── Entrega incompleta / faltante ─────────────────────────────────────
+  // "Pedí 3 y llegó 1", "me faltó una caja", "¿las otras quedaron pendientes?"
+  // Si hay un pedido entregado hace poco, el bot lo resuelve solo: registra
+  // las unidades que faltan como pedido nuevo para el próximo reparto, le
+  // confirma al cliente y te avisa (sin bloquear la conversación). Si no
+  // logra entender cantidades, escala como antes.
+  const PARTIAL_PATTERNS = [
+    /\bfalt(a|an|ó|o|aron|aba)\b/i,
+    /(lleg[oó]|llegaron|trajeron|vino|vinieron|recib[ií]|entregaron)\s+(solo|solamente|s[oó]lo|nada\s+m[aá]s\s+que|apenas)\b/i,
+    /(quedaron|quedan|qued[oó])\s+pendientes?/i,
+    /(ped[ií]|hab[ií]a\s+pedido|encargu[eé])\s+\w+.{0,40}(lleg|recib|trajeron)/i,
+    /entrega\s+incompleta|incompleto|me\s+llegaron?\s+menos/i,
+  ];
+  if (!['collecting_order', 'scheduled'].includes(currentState) && PARTIAL_PATTERNS.some(p => p.test(userMessage))) {
+    const delivered = await db.getRecentDeliveredOrder(conversationId, 7).catch(() => null);
+    if (delivered) {
+      const r = await handlePartialDelivery(orgId, conversationId, conversation, userMessage, history, delivered, orderCtx, L);
+      if (r) return r;   // null → no se pudo interpretar: sigue el flujo normal (escalación)
+    }
+  }
+
   // ── Agente de escalación — corre en paralelo con la clasificación ──
   const effectiveState = isTemplateReply ? 'interested' : currentState;
   const [escalationResult, intentResult] = await Promise.all([
@@ -765,6 +786,109 @@ REGLAS ABSOLUTAS:
   await db.updatePipelineState(conversationId, finalState, undefined);
   L.agent('sales', Date.now() - tGen);
   return { response: salesResponse, agentType: 'sales', newState: finalState };
+}
+
+/**
+ * Reclamo de entrega incompleta. Extrae con Haiku qué pidió vs qué recibió,
+ * valida contra el pedido entregado y el catálogo, y crea el pedido de las
+ * unidades faltantes para el próximo reparto (mañana).
+ *
+ * @returns {object|null} resultado del pipeline, o null si no se pudo resolver
+ */
+async function handlePartialDelivery(orgId, conversationId, conversation, userMessage, history, delivered, orderCtx, L) {
+  const { products = [], specialPrices = {} } = orderCtx || {};
+  let deliveredItems = [];
+  try {
+    const its = typeof delivered.items === 'string' ? JSON.parse(delivered.items) : delivered.items;
+    deliveredItems = (Array.isArray(its) ? its : []).map(i => ({ name: i.name || i.title || i.product_name, quantity: Number(i.quantity) || 0 }));
+  } catch { deliveredItems = []; }
+  if (!deliveredItems.length) return null;
+
+  // 1. Entender cantidades: qué dice el cliente que pidió y qué recibió
+  const Anthropic = require('@anthropic-ai/sdk');
+  const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const recent = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`).join('\n');
+  const deliveredText = deliveredItems.map(i => `${i.quantity}x ${i.name}`).join(', ');
+  let claim = null;
+  try {
+    const resp = await aiClient.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      system: `El cliente reclama que su entrega llegó incompleta. Lo que el sistema registra como ENTREGADO: ${deliveredText}.
+Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre del producto tal como está en lo entregado>","ordered":N,"received":N}],"confident":true|false}
+- "ordered" es lo que el cliente dice que pidió; "received" lo que dice que le llegó (si no lo dice, usa la cantidad entregada registrada).
+- Si no queda claro cuántas unidades faltan, devuelve "confident": false.
+- Solo el JSON.`,
+      messages: [{ role: 'user', content: `Conversación:\n${recent}\n\nÚltimo mensaje del cliente: "${userMessage}"` }],
+    });
+    claim = JSON.parse((resp.content[0]?.text || '').match(/\{[\s\S]*\}/)?.[0] || 'null');
+  } catch (e) {
+    console.warn('[Pipeline] faltante: extracción falló:', e.message);
+    return null;
+  }
+  if (!claim || claim.confident === false || !Array.isArray(claim.items) || !claim.items.length) return null;
+
+  // 2. Calcular faltantes y validarlos (producto real, cantidades razonables)
+  const missing = [];
+  for (const c of claim.items) {
+    const ordered  = parseInt(c.ordered, 10);
+    const known    = deliveredItems.find(d => pricing.matchProduct(c.product_name || '', pricing.flattenCatalog([{ id: 'x', title: d.name, priceMin: 0 }])));
+    const received = Number.isFinite(parseInt(c.received, 10)) ? parseInt(c.received, 10) : (known?.quantity ?? 0);
+    const diff = ordered - received;
+    if (!Number.isFinite(ordered) || diff <= 0 || diff > 20) continue;
+    missing.push({ product_name: known?.name || c.product_name, quantity: diff, ordered, received });
+  }
+  if (!missing.length) return null;
+
+  // 3. Valorizar con el catálogo (mismo precio que el pedido original si coincide el producto)
+  const priced = pricing.priceItems(missing, products, { specialPrices });
+  if (!priced.items.length || priced.items.some(it => !it.matched)) return null;
+  for (const it of priced.items) {
+    const orig = deliveredItems.find(d => d.name === it.name);
+    // si el pedido original traía precio unitario, respetarlo
+    const origPriced = (() => { try { const its = typeof delivered.items === 'string' ? JSON.parse(delivered.items) : delivered.items; return its.find(x => (x.name || x.title) === it.name && Number(x.price) > 0); } catch { return null; } })();
+    if (origPriced) it.price = Number(origPriced.price);
+    void orig;
+  }
+  const total = priced.items.reduce((s, it) => s + it.price * it.quantity, 0);
+
+  // 4. Crear el pedido de lo que falta para el próximo reparto (mañana)
+  let addr = {};
+  try { addr = typeof delivered.shipping_address === 'string' ? JSON.parse(delivered.shipping_address) : (delivered.shipping_address || {}); } catch { addr = {}; }
+  const tomorrow = new Date(Date.now() + 86400000);
+  const tomorrowISO = tomorrow.toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+  const label = `#${delivered.id}`;
+  const summaryText = missing.map(m => `${m.quantity}x ${m.product_name}`).join(', ');
+  const noteText = `Faltante del pedido ${label}: el cliente pidió ${missing.map(m => `${m.ordered} ${m.product_name}`).join(', ')} y recibió ${missing.map(m => m.received).join(', ')}. Registrado por el bot.`;
+
+  let order;
+  try {
+    order = await db.createOrder({
+      conversationId,
+      organizationId: orgId,
+      items: priced.items.map(it => ({ name: it.name, title: it.name, quantity: it.quantity, price: it.price, product_id: it.product_id || null, variant_id: it.variant_id || null })),
+      customerName:  delivered.customer_name,
+      customerPhone: delivered.customer_phone || conversation.phone_number,
+      shippingAddress: { address: addr.address || addr.address1 || '', city: addr.city || '' },
+      totalPrice: total,
+      status: 'por_despachar',
+    });
+    await db.updateOrder(order.id, { delivery_date: tomorrowISO, delivery_note: `Faltante de ${label}`, notes: noteText, updated_at: new Date() });
+  } catch (e) {
+    console.error('[Pipeline] faltante: no se pudo crear el pedido:', e.message);
+    return null;
+  }
+
+  L.step('faltante', `pedido ${order.id} por ${summaryText} (falta de ${label})`);
+  const [y, m, d] = tomorrowISO.split('-');
+  const first = (delivered.customer_name || '').split(' ')[0];
+  return {
+    response: `Tienes razón${first ? `, ${first}` : ''} 🙏 Te ${missing.reduce((s, x) => s + x.quantity, 0) === 1 ? 'faltó' : 'faltaron'} ${summaryText}. Ya lo dejé registrado para el próximo reparto (${d}/${m}) y el equipo te confirma la hora por aquí. Disculpa la molestia.`,
+    agentType: 'orders',
+    newState: 'exploring',
+    orderCreated: { orderId: order.id },
+    adminNotice: `⚠️ *Entrega incompleta* — ${delivered.customer_name || conversation.phone_number} reclama que del pedido ${label} le faltó ${summaryText}.\nEl bot creó el pedido #${order.id} (${summaryText}, $${Math.round(total).toLocaleString('es-CL')}) para el ${d}/${m}. Revísalo en Pedidos: si no corresponde, cancélalo.`,
+  };
 }
 
 /**

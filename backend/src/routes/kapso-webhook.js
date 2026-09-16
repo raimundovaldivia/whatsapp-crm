@@ -493,6 +493,10 @@ router.post('/', async (req, res) => {
             order: result.orderCreated,
           });
         }
+        // Aviso al admin como copia (el bot sigue atendiendo, no pasa a modo humano)
+        if (result.adminNotice) {
+          notifyAdmin(org.id, { body: result.adminNotice, kind: 'order', conversationId: capturedConvId }).catch(() => {});
+        }
         if (result.orderUpdated || result.orderCancelled) {
           const ev = result.orderUpdated ? 'modificó' : 'canceló';
           const oid = (result.orderUpdated || result.orderCancelled).orderId;
