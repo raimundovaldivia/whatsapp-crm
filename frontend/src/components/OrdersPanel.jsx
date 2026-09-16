@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
+import ConciliacionPanel from './ConciliacionPanel.jsx';
 import { useTheme } from '../theme.js';
 
 // ─── Normalización ────────────────────────────────────────────────
@@ -564,6 +565,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
             { key: 'orders',    label: 'Todos' },
             { key: 'scheduled', label: `📅 Agendados${scheduledOrders.filter(o=>o.status==='pending').length ? ` (${scheduledOrders.filter(o=>o.status==='pending').length})` : ''}` },
             { key: 'charge',    label: `💸 Por cobrar${charges.length ? ` (${charges.length})` : ''}` },
+            { key: 'recon',     label: '🏦 Conciliación' },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setActiveTab(key)} style={{
               padding: '4px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer',
@@ -594,6 +596,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       </div>
 
       {/* ── Vista Agendados ── */}
+      {activeTab === 'recon' && <ConciliacionPanel colors={colors} />}
+
       {activeTab === 'scheduled' && (
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
           {loading ? (

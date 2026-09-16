@@ -385,6 +385,46 @@ async function setupDatabase() {
       -- Modificado por el propio cliente desde WhatsApp (modify_order del bot)
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_modified BOOLEAN DEFAULT FALSE;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS notes TEXT;
+      -- ─── CONCILIACIÓN BANCARIA: cartolas y abonos ────────────────────
+      CREATE TABLE IF NOT EXISTS bank_statements (
+        id               SERIAL PRIMARY KEY,
+        organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        account          TEXT,
+        statement_number TEXT,
+        kind             TEXT,
+        period_from      DATE,
+        period_to        DATE,
+        filename         TEXT,
+        total_abonos     BIGINT,
+        total_cargos     BIGINT,
+        movements_count  INTEGER DEFAULT 0,
+        new_movements    INTEGER DEFAULT 0,
+        uploaded_by      INTEGER,
+        created_at       TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS bank_movements (
+        id               SERIAL PRIMARY KEY,
+        organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        statement_id     INTEGER REFERENCES bank_statements(id) ON DELETE SET NULL,
+        movement_key     TEXT NOT NULL,
+        date             DATE NOT NULL,
+        kind             TEXT NOT NULL,
+        amount           BIGINT NOT NULL,
+        description      TEXT,
+        payer            TEXT,
+        doc_number       TEXT,
+        branch           TEXT,
+        balance          BIGINT,
+        status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','matched','ignored')),
+        matched_orders   JSONB,
+        matched_at       TIMESTAMPTZ,
+        matched_by       INTEGER,
+        note             TEXT,
+        created_at       TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (organization_id, movement_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_bank_movements_org_status ON bank_movements(organization_id, status, date DESC);
+
       -- El cliente pidió que se le entregue otro día (desde la app del repartidor)
       ALTER TABLE orders         ADD COLUMN IF NOT EXISTS delivery_date DATE;
       ALTER TABLE orders         ADD COLUMN IF NOT EXISTS delivery_note TEXT;

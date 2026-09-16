@@ -46,6 +46,7 @@ const productsRouter       = require('./routes/products');       // Productos pr
 const storeRouter          = require('./routes/store');          // Tienda pública
 const storeSettingsRouter  = require('./routes/store-settings'); // Ajustes editables de la tienda
 const contactsRouter       = require('./routes/contacts');        // Contactos (leads y clientes)
+const reconciliationRouter = require('./routes/reconciliation');  // Conciliación bancaria (cartola ↔ pedidos)
 const deliveryRouter       = require('./routes/delivery');         // App mobile de repartidor
 const usersRouter          = require('./routes/users');            // Gestión de usuarios (RBAC)
 const adminAlertsRouter    = require('./routes/admin-alerts');      // Cola de alertas al admin
@@ -143,6 +144,7 @@ app.use('/api/payment-proofs', paymentProofsRouter); // Comprobantes de pago
 app.use('/api/products',      productsRouter);       // Productos propios
 app.use('/api/store-settings', storeSettingsRouter); // Ajustes editables de la tienda (con auth)
 app.use('/api/contacts',      contactsRouter);       // Contactos: leads y clientes
+app.use('/api/reconciliation', reconciliationRouter); // Conciliación bancaria
 app.use('/api/delivery',      deliveryRouter);        // App mobile repartidor
 app.use('/api/users',         usersRouter);           // Gestión de usuarios (RBAC)
 app.use('/api/admin-alerts',  adminAlertsRouter);     // Cola de alertas al admin
