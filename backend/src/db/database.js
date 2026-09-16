@@ -730,6 +730,34 @@ async function getLatestPendingOrderByConversation(conversationId) {
 }
 
 /**
+ * Pedidos de la conversación a los que puede corresponder un comprobante de
+ * pago, en orden de prioridad:
+ *   1. Entregados por transferencia SIN comprobante válido (se les mandó el
+ *      cobro; es lo más probable cuando llega una captura).
+ *   2. Pedidos en curso todavía no pagados (flujo pre-entrega).
+ * Devuelve hasta 5 para que quien llama elija por monto.
+ */
+async function getOrdersAwaitingPayment(conversationId) {
+  return query(
+    `SELECT o.*,
+            (o.status = 'entregado') AS is_delivered,
+            (SELECT COUNT(*) FROM payment_proofs pp WHERE pp.order_id = o.id AND pp.status = 'pending')::int AS proofs_pending
+       FROM orders o
+      WHERE o.conversation_id = $1
+        AND (
+          (o.status = 'entregado' AND o.payment_method = 'transferencia'
+             AND NOT EXISTS (SELECT 1 FROM payment_proofs pp
+                              WHERE pp.order_id = o.id AND pp.status IN ('verified','pre_verified'))
+             AND COALESCE(o.payment_marked_at, o.updated_at, o.created_at) > NOW() - INTERVAL '60 days')
+          OR o.status IN ('sent','draft','payment_received','nuevo','por_despachar','en_camino')
+        )
+      ORDER BY (o.status = 'entregado') DESC, o.created_at DESC
+      LIMIT 5`,
+    [conversationId]
+  );
+}
+
+/**
  * Busca el pedido activo más reciente de una conversación para inyectar
  * contexto al bot. Incluye todos los estados no terminales.
  */
@@ -1460,7 +1488,7 @@ module.exports = {
   // Products propios
   getProducts, getProductById, createProduct, updateProduct, deleteProduct,
   // Orders
-  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation, getActiveOrderForBot, getRecentDeliveredOrder,
+  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation, getOrdersAwaitingPayment, getActiveOrderForBot, getRecentDeliveredOrder,
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts

@@ -302,6 +302,44 @@ Reglas estrictas para responder sobre este pedido:
     console.warn('[Pipeline] activeOrder bot context error:', e.message);
   }
 
+  // ── Pedido YA ENTREGADO con pago por transferencia pendiente ("por cobrar") ──
+  // Sin esto el bot no sabe que el pedido ya está en manos del cliente y, ante
+  // un "transferido", contesta "queda listo para el despacho".
+  let chargeOrder = null;
+  let chargeSection = '';
+  try {
+    const phone = String(conversation.phone_number || '').replace(/\D/g, '');
+    if (phone) {
+      const tail = phone.slice(-9);
+      const pend = await require('./payment-collection').getPendingCharges(orgId);   // lazy: evita cargar los senders de WhatsApp al importar el pipeline
+      chargeOrder = pend.find(o => String(o.customer_phone || '').replace(/\D/g, '').slice(-9) === tail) || null;
+    }
+    if (chargeOrder) {
+      const total = `$${Number(chargeOrder.total_price || 0).toLocaleString('es-CL')}`;
+      const when  = chargeOrder.payment_marked_at
+        ? new Date(chargeOrder.payment_marked_at).toLocaleDateString('es-CL', { day: 'numeric', month: 'long' })
+        : null;
+      const proofLine = chargeOrder.proofs_pending > 0
+        ? 'Comprobante: YA lo mandó y está en revisión por el equipo.'
+        : 'Comprobante: todavía NO lo ha mandado.';
+      const cobroLine = chargeOrder.charge_requested_at
+        ? 'Ya se le envió por este chat el mensaje de cobro con los datos bancarios.'
+        : '';
+      chargeSection = `## Pedido ${chargeOrder.order_label} YA ENTREGADO — pago por transferencia pendiente ⚠️
+El cliente YA RECIBIÓ este pedido${when ? ` (entregado el ${when})` : ''} por ${total} y eligió pagar por transferencia.
+${proofLine}${cobroLine ? `\n${cobroLine}` : ''}
+
+Reglas estrictas:
+1. Este pedido NO se despacha ni se coordina: ya está entregado. NUNCA digas "queda listo para el despacho", "te contactamos para coordinar la entrega" ni nada parecido sobre este pedido.
+2. Si dice que transfirió / pagó: agradece y, si aún no ha mandado el comprobante, pídele la captura por este chat. Si ya lo mandó, dile que lo tenemos y que se lo confirmamos.
+3. Si pregunta cuánto debe o los datos para transferir: ${total} por el pedido ${chargeOrder.order_label}; los datos bancarios están en la sección de Instrucciones de Pago.
+4. Si quiere hacer OTRO pedido, atiéndelo normalmente — es un pedido nuevo, distinto de este.`;
+      console.log(`[Pipeline] 💸 Pedido por cobrar inyectado al contexto: ${chargeOrder.order_label}`);
+    }
+  } catch (e) {
+    console.warn('[Pipeline] chargeOrder bot context error:', e.message);
+  }
+
   L.context({
     products: products.length,
     history:  purchaseHistorySection ? (purchaseHistorySection.match(/\n-/g) || []).length : 0,
@@ -324,7 +362,7 @@ Reglas estrictas para responder sobre este pedido:
   } catch (_) {}
 
   // pendingOrderSection va PRIMERO para que el LLM lo lea antes de cualquier otro contexto
-  const storeCustomPrompt = [pendingOrderSection, contactAddressSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [chargeSection, pendingOrderSection, contactAddressSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Agendado vigente? ──────────────────────────────────────────────────────
   // Solo cuenta un pedido agendado cuya fecha NO haya pasado todavía.
@@ -525,6 +563,39 @@ REGLAS ABSOLUTAS:
     L.agent('orchestrator', 0);
     L.step('stock_remaining', 'preguntando cuándo se termina');
     return { response: stockMsg, agentType: 'orchestrator', newState: 'future_interest' };
+  }
+
+  // ── "Transferido" / "ya pagué" con un pedido entregado por cobrar ───────
+  // Respuesta determinística: no se le pide al LLM que adivine el estado.
+  // Agradece, pide la captura si falta, y avisa al admin para que cruce la
+  // cartola (Conciliación) — el comprobante lo procesa el webhook aparte.
+  // Ojo: \b no funciona después de una vocal con tilde ("transferí"), por eso
+  // el cierre de palabra es (?!\p{L}) con la bandera u.
+  const PAID_PATTERNS = [
+    /\btransferid[oa]s?(?!\p{L})/iu,
+    /\b(ya|reci[eé]n|listo|lista)\b.{0,25}\b(transfer[ií]|pagu[eé]|deposit[eé]|pag[oó])(?!\p{L})/iu,
+    /\b(te|les|le)\s+(transfer[ií]|pagu[eé]|deposit[eé])(?!\p{L})/iu,
+    /\b(hice|realic[eé])\s+(la\s+|el\s+)?(transferencia|pago|dep[oó]sito)(?!\p{L})/iu,
+    /\btransferencia\s+(hecha|lista|realizada|enviada)(?!\p{L})/iu,
+    /\bpago\s+(hecho|listo|realizado|enviado)(?!\p{L})/iu,
+    /\blisto\s+el\s+pago(?!\p{L})/iu,
+  ];
+  if (chargeOrder && !['collecting_order'].includes(currentState)
+      && userMessage.length <= 160 && PAID_PATTERNS.some(p => p.test(userMessage))) {
+    const first = (conversation.contact_name || chargeOrder.customer_name || '').trim().split(/\s+/)[0] || '';
+    const hi = first ? ` ${first}` : '';
+    const total = `$${Number(chargeOrder.total_price || 0).toLocaleString('es-CL')}`;
+    const response = chargeOrder.proofs_pending > 0
+      ? `¡Gracias${hi}! 🙌 Ya nos llegó tu comprobante del pedido ${chargeOrder.order_label}, lo estamos revisando y te confirmamos por acá.`
+      : `¡Gracias${hi}! 🙌 Cuando puedas, mándanos la captura del comprobante por este chat y dejamos registrado el pago del pedido ${chargeOrder.order_label} (${total}).`;
+    L.agent('orchestrator', 0);
+    L.step('paid_notice', `cliente dice que pagó ${chargeOrder.order_label}`);
+    return {
+      response,
+      agentType: 'orchestrator',
+      newState: currentState,
+      adminNotice: `💸 *${conversation.contact_name || chargeOrder.customer_name || conversation.phone_number}* dice que transfirió el pedido ${chargeOrder.order_label} (${total})${chargeOrder.proofs_pending > 0 ? ' — comprobante en revisión' : ' — sin comprobante aún'}.\nRevisa Pagos o cruza la cartola en Pedidos → Conciliación.`,
+    };
   }
 
   // ── Entrega incompleta / faltante ─────────────────────────────────────

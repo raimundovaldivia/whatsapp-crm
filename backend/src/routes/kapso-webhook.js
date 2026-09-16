@@ -801,18 +801,29 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       conversation: earlyConv2,
     });
 
-    // ── 4. Comparar monto con el pedido pendiente ────────────────────
-    const pendingOrder = await db.getLatestPendingOrderByConversation(conversation.id);
+    // ── 4. Elegir el pedido al que corresponde el comprobante ─────────
+    // Candidatos: pedidos ENTREGADOS por transferencia sin comprobante (se
+    // les mandó el cobro) primero, luego pedidos en curso. Si el monto de la
+    // captura calza con alguno, ese gana; si no, el de mayor prioridad.
+    const candidates = await db.getOrdersAwaitingPayment(conversation.id).catch(() => []);
+    const toNum = v => parseFloat(String(v ?? '').replace(/[^0-9.]/g, ''));
+    const paidAmt = analysis.amount ? toNum(analysis.amount) : NaN;
+    let pendingOrder = null;
+    if (!isNaN(paidAmt)) {
+      pendingOrder = candidates.find(o => Math.abs(toNum(o.total_price) - paidAmt) <= 1) || null;
+    }
+    if (!pendingOrder) pendingOrder = candidates[0] || null;
+    const wasDelivered = !!pendingOrder && pendingOrder.status === 'entregado';
+
     let amountMatches  = null;
     let proofStatus    = 'pending';
 
-    if (analysis.amount && pendingOrder?.total_price) {
-      const orderAmt = parseFloat(String(pendingOrder.total_price).replace(/[^0-9.]/g, ''));
-      const paidAmt  = parseFloat(String(analysis.amount).replace(/[^0-9.]/g, ''));
-      if (!isNaN(orderAmt) && !isNaN(paidAmt)) {
+    if (!isNaN(paidAmt) && pendingOrder?.total_price) {
+      const orderAmt = toNum(pendingOrder.total_price);
+      if (!isNaN(orderAmt)) {
         amountMatches = Math.abs(orderAmt - paidAmt) <= 1; // tolerancia $1
         proofStatus   = amountMatches ? 'pre_verified' : 'pending';
-        console.log(`[KapsoWebhook] 💰 Monto pedido: $${orderAmt} | Pagado: $${paidAmt} | Match: ${amountMatches}`);
+        console.log(`[KapsoWebhook] 💰 Pedido #${pendingOrder.id} (${pendingOrder.status}) $${orderAmt} | Pagado: $${paidAmt} | Match: ${amountMatches}`);
       }
     }
 
@@ -834,15 +845,31 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       status:             proofStatus,
     });
 
-    // Actualizar estado del pedido
-    if (pendingOrder) {
+    // Actualizar estado del pedido. Un pedido YA ENTREGADO no retrocede a
+    // "pago recibido": se queda en entregado y el comprobante pre_verified lo
+    // saca de "Por cobrar" (la conciliación con la cartola lo pasa a pagado).
+    if (pendingOrder && !wasDelivered) {
       await db.updateOrder(pendingOrder.id, { status: 'payment_received' }).catch(() => {});
     }
 
     // ── 6. Responder al cliente ──────────────────────────────────────
+    const firstName = (conversation.contact_name || parsed.contactName || '').trim().split(/\s+/)[0] || '';
+    const hi = firstName ? ` ${firstName}` : '';
+    const amountTxt = analysis.amount ? `$${Number(analysis.amount).toLocaleString('es-CL')}` : '';
     let reply;
-    if (amountMatches === true) {
-      reply = `✅ ¡Comprobante recibido y verificado automáticamente! Tu pago de $${analysis.amount?.toLocaleString('es-CL')} fue confirmado. Pronto despacharemos tu pedido 🚀`;
+    if (wasDelivered) {
+      // Cobranza post-entrega: el pedido ya está en manos del cliente. Nada de
+      // "pronto despacharemos" — solo dar por recibido el pago.
+      const ref = `tu pedido #${pendingOrder.id}`;
+      if (amountMatches === true) {
+        reply = `✅ ¡Comprobante recibido${hi}! El pago de ${amountTxt} por ${ref} quedó registrado. ¡Muchas gracias! 🙌`;
+      } else if (amountMatches === false) {
+        reply = `✅ Recibimos tu comprobante${hi}. El monto (${amountTxt}) no coincide con ${ref} ($${Number(pendingOrder.total_price).toLocaleString('es-CL')}), así que el equipo lo revisa y te confirma por acá 🔍`;
+      } else {
+        reply = `✅ ¡Recibimos tu comprobante${hi}! Lo dejamos registrado para ${ref} y te confirmamos en cuanto lo verifiquemos. ¡Gracias! 🙌`;
+      }
+    } else if (amountMatches === true) {
+      reply = `✅ ¡Comprobante recibido y verificado automáticamente! Tu pago de ${amountTxt} fue confirmado. Pronto despacharemos tu pedido 🚀`;
     } else if (amountMatches === false) {
       reply = `✅ Recibimos tu comprobante. Nuestro equipo lo revisará porque detectamos una diferencia en el monto — te confirmaremos pronto 🔍`;
     } else {
@@ -859,7 +886,9 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     // ── 7. Notificar al admin (con cola si la ventana está cerrada) ───
     {
       const clientName  = conversation.contact_name || parsed.from;
-      const orderLine   = pendingOrder ? `\n📦 *Pedido:* ${pendingOrder.customer_name || ''} — $${pendingOrder.total_price || '?'}` : '';
+      const orderLine   = pendingOrder
+        ? `\n📦 *Pedido:* #${pendingOrder.id} ${pendingOrder.customer_name || ''} — $${Number(pendingOrder.total_price || 0).toLocaleString('es-CL')}${wasDelivered ? ' (ya entregado — cobranza)' : ''}`
+        : '\n📦 *Pedido:* no encontré uno pendiente para este cliente';
       const amountLine  = analysis.amount  ? `\n💵 *Monto pagado:* $${analysis.amount?.toLocaleString('es-CL')} ${analysis.currency || ''}` : '';
       const bankLine    = analysis.bank    ? `\n🏦 *Banco:* ${analysis.bank}` : '';
       const matchLine   = amountMatches === true  ? '\n✅ *Monto coincide — pre-verificado*'
