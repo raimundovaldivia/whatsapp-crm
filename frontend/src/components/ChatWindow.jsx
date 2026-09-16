@@ -1097,8 +1097,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                         const items = Array.isArray(o.items) ? o.items : [];
                         const isShopify = o._source === 'shopify';
                         const fs = isShopify ? (o.financial_status||'').toUpperCase() : (o.status||'').toUpperCase();
-                        const fsColor = ['PAID','CONFIRMED','PAYMENT_RECEIVED'].includes(fs) ? colors.green : ['PENDING','NUEVO','SENT'].includes(fs) ? colors.yellow : colors.textSecondary;
-                        const fsLabel = { PAID:'Pagado', PENDING:'Pendiente', REFUNDED:'Reembolsado', VOIDED:'Anulado', NUEVO:'Nuevo', CONFIRMED:'Confirmado', PAYMENT_RECEIVED:'Pagado', SENT:'Enviado' }[fs] || fs;
+                        // Etiqueta + color para TODOS los estados (Shopify y bot).
+                        const STATUS_STYLE = {
+                          PAID:{ l:'Pagado', c:'#22c55e' }, CONFIRMED:{ l:'Confirmado', c:'#22c55e' }, PAYMENT_RECEIVED:{ l:'Pago recibido', c:'#22c55e' },
+                          ENTREGADO:{ l:'Entregado', c:'#22c55e' },
+                          PENDING:{ l:'Pendiente', c:'#f59e0b' }, NUEVO:{ l:'Nuevo', c:'#f59e0b' }, SENT:{ l:'Enviado', c:'#f59e0b' }, POR_DESPACHAR:{ l:'Por despachar', c:'#f59e0b' },
+                          DRAFT:{ l:'Borrador', c:'#9ca3af' },
+                          EN_CAMINO:{ l:'En camino', c:'#3b82f6' },
+                          CANCELLED:{ l:'Cancelado', c:'#ef4444' }, VOIDED:{ l:'Anulado', c:'#ef4444' }, REFUNDED:{ l:'Reembolsado', c:'#ef4444' },
+                        };
+                        const st = STATUS_STYLE[fs] || { l: (fs || '—').replace(/_/g,' ').toLowerCase().replace(/^\w/, m=>m.toUpperCase()), c: colors.textSecondary };
                         return (
                           <div key={i} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
                             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
@@ -1109,7 +1117,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                                 <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}{o.shopify_name ? ` · ${o.shopify_name}` : ''}</span>
                               </div>
                               <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                                <span style={{ fontSize:'11px', color:fsColor, fontWeight:600 }}>{fsLabel}</span>
+                                <span style={{ fontSize:'10px', fontWeight:700, padding:'2px 8px', borderRadius:'999px', color:st.c, backgroundColor:`${st.c}1f`, border:`1px solid ${st.c}55`, whiteSpace:'nowrap' }}>{st.l}</span>
                                 <span style={{ fontSize:'13px', fontWeight:700, color:colors.textPrimary }}>${Number(o.total_price||0).toLocaleString('es-CL')}</span>
                               </div>
                             </div>
@@ -1119,9 +1127,17 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                               </div>
                             )}
                             {(() => {
-                              const addr = isShopify
-                                ? [o.shipping_address1, o.shipping_city].filter(Boolean).join(', ')
-                                : (o.shipping_address || '');
+                              let addr;
+                              if (isShopify) {
+                                addr = [o.shipping_address1, o.shipping_city].filter(Boolean).join(', ');
+                              } else {
+                                // shipping_address del bot es un objeto/JSON { address, city } — nunca mostrarlo crudo
+                                let a = o.shipping_address;
+                                if (typeof a === 'string') { try { a = JSON.parse(a); } catch {} }
+                                addr = (a && typeof a === 'object')
+                                  ? [a.address || a.address1, a.city].filter(Boolean).join(', ')
+                                  : (typeof a === 'string' ? a : '');
+                              }
                               return addr ? (
                                 <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'4px', display:'flex', alignItems:'center', gap:'4px' }}>
                                   📍 {addr}

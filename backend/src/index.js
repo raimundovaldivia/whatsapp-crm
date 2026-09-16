@@ -178,4 +178,8 @@ process.on('unhandledRejection', (err) => console.error('[Error no manejado]', e
 
 
 
-// Deploy marker: 2026-09-16T21:07Z (repartos: omitir pedidos ya entregados al enviar)
+
+
+
+
+// Deploy marker: 2026-09-16T23:14:30Z (trigger auto-push tras liberar el lock)

@@ -604,6 +604,13 @@ function NuevoReparto({ colors }) {
                       )}
                     </div>
                     <span style={{ color: colors.textMuted, fontSize: '11px' }}>{o.orderName}</span>
+                    {o.dispatchCount > 0 && (
+                      <span
+                        title={o.lastAttemptStatus === 'fallido' ? 'Ya salió antes y no se pudo entregar' : o.lastAttemptStatus === 'reprogramado' ? 'Reprogramado por el cliente' : 'Ya salió a reparto antes'}
+                        style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: '#fb923c' }}>
+                        🔁 {o.dispatchCount + 1}º intento{o.lastAttemptStatus === 'fallido' ? ' · falló' : ''}
+                      </span>
+                    )}
                     {o.deliveryDate && (() => {
                       const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
                       const future = o.deliveryDate > today;
@@ -1099,6 +1106,11 @@ function HistorialRepartos({ colors }) {
   const [loading,  setLoading]  = useState(true);
   const [expanded, setExpanded] = useState(null);
   const [error,    setError]    = useState(null);
+  // ── Agregar pedido a una ruta existente ──
+  const [addFor,   setAddFor]   = useState(null);   // id de ruta en modo "agregar"
+  const [addPool,  setAddPool]  = useState([]);     // pedidos pendientes para elegir
+  const [addSel,   setAddSel]   = useState(new Set());
+  const [addBusy,  setAddBusy]  = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1110,6 +1122,28 @@ function HistorialRepartos({ colors }) {
   }, []);
 
   useEffect(() => { load(); }, []);
+
+  async function openAdd(route) {
+    setAddFor(route.id); setAddSel(new Set()); setAddPool([]);
+    try {
+      const r = await api.get('/delivery/orders');
+      const inRoute = new Set((Array.isArray(route.orders) ? route.orders : []).map(o => `${o.source}_${o.id}`));
+      setAddPool((r.data.orders || []).filter(o => !inRoute.has(`${o.source}_${o.id}`)));
+    } catch (e) { alert(e.response?.data?.error || e.message); setAddFor(null); }
+  }
+  async function confirmAdd(routeId) {
+    const chosen = addPool.filter(o => addSel.has(`${o.source}_${o.id}`));
+    if (!chosen.length) { setAddFor(null); return; }
+    setAddBusy(true);
+    try {
+      const { data } = await api.post(`/delivery/routes/${routeId}/orders`, { orders: chosen });
+      setAddFor(null); setAddSel(new Set());
+      await new Promise(r => setTimeout(r, 150));
+      load();
+      if (data?.added) alert(`✅ ${data.added} pedido${data.added > 1 ? 's' : ''} agregado${data.added > 1 ? 's' : ''} a la ruta.`);
+    } catch (e) { alert(e.response?.data?.error || e.message); }
+    finally { setAddBusy(false); }
+  }
 
   async function handleCancel(id) {
     if (!window.confirm('¿Cancelar esta ruta?')) return;
@@ -1269,6 +1303,54 @@ function HistorialRepartos({ colors }) {
                       </div>
                     );
                   })()}
+
+                  {/* ── Agregar pedido a esta ruta ── */}
+                  {!['completed', 'cancelled'].includes(route.status) && (
+                    <div style={{ marginTop: '12px', borderTop: `1px dashed ${colors.border}`, paddingTop: '12px' }}>
+                      {addFor !== route.id ? (
+                        <button onClick={() => openAdd(route)}
+                          style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '6px 12px', color: colors.blue, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+                          + Agregar pedido{route.status === 'sent' || route.status === 'in_progress' ? ' (sale en camino al instante)' : ''}
+                        </button>
+                      ) : (
+                        <div style={{ backgroundColor: colors.bg, borderRadius: '10px', border: `1px solid ${colors.border}`, padding: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px' }}>Pedidos pendientes</span>
+                            <button onClick={() => setAddFor(null)} style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', fontSize: '12px' }}>✕ cerrar</button>
+                          </div>
+                          {addPool.length === 0 ? (
+                            <div style={{ color: colors.textMuted, fontSize: '12px', padding: '8px 0' }}>No hay pedidos pendientes para agregar.</div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '220px', overflowY: 'auto' }}>
+                              {addPool.map(o => {
+                                const key = `${o.source}_${o.id}`;
+                                const on = addSel.has(key);
+                                return (
+                                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', backgroundColor: on ? `${colors.blue}18` : 'transparent' }}>
+                                    <input type="checkbox" checked={on} onChange={() => {
+                                      setAddSel(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+                                    }} />
+                                    <span style={{ flex: 1, minWidth: 0, fontSize: '12px', color: colors.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {o.customerName || o.orderName}
+                                      <span style={{ color: colors.textMuted }}> · {o.fullAddress || 'sin dirección'}</span>
+                                      {o.dispatchCount > 0 && <span style={{ color: '#fb923c', fontWeight: 700 }}> · 🔁 {o.dispatchCount + 1}º</span>}
+                                    </span>
+                                    <span style={{ fontSize: '12px', fontWeight: 700, color: colors.green }}>${Number(o.totalPrice || 0).toLocaleString('es-CL')}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                            <button disabled={addBusy || addSel.size === 0} onClick={() => confirmAdd(route.id)}
+                              style={{ background: addSel.size ? colors.blue : colors.border, color: '#fff', border: 'none', borderRadius: '8px', padding: '7px 14px', cursor: addSel.size ? 'pointer' : 'default', fontSize: '12px', fontWeight: 700, opacity: addBusy ? 0.6 : 1 }}>
+                              {addBusy ? 'Agregando...' : `Agregar ${addSel.size || ''}`}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

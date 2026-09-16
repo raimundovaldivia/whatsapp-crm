@@ -443,6 +443,17 @@ async function setupDatabase() {
       UPDATE shopify_orders SET delivered_at = COALESCE(payment_marked_at, updated_at, synced_at)
         WHERE delivered_at IS NULL AND crm_status = 'entregado';
 
+      -- Intentos de despacho: cuántas veces salió el pedido a reparto, cuándo
+      -- fue el último intento y cómo terminó (fallido / reprogramado). Sirve
+      -- para que un pedido que "falló" NO quede cancelado sino de vuelta en
+      -- 'por_despachar', y para marcar en la lista "ya salió antes".
+      ALTER TABLE orders         ADD COLUMN IF NOT EXISTS dispatch_count      INT DEFAULT 0;
+      ALTER TABLE orders         ADD COLUMN IF NOT EXISTS last_attempt_at     TIMESTAMP;
+      ALTER TABLE orders         ADD COLUMN IF NOT EXISTS last_attempt_status TEXT;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS dispatch_count      INT DEFAULT 0;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS last_attempt_at     TIMESTAMP;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS last_attempt_status TEXT;
+
       -- Recordatorio enviado al cliente cuando una escalación lleva mucho sin respuesta humana
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS escalation_reminder_at TIMESTAMP;
 

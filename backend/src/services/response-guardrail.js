@@ -298,8 +298,28 @@ async function checkResponseFreshness(orgId, conversationId, response, turn = {}
   }
 }
 
+/**
+ * ¿El bot le PROMETIÓ al cliente que va a consultar con el equipo y confirmarle?
+ *
+ * Cuando el bot dice "le consulto al equipo y te confirmo por aquí" sin que la
+ * pipeline haya escalado de verdad, esa promesa queda en el aire: nadie del
+ * equipo se entera y el cliente espera para siempre. Si el mensaje suena a
+ * esta promesa, quien llama debe convertirlo en una escalación real (avisar al
+ * admin y pasar la conversación a humano) en vez de solo mandar el texto.
+ */
+const TEAM_RE    = /(equipo|ejecutiv[oa]|encargad[oa]|asesor|un[ea]?\s+persona\s+del)/i;
+const CONSULT_RE = /\b(consult|pregunt|revis|coordin|averigu|valid)(o|amos|ar[eé]|aremos)\b[^.!?\n]{0,30}(equipo|ejecutiv|encargad|asesor)/i;
+const PROMISE_RE = /\b(te|les?)\s+(confirmo|aviso|escribo|respondo|comento|contesto|digo|cuento)\b/i;
+function promisesTeamFollowup(response) {
+  const t = String(response || '');
+  if (!t) return false;
+  if (CONSULT_RE.test(t)) return true;             // "le consulto al equipo…"
+  return TEAM_RE.test(t) && PROMISE_RE.test(t);    // "…con el equipo y te confirmo"
+}
+
 module.exports = {
   checkResponseFreshness,
+  promisesTeamFollowup,
   // exportados para pruebas
   findPastDatesInFutureClaims,
   resolveDayMonth,

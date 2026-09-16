@@ -149,6 +149,8 @@ function normalizeShopifyOrder(row) {
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
     deliveryDate: dateOnly(row.delivery_date),
     deliveryNote: row.delivery_note || null,
+    dispatchCount: parseInt(row.dispatch_count) || 0,
+    lastAttemptStatus: row.last_attempt_status || null,
   };
 }
 
@@ -184,6 +186,8 @@ function normalizeBotOrder(row) {
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
     deliveryDate: dateOnly(row.delivery_date),
     deliveryNote: row.delivery_note || null,
+    dispatchCount: parseInt(row.dispatch_count) || 0,
+    lastAttemptStatus: row.last_attempt_status || null,
   };
 }
 
@@ -204,7 +208,9 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                total_price,
                crm_status,
                delivery_date,
-               delivery_note
+               delivery_note,
+               dispatch_count,
+               last_attempt_status
         FROM shopify_orders
         WHERE organization_id = $1
           AND (crm_status IS NULL OR crm_status NOT IN ('en_camino', 'entregado', 'cancelled'))
@@ -221,6 +227,8 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                o.status                AS crm_status,
                o.delivery_date,
                o.delivery_note,
+               o.dispatch_count,
+               o.last_attempt_status,
                ct.name                 AS contact_name,
                ct.address              AS contact_address,
                ct.city                 AS contact_city,
@@ -811,12 +819,14 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
       const botIds     = finalOrders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
       await Promise.all([
         shopifyIds.length && pool.query(
-          `UPDATE shopify_orders SET crm_status = 'en_camino'
+          `UPDATE shopify_orders SET crm_status = 'en_camino',
+                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
            WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
           [req.orgId, shopifyIds]
         ),
         botIds.length && pool.query(
-          `UPDATE orders SET status = 'en_camino', updated_at = NOW()
+          `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
+                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
            WHERE organization_id = $1 AND id = ANY($2)`,
           [req.orgId, botIds]
         ),
@@ -897,11 +907,15 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
       const botIds     = orders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
       await Promise.all([
         shopifyIds.length && pool.query(
-          `UPDATE shopify_orders SET crm_status = 'en_camino' WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
+          `UPDATE shopify_orders SET crm_status = 'en_camino',
+                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
+             WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
           [req.orgId, shopifyIds]
         ),
         botIds.length && pool.query(
-          `UPDATE orders SET status = 'en_camino', updated_at = NOW() WHERE organization_id = $1 AND id = ANY($2)`,
+          `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
+                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
+             WHERE organization_id = $1 AND id = ANY($2)`,
           [req.orgId, botIds]
         ),
       ].filter(Boolean));
@@ -910,6 +924,74 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
     res.json({ success: true, route, skipped });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── ADMIN: Agregar pedidos a una ruta ya creada ─────────────────────────────
+//
+// POST /api/delivery/routes/:id/orders   body: { orders: [ {source,id,...} ] }
+//
+// Agrega paradas al final de una ruta existente (borrador, enviada o en curso).
+// Si la ruta ya salió (sent/in_progress), los pedidos nuevos se marcan
+// 'en_camino' al toque. No re-optimiza: van al final del recorrido.
+router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const pool = getPool();
+  const { orders } = req.body;
+  if (!Array.isArray(orders) || orders.length === 0)
+    return res.status(400).json({ success: false, error: 'No hay pedidos para agregar' });
+  try {
+    const { rows: [route] } = await pool.query(
+      `SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2`,
+      [parseInt(req.params.id), req.orgId]
+    );
+    if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+    if (['completed', 'cancelled'].includes(route.status))
+      return res.status(400).json({ success: false, error: 'No se pueden agregar pedidos a una ruta cerrada. Crea una ruta nueva.' });
+
+    const cur      = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
+    const curStops = Array.isArray(route.optimized_route) ? route.optimized_route : JSON.parse(route.optimized_route || '[]');
+    const existing = new Set(cur.map(o => `${o.source}_${o.id}`));
+    const toAdd    = orders.filter(o => o && o.source && o.id != null && !existing.has(`${o.source}_${o.id}`));
+    if (!toAdd.length) return res.json({ success: true, added: 0, route });
+
+    const newOrders = [...cur, ...toAdd];
+    const baseStops = curStops.length ? curStops : cur.map((o, i) => ({ ...o, stopNumber: i + 1 }));
+    const newStops  = [...baseStops, ...toAdd.map((o, i) => ({ ...o, stopNumber: baseStops.length + i + 1 }))];
+
+    await pool.query(
+      `UPDATE delivery_routes SET orders = $3, optimized_route = $4 WHERE id = $1 AND organization_id = $2`,
+      [route.id, req.orgId, JSON.stringify(newOrders), JSON.stringify(newStops)]
+    );
+
+    // Si la ruta ya está en la calle, los nuevos salen 'en_camino' de inmediato.
+    if (['sent', 'in_progress'].includes(route.status)) {
+      const shopIds = toAdd.filter(o => o.source === 'shopify').map(o => o.id);
+      const botIds  = toAdd.filter(o => o.source === 'bot').map(o => parseInt(o.id));
+      await Promise.all([
+        shopIds.length && pool.query(
+          `UPDATE shopify_orders SET crm_status = 'en_camino',
+                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
+             WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
+          [req.orgId, shopIds]
+        ),
+        botIds.length && pool.query(
+          `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
+                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
+             WHERE organization_id = $1 AND id = ANY($2)`,
+          [req.orgId, botIds]
+        ),
+      ].filter(Boolean));
+    }
+
+    const { rows: [updated] } = await pool.query(
+      `SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2`,
+      [route.id, req.orgId]
+    );
+    console.log(`[Delivery/routes ADD] ✅ ${toAdd.length} pedido(s) agregados a ruta ${route.id} (${route.status})`);
+    res.json({ success: true, added: toAdd.length, route: updated });
+  } catch (err) {
+    console.error('[Delivery/routes ADD]', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1076,10 +1158,15 @@ async function applyStopUpdate(req, res, id, stopKey) {
     // El medio de pago solo se guarda al entregar: en 'cancelled' o 'pending'
     // no hubo cobro, así que se deja como estaba.
     const [source, orderId] = splitStopKey(stopKey);
+    // "Fallido" (cancelled) y "Reprogramado" (postponed) NO matan el pedido:
+    // vuelve a 'por_despachar' para salir de nuevo. Solo se anota que hubo un
+    // intento fallido. Una cancelación real la hace el admin/bot, no el
+    // repartidor. 'pending' (desmarcar) lo deja en_camino.
+    const isFailedAttempt = status === 'cancelled' || status === 'postponed';
     const newOrderStatus = status === 'entregado' ? 'entregado'
-                         : status === 'cancelled' ? 'cancelled'
-                         : status === 'postponed' ? 'por_despachar'   // vuelve a la lista para otra ruta
+                         : isFailedAttempt         ? 'por_despachar'   // vuelve a la lista para otra ruta
                          : 'en_camino';
+    const attemptStatus = status === 'cancelled' ? 'fallido' : status === 'postponed' ? 'reprogramado' : null;
     const savePayment = status === 'entregado' && !!paymentMethod;
     const wasDelivered = status === 'entregado';   // señal de entrega, independiente del pago
     // Pago en efectivo al entregar = el pedido queda pagado de inmediato.
@@ -1095,10 +1182,14 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 financial_status  = CASE WHEN $6::boolean THEN 'paid' ELSE financial_status END,
                 delivered_at      = CASE WHEN $9::boolean THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
+                last_attempt_at     = CASE WHEN $10::text IS NOT NULL THEN NOW() ELSE last_attempt_at END,
+                last_attempt_status = CASE WHEN $10::text IS NOT NULL THEN $10 ELSE last_attempt_status END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
-                delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8 ELSE delivery_note END
+                delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8
+                                         WHEN $10::text = 'fallido' AND $11::text <> '' THEN $11
+                                         ELSE delivery_note END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
-        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered]
+        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
       );
     } else if (source === 'bot') {
       // Pedidos del bot marcan "pagado" con status = 'paid' (igual que al
@@ -1114,12 +1205,16 @@ async function applyStopUpdate(req, res, id, stopKey) {
                          END,
                 updated_at = NOW(),
                 delivered_at      = CASE WHEN $9::boolean THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
+                last_attempt_at     = CASE WHEN $10::text IS NOT NULL THEN NOW() ELSE last_attempt_at END,
+                last_attempt_status = CASE WHEN $10::text IS NOT NULL THEN $10 ELSE last_attempt_status END,
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
-                delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8 ELSE delivery_note END
+                delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8
+                                         WHEN $10::text = 'fallido' AND $11::text <> '' THEN $11
+                                         ELSE delivery_note END
           WHERE id = $2 AND organization_id = $3`,
-        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered]
+        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
       );
     }
 

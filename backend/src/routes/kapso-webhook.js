@@ -466,6 +466,21 @@ router.post('/', async (req, res) => {
             log.done();
             return;
           }
+
+          // El bot prometió "consultar con el equipo y confirmar" pero la
+          // pipeline no escaló → esa promesa no le llega a nadie. La
+          // convertimos en escalación real: se avisa al admin y la
+          // conversación pasa a humano, usando el mismo texto como acuse.
+          if (guardrail.promisesTeamFollowup(result.response)) {
+            log.step('promise_escalate', 'el bot prometió consultar con el equipo → escalando de verdad');
+            await escalateWithAck(
+              result.response,
+              result.escalationReason || 'El bot le dijo al cliente que consultaría algo con el equipo',
+              result.response
+            );
+            log.done();
+            return;
+          }
         }
 
         if (result.switchToHuman) {
