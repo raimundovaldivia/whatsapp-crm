@@ -177,9 +177,11 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   } catch { /* JSON inválido — ignorar */ }
   const deliveryRaw   = await db.getSetting(orgId, 'delivery_info');
   let deliverySection = '';
+  let deliverySchedule = '';   // el horario tal cual, para responder "¿a qué hora llega?" con dato real
   if (deliveryRaw) {
     try {
       const d = JSON.parse(deliveryRaw);
+      deliverySchedule = (d.schedule || '').trim();
       const lines = [];
       if (d.schedule)       lines.push(`📅 Horarios de entrega: ${d.schedule}`);
       if (d.zone)           lines.push(`📍 Zona de reparto: ${d.zone}`);
@@ -689,6 +691,51 @@ REGLAS ABSOLUTAS:
   const customerName = knownCustomerData?.name?.split(' ')[0] || '';
 
   const salesOpts = { isWarmLead: isTemplateReply, templateName, customerName, intent };
+
+  // ── "¿A qué hora llega mi pedido?" / "¿ya viene?" ──────────────────────
+  // Con un pedido activo, el bot responde con el DATO REAL (estado del pedido +
+  // ventana de reparto configurada) en vez de inventar una hora o prometer
+  // "le consulto al equipo" y dejar al cliente esperando.
+  const DELIVERY_STATUS_PATTERNS = [
+    /(a\s+qu[eé]\s+hora|qu[eé]\s+hora|en\s+qu[eé]\s+horario|qu[eé]\s+horario|horario\s+de\s+(entrega|reparto|despacho))\b/i,
+    /\bcu[aá]ndo\b.{0,25}\b(llega|lleg[aá]|entregan?|entrega|despachan?|sale|viene|reparten)\b/i,
+    /\b(ya\s+)?(va\s+en\s+camino|est[aá]\s+en\s+camino|en\s+ruta|va\s+en\s+ruta|salió\s+(mi|el)|despacharon|lo\s+mandaron|lo\s+enviaron)\b/i,
+    /\b(hoy|ma[ñn]ana)\b.{0,20}\b(llega|entregan?|reparten|despachan?|lo\s+traen)\b/i,
+    /\b(mi|el)\s+pedido\b.{0,30}\b(llega|viene|hora|cu[aá]ndo|en\s+camino|ruta)\b/i,
+    /\bpara\s+cu[aá]ndo\s+(lo\s+)?(tengo|llega|entregan)\b/i,
+  ];
+  if (activeOrder && userMessage.length <= 160
+      && intent !== 'modify_order' && intent !== 'cancel_order'
+      && DELIVERY_STATUS_PATTERNS.some(p => p.test(userMessage))) {
+    const first = (conversation.contact_name || activeOrder.customer_name || '').trim().split(/\s+/)[0] || '';
+    const hi = first ? ` ${first}` : '';
+    const win = deliverySchedule ? ` La entrega es ${deliverySchedule}.` : '';
+    // Fecha programada (reprogramado / agendado a futuro)
+    let schedFuture = null;
+    try {
+      if (activeOrder.delivery_date) {
+        const dd = new Date(activeOrder.delivery_date);
+        const todayStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+        const ddStr = new Date(activeOrder.delivery_date).toISOString().slice(0, 10);
+        if (ddStr > todayStr) schedFuture = formatDateEs(activeOrder.delivery_date);
+      }
+    } catch (_) {}
+
+    let response;
+    if (schedFuture) {
+      response = `Tu pedido quedó agendado para el ${schedFuture} 📅.${win} Ese día te avisamos cuando vaya saliendo. ¿Algo más?`;
+    } else if (activeOrder.status === 'en_camino') {
+      response = `¡Tu pedido va en la ruta de hoy${hi}! 🚚${win} No te puedo dar una hora exacta porque depende del orden del recorrido, pero apenas el repartidor vaya llegando te avisamos. 😊`;
+    } else if (activeOrder.status === 'por_despachar') {
+      response = `Tu pedido está listo para salir${hi} 📦.${win} Hoy te llega dentro de ese horario; cuando salga a la ruta te avisamos. 😊`;
+    } else {
+      // draft / nuevo / sent / payment_received → aún en preparación
+      response = `Tu pedido está en preparación${hi} 😊.${win} Sale en el próximo reparto y te avisamos apenas vaya en camino.`;
+    }
+    L.agent('orchestrator', 0);
+    L.step('delivery_status', `pedido #${activeOrder.id} estado ${activeOrder.status}`);
+    return { response, agentType: 'orchestrator', newState: currentState };
+  }
 
   // ── Preferencia / restricción de horario de entrega ────────────────────
   // "a las 15:00", "no tan tarde", "temprano", "tengo restricción de horario",
