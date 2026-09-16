@@ -183,4 +183,5 @@ process.on('unhandledRejection', (err) => console.error('[Error no manejado]', e
 
 
 
-// Deploy marker: 2026-09-16T23:19:11Z (bot responde hora de entrega con dato real)
+
+// Deploy marker: 2026-09-16T23:28:53Z (rutas: solo acciones, sin duplicar despachos)
