@@ -175,3 +175,5 @@ setupDatabase().then(() => {
 });
 
 process.on('unhandledRejection', (err) => console.error('[Error no manejado]', err));
+
+// Deploy marker: 2026-09-16T20:47Z (cobranza post-entrega, pedido fantasma, dobles mensajes, repartos entregados)
