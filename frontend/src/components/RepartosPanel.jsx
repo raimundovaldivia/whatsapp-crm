@@ -909,6 +909,7 @@ function DespachosRepartos({ colors }) {
   const [status,  setStatus]  = useState('');
   const [drivers, setDrivers] = useState([]);
   const [rows,    setRows]    = useState([]);
+  const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [openDays, setOpenDays] = useState({});
@@ -921,8 +922,14 @@ function DespachosRepartos({ colors }) {
     setLoading(true); setError(null);
     const q = new URLSearchParams({ from, to });
     if (driver) q.set('driver', driver);
-    api.get(`/delivery/dispatches?${q.toString()}`)
-      .then(r => setRows(r.data.rows || []))
+    Promise.all([
+      api.get(`/delivery/dispatches?${q.toString()}`),
+      api.get(`/delivery/expenses?from=${from}&to=${to}`).catch(() => ({ data: { expenses: [] } })),
+    ])
+      .then(([disp, exp]) => {
+        setRows(disp.data.rows || []);
+        setExpenses(exp.data.expenses || []);
+      })
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoading(false));
   }, [from, to, driver]);
@@ -957,11 +964,26 @@ function DespachosRepartos({ colors }) {
     else d.pendientes++;
   }
 
+  // ── Gastos del repartidor por día (mismo rango y filtro de repartidor) ──
+  const clDay = ts => { try { return new Date(ts).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' }); } catch { return String(ts || '').slice(0, 10); } };
+  const gastosByDay = {};
+  let gastosTotal = 0;
+  for (const e of expenses) {
+    if (driver && String(e.driver_user_id) !== String(driver)) continue;   // respeta el filtro de repartidor
+    const day = clDay(e.created_at);
+    const amt = Number(e.amount) || 0;
+    gastosByDay[day] = (gastosByDay[day] || 0) + amt;
+    gastosTotal += amt;
+  }
+  for (const d of days) d.gastos = gastosByDay[d.day] || 0;
+
   const totals = days.reduce((t, d) => ({
     entregados: t.entregados + d.entregados, fallidos: t.fallidos + d.fallidos,
     efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia,
     cobrosEnviados: t.cobrosEnviados + d.cobrosEnviados, cobrosPendientes: t.cobrosPendientes + d.cobrosPendientes,
   }), { entregados: 0, fallidos: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0 });
+  totals.gastos = gastosTotal;
+  totals.netoEfectivo = totals.efectivo - gastosTotal;   // efectivo recaudado menos lo que gastó el repartidor
 
   const dayLabel = day => new Date(day + 'T12:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' });
   const timeOf = r => new Date(r.at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
@@ -1023,6 +1045,8 @@ function DespachosRepartos({ colors }) {
         {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
         {chip(`💸 ${totals.cobrosEnviados} cobros enviados`, '#fbbf24')}
         {totals.cobrosPendientes > 0 && chip(`⚠️ ${totals.cobrosPendientes} sin cobrar`, '#f87171')}
+        {totals.gastos > 0 && chip(`🧾 ${CLP(totals.gastos)} gastos`, '#fb923c')}
+        {totals.gastos > 0 && chip(`💰 ${CLP(totals.netoEfectivo)} neto efectivo`, totals.netoEfectivo >= 0 ? '#22c55e' : '#f87171')}
       </div>
 
       {loading && <div style={{ color: colors.textMuted, fontSize: '13px' }}>Cargando despachos…</div>}
@@ -1050,6 +1074,7 @@ function DespachosRepartos({ colors }) {
               {chip(`🏦 ${CLP(d.transferencia)}`, '#38bdf8')}
               {d.transferencia > 0 && chip(`💸 ${d.cobrosEnviados}/${d.cobrosEnviados + d.cobrosPendientes} cobrados`, d.cobrosPendientes ? '#fbbf24' : '#22c55e')}
               {d.extras > 0 && chip(`🥚 +${CLP(d.extras)} extras`, '#c4b5fd')}
+              {d.gastos > 0 && chip(`🧾 ${CLP(d.gastos)} gastos`, '#fb923c')}
             </div>
             {open && (
               <div style={{ overflowX: 'auto' }}>
