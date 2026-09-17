@@ -454,6 +454,19 @@ async function setupDatabase() {
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS last_attempt_at     TIMESTAMP;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS last_attempt_status TEXT;
 
+      -- Tokens push (Expo) de las apps de administrador (Central). Un admin
+      -- puede tener varios dispositivos; el token es único.
+      CREATE TABLE IF NOT EXISTS push_tokens (
+        id              SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL,
+        user_id         INTEGER,
+        token           TEXT UNIQUE NOT NULL,
+        platform        TEXT DEFAULT 'expo',
+        created_at      TIMESTAMP DEFAULT NOW(),
+        updated_at      TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_push_tokens_org ON push_tokens(organization_id);
+
       -- Recordatorio enviado al cliente cuando una escalación lleva mucho sin respuesta humana
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS escalation_reminder_at TIMESTAMP;
 

@@ -58,6 +58,13 @@ async function isWindowOpen(orgId) {
 async function notifyAdmin(orgId, { body, kind = 'help', conversationId = null, wc = null } = {}) {
   if (!body) return { sent: false, queued: false, reason: 'sin_cuerpo' };
 
+  // Push a la app Central (independiente de la ventana de 24h de WhatsApp).
+  // Best-effort: nunca bloquea ni rompe la alerta por WhatsApp.
+  try {
+    const title = { payment: '💸 Pago', order: '📦 Pedido', handoff: '👤 Atención', help: '🆘 Necesita ayuda' }[kind] || '🔔 Aviso';
+    require('./push').pushAdmins(orgId, { title, body: body.replace(/\*/g, ''), data: { kind, conversationId } }).catch(() => {});
+  } catch (_) {}
+
   const adminPhone = await db.getSetting(orgId, 'admin_alert_phone').catch(() => null);
   if (!adminPhone) return { sent: false, queued: false, reason: 'sin_admin_phone' };
 

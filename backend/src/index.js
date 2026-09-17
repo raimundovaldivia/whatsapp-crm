@@ -51,6 +51,7 @@ const deliveryRouter       = require('./routes/delivery');         // App mobile
 const usersRouter          = require('./routes/users');            // Gestión de usuarios (RBAC)
 const adminAlertsRouter    = require('./routes/admin-alerts');      // Cola de alertas al admin
 const reengagementRouter   = require('./routes/reengagement');     // Mensajería masiva y re-enganche
+const pushRouter           = require('./routes/push');             // Tokens push de la app Central (admin)
 
 const app    = express();
 const server = http.createServer(app);
@@ -149,6 +150,7 @@ app.use('/api/delivery',      deliveryRouter);        // App mobile repartidor
 app.use('/api/users',         usersRouter);           // Gestión de usuarios (RBAC)
 app.use('/api/admin-alerts',  adminAlertsRouter);     // Cola de alertas al admin
 app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-enganche
+app.use('/api/push',          pushRouter);           // Registro de tokens push (app Central)
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
@@ -176,14 +178,4 @@ setupDatabase().then(() => {
 
 process.on('unhandledRejection', (err) => console.error('[Error no manejado]', err));
 
-
-
-
-
-
-
-
-
-
-
-// Deploy marker: 2026-09-17T15:21:58Z (despachos con gastos)
+// Deploy marker: 2026-09-16T20:47Z (cobranza post-entrega, pedido fantasma, dobles mensajes, repartos entregados)
