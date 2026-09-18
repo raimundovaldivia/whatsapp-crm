@@ -567,8 +567,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       position: 'relative',
       backgroundColor: isDark ? '#0b141a' : '#efeae2',
       backgroundImage: isDark
-        ? `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='%23ffffff05'/%3E%3C/svg%3E")`
-        : `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='%2300000008'/%3E%3C/svg%3E")`,
+        ? `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='white' fill-opacity='0.03'/%3E%3C/svg%3E")`
+        : `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='black' fill-opacity='0.035'/%3E%3C/svg%3E")`,
     }}>
       {/* Header */}
       <div style={{
