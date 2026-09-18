@@ -14,6 +14,7 @@ import SettingsPanel     from './components/SettingsPanel.jsx';
 import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
 import ProductsPanel        from './components/ProductsPanel.jsx';
 import RepartosPanel        from './components/RepartosPanel.jsx';
+import EvaluacionPanel      from './components/EvaluacionPanel.jsx';
 import UsersPanel           from './components/UsersPanel.jsx';
 import ReengagementPanel    from './components/ReengagementPanel.jsx';
 import AdminAlertsBanner    from './components/AdminAlertsBanner.jsx';
@@ -270,8 +271,8 @@ export default function App() {
 
   // Qué vistas puede ver cada rol
   const ROLE_VIEWS = {
-    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'dashboard', 'users']),
-    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'dashboard', 'users']),
+    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users']),
+    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users']),
     supervisor: new Set(['chats', 'orders', 'repartos', 'pagos']),
     coordinador: new Set(['repartos']),
     agent:      new Set(['chats']),
@@ -487,6 +488,9 @@ export default function App() {
 
       {/* Vista Repartos */}
       {view === 'repartos' && <RepartosPanel />}
+
+      {/* Vista Evaluación del bot */}
+      {view === 'evaluacion' && <EvaluacionPanel />}
 
       {/* Vista Mi Tienda (gestión de productos + tienda pública) */}
       {view === 'productos' && <ProductsPanel orgSlug={org?.slug} />}

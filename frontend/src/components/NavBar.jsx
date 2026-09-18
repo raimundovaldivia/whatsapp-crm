@@ -3,8 +3,8 @@ import { useTheme } from '../theme.js';
 
 // Qué vistas puede ver cada rol
 const ROLE_VIEWS = {
-  owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'users'],
-  admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'settings', 'users'],
+  owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'users'],
+  admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'users'],
   supervisor: ['chats', 'orders', 'repartos', 'pagos'],
   coordinador: ['repartos'],
   agent:      ['chats'],
@@ -19,6 +19,7 @@ const ALL_NAV_ITEMS = [
   { key: 'clientes',     icon: Users,         label: 'Clientes' },
   { key: 'mensajeria',   icon: Megaphone,     label: 'Mensajería' },
   { key: 'productos',    icon: Store,         label: 'Mi Tienda' },
+  { key: 'evaluacion',   icon: BarChart2,     label: 'Evaluación' },
 ];
 
 // Items visibles en la barra móvil (los más usados)

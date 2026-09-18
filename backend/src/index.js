@@ -52,6 +52,7 @@ const usersRouter          = require('./routes/users');            // Gestión d
 const adminAlertsRouter    = require('./routes/admin-alerts');      // Cola de alertas al admin
 const reengagementRouter   = require('./routes/reengagement');     // Mensajería masiva y re-enganche
 const pushRouter           = require('./routes/push');             // Tokens push de la app Central (admin)
+const botEvalRouter        = require('./routes/bot-eval');          // Evaluación del bot y ciclo de mejora
 
 const app    = express();
 const server = http.createServer(app);
@@ -151,6 +152,7 @@ app.use('/api/users',         usersRouter);           // Gestión de usuarios (R
 app.use('/api/admin-alerts',  adminAlertsRouter);     // Cola de alertas al admin
 app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-enganche
 app.use('/api/push',          pushRouter);           // Registro de tokens push (app Central)
+app.use('/api/bot-eval',      botEvalRouter);        // Evaluación del bot y ciclo de mejora
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
