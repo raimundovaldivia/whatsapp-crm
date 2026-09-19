@@ -83,7 +83,7 @@ export async function getMessages(convId, limit = 50) {
 }
 export async function sendMessage(convId, content) {
   const c = await getClient();
-  const { data } = await c.post(`/api/conversations/${convId}/messages`, { content });
+  const { data } = await c.post(`/api/conversations/${convId}/messages`, { text: content });
   return data;
 }
 export async function setAgentMode(convId, mode) {   // 'human' | 'ai'
