@@ -913,10 +913,33 @@ function DespachosRepartos({ colors }) {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [openDays, setOpenDays] = useState({});
+  const [charging, setCharging] = useState('');   // día que está enviando cobros
+  const [chargeMsg, setChargeMsg] = useState(null);
 
   useEffect(() => {
     api.get('/delivery/drivers').then(r => setDrivers(r.data.drivers || [])).catch(() => {});
   }, []);
+
+  // Enviar el template de cobro a los NO cobrados de un día (transferencia,
+  // entregado, sin comprobante). Usa el mismo endpoint que "Por cobrar".
+  async function cobrarDia(d, ev) {
+    ev?.stopPropagation?.();
+    const pend = (d.rows || []).filter(r =>
+      r.status === 'entregado' && r.payment_method === 'transferencia' && r.charge?.pending
+    );
+    const orders = pend.map(r => ({ source: r.source, id: r.order_id }));
+    if (!orders.length) return;
+    if (!window.confirm(`¿Enviar el mensaje de cobro a ${orders.length} cliente${orders.length === 1 ? '' : 's'} no cobrado${orders.length === 1 ? '' : 's'} del ${dayLabel(d.day)}?`)) return;
+    setCharging(d.day); setChargeMsg(null);
+    try {
+      const { data } = await api.post('/orders/send-charge', { orders });
+      const sent = data.sent || 0, failed = data.failed || 0;
+      setChargeMsg({ day: d.day, text: failed === 0 ? `✅ ${sent} cobro(s) enviado(s)` : `Enviados ${sent}, fallaron ${failed}. Revisa que el template esté aprobado (Ajustes → Cobranza).`, ok: failed === 0 });
+      load();
+    } catch (e) {
+      setChargeMsg({ day: d.day, text: e.response?.data?.error || 'Error enviando los cobros', ok: false });
+    } finally { setCharging(''); }
+  }
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
@@ -1075,7 +1098,20 @@ function DespachosRepartos({ colors }) {
               {d.transferencia > 0 && chip(`💸 ${d.cobrosEnviados}/${d.cobrosEnviados + d.cobrosPendientes} cobrados`, d.cobrosPendientes ? '#fbbf24' : '#22c55e')}
               {d.extras > 0 && chip(`🥚 +${CLP(d.extras)} extras`, '#c4b5fd')}
               {d.gastos > 0 && chip(`🧾 ${CLP(d.gastos)} gastos`, '#fb923c')}
+              {d.cobrosPendientes > 0 && (
+                <button
+                  onClick={(ev) => cobrarDia(d, ev)}
+                  disabled={charging === d.day}
+                  style={{ backgroundColor: '#fbbf24', color: '#231a02', border: 'none', borderRadius: '999px', padding: '4px 12px', fontSize: '11px', fontWeight: 800, cursor: 'pointer', opacity: charging === d.day ? 0.6 : 1 }}>
+                  {charging === d.day ? 'Enviando…' : `💸 Cobrar a ${d.cobrosPendientes} no cobrado${d.cobrosPendientes === 1 ? '' : 's'}`}
+                </button>
+              )}
             </div>
+            {chargeMsg?.day === d.day && (
+              <div style={{ padding: '6px 14px', fontSize: '12px', color: chargeMsg.ok ? '#22c55e' : '#f87171', backgroundColor: colors.bgCard, borderTop: `1px solid ${colors.border}` }}>
+                {chargeMsg.text}
+              </div>
+            )}
             {open && (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '860px' }}>
