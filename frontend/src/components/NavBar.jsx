@@ -195,3 +195,5 @@ function NavItem({ children, active, label, badge, onClick, danger, colors }) {
     </div>
   );
 }
+
+// nav: logout movido al avatar (2026-09-20T15:37)

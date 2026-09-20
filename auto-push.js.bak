@@ -1,0 +1,108 @@
+/**
+ * auto-push.js — Vigila el proyecto y hace commit + push automático.
+ *
+ * Cada vez que cambia un archivo (incluidos los que escribe Claude), espera unos
+ * segundos y hace:  git add -A  →  git commit  →  git push
+ * Así Railway y el frontend redeployan solos, sin que tengas que teclear git.
+ *
+ * USO:
+ *   1) Abre una terminal en la carpeta del proyecto (donde está la carpeta .git).
+ *   2) Corre:  node auto-push.js
+ *   3) Déjala abierta. Para detener: Ctrl+C.
+ *
+ * Notas:
+ *   - Espera DEBOUNCE_MS tras el último cambio antes de subir (evita subir a
+ *     medio guardar y no spamea commits).
+ *   - Si no hay cambios reales, no hace nada.
+ *   - Ignora node_modules, .git, .expo, dist, build, etc.
+ *   - Consejo: cierra el archivo en tu editor si notas que "se revierte"; el
+ *     watcher sube lo que esté en disco en ese momento.
+ */
+
+const { execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = process.cwd();
+const DEBOUNCE_MS = 8000;   // segundos de calma tras el último cambio antes de subir
+const IGNORE = [
+  '.git', 'node_modules', '.expo', 'dist', 'build', '.next',
+  'android', 'ios', '.gradle', 'coverage', '.cache',
+];
+
+function ignored(rel) {
+  return IGNORE.some(seg => rel === seg || rel.startsWith(seg + path.sep) || rel.includes(path.sep + seg + path.sep));
+}
+
+function git(args) {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd: ROOT, windowsHide: true, maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+      resolve({ code: err ? (err.code || 1) : 0, out: (stdout || '') + (stderr || '') });
+    });
+  });
+}
+
+let timer = null;
+let running = false;
+let pendingWhileRunning = false;
+
+function ts() {
+  return new Date().toLocaleString('es-CL');
+}
+
+async function commitAndPush() {
+  if (running) { pendingWhileRunning = true; return; }
+  running = true;
+  try {
+    const status = await git(['status', '--porcelain']);
+    if (!status.out.trim()) { running = false; return; }  // nada que subir
+
+    console.log(`\n[${ts()}] Cambios detectados — subiendo...`);
+    await git(['add', '-A']);
+    const commit = await git(['commit', '-m', `auto: cambios ${ts()}`]);
+    if (commit.code !== 0 && !/nothing to commit/i.test(commit.out)) {
+      console.log('  commit:', commit.out.trim().split('\n').slice(-3).join(' | '));
+    }
+    const push = await git(['push']);
+    if (push.code === 0) {
+      console.log(`  ✅ push OK — Railway/Frontend redeployan solos.`);
+    } else {
+      console.log('  ⚠️ push falló:', push.out.trim().split('\n').slice(-4).join(' | '));
+      console.log('    (si dice "rejected/fetch first": corre  git pull --rebase  una vez y vuelve a intentar)');
+    }
+  } catch (e) {
+    console.log('  ⚠️ error:', e.message);
+  } finally {
+    running = false;
+    if (pendingWhileRunning) { pendingWhileRunning = false; schedule(); }
+  }
+}
+
+function schedule() {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(commitAndPush, DEBOUNCE_MS);
+}
+
+// Verificar que estamos en un repo git
+(async () => {
+  const check = await git(['rev-parse', '--is-inside-work-tree']);
+  if (check.code !== 0) {
+    console.error('❌ Esta carpeta no es un repositorio git. Corre el script dentro del proyecto (donde está .git).');
+    process.exit(1);
+  }
+  console.log('👀 auto-push activo en:', ROOT);
+  console.log(`   Espera ${DEBOUNCE_MS / 1000}s tras el último cambio y sube solo. Ctrl+C para detener.\n`);
+
+  try {
+    fs.watch(ROOT, { recursive: true }, (_evt, filename) => {
+      if (!filename) return;
+      const rel = filename.toString();
+      if (ignored(rel)) return;
+      schedule();
+    });
+  } catch (e) {
+    console.error('❌ No se pudo iniciar el watcher:', e.message);
+    console.error('   (En Windows fs.watch recursivo debería funcionar; si falla, avísame y uso otra vía.)');
+    process.exit(1);
+  }
+})();
