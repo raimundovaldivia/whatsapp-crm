@@ -408,6 +408,20 @@ function WhatsAppTab() {
 
   useEffect(() => { loadConfig(); }, []);
 
+  const selectExisting = async (name) => {
+    if (!name) return;
+    setSelBusy(true); setError(''); setSuccess('');
+    try {
+      await api.post('/settings/charge-settings', { waTemplate: name });
+      setWaTemplate(name);
+      const r = await api.get('/settings/charge-settings/template-status').catch(() => null);
+      if (r?.data?.status) { setTplStatus(r.data.status); setTplReason(r.data.reason || null); }
+      setSuccess(`Ahora el cobro usa el template "${name}".`);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo elegir el template');
+    } finally { setSelBusy(false); }
+  };
+
   const save = async () => {
     setSaving(true); setError(''); setSuccess(''); setTestResult(null);
     try {
@@ -1766,6 +1780,8 @@ function CobranzaTab() {
   const [tplBusy,     setTplBusy]     = useState(false);
   const [defaultTpl,  setDefaultTpl]  = useState('');
   const templateRef = useRef(null);
+  const [tplList,     setTplList]     = useState([]);   // templates disponibles para elegir
+  const [selBusy,     setSelBusy]     = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -1779,6 +1795,7 @@ function CobranzaTab() {
         setTplStatus(s.waTemplateStatus || null);
         setTplReason(s.waTemplateReason || null);
         setDefaultTpl(res.data?.defaultTemplate || '');
+        api.get('/templates').then(r => setTplList(r.data?.templates || [])).catch(() => {});
         // Si está pendiente, preguntarle a Meta si ya lo aprobó
         if (s.waTemplate && s.waTemplateStatus !== 'APPROVED') {
           api.get('/settings/charge-settings/template-status')
@@ -2001,6 +2018,22 @@ function CobranzaTab() {
               const st = waTemplate ? (STATUS[tplStatus] || STATUS.PENDING) : null;
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                  {tplList.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '12px', color: colors.textSecondary }}>Template para cobrar:</span>
+                      <select value={waTemplate} disabled={selBusy}
+                        onChange={e => selectExisting(e.target.value)}
+                        style={{ fontSize: '12px', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp, color: colors.textPrimary }}>
+                        <option value="">— elegir un template —</option>
+                        {tplList.map(t => (
+                          <option key={t.name} value={t.name}>
+                            {t.name} {t.status === 'APPROVED' ? '✅' : t.status === 'PENDING' ? '⏳' : t.status === 'REJECTED' ? '❌' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {selBusy && <span style={{ fontSize: '11px', color: colors.textMuted }}>guardando…</span>}
+                    </div>
+                  )}
                   {st ? (
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', backgroundColor: st.bg, border: `1px solid ${st.color}44` }}>
                       <span style={{ fontFamily: 'monospace', fontSize: '12px', color: colors.textPrimary }}>{waTemplate}</span>

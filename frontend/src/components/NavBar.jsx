@@ -1,4 +1,4 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, LogOut, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck, UserCog, Megaphone } from 'lucide-react';
+import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck, UserCog, Megaphone } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 // Qué vistas puede ver cada rol
@@ -107,13 +107,13 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
       flexShrink: 0,
     }}>
       {/* Avatar org */}
-      <div style={{
+      <div onClick={onLogout} style={{
         width: '40px', height: '40px', borderRadius: '50%',
         backgroundColor: colors.green,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontWeight: 700, color: 'white', fontSize: '16px',
-        marginBottom: '8px', flexShrink: 0,
-      }} title={orgName}>
+        marginBottom: '8px', flexShrink: 0, cursor: 'pointer',
+      }} title={`${orgName} — clic para cerrar sesión`}>
         {initial}
       </div>
 
@@ -156,9 +156,6 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
         </NavItem>
       )}
 
-      <NavItem label="Cerrar sesión" onClick={onLogout} danger colors={colors}>
-        <LogOut size={18} />
-      </NavItem>
     </div>
   );
 }
