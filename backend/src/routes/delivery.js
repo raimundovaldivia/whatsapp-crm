@@ -953,6 +953,48 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
   }
 });
 
+// ─── ADMIN: Devolver los pedidos de una ruta cancelada a "por despachar" ───
+//
+// POST /api/delivery/routes/:id/release
+//
+// Para rutas ya canceladas cuyos pedidos quedaron atascados en 'en_camino'
+// (antes de que el cancelar los devolviera solo). Los devuelve a
+// 'por_despachar' para que reaparezcan en Despachos. No toca los entregados.
+router.post('/routes/:id/release', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const { id } = req.params;
+  const pool = getPool();
+  try {
+    const { rows: [route] } = await pool.query(
+      `SELECT orders FROM delivery_routes WHERE id = $1 AND organization_id = $2`,
+      [parseInt(id), req.orgId]
+    );
+    if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+    const orders = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
+    const shopifyIds = orders.filter(o => o.source === 'shopify').map(o => o.id);
+    const botIds     = orders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
+    const restored = await Promise.all([
+      shopifyIds.length && pool.query(
+        `UPDATE shopify_orders SET crm_status = 'por_despachar'
+           WHERE organization_id = $1 AND shopify_order_id = ANY($2)
+             AND crm_status = 'en_camino' AND delivered_at IS NULL
+         RETURNING shopify_order_id`,
+        [req.orgId, shopifyIds]
+      ),
+      botIds.length && pool.query(
+        `UPDATE orders SET status = 'por_despachar', updated_at = NOW()
+           WHERE organization_id = $1 AND id = ANY($2)
+             AND status = 'en_camino' AND delivered_at IS NULL
+         RETURNING id`,
+        [req.orgId, botIds]
+      ),
+    ].filter(Boolean));
+    const restored_count = restored.reduce((a, r) => a + (r && r.rowCount ? r.rowCount : 0), 0);
+    res.json({ success: true, restored: restored_count });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── ADMIN: Agregar pedidos a una ruta ya creada ─────────────────────────────
 //
 // POST /api/delivery/routes/:id/orders   body: { orders: [ {source,id,...} ] }
