@@ -921,6 +921,32 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
       ].filter(Boolean));
     }
 
+    // Al cancelar la ruta: los pedidos que iban EN CAMINO y no alcanzaron a
+    // entregarse vuelven a 'por_despachar' para poder salir en otra ruta. No se
+    // tocan los que ya se entregaron/pagaron (delivered_at o estado cerrado).
+    if (status === 'cancelled' && route.orders) {
+      const cOrders   = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders);
+      const shopifyIds = cOrders.filter(o => o.source === 'shopify').map(o => o.id);
+      const botIds     = cOrders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
+      const restored = await Promise.all([
+        shopifyIds.length && pool.query(
+          `UPDATE shopify_orders SET crm_status = 'por_despachar'
+             WHERE organization_id = $1 AND shopify_order_id = ANY($2)
+               AND crm_status = 'en_camino' AND delivered_at IS NULL
+           RETURNING shopify_order_id`,
+          [req.orgId, shopifyIds]
+        ),
+        botIds.length && pool.query(
+          `UPDATE orders SET status = 'por_despachar', updated_at = NOW()
+             WHERE organization_id = $1 AND id = ANY($2)
+               AND status = 'en_camino' AND delivered_at IS NULL
+           RETURNING id`,
+          [req.orgId, botIds]
+        ),
+      ].filter(Boolean));
+      const nBack = restored.reduce((a, r) => a + (r && r.rowCount ? r.rowCount : 0), 0);
+      console.log(`[Delivery/routes PATCH] ruta ${id} cancelada, ${nBack} pedido(s) devueltos a por_despachar`);
+    }
     res.json({ success: true, route, skipped });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, error: err.message });
