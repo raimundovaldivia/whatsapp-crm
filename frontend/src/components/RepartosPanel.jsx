@@ -1216,6 +1216,17 @@ function HistorialRepartos({ colors }) {
     }
   }
 
+  async function handleRelease(id) {
+    if (!window.confirm('¿Devolver los pedidos de esta ruta a "por despachar"?')) return;
+    try {
+      const { data } = await api.post(`/delivery/routes/${id}/release`);
+      alert(`${data.restored || 0} pedido(s) devueltos a por despachar.`);
+      load();
+    } catch (e) {
+      alert(e.response?.data?.error || e.message);
+    }
+  }
+
   async function handleDelete(id) {
     if (!window.confirm('¿Eliminar esta ruta?')) return;
     try {
@@ -1293,6 +1304,13 @@ function HistorialRepartos({ colors }) {
                       title="Cancelar ruta"
                       style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', color: colors.red, fontSize: '12px' }}>
                       Cancelar
+                    </button>
+                  )}
+                  {route.status === 'cancelled' && (
+                    <button onClick={e => { e.stopPropagation(); handleRelease(route.id); }}
+                      title="Devolver los pedidos a por despachar"
+                      style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', color: colors.textSecondary, fontSize: '12px', whiteSpace: 'nowrap' }}>
+                      ↩ Devolver pedidos
                     </button>
                   )}
                 </div>
