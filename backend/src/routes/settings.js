@@ -91,6 +91,7 @@ const MODULE_DEFAULTS = {
   evaluacion:  true,
   // Funciones opcionales
   edit_delivered_items: false,  // editar productos/monto entregado (Despachos + app repartidor)
+  cobranza:             false,  // cobro automatico por transferencia (auto-provisiona el template)
 };
 
 async function getModules(orgId) {
@@ -119,7 +120,16 @@ router.put('/modules', async (req, res) => {
       if (k in MODULE_DEFAULTS) next[k] = !!v;   // solo claves conocidas
     }
     await db.setSetting(req.orgId, 'modules', JSON.stringify(next));
-    res.json({ success: true, modules: next });
+    // Al ACTIVAR el modulo de cobranza: preparamos y enviamos a aprobacion el
+    // template de cobro automaticamente (Kapso). Asi el usuario no crea templates a mano.
+    let cobranzaTemplate = null;
+    if (next.cobranza && !current.cobranza) {
+      cobranzaTemplate = { provisioning: true };
+      collection.submitChargeTemplate(req.orgId)
+        .then(r => console.log('[Modulos] template de cobranza:', JSON.stringify(r)))
+        .catch(e => console.warn('[Modulos] template de cobranza fallo:', e.message));
+    }
+    res.json({ success: true, modules: next, cobranzaTemplate });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
