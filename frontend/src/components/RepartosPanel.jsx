@@ -938,9 +938,11 @@ function DespachosRepartos({ colors }) {
   const [payBusy,     setPayBusy]     = useState('');     // stop_key cuyo medio de pago se está guardando
   const [editTot,     setEditTot]     = useState(null);   // stop_key con el total en edición
   const [editTotVal,  setEditTotVal]  = useState('');
+  const [canEditItems, setCanEditItems] = useState(false);  // módulo edit_delivered_items
 
   useEffect(() => {
     api.get('/delivery/drivers').then(r => setDrivers(r.data.drivers || [])).catch(() => {});
+    api.get('/settings/modules').then(r => setCanEditItems(!!(r.data?.modules?.edit_delivered_items))).catch(() => {});
   }, []);
 
   // Abre el modal de cobro: elige template y muestra la vista previa antes de enviar.
@@ -1227,7 +1229,9 @@ function DespachosRepartos({ colors }) {
                             </select>
                           </td>
                           <td style={{ padding: '8px 12px', color: colors.textPrimary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                            {editTot === r.stop_key ? (
+                            {!canEditItems ? (
+                              r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>
+                            ) : editTot === r.stop_key ? (
                               <input autoFocus type="number" value={editTotVal}
                                 onChange={e => setEditTotVal(e.target.value)}
                                 onKeyDown={e => { if (e.key === 'Enter') saveTotal(r); if (e.key === 'Escape') setEditTot(null); }}
