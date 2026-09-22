@@ -25,14 +25,15 @@ const ALL_NAV_ITEMS = [
 // Items visibles en la barra móvil (los más usados)
 const MOBILE_KEYS = ['chats', 'orders', 'repartos', 'clientes', 'settings'];
 
-export default function NavBar({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, pendingProofs, isMobile, userRole }) {
+export default function NavBar({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, pendingProofs, isMobile, userRole, modules }) {
   const { colors, isDark, toggle } = useTheme();
   const initial = (orgName || 'W')[0].toUpperCase();
 
   const allowed = ROLE_VIEWS[userRole] || ROLE_VIEWS.agent;
   const canSettings = allowed.includes('settings');
   const canUsers = allowed.includes('users');
-  const navItems = ALL_NAV_ITEMS.filter(i => allowed.includes(i.key));
+  const moduleOn = (k) => !modules || modules[k] !== false;
+  const navItems = ALL_NAV_ITEMS.filter(i => allowed.includes(i.key) && moduleOn(i.key));
 
   /* ── Barra inferior móvil ── */
   if (isMobile) {
