@@ -1154,6 +1154,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [testMode,       setTestMode]       = useState(false);
   const [testPhoneInput, setTestPhoneInput] = useState(testPhone || '');
   const TEST_PHONE = testPhoneInput.trim();
+  const [prodTerm,  setProdTerm]  = useState('');    // texto del filtro por producto
+  const [prodPhones, setProdPhones] = useState(null); // Set de teléfonos que compraron el producto (null = sin filtro)
+  const [prodBusy,  setProdBusy]  = useState(false);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -1217,6 +1220,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       if (new Date(c.last_order_at).getTime() >= ONE_WEEK_AGO) return false;
     }
     if (excludeEmpresas && c.client_type === 'empresa') return false;
+    if (prodPhones && !prodPhones.has(normPhone(c.phone))) return false;
     return true;
   });
 
@@ -1235,6 +1239,32 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       return n;
     });
   }
+
+  // Normaliza el teléfono igual que el backend (569XXXXXXXX) para poder cruzar.
+  const normPhone = p => {
+    const n = String(p || '').replace(/\D/g, '');
+    if (/^9\d{8}$/.test(n)) return '56' + n;
+    return n;
+  };
+
+  // Aplica/limpia el filtro por producto (ej: "jumbo"). Trae del backend los
+  // teléfonos que compraron ese producto y deja seleccionados solo esos.
+  async function applyProduct() {
+    const term = prodTerm.trim();
+    if (!term) { setProdPhones(null); return; }
+    setProdBusy(true);
+    try {
+      const { data } = await api.get(`/contacts/by-product?q=${encodeURIComponent(term)}`);
+      const set = new Set((data.phones || []).map(normPhone));
+      setProdPhones(set);
+      // Auto-seleccionar los contactos que quedan tras el filtro
+      setSelected(new Set(contacts.filter(c => set.has(normPhone(c.phone))).map(c => c.phone)));
+      showToast(`${set.size} cliente(s) compraron "${term}"`);
+    } catch (e) {
+      showToast('No se pudo filtrar por producto: ' + (e.response?.data?.error || e.message), 'error');
+    } finally { setProdBusy(false); }
+  }
+  function clearProduct() { setProdTerm(''); setProdPhones(null); }
 
   async function handleSend() {
     if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
