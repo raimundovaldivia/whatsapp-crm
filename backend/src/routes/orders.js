@@ -678,6 +678,48 @@ router.get('/:id', async (req, res) => {
 });
 
 /**
+ * PATCH /api/orders/adjust-total
+ * Corrige el MONTO real del pedido cuando lo entregado difiere de lo pedido
+ * (ej: se entregaron solo los huevos sin la aceituna). Sirve tanto para el
+ * cobro como para los totales de Despachos.
+ * Body: { source: 'bot'|'shopify', id, total, note? }
+ */
+router.patch('/adjust-total', async (req, res) => {
+  const { source, id, total, note } = req.body;
+  const amount = Math.round(Number(total));
+  if (!['bot', 'shopify'].includes(source)) {
+    return res.status(400).json({ success: false, error: "source debe ser 'bot' o 'shopify'" });
+  }
+  if (!Number.isFinite(amount) || amount < 0) {
+    return res.status(400).json({ success: false, error: 'total inválido' });
+  }
+  try {
+    const pool = getPool();
+    const cleanNote = (note || '').toString().slice(0, 300);
+    const { rowCount } = source === 'shopify'
+      ? await pool.query(
+          `UPDATE shopify_orders
+              SET total_price = $1, delivery_modified = TRUE,
+                  delivery_note = COALESCE(NULLIF($4, ''), delivery_note)
+            WHERE shopify_order_id = $2 AND organization_id = $3`,
+          [String(amount), String(id), req.orgId, cleanNote]
+        )
+      : await pool.query(
+          `UPDATE orders
+              SET total_price = $1, delivery_modified = TRUE, updated_at = NOW(),
+                  delivery_note = COALESCE(NULLIF($4, ''), delivery_note)
+            WHERE id = $2 AND organization_id = $3`,
+          [String(amount), parseInt(id), req.orgId, cleanNote]
+        );
+    if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    res.json({ success: true, total: amount });
+  } catch (err) {
+    console.error('[Orders/adjust-total]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * PATCH /api/orders/:id/status
  * Actualizar estado manualmente (ej: marcar como pagada)
  */
