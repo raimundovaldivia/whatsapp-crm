@@ -932,6 +932,7 @@ function DespachosRepartos({ colors }) {
   const [chargeTpl,   setChargeTpl]   = useState('');     // template elegido
   const [chargeBank,  setChargeBank]  = useState('');     // datos bancarios ({{4}})
   const [chargeIdx,   setChargeIdx]   = useState(0);      // destinatario en la vista previa
+  const [payBusy,     setPayBusy]     = useState('');     // stop_key cuyo medio de pago se está guardando
 
   useEffect(() => {
     api.get('/delivery/drivers').then(r => setDrivers(r.data.drivers || [])).catch(() => {});
@@ -977,6 +978,18 @@ function DespachosRepartos({ colors }) {
     } catch (e) {
       setChargeMsg({ day, text: e.response?.data?.error || 'Error enviando los cobros', ok: false });
     } finally { setCharging(''); setChargeModal(null); }
+  }
+
+  // Cambiar a mano el medio de pago de un pedido desde la tabla (corrige si el
+  // repartidor se equivocó). Refresca para recalcular pagos y cobranza.
+  async function changePay(r, method) {
+    setPayBusy(r.stop_key);
+    try {
+      await api.patch('/orders/payment-method', { source: r.source, id: r.order_id, paymentMethod: method });
+      load();
+    } catch (e) {
+      alert(e.response?.data?.error || 'No se pudo cambiar el medio de pago');
+    } finally { setPayBusy(''); }
   }
 
   const load = useCallback(() => {
@@ -1069,7 +1082,7 @@ function DespachosRepartos({ colors }) {
   );
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <div style={{ flex: 1, minHeight: 0, height: '100%', overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
       {/* Filtros */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
         <label style={{ fontSize: '11px', color: colors.textMuted }}>Desde</label>
@@ -1181,7 +1194,17 @@ function DespachosRepartos({ colors }) {
                             {(r.extras || []).map((e, k) => <div key={'x' + k} style={{ color: '#c4b5fd' }}>+ {e.quantity}x {e.name}</div>)}
                           </td>
                           <td style={{ padding: '8px 12px' }}>{chip(sm.label, sm.color)}</td>
-                          <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>{pm ? chip(`${pm.icon} ${pm.label}`, pm.color) : <span style={{ color: colors.textMuted }}>—</span>}</td>
+                          <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                            <select value={r.payment_method || ''} disabled={payBusy === r.stop_key}
+                              onChange={e => changePay(r, e.target.value || null)}
+                              title="Cambiar medio de pago"
+                              style={{ fontSize: '11px', padding: '3px 6px', borderRadius: '6px', background: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, cursor: payBusy === r.stop_key ? 'wait' : 'pointer', opacity: payBusy === r.stop_key ? 0.6 : 1 }}>
+                              <option value="">—</option>
+                              <option value="efectivo">💵 Efectivo</option>
+                              <option value="transferencia">🏦 Transferencia</option>
+                              <option value="otro">Otro</option>
+                            </select>
+                          </td>
                           <td style={{ padding: '8px 12px', color: colors.textPrimary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
                             {r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>}
                           </td>

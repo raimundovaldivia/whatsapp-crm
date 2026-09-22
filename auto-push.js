@@ -45,14 +45,29 @@ function git(args) {
 }
 
 function clearStaleLock() {
-  const lock = path.join(ROOT, '.git', 'index.lock');
-  try {
-    const st = fs.statSync(lock);
-    if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-      fs.unlinkSync(lock);
-      console.log(`[${ts()}] 🔓 index.lock viejo eliminado (estaba colgado).`);
+  // Barre TODOS los .lock colgados de git (index.lock, HEAD.lock, refs/**.lock,
+  // objects/maintenance.lock). Un git que muere a medias los deja y traban todo.
+  const gitDir = path.join(ROOT, '.git');
+  const targets = [];
+  const walk = dir => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { if (e.name !== 'objects' || dir === gitDir) walk(full); }
+      else if (e.name.endsWith('.lock')) targets.push(full);
     }
-  } catch { /* no existe: ok */ }
+  };
+  walk(gitDir);
+  for (const lock of targets) {
+    try {
+      const st = fs.statSync(lock);
+      if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+        fs.unlinkSync(lock);
+        console.log(`[${ts()}] 🔓 lock viejo eliminado: ${path.relative(ROOT, lock)}`);
+      }
+    } catch { /* ya no existe o en uso: ok */ }
+  }
 }
 
 let timer = null;
