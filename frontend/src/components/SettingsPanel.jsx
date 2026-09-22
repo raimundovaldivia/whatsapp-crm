@@ -1756,14 +1756,14 @@ const PLACEHOLDERS = [
 const SAMPLE = { nombre: 'María', pedido: '#1042', total: '$40.000' };
 
 const MODULOS_SECCIONES = [
-  { key: 'stats',      title: 'EstadÃ­sticas',       desc: 'Panel de mÃ©tricas y ventas.',            Icon: Zap },
-  { key: 'orders',     title: 'Pedidos',             desc: 'GestiÃ³n de pedidos y cobros.',           Icon: ShoppingBag },
+  { key: 'stats',      title: 'Estadísticas',       desc: 'Panel de métricas y ventas.',            Icon: Zap },
+  { key: 'orders',     title: 'Pedidos',             desc: 'Gestión de pedidos y cobros.',           Icon: ShoppingBag },
   { key: 'repartos',   title: 'Repartos',            desc: 'Rutas, despachos y app del repartidor.',  Icon: MapPin },
   { key: 'pagos',      title: 'Pagos',               desc: 'Comprobantes de transferencia.',          Icon: CreditCard },
   { key: 'clientes',   title: 'Clientes',            desc: 'Base de clientes y contactos.',           Icon: Phone },
-  { key: 'mensajeria', title: 'MensajerÃ­a IA',      desc: 'EnvÃ­os masivos y re-enganche con IA.',   Icon: MessageCircle },
-  { key: 'productos',  title: 'Mi Tienda',           desc: 'CatÃ¡logo y tienda pÃºblica.',            Icon: Store },
-  { key: 'evaluacion', title: 'EvaluaciÃ³n del bot',  desc: 'AnÃ¡lisis y mejora del bot con IA.',      Icon: FlaskConical },
+  { key: 'mensajeria', title: 'Mensajería IA',      desc: 'Envíos masivos y re-enganche con IA.',   Icon: MessageCircle },
+  { key: 'productos',  title: 'Mi Tienda',           desc: 'Catálogo y tienda pública.',            Icon: Store },
+  { key: 'evaluacion', title: 'Evaluación del bot',  desc: 'Análisis y mejora del bot con IA.',      Icon: FlaskConical },
 ];
 const MODULOS_FUNCIONES = [
   { key: 'edit_delivered_items', title: 'Editar productos entregados', desc: 'Permite corregir productos y monto real de un pedido al entregar (en Despachos y en la app del repartidor).', Icon: FileText },
@@ -1827,7 +1827,7 @@ function ModulosTab() {
         const res = await api.get('/settings/modules');
         setModules({ ...(res.data?.defaults || {}), ...(res.data?.modules || {}) });
       } catch (err) {
-        setError(err.response?.data?.error || 'No se pudieron cargar los mÃ³dulos');
+        setError(err.response?.data?.error || 'No se pudieron cargar los módulos');
       } finally {
         setLoading(false);
       }
@@ -1881,8 +1881,8 @@ function ModulosTab() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <div>
-        <h2 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 700, margin: '0 0 4px' }}>MÃ³dulos</h2>
-        <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>Activa o desactiva mÃ³dulos de tu ecommerce.</p>
+        <h2 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 700, margin: '0 0 4px' }}>Módulos</h2>
+        <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>Activa o desactiva módulos de tu ecommerce.</p>
       </div>
       {error && <Alert type="error" msg={error} colors={colors} />}
       {group('Secciones', MODULOS_SECCIONES)}
