@@ -1345,6 +1345,29 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           style={{ flex: 1, minWidth: '180px', padding: '7px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
         />
 
+        {/* Filtro por producto (ej: jumbo) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+          <input
+            value={prodTerm}
+            onChange={e => setProdTerm(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') applyProduct(); }}
+            placeholder="Producto (ej: jumbo)"
+            style={{ width: '150px', padding: '7px 12px', borderRadius: '8px', border: `1px solid ${prodPhones ? colors.green + '66' : colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
+          />
+          <button onClick={applyProduct} disabled={prodBusy}
+            style={{ padding: '6px 11px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+              border: `1px solid ${colors.green}66`, backgroundColor: colors.green + '22', color: colors.green, opacity: prodBusy ? 0.6 : 1 }}>
+            {prodBusy ? '…' : 'Filtrar'}
+          </button>
+          {prodPhones && (
+            <button onClick={clearProduct}
+              style={{ padding: '6px 9px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textMuted }}>
+              ✕
+            </button>
+          )}
+        </div>
+
         {/* Filtro: excluir compradores recientes */}
         <button
           onClick={() => {
