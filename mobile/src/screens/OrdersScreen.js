@@ -118,6 +118,9 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
           <Text style={s.headerTitle}>🚚 Mis rutas</Text>
           <Text style={s.headerSub}>{firstName ? `Hola ${firstName}` : 'Rutas asignadas'}</Text>
         </View>
+        <TouchableOpacity onPress={() => navigation.navigate('History')} style={s.histBtn}>
+          <Text style={s.histText}>🗂️ Historial</Text>
+        </TouchableOpacity>
         <TouchableOpacity onPress={handleLogout} style={s.logoutBtn}>
           <Text style={s.logoutText}>Salir</Text>
         </TouchableOpacity>
@@ -250,6 +253,8 @@ const s = StyleSheet.create({
   headerSub:    { color: C.muted, fontSize: 13, marginTop: 2 },
   logoutBtn:    { backgroundColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
   logoutText:   { color: C.muted, fontSize: 13, fontWeight: '600' },
+  histBtn:      { backgroundColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8 },
+  histText:     { color: C.text, fontSize: 13, fontWeight: '700' },
 
   scroll:       { flex: 1 },
   scrollContent:{ padding: 16, gap: 14, paddingBottom: 40 },
