@@ -52,6 +52,7 @@ export default function App() {
   const [loadingConvs, setLoadingConvs]   = useState(false);
   const [pendingOrders, setPendingOrders]   = useState(0);
   const [pendingProofs, setPendingProofs]   = useState(0);
+  const [modules, setModules] = useState(null);   // feature flags de módulos (null = aún no cargado → todo activo)
   const [botTypingConvs, setBotTypingConvs] = useState(new Set());
 
   // Deduplicar mensajes entre optimistic update y socket event
@@ -280,13 +281,30 @@ export default function App() {
   const userRole = user?.role || 'agent';
   const allowedViews = ROLE_VIEWS[userRole] || ROLE_VIEWS.agent;
 
+  // Cargar módulos activos de la organización (una vez que hay sesión)
+  useEffect(() => {
+    if (!user) return;
+    api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({}));
+  }, [user]);
+
+  // Un módulo de sección está activo salvo que esté explícitamente en false.
+  const moduleOn = (k) => !modules || modules[k] !== false;
+  const ALWAYS_ON_VIEWS = new Set(['chats', 'settings', 'users', 'dashboard', 'catalogo']);
+
+  // Si la vista actual pertenece a un módulo desactivado, volver a Chats.
+  useEffect(() => {
+    if (modules && !ALWAYS_ON_VIEWS.has(view) && modules[view] === false) setView('chats');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modules, view]);
+
   // ── Cambiar vista ───────────────────────────────────────────────
   const handleChangeView = useCallback((newView) => {
     const allowed = ROLE_VIEWS[user?.role] || ROLE_VIEWS.agent;
     if (!allowed.has(newView)) return; // silently block unauthorized navigation
+    if (modules && !ALWAYS_ON_VIEWS.has(newView) && modules[newView] === false) return; // módulo desactivado
     setView(newView);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.role]);
+  }, [user?.role, modules]);
 
   // ── Render ──────────────────────────────────────────────────────
   if (appState === 'loading') return (
@@ -403,6 +421,7 @@ export default function App() {
         colors={colors}
         isMobile={isMobile}
         userRole={userRole}
+        modules={modules}
       />
 
       {/* Vista Chats */}
