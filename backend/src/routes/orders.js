@@ -516,7 +516,7 @@ router.get('/pending-charge', async (req, res) => {
  * panel pueda mostrar cuáles salieron y cuáles no (y por qué).
  */
 router.post('/send-charge', async (req, res) => {
-  const { orders: selection = [], force = false } = req.body;
+  const { orders: selection = [], force = false, template = null } = req.body;
   if (!Array.isArray(selection) || selection.length === 0) {
     return res.status(400).json({ success: false, error: 'Selecciona al menos un pedido' });
   }
@@ -536,7 +536,7 @@ router.post('/send-charge', async (req, res) => {
         results.push({ ...sel, ok: false, reason: 'no_por_cobrar' });
         continue;
       }
-      const r = await collection.sendChargeRequest(req.orgId, order, { force, io });
+      const r = await collection.sendChargeRequest(req.orgId, order, { force, io, templateOverride: template });
       results.push({
         source: order.source,
         id:     order.id,

@@ -873,6 +873,18 @@ function NuevoReparto({ colors }) {
 // repartidor, medio de pago y estado. Exporta CSV.
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
+
+// Rellena el cuerpo (BODY) de un template de WhatsApp con los datos reales del
+// pedido, para la vista previa del cobro. Parámetros: {{1}} nombre, {{2}} pedido,
+// {{3}} total, {{4}} datos bancarios.
+function fillTemplateBody(tpl, row, bank) {
+  const body = (tpl?.components || []).find(c => String(c.type || '').toUpperCase() === 'BODY');
+  const text = body?.text || '';
+  if (!text) return '(Este template no tiene texto de cuerpo para previsualizar.)';
+  const first = String(row?.customer_name || '').trim().split(/\s+/)[0] || 'Hola';
+  const vals = { '1': first, '2': row?.order_label || `#${row?.order_id}`, '3': CLP(row?.total || 0), '4': bank || '-' };
+  return text.replace(/\{\{(\d+)\}\}/g, (_, n) => (vals[n] != null ? vals[n] : `{{${n}}}`));
+}
 const isoDay = d => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
 const PAY_META = {
   efectivo:      { label: 'Efectivo',      icon: '💵', color: '#22c55e' },
@@ -915,30 +927,56 @@ function DespachosRepartos({ colors }) {
   const [openDays, setOpenDays] = useState({});
   const [charging, setCharging] = useState('');   // día que está enviando cobros
   const [chargeMsg, setChargeMsg] = useState(null);
+  const [chargeModal, setChargeModal] = useState(null);   // { day, rows } — modal de cobro
+  const [chargeTpls,  setChargeTpls]  = useState([]);     // templates aprobados
+  const [chargeTpl,   setChargeTpl]   = useState('');     // template elegido
+  const [chargeBank,  setChargeBank]  = useState('');     // datos bancarios ({{4}})
+  const [chargeIdx,   setChargeIdx]   = useState(0);      // destinatario en la vista previa
 
   useEffect(() => {
     api.get('/delivery/drivers').then(r => setDrivers(r.data.drivers || [])).catch(() => {});
   }, []);
 
-  // Enviar el template de cobro a los NO cobrados de un día (transferencia,
-  // entregado, sin comprobante). Usa el mismo endpoint que "Por cobrar".
-  async function cobrarDia(d, ev) {
+  // Abre el modal de cobro: elige template y muestra la vista previa antes de enviar.
+  async function openChargeModal(d, ev) {
     ev?.stopPropagation?.();
     const pend = (d.rows || []).filter(r =>
       r.status === 'entregado' && r.payment_method === 'transferencia' && r.charge?.pending
     );
-    const orders = pend.map(r => ({ source: r.source, id: r.order_id }));
-    if (!orders.length) return;
-    if (!window.confirm(`¿Enviar el mensaje de cobro a ${orders.length} cliente${orders.length === 1 ? '' : 's'} no cobrado${orders.length === 1 ? '' : 's'} del ${dayLabel(d.day)}?`)) return;
-    setCharging(d.day); setChargeMsg(null);
+    if (!pend.length) return;
+    setChargeModal({ day: d.day, rows: pend });
+    setChargeIdx(0); setChargeMsg(null);
     try {
-      const { data } = await api.post('/orders/send-charge', { orders });
+      const [tplRes, cfgRes] = await Promise.all([
+        api.get('/templates').catch(() => ({ data: { data: [] } })),
+        api.get('/settings/charge-settings').catch(() => ({ data: {} })),
+      ]);
+      const all = tplRes.data?.data || tplRes.data || [];
+      const approved = all.filter(t => t.status === 'APPROVED');
+      setChargeTpls(approved);
+      const cfg = cfgRes.data?.data || cfgRes.data || {};
+      setChargeBank(cfg.bankDetails || '');
+      const def = cfg.waTemplate && approved.some(t => t.name === cfg.waTemplate)
+        ? cfg.waTemplate : (approved[0]?.name || '');
+      setChargeTpl(def);
+    } catch { /* si falla, el modal igual permite enviar con el template de Ajustes */ }
+  }
+
+  // Envía el cobro con el template elegido (o el de Ajustes si no hay lista).
+  async function doCharge() {
+    if (!chargeModal) return;
+    const day = chargeModal.day;
+    const orders = (chargeModal.rows || []).map(r => ({ source: r.source, id: r.order_id }));
+    if (!orders.length) { setChargeModal(null); return; }
+    setCharging(day);
+    try {
+      const { data } = await api.post('/orders/send-charge', { orders, template: chargeTpl || undefined });
       const sent = data.sent || 0, failed = data.failed || 0;
-      setChargeMsg({ day: d.day, text: failed === 0 ? `✅ ${sent} cobro(s) enviado(s)` : `Enviados ${sent}, fallaron ${failed}. Revisa que el template esté aprobado (Ajustes → Cobranza).`, ok: failed === 0 });
+      setChargeMsg({ day, text: failed === 0 ? `\u2705 ${sent} cobro(s) enviado(s)` : `Enviados ${sent}, fallaron ${failed}. Revisa que el template esté aprobado (Ajustes \u2192 Cobranza).`, ok: failed === 0 });
       load();
     } catch (e) {
-      setChargeMsg({ day: d.day, text: e.response?.data?.error || 'Error enviando los cobros', ok: false });
-    } finally { setCharging(''); }
+      setChargeMsg({ day, text: e.response?.data?.error || 'Error enviando los cobros', ok: false });
+    } finally { setCharging(''); setChargeModal(null); }
   }
 
   const load = useCallback(() => {
@@ -1100,7 +1138,7 @@ function DespachosRepartos({ colors }) {
               {d.gastos > 0 && chip(`🧾 ${CLP(d.gastos)} gastos`, '#fb923c')}
               {d.cobrosPendientes > 0 && (
                 <button
-                  onClick={(ev) => cobrarDia(d, ev)}
+                  onClick={(ev) => openChargeModal(d, ev)}
                   disabled={charging === d.day}
                   style={{ backgroundColor: '#fbbf24', color: '#231a02', border: 'none', borderRadius: '999px', padding: '4px 12px', fontSize: '11px', fontWeight: 800, cursor: 'pointer', opacity: charging === d.day ? 0.6 : 1 }}>
                   {charging === d.day ? 'Enviando…' : `💸 Cobrar a ${d.cobrosPendientes} no cobrado${d.cobrosPendientes === 1 ? '' : 's'}`}
@@ -1158,6 +1196,68 @@ function DespachosRepartos({ colors }) {
           </div>
         );
       })}
+
+      {chargeModal && (() => {
+        const rowsM = chargeModal.rows || [];
+        const idx = Math.min(chargeIdx, rowsM.length - 1);
+        const row = rowsM[idx];
+        const tpl = chargeTpls.find(t => t.name === chargeTpl);
+        const preview = chargeTpls.length === 0
+          ? '(No hay templates aprobados. Se enviará como texto normal a quienes escribieron hace menos de 24 h.)'
+          : (tpl ? fillTemplateBody(tpl, row, chargeBank) : 'Elige un template para ver la vista previa.');
+        return (
+          <div onClick={() => { if (!charging) setChargeModal(null); }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 18, width: 'min(560px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }}>
+              <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: 16 }}>
+                Cobrar a {rowsM.length} no cobrado{rowsM.length === 1 ? '' : 's'}
+              </div>
+              <div style={{ color: colors.textMuted, fontSize: 12, marginBottom: 14 }}>{dayLabel(chargeModal.day)}</div>
+
+              <div style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Template a enviar</div>
+              {chargeTpls.length === 0 ? (
+                <div style={{ color: colors.yellow, fontSize: 12, marginBottom: 12 }}>
+                  No hay templates aprobados en WhatsApp. Los que escribieron hace menos de 24 h reciben texto normal; el resto queda en “Por cobrar”.
+                </div>
+              ) : (
+                <select value={chargeTpl} onChange={e => setChargeTpl(e.target.value)}
+                  style={{ width: '100%', margin: '0 0 14px', padding: '9px 10px', borderRadius: 8, background: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 13 }}>
+                  {chargeTpls.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+                </select>
+              )}
+
+              <div style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+                Vista previa{rowsM.length > 1 ? ` (${idx + 1}/${rowsM.length})` : ''} · {row?.customer_name || 'cliente'} · {row?.order_label || ''}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap', background: colors.bgInput, border: `1px solid ${colors.border}`, borderRadius: 10, padding: 12, color: colors.textPrimary, fontSize: 13, minHeight: 60 }}>
+                {preview}
+              </div>
+              {rowsM.length > 1 && (
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
+                  <button onClick={() => setChargeIdx(i => Math.max(0, i - 1))} disabled={idx === 0}
+                    style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.textSecondary, padding: '4px 12px', cursor: idx === 0 ? 'default' : 'pointer', opacity: idx === 0 ? 0.5 : 1 }}>← Anterior</button>
+                  <button onClick={() => setChargeIdx(i => Math.min(rowsM.length - 1, i + 1))} disabled={idx >= rowsM.length - 1}
+                    style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.textSecondary, padding: '4px 12px', cursor: idx >= rowsM.length - 1 ? 'default' : 'pointer', opacity: idx >= rowsM.length - 1 ? 0.5 : 1 }}>Siguiente →</button>
+                </div>
+              )}
+
+              <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 12 }}>
+                A quienes te escribieron hace menos de 24 h les llega el mismo detalle como mensaje normal; a los demás, este template.
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+                <button onClick={() => setChargeModal(null)} disabled={charging === chargeModal.day}
+                  style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.textSecondary, padding: '9px 14px', cursor: 'pointer', fontWeight: 700 }}>Cancelar</button>
+                <button onClick={doCharge} disabled={charging === chargeModal.day || (chargeTpls.length > 0 && !chargeTpl)}
+                  style={{ background: '#fbbf24', color: '#231a02', border: 'none', borderRadius: 8, padding: '9px 16px', cursor: 'pointer', fontWeight: 800, opacity: charging === chargeModal.day ? 0.6 : 1 }}>
+                  {charging === chargeModal.day ? 'Enviando…' : `Enviar a ${rowsM.length}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

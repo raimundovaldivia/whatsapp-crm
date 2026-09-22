@@ -254,7 +254,7 @@ async function registerChargeSent(source, orderId, orgId) {
  * @returns {{ ok: boolean, reason?: string, message?: string }}
  */
 async function sendChargeRequest(orgId, order, opts = {}) {
-  const { force = false, io = null } = opts;
+  const { force = false, io = null, templateOverride = null } = opts;
 
   if (!order?.customer_phone) {
     return { ok: false, reason: 'sin_telefono' };
@@ -272,6 +272,8 @@ async function sendChargeRequest(orgId, order, opts = {}) {
   if (!wc) return { ok: false, reason: 'whatsapp_no_configurado' };
 
   const settings = await getChargeSettings(orgId);
+  // Template puntual elegido en Despachos para este envío (sobrescribe el de Ajustes).
+  if (templateOverride) { settings.waTemplate = templateOverride; settings.waTemplateStatus = 'APPROVED'; }
   const text     = buildChargeMessage(order, settings);
 
   let sent = null;
