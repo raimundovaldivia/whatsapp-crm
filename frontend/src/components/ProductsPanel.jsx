@@ -93,7 +93,7 @@ function StoreConfigTab({ orgSlug, colors }) {
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-      {error   && <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, backgroundColor: '#2d1a1a', color: '#f87171', fontSize: 13 }}>{error}</div>}
+      {error   && <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, backgroundColor: '#2d1a1a', color: colors.dangerSoft, fontSize: 13 }}>{error}</div>}
       {success && <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, backgroundColor: colors.bgAccent, color: colors.green, fontSize: 13 }}>{success}</div>}
 
       {/* Identidad */}
@@ -557,10 +557,10 @@ export default function ProductsPanel({ orgSlug }) {
 
         {importResult && (
           <div style={{ marginTop: '12px', padding: '10px 14px', borderRadius: '8px',
-            backgroundColor: isDark ? '#22c55e18' : '#dcfce7', border: `1px solid #22c55e44`, fontSize: '13px', color: '#16a34a' }}>
+            backgroundColor: isDark ? colors.success + '18' : '#dcfce7', border: `1px solid ${colors.success}44`, fontSize: '13px', color: colors.successStrong }}>
             ✅ Importación completa: {importResult.imported} nuevos, {importResult.updated} actualizados
             {' · '}{importResult.imagesHostedOnR2 ? '📦 Imágenes guardadas en R2 (independiente de Shopify)' : '⚠️ Imágenes aún en CDN de Shopify — configura R2 para independizarte'}
-            <button onClick={() => setImportResult(null)} style={{ marginLeft: '12px', background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a' }}>✕</button>
+            <button onClick={() => setImportResult(null)} style={{ marginLeft: '12px', background: 'none', border: 'none', cursor: 'pointer', color: colors.successStrong }}>✕</button>
           </div>
         )}
       </div>
@@ -651,20 +651,20 @@ export default function ProductsPanel({ orgSlug }) {
                 {(p.is_business || (p.bulk_price && p.bulk_min_qty) || (p.compare_price && parseFloat(p.compare_price) > parseFloat(p.price))) && (
                   <div style={{ marginBottom: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                     {p.is_business && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#6366f120', color: '#6366f1',
-                        border: '1px solid #6366f155', borderRadius: '20px', padding: '2px 8px' }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: colors.indigo + '20', color: colors.indigo,
+                        border: `1px solid ${colors.indigo}55`, borderRadius: '20px', padding: '2px 8px' }}>
                         🏢 Solo empresas
                       </span>
                     )}
                     {p.compare_price && parseFloat(p.compare_price) > parseFloat(p.price) && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#ef444420', color: '#ef4444',
-                        border: '1px solid #ef444455', borderRadius: '20px', padding: '2px 8px' }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: colors.danger + '20', color: colors.danger,
+                        border: `1px solid ${colors.danger}55`, borderRadius: '20px', padding: '2px 8px' }}>
                         🏷️ −{Math.round((1 - parseFloat(p.price)/parseFloat(p.compare_price))*100)}% dcto
                       </span>
                     )}
                     {p.bulk_price && p.bulk_min_qty && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#f59e0b20', color: '#d97706',
-                        border: '1px solid #f59e0b55', borderRadius: '20px', padding: '2px 8px' }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: colors.amberStrong + '20', color: '#d97706',
+                        border: `1px solid ${colors.amberStrong}55`, borderRadius: '20px', padding: '2px 8px' }}>
                         🧾 {p.bulk_min_qty}+ u.: ${Number(p.bulk_price).toLocaleString('es-CL')}
                       </span>
                     )}
@@ -852,12 +852,12 @@ export default function ProductsPanel({ orgSlug }) {
             </label>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
-              backgroundColor: form.isBusiness ? '#6366f110' : 'transparent',
-              border: `1px solid ${form.isBusiness ? '#6366f155' : colors.border}`,
+              backgroundColor: form.isBusiness ? colors.indigo + '10' : 'transparent',
+              border: `1px solid ${form.isBusiness ? colors.indigo + '55' : colors.border}`,
               borderRadius: '8px', padding: '10px 12px' }}>
               <input type="checkbox" checked={form.isBusiness} onChange={e => setForm(f => ({ ...f, isBusiness: e.target.checked }))} />
               <div>
-                <span style={{ fontSize: '14px', color: form.isBusiness ? '#6366f1' : colors.textPrimary, fontWeight: form.isBusiness ? 600 : 400 }}>
+                <span style={{ fontSize: '14px', color: form.isBusiness ? colors.indigo : colors.textPrimary, fontWeight: form.isBusiness ? 600 : 400 }}>
                   🏢 Solo para empresas (B2B)
                 </span>
                 <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '2px' }}>

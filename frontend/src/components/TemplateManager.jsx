@@ -461,7 +461,7 @@ function CreateTemplateForm({ onCreated, colors }) {
 
       {/* Info Meta */}
       <div style={{ backgroundColor: colors.bgSub, borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.6, display: 'flex', gap: '8px' }}>
-        <Info size={14} color="#4db6e8" style={{ flexShrink: 0, marginTop: '1px' }} />
+        <Info size={14} color={colors.infoSoft} style={{ flexShrink: 0, marginTop: '1px' }} />
         <span>
           Los templates de categoría <strong style={{ color: colors.textPrimary }}>Marketing</strong> son revisados por Meta y normalmente aprobados en <strong style={{ color: colors.textPrimary }}>1-24 horas</strong>.
           Una vez aprobados aparecerán en Re-enganche con el badge <span style={{ color: colors.greenLight }}>✓ Aprobado</span>.
