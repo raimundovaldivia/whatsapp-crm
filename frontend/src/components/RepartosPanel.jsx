@@ -1365,6 +1365,76 @@ function DespachosRepartos({ colors }) {
           </div>
         );
       })()}
+
+      {itemsModal && (() => {
+        const rows = itemRows || [];
+        const itTotal = rows.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+        return (
+          <div onClick={() => { if (!itemsBusy) { setItemsModal(null); setItemRows(null); } }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 18, width: 'min(560px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }}>
+              <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: 16 }}>Editar productos</div>
+              <div style={{ color: colors.textMuted, fontSize: 12, marginBottom: 14 }}>{itemsModal.name} · {itemsModal.label}</div>
+
+              {itemRows === null ? (
+                <div style={{ color: colors.textMuted, fontSize: 13, padding: '20px 0' }}>Cargando productos…</div>
+              ) : rows.length === 0 ? (
+                <div style={{ color: colors.textMuted, fontSize: 13, padding: '10px 0' }}>Este pedido no tiene productos con detalle. Puedes agregar uno.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {rows.map((it, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '8px 10px' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <input value={it.name} onChange={e => setItem(i, { name: e.target.value })} placeholder="Producto"
+                          style={ui.input(colors, { width: '100%', padding: '5px 8px', fontSize: 13, marginBottom: 4 })} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ color: colors.textMuted, fontSize: 11 }}>$</span>
+                          <input type="number" value={it.price} onChange={e => setItem(i, { price: e.target.value })}
+                            style={ui.input(colors, { width: 90, padding: '4px 6px', fontSize: 12 })} />
+                          <span style={{ color: colors.textMuted, fontSize: 11, marginLeft: 6 }}>c/u</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <button onClick={() => setItem(i, { quantity: Math.max(0, (Number(it.quantity) || 0) - 1) })}
+                          style={{ ...ui.btn(colors, 'secondary'), padding: '2px 9px', fontSize: 15 }}>−</button>
+                        <input type="number" value={it.quantity} onChange={e => setItem(i, { quantity: e.target.value })}
+                          style={ui.input(colors, { width: 48, padding: '4px 6px', fontSize: 13, textAlign: 'center' })} />
+                        <button onClick={() => setItem(i, { quantity: (Number(it.quantity) || 0) + 1 })}
+                          style={{ ...ui.btn(colors, 'secondary'), padding: '2px 9px', fontSize: 15 }}>+</button>
+                      </div>
+                      <div style={{ width: 74, textAlign: 'right', color: colors.textPrimary, fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>
+                        {CLP((Number(it.price) || 0) * (Number(it.quantity) || 0))}
+                      </div>
+                      <button onClick={() => removeItem(i)} title="Quitar"
+                        style={{ background: 'none', border: 'none', color: colors.dangerSoft, cursor: 'pointer', fontSize: 15, fontWeight: 800 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {itemRows !== null && (
+                <button onClick={addItem}
+                  style={{ ...ui.btn(colors, 'ghost'), color: colors.blue, padding: '6px 0', marginTop: 8 }}>+ Agregar producto</button>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 12, borderTop: `1px solid ${colors.border}` }}>
+                <span style={{ color: colors.textSecondary, fontSize: 13, fontWeight: 700 }}>Total</span>
+                <span style={{ color: colors.textPrimary, fontSize: 18, fontWeight: 800 }}>{CLP(itTotal)}</span>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+                <button onClick={() => { setItemsModal(null); setItemRows(null); }} disabled={itemsBusy}
+                  style={{ ...ui.btn(colors, 'secondary'), padding: '9px 14px' }}>Cancelar</button>
+                <button onClick={saveItems} disabled={itemsBusy || itemRows === null}
+                  style={{ background: colors.green, color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', cursor: 'pointer', fontWeight: 800, opacity: itemsBusy ? 0.6 : 1 }}>
+                  {itemsBusy ? 'Guardando…' : 'Guardar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
