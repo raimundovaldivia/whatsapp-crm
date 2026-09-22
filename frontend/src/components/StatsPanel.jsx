@@ -154,12 +154,12 @@ export default function StatsPanel() {
   });
 
   const statusStyles = {
-    PAID:               { label: 'Pagado',      color: '#4ade80' },
+    PAID:               { label: 'Pagado',      color: colors.successSoft },
     PENDING:            { label: 'Pendiente',   color: '#facc15' },
     REFUNDED:           { label: 'Reembolsado', color: '#94a3b8' },
     PARTIALLY_REFUNDED: { label: 'Rem. parcial',color: '#94a3b8' },
-    VOIDED:             { label: 'Anulado',     color: '#f87171' },
-    AUTHORIZED:         { label: 'Autorizado',  color: '#4db6ac' },
+    VOIDED:             { label: 'Anulado',     color: colors.dangerSoft },
+    AUTHORIZED:         { label: 'Autorizado',  color: colors.tealSoft },
   };
 
   const card = (icon, label, value, sub, prev, current) => (
@@ -196,8 +196,8 @@ export default function StatsPanel() {
         {/* Cards resumen */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
           {card(<DollarSign size={16} color={colors.green} />, 'Ventas hoy', clp(ventasHoy), `${pedidosHoy} pedidos`, null, null)}
-          {card(<DollarSign size={16} color='#a78bfa' />, 'Esta semana', clp(ventasSemana), `${pedidosSemana} pedidos`, ventasUltSem, ventasSemana)}
-          {card(<DollarSign size={16} color='#4db6ac' />, 'Este mes', clp(ventasMes), `${pedidosMes} pedidos`, ventasUltMes, ventasMes)}
+          {card(<DollarSign size={16} color={colors.purpleSoft} />, 'Esta semana', clp(ventasSemana), `${pedidosSemana} pedidos`, ventasUltSem, ventasSemana)}
+          {card(<DollarSign size={16} color={colors.tealSoft} />, 'Este mes', clp(ventasMes), `${pedidosMes} pedidos`, ventasUltMes, ventasMes)}
           {card(<ShoppingBag size={16} color={colors.yellow} />, 'Ticket promedio', clp(ticketMes), 'este mes', null, null)}
         </div>
 
