@@ -572,18 +572,54 @@ router.patch('/payment-method', async (req, res) => {
   try {
     const pool = getPool();
     const method = paymentMethod ?? null;
+    // Al cambiar el medio de pago reconciliamos el estado de pago:
+    //  • A transferencia/otro/—: si estaba "pagado" SOLO por efectivo/marca manual
+    //    (sin comprobante verificado), vuelve a "entregado" → reaparece en Por cobrar.
+    //    No toca los pagados con comprobante real ni (en Shopify) los pagados online.
+    //  • A efectivo: si ya se entregó, queda pagado (efectivo al entregar).
+    const nonCash = method === null || method === 'transferencia' || method === 'otro';
     const { rowCount } = source === 'shopify'
       ? await pool.query(
           `UPDATE shopify_orders
-              SET payment_method = $1, payment_marked_at = NOW()
+              SET payment_method = $1,
+                  financial_status = CASE
+                    WHEN $4::boolean AND LOWER(COALESCE(financial_status,'')) = 'paid'
+                         AND payment_marked_at IS NOT NULL
+                      THEN 'pending'
+                    WHEN $1 = 'efectivo' AND crm_status = 'entregado'
+                      THEN 'paid'
+                    ELSE financial_status END,
+                  payment_marked_at = CASE
+                    WHEN $1 = 'efectivo' AND crm_status = 'entregado' THEN NOW()
+                    WHEN $4::boolean AND LOWER(COALESCE(financial_status,'')) = 'paid'
+                         AND payment_marked_at IS NOT NULL THEN NULL
+                    ELSE payment_marked_at END
             WHERE shopify_order_id = $2 AND organization_id = $3`,
-          [method, String(id), req.orgId]
+          [method, String(id), req.orgId, nonCash]
         )
       : await pool.query(
-          `UPDATE orders
-              SET payment_method = $1, payment_marked_at = NOW(), updated_at = NOW()
-            WHERE id = $2 AND organization_id = $3`,
-          [method, parseInt(id), req.orgId]
+          `UPDATE orders o
+              SET payment_method = $1,
+                  status = CASE
+                    WHEN $4::boolean AND o.status = 'paid'
+                         AND NOT EXISTS (SELECT 1 FROM payment_proofs pp
+                                          WHERE pp.order_id = o.id
+                                            AND pp.status IN ('verified','pre_verified'))
+                      THEN 'entregado'
+                    WHEN $1 = 'efectivo' AND o.status = 'entregado'
+                      THEN 'paid'
+                    ELSE o.status END,
+                  payment_marked_at = CASE
+                    WHEN $1 = 'efectivo' AND o.status = 'entregado' THEN NOW()
+                    WHEN $4::boolean AND o.status = 'paid'
+                         AND NOT EXISTS (SELECT 1 FROM payment_proofs pp
+                                          WHERE pp.order_id = o.id
+                                            AND pp.status IN ('verified','pre_verified'))
+                      THEN NULL
+                    ELSE payment_marked_at END,
+                  updated_at = NOW()
+            WHERE o.id = $2 AND o.organization_id = $3`,
+          [method, parseInt(id), req.orgId, nonCash]
         );
 
     if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
