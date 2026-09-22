@@ -595,7 +595,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           )}
           <div style={{
             width: isMobile ? '34px' : '40px', height: isMobile ? '34px' : '40px',
-            borderRadius: '50%', backgroundColor: '#4db6ac', flexShrink: 0,
+            borderRadius: '50%', backgroundColor: colors.tealSoft, flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontWeight: 600, color: 'white', fontSize: '13px',
           }}>
@@ -670,7 +670,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               backgroundColor: 'transparent',
               border: `1px solid ${colors.borderStrong}`,
               borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
-              color: '#4db6e8',
+              color: colors.infoSoft,
               cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', transition: 'all 0.15s',
@@ -704,11 +704,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             disabled={togglingOptOut}
             title={optOut ? 'Volver a contactar (quitar opt-out)' : 'Marcar como No contactar'}
             style={{
-              backgroundColor: optOut ? '#ef444420' : 'transparent',
-              border: optOut ? '1px solid #ef4444' : `1px solid ${colors.borderStrong}`,
+              backgroundColor: optOut ? colors.danger + '20' : 'transparent',
+              border: optOut ? `1px solid ${colors.danger}` : `1px solid ${colors.borderStrong}`,
               borderRadius: '20px',
               padding: '4px 10px',
-              color: optOut ? '#ef4444' : colors.textMuted,
+              color: optOut ? colors.danger : colors.textMuted,
               cursor: togglingOptOut ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', fontWeight: optOut ? 600 : 400, transition: 'all 0.15s',
@@ -721,8 +721,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             onClick={handleToggleEmpresa}
             title={isEmpresa ? 'Marcar como cliente particular' : 'Marcar como empresa (B2B)'}
             style={{
-              backgroundColor: isEmpresa ? '#6366f1' : 'transparent',
-              border: isEmpresa ? '1px solid #6366f1' : `1px solid ${colors.borderStrong}`,
+              backgroundColor: isEmpresa ? colors.indigo : 'transparent',
+              border: isEmpresa ? `1px solid ${colors.indigo}` : `1px solid ${colors.borderStrong}`,
               borderRadius: '20px',
               padding: '4px 10px',
               color: isEmpresa ? 'white' : colors.textMuted,
@@ -730,8 +730,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               display: 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', fontWeight: isEmpresa ? 600 : 400, transition: 'all 0.15s',
             }}
-            onMouseEnter={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#4f46e5' : '#6366f120'; e.currentTarget.style.color = isEmpresa ? 'white' : '#6366f1'; }}
-            onMouseLeave={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#6366f1' : 'transparent'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.textMuted; }}
+            onMouseEnter={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#4f46e5' : colors.indigo + '20'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.indigo; }}
+            onMouseLeave={e => { e.currentTarget.style.backgroundColor = isEmpresa ? colors.indigo : 'transparent'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.textMuted; }}
           >
             🏢 {isEmpresa ? 'Empresa' : 'Empresa'}
           </button>
@@ -742,7 +742,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               backgroundColor: 'transparent',
               border: `1px solid ${colors.borderStrong}`,
               borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
-              color: '#a78bfa',
+              color: colors.purpleSoft,
               cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', transition: 'all 0.15s',
@@ -799,7 +799,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           borderBottom: '1px solid #4a3000',
           padding: '8px 16px',
           fontSize: '12px',
-          color: '#fb923c',
+          color: colors.warning,
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
@@ -833,7 +833,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               onClick={() => handleFeedback('correct')}
               style={{
                 backgroundColor: '#1a4731',
-                color: '#4ade80',
+                color: colors.successSoft,
                 border: '1px solid #166534',
                 padding: '4px 12px',
                 borderRadius: '8px',
@@ -849,7 +849,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               onClick={() => handleFeedback('unnecessary')}
               style={{
                 backgroundColor: '#4a1c1c',
-                color: '#f87171',
+                color: colors.dangerSoft,
                 border: '1px solid #7f1d1d',
                 padding: '4px 12px',
                 borderRadius: '8px',
@@ -872,7 +872,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           borderBottom: '1px solid #2a3942',
           padding: '8px 16px',
           fontSize: '12px',
-          color: feedbackSent === 'correct' ? '#4ade80' : '#f87171',
+          color: feedbackSent === 'correct' ? colors.successSoft : colors.dangerSoft,
           display: 'flex', alignItems: 'center', gap: '6px',
         }}>
           {feedbackSent === 'correct'
@@ -926,7 +926,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', padding: '4px 0' }}>
             <div style={{
               width: '28px', height: '28px', borderRadius: '50%',
-              backgroundColor: '#4db6ac', display: 'flex', alignItems: 'center',
+              backgroundColor: colors.tealSoft, display: 'flex', alignItems: 'center',
               justifyContent: 'center', flexShrink: 0,
             }}>
               <Bot size={13} color="white" />
@@ -1111,7 +1111,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                           <div key={i} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
                             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
                               <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-                                <span style={{ fontSize:'10px', padding:'1px 6px', borderRadius:'4px', backgroundColor: isShopify ? '#0d2020' : colors.bgSub, color: isShopify ? '#4db6ac' : colors.textSecondary, border:`1px solid ${isShopify ? '#1a3d3d' : colors.border}` }}>
+                                <span style={{ fontSize:'10px', padding:'1px 6px', borderRadius:'4px', backgroundColor: isShopify ? '#0d2020' : colors.bgSub, color: isShopify ? colors.tealSoft : colors.textSecondary, border:`1px solid ${isShopify ? '#1a3d3d' : colors.border}` }}>
                                   {isShopify ? 'Shopify' : 'Bot'}
                                 </span>
                                 <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}{o.shopify_name ? ` · ${o.shopify_name}` : ''}</span>
@@ -1168,7 +1168,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 <span style={{ fontWeight:700, fontSize:'15px', color:colors.textPrimary }}>Nueva orden</span>
                 <span style={{ fontSize:'12px', color:colors.textMuted }}>— {conversation.contact_name || conversation.phone_number}</span>
                 {isEmpresa && (
-                  <span style={{ fontSize:'10px', fontWeight:700, backgroundColor:'#6366f120', color:'#6366f1', border:'1px solid #6366f155', borderRadius:'20px', padding:'2px 8px' }}>
+                  <span style={{ fontSize:'10px', fontWeight:700, backgroundColor: colors.indigo + '20', color: colors.indigo, border:`1px solid ${colors.indigo}55`, borderRadius:'20px', padding:'2px 8px' }}>
                     🏢 Productos empresa
                   </span>
                 )}
@@ -1382,7 +1382,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     </div>
                   )}
                   {discountAmount > 0 && (
-                    <div style={{ fontSize:'11px', color:'#f87171' }}>
+                    <div style={{ fontSize:'11px', color:colors.dangerSoft }}>
                       Descuento ({orderDiscountType === 'percent' ? `${discountNum}%` : `$${discountNum.toLocaleString('es-CL')}`}): <span style={{ fontWeight:600 }}>-${Math.round(discountAmount).toLocaleString('es-CL')}</span>
                     </div>
                   )}
@@ -1414,7 +1414,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${colors.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <FileText size={16} color="#4db6e8" />
+                <FileText size={16} color={colors.infoSoft} />
                 <span style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '15px' }}>Enviar Template</span>
               </div>
               <button onClick={() => setShowTemplateModal(false)}
@@ -1422,7 +1422,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 <X size={18} />
               </button>
             </div>
-            <div style={{ padding: '10px 20px', backgroundColor: colors.bgAccent, borderBottom: `1px solid ${colors.border}`, fontSize: '12px', color: '#4db6e8', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+            <div style={{ padding: '10px 20px', backgroundColor: colors.bgAccent, borderBottom: `1px solid ${colors.border}`, fontSize: '12px', color: colors.infoSoft, display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
               <span>💡</span>
               <span>Los templates funcionan aunque la ventana de 24h haya expirado.</span>
             </div>
@@ -1502,7 +1502,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   Cancelar
                 </button>
                 <button onClick={sendTemplateMessage} disabled={!selectedTemplate || sendingTemplate}
-                  style={{ padding: '8px 20px', borderRadius: '8px', backgroundColor: selectedTemplate ? '#4db6e8' : colors.bgHover, color: selectedTemplate ? '#000' : colors.textSecondary, border: 'none', cursor: selectedTemplate ? 'pointer' : 'not-allowed', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', opacity: sendingTemplate ? 0.7 : 1 }}>
+                  style={{ padding: '8px 20px', borderRadius: '8px', backgroundColor: selectedTemplate ? colors.infoSoft : colors.bgHover, color: selectedTemplate ? '#000' : colors.textSecondary, border: 'none', cursor: selectedTemplate ? 'pointer' : 'not-allowed', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', opacity: sendingTemplate ? 0.7 : 1 }}>
                   {sendingTemplate ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Enviando...</> : <><Send size={13} /> Enviar Template</>}
                 </button>
               </div>
@@ -1582,7 +1582,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             {/* Header */}
             <div style={{ padding:'16px 20px', borderBottom:`1px solid ${colors.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                <BarChart2 size={16} color='#a78bfa' />
+                <BarChart2 size={16} color={colors.purpleSoft} />
                 <span style={{ fontWeight:600, color:colors.textPrimary, fontSize:'14px' }}>Análisis de conversación</span>
               </div>
               <button onClick={() => setShowAnalysis(false)} style={{ background:'none', border:'none', cursor:'pointer', color:colors.textMuted, padding:'2px', display:'flex', alignItems:'center' }}>
@@ -1600,7 +1600,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               )}
 
               {!analysisLoading && analysisData?.error && (
-                <div style={{ padding:'12px', backgroundColor:'#ef444420', borderRadius:'8px', color:'#ef4444', fontSize:'13px' }}>
+                <div style={{ padding:'12px', backgroundColor:colors.danger + '20', borderRadius:'8px', color:colors.danger, fontSize:'13px' }}>
                   {analysisData.error}
                 </div>
               )}
@@ -1608,10 +1608,10 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               {!analysisLoading && analysisData && !analysisData.error && (() => {
                 const a = analysisData;
                 const puntaje = a.puntaje_bot || 0;
-                const puntajeColor = puntaje >= 4 ? '#22c55e' : puntaje >= 3 ? '#f59e0b' : '#ef4444';
+                const puntajeColor = puntaje >= 4 ? colors.success : puntaje >= 3 ? colors.amberStrong : colors.danger;
                 const estadoColors = {
-                  'compró': '#22c55e', 'agendó': '#a78bfa', 'interesado': '#f59e0b',
-                  'exploró': colors.textMuted, 'insatisfecho': '#ef4444', 'se dio de baja': '#6b7280', 'otro': colors.textMuted,
+                  'compró': colors.success, 'agendó': colors.purpleSoft, 'interesado': colors.amberStrong,
+                  'exploró': colors.textMuted, 'insatisfecho': colors.danger, 'se dio de baja': '#6b7280', 'otro': colors.textMuted,
                 };
                 const estadoColor = estadoColors[a.estado_final] || colors.textMuted;
 
@@ -1646,7 +1646,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                         </div>
                       </div>
                       <div style={{ backgroundColor:colors.bgSecondary, borderRadius:'10px', padding:'12px', textAlign:'center' }}>
-                        <div style={{ fontSize:'13px', fontWeight:600, color: a.deteccion_correcta ? '#22c55e' : '#ef4444' }}>
+                        <div style={{ fontSize:'13px', fontWeight:600, color: a.deteccion_correcta ? colors.success : colors.danger }}>
                           {a.deteccion_correcta ? '✓ Correcto' : '✗ Falló'}
                         </div>
                         <div style={{ fontSize:'11px', color:colors.textMuted, marginTop:'2px' }}>Detección</div>
@@ -1661,14 +1661,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                       </div>
                     )}
 
-                    <Section title="✓ Aciertos" color="#22c55e" items={a.aciertos} />
-                    <Section title="✗ Errores detectados" color="#ef4444" items={a.errores} />
-                    <Section title="💡 Oportunidades de mejora" color="#f59e0b" items={a.oportunidades} />
+                    <Section title="✓ Aciertos" color={colors.success} items={a.aciertos} />
+                    <Section title="✗ Errores detectados" color={colors.danger} items={a.errores} />
+                    <Section title="💡 Oportunidades de mejora" color={colors.amberStrong} items={a.oportunidades} />
 
                     {/* Próxima acción */}
                     {a.proxima_accion && (
-                      <div style={{ backgroundColor:'#a78bfa18', border:'1px solid #a78bfa40', borderRadius:'10px', padding:'12px' }}>
-                        <div style={{ fontSize:'11px', fontWeight:700, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'4px' }}>Próxima acción recomendada</div>
+                      <div style={{ backgroundColor:colors.purpleSoft + '18', border:`1px solid ${colors.purpleSoft}40`, borderRadius:'10px', padding:'12px' }}>
+                        <div style={{ fontSize:'11px', fontWeight:700, color:colors.purpleSoft, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'4px' }}>Próxima acción recomendada</div>
                         <div style={{ fontSize:'13px', color:colors.textPrimary }}>{a.proxima_accion}</div>
                       </div>
                     )}
@@ -1680,7 +1680,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             {/* Panel de mejoras del bot */}
             {!analysisLoading && improvementsData && !improvementsData.error && (
               <div style={{ borderTop:`1px solid ${colors.border}`, padding:'16px 20px', backgroundColor: colors.bgSecondary }}>
-                <div style={{ fontSize:'12px', fontWeight:700, color:'#f59e0b', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'10px' }}>
+                <div style={{ fontSize:'12px', fontWeight:700, color:colors.amberStrong, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'10px' }}>
                   🤖 Reglas generadas para el bot
                 </div>
                 {improvementsData.newRules.length === 0 ? (
@@ -1690,7 +1690,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     <div style={{ display:'flex', flexDirection:'column', gap:'6px', marginBottom:'12px' }}>
                       {improvementsData.newRules.map((rule, i) => (
                         <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:'8px', fontSize:'13px', color:colors.textPrimary, backgroundColor:colors.bgPanel, borderRadius:'8px', padding:'8px 10px', border:`1px solid ${colors.border}` }}>
-                          <span style={{ color:'#f59e0b', fontWeight:700, flexShrink:0 }}>{i+1}.</span>
+                          <span style={{ color:colors.amberStrong, fontWeight:700, flexShrink:0 }}>{i+1}.</span>
                           <span style={{ lineHeight:'1.4' }}>{rule}</span>
                         </div>
                       ))}
@@ -1701,14 +1701,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                       </div>
                     )}
                     {rulesSaved ? (
-                      <div style={{ fontSize:'13px', color:'#22c55e', display:'flex', alignItems:'center', gap:'6px' }}>
+                      <div style={{ fontSize:'13px', color:colors.success, display:'flex', alignItems:'center', gap:'6px' }}>
                         ✓ Reglas guardadas — el bot las aplicará desde ahora
                       </div>
                     ) : (
                       <button
                         onClick={() => saveRules(improvementsData.combined)}
                         disabled={savingRules}
-                        style={{ fontSize:'13px', fontWeight:600, color:'#fff', backgroundColor:'#f59e0b', border:'none', borderRadius:'8px', padding:'8px 16px', cursor: savingRules ? 'not-allowed' : 'pointer', opacity: savingRules ? 0.7 : 1 }}
+                        style={{ fontSize:'13px', fontWeight:600, color:'#fff', backgroundColor:colors.amberStrong, border:'none', borderRadius:'8px', padding:'8px 16px', cursor: savingRules ? 'not-allowed' : 'pointer', opacity: savingRules ? 0.7 : 1 }}
                       >
                         {savingRules ? 'Guardando...' : '💾 Guardar en el bot'}
                       </button>
@@ -1718,7 +1718,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               </div>
             )}
             {!analysisLoading && improvementsData?.error && (
-              <div style={{ borderTop:`1px solid ${colors.border}`, padding:'12px 20px', color:'#ef4444', fontSize:'13px' }}>
+              <div style={{ borderTop:`1px solid ${colors.border}`, padding:'12px 20px', color:colors.danger, fontSize:'13px' }}>
                 Error generando mejoras: {improvementsData.error}
               </div>
             )}
@@ -1726,16 +1726,16 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             {/* Footer */}
             {!analysisLoading && (
               <div style={{ padding:'12px 20px', borderTop:`1px solid ${colors.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                <button onClick={openAnalysis} style={{ fontSize:'12px', color:'#a78bfa', background:'none', border:'none', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                <button onClick={openAnalysis} style={{ fontSize:'12px', color:colors.purpleSoft, background:'none', border:'none', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
                   <BarChart2 size={12} /> Volver a analizar
                 </button>
                 {analysisData && !analysisData.error && (analysisData.errores?.length || analysisData.oportunidades?.length) ? (
                   improvementsLoading ? (
-                    <span style={{ fontSize:'12px', color:'#f59e0b' }}>Generando mejoras...</span>
+                    <span style={{ fontSize:'12px', color:colors.amberStrong }}>Generando mejoras...</span>
                   ) : !improvementsData ? (
                     <button
                       onClick={() => generateImprovements(analysisData)}
-                      style={{ fontSize:'12px', fontWeight:600, color:'#f59e0b', background:'none', border:`1px solid #f59e0b`, borderRadius:'6px', padding:'4px 10px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}
+                      style={{ fontSize:'12px', fontWeight:600, color:colors.amberStrong, background:'none', border:`1px solid ${colors.amberStrong}`, borderRadius:'6px', padding:'4px 10px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}
                     >
                       🚀 Mejorar bot con este análisis
                     </button>

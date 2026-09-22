@@ -206,7 +206,7 @@ export default function UsersPanel() {
                   )}
                 </div>
               ))}
-              {formError && <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#ef4444' }}>{formError}</p>}
+              {formError && <p style={{ margin: '0 0 12px', fontSize: '13px', color: colors.danger }}>{formError}</p>}
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button type="button" onClick={() => setShowCreate(false)}
                   style={{ flex: 1, padding: '9px', borderRadius: '8px', border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, cursor: 'pointer', fontSize: '14px' }}>Cancelar</button>
@@ -225,7 +225,7 @@ export default function UsersPanel() {
         {loading ? (
           <p style={{ padding: '32px', textAlign: 'center', color: colors.textSecondary }}>Cargando…</p>
         ) : error ? (
-          <p style={{ padding: '32px', textAlign: 'center', color: '#ef4444' }}>{error}</p>
+          <p style={{ padding: '32px', textAlign: 'center', color: colors.danger }}>{error}</p>
         ) : users.length === 0 ? (
           <p style={{ padding: '32px', textAlign: 'center', color: colors.textSecondary }}>No hay usuarios en esta organización</p>
         ) : (
@@ -276,7 +276,7 @@ export default function UsersPanel() {
                   {/* Eliminar */}
                   {!isOwner ? (
                     <button onClick={() => handleDelete(u.id, u.email)} disabled={deletingId === u.id} title="Eliminar usuario"
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: deletingId === u.id ? colors.textSecondary : '#ef4444', padding: '4px', borderRadius: '6px', opacity: deletingId === u.id ? 0.5 : 1 }}>
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: deletingId === u.id ? colors.textSecondary : colors.danger, padding: '4px', borderRadius: '6px', opacity: deletingId === u.id ? 0.5 : 1 }}>
                       <Trash2 size={15} />
                     </button>
                   ) : <div style={{ width: '22px' }} />}
@@ -311,7 +311,7 @@ export default function UsersPanel() {
                     {/* Notificaciones */}
                     <div>
                       <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '8px' }}>
-                        🔔 Notificaciones WhatsApp {!u.whatsapp_phone && <span style={{ color: '#f59e0b' }}>(requiere teléfono)</span>}
+                        🔔 Notificaciones WhatsApp {!u.whatsapp_phone && <span style={{ color: colors.amberStrong }}>(requiere teléfono)</span>}
                       </label>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {Object.entries(NOTIF_LABELS).map(([key, { label, desc }]) => {

@@ -75,7 +75,7 @@ export default function EvaluacionPanel() {
     if (diff === 0) return <span style={{ color: c.textMuted }}>= igual</span>;
     const good = lowerIsBetter ? diff < 0 : diff > 0;
     const arrow = diff > 0 ? '▲' : '▼';
-    return <span style={{ color: good ? '#22c55e' : '#f87171' }}>{arrow} {Math.abs(diff)} vs antes</span>;
+    return <span style={{ color: good ? c.success : c.dangerSoft }}>{arrow} {Math.abs(diff)} vs antes</span>;
   };
 
   const inp = { backgroundColor: c.bgCard, border: `1px solid ${c.border}`, borderRadius: 8, padding: '8px 10px', color: c.textPrimary, fontSize: 13 };
@@ -104,10 +104,10 @@ export default function EvaluacionPanel() {
         <>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
             {card('Conversaciones', m.conversaciones, trend(m.conversaciones, p?.conversaciones, false))}
-            {card('Terminó en pedido', `${m.tasa_pedido}%`, trend(m.tasa_pedido, p?.tasa_pedido, false), '#22c55e')}
-            {card('Escaló a humano', `${m.tasa_escalacion}%`, trend(m.tasa_escalacion, p?.tasa_escalacion, true), '#fb923c')}
-            {card('Con fricción', `${m.tasa_friccion}%`, trend(m.tasa_friccion, p?.tasa_friccion, true), '#f87171')}
-            {card('Abandonadas', `${m.tasa_abandono}%`, trend(m.tasa_abandono, p?.tasa_abandono, true), '#f87171')}
+            {card('Terminó en pedido', `${m.tasa_pedido}%`, trend(m.tasa_pedido, p?.tasa_pedido, false), c.success)}
+            {card('Escaló a humano', `${m.tasa_escalacion}%`, trend(m.tasa_escalacion, p?.tasa_escalacion, true), c.warning)}
+            {card('Con fricción', `${m.tasa_friccion}%`, trend(m.tasa_friccion, p?.tasa_friccion, true), c.dangerSoft)}
+            {card('Abandonadas', `${m.tasa_abandono}%`, trend(m.tasa_abandono, p?.tasa_abandono, true), c.dangerSoft)}
             {card('Msgs cliente prom.', m.mensajes_cliente_prom, null)}
           </div>
           <p style={{ color: c.textMuted, fontSize: 11, marginTop: 0 }}>
@@ -120,13 +120,13 @@ export default function EvaluacionPanel() {
       {grade && (
         <div style={{ marginTop: 18, borderTop: `1px solid ${c.border}`, paddingTop: 16 }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-            {card('Nota promedio', grade.promedio != null ? `${grade.promedio} / 5` : '—', `${grade.evaluadas} evaluadas`, grade.promedio >= 4 ? '#22c55e' : grade.promedio >= 3 ? '#fbbf24' : '#f87171')}
+            {card('Nota promedio', grade.promedio != null ? `${grade.promedio} / 5` : '—', `${grade.evaluadas} evaluadas`, grade.promedio >= 4 ? c.success : grade.promedio >= 3 ? c.amber : c.dangerSoft)}
             <div style={{ flex: 2, minWidth: 220 }}>
               <div style={{ color: c.textMuted, fontSize: 12, marginBottom: 6 }}>Distribución de notas</div>
               {[5, 4, 3, 2, 1].map(k => {
                 const n = grade.distribucion?.[k] || 0;
                 const max = Math.max(1, ...Object.values(grade.distribucion || {}));
-                const col = k >= 4 ? '#22c55e' : k === 3 ? '#fbbf24' : '#f87171';
+                const col = k >= 4 ? c.success : k === 3 ? c.amber : c.dangerSoft;
                 return (
                   <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
                     <span style={{ color: c.textMuted, width: 14, fontSize: 12 }}>{k}</span>
@@ -146,7 +146,7 @@ export default function EvaluacionPanel() {
               <div style={{ color: c.textPrimary, fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Errores más frecuentes</div>
               {grade.errores.map((e, i) => (
                 <div key={i} style={{ color: c.textSecondary, fontSize: 13, padding: '3px 0' }}>
-                  <span style={{ color: '#fb923c', fontWeight: 700 }}>×{e.count}</span> {e.text}
+                  <span style={{ color: c.warning, fontWeight: 700 }}>×{e.count}</span> {e.text}
                 </div>
               ))}
             </div>
@@ -175,10 +175,10 @@ export default function EvaluacionPanel() {
                 <div key={g.id} style={{ borderBottom: `1px solid ${c.border}`, padding: '8px 0' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: c.textPrimary, fontWeight: 600, fontSize: 13 }}>{g.name}</span>
-                    <span style={{ color: '#f87171', fontWeight: 800, fontSize: 13 }}>{g.puntaje}/5</span>
+                    <span style={{ color: c.dangerSoft, fontWeight: 800, fontSize: 13 }}>{g.puntaje}/5</span>
                   </div>
                   <div style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }}>{g.resumen}</div>
-                  {(g.errores || []).length > 0 && <div style={{ color: '#fb923c', fontSize: 12, marginTop: 2 }}>⚠️ {g.errores.join(' · ')}</div>}
+                  {(g.errores || []).length > 0 && <div style={{ color: c.warning, fontSize: 12, marginTop: 2 }}>⚠️ {g.errores.join(' · ')}</div>}
                 </div>
               ))}
             </div>
