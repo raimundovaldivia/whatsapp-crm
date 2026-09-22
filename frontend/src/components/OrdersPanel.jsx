@@ -9,6 +9,7 @@ import {
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
 import ConciliacionPanel from './ConciliacionPanel.jsx';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 
 // ─── Normalización ────────────────────────────────────────────────
 function normalizeBotOrder(o) {
@@ -95,16 +96,16 @@ function getCrmStatusStyle(status) {
 function getBotStatusStyle(status, colors) {
   const crm = getCrmStatusStyle(status);
   return {
-    draft:            { label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
-    sent:             { label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
-    payment_received: { label: 'Pago recibido',  color: '#38bdf8', bg: '#0c2030' },
+    draft:            { label: 'Nuevo',          color: colors.purpleSoft, bg: '#1e1030' },
+    sent:             { label: 'Nuevo',          color: colors.purpleSoft, bg: '#1e1030' },
+    payment_received: { label: 'Pago recibido',  color: colors.info, bg: '#0c2030' },
     nuevo:            crm,
     por_despachar:    crm,
     en_camino:        crm,
     entregado:        crm,
-    paid:             { label: 'Pagado',         color: '#22c55e', bg: '#052010' },
-    cancelled:        { label: 'Cancelado',      color: '#f87171', bg: '#2d1a1a' },
-    failed:           { label: 'Fallido',        color: '#f87171', bg: '#2d1a1a' },
+    paid:             { label: 'Pagado',         color: colors.success, bg: '#052010' },
+    cancelled:        { label: 'Cancelado',      color: colors.dangerSoft, bg: '#2d1a1a' },
+    failed:           { label: 'Fallido',        color: colors.dangerSoft, bg: '#2d1a1a' },
   }[status] || { label: status, color: colors.textSecondary, bg: colors.bgHover };
 }
 
@@ -115,7 +116,7 @@ function getShopifyFinancialStyle(status, colors) {
     REFUNDED:           { label: 'Reembolsado',   color: colors.textSecondary, bg: colors.bgHover },
     PARTIALLY_REFUNDED: { label: 'Rem. parcial',  color: colors.textSecondary, bg: colors.bgHover },
     VOIDED:             { label: 'Anulado',       color: colors.red,           bg: '#2d1a1a' },
-    AUTHORIZED:         { label: 'Autorizado',    color: '#4db6ac',            bg: '#0d2929' },
+    AUTHORIZED:         { label: 'Autorizado',    color: colors.tealSoft,            bg: '#0d2929' },
   }[status] || { label: status || '—', color: colors.textSecondary, bg: colors.bgHover };
 }
 
@@ -125,7 +126,7 @@ function getShopifyFulfillmentStyle(status, colors) {
     UNFULFILLED: { label: 'Sin enviar', color: colors.yellow },
     PARTIAL:     { label: 'Parcial',    color: colors.yellow },
     RESTOCKED:   { label: 'Devuelto',   color: colors.textSecondary },
-    IN_PROGRESS: { label: 'En proceso', color: '#4db6ac' },
+    IN_PROGRESS: { label: 'En proceso', color: colors.tealSoft },
   }[status] || { label: status || '—', color: colors.textSecondary };
 }
 
@@ -586,7 +587,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           </span>
         )}
         <button onClick={handleSyncAll} disabled={syncingAll}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: syncingAll ? colors.bgHover : '#0d2929', color: '#4db6ac', padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 500, border: '1px solid #1a4040', cursor: syncingAll ? 'not-allowed' : 'pointer', opacity: syncingAll ? 0.7 : 1 }}>
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: syncingAll ? colors.bgHover : '#0d2929', color: colors.tealSoft, padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 500, border: '1px solid #1a4040', cursor: syncingAll ? 'not-allowed' : 'pointer', opacity: syncingAll ? 0.7 : 1 }}>
           <RefreshCw size={12} style={{ animation: syncingAll ? 'spin 1s linear infinite' : 'none' }} />
           {syncingAll ? 'Sincronizando...' : 'Sync Shopify'}
         </button>
@@ -620,7 +621,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                   ? parsedDate.toLocaleDateString('es-CL', { weekday:'long', day:'numeric', month:'long' })
                   : '—';
                 const isOverdue   = isPending && parsedDate && !isNaN(parsedDate) && parsedDate < new Date();
-                const statusColor = isPending ? (isOverdue ? '#f87171' : '#a78bfa') : isSent ? '#22c55e' : colors.textMuted;
+                const statusColor = isPending ? (isOverdue ? colors.dangerSoft : colors.purpleSoft) : isSent ? colors.success : colors.textMuted;
                 const statusLabel = isPending ? (isOverdue ? '⚠️ Vencido' : '📅 Pendiente') : isSent ? '✓ Enviado' : 'Cancelado';
                 return (
                   <div key={o.id} style={{ backgroundColor: colors.bgPanel, borderRadius:'12px', border:`1px solid ${isPending ? '#a78bfa30' : colors.border}`, padding:'14px 16px', display:'flex', gap:'12px', alignItems:'flex-start' }}>
@@ -643,7 +644,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                         <button
                           onClick={() => openConvDrawer(o.conversation_id, o.customer_name || o.contact_name, o.phone)}
                           title="Ver conversación"
-                          style={{ padding:'5px 10px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color:'#4db6ac', fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                          style={{ padding:'5px 10px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color:colors.tealSoft, fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
                           <MessageSquare size={12} /> Chat
                         </button>
                       )}
@@ -651,7 +652,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                         <button
                           onClick={() => cancelScheduled(o.id)}
                           title="Cancelar pedido agendado"
-                          style={{ padding:'5px 10px', borderRadius:'6px', border:'1px solid #ef444440', background:'none', color:'#f87171', fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                          style={{ padding:'5px 10px', borderRadius:'6px', border:'1px solid ' + colors.danger + '40', background:'none', color:colors.dangerSoft, fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
                           <BanIcon size={12} /> Cancelar
                         </button>
                       )}
@@ -679,7 +680,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
             <div style={{ display:'flex', alignItems:'center', gap:'16px', backgroundColor: colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:'12px', padding:'14px 18px', flexWrap:'wrap' }}>
               <div>
                 <div style={{ fontSize:'11px', color: colors.textMuted, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em' }}>Por cobrar</div>
-                <div style={{ fontSize:'22px', fontWeight:700, color:'#fbbf24' }}>{fmt(totalDeuda)}</div>
+                <div style={{ fontSize:'22px', fontWeight:700, color:colors.amber }}>{fmt(totalDeuda)}</div>
                 <div style={{ fontSize:'12px', color: colors.textMuted }}>
                   {charges.length} pedido{charges.length === 1 ? '' : 's'} por transferencia sin comprobante
                 </div>
@@ -699,7 +700,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                 disabled={selCount === 0 || sendingCharge}
                 style={{
                   display:'flex', alignItems:'center', gap:'7px',
-                  backgroundColor: selCount === 0 ? colors.bgHover : '#f59e0b',
+                  backgroundColor: selCount === 0 ? colors.bgHover : colors.amberStrong,
                   color: selCount === 0 ? colors.textMuted : '#1c1206',
                   padding:'9px 16px', borderRadius:'8px', fontSize:'13px', fontWeight:700,
                   border:'none', cursor: selCount === 0 || sendingCharge ? 'not-allowed' : 'pointer',
@@ -770,7 +771,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                         style={{
                           backgroundColor: isSel ? colors.bgHover : colors.bgPanel,
                           borderRadius:'12px',
-                          border:`1px solid ${isSel ? '#f59e0b' : antiguo ? '#f59e0b40' : colors.border}`,
+                          border:`1px solid ${isSel ? colors.amberStrong : antiguo ? colors.amberStrong + '40' : colors.border}`,
                           padding:'13px 16px', display:'flex', gap:'12px', alignItems:'center', cursor:'pointer',
                         }}>
                         <input type="checkbox" checked={isSel} onChange={() => toggleCharge(o)}
@@ -782,14 +783,14 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                               {o.customer_name || o.customer_phone}
                             </span>
                             <span style={{ fontSize:'11px', color: colors.textMuted }}>{o.customer_phone || 'sin teléfono'}</span>
-                            <span style={{ fontSize:'10px', fontWeight:700, padding:'1px 6px', borderRadius:'4px', backgroundColor: o.source === 'bot' ? '#0d292940' : '#1e293b', color: o.source === 'bot' ? '#4db6ac' : '#94a3b8', display:'flex', alignItems:'center', gap:'3px' }}>
+                            <span style={{ fontSize:'10px', fontWeight:700, padding:'1px 6px', borderRadius:'4px', backgroundColor: o.source === 'bot' ? '#0d292940' : '#1e293b', color: o.source === 'bot' ? colors.tealSoft : '#94a3b8', display:'flex', alignItems:'center', gap:'3px' }}>
                               {o.source === 'bot' ? <><Bot size={9} /> Bot</> : <><Store size={9} /> Shopify</>}
                             </span>
                           </div>
                           <div style={{ display:'flex', gap:'12px', fontSize:'12px', color: colors.textMuted, flexWrap:'wrap' }}>
                             <span>🧾 {o.order_label}</span>
                             {days != null && (
-                              <span style={{ color: antiguo ? '#fbbf24' : colors.textMuted }}>
+                              <span style={{ color: antiguo ? colors.amber : colors.textMuted }}>
                                 ⏱ entregado {days >= 1 ? `hace ${days} día${days === 1 ? '' : 's'}` : `hace ${o.hours_owed}h`}
                               </span>
                             )}
@@ -802,7 +803,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                           </div>
                         </div>
 
-                        <div style={{ fontSize:'15px', fontWeight:700, color:'#fbbf24', flexShrink:0 }}>
+                        <div style={{ fontSize:'15px', fontWeight:700, color:colors.amber, flexShrink:0 }}>
                           {fmt(o.total_price)}
                         </div>
 
@@ -859,7 +860,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
             { icon: <Package size={18} color={colors.textSecondary} />, label: 'En vista',        value: filtered.length,                                    color: colors.textPrimary },
             { icon: <Clock size={18} color={colors.yellow} />,          label: 'Sin despachar',   value: totalUnfulfilled,                                   color: colors.yellow },
             { icon: <DollarSign size={18} color={colors.green} />,      label: dateFilterLabel,   value: `$${ventasFiltradas.toLocaleString('es-CL')}`,      color: colors.green },
-            { icon: <DollarSign size={18} color='#4db6ac' />,           label: 'Ventas este mes', value: `$${ventasMesFront.toLocaleString('es-CL')}`,       color: '#4db6ac' },
+            { icon: <DollarSign size={18} color={colors.tealSoft} />,           label: 'Ventas este mes', value: `$${ventasMesFront.toLocaleString('es-CL')}`,       color: colors.tealSoft },
           ].map(({ icon, label, value, color }) => (
             <div key={label} style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '14px 16px', border: `1px solid ${colors.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>{icon}<span style={{ fontSize: '11px', color: colors.textSecondary }}>{label}</span></div>
@@ -929,7 +930,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
             { key: 'shopify', label: '🛍️ Shopify', icon: null },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setSourceFilterR(key)}
-              style={{ padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, border: `1px solid ${sourceFilter === key ? '#4db6ac' : colors.border}`, backgroundColor: sourceFilter === key ? '#0d2929' : colors.bgPanel, color: sourceFilter === key ? '#4db6ac' : colors.textSecondary, cursor: 'pointer' }}>
+              style={{ padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, border: `1px solid ${sourceFilter === key ? colors.tealSoft : colors.border}`, backgroundColor: sourceFilter === key ? '#0d2929' : colors.bgPanel, color: sourceFilter === key ? colors.tealSoft : colors.textSecondary, cursor: 'pointer' }}>
               {label}
             </button>
           ))}
@@ -976,19 +977,19 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
 
               <button onClick={handleBulkCancel} disabled={applyingBulk}
-                style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #fb923c44', backgroundColor: '#2e1500', color: '#fb923c', cursor: 'pointer', fontSize: '12px', fontWeight: 500, opacity: applyingBulk ? 0.7 : 1 }}>
+                style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid ' + colors.warning + '44', backgroundColor: '#2e1500', color: colors.warning, cursor: 'pointer', fontSize: '12px', fontWeight: 500, opacity: applyingBulk ? 0.7 : 1 }}>
                 🚫 Anular
               </button>
 
               <button onClick={handleBulkDelete} disabled={applyingBulk}
-                style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #f8717144', backgroundColor: '#2d1a1a', color: '#f87171', cursor: 'pointer', fontSize: '12px', fontWeight: 500, opacity: applyingBulk ? 0.7 : 1 }}>
+                style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid ' + colors.dangerSoft + '44', backgroundColor: '#2d1a1a', color: colors.dangerSoft, cursor: 'pointer', fontSize: '12px', fontWeight: 500, opacity: applyingBulk ? 0.7 : 1 }}>
                 🗑️ Eliminar
               </button>
 
               <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
 
               <button onClick={handleExportXlsx}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: '1px solid #22c55e44', backgroundColor: '#052010', color: '#4ade80', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: '1px solid ' + colors.success + '44', backgroundColor: '#052010', color: colors.successSoft, cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
                 <Download size={12} /> Exportar despacho
               </button>
             </>
@@ -1216,7 +1217,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
 
         {/* Badge: modificado/vendido en reparto */}
         {(order.raw?.delivery_modified || order.delivery_modified) && (
-          <div style={{ backgroundColor: '#2a1a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #8b5cf655', flexShrink: 0 }}>
+          <div style={{ backgroundColor: '#2a1a3d', color: colors.purpleSofter, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #8b5cf655', flexShrink: 0 }}>
             🛒 Modificado en reparto
           </div>
         )}
@@ -1231,7 +1232,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
           const iso = String(order.raw.delivery_date).slice(0, 10);
           const [y, m, d] = iso.split('-');
           return (
-            <div title={order.raw.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #a78bfa55', flexShrink: 0 }}>
+            <div title={order.raw.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: colors.purpleSofter, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid ' + colors.purpleSoft + '55', flexShrink: 0 }}>
               📅 Entregar el {d}/{m}
             </div>
           );
@@ -1390,17 +1391,17 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
             )}
             {/* Botones logísticos en cadena según estado */}
             {['sent', 'nuevo', 'draft', 'payment_received'].includes(order.status) && (
-              <button onClick={() => onStatusChange(order.id, 'por_despachar')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#2e1500', color: '#fb923c', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #fb923c33', cursor: 'pointer' }}>
+              <button onClick={() => onStatusChange(order.id, 'por_despachar')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#2e1500', color: colors.warning, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid ' + colors.warning + '33', cursor: 'pointer' }}>
                 <Package size={12} /> Por despachar
               </button>
             )}
             {order.status === 'por_despachar' && (
-              <button onClick={() => onStatusChange(order.id, 'en_camino')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#0c2030', color: '#38bdf8', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #38bdf833', cursor: 'pointer' }}>
+              <button onClick={() => onStatusChange(order.id, 'en_camino')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#0c2030', color: colors.info, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid ' + colors.info + '33', cursor: 'pointer' }}>
                 <Truck size={12} /> Marcar enviado
               </button>
             )}
             {order.status === 'en_camino' && (
-              <button onClick={() => onStatusChange(order.id, 'entregado')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#07231f', color: '#2dd4bf', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #2dd4bf33', cursor: 'pointer' }}>
+              <button onClick={() => onStatusChange(order.id, 'entregado')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#07231f', color: colors.teal, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid ' + colors.teal + '33', cursor: 'pointer' }}>
                 <CheckCircle size={12} /> Marcar entregado
               </button>
             )}
@@ -1469,7 +1470,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
         <SelectBox checked={!!selected} onChange={onToggleSelect} colors={colors} />
 
         {/* Badge fuente — Shopify */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', backgroundColor: '#0d2020', border: '1px solid #1a3d3d', fontSize: '11px', fontWeight: 600, color: '#4db6ac', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', backgroundColor: '#0d2020', border: '1px solid #1a3d3d', fontSize: '11px', fontWeight: 600, color: colors.tealSoft, flexShrink: 0 }}>
           <Store size={10} /> Shopify
         </div>
 
@@ -1485,7 +1486,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
 
         {/* Badge: modificado/vendido en reparto */}
         {(order.raw?.delivery_modified || order.delivery_modified) && (
-          <div style={{ backgroundColor: '#2a1a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #8b5cf655', flexShrink: 0 }}>
+          <div style={{ backgroundColor: '#2a1a3d', color: colors.purpleSofter, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #8b5cf655', flexShrink: 0 }}>
             🛒 Modificado en reparto
           </div>
         )}
@@ -1500,7 +1501,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
           const iso = String(order.raw.delivery_date).slice(0, 10);
           const [y, m, d] = iso.split('-');
           return (
-            <div title={order.raw.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: '#c4b5fd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #a78bfa55', flexShrink: 0 }}>
+            <div title={order.raw.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: colors.purpleSofter, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid ' + colors.purpleSoft + '55', flexShrink: 0 }}>
               📅 Entregar el {d}/{m}
             </div>
           );
@@ -1582,7 +1583,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
                 </div>
               )}
 
-              <div style={{ color: '#4db6ac' }}>🛍️ Canal: Shopify</div>
+              <div style={{ color: colors.tealSoft }}>🛍️ Canal: Shopify</div>
             </div>
           </div>
         </div>
@@ -1696,11 +1697,10 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
     }
   };
 
-  const inp = {
-    padding: '8px 10px', borderRadius: '8px', border: `1px solid ${colors.border}`,
-    backgroundColor: colors.bgHover, color: colors.textPrimary, fontSize: '13px',
-    outline: 'none', width: '100%', boxSizing: 'border-box',
-  };
+  const inp = ui.input(colors, {
+    padding: '8px 10px', backgroundColor: colors.bgHover,
+    width: '100%', boxSizing: 'border-box',
+  });
 
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>

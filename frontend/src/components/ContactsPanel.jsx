@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Users, UserCheck, UserX, Search, RefreshCw, MessageSquare } from 'lucide-react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 import { formatDateTime } from '../utils/dates.js';
 
 const TYPE_COLORS = {
@@ -69,8 +70,8 @@ export default function ContactsPanel({ onSelectConversation }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
           {[
             { icon: <Users size={18} color={colors.textSecondary} />,   label: 'Total',      value: stats.total,      color: colors.textPrimary },
-            { icon: <UserX size={18} color='#fb923c' />,                label: 'Leads',      value: stats.leads,      color: '#fb923c' },
-            { icon: <UserCheck size={18} color='#4ade80' />,            label: 'Clientes',   value: stats.customers,  color: '#4ade80' },
+            { icon: <UserX size={18} color={colors.warning} />,                label: 'Leads',      value: stats.leads,      color: colors.warning },
+            { icon: <UserCheck size={18} color={colors.successSoft} />,            label: 'Clientes',   value: stats.customers,  color: colors.successSoft },
             { icon: <MessageSquare size={18} color={colors.green} />,   label: 'Conversión', value: `${conversionRate}%`, color: colors.green },
           ].map(({ icon, label, value, color }) => (
             <div key={label} style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '14px 16px', border: `1px solid ${colors.border}` }}>
@@ -154,9 +155,9 @@ export default function ContactsPanel({ onSelectConversation }) {
       {toast && (
         <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 1000,
           backgroundColor: toast.type === 'error' ? '#2d1a1a' : '#0a2015',
-          color: toast.type === 'error' ? '#f87171' : '#4ade80',
+          color: toast.type === 'error' ? colors.dangerSoft : colors.successSoft,
           padding: '12px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 500,
-          border: `1px solid ${toast.type === 'error' ? '#f8717133' : '#4ade8033'}` }}>
+          border: `1px solid ${toast.type === 'error' ? colors.dangerSoft + '33' : colors.successSoft + '33'}` }}>
           {toast.msg}
         </div>
       )}
@@ -201,7 +202,7 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
 
   return (
     <div style={{ backgroundColor: colors.bgPanel, borderRadius: '10px', border: `1px solid ${hasAddress ? colors.border : '#5c262633'}`, overflow: 'hidden' }}
-      onMouseEnter={e => { if (!expanded) e.currentTarget.style.borderColor = hasAddress ? colors.borderStrong : '#f8717155'; }}
+      onMouseEnter={e => { if (!expanded) e.currentTarget.style.borderColor = hasAddress ? colors.borderStrong : colors.dangerSoft + '55'; }}
       onMouseLeave={e => { if (!expanded) e.currentTarget.style.borderColor = hasAddress ? colors.border : '#5c262633'; }}>
 
       {/* Fila principal */}
@@ -219,7 +220,7 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
             <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {displayName || contact.phone}
             </div>
-            <div style={{ fontSize: '11px', color: hasAddress ? colors.textSecondary : '#f87171', fontStyle: hasAddress ? 'normal' : 'italic' }}>
+            <div style={{ fontSize: '11px', color: hasAddress ? colors.textSecondary : colors.dangerSoft, fontStyle: hasAddress ? 'normal' : 'italic' }}>
               {hasAddress ? (contact.address + (contact.city ? `, ${contact.city}` : '')) : '⚠ Sin dirección'}
             </div>
           </div>
@@ -231,7 +232,7 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
         <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
           {contact.last_seen_at ? formatDateTime(contact.last_seen_at) : '—'}
         </div>
-        <div style={{ color: contact.total_orders > 0 ? '#4ade80' : colors.textSecondary, fontSize: '13px', fontWeight: contact.total_orders > 0 ? 600 : 400 }}>
+        <div style={{ color: contact.total_orders > 0 ? colors.successSoft : colors.textSecondary, fontSize: '13px', fontWeight: contact.total_orders > 0 ? 600 : 400 }}>
           {contact.total_orders > 0 ? `${contact.total_orders} pedido${contact.total_orders !== 1 ? 's' : ''}` : '—'}
         </div>
         <div style={{ backgroundColor: typeStyle.bg, color: typeStyle.color, borderRadius: '20px', padding: '3px 10px',
@@ -248,12 +249,12 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
               <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Nombre completo"
                 style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
               <input value={editAddr} onChange={e => setEditAddr(e.target.value)} placeholder="Calle y número *"
-                style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${editAddr ? colors.border : '#f8717166'}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
+                style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${editAddr ? colors.border : colors.dangerSoft + '66'}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
               <input value={editCity} onChange={e => setEditCity(e.target.value)} placeholder="Ciudad / Comuna"
                 style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
-              {err && <div style={{ color: '#f87171', fontSize: '12px' }}>{err}</div>}
+              {err && <div style={{ color: colors.dangerSoft, fontSize: '12px' }}>{err}</div>}
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={save} disabled={saving} style={{ padding: '7px 16px', borderRadius: '8px', border: 'none', backgroundColor: '#4ade80', color: '#000', fontSize: '12px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+                <button onClick={save} disabled={saving} style={{ padding: '7px 16px', borderRadius: '8px', border: 'none', backgroundColor: colors.successSoft, color: '#000', fontSize: '12px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
                   {saving ? 'Guardando...' : '✓ Guardar'}
                 </button>
                 <button onClick={cancel} style={{ padding: '7px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, fontSize: '12px', cursor: 'pointer' }}>
@@ -267,7 +268,7 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
                 {contact.email && <div>📧 {contact.email}</div>}
                 {hasAddress
                   ? <div>📍 {contact.address}{contact.city ? `, ${contact.city}` : ''}</div>
-                  : <div style={{ color: '#f87171', fontStyle: 'italic' }}>⚠ Sin dirección — las órdenes de este contacto no tendrán dirección</div>
+                  : <div style={{ color: colors.dangerSoft, fontStyle: 'italic' }}>⚠ Sin dirección — las órdenes de este contacto no tendrán dirección</div>
                 }
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
@@ -276,7 +277,7 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
                 </button>
                 {onGoToConversation && (
                   <button onClick={e => { e.stopPropagation(); onGoToConversation(contact); }}
-                    style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', backgroundColor: colors.bgAccent, color: '#4ade80', fontSize: '12px', cursor: 'pointer' }}>
+                    style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', backgroundColor: colors.bgAccent, color: colors.successSoft, fontSize: '12px', cursor: 'pointer' }}>
                     💬 Ir al chat
                   </button>
                 )}

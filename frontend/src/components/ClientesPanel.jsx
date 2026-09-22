@@ -98,6 +98,7 @@ function ProductSelect({ value, onChange, options, placeholder = '— Selecciona
 }
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 
 function formatDate(dateStr) {
   if (!dateStr) return '—';
@@ -537,7 +538,7 @@ export default function ClientesPanel({ onOpenConversation }) {
             <>
               {(selectAllLeads || selectedLeads.size > 0) && (
                 <button onClick={bulkDeleteLeads} disabled={bulkDeleting}
-                  style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: '#ef444418', border: '1px solid #ef444433', cursor: bulkDeleting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: '#ef4444', fontSize: '12px', fontWeight: 600, opacity: bulkDeleting ? 0.7 : 1 }}>
+                  style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: colors.danger + '18', border: `1px solid ${colors.danger}33`, cursor: bulkDeleting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.danger, fontSize: '12px', fontWeight: 600, opacity: bulkDeleting ? 0.7 : 1 }}>
                   🗑 {bulkDeleting ? 'Eliminando...' : `Eliminar ${selectAllLeads ? leadsTotal : selectedLeads.size}`}
                 </button>
               )}
@@ -730,7 +731,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                           )}
                           {c.phone && (
                             <button onClick={e => { e.stopPropagation(); openPriceModal({ phone: c.phone, name: c.name }); }} title="Precios especiales"
-                              style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: `${'#f59e0b'}18`, color: '#f59e0b', padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: '1px solid #f59e0b33', cursor: 'pointer' }}>
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: `${colors.amberStrong}18`, color: colors.amberStrong, padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: `1px solid ${colors.amberStrong}33`, cursor: 'pointer' }}>
                               💰 Precios
                             </button>
                           )}
@@ -775,10 +776,10 @@ export default function ClientesPanel({ onOpenConversation }) {
                                       style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
                                     <input value={addrCity} onChange={e => setAddrCity(e.target.value)} placeholder="Ciudad / Comuna"
                                       style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
-                                    {addrErr && <div style={{ color: '#f87171', fontSize: '11px' }}>{addrErr}</div>}
+                                    {addrErr && <div style={{ color: colors.dangerSoft, fontSize: '11px' }}>{addrErr}</div>}
                                     <div style={{ display: 'flex', gap: '6px' }}>
                                       <button onClick={() => saveAddr(c)} disabled={addrSaving}
-                                        style={{ padding: '4px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#4ade80', color: '#000', fontSize: '11px', fontWeight: 600, cursor: addrSaving ? 'not-allowed' : 'pointer', opacity: addrSaving ? 0.7 : 1 }}>
+                                        style={{ padding: '4px 12px', borderRadius: '6px', border: 'none', backgroundColor: colors.successSoft, color: '#000', fontSize: '11px', fontWeight: 600, cursor: addrSaving ? 'not-allowed' : 'pointer', opacity: addrSaving ? 0.7 : 1 }}>
                                         {addrSaving ? 'Guardando...' : '✓ Guardar'}
                                       </button>
                                       <button onClick={cancelAddrEdit}
@@ -792,7 +793,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                                     {c.email && <div><span style={{ color: colors.textPrimary }}>Email:</span> {c.email}</div>}
                                     {c.address?.address1
                                       ? <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {[c.address.address1, c.address.address2].filter(Boolean).join(', ')}</div>
-                                      : <div style={{ color: '#f87171', fontStyle: 'italic' }}>⚠ Sin dirección de calle</div>
+                                      : <div style={{ color: colors.dangerSoft, fontStyle: 'italic' }}>⚠ Sin dirección de calle</div>
                                     }
                                     {c.address?.city && <div><span style={{ color: colors.textPrimary }}>Ciudad:</span> {c.address.city}{c.address.province ? `, ${c.address.province}` : ''}</div>}
                                     {c.address?.zip  && <div><span style={{ color: colors.textPrimary }}>CP:</span> {c.address.zip}</div>}
@@ -921,7 +922,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: colors.bgHover, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, color: lead.contact_type === 'customer' ? colors.green : '#fb923c', flexShrink: 0 }}>
+                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: colors.bgHover, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, color: lead.contact_type === 'customer' ? colors.green : colors.warning, flexShrink: 0 }}>
                           {(lead.display_name || lead.name || lead.phone || '?')[0].toUpperCase()}
                         </div>
                         <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 500 }}>
@@ -949,7 +950,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                     <td style={{ padding: '12px 16px' }}>
                       {lead.contact_type === 'customer'
                         ? <span style={{ backgroundColor: `${colors.green}18`, color: colors.green, border: `1px solid ${colors.green}33`, borderRadius: '12px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>Cliente</span>
-                        : <span style={{ backgroundColor: '#fb923c18', color: '#fb923c', border: '1px solid #fb923c33', borderRadius: '12px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>Lead</span>}
+                        : <span style={{ backgroundColor: colors.warning + '18', color: colors.warning, border: `1px solid ${colors.warning}33`, borderRadius: '12px', padding: '2px 8px', fontSize: '11px', fontWeight: 600 }}>Lead</span>}
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       <div style={{ display: 'flex', gap: '5px' }}>
@@ -960,7 +961,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                           </button>
                         )}
                         <button onClick={() => openPriceModal({ phone: lead.phone, name: lead.display_name || lead.name || lead.phone })} title="Precios especiales"
-                          style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: '#f59e0b18', color: '#f59e0b', padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: '1px solid #f59e0b33', cursor: 'pointer' }}>
+                          style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: colors.amberStrong + '18', color: colors.amberStrong, padding: '5px 9px', borderRadius: '7px', fontSize: '11px', border: `1px solid ${colors.amberStrong}33`, cursor: 'pointer' }}>
                           💰
                         </button>
                       </div>
@@ -1020,10 +1021,10 @@ export default function ClientesPanel({ onOpenConversation }) {
                   <div key={p.product_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '8px 12px', border: `1px solid ${colors.border}` }}>
                     <div>
                       <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 500 }}>{p.product_title || p.product_id}</div>
-                      <div style={{ color: '#f59e0b', fontSize: '14px', fontWeight: 700 }}>${Number(p.custom_price).toLocaleString('es-CL')}</div>
+                      <div style={{ color: colors.amberStrong, fontSize: '14px', fontWeight: 700 }}>${Number(p.custom_price).toLocaleString('es-CL')}</div>
                     </div>
                     <button onClick={() => deleteSpecialPrice(p.product_id)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '18px', lineHeight: 1 }}>×</button>
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.danger, fontSize: '18px', lineHeight: 1 }}>×</button>
                   </div>
                 ))}
               </div>
@@ -1056,7 +1057,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                     min="0"
                     style={{ flex: 1, padding: '7px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '13px' }} />
                   <button onClick={saveSpecialPrice} disabled={priceSaving || !newPriceProductId || !newPriceValue}
-                    style={{ padding: '7px 18px', borderRadius: '7px', backgroundColor: '#f59e0b', border: 'none', color: '#000', fontSize: '13px', fontWeight: 700, cursor: priceSaving || !newPriceProductId || !newPriceValue ? 'not-allowed' : 'pointer', opacity: priceSaving || !newPriceProductId || !newPriceValue ? 0.5 : 1 }}>
+                    style={{ padding: '7px 18px', borderRadius: '7px', backgroundColor: colors.amberStrong, border: 'none', color: '#000', fontSize: '13px', fontWeight: 700, cursor: priceSaving || !newPriceProductId || !newPriceValue ? 'not-allowed' : 'pointer', opacity: priceSaving || !newPriceProductId || !newPriceValue ? 0.5 : 1 }}>
                     {priceSaving ? '...' : 'Guardar'}
                   </button>
                 </div>
@@ -1114,7 +1115,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                       <select
                         value={importCols[key]}
                         onChange={e => setImportCols(p => ({ ...p, [key]: e.target.value }))}
-                        style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${required && !importCols[key] ? colors.red || '#ef4444' : colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '12px' }}>
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${required && !importCols[key] ? colors.red || colors.danger : colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: '12px' }}>
                         <option value="">— ninguna —</option>
                         {importHeaders.map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
@@ -1163,7 +1164,7 @@ export default function ClientesPanel({ onOpenConversation }) {
               <div style={{ textAlign: 'center', padding: '16px' }}>
                 {importResult.success
                   ? <CheckCircle size={40} color={colors.green} style={{ marginBottom: '12px' }} />
-                  : <AlertCircle size={40} color="#ef4444" style={{ marginBottom: '12px' }} />}
+                  : <AlertCircle size={40} color={colors.danger} style={{ marginBottom: '12px' }} />}
                 {importResult.success ? (
                   <>
                     <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '16px', marginBottom: '12px' }}>Importación completada</div>
@@ -1171,7 +1172,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                       <div><span style={{ color: colors.green, fontWeight: 700, fontSize: '22px' }}>{importResult.imported}</span><br /><span style={{ color: colors.textSecondary }}>Nuevos leads</span></div>
                       <div><span style={{ color: colors.textSecondary, fontWeight: 700, fontSize: '22px' }}>{importResult.existingLeads ?? importResult.skipped ?? 0}</span><br /><span style={{ color: colors.textSecondary }}>Ya eran leads</span></div>
                       <div><span style={{ color: '#3b82f6', fontWeight: 700, fontSize: '22px' }}>{importResult.existingCustomers ?? 0}</span><br /><span style={{ color: colors.textSecondary }}>Ya son clientes</span></div>
-                      <div><span style={{ color: '#f59e0b', fontWeight: 700, fontSize: '22px' }}>{importResult.invalid}</span><br /><span style={{ color: colors.textSecondary }}>Sin tel. válido</span></div>
+                      <div><span style={{ color: colors.amberStrong, fontWeight: 700, fontSize: '22px' }}>{importResult.invalid}</span><br /><span style={{ color: colors.textSecondary }}>Sin tel. válido</span></div>
                     </div>
                     {(importResult.existingCustomers > 0) && (
                       <div style={{ marginTop: '10px', fontSize: '12px', color: colors.textSecondary, padding: '8px', backgroundColor: colors.bgApp, borderRadius: '6px' }}>
@@ -1179,13 +1180,13 @@ export default function ClientesPanel({ onOpenConversation }) {
                       </div>
                     )}
                     {importResult.errors?.length > 0 && (
-                      <div style={{ marginTop: '8px', fontSize: '11px', color: '#ef4444' }}>
+                      <div style={{ marginTop: '8px', fontSize: '11px', color: colors.danger }}>
                         Errores: {importResult.errors.map(e => `${e.phone}: ${e.error}`).join(' · ')}
                       </div>
                     )}
                   </>
                 ) : (
-                  <div style={{ color: '#ef4444', fontSize: '14px' }}>{importResult.error}</div>
+                  <div style={{ color: colors.danger, fontSize: '14px' }}>{importResult.error}</div>
                 )}
                 <button onClick={() => setImportModal(false)} style={{ marginTop: '16px', padding: '8px 20px', borderRadius: '8px', backgroundColor: colors.green, border: 'none', color: '#fff', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
                   Cerrar
