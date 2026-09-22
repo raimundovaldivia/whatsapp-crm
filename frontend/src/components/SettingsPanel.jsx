@@ -1766,6 +1766,7 @@ const MODULOS_SECCIONES = [
   { key: 'evaluacion', title: 'Evaluación del bot',  desc: 'Análisis y mejora del bot con IA.',      Icon: FlaskConical },
 ];
 const MODULOS_FUNCIONES = [
+  { key: 'cobranza', title: 'Cobranza automática', desc: 'Prepara y envía a aprobación el template de cobro por transferencia automáticamente. Al activarlo no tienes que crear templates a mano.', Icon: DollarSign },
   { key: 'edit_delivered_items', title: 'Editar productos entregados', desc: 'Permite corregir productos y monto real de un pedido al entregar (en Despachos y en la app del repartidor).', Icon: FileText },
 ];
 
