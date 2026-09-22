@@ -8,6 +8,7 @@ import {
 
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 
 function Tooltip({ text, children, position = 'top' }) {
   const { colors } = useTheme();
@@ -487,12 +488,12 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         <div style={{ flex: 1 }} />
 
         {/* Selector de modo principal — solo Envío masivo visible */}
-        <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderRadius: '8px', padding: '2px', border: `1px solid ${colors.border}`, gap: '2px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderRadius: colors.radiusMd, padding: '2px', border: `1px solid ${colors.border}`, gap: '2px', flexShrink: 0 }}>
           {[
             { key: 'masivo', label: '📢 Envío masivo' },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setMainTab(key)} style={{
-              padding: '5px 12px', borderRadius: '6px', border: 'none', cursor: 'pointer',
+              padding: '5px 12px', borderRadius: colors.radiusSm, border: 'none', cursor: 'pointer',
               fontSize: '12px', fontWeight: 600, transition: 'all 0.15s',
               backgroundColor: mainTab === key ? colors.green : 'transparent',
               color: mainTab === key ? '#fff' : colors.textSecondary,
@@ -504,7 +505,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         {mainTab === 'ia' && <button onClick={() => load(true)} disabled={loading}
           style={{
             display: 'flex', alignItems: 'center', gap: '5px',
-            padding: '7px 14px', borderRadius: '8px',
+            padding: '7px 14px', borderRadius: colors.radiusMd,
             backgroundColor: colors.green, color: 'white',
             border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
             fontSize: '12px', fontWeight: 600, opacity: loading ? 0.6 : 1,
@@ -520,7 +521,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
             onClick={() => setMenuOpen(o => !o)}
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: '34px', height: '34px', borderRadius: '8px',
+              width: '34px', height: '34px', borderRadius: colors.radiusMd,
               backgroundColor: menuOpen ? colors.bgHover : 'transparent',
               border: `1px solid ${colors.border}`,
               color: colors.textSecondary, cursor: 'pointer',
@@ -739,7 +740,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
               backgroundColor: colors.bgAccent2, color: colors.green,
-              padding: '7px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 600,
+              padding: '7px 16px', borderRadius: colors.radiusMd, fontSize: '13px', fontWeight: 600,
               border: `1px solid ${colors.green}44`,
               cursor: (pickingAll || templates.length === 0) ? 'not-allowed' : 'pointer',
               opacity: pickingAll ? 0.7 : 1,
@@ -755,7 +756,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               display: 'flex', alignItems: 'center', gap: '6px',
               backgroundColor: selectedWithTemplate > 0 ? colors.green : colors.bgHover,
               color: selectedWithTemplate > 0 ? 'white' : colors.textSecondary,
-              padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 500,
+              padding: '7px 14px', borderRadius: colors.radiusMd, fontSize: '13px', fontWeight: 500,
               border: 'none',
               cursor: selectedWithTemplate > 0 ? 'pointer' : 'not-allowed',
               opacity: sendingBulk ? 0.7 : 1,
@@ -779,7 +780,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
           {onClearFilter && (
             <button onClick={onClearFilter} style={{
               display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto',
-              background: 'none', border: `1px solid ${colors.green}44`, borderRadius: '6px',
+              background: 'none', border: `1px solid ${colors.green}44`, borderRadius: colors.radiusSm,
               color: colors.green, fontSize: '11px', cursor: 'pointer', padding: '2px 8px',
             }}>
               <X size={11} /> Ver todos
@@ -803,7 +804,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
           <div style={{ textAlign: 'center', padding: '60px', color: colors.red }}>
             <AlertCircle size={40} style={{ marginBottom: '12px', opacity: 0.7 }} />
             <div style={{ fontSize: '14px', marginBottom: '16px', maxWidth: '400px', margin: '0 auto 16px', lineHeight: 1.5 }}>{error}</div>
-            <button onClick={() => load(true)} style={{ backgroundColor: `${colors.green}22`, color: colors.green, border: `1px solid ${colors.green}33`, borderRadius: '8px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer' }}>
+            <button onClick={() => load(true)} style={{ backgroundColor: `${colors.green}22`, color: colors.green, border: `1px solid ${colors.green}33`, borderRadius: colors.radiusMd, padding: '8px 16px', fontSize: '13px', cursor: 'pointer' }}>
               Reintentar
             </button>
           </div>
@@ -934,7 +935,7 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
           : `La IA estima que comprará en aproximadamente ${predDays} días, basado en su ciclo habitual.`}>
           <span style={{
             backgroundColor: predBg, color: predColor,
-            borderRadius: '6px', padding: '3px 10px',
+            borderRadius: colors.radiusSm, padding: '3px 10px',
             fontSize: '12px', fontWeight: 700,
             border: `1px solid ${predColor}44`,
             flexShrink: 0,
@@ -947,10 +948,10 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
         {sentToday && (
           <Tooltip text={`Ya se le envió un template hoy a las ${sentToday}. El backend lo omitirá si intentas enviarlo de nuevo.`}>
             <span style={{
-              backgroundColor: '#f59e0b22', color: '#f59e0b',
-              borderRadius: '6px', padding: '3px 8px',
+              backgroundColor: colors.amberStrong + '22', color: colors.amberStrong,
+              borderRadius: colors.radiusSm, padding: '3px 8px',
               fontSize: '11px', fontWeight: 700, flexShrink: 0,
-              border: '1px solid #f59e0b44',
+              border: `1px solid ${colors.amberStrong}44`,
             }}>
               📬 {sentToday}
             </span>
@@ -961,7 +962,7 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
         <Tooltip text={`Confianza de la predicción. ${conf >= 80 ? 'Alta — patrón de compra muy regular.' : conf >= 60 ? 'Media — patrón moderadamente consistente.' : 'Baja — pocos datos o compras irregulares.'}`}>
           <span style={{
             backgroundColor: colors.bgHover, color: cColor,
-            borderRadius: '6px', padding: '3px 8px',
+            borderRadius: colors.radiusSm, padding: '3px 8px',
             fontSize: '11px', fontWeight: 700, flexShrink: 0,
           }}>
             {conf}%
@@ -1062,7 +1063,7 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
           {/* Resultado del pick de IA */}
           {pick && !pick.loading && (
             <div style={{
-              backgroundColor: colors.bgAccent2, borderRadius: '8px',
+              backgroundColor: colors.bgAccent2, borderRadius: colors.radiusMd,
               border: `1px solid ${colors.green}33`,
               padding: '7px 10px',
             }}>
@@ -1094,7 +1095,7 @@ function CandidateCard({ candidate: c, isSelected, isSending, pick, onToggleSele
               display: 'flex', alignItems: 'center', gap: '5px',
               backgroundColor: pick && !pick.loading ? colors.bgHover : colors.bgAccent2,
               color: pick && !pick.loading ? colors.textSecondary : colors.green,
-              padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
+              padding: '5px 10px', borderRadius: colors.radiusSm, fontSize: '11px', fontWeight: 500,
               border: `1px solid ${pick && !pick.loading ? colors.border : `${colors.green}44`}`,
               cursor: isPickLoading ? 'not-allowed' : 'pointer',
               opacity: isPickLoading ? 0.6 : 1, alignSelf: 'flex-start',
@@ -1328,7 +1329,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       {toast && (
         <div style={{
           position: 'fixed', top: '70px', right: '20px', zIndex: 9999,
-          backgroundColor: toast.type === 'error' ? '#f87171' : '#22c55e',
+          backgroundColor: toast.type === 'error' ? colors.dangerSoft : colors.success,
           color: '#fff', padding: '10px 18px', borderRadius: '10px',
           fontSize: '13px', fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
         }}>{toast.msg}</div>
@@ -1342,7 +1343,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Buscar por nombre o teléfono..."
-          style={{ flex: 1, minWidth: '180px', padding: '7px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
+          style={{ flex: 1, minWidth: '180px', padding: '7px 12px', borderRadius: colors.radiusMd, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
         />
 
         {/* Filtro por producto (ej: jumbo) */}
@@ -1352,7 +1353,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             onChange={e => setProdTerm(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') applyProduct(); }}
             placeholder="Producto (ej: jumbo)"
-            style={{ width: '150px', padding: '7px 12px', borderRadius: '8px', border: `1px solid ${prodPhones ? colors.green + '66' : colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
+            style={{ width: '150px', padding: '7px 12px', borderRadius: colors.radiusMd, border: `1px solid ${prodPhones ? colors.green + '66' : colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
           />
           <button onClick={applyProduct} disabled={prodBusy}
             style={{ padding: '6px 11px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
@@ -1434,7 +1435,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           <select
             value={selTpl?.name || ''}
             onChange={e => setSelTpl(templates.find(t => t.name === e.target.value) || null)}
-            style={{ padding: '7px 10px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', cursor: 'pointer' }}>
+            style={{ padding: '7px 10px', borderRadius: colors.radiusMd, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', cursor: 'pointer' }}>
             {templates.map(t => (
               <option key={t.name} value={t.name}>{t.name}</option>
             ))}
@@ -1454,7 +1455,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         {/* Enviar */}
         <button onClick={handleSend} disabled={sending || selected.size === 0 || !selTpl} style={{
           display: 'flex', alignItems: 'center', gap: '6px',
-          padding: '7px 16px', borderRadius: '8px', border: 'none',
+          padding: '7px 16px', borderRadius: colors.radiusMd, border: 'none',
           backgroundColor: (selected.size > 0 && selTpl) ? colors.green : colors.bgHover,
           color: (selected.size > 0 && selTpl) ? '#fff' : colors.textMuted,
           fontSize: '13px', fontWeight: 700, cursor: (sending || selected.size === 0 || !selTpl) ? 'not-allowed' : 'pointer',
@@ -1473,7 +1474,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             value={testPhoneInput}
             onChange={e => setTestPhoneInput(e.target.value)}
             placeholder="+56912345678"
-            style={{ padding: '4px 10px', borderRadius: '6px', border: `1px solid ${colors.yellow}66`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '12px', width: '160px', outline: 'none' }}
+            style={{ padding: '4px 10px', borderRadius: colors.radiusSm, border: `1px solid ${colors.yellow}66`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '12px', width: '160px', outline: 'none' }}
           />
           {TEST_PHONE
             ? <span style={{ fontSize: '12px', color: colors.yellow }}>Todos los mensajes irán a <strong>{TEST_PHONE}</strong></span>
@@ -1533,7 +1534,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 <div style={{ color: colors.textMuted, fontSize: '12px' }}>{c.phone}</div>
               </div>
               {c.total_orders > 0 && (
-                <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: '6px', padding: '2px 6px' }}>
+                <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: colors.radiusSm, padding: '2px 6px' }}>
                   {c.total_orders} pedidos
                 </span>
               )}
