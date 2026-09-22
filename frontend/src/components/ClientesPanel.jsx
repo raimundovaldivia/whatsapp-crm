@@ -209,6 +209,25 @@ export default function ClientesPanel({ onOpenConversation }) {
     }
   }, []);
 
+  // ── Despachos repetidos ──
+  const [repeatData, setRepeatData] = useState({ clientes: [], total: 0, loading: false, error: null, loaded: false });
+
+  const loadRepeat = useCallback(async () => {
+    setRepeatData(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const res = await api.get('/clientes/repeat-deliveries');
+      setRepeatData({
+        clientes: res.data.clientes || [],
+        total: res.data.total || 0,
+        loading: false,
+        error: null,
+        loaded: true,
+      });
+    } catch (err) {
+      setRepeatData(prev => ({ ...prev, loading: false, error: err.response?.data?.error || err.message, loaded: true }));
+    }
+  }, []);
+
   // ── Bulk delete leads ──
   const [selectedLeads, setSelectedLeads] = useState(new Set());
   const [selectAllLeads, setSelectAllLeads] = useState(false); // true = todas las páginas
@@ -456,6 +475,11 @@ export default function ClientesPanel({ onOpenConversation }) {
   // Reset selection when changing tabs
   useEffect(() => { setSelectedLeads(new Set()); setSelectAllLeads(false); }, [tab]);
 
+  // Load repeat deliveries when switching to that tab (first time)
+  useEffect(() => {
+    if (tab === 'repeat' && !repeatData.loaded && !repeatData.loading) loadRepeat();
+  }, [tab, repeatData.loaded, repeatData.loading, loadRepeat]);
+
   // Filtrado local por búsqueda
   const filtered = search.trim()
     ? allCustomers.filter(c => {
@@ -497,6 +521,7 @@ export default function ClientesPanel({ onOpenConversation }) {
           {[
             { key: 'clientes', label: 'Clientes Shopify', icon: <ShoppingBag size={12} /> },
             { key: 'leads',    label: 'Leads WhatsApp',   icon: <Zap size={12} /> },
+            { key: 'repeat',   label: '🔁 Despachos repetidos', icon: null },
           ].map(({ key, label, icon }) => (
             <button key={key} onClick={() => setTab(key)}
               style={{
@@ -568,7 +593,7 @@ export default function ClientesPanel({ onOpenConversation }) {
       </div>
 
       {/* Stats — Clientes tab */}
-      {!isLeads && allCustomers.length > 0 && (
+      {!isLeads && tab !== 'repeat' && allCustomers.length > 0 && (
         <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}` }}>
           {[
             { label: 'Clientes totales', value: allCustomers.length,                                          icon: <Users size={14} /> },
@@ -588,7 +613,7 @@ export default function ClientesPanel({ onOpenConversation }) {
       )}
 
       {/* Banner: primera vez, necesita sync */}
-      {!isLeads && needsSync && !loading && (
+      {!isLeads && tab !== 'repeat' && needsSync && !loading && (
         <div style={{ backgroundColor: `${colors.green}15`, borderBottom: `1px solid ${colors.green}33`, padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <RefreshCw size={16} color={colors.green} />
           <span style={{ color: colors.textPrimary, fontSize: '13px' }}>
@@ -622,7 +647,7 @@ export default function ClientesPanel({ onOpenConversation }) {
       )}
 
       {/* ═══ CLIENTES TAB ═══ */}
-      {!isLeads && (
+      {!isLeads && tab !== 'repeat' && (
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {loading && allCustomers.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '80px', color: colors.textSecondary }}>
@@ -988,6 +1013,62 @@ export default function ClientesPanel({ onOpenConversation }) {
                 </button>
               </div>
             )}
+          </>
+        )}
+      </div>
+      )}
+
+      {tab === 'repeat' && (
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+        {repeatData.loading ? (
+          <div style={{ textAlign: 'center', padding: '80px', color: colors.textSecondary }}>
+            <div style={{ width: '36px', height: '36px', border: `3px solid ${colors.border}`, borderTop: `3px solid ${colors.green}`, borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
+            <div style={{ fontSize: '14px' }}>Cargando despachos repetidos...</div>
+          </div>
+        ) : repeatData.error ? (
+          <div style={{ textAlign: 'center', padding: '60px', color: colors.red }}>
+            <WifiOff size={40} style={{ marginBottom: '12px', opacity: 0.7 }} />
+            <div style={{ fontSize: '14px', marginBottom: '16px' }}>{repeatData.error}</div>
+            <button onClick={loadRepeat} style={{ backgroundColor: `${colors.green}22`, color: colors.green, border: `1px solid ${colors.green}33`, borderRadius: '8px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer' }}>Reintentar</button>
+          </div>
+        ) : repeatData.clientes.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '80px', color: colors.textSecondary }}>
+            <MapPin size={48} style={{ marginBottom: '16px', opacity: 0.2 }} />
+            <div style={{ fontSize: '15px' }}>No hay clientes con más de un despacho todavía.</div>
+          </div>
+        ) : (
+          <>
+            <div style={{ color: colors.textSecondary, fontSize: '13px', marginBottom: '16px' }}>
+              <strong style={{ color: colors.textPrimary }}>{repeatData.total}</strong> clientes con más de un despacho
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {repeatData.clientes.map((c, i) => (
+                <div key={c.phone || i} style={{ backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px 16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>{c.name || 'Sin nombre'}</span>
+                      <span style={{ color: colors.textSecondary, fontSize: '12px' }}>{c.phone}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={ui.chip(colors, colors.green)}>🚚 {c.deliveries} despachos</span>
+                      {c.addressCount > 1 && (
+                        <span style={ui.chip(colors, colors.warning)}>más de 1 dirección</span>
+                      )}
+                      {c.last && (
+                        <span style={{ color: colors.textMuted, fontSize: '11px' }}>Último: {new Date(c.last).toLocaleDateString('es-CL')}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {(c.addresses || []).map((addr, j) => (
+                      <span key={j} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', backgroundColor: colors.bgHover, color: colors.textSecondary, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '4px 10px', fontSize: '12px' }}>
+                        <MapPin size={12} color={colors.blue} /> {addr}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </>
         )}
       </div>
