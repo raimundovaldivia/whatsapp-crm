@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   Linking, Alert, ActivityIndicator, Platform, ScrollView,
 } from 'react-native';
-import { updateStopStatus, getSellCatalog } from '../services/api';
+import { updateStopStatus, getSellCatalog, getModules, getOrderItems, setOrderItems } from '../services/api';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 
@@ -34,6 +34,8 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const [paidWith,      setPaidWith]      = useState(null);
   // Nota que el repartidor puede dejar en la parada (ej: "dejé con conserje").
   const [note, setNote] = useState(navRoute.params?.stop?.note || '');
+  // Total mostrado en pantalla; puede cambiar si el repartidor edita los productos.
+  const [orderTotal, setOrderTotal] = useState(Number(navRoute.params?.stop?.totalPrice) || 0);
 
   // Venta extra en ruta ("bandejas extras") — solo si la tienda lo activó.
   const [sellEnabled, setSellEnabled] = useState(false);
@@ -41,10 +43,24 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const [showPicker,  setShowPicker]  = useState(false);
   const [extras,      setExtras]      = useState({}); // id → { title, price, quantity }
 
+  // Editar productos entregados — solo si la tienda activó el módulo.
+  const [editItemsEnabled, setEditItemsEnabled] = useState(false);
+  const [showItemsEditor,  setShowItemsEditor]  = useState(false);
+  const [editItems,        setEditItems]        = useState([]); // [{ name, quantity, price, extra }]
+  const [loadingItems,     setLoadingItems]     = useState(false);
+  const [savingItems,      setSavingItems]      = useState(false);
+
   useEffect(() => {
     getSellCatalog()
       .then(d => { setSellEnabled(!!d?.enabled); setCatalog(Array.isArray(d?.products) ? d.products : []); })
       .catch(() => { setSellEnabled(false); });
+  }, []);
+
+  // Feature-flag: ¿está activado el editor de productos entregados?
+  useEffect(() => {
+    getModules()
+      .then(m => setEditItemsEnabled(!!m?.edit_delivered_items))
+      .catch(() => setEditItemsEnabled(false));
   }, []);
 
   const extrasList  = Object.values(extras).filter(e => e.quantity > 0);
@@ -57,6 +73,85 @@ export default function StopScreen({ route: navRoute, navigation }) {
       const quantity = Math.max(0, cur.quantity + delta);
       return { ...prev, [p.id]: { ...cur, title: p.title, price: p.price, quantity } };
     });
+  }
+
+  // Origen y número del pedido (para leer/guardar sus items). Preferimos los
+  // campos del stop; si faltan, partimos el stopKey por el primer "_"
+  // (ej: "bot_123" o "shopify_gid://shopify/Order/123").
+  const orderSource = stop?.source || (stopKey && stopKey.indexOf('_') >= 0 ? stopKey.slice(0, stopKey.indexOf('_')) : null);
+  const orderId     = (stop?.id != null && stop?.id !== '')
+    ? stop.id
+    : (stopKey && stopKey.indexOf('_') >= 0 ? stopKey.slice(stopKey.indexOf('_') + 1) : null);
+
+  // Total en vivo del editor.
+  const editTotal = editItems.reduce((sum, it) => sum + (Number(it.price) || 0) * (Number(it.quantity) || 0), 0);
+
+  async function openItemsEditor() {
+    if (!orderSource || orderId == null) {
+      Alert.alert('Sin pedido', 'No se pudo determinar el pedido para editar sus productos.');
+      return;
+    }
+    setLoadingItems(true);
+    try {
+      const data  = await getOrderItems(orderSource, orderId);
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setEditItems(items.map(it => ({
+        name:     it.name,
+        quantity: Number(it.quantity) || 0,
+        price:    Number(it.price) || 0,
+        extra:    it.extra,
+      })));
+      setShowItemsEditor(true);
+    } catch (err) {
+      if (err.response?.status === 401) return; // la app vuelve al login sola
+      const msg = err.response?.data?.error
+        || (err.code === 'ECONNABORTED' ? 'Sin conexión. Intenta de nuevo cuando tengas señal.' : err.message);
+      Alert.alert('No se pudieron cargar los productos', msg);
+    } finally {
+      setLoadingItems(false);
+    }
+  }
+
+  function bumpItemQty(index, delta) {
+    setEditItems(prev => prev.map((it, i) =>
+      i === index ? { ...it, quantity: Math.max(0, (Number(it.quantity) || 0) + delta) } : it
+    ));
+  }
+
+  function removeItem(index) {
+    setEditItems(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function saveItems() {
+    setSavingItems(true);
+    try {
+      const payload = editItems.map(it => ({
+        name:     it.name,
+        quantity: Number(it.quantity) || 0,
+        price:    Number(it.price) || 0,
+        ...(it.extra !== undefined ? { extra: it.extra } : {}),
+      }));
+      const resp = await setOrderItems(orderSource, orderId, payload);
+      const newTotal = resp?.total;
+      setShowItemsEditor(false);
+      setEditItems([]);
+      if (typeof newTotal === 'number') setOrderTotal(newTotal);
+      Alert.alert('Productos actualizados', typeof newTotal === 'number'
+        ? `Nuevo total: ${CLP(newTotal)}`
+        : 'Los cambios se guardaron.');
+    } catch (err) {
+      if (err.response?.status === 401) return; // la app vuelve al login sola
+      const msg = err.response?.data?.error
+        || (err.code === 'ECONNABORTED' ? 'Sin conexión. Intenta de nuevo cuando tengas señal.' : err.message);
+      Alert.alert('No se pudo guardar', msg);
+    } finally {
+      setSavingItems(false);
+    }
+  }
+
+  function cancelItemsEditor() {
+    setShowItemsEditor(false);
+    setEditItems([]);
   }
 
   function openMaps() {
@@ -193,11 +288,11 @@ export default function StopScreen({ route: navRoute, navigation }) {
       )}
 
       {/* Total */}
-      {stop.totalPrice > 0 && (
+      {orderTotal > 0 && (
         <View style={s.infoCard}>
           <Text style={s.infoLabel}>💰 Total</Text>
           <Text style={[s.infoValue, { color: C.green, fontWeight: '700' }]}>
-            ${Math.round(stop.totalPrice).toLocaleString('es-CL')}
+            ${Math.round(orderTotal).toLocaleString('es-CL')}
           </Text>
         </View>
       )}
@@ -247,9 +342,9 @@ export default function StopScreen({ route: navRoute, navigation }) {
         /* ── Paso 2: ¿cómo pagó? ── */
         <View style={s.payBox}>
           <Text style={s.payTitle}>¿Cómo pagó {stop.customerName?.split(' ')[0] || 'el cliente'}?</Text>
-          {(Number(stop.totalPrice) > 0 || extrasTotal > 0) && (
+          {(orderTotal > 0 || extrasTotal > 0) && (
             <Text style={s.paySub}>
-              Total a cobrar: {CLP((Number(stop.totalPrice) || 0) + extrasTotal)}
+              Total a cobrar: {CLP(orderTotal + extrasTotal)}
               {extrasTotal > 0 ? ` (incluye +${CLP(extrasTotal)} extra)` : ''}
             </Text>
           )}
@@ -335,6 +430,45 @@ export default function StopScreen({ route: navRoute, navigation }) {
               })}
               {extrasList.length > 0 && (
                 <Text style={s.sellSummary}>{extrasList.map(e => `${e.quantity}× ${e.title}`).join(', ')} = {CLP(extrasTotal)}</Text>
+              )}
+            </View>
+          )}
+
+          {editItemsEnabled && (
+            <View style={s.editBox}>
+              {!showItemsEditor ? (
+                <TouchableOpacity style={s.editOpenBtn} onPress={openItemsEditor} disabled={loadingItems} activeOpacity={0.85}>
+                  {loadingItems ? <ActivityIndicator color={C.blue} /> : (
+                    <Text style={s.editOpenText}>✏️ Editar productos entregados</Text>
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <Text style={s.editTitle}>Editar productos</Text>
+                  {editItems.length === 0 ? (
+                    <Text style={s.editEmpty}>No quedan productos. Al guardar se quitarán todos.</Text>
+                  ) : editItems.map((it, i) => (
+                    <View key={i} style={s.editRow}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={s.editName} numberOfLines={2}>{it.name}</Text>
+                        <Text style={s.editPrice}>{CLP(it.price)}{it.quantity > 0 ? ` · ${CLP((Number(it.price) || 0) * (Number(it.quantity) || 0))}` : ''}</Text>
+                      </View>
+                      <TouchableOpacity style={s.stepBtn} onPress={() => bumpItemQty(i, -1)}><Text style={s.stepTxt}>−</Text></TouchableOpacity>
+                      <Text style={s.stepQty}>{it.quantity}</Text>
+                      <TouchableOpacity style={s.stepBtn} onPress={() => bumpItemQty(i, +1)}><Text style={s.stepTxt}>+</Text></TouchableOpacity>
+                      <TouchableOpacity style={s.editRemoveBtn} onPress={() => removeItem(i)}><Text style={s.editRemoveTxt}>✕</Text></TouchableOpacity>
+                    </View>
+                  ))}
+                  <Text style={s.editTotal}>Total: {CLP(editTotal)}</Text>
+                  <View style={s.editActions}>
+                    <TouchableOpacity style={[s.editSaveBtn, savingItems && s.btnDisabled]} onPress={saveItems} disabled={savingItems} activeOpacity={0.85}>
+                      {savingItems ? <ActivityIndicator color="#fff" /> : <Text style={s.editSaveTxt}>Guardar</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={s.editCancelBtn} onPress={cancelItemsEditor} disabled={savingItems} activeOpacity={0.85}>
+                      <Text style={s.editCancelTxt}>Cancelar</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
               )}
             </View>
           )}
@@ -456,4 +590,21 @@ const s = StyleSheet.create({
   payIcon:      { fontSize: 30 },
   payBtnText:   { color: '#fff', fontWeight: '800', fontSize: 17 },
   payCancel:    { color: C.muted, fontSize: 15, textAlign: 'center', padding: 12 },
+
+  editBox:       { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 12, gap: 10 },
+  editOpenBtn:   { alignItems: 'center', paddingVertical: 4 },
+  editOpenText:  { color: C.blue, fontSize: 15, fontWeight: '700' },
+  editTitle:     { color: C.text, fontSize: 15, fontWeight: '800' },
+  editEmpty:     { color: C.muted, fontSize: 13 },
+  editRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 8 },
+  editName:      { color: C.text, fontSize: 14, fontWeight: '600' },
+  editPrice:     { color: C.muted, fontSize: 12, marginTop: 2 },
+  editRemoveBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: C.red + '22', alignItems: 'center', justifyContent: 'center' },
+  editRemoveTxt: { color: C.red, fontSize: 16, fontWeight: '800' },
+  editTotal:     { color: C.green, fontSize: 15, fontWeight: '800', textAlign: 'right', marginTop: 4 },
+  editActions:   { flexDirection: 'row', gap: 10, marginTop: 4 },
+  editSaveBtn:   { flex: 1, backgroundColor: C.green, borderRadius: 12, padding: 14, alignItems: 'center' },
+  editSaveTxt:   { color: '#fff', fontSize: 15, fontWeight: '800' },
+  editCancelBtn: { flex: 1, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, alignItems: 'center' },
+  editCancelTxt: { color: C.muted, fontSize: 15, fontWeight: '700' },
 });
