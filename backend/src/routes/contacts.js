@@ -123,6 +123,42 @@ router.get('/stats', async (req, res) => {
  * Todos los contactos con teléfono desde la tabla contacts.
  * Los clientes de Shopify se sincronizan automáticamente en upsertShopifyOrders.
  */
+// GET /api/contacts/by-product?q=<texto>
+// Devuelve los teléfonos (normalizados) de clientes que ALGUNA VEZ compraron un
+// producto cuyo título contiene <texto> — en pedidos del bot o de Shopify.
+// Sirve para segmentar campañas (ej: q=jumbo → compradores de huevos jumbo).
+router.get('/by-product', requireContactsAccess, async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.json({ success: true, phones: [], count: 0, term: '' });
+  try {
+    const like = `%${q}%`;
+    const { rows } = await pool.query(
+      `SELECT DISTINCT customer_phone FROM (
+         SELECT customer_phone FROM orders
+           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+             AND status <> 'cancelled' AND items::text ILIKE $2
+         UNION
+         SELECT customer_phone FROM shopify_orders
+           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+             AND items::text ILIKE $2
+       ) t`,
+      [req.orgId, like]
+    );
+    const norm = p => {
+      const n = String(p || '').replace(/\D/g, '');
+      if (/^9\d{8}$/.test(n)) return '56' + n;
+      return n;
+    };
+    const phones = [...new Set(rows.map(r => norm(r.customer_phone)).filter(Boolean))];
+    res.json({ success: true, phones, count: phones.length, term: q });
+  } catch (err) {
+    console.error('[Contacts/by-product]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get('/broadcast', requireContactsAccess, async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
