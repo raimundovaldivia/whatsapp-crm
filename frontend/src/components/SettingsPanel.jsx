@@ -14,6 +14,7 @@ import {
 import { setupAPI, api, storeSettingsAPI, settingsAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 
 const TABS = [
   { key: 'shopify',   label: 'Shopify',    icon: ShoppingBag },
@@ -94,10 +95,7 @@ function ShopifyTab() {
   const [success, setSuccess]     = useState('');
   const [syncing, setSyncing]     = useState(false);
 
-  const card = {
-    backgroundColor: colors.bgPanel, borderRadius: '14px',
-    border: `1px solid ${colors.border}`, overflow: 'hidden',
-  };
+  const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', padding: undefined });
   const inp = {
     width: '100%', backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
     borderRadius: '8px', padding: '10px 14px', color: colors.textPrimary, fontSize: '14px',
@@ -381,10 +379,7 @@ function WhatsAppTab() {
   const [savingWabaId,    setSavingWabaId]    = useState(false);
   const [wabaIdSuccess,   setWabaIdSuccess]   = useState('');
 
-  const card = {
-    backgroundColor: colors.bgPanel, borderRadius: '14px',
-    border: `1px solid ${colors.border}`, overflow: 'hidden',
-  };
+  const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', padding: undefined });
 
   const loadConfig = () => {
     api.get('/settings/whatsapp').then(r => {
@@ -580,7 +575,7 @@ function WhatsAppTab() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
                   {!kapsoWabaId && <span style={{ fontSize: '14px' }}>⚠️</span>}
                   <span style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 600 }}>WABA ID — para Templates WhatsApp</span>
-                  <span style={{ backgroundColor: '#1a4060', color: '#4db6e8', fontSize: '10px', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>Templates</span>
+                  <span style={{ backgroundColor: '#1a4060', color: colors.infoSoft, fontSize: '10px', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>Templates</span>
                 </div>
                 {!kapsoWabaId && (
                   <div style={{ backgroundColor: `${colors.yellow}18`, border: `1px solid ${colors.yellow}44`, borderRadius: '6px', padding: '8px 10px', marginBottom: '10px', fontSize: '12px', color: colors.yellow, lineHeight: 1.5 }}>
@@ -589,7 +584,7 @@ function WhatsAppTab() {
                 )}
                 <p style={{ color: colors.textSecondary, fontSize: '11px', margin: '0 0 10px', lineHeight: 1.6 }}>
                   El WhatsApp Business Account ID es necesario para listar y enviar templates cuando la ventana de 24h ha expirado.
-                  Encuéntralo en <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: '#4db6e8' }}>app.kapso.ai</a> → tu número → Account ID.
+                  Encuéntralo en <a href="https://app.kapso.ai" target="_blank" rel="noreferrer" style={{ color: colors.infoSoft }}>app.kapso.ai</a> → tu número → Account ID.
                 </p>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <input
@@ -607,7 +602,7 @@ function WhatsAppTab() {
                     onClick={saveWabaId}
                     disabled={savingWabaId}
                     style={{
-                      backgroundColor: '#1a4060', color: '#4db6e8',
+                      backgroundColor: '#1a4060', color: colors.infoSoft,
                       border: '1px solid #1e5a80', borderRadius: '7px',
                       padding: '8px 14px', fontSize: '12px', fontWeight: 600,
                       cursor: savingWabaId ? 'not-allowed' : 'pointer',
@@ -938,10 +933,7 @@ function IATab({ onSwitchTab }) {
   const saveTimer  = useRef(null);
   const syncMsgTimer = useRef(null);
 
-  const card = {
-    backgroundColor: colors.bgPanel, borderRadius: '14px',
-    border: `1px solid ${colors.border}`, overflow: 'hidden',
-  };
+  const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', padding: undefined });
   const inp = {
     width: '100%', backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
     borderRadius: '8px', padding: '10px 14px', color: colors.textPrimary, fontSize: '14px',
@@ -1599,10 +1591,7 @@ function TiendaTab() {
     admin_alert_phone:   '',
   });
 
-  const card = {
-    backgroundColor: colors.bgPanel, borderRadius: '14px',
-    border: `1px solid ${colors.border}`, overflow: 'hidden', marginBottom: '16px',
-  };
+  const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', marginBottom: '16px', padding: undefined });
   const cardHeader = {
     padding: '14px 20px', borderBottom: `1px solid ${colors.border}`,
     display: 'flex', alignItems: 'center', gap: '10px',
@@ -1884,10 +1873,7 @@ function CobranzaTab() {
     return msg.trim();
   })();
 
-  const card = {
-    backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
-    borderRadius: '12px', overflow: 'hidden',
-  };
+  const card = ui.card(colors, { backgroundColor: colors.bgPanel, overflow: 'hidden', padding: undefined });
   const inp = {
     width: '100%', backgroundColor: colors.bgApp, border: `1px solid ${colors.borderStrong}`,
     borderRadius: '8px', padding: '10px 14px', color: colors.textPrimary, fontSize: '14px',
@@ -1944,7 +1930,7 @@ function CobranzaTab() {
           </div>
 
           {autoSend && (
-            <div style={{ fontSize: '12px', color: '#fbbf24', backgroundColor: '#2a1f08', border: '1px solid #78350f', borderRadius: '8px', padding: '10px 14px', lineHeight: 1.5 }}>
+            <div style={{ fontSize: '12px', color: colors.amber, backgroundColor: '#2a1f08', border: '1px solid #78350f', borderRadius: '8px', padding: '10px 14px', lineHeight: 1.5 }}>
               Con el envío automático activado, revisa bien el texto: sale tal cual, sin que nadie lo lea antes.
               Igual se respeta la espera de 6 horas entre dos cobros al mismo pedido.
             </div>
@@ -1967,7 +1953,7 @@ function CobranzaTab() {
                 <button key={p.tag} onClick={() => insertPlaceholder(p.tag)} title={p.desc}
                   style={{ fontSize: '11px', fontFamily: 'monospace', padding: '3px 8px', borderRadius: '5px',
                     border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp,
-                    color: '#4db6ac', cursor: 'pointer' }}>
+                    color: colors.tealSoft, cursor: 'pointer' }}>
                   {p.tag}
                 </button>
               ))}
@@ -1995,7 +1981,7 @@ function CobranzaTab() {
               style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }}
             />
             <p style={hintStyle}>
-              Se insertan donde pongas <code style={{ color: '#4db6ac' }}>{'{datos_banco}'}</code>.
+              Se insertan donde pongas <code style={{ color: colors.tealSoft }}>{'{datos_banco}'}</code>.
               Si no usas el placeholder, se agregan al final del mensaje.
             </p>
           </div>
@@ -2011,9 +1997,9 @@ function CobranzaTab() {
             {(() => {
               const STATUS = {
                 APPROVED: { label: '✅ Aprobado por Meta — operativo', color: colors.green,  bg: '#0f2a1a' },
-                PENDING:  { label: '⏳ Pendiente de aprobación en Meta', color: '#fbbf24', bg: '#2a1f08' },
-                REJECTED: { label: '❌ Rechazado por Meta',                color: '#f87171', bg: '#3a1515' },
-                MISSING:  { label: '⚠️ No existe en Meta',                color: '#f87171', bg: '#3a1515' },
+                PENDING:  { label: '⏳ Pendiente de aprobación en Meta', color: colors.amber, bg: '#2a1f08' },
+                REJECTED: { label: '❌ Rechazado por Meta',                color: colors.dangerSoft, bg: '#3a1515' },
+                MISSING:  { label: '⚠️ No existe en Meta',                color: colors.dangerSoft, bg: '#3a1515' },
               };
               const st = waTemplate ? (STATUS[tplStatus] || STATUS.PENDING) : null;
               return (

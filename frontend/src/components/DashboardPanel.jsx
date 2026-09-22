@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { dashboardAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 
 /* ── Animación de número contando hacia arriba ── */
 function useCountUp(target, duration = 1200) {
@@ -183,12 +184,12 @@ export default function DashboardPanel({ onChangeView }) {
   const DAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
   /* ── Estilos base ── */
-  const card = {
+  const card = ui.card(colors, {
     backgroundColor: colors.bgPanel,
     borderRadius: '14px',
-    border: `1px solid ${colors.border}`,
+    padding: 0,
     overflow: 'hidden',
-  };
+  });
 
   /* ── Fecha de inicio de semana ── */
   const weekStart = (() => {
@@ -413,8 +414,8 @@ export default function DashboardPanel({ onChangeView }) {
                             display: 'flex', alignItems: 'center', gap: '3px',
                             fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '20px',
                             backgroundColor: order.source === 'bot' ? `${colors.green}18` : '#0d2929',
-                            color: order.source === 'bot' ? colors.green : '#4db6ac',
-                            border: `1px solid ${order.source === 'bot' ? colors.green : '#4db6ac'}33`,
+                            color: order.source === 'bot' ? colors.green : colors.tealSoft,
+                            border: `1px solid ${order.source === 'bot' ? colors.green : colors.tealSoft}33`,
                             flexShrink: 0,
                           }}>
                             {order.source === 'bot' ? <><Bot size={9} /> Bot</> : '🛍️ Shopify'}
