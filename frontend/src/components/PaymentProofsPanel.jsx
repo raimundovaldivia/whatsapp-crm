@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, XCircle, Clock, RefreshCw, ExternalLink, X, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 import { paymentProofsAPI } from '../utils/api.js';
 import { formatDateTime } from '../utils/dates.js';
 
@@ -108,7 +109,7 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
         {pendingCount > 0 && (
           <div style={{
             marginLeft: 'auto',
-            backgroundColor: '#f59e0b', color: 'white',
+            backgroundColor: colors.amberStrong, color: 'white',
             borderRadius: '12px', padding: '3px 10px',
             fontSize: '13px', fontWeight: 700,
           }}>
@@ -198,7 +199,7 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
                     </div>
                     {proof.extracted_amount && (
                       <div style={{ fontSize: '12px', marginTop: '3px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                        <span style={{ color: proof.amount_matches === true ? '#22c55e' : proof.amount_matches === false ? '#ef4444' : colors.textSecondary }}>
+                        <span style={{ color: proof.amount_matches === true ? colors.success : proof.amount_matches === false ? colors.danger : colors.textSecondary }}>
                           💵 ${Number(proof.extracted_amount).toLocaleString('es-CL')}
                           {proof.amount_matches === true && ' ✓ monto OK'}
                           {proof.amount_matches === false && ' ⚠ monto difiere'}
@@ -284,7 +285,7 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
                     </span>
                     <br />
                     {selected.extracted_amount && (
-                      <span style={{ color: selected.amount_matches === true ? '#22c55e' : selected.amount_matches === false ? '#ef4444' : colors.textPrimary }}>
+                      <span style={{ color: selected.amount_matches === true ? colors.success : selected.amount_matches === false ? colors.danger : colors.textPrimary }}>
                         <b>Monto:</b> ${Number(selected.extracted_amount).toLocaleString('es-CL')}
                         {selected.amount_matches === true && ' ✅ coincide con pedido'}
                         {selected.amount_matches === false && ' ⚠️ NO coincide con pedido'}
@@ -341,7 +342,7 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
                 disabled={saving}
                 style={{
                   flex: 1, padding: '10px', borderRadius: '8px', border: 'none',
-                  backgroundColor: '#22c55e', color: 'white',
+                  backgroundColor: colors.success, color: 'white',
                   fontWeight: 700, fontSize: '14px', cursor: saving ? 'not-allowed' : 'pointer',
                   opacity: saving ? 0.7 : 1,
                 }}
@@ -353,7 +354,7 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
                 disabled={saving}
                 style={{
                   flex: 1, padding: '10px', borderRadius: '8px', border: 'none',
-                  backgroundColor: '#ef4444', color: 'white',
+                  backgroundColor: colors.danger, color: 'white',
                   fontWeight: 700, fontSize: '14px', cursor: saving ? 'not-allowed' : 'pointer',
                   opacity: saving ? 0.7 : 1,
                 }}
