@@ -44,6 +44,13 @@ export const DARK = {
   radiusMd:      '8px',
   radiusLg:      '12px',
   radiusPill:    '999px',
+  // ── Alias de compatibilidad (referencias usadas en paneles) ──
+  bg:            '#111b21',
+  bgSecondary:   '#1a2428',
+  surface:       '#232f37',
+  text:          '#e9edef',
+  blue:          '#38bdf8',
+  orange:        '#fb923c',
   navBg:         '#202c33',
 };
 
@@ -90,6 +97,13 @@ export const LIGHT = {
   radiusMd:      '8px',
   radiusLg:      '12px',
   radiusPill:    '999px',
+  // ── Alias de compatibilidad (referencias usadas en paneles) ──
+  bg:            '#f0f2f5',
+  bgSecondary:   '#f7f8fa',
+  surface:       '#f7f8fa',
+  text:          '#111b21',
+  blue:          '#38bdf8',
+  orange:        '#fb923c',
   navBg:         '#ffffff',
 };
 
