@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api, API_BASE } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import * as ui from '../ui.js';
 import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone, Download } from 'lucide-react';
 
 // ─── Mapa (Leaflet + OpenStreetMap, cargado desde index.html vía window.L) ────
@@ -1076,9 +1077,9 @@ function DespachosRepartos({ colors }) {
     URL.revokeObjectURL(a.href);
   }
 
-  const inp = { padding: '6px 9px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '12px', outline: 'none' };
+  const inp = ui.input(colors, { padding: '6px 9px', backgroundColor: colors.bgCard, fontSize: '12px' });
   const chip = (text, color) => (
-    <span style={{ fontSize: '11px', fontWeight: 600, color, backgroundColor: color + '18', border: `1px solid ${color}44`, borderRadius: '20px', padding: '2px 9px', whiteSpace: 'nowrap' }}>{text}</span>
+    <span style={ui.chip(colors, color)}>{text}</span>
   );
 
   return (
