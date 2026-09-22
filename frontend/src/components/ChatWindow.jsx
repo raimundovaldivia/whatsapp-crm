@@ -1094,7 +1094,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                       .sort((a, b) => new Date(b._date) - new Date(a._date))
                       .map((o, i) => {
                         const fecha = o._date ? new Date(o._date).toLocaleDateString('es-CL', { day:'numeric', month:'short', year:'numeric' }) : '—';
-                        const items = Array.isArray(o.items) ? o.items : [];
+                        let items = [];
+                        try { items = Array.isArray(o.items) ? o.items : (typeof o.items === 'string' ? JSON.parse(o.items || '[]') : []); } catch { items = []; }
+                        if (!Array.isArray(items)) items = [];
                         const isShopify = o._source === 'shopify';
                         const fs = isShopify ? (o.financial_status||'').toUpperCase() : (o.status||'').toUpperCase();
                         // Etiqueta + color para TODOS los estados (Shopify y bot).
