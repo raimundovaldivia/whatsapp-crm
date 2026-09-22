@@ -939,6 +939,9 @@ function DespachosRepartos({ colors }) {
   const [editTot,     setEditTot]     = useState(null);   // stop_key con el total en edición
   const [editTotVal,  setEditTotVal]  = useState('');
   const [canEditItems, setCanEditItems] = useState(false);  // módulo edit_delivered_items
+  const [itemsModal, setItemsModal] = useState(null);  // { source, id, name, label }
+  const [itemRows,   setItemRows]   = useState(null);  // null = cargando
+  const [itemsBusy,  setItemsBusy]  = useState(false);
 
   useEffect(() => {
     api.get('/delivery/drivers').then(r => setDrivers(r.data.drivers || [])).catch(() => {});
@@ -1013,6 +1016,28 @@ function DespachosRepartos({ colors }) {
     } catch (e) {
       alert(e.response?.data?.error || 'No se pudo corregir el monto');
     }
+  }
+
+  // Editor de productos entregados (recalcula total). Bajo el modulo edit_delivered_items.
+  async function openItems(r) {
+    setItemsModal({ source: r.source, id: r.order_id, name: r.customer_name || 'cliente', label: r.order_label || '' });
+    setItemRows(null);
+    try {
+      const { data } = await api.get(`/orders/order-items?source=${r.source}&id=${encodeURIComponent(r.order_id)}`);
+      setItemRows((data.items || []).map(i => ({ name: i.name || '', quantity: Number(i.quantity) || 0, price: Number(i.price) || 0, extra: !!i.extra })));
+    } catch (e) { setItemRows([]); }
+  }
+  const setItem = (i, patch) => setItemRows(prev => prev.map((it, k) => k === i ? { ...it, ...patch } : it));
+  const removeItem = (i) => setItemRows(prev => prev.filter((_, k) => k !== i));
+  const addItem = () => setItemRows(prev => [...(prev || []), { name: '', quantity: 1, price: 0, extra: true }]);
+  async function saveItems() {
+    if (!itemsModal || !itemRows) return;
+    setItemsBusy(true);
+    try {
+      await api.patch('/orders/set-items', { source: itemsModal.source, id: itemsModal.id, items: itemRows });
+      setItemsModal(null); setItemRows(null); load();
+    } catch (e) { alert(e.response?.data?.error || 'No se pudo guardar'); }
+    finally { setItemsBusy(false); }
   }
 
   const load = useCallback(() => {
@@ -1231,17 +1256,10 @@ function DespachosRepartos({ colors }) {
                           <td style={{ padding: '8px 12px', color: colors.textPrimary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
                             {!canEditItems ? (
                               r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>
-                            ) : editTot === r.stop_key ? (
-                              <input autoFocus type="number" value={editTotVal}
-                                onChange={e => setEditTotVal(e.target.value)}
-                                onKeyDown={e => { if (e.key === 'Enter') saveTotal(r); if (e.key === 'Escape') setEditTot(null); }}
-                                onBlur={() => saveTotal(r)}
-                                style={ui.input(colors, { width: '92px', padding: '4px 6px', fontSize: '12px' })} />
                             ) : (
-                              <span onClick={() => { setEditTot(r.stop_key); setEditTotVal(String(Math.round(r.total || 0))); }}
-                                title="Clic para corregir el monto real"
-                                style={{ cursor: 'pointer', borderBottom: `1px dashed ${colors.border}` }}>
-                                {r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>}
+                              <span onClick={() => openItems(r)} title="Editar productos y monto"
+                                style={{ cursor: 'pointer', borderBottom: `1px dashed ${colors.blue}` }}>
+                                {r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>} <span style={{ color: colors.blue, fontSize: '11px' }}>✎</span>
                               </span>
                             )}
                           </td>
