@@ -9,7 +9,7 @@ import {
   ShoppingBag, RefreshCw, MessageCircle, Phone, Brain,
   Eye, EyeOff, Save, Zap, FileText, ChevronRight,
   Sparkles, ArrowRight, Clock, MapPin, DollarSign, CreditCard,
-  Bot, X, Send, RotateCcw, FlaskConical, Store,
+  Bot, X, Send, RotateCcw, FlaskConical, Store, LayoutGrid,
 } from 'lucide-react';
 import { setupAPI, api, storeSettingsAPI, settingsAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
@@ -22,6 +22,7 @@ const TABS = [
   { key: 'ia',        label: 'IA & Bot',   icon: Brain },
   { key: 'templates', label: 'Templates',  icon: FileText },
   { key: 'cobranza',  label: 'Cobranza',   icon: DollarSign },
+  { key: 'modulos',   label: 'Módulos',    icon: LayoutGrid },
 ];
 
 function Field({ label: lbl, hint: h, type = 'text', value, onChange, placeholder, password, colors }) {
@@ -1754,6 +1755,142 @@ const PLACEHOLDERS = [
 // Datos ficticios para la previsualización
 const SAMPLE = { nombre: 'María', pedido: '#1042', total: '$40.000' };
 
+const MODULOS_SECCIONES = [
+  { key: 'stats',      title: 'EstadÃ­sticas',       desc: 'Panel de mÃ©tricas y ventas.',            Icon: Zap },
+  { key: 'orders',     title: 'Pedidos',             desc: 'GestiÃ³n de pedidos y cobros.',           Icon: ShoppingBag },
+  { key: 'repartos',   title: 'Repartos',            desc: 'Rutas, despachos y app del repartidor.',  Icon: MapPin },
+  { key: 'pagos',      title: 'Pagos',               desc: 'Comprobantes de transferencia.',          Icon: CreditCard },
+  { key: 'clientes',   title: 'Clientes',            desc: 'Base de clientes y contactos.',           Icon: Phone },
+  { key: 'mensajeria', title: 'MensajerÃ­a IA',      desc: 'EnvÃ­os masivos y re-enganche con IA.',   Icon: MessageCircle },
+  { key: 'productos',  title: 'Mi Tienda',           desc: 'CatÃ¡logo y tienda pÃºblica.',            Icon: Store },
+  { key: 'evaluacion', title: 'EvaluaciÃ³n del bot',  desc: 'AnÃ¡lisis y mejora del bot con IA.',      Icon: FlaskConical },
+];
+const MODULOS_FUNCIONES = [
+  { key: 'edit_delivered_items', title: 'Editar productos entregados', desc: 'Permite corregir productos y monto real de un pedido al entregar (en Despachos y en la app del repartidor).', Icon: FileText },
+];
+
+function ModulosToggle({ on, colors }) {
+  return (
+    <div style={{
+      width: '42px', height: '24px', borderRadius: '999px', flexShrink: 0,
+      backgroundColor: on ? colors.green : colors.borderStrong,
+      position: 'relative', transition: 'background-color 0.15s',
+    }}>
+      <span style={{
+        position: 'absolute', top: '3px', left: on ? '21px' : '3px',
+        width: '18px', height: '18px', borderRadius: '50%',
+        backgroundColor: '#fff', transition: 'left 0.15s',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+      }} />
+    </div>
+  );
+}
+
+function ModulosCard({ mod, on, busy, onToggle, colors }) {
+  const Icon = mod.Icon;
+  return (
+    <div
+      onClick={() => !busy && onToggle(mod.key, !on)}
+      style={{
+        ...ui.card(colors, { backgroundColor: colors.bgCard }),
+        display: 'flex', alignItems: 'flex-start', gap: '12px',
+        cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
+        minWidth: '260px', flex: '1 1 260px',
+      }}>
+      <div style={{
+        width: '34px', height: '34px', borderRadius: '8px', flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: on ? colors.green + '22' : colors.bgApp,
+        color: on ? colors.green : colors.textMuted,
+      }}>
+        <Icon size={17} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '2px' }}>{mod.title}</div>
+        <div style={{ color: colors.textSecondary, fontSize: '11px', lineHeight: 1.4 }}>{mod.desc}</div>
+      </div>
+      <ModulosToggle on={on} colors={colors} />
+    </div>
+  );
+}
+
+function ModulosTab() {
+  const { colors } = useTheme();
+  const [modules, setModules] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState('');
+  const [busyKey, setBusyKey] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get('/settings/modules');
+        setModules({ ...(res.data?.defaults || {}), ...(res.data?.modules || {}) });
+      } catch (err) {
+        setError(err.response?.data?.error || 'No se pudieron cargar los mÃ³dulos');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const toggle = async (key, val) => {
+    setError('');
+    const prev = modules;
+    setModules(m => ({ ...m, [key]: val }));
+    setBusyKey(key);
+    try {
+      const res = await api.put('/settings/modules', { modules: { [key]: val } });
+      if (res.data?.modules) setModules(m => ({ ...m, ...res.data.modules }));
+    } catch (err) {
+      setModules(prev);
+      setError(err.response?.data?.error || 'No se pudo guardar el cambio');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const card = ui.card(colors, { backgroundColor: colors.bgPanel });
+
+  if (loading) {
+    return (
+      <div style={{ ...card, padding: '40px', textAlign: 'center', color: colors.textMuted }}>
+        <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} />
+      </div>
+    );
+  }
+
+  const group = (title, list) => (
+    <div>
+      <div style={{ ...ui.sectionTitle(colors), marginBottom: '10px' }}>{title}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+        {list.map(mod => (
+          <ModulosCard
+            key={mod.key}
+            mod={mod}
+            on={!!modules[mod.key]}
+            busy={busyKey === mod.key}
+            onToggle={toggle}
+            colors={colors}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div>
+        <h2 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 700, margin: '0 0 4px' }}>MÃ³dulos</h2>
+        <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>Activa o desactiva mÃ³dulos de tu ecommerce.</p>
+      </div>
+      {error && <Alert type="error" msg={error} colors={colors} />}
+      {group('Secciones', MODULOS_SECCIONES)}
+      {group('Funciones', MODULOS_FUNCIONES)}
+    </div>
+  );
+}
+
 function CobranzaTab() {
   const { colors } = useTheme();
   const [loading,     setLoading]     = useState(true);
@@ -2137,6 +2274,7 @@ export default function SettingsPanel({ successMessage, onClearMessage }) {
           </div>
         )}
         {activeTab === 'cobranza'  && <CobranzaTab />}
+        {activeTab === 'modulos'   && <ModulosTab />}
       </div>
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
