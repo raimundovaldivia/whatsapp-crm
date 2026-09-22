@@ -208,3 +208,28 @@ export async function getDailySummary() {
   const res = await client.get('/api/delivery/summary');
   return res.data;
 }
+
+// ── Módulos activables + edición de items entregados ───────────────────
+// Feature-flags de la tienda. El editor de productos entregados solo aparece
+// si modules.edit_delivered_items === true.
+export async function getModules() {
+  const client = await getClient();
+  const res = await client.get('/api/settings/modules');
+  return res.data?.modules || {};
+}
+
+// Lee los items de un pedido para editarlos en la parada.
+// Devuelve { items: [{name, quantity, price, extra}], total }.
+export async function getOrderItems(source, id) {
+  const client = await getClient();
+  const res = await client.get('/api/orders/order-items', { params: { source, id } });
+  return res.data;
+}
+
+// Guarda los items editados. El total se recalcula en el backend.
+// Los items con quantity 0 los descarta el servidor. Devuelve { total, items }.
+export async function setOrderItems(source, id, items) {
+  const client = await getClient();
+  const res = await client.patch('/api/orders/set-items', { source, id, items });
+  return res.data;
+}
