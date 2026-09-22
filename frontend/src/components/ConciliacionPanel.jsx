@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../utils/api.js';
 import { Upload, RotateCcw, Check, X, Search, Undo2, FileText } from 'lucide-react';
+import * as ui from '../ui.js';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const fmtDate = d => d ? new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—';
@@ -121,8 +122,8 @@ export default function ConciliacionPanel({ colors }) {
     return () => clearTimeout(t);
   }, [manualFor, manualQ]);
 
-  const chip = (text, color) => <span style={{ fontSize: '11px', fontWeight: 600, color, backgroundColor: color + '18', border: `1px solid ${color}44`, borderRadius: '20px', padding: '2px 9px', whiteSpace: 'nowrap' }}>{text}</span>;
-  const btn = (extra = {}) => ({ fontSize: '12px', padding: '6px 11px', borderRadius: '7px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px', ...extra });
+  const chip = (text, color) => <span style={ui.chip(colors, color)}>{text}</span>;
+  const btn = (extra = {}) => ui.btn(colors, 'secondary', { fontSize: '12px', fontWeight: 400, padding: '6px 11px', borderRadius: '7px', gap: '5px', backgroundColor: colors.bgCard, ...extra });
 
   const manualTotal = Object.values(manualSel).reduce((s, o) => s + (o.total || 0), 0);
   const highCount = rows.filter(m => m.candidates?.[0]?.confidence === 'alta').length;
@@ -149,12 +150,12 @@ export default function ConciliacionPanel({ colors }) {
 
       {stats && view === 'pending' && (
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {chip(`${stats.pending} abonos por conciliar · ${CLP(stats.pending_amount)}`, '#fbbf24')}
-          {chip(`${stats.matched} conciliados`, '#22c55e')}
+          {chip(`${stats.pending} abonos por conciliar · ${CLP(stats.pending_amount)}`, colors.amber)}
+          {chip(`${stats.matched} conciliados`, colors.success)}
         </div>
       )}
       {notice && <div style={{ fontSize: '12px', color: colors.green, backgroundColor: colors.green + '12', border: `1px solid ${colors.green}44`, borderRadius: '8px', padding: '8px 12px' }}>{notice}</div>}
-      {error  && <div style={{ fontSize: '12px', color: '#f87171', backgroundColor: '#f8717112', border: '1px solid #f8717144', borderRadius: '8px', padding: '8px 12px' }}>{error}</div>}
+      {error  && <div style={{ fontSize: '12px', color: colors.dangerSoft, backgroundColor: colors.dangerSoft + '12', border: `1px solid ${colors.dangerSoft}44`, borderRadius: '8px', padding: '8px 12px' }}>{error}</div>}
       {loading && <div style={{ color: colors.textMuted, fontSize: '13px' }}>Cargando…</div>}
 
       {/* ── Cartolas subidas ── */}
@@ -188,7 +189,7 @@ export default function ConciliacionPanel({ colors }) {
               <span style={{ color: colors.textSecondary, fontSize: '12px', minWidth: '58px' }}>{fmtDate(m.date)}</span>
               <span style={{ color: colors.textPrimary, fontWeight: 700, minWidth: '90px', fontVariantNumeric: 'tabular-nums' }}>{CLP(m.amount)}</span>
               <span style={{ color: colors.textPrimary, fontSize: '13px', flex: 1, minWidth: '160px' }}>{m.payer || m.description}</span>
-              {view === 'matched' && (m.matched_orders || []).map(o => chip(`${o.source === 'bot' ? '#BOT-' + o.id : o.id} pagado`, '#22c55e'))}
+              {view === 'matched' && (m.matched_orders || []).map(o => chip(`${o.source === 'bot' ? '#BOT-' + o.id : o.id} pagado`, colors.success))}
               {view === 'ignored' && m.note && <span style={{ fontSize: '12px', color: colors.textMuted }}>📝 {m.note}</span>}
               <button onClick={() => unmatch(m.id)} disabled={busyId === m.id} style={btn({ color: colors.textSecondary })} title="Revertir"><Undo2 size={12} /> Revertir</button>
             </div>
@@ -231,7 +232,7 @@ export default function ConciliacionPanel({ colors }) {
                             <span key={k}>{k > 0 ? ' + ' : ''}<b>{o.label}</b> {o.customer_name} · {CLP(o.total)} · {fmtDate(o.created_at)} · <span style={{ color: colors.textMuted }}>{o.status}</span></span>
                           ))}
                           {c.similarity > 0 && <span style={{ color: colors.textMuted, fontSize: '11px', marginLeft: '8px' }}>nombre {c.similarity}%</span>}
-                          {c.reused && <span style={{ color: '#fbbf24', fontSize: '11px', marginLeft: '8px' }}>ya sugerido para otro abono</span>}
+                          {c.reused && <span style={{ color: colors.amber, fontSize: '11px', marginLeft: '8px' }}>ya sugerido para otro abono</span>}
                         </span>
                         <button onClick={() => confirm(m.id, c.orders)} disabled={busyId === m.id} style={btn({ backgroundColor: colors.green, color: '#fff', border: 'none', fontWeight: 600 })}>
                           <Check size={12} /> {busyId === m.id ? 'Guardando…' : 'Confirmar pago'}
@@ -258,7 +259,7 @@ export default function ConciliacionPanel({ colors }) {
                         {manualOrders.length === 0 && <span style={{ color: colors.textMuted, fontSize: '12px' }}>Sin pedidos sin pagar que coincidan.</span>}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span style={{ fontSize: '12px', color: Math.abs(manualTotal - m.amount) <= 1 ? colors.green : '#fbbf24' }}>
+                        <span style={{ fontSize: '12px', color: Math.abs(manualTotal - m.amount) <= 1 ? colors.green : colors.amber }}>
                           Seleccionado: {CLP(manualTotal)} {Math.abs(manualTotal - m.amount) <= 1 ? '✓ calza' : `(abono ${CLP(m.amount)})`}
                         </span>
                         <div style={{ flex: 1 }} />
