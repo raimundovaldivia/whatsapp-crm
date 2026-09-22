@@ -108,7 +108,7 @@ export default function AdminAlertsBanner() {
       </div>
 
       {msg && (
-        <div style={{ padding: '0 14px 10px', fontSize: '12px', color: msg.ok ? '#4ade80' : '#fca5a5' }}>
+        <div style={{ padding: '0 14px 10px', fontSize: '12px', color: msg.ok ? colors.successSoft : '#fca5a5' }}>
           {msg.text}
         </div>
       )}

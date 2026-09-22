@@ -56,7 +56,7 @@ export default function AuthPage({ onAuth }) {
         flex: '0 0 45%',
         background: isDark
           ? 'linear-gradient(135deg, #0b1e2d 0%, #0d2e25 50%, #0b1e2d 100%)'
-          : 'linear-gradient(135deg, #00a88415 0%, #00c85310 50%, #00a88408 100%)',
+          : `linear-gradient(135deg, ${colors.green}15 0%, #00c85310 50%, ${colors.green}08 100%)`,
         borderRight: `1px solid ${colors.border}`,
         flexDirection: 'column',
         justifyContent: 'center',
