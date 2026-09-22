@@ -1138,7 +1138,7 @@ function DespachosRepartos({ colors }) {
       {days.map(d => {
         const open = openDays[d.day] !== false; // abiertos por defecto
         return (
-          <div key={d.day} style={{ border: `1px solid ${colors.border}`, borderRadius: '10px', overflow: 'hidden' }}>
+          <div key={d.day} style={{ border: `1px solid ${colors.border}`, borderRadius: '10px', overflow: 'hidden', flexShrink: 0 }}>
             <div onClick={() => setOpenDays(o => ({ ...o, [d.day]: !open }))}
               style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', backgroundColor: colors.bgCard, cursor: 'pointer', flexWrap: 'wrap' }}>
               {open ? <ChevronDown size={14} color={colors.textMuted} /> : <ChevronRight size={14} color={colors.textMuted} />}
@@ -1257,6 +1257,33 @@ function DespachosRepartos({ colors }) {
                 </select>
               )}
 
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>Destinatarios ({selCount}/{rowsM.length})</span>
+                <button onClick={() => setChargeSel(allSel ? new Set() : new Set(rowsM.map(r => r.stop_key)))}
+                  style={{ background: 'none', border: 'none', color: colors.blue, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                  {allSel ? 'Ninguno' : 'Todos'}
+                </button>
+              </div>
+              <div style={{ maxHeight: 160, overflowY: 'auto', border: `1px solid ${colors.border}`, borderRadius: 10, marginBottom: 14 }}>
+                {rowsM.map((r, i) => {
+                  const on = chargeSel.has(r.stop_key);
+                  return (
+                    <div key={r.stop_key}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderBottom: i < rowsM.length - 1 ? `1px solid ${colors.border}` : 'none', background: i === idx ? colors.bgHover : 'transparent' }}>
+                      <input type="checkbox" checked={on}
+                        onChange={() => setChargeSel(prev => { const n = new Set(prev); n.has(r.stop_key) ? n.delete(r.stop_key) : n.add(r.stop_key); return n; })}
+                        style={{ cursor: 'pointer' }} />
+                      <div onClick={() => setChargeIdx(i)} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                        <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.customer_name || 'cliente'}</div>
+                        <div style={{ color: colors.textMuted, fontSize: 11 }}>{r.order_label} · {CLP(r.total || 0)}</div>
+                      </div>
+                      <button onClick={() => setChargeIdx(i)} title="Ver vista previa"
+                        style={{ background: 'none', border: 'none', color: i === idx ? colors.green : colors.textMuted, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>ver</button>
+                    </div>
+                  );
+                })}
+              </div>
+
               <div style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
                 Vista previa{rowsM.length > 1 ? ` (${idx + 1}/${rowsM.length})` : ''} · {row?.customer_name || 'cliente'} · {row?.order_label || ''}
               </div>
@@ -1279,9 +1306,9 @@ function DespachosRepartos({ colors }) {
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
                 <button onClick={() => setChargeModal(null)} disabled={charging === chargeModal.day}
                   style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.textSecondary, padding: '9px 14px', cursor: 'pointer', fontWeight: 700 }}>Cancelar</button>
-                <button onClick={doCharge} disabled={charging === chargeModal.day || (chargeTpls.length > 0 && !chargeTpl)}
-                  style={{ background: '#fbbf24', color: '#231a02', border: 'none', borderRadius: 8, padding: '9px 16px', cursor: 'pointer', fontWeight: 800, opacity: charging === chargeModal.day ? 0.6 : 1 }}>
-                  {charging === chargeModal.day ? 'Enviando…' : `Enviar a ${rowsM.length}`}
+                <button onClick={doCharge} disabled={charging === chargeModal.day || selCount === 0 || (chargeTpls.length > 0 && !chargeTpl)}
+                  style={{ background: '#fbbf24', color: '#231a02', border: 'none', borderRadius: 8, padding: '9px 16px', cursor: (selCount === 0 ? 'not-allowed' : 'pointer'), fontWeight: 800, opacity: (charging === chargeModal.day || selCount === 0) ? 0.6 : 1 }}>
+                  {charging === chargeModal.day ? 'Enviando…' : `Enviar a ${selCount}`}
                 </button>
               </div>
             </div>
