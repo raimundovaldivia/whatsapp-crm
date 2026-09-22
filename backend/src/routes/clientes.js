@@ -56,6 +56,60 @@ function contactToCustomer(c) {
  * Devuelve clientes desde la tabla contacts local (sin llamar a Shopify).
  * Si no hay clientes sincronizados, indica que hay que hacer /sync primero.
  */
+// GET /api/clientes/repeat-deliveries
+// Clientes a los que se les despachó (entregó) más de una vez, con sus
+// distintas direcciones de despacho (base para múltiples direcciones).
+router.get('/repeat-deliveries', async (req, res) => {
+  try {
+    const pool = getPool();
+    const [bot, shop] = await Promise.all([
+      pool.query(
+        `SELECT customer_phone AS phone, customer_name AS name, created_at AS d, shipping_address AS addr
+           FROM orders
+          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+            AND (status IN ('entregado','paid') OR delivered_at IS NOT NULL)`,
+        [req.orgId]
+      ),
+      pool.query(
+        `SELECT customer_phone AS phone, customer_name AS name, shopify_created_at AS d,
+                NULLIF(TRIM(CONCAT_WS(', ', shipping_address1, shipping_city)), '') AS addr
+           FROM shopify_orders
+          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+            AND (crm_status = 'entregado' OR delivered_at IS NOT NULL OR LOWER(COALESCE(fulfillment_status,'')) = 'fulfilled')`,
+        [req.orgId]
+      ),
+    ]);
+    const norm = p => { const n = String(p || '').replace(/\D/g, ''); return /^9\d{8}$/.test(n) ? '56' + n : n; };
+    const botAddr = a => {
+      if (!a) return '';
+      let x = a;
+      if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return String(a).trim(); } }
+      if (x && typeof x === 'object') return [x.address || x.address1, x.city].filter(Boolean).join(', ');
+      return String(a).trim();
+    };
+    const map = new Map();
+    const add = (r, addr) => {
+      const k = norm(r.phone); if (!k) return;
+      if (!map.has(k)) map.set(k, { phone: k, name: r.name || '', deliveries: 0, addrs: new Set(), last: null });
+      const e = map.get(k);
+      e.deliveries++;
+      if (addr) e.addrs.add(addr);
+      if (r.name && r.name.length > (e.name ? e.name.length : 0)) e.name = r.name;
+      if (!e.last || new Date(r.d) > new Date(e.last)) e.last = r.d;
+    };
+    for (const r of bot.rows)  add(r, botAddr(r.addr));
+    for (const r of shop.rows) add(r, r.addr ? String(r.addr).trim() : '');
+    const clientes = [...map.values()]
+      .filter(e => e.deliveries > 1)
+      .map(e => ({ phone: e.phone, name: e.name, deliveries: e.deliveries, addresses: [...e.addrs], addressCount: e.addrs.size, last: e.last }))
+      .sort((a, b) => b.deliveries - a.deliveries);
+    res.json({ success: true, total: clientes.length, clientes });
+  } catch (err) {
+    console.error('[Clientes/repeat-deliveries]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get('/all', async (req, res) => {
   try {
     const q = (req.query.query || '').toLowerCase();
