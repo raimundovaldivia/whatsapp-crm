@@ -76,6 +76,55 @@ router.put('/', async (req, res) => {
   }
 });
 
+// ── Módulos del ecommerce (feature flags activables) ────────────────────────
+// Mapa central { moduleKey: bool } que decide qué secciones/funciones están
+// activas para esta organización. Se lee en el arranque del panel.
+const MODULE_DEFAULTS = {
+  // Secciones (ocultan/muestran su pestaña en la barra lateral)
+  stats:       true,
+  orders:      true,
+  repartos:    true,
+  pagos:       true,
+  clientes:    true,
+  mensajeria:  true,
+  productos:   true,
+  evaluacion:  true,
+  // Funciones opcionales
+  edit_delivered_items: false,  // editar productos/monto entregado (Despachos + app repartidor)
+};
+
+async function getModules(orgId) {
+  let saved = {};
+  try {
+    const raw = await db.getSetting(orgId, 'modules');
+    saved = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : {};
+  } catch { saved = {}; }
+  return { ...MODULE_DEFAULTS, ...saved };
+}
+
+router.get('/modules', async (req, res) => {
+  try {
+    res.json({ success: true, modules: await getModules(req.orgId), defaults: MODULE_DEFAULTS });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put('/modules', async (req, res) => {
+  try {
+    const incoming = req.body?.modules || {};
+    const current = await getModules(req.orgId);
+    const next = { ...current };
+    for (const [k, v] of Object.entries(incoming)) {
+      if (k in MODULE_DEFAULTS) next[k] = !!v;   // solo claves conocidas
+    }
+    await db.setSetting(req.orgId, 'modules', JSON.stringify(next));
+    res.json({ success: true, modules: next });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 /**
  * POST /api/settings/test-bot
  * Simula una conversación con el bot SIN guardar nada en DB.
