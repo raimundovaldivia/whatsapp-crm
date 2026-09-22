@@ -189,7 +189,9 @@ function formatCLP(value) {
 function firstName(name) {
   const clean = (name || '').trim();
   if (!clean || /^\d+$/.test(clean)) return '';
-  return clean.split(/\s+/)[0];
+  const first = clean.split(/\s+/)[0];
+  // Estandarizar: primera letra mayuscula, resto minuscula (GEORGA -> Georga)
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 }
 
 /**

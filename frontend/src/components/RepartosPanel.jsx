@@ -882,7 +882,8 @@ function fillTemplateBody(tpl, row, bank) {
   const body = (tpl?.components || []).find(c => String(c.type || '').toUpperCase() === 'BODY');
   const text = body?.text || '';
   if (!text) return '(Este template no tiene texto de cuerpo para previsualizar.)';
-  const first = String(row?.customer_name || '').trim().split(/\s+/)[0] || 'Hola';
+  const rawFirst = String(row?.customer_name || '').trim().split(/\s+/)[0];
+  const first = rawFirst ? (rawFirst.charAt(0).toUpperCase() + rawFirst.slice(1).toLowerCase()) : 'Hola';
   const vals = { '1': first, '2': row?.order_label || `#${row?.order_id}`, '3': CLP(row?.total || 0), '4': bank || '-' };
   return text.replace(/\{\{(\d+)\}\}/g, (_, n) => (vals[n] != null ? vals[n] : `{{${n}}}`));
 }
