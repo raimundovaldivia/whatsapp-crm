@@ -936,6 +936,8 @@ function DespachosRepartos({ colors }) {
   const [chargeIdx,   setChargeIdx]   = useState(0);      // destinatario en la vista previa
   const [chargeSel,   setChargeSel]   = useState(new Set());  // stop_keys a los que SI se cobra
   const [payBusy,     setPayBusy]     = useState('');     // stop_key cuyo medio de pago se está guardando
+  const [editTot,     setEditTot]     = useState(null);   // stop_key con el total en edición
+  const [editTotVal,  setEditTotVal]  = useState('');
 
   useEffect(() => {
     api.get('/delivery/drivers').then(r => setDrivers(r.data.drivers || [])).catch(() => {});
@@ -996,6 +998,19 @@ function DespachosRepartos({ colors }) {
     } catch (e) {
       alert(e.response?.data?.error || 'No se pudo cambiar el medio de pago');
     } finally { setPayBusy(''); }
+  }
+
+  // Corrige el monto real del pedido (lo entregado != lo pedido). Afecta el cobro y los totales.
+  async function saveTotal(r) {
+    const v = Math.round(Number(editTotVal));
+    setEditTot(null);
+    if (!Number.isFinite(v) || v < 0 || v === Math.round(r.total || 0)) return;
+    try {
+      await api.patch('/orders/adjust-total', { source: r.source, id: r.order_id, total: v });
+      load();
+    } catch (e) {
+      alert(e.response?.data?.error || 'No se pudo corregir el monto');
+    }
   }
 
   const load = useCallback(() => {
@@ -1212,7 +1227,19 @@ function DespachosRepartos({ colors }) {
                             </select>
                           </td>
                           <td style={{ padding: '8px 12px', color: colors.textPrimary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                            {r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>}
+                            {editTot === r.stop_key ? (
+                              <input autoFocus type="number" value={editTotVal}
+                                onChange={e => setEditTotVal(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') saveTotal(r); if (e.key === 'Escape') setEditTot(null); }}
+                                onBlur={() => saveTotal(r)}
+                                style={ui.input(colors, { width: '92px', padding: '4px 6px', fontSize: '12px' })} />
+                            ) : (
+                              <span onClick={() => { setEditTot(r.stop_key); setEditTotVal(String(Math.round(r.total || 0))); }}
+                                title="Clic para corregir el monto real"
+                                style={{ cursor: 'pointer', borderBottom: `1px dashed ${colors.border}` }}>
+                                {r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>}
+                              </span>
+                            )}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: '11px', color: ci?.color || colors.textMuted, whiteSpace: 'nowrap' }}>{ci ? `${ci.icon} ${ci.label}` : '—'}</td>
                         </tr>
