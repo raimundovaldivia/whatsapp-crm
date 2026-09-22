@@ -203,7 +203,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
               <strong style={{ color: colors.textPrimary }}>Fusión masiva</strong> — une todos los duplicados de la org de una vez (9-digit sin 56, con +, etc.)
             </div>
             <button onClick={handleMergeAllDuplicates} disabled={mergingAll}
-              style={{ flexShrink: 0, padding: '6px 12px', borderRadius: '7px', border: '1px solid #f59e0b',
+              style={{ flexShrink: 0, padding: '6px 12px', borderRadius: '7px', border: `1px solid ${colors.amberStrong}`,
                 backgroundColor: 'transparent', color: mergingAll ? colors.textMuted : '#d97706',
                 fontSize: '12px', fontWeight: 600, cursor: mergingAll ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -212,8 +212,8 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
             </button>
           </div>
           {mergeAllResult && (
-            <div style={{ padding: '8px 12px', borderRadius: '8px', backgroundColor: colors.bgAccent || '#22c55e18',
-              border: '1px solid #22c55e44', fontSize: '12px', color: colors.green, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ padding: '8px 12px', borderRadius: '8px', backgroundColor: colors.bgAccent || colors.success + '18',
+              border: `1px solid ${colors.success}44`, fontSize: '12px', color: colors.green, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               ✅ Se fusionaron {mergeAllResult.mergedConversations} conversación(es) duplicada(s)
               <button onClick={() => setMergeAllResult(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.green }}><X size={12} /></button>
             </div>
@@ -234,7 +234,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
               Buscar
             </button>
           </div>
-          {diagError && <div style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#2d1a1a', color: '#f87171', fontSize: '13px' }}>{diagError}</div>}
+          {diagError && <div style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#2d1a1a', color: colors.dangerSoft, fontSize: '13px' }}>{diagError}</div>}
 
           {diagResults && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -246,7 +246,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
               ) : (
                 <>
                   {diagResults.conversations.length > 1 && (
-                    <div style={{ padding: '8px 12px', borderRadius: '8px', backgroundColor: '#f59e0b18', border: '1px solid #f59e0b44', fontSize: '12px', color: '#d97706' }}>
+                    <div style={{ padding: '8px 12px', borderRadius: '8px', backgroundColor: colors.amberStrong + '18', border: `1px solid ${colors.amberStrong}44`, fontSize: '12px', color: '#d97706' }}>
                       ⚠️ Se encontraron {diagResults.conversations.length} conversaciones — hay duplicados. Fusioná las más antiguas en la más nueva.
                     </div>
                   )}
@@ -272,7 +272,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
                             onClick={() => handleMergeInto(diagResults.conversations[0].id, conv.id)}
                             disabled={mergingId === conv.id}
                             title={`Fusionar en conversación #${diagResults.conversations[0].id}`}
-                            style={{ flexShrink: 0, padding: '6px 10px', borderRadius: '7px', border: '1px solid #f59e0b',
+                            style={{ flexShrink: 0, padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.amberStrong}`,
                               backgroundColor: 'transparent', color: '#d97706', fontSize: '11px', fontWeight: 600,
                               cursor: mergingId === conv.id ? 'not-allowed' : 'pointer',
                               display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -374,9 +374,9 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
           {/* Reintentar mensajes sin respuesta */}
           <div style={{ position: 'relative' }}>
             <button onClick={handleRetryUnanswered} disabled={retrying}
-              style={{ background: 'none', color: retryResult?.error ? '#f87171' : retryResult ? '#4ade80' : colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: retrying ? 'wait' : 'pointer', opacity: retrying ? 0.7 : 1 }}
-              onMouseEnter={e => { if (!retrying) { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = '#fb923c'; } }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = retryResult?.error ? '#f87171' : retryResult ? '#4ade80' : colors.textSecondary; }}
+              style={{ background: 'none', color: retryResult?.error ? colors.dangerSoft : retryResult ? colors.successSoft : colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: retrying ? 'wait' : 'pointer', opacity: retrying ? 0.7 : 1 }}
+              onMouseEnter={e => { if (!retrying) { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.warning; } }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = retryResult?.error ? colors.dangerSoft : retryResult ? colors.successSoft : colors.textSecondary; }}
               title="Reintentar mensajes sin respuesta (últimas 48h)">
               {retrying
                 ? <RotateCcw size={16} style={{ animation: 'spin 1s linear infinite' }} />
@@ -385,7 +385,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
                   : <RotateCcw size={16} />}
             </button>
             {retryResult && !retryResult.error && (
-              <span style={{ position: 'absolute', top: '-6px', right: '-4px', background: retryResult.sent > 0 ? '#4ade80' : '#6b7280', color: '#000', borderRadius: '999px', fontSize: '9px', fontWeight: 700, padding: '1px 4px', pointerEvents: 'none' }}>
+              <span style={{ position: 'absolute', top: '-6px', right: '-4px', background: retryResult.sent > 0 ? colors.successSoft : '#6b7280', color: '#000', borderRadius: '999px', fontSize: '9px', fontWeight: 700, padding: '1px 4px', pointerEvents: 'none' }}>
                 {retryResult.sent > 0 ? `+${retryResult.sent}` : '0'}
               </span>
             )}
@@ -417,9 +417,9 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       }}>
         {[
           { key: 'all',     label: 'Todos',      count: conversations.length, color: colors.green,   dot: null },
-          { key: 'unread',  label: 'No leídos',  count: unreadCount,          color: '#f87171',      dot: null },
+          { key: 'unread',  label: 'No leídos',  count: unreadCount,          color: colors.dangerSoft,      dot: null },
           { key: 'hot',     label: '🔥 Hot',     count: hotCount,             color: '#f97316',      dot: null },
-          { key: 'stalled', label: '⏳ Sin cierre', count: stalledCount,      color: '#a78bfa',      dot: null },
+          { key: 'stalled', label: '⏳ Sin cierre', count: stalledCount,      color: colors.purpleSoft,      dot: null },
           { key: 'ai',      label: '🤖 IA',      count: aiCount,              color: colors.green,   dot: null },
           { key: 'human',   label: '👤 Humano',  count: humanCount,           color: colors.yellow,  dot: humanUnread > 0 },
         ].map(tab => {
@@ -448,7 +448,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
                 }}>{tab.count}</span>
               )}
               {tab.dot && (
-                <span style={{ position: 'absolute', top: '-2px', right: '-2px', width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', border: `1px solid ${colors.bgSub}` }} />
+                <span style={{ position: 'absolute', top: '-2px', right: '-2px', width: '7px', height: '7px', borderRadius: '50%', backgroundColor: colors.danger, border: `1px solid ${colors.bgSub}` }} />
               )}
             </button>
           );
@@ -464,7 +464,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         )}
         {activeTab === 'stalled' && (
           <button onClick={handleTriggerFollowUp} disabled={triggering}
-            style={{ flexShrink: 0, padding: '5px 10px', borderRadius: '20px', border: `1px solid #a78bfa`, backgroundColor: 'transparent', color: triggering ? colors.textMuted : '#a78bfa', fontSize: '11px', fontWeight: 600, cursor: triggering ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            style={{ flexShrink: 0, padding: '5px 10px', borderRadius: '20px', border: `1px solid ${colors.purpleSoft}`, backgroundColor: 'transparent', color: triggering ? colors.textMuted : colors.purpleSoft, fontSize: '11px', fontWeight: 600, cursor: triggering ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
             {triggering ? <Loader size={10} /> : <span style={{fontSize:'10px'}}>🤖</span>}
             {triggering ? 'Enviando...' : 'Bot seguimiento'}
           </button>
@@ -523,7 +523,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
                         onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = colors.bgHover; }}
                         onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#4db6ac', flexShrink: 0,
+                          <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: colors.tealSoft, flexShrink: 0,
                             display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, color: 'white', fontSize: '12px' }}>
                             {initials}
                           </div>
@@ -535,7 +535,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
                               {r.direction === 'inbound' ? '← ' : '→ '}
                               {parts.map((p, i) =>
                                 p.toLowerCase() === q
-                                  ? <mark key={i} style={{ backgroundColor: '#f59e0b55', color: colors.textPrimary, borderRadius: '2px', padding: '0 1px' }}>{p}</mark>
+                                  ? <mark key={i} style={{ backgroundColor: colors.amberStrong + '55', color: colors.textPrimary, borderRadius: '2px', padding: '0 1px' }}>{p}</mark>
                                   : <span key={i}>{p}</span>
                               )}
                             </div>
