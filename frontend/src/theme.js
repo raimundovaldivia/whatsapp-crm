@@ -4,6 +4,7 @@ import { createContext, useContext } from 'react';
 export const DARK = {
   bgApp:         '#111b21',
   bgPanel:       '#202c33',
+  bgCard:        '#232f37',
   bgSub:         '#1a2428',
   bgInput:       '#111b21',
   bgHover:       '#2a3942',
@@ -27,6 +28,7 @@ export const DARK = {
 export const LIGHT = {
   bgApp:         '#f0f2f5',
   bgPanel:       '#ffffff',
+  bgCard:        '#f7f8fa',
   bgSub:         '#f7f8fa',
   bgInput:       '#f5f6f7',
   bgHover:       '#e8eaed',

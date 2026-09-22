@@ -210,7 +210,7 @@ export default function RepartosPanel() {
   const [tab, setTab] = useState('nuevo'); // 'nuevo' | 'historial'
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', backgroundColor: colors.bgPanel }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', backgroundColor: colors.bgPanel }}>
       {/* Header */}
       <div style={{ padding: '20px 24px 0', borderBottom: `1px solid ${colors.border}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
@@ -238,7 +238,7 @@ export default function RepartosPanel() {
       </div>
 
       {/* Contenido */}
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {tab === 'nuevo'     && <NuevoReparto colors={colors} />}
         {tab === 'despachos' && <DespachosRepartos colors={colors} />}
         {tab === 'historial' && <HistorialRepartos colors={colors} />}
