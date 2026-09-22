@@ -933,6 +933,7 @@ function DespachosRepartos({ colors }) {
   const [chargeTpl,   setChargeTpl]   = useState('');     // template elegido
   const [chargeBank,  setChargeBank]  = useState('');     // datos bancarios ({{4}})
   const [chargeIdx,   setChargeIdx]   = useState(0);      // destinatario en la vista previa
+  const [chargeSel,   setChargeSel]   = useState(new Set());  // stop_keys a los que SI se cobra
   const [payBusy,     setPayBusy]     = useState('');     // stop_key cuyo medio de pago se está guardando
 
   useEffect(() => {
@@ -948,6 +949,7 @@ function DespachosRepartos({ colors }) {
     if (!pend.length) return;
     setChargeModal({ day: d.day, rows: pend });
     setChargeIdx(0); setChargeMsg(null);
+    setChargeSel(new Set(pend.map(r => r.stop_key)));
     try {
       const [tplRes, cfgRes] = await Promise.all([
         api.get('/templates').catch(() => ({ data: { data: [] } })),
@@ -968,8 +970,10 @@ function DespachosRepartos({ colors }) {
   async function doCharge() {
     if (!chargeModal) return;
     const day = chargeModal.day;
-    const orders = (chargeModal.rows || []).map(r => ({ source: r.source, id: r.order_id }));
-    if (!orders.length) { setChargeModal(null); return; }
+    const orders = (chargeModal.rows || [])
+      .filter(r => chargeSel.has(r.stop_key))
+      .map(r => ({ source: r.source, id: r.order_id }));
+    if (!orders.length) { setChargeMsg({ day, text: 'Selecciona al menos un cliente', ok: false }); return; }
     setCharging(day);
     try {
       const { data } = await api.post('/orders/send-charge', { orders, template: chargeTpl || undefined });
@@ -1223,6 +1227,8 @@ function DespachosRepartos({ colors }) {
 
       {chargeModal && (() => {
         const rowsM = chargeModal.rows || [];
+        const selCount = rowsM.filter(r => chargeSel.has(r.stop_key)).length;
+        const allSel = rowsM.length > 0 && selCount === rowsM.length;
         const idx = Math.min(chargeIdx, rowsM.length - 1);
         const row = rowsM[idx];
         const tpl = chargeTpls.find(t => t.name === chargeTpl);
