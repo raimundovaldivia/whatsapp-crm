@@ -145,6 +145,16 @@ export async function getActiveRoutes() {
   };
 }
 
+/**
+ * Historial de rutas del repartidor (terminadas o canceladas).
+ * Devuelve { routes: [...] } — para revisar rutas pasadas y corregir una parada.
+ */
+export async function getRouteHistory() {
+  const client = await getClient();
+  const res = await client.get('/api/delivery/routes/history');
+  return res.data?.routes || [];
+}
+
 /** Detalle de una ruta (para refrescar paradas al volver a la pantalla). */
 export async function getRoute(routeId) {
   const client = await getClient();

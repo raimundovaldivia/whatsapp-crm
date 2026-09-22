@@ -557,6 +557,37 @@ router.get('/routes/active', async (req, res) => {
 });
 
 /**
+ * Historial de rutas del repartidor: las que ya terminó o se cancelaron.
+ * El repartidor ve solo las suyas; admin/supervisor ven todas (monitoreo).
+ * Se usa para que el chofer revise rutas pasadas y corrija una parada si se
+ * equivocó (la correccion usa el mismo PATCH /routes/:id/stops).
+ * IMPORTANTE: va antes de /routes/:id para que "history" no se tome como id.
+ */
+router.get('/routes/history', async (req, res) => {
+  const pool = getPool();
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
+  const limit = Math.min(parseInt(req.query.limit) || 40, 100);
+  try {
+    const { rows } = await pool.query(`
+      SELECT r.id, r.name, r.status, r.driver_name, r.driver_user_id,
+             r.orders, r.optimized_route, r.stop_statuses,
+             r.total_distance, r.total_duration, r.created_at, r.sent_at, r.completed_at,
+             u.name AS driver_user_name
+        FROM delivery_routes r
+        LEFT JOIN users u ON u.id = r.driver_user_id
+       WHERE r.organization_id = $1
+         AND r.status IN ('completed', 'cancelled')
+         AND ($2::int IS NULL OR r.driver_user_id = $2)
+       ORDER BY COALESCE(r.completed_at, r.sent_at, r.created_at) DESC
+       LIMIT $3
+    `, [req.orgId, driverScope, limit]);
+    res.json({ success: true, routes: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * Detalle de una ruta. La app lo usa para refrescar el estado de las paradas
  * al volver a la pantalla (en vez de pasar callbacks por navegación).
  */
