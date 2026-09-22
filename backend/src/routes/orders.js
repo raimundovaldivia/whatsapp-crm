@@ -720,6 +720,74 @@ router.patch('/adjust-total', async (req, res) => {
 });
 
 /**
+ * GET /api/orders/order-items?source=bot|shopify&id=...
+ * Devuelve los items del pedido con su precio y el total, para editarlos.
+ */
+router.get('/order-items', async (req, res) => {
+  const { source, id } = req.query;
+  if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
+  try {
+    const pool = getPool();
+    const table = source === 'shopify' ? 'shopify_orders' : 'orders';
+    const idCol = source === 'shopify' ? 'shopify_order_id' : 'id';
+    const idVal = source === 'shopify' ? String(id) : parseInt(id);
+    const { rows: [row] } = await pool.query(
+      `SELECT items, total_price FROM ${table} WHERE ${idCol} = $1 AND organization_id = $2`,
+      [idVal, req.orgId]
+    );
+    if (!row) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    let items = [];
+    try { items = Array.isArray(row.items) ? row.items : (typeof row.items === 'string' ? JSON.parse(row.items || '[]') : (row.items || [])); } catch { items = []; }
+    if (!Array.isArray(items)) items = [];
+    const norm = items.map(i => ({ name: i.name || i.title || '', quantity: Number(i.quantity) || 0, price: Number(i.price) || 0, extra: !!i._deliveryExtra }));
+    res.json({ success: true, items: norm, total: Math.round(parseFloat(row.total_price) || 0) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/orders/set-items
+ * Reemplaza los productos del pedido y recalcula el total (lo entregado != lo pedido).
+ * Body: { source, id, items: [{ name, quantity, price, extra? }] }
+ */
+router.patch('/set-items', async (req, res) => {
+  const { source, id, items } = req.body;
+  if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
+  if (!Array.isArray(items)) return res.status(400).json({ success: false, error: 'items debe ser un array' });
+  try {
+    const clean = items
+      .map(i => ({
+        name: String(i.name || i.title || '').slice(0, 200),
+        title: String(i.name || i.title || '').slice(0, 200),
+        quantity: Math.max(0, Math.round(Number(i.quantity) || 0)),
+        price: Math.max(0, Math.round(Number(i.price) || 0)),
+        ...(i.extra ? { _deliveryExtra: true } : {}),
+      }))
+      .filter(i => i.name && i.quantity > 0);
+    const total = clean.reduce((s, i) => s + i.price * i.quantity, 0);
+    const itemsJson = JSON.stringify(clean);
+    const pool = getPool();
+    const { rowCount } = source === 'shopify'
+      ? await pool.query(
+          `UPDATE shopify_orders SET items = $1::jsonb, total_price = $2, delivery_modified = TRUE
+            WHERE shopify_order_id = $3 AND organization_id = $4`,
+          [itemsJson, total, String(id), req.orgId]
+        )
+      : await pool.query(
+          `UPDATE orders SET items = $1, total_price = $2, delivery_modified = TRUE, updated_at = NOW()
+            WHERE id = $3 AND organization_id = $4`,
+          [itemsJson, String(total), parseInt(id), req.orgId]
+        );
+    if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    res.json({ success: true, total, items: clean });
+  } catch (err) {
+    console.error('[Orders/set-items]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * PATCH /api/orders/:id/status
  * Actualizar estado manualmente (ej: marcar como pagada)
  */
