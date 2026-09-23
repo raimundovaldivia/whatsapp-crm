@@ -720,6 +720,54 @@ router.patch('/adjust-total', async (req, res) => {
 });
 
 /**
+ * PATCH /api/orders/reschedule
+ * Reprograma un pedido a otra fecha SIN cancelarlo (el cliente lo quiere para
+ * otro día). Fija delivery_date, lo mantiene/vuelve a dejar despachable y anota
+ * el motivo. Body: { source, id, date: 'YYYY-MM-DD', note? }
+ */
+router.patch('/reschedule', async (req, res) => {
+  const { source, id, date, note } = req.body;
+  if (!['bot', 'shopify'].includes(source)) {
+    return res.status(400).json({ success: false, error: "source debe ser 'bot' o 'shopify'" });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+    return res.status(400).json({ success: false, error: 'date debe ser YYYY-MM-DD' });
+  }
+  try {
+    const pool = getPool();
+    const stamp = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' });
+    const reason = (note || '').toString().slice(0, 200);
+    const noteText = `[reprogramado ${stamp}] para ${date}${reason ? ` — ${reason}` : ''}`;
+    const { rowCount } = source === 'shopify'
+      ? await pool.query(
+          `UPDATE shopify_orders
+              SET delivery_date = $1::date,
+                  crm_status    = CASE WHEN crm_status = 'cancelled' THEN 'por_despachar' ELSE crm_status END,
+                  delivery_note = $4,
+                  last_attempt_status = 'reprogramado',
+                  synced_at     = NOW()
+            WHERE shopify_order_id = $2 AND organization_id = $3`,
+          [date, String(id), req.orgId, noteText]
+        )
+      : await pool.query(
+          `UPDATE orders
+              SET delivery_date = $1::date,
+                  status        = CASE WHEN status = 'cancelled' THEN 'por_despachar' ELSE status END,
+                  last_attempt_status = 'reprogramado',
+                  notes         = COALESCE(notes, '') || $4,
+                  updated_at    = NOW()
+            WHERE id = $2 AND organization_id = $3`,
+          [date, parseInt(id), req.orgId, `\n[admin] ${noteText}`]
+        );
+    if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    res.json({ success: true, date });
+  } catch (err) {
+    console.error('[Orders/reschedule]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/orders/order-items?source=bot|shopify&id=...
  * Devuelve los items del pedido con su precio y el total, para editarlos.
  */
