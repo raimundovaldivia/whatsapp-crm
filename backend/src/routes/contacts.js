@@ -127,6 +127,64 @@ router.get('/stats', async (req, res) => {
 // Devuelve los teléfonos (normalizados) de clientes que ALGUNA VEZ compraron un
 // producto cuyo título contiene <texto> — en pedidos del bot o de Shopify.
 // Sirve para segmentar campañas (ej: q=jumbo → compradores de huevos jumbo).
+// GET /api/contacts/favorite-products
+// Devuelve { favorites: { <telefono normalizado>: "Producto más pedido" } }.
+// El favorito = el producto que más veces aparece en los pedidos del cliente
+// (bot + Shopify). Sirve para rellenar variables de template por cliente.
+router.get('/favorite-products', requireContactsAccess, async (req, res) => {
+  const { getPool } = require('../db/database');
+  const pool = getPool();
+  try {
+    const [bot, shop] = await Promise.all([
+      pool.query(
+        `SELECT customer_phone AS phone, items FROM orders
+          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+            AND status <> 'cancelled' AND items IS NOT NULL`,
+        [req.orgId]
+      ),
+      pool.query(
+        `SELECT customer_phone AS phone, items FROM shopify_orders
+          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+            AND items IS NOT NULL`,
+        [req.orgId]
+      ),
+    ]);
+    const norm = p => { const n = String(p || '').replace(/\D/g, ''); return /^9\d{8}$/.test(n) ? '56' + n : n; };
+    const parseItems = it => {
+      let x = it;
+      if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return []; } }
+      return Array.isArray(x) ? x : [];
+    };
+    // phone -> { productName -> count }
+    const tally = new Map();
+    const eat = (rows) => {
+      for (const r of rows) {
+        const k = norm(r.phone); if (!k) continue;
+        if (!tally.has(k)) tally.set(k, new Map());
+        const m = tally.get(k);
+        for (const it of parseItems(r.items)) {
+          if (it && it._deliveryExtra) continue;              // ignorar extras de reparto
+          const name = String(it?.name || it?.title || '').trim();
+          if (!name) continue;
+          const q = Number(it?.quantity) || 1;
+          m.set(name, (m.get(name) || 0) + q);
+        }
+      }
+    };
+    eat(bot.rows); eat(shop.rows);
+    const favorites = {};
+    for (const [phone, m] of tally) {
+      let best = null, bestN = 0;
+      for (const [name, n] of m) if (n > bestN) { best = name; bestN = n; }
+      if (best) favorites[phone] = best;
+    }
+    res.json({ success: true, favorites, count: Object.keys(favorites).length });
+  } catch (err) {
+    console.error('[Contacts/favorite-products]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get('/by-product', requireContactsAccess, async (req, res) => {
   const { getPool } = require('../db/database');
   const pool = getPool();
