@@ -1149,6 +1149,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [templates,      setTemplates]      = useState(parentTemplates);
   const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
   const [selTpl,         setSelTpl]         = useState(parentTemplates[0] || null);
+  const [previewIdx,     setPreviewIdx]     = useState(0);
   const [sending,        setSending]        = useState(false);
   const [results,        setResults]        = useState(null);
   const [toast,          setToast]          = useState(null);
@@ -1490,6 +1491,38 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
         </div>
       )}
+
+      {/* Vista previa del mensaje */}
+      {!loading && selTpl && (() => {
+        const sel = contacts.filter(c => selected.has(c.phone));
+        if (!sel.length) return null;
+        const idx = Math.min(previewIdx, sel.length - 1);
+        const c = sel[idx];
+        const bodyComp = (selTpl.components || []).find(x => x.type === 'BODY');
+        const nombre = toTitleCase((c?.name || 'Cliente').split(' ')[0]);
+        const text = bodyComp?.text ? bodyComp.text.replace(/\{\{\d+\}\}/g, nombre) : '(Este template no tiene cuerpo de texto para previsualizar)';
+        return (
+          <div style={{ padding: '10px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
+              <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>
+                Vista previa{sel.length > 1 ? ` (${idx + 1}/${sel.length})` : ''} · {toTitleCase(c?.name) || c?.phone}
+              </span>
+              {sel.length > 1 && (
+                <span style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => setPreviewIdx(i => Math.max(0, Math.min(i, sel.length - 1) - 1))} disabled={idx === 0}
+                    style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: colors.radiusSm, color: colors.textSecondary, padding: '2px 10px', cursor: idx === 0 ? 'default' : 'pointer', opacity: idx === 0 ? 0.5 : 1 }}>←</button>
+                  <button onClick={() => setPreviewIdx(i => Math.min(sel.length - 1, Math.min(i, sel.length - 1) + 1))} disabled={idx >= sel.length - 1}
+                    style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: colors.radiusSm, color: colors.textSecondary, padding: '2px 10px', cursor: idx >= sel.length - 1 ? 'default' : 'pointer', opacity: idx >= sel.length - 1 ? 0.5 : 1 }}>→</button>
+                </span>
+              )}
+            </div>
+            <div style={{ whiteSpace: 'pre-wrap', background: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '10px 12px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.5 }}>{text}</div>
+            <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
+              Así llega el mensaje (el nombre se cambia por cada cliente).{testMode && TEST_PHONE ? ` En modo prueba todos van a ${TEST_PHONE}.` : ''}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Select all bar */}
       {!loading && filtered.length > 0 && (
