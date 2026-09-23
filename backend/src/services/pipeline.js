@@ -356,17 +356,77 @@ Reglas estrictas:
     state: currentState,
   });
 
+  // ── Direcciones de despacho pasadas (para preguntar cuál usar si hay varias) ──
+  // Un cliente puede haber recibido despachos en más de una dirección (casa,
+  // trabajo, la de un familiar…). Si es así, el bot NO debe asumir — debe
+  // preguntar a cuál despachar, ofreciendo las que ya conocemos de sus pedidos.
+  let pastAddresses = [];
+  try {
+    if (conversation.phone_number) {
+      const pool  = getPool();
+      const phone = String(conversation.phone_number).replace(/\s+/g, '');
+      const variants = [phone];
+      if (phone.startsWith('56') && phone.length >= 10) variants.push(phone.slice(2));
+      if (phone.startsWith('9')  && phone.length === 9) variants.push('56' + phone);
+      if (!phone.startsWith('+') && phone.startsWith('56')) variants.push('+' + phone);
+
+      const [botRes, shopRes] = await Promise.all([
+        pool.query(
+          `SELECT shipping_address AS addr
+             FROM orders
+            WHERE organization_id = $1 AND customer_phone = ANY($2::text[])
+              AND shipping_address IS NOT NULL
+            ORDER BY created_at DESC LIMIT 30`,
+          [orgId, variants]
+        ),
+        pool.query(
+          `SELECT NULLIF(TRIM(CONCAT_WS(', ', shipping_address1, shipping_city)), '') AS addr
+             FROM shopify_orders
+            WHERE organization_id = $1 AND customer_phone = ANY($2::text[])
+            ORDER BY shopify_created_at DESC LIMIT 30`,
+          [orgId, variants]
+        ),
+      ]);
+
+      const botAddr = a => {
+        if (!a) return '';
+        let x = a;
+        if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return String(a).trim(); } }
+        if (x && typeof x === 'object') return [x.address || x.address1, x.city].filter(Boolean).join(', ');
+        return String(a).trim();
+      };
+      const seen = new Map();   // clave normalizada -> display (primero visto = más reciente)
+      const push = raw => {
+        const disp = String(raw || '').trim();
+        if (!disp) return;
+        const key = disp.toLowerCase().replace(/\s+/g, ' ').replace(/[.,]/g, '').trim();
+        if (key && !seen.has(key)) seen.set(key, disp);
+      };
+      for (const r of botRes.rows)  push(botAddr(r.addr));
+      for (const r of shopRes.rows) push(r.addr);
+      pastAddresses = [...seen.values()];
+    }
+  } catch (e) {
+    console.warn('[Pipeline] pastAddresses error:', e.message);
+  }
+
   // ── Dirección registrada del contacto ─────────────────────────────────────
   let contactAddressSection = '';
   try {
-    const cAddr = contact?.address || contact?.address1;
-    const cCity = contact?.city;
-    if (cAddr && cCity) {
-      contactAddressSection = `## Dirección del cliente ✅ NO PEDIR\nTienes la dirección completa registrada: **${cAddr}, ${cCity}**.\n⚠️ NO pidas la dirección al cliente — ya está en el sistema. Cuando registres un pedido, usa esta dirección directamente sin pedírsela.`;
-    } else if (cAddr) {
-      contactAddressSection = `## Dirección del cliente ✅ NO PEDIR\nDirección registrada: **${cAddr}**.\n⚠️ NO pidas la dirección — ya la tienes. Úsala para el pedido.`;
-    } else if (cCity) {
-      contactAddressSection = `## Dirección del cliente (ciudad conocida)\nCiudad: **${cCity}**. Si necesitas la dirección de calle para el pedido, pide SOLO la calle y número (ya conoces la ciudad).`;
+    if (pastAddresses.length > 1) {
+      // El cliente tiene VARIAS direcciones conocidas: el bot debe preguntar.
+      const listado = pastAddresses.map((a, i) => `${i + 1}. ${a}`).join('\n');
+      contactAddressSection = `## Dirección de despacho — ESTE CLIENTE TIENE VARIAS ⚠️\nEste cliente ha recibido despachos en más de una dirección. Direcciones conocidas de sus pedidos anteriores:\n${listado}\n\nReglas estrictas al registrar el pedido:\n1. NO asumas la dirección. ANTES de confirmar el pedido, pregúntale al cliente a cuál de sus direcciones quiere el despacho, ofreciéndole la lista de arriba (puedes numerarlas para que responda con el número).\n2. Si elige una (por número o por nombre), usa esa dirección exacta para el pedido.\n3. Si menciona una dirección nueva que no está en la lista, úsala tal cual la diga.\n4. No vuelvas a pedir la ciudad si ya la sabes por la dirección elegida; pide solo lo que falte.`;
+    } else {
+      const cAddr = contact?.address || contact?.address1;
+      const cCity = contact?.city;
+      if (cAddr && cCity) {
+        contactAddressSection = `## Dirección del cliente ✅ NO PEDIR\nTienes la dirección completa registrada: **${cAddr}, ${cCity}**.\n⚠️ NO pidas la dirección al cliente — ya está en el sistema. Cuando registres un pedido, usa esta dirección directamente sin pedírsela.`;
+      } else if (cAddr) {
+        contactAddressSection = `## Dirección del cliente ✅ NO PEDIR\nDirección registrada: **${cAddr}**.\n⚠️ NO pidas la dirección — ya la tienes. Úsala para el pedido.`;
+      } else if (cCity) {
+        contactAddressSection = `## Dirección del cliente (ciudad conocida)\nCiudad: **${cCity}**. Si necesitas la dirección de calle para el pedido, pide SOLO la calle y número (ya conoces la ciudad).`;
+      }
     }
   } catch (_) {}
 
