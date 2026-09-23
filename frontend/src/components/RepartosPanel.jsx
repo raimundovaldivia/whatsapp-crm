@@ -275,6 +275,8 @@ function NuevoReparto({ colors }) {
   const [warehouse,     setWarehouse]     = useState(null);     // { address, lat, lng, geocoded }
   const [optRoutes,     setOptRoutes]     = useState([]);       // rutas optimizadas (una por vehículo)
   const [routeDrivers,  setRouteDrivers]  = useState({});       // vehicleIndex → driverUserId
+  const [reschedId,     setReschedId]     = useState(null);     // `${source}_${id}` con el selector de fecha abierto
+  const [reschedDate,   setReschedDate]   = useState('');       // YYYY-MM-DD elegida
 
   useEffect(() => {
     setLoadingOrders(true);
@@ -311,6 +313,23 @@ function NuevoReparto({ colors }) {
       setDriverName('');
       setDriverPhone('');
     }
+  }
+
+  function reloadOrders() {
+    setLoadingOrders(true);
+    api.get('/delivery/orders')
+      .then(r => setOrders(r.data.orders || []))
+      .catch(e => setError(e.response?.data?.error || e.message))
+      .finally(() => setLoadingOrders(false));
+  }
+
+  async function saveReschedule(o) {
+    if (!reschedDate) return;
+    try {
+      await api.patch('/orders/reschedule', { source: o.source, id: o.id, date: reschedDate });
+      setReschedId(null); setReschedDate('');
+      reloadOrders();
+    } catch (e) { alert(e.response?.data?.error || e.message); }
   }
 
   function toggleOrder(o) {
@@ -622,6 +641,30 @@ function NuevoReparto({ colors }) {
                         </span>
                       );
                     })()}
+                    <div onClick={e => e.stopPropagation()} style={{ marginTop: '4px' }}>
+                      {reschedId === `${o.source}_${o.id}` ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <input
+                            type="date"
+                            autoFocus
+                            value={reschedDate}
+                            min={new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' })}
+                            onChange={e => setReschedDate(e.target.value)}
+                            style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '5px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, outline: 'none' }}
+                          />
+                          <button onClick={() => saveReschedule(o)} disabled={!reschedDate}
+                            style={{ background: '#a78bfa', border: 'none', borderRadius: '4px', color: '#fff', fontSize: '11px', padding: '2px 8px', cursor: reschedDate ? 'pointer' : 'not-allowed', fontWeight: 700, opacity: reschedDate ? 1 : 0.5 }}>Reprogramar</button>
+                          <button onClick={() => { setReschedId(null); setReschedDate(''); }}
+                            style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', fontSize: '12px' }}>✕</button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setReschedId(`${o.source}_${o.id}`); setReschedDate(o.deliveryDate || ''); }}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#a78bfa', fontSize: '11px', fontWeight: 600, padding: 0 }}>
+                          📅 Reprogramar a otro día
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
