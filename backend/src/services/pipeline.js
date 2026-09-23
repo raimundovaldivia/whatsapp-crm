@@ -876,6 +876,45 @@ REGLAS ABSOLUTAS:
     }
 
     if (intent === 'cancel_order') {
+      // A veces "cancela" en realidad significa "para otro día". Si el mensaje
+      // trae una fecha futura, NO cancelamos: reprogramamos el pedido a ese día
+      // (se mantiene vivo) y se lo confirmamos, dejando abierta la cancelación
+      // real si el cliente insiste.
+      let reprogramDate = null;
+      try {
+        if (isFutureOrderIntent(userMessage)) {
+          const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+          const recentTexts = history.slice(-6).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
+          const sched = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
+          if (sched?.desiredDate && String(sched.desiredDate).slice(0, 10) > todayISO) {
+            reprogramDate = String(sched.desiredDate).slice(0, 10);
+          }
+        }
+      } catch (e) { console.warn('[Pipeline] reprogramar-en-cancel error:', e.message); }
+
+      if (reprogramDate) {
+        const stamp  = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' });
+        const cuando = formatDateEs(reprogramDate);
+        try {
+          await getPool().query(
+            `UPDATE orders
+                SET delivery_date = $1::date,
+                    notes = COALESCE(notes, '') || $2,
+                    updated_at = NOW()
+              WHERE id = $3 AND organization_id = $4`,
+            [reprogramDate, `\n[bot] Reprogramado por el cliente (${stamp}) para ${reprogramDate}`, activeOrder.id, orgId]
+          );
+        } catch (e) { console.warn('[Pipeline] no se pudo reprogramar el pedido:', e.message); }
+        L.step('reschedule_order', `pedido ${activeOrder.id} reprogramado a ${reprogramDate} (en vez de cancelar)`);
+        L.agent('orders', 0);
+        return {
+          response: `¡Listo! En vez de cancelarlo${orderItemsText ? ` (${orderItemsText})` : ''}, te lo dejo agendado para el ${cuando} 📅 Ese día te avisamos cuando vaya saliendo. Si prefieres cancelarlo del todo, dímelo y lo hago 😊`,
+          agentType: 'orders',
+          newState: currentState,
+          adminNotice: `📅 *Pedido reprogramado por el cliente* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido #${activeOrder.id}${orderItemsText ? ` (${orderItemsText})` : ''} → ${cuando}`,
+        };
+      }
+
       await db.updateOrder(activeOrder.id, { status: 'cancelled', updated_at: new Date() });
       await db.updatePipelineState(conversationId, 'exploring', {});
       L.step('cancel_order', `pedido ${activeOrder.id} cancelado por el cliente`);
