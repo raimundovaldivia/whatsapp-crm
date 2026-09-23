@@ -211,6 +211,7 @@ export default function ClientesPanel({ onOpenConversation }) {
 
   // ── Despachos repetidos ──
   const [repeatData, setRepeatData] = useState({ clientes: [], total: 0, loading: false, error: null, loaded: false });
+  const [repeatOnlyMulti, setRepeatOnlyMulti] = useState(false); // solo clientes con más de una dirección
 
   const loadRepeat = useCallback(async () => {
     setRepeatData(prev => ({ ...prev, loading: true, error: null }));
@@ -1038,11 +1039,27 @@ export default function ClientesPanel({ onOpenConversation }) {
           </div>
         ) : (
           <>
-            <div style={{ color: colors.textSecondary, fontSize: '13px', marginBottom: '16px' }}>
-              <strong style={{ color: colors.textPrimary }}>{repeatData.total}</strong> clientes con más de un despacho
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {repeatData.clientes.map((c, i) => (
+            {(() => {
+              const multiCount = repeatData.clientes.filter(c => c.addressCount > 1).length;
+              const shown = repeatOnlyMulti ? repeatData.clientes.filter(c => c.addressCount > 1) : repeatData.clientes;
+              return (
+              <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                <div style={{ color: colors.textSecondary, fontSize: '13px' }}>
+                  <strong style={{ color: colors.textPrimary }}>{repeatData.total}</strong> clientes con más de un despacho · <strong style={{ color: colors.warning }}>{multiCount}</strong> con más de una dirección
+                </div>
+                <button onClick={() => setRepeatOnlyMulti(v => !v)}
+                  style={ui.btn(colors, repeatOnlyMulti ? 'warning' : 'secondary', { fontSize: '12px', padding: '6px 12px' })}>
+                  {repeatOnlyMulti ? '✓ Solo con varias direcciones' : 'Solo con varias direcciones'}
+                </button>
+              </div>
+              {shown.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '48px', color: colors.textSecondary, fontSize: '14px' }}>
+                  Ningún cliente con más de una dirección.
+                </div>
+              ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {shown.map((c, i) => (
                 <div key={c.phone || i} style={{ backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px 16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -1068,7 +1085,11 @@ export default function ClientesPanel({ onOpenConversation }) {
                   </div>
                 </div>
               ))}
-            </div>
+              </div>
+              )}
+              </>
+              );
+            })()}
           </>
         )}
       </div>
