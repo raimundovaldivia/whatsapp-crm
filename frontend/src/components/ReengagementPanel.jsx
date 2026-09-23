@@ -1242,11 +1242,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   // Normaliza el teléfono igual que el backend (569XXXXXXXX) para poder cruzar.
-  const normPhone = p => {
+  function normPhone(p) {
     const n = String(p || '').replace(/\D/g, '');
     if (/^9\d{8}$/.test(n)) return '56' + n;
     return n;
-  };
+  }
 
   // Aplica/limpia el filtro por producto (ej: "jumbo"). Trae del backend los
   // teléfonos que compraron ese producto y deja seleccionados solo esos.
