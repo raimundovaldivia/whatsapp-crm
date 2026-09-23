@@ -1041,6 +1041,12 @@ function DespachosRepartos({ colors }) {
   async function changePay(r, method) {
     setPayBusy(r.stop_key);
     try {
+      // El pago que se ve en Despachos viene de la ruta (stop_payments), no de
+      // la tabla orders. Hay que actualizar la parada de la ruta y además
+      // reconciliar el pedido (estado de pago / cobranza).
+      if (r.route_id) {
+        await api.patch(`/delivery/routes/${r.route_id}/stop-payment`, { stopKey: r.stop_key, paymentMethod: method });
+      }
       await api.patch('/orders/payment-method', { source: r.source, id: r.order_id, paymentMethod: method });
       load();
     } catch (e) {

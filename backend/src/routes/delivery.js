@@ -1446,6 +1446,37 @@ router.get('/summary', async (req, res) => {
 
 // ─── ADMIN: Despachos realizados (por parada, para agrupar por día) ──────────
 //
+// PATCH /api/delivery/routes/:id/stop-payment
+// Corrige a mano el medio de pago de una parada desde Despachos. En Despachos
+// el pago mostrado sale de stop_payments de la RUTA (lo que marcó el repartidor),
+// no de la tabla orders; por eso hay que escribirlo aquí para que el cambio se
+// vea. La reconciliación de pago/cobranza del pedido la hace /orders/payment-method.
+router.patch('/routes/:id/stop-payment', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const { stopKey, paymentMethod } = req.body;
+  const VALID = ['efectivo', 'transferencia', 'otro', null];
+  if (!stopKey || typeof stopKey !== 'string') {
+    return res.status(400).json({ success: false, error: 'stopKey requerido' });
+  }
+  if (!VALID.includes(paymentMethod ?? null)) {
+    return res.status(400).json({ success: false, error: 'Medio de pago inválido' });
+  }
+  try {
+    const pool = getPool();
+    const method = paymentMethod ?? null;
+    const { rowCount } = await pool.query(
+      `UPDATE delivery_routes
+          SET stop_payments = COALESCE(stop_payments, '{}'::jsonb) || jsonb_build_object($1::text, $2::jsonb)
+        WHERE id = $3 AND organization_id = $4`,
+      [stopKey, JSON.stringify(method), parseInt(req.params.id), req.orgId]
+    );
+    if (!rowCount) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Delivery/stop-payment]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // GET /api/delivery/dispatches?from=YYYY-MM-DD&to=YYYY-MM-DD&driver=<userId>
 //
 // Devuelve una fila por parada de las rutas del período, con el estado que
