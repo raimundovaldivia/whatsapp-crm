@@ -1150,6 +1150,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
   const [selTpl,         setSelTpl]         = useState(parentTemplates[0] || null);
   const [previewIdx,     setPreviewIdx]     = useState(0);
+  const [favMap,  setFavMap]  = useState({});    // telefono -> producto favorito
+  const [varMap,  setVarMap]  = useState([]);    // por variable: 'name' | 'fav' | 'text'
+  const [varText, setVarText] = useState([]);    // texto fijo por variable
   const [sending,        setSending]        = useState(false);
   const [results,        setResults]        = useState(null);
   const [toast,          setToast]          = useState(null);
@@ -1211,6 +1214,31 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     }
     // si ya vienen del padre, tplLoading ya es false
   }, []);
+
+  // Producto favorito por cliente (para rellenar variables de template)
+  useEffect(() => {
+    api.get('/contacts/favorite-products').then(r => setFavMap(r.data?.favorites || {})).catch(() => {});
+  }, []);
+
+  const tplBody = (selTpl?.components || []).find(c => c.type === 'BODY');
+  const tplVarCount = tplBody?.text ? new Set([...tplBody.text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1])).size : 0;
+
+  // Al cambiar de template, resetear el mapeo de variables (1=Nombre, resto=Producto favorito)
+  useEffect(() => {
+    setVarMap(Array.from({ length: tplVarCount }, (_, i) => (i === 0 ? 'name' : 'fav')));
+    setVarText(Array.from({ length: tplVarCount }, () => ''));
+  }, [selTpl?.name, tplVarCount]);
+
+  function favProduct(phone) { return favMap[normPhone(phone)] || 'tu producto habitual'; }
+  function varValue(i, contact) {
+    const mode = varMap[i] || (i === 0 ? 'name' : 'fav');
+    let v;
+    if (mode === 'name') v = toTitleCase((contact?.name || 'Cliente').split(' ')[0]);
+    else if (mode === 'text') v = (varText[i] || '');
+    else v = favProduct(contact?.phone);
+    v = String(v || '').replace(/\s+/g, ' ').trim();
+    return v || '-';
+  }
 
   const ONE_WEEK_AGO = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const filtered = contacts.filter(c => {
@@ -1286,15 +1314,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       const contact = contacts.find(c => c.phone === phone);
       const nombre = toTitleCase((contact?.name || 'Cliente').split(' ')[0]); // primer nombre, formateado
 
-      // Rellenar cada variable con el nombre del contacto
-      const components = varCount > 0 ? [{
-        type: 'body',
-        parameters: Array.from({ length: varCount }, () => ({ type: 'text', text: nombre })),
-      }] : [];
+      // Rellenar cada variable segun el mapeo elegido (Nombre / Producto favorito / Texto)
+      const params = [];
+      for (let i = 0; i < varCount; i++) params.push({ type: 'text', text: varValue(i, contact) });
+      const components = varCount > 0 ? [{ type: 'body', parameters: params }] : [];
 
-      // Texto de preview para mostrar en el chat (reemplaza {{N}} con el nombre)
+      // Texto de preview para el chat (reemplaza cada {{N}} por su valor mapeado)
       const previewText = bodyComp?.text
-        ? bodyComp.text.replace(/\{\{\d+\}\}/g, nombre)
+        ? bodyComp.text.replace(/\{\{(\d+)\}\}/g, (_, n) => varValue(Number(n) - 1, contact))
         : null;
 
       return {
@@ -1492,6 +1519,30 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </div>
       )}
 
+      {/* Mapeo de variables del template */}
+      {!loading && selTpl && tplVarCount > 0 && (
+        <div style={{ padding: '8px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>Variables del mensaje:</span>
+          {Array.from({ length: tplVarCount }).map((_, i) => (
+            <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ color: colors.textMuted, fontSize: 12 }}>{`{{${i + 1}}}`}</span>
+              <select value={varMap[i] || (i === 0 ? 'name' : 'fav')}
+                onChange={e => setVarMap(m => { const n = [...m]; while (n.length < tplVarCount) n.push('fav'); n[i] = e.target.value; return n; })}
+                style={{ padding: '3px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }}>
+                <option value="name">Nombre</option>
+                <option value="fav">Producto favorito</option>
+                <option value="text">Texto fijo</option>
+              </select>
+              {varMap[i] === 'text' && (
+                <input value={varText[i] || ''}
+                  onChange={e => setVarText(t => { const n = [...t]; while (n.length < tplVarCount) n.push(''); n[i] = e.target.value; return n; })}
+                  placeholder="texto" style={{ width: 120, padding: '3px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Vista previa del mensaje */}
       {!loading && selTpl && (() => {
         const sel = contacts.filter(c => selected.has(c.phone));
@@ -1500,7 +1551,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         const c = sel[idx];
         const bodyComp = (selTpl.components || []).find(x => x.type === 'BODY');
         const nombre = toTitleCase((c?.name || 'Cliente').split(' ')[0]);
-        const text = bodyComp?.text ? bodyComp.text.replace(/\{\{\d+\}\}/g, nombre) : '(Este template no tiene cuerpo de texto para previsualizar)';
+        const text = bodyComp?.text ? bodyComp.text.replace(/\{\{(\d+)\}\}/g, (_, n) => varValue(Number(n) - 1, c)) : '(Este template no tiene cuerpo de texto para previsualizar)';
         return (
           <div style={{ padding: '10px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
