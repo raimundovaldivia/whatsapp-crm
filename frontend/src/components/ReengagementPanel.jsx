@@ -1153,6 +1153,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [favMap,  setFavMap]  = useState({});    // telefono -> producto favorito
   const [varMap,  setVarMap]  = useState([]);    // por variable: 'name' | 'fav' | 'text'
   const [varText, setVarText] = useState([]);    // texto fijo por variable
+  const [sendProgress, setSendProgress] = useState({ done: 0, total: 0 });
   const [sending,        setSending]        = useState(false);
   const [results,        setResults]        = useState(null);
   const [toast,          setToast]          = useState(null);
@@ -1335,15 +1336,30 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       };
     });
     try {
-      const res = await api.post('/reengagement/send-bulk', { items }, { timeout: 600000 });
-      const sent   = res.data.results?.filter(r => r.success).length || 0;
-      const failed = res.data.results?.filter(r => !r.success).length || 0;
-      setResults({ sent, failed });
-      showToast(`✅ ${sent} enviados${failed ? ` · ${failed} fallidos` : ''}`);
+      // Enviar por lotes para mostrar progreso en vivo (contador X/total).
+      const CHUNK = 8;
+      let sent = 0, failed = 0, skipped = 0;
+      setSendProgress({ done: 0, total: items.length });
+      for (let i = 0; i < items.length; i += CHUNK) {
+        const part = items.slice(i, i + CHUNK);
+        try {
+          const res = await api.post('/reengagement/send-bulk', { items: part }, { timeout: 600000 });
+          const r = res.data.results || [];
+          sent    += r.filter(x => x.success).length;
+          skipped += r.filter(x => x.skipped).length;
+          failed  += r.filter(x => !x.success && !x.skipped).length;
+        } catch (e) {
+          failed += part.length;
+        }
+        setSendProgress({ done: Math.min(i + CHUNK, items.length), total: items.length });
+      }
+      setResults({ sent, failed, skipped });
+      showToast(`✅ ${sent} enviados${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
     } catch (err) {
       showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
     } finally {
       setSending(false);
+      setSendProgress({ done: 0, total: 0 });
     }
   }
 
@@ -1490,7 +1506,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           opacity: sending ? 0.7 : 1,
         }}>
           <Send size={14} />
-          {sending ? 'Enviando...' : `Enviar a ${selected.size}`}
+          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : `Enviar a ${selected.size}`}
         </button>
       </div>
 
