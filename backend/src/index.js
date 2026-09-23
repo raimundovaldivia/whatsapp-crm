@@ -79,6 +79,7 @@ shopifyWebhookRouter.setSocketIO(io);
 conversationsRouter.setSocketIO(io);
 ordersRouter.setSocketIO(io);
 deliveryRouter.setSocketIO(io);
+reengagementRouter.setSocketIO(io);   // Mensajería masiva: emitir mensajes al panel en vivo
 
 io.on('connection', (socket) => {
   socket.on('join_org', (orgId) => {
