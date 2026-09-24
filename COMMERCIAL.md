@@ -4,7 +4,7 @@ Esta versión permite vender módulos y administrar su acceso por tienda. La con
 
 ## Catálogo
 
-La cuenta base incluye conversaciones, clientes, equipo e integraciones. Los siete módulos son Ventas con IA, Pedidos, Marketing, Pagos y cobranza, Logística, Tienda y catálogo, y Analítica. Ventas con IA, Pagos y Logística requieren Pedidos.
+La cuenta base incluye conversaciones, clientes, equipo e integraciones. Los siete módulos son Ventas con IA, Pedidos, Marketing, Pagos y cobranza, Logística, Tienda y catálogo, y Analítica. Ventas con IA, Pagos, Logística y Tienda y catálogo requieren Pedidos.
 
 El catálogo canónico está en `backend/src/services/solution-catalog.js`. Los ajustes de cada tienda pueden ocultar funcionalidades contratadas, pero no conceder acceso a módulos sin contrato. La API aplica el control, independientemente del menú o del cliente móvil.
 
