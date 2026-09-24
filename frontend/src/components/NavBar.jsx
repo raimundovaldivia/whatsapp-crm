@@ -152,12 +152,6 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
         </NavItem>
       )}
 
-      {canSettings && (
-        <NavItem active={view === 'settings'} label="Ajustes" onClick={() => onChangeView('settings')} colors={colors}>
-          <Settings size={20} />
-        </NavItem>
-      )}
-
     </div>
   );
 }
