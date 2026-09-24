@@ -654,7 +654,7 @@ export default function ClientesPanel({ onOpenConversation }) {
           <div style={{ textAlign: 'center', padding: '80px', color: colors.textSecondary }}>
             <div style={{ width: '36px', height: '36px', border: `3px solid ${colors.border}`, borderTop: `3px solid ${colors.green}`, borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
             <div style={{ fontSize: '14px', marginBottom: '6px' }}>Cargando clientes de Shopify...</div>
-            <div style={{ fontSize: '12px', opacity: 0.6 }}>Puede tardar ~30s si Render está en cold start</div>
+            <div style={{ fontSize: '12px', opacity: 0.6 }}>La consulta puede tardar unos segundos según el tamaño de la tienda</div>
           </div>
         ) : error ? (
           <div style={{ textAlign: 'center', padding: '60px', color: colors.red }}>

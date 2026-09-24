@@ -85,12 +85,12 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
         message: 'Kapso WhatsApp configurado correctamente',
         warning,
         data: {
-          webhookUrl: `${process.env.PUBLIC_URL || 'https://TU-BACKEND.onrender.com'}/kapso-webhook`,
+          webhookUrl: (process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL) ? `${(process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL).replace(/\/$/, '')}/kapso-webhook` : null,
           instructions: [
             '1. Ve a app.kapso.ai → tu número → Webhooks',
-            '2. Agrega un webhook con la URL anterior',
+            '2. Configura CRM_PUBLIC_URL con la URL pública del backend de Railway y agrega el webhook indicado',
             '3. Suscríbete al evento: whatsapp.message.received',
-            '4. (Opcional) Habilita firma y guarda el secret en webhookSecret',
+            '4. Habilita la firma y guarda el secreto en webhookSecret; es obligatorio para recibir mensajes',
           ],
         },
       });
@@ -279,7 +279,7 @@ router.post('/kapso/connect', requireAuth, async (req, res) => {
     if (!process.env.KAPSO_API_KEY) {
       return res.status(400).json({
         success: false,
-        error: 'KAPSO_API_KEY no está configurada. Agrégala en las variables de entorno de Render.',
+        error: 'KAPSO_API_KEY no está configurada. Agrégala en las variables de entorno de Railway.',
       });
     }
 
@@ -390,7 +390,7 @@ router.post('/kapso/save', requireAuth, async (req, res) => {
       }
     } else {
       const missing = !backendUrl ? 'PUBLIC_URL' : 'KAPSO_API_KEY';
-      webhookWarning = `Falta la variable de entorno ${missing} en Render. El webhook debe configurarse manualmente en app.kapso.ai.`;
+      webhookWarning = `Falta la variable de entorno ${missing} en Railway. El webhook debe configurarse manualmente en app.kapso.ai.`;
       console.warn(`[Setup/Kapso] ⚠️ ${webhookWarning}`);
     }
 

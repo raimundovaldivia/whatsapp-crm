@@ -65,7 +65,7 @@ export function resetClient() {
 export async function login(baseUrl, email, password) {
   const url = (baseUrl || DEFAULT_API_URL).replace(/\/$/, '');
 
-  // Render (plan gratis) duerme el servidor. El primer intento suele despertarlo
+  // El servidor puede tardar en responder durante un reinicio o una interrupción de red
   // y puede cortar por timeout; se reintenta una vez, para entonces ya está
   // despierto y responde. Solo se reintenta ante fallo de red/timeout, nunca
   // ante credenciales incorrectas (401).

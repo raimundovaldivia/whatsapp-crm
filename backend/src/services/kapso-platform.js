@@ -104,7 +104,7 @@ async function findCustomerByExternalId(orgId) {
  * Docs: https://docs.kapso.ai/api/platform/v1/webhooks/create-webhook.md
  *
  * @param {string} phoneNumberId  - Meta phone number ID
- * @param {string} webhookUrl     - URL pública del backend (ej: https://backend.onrender.com/kapso-webhook)
+ * @param {string} webhookUrl     - URL pública del backend (ej: https://whatsapp-crm-api-production-f804.up.railway.app/kapso-webhook)
  * @param {string} [secretKey]    - Opcional: secret para verificar firmas HMAC
  * @returns {{ id, url, events, active }}
  */

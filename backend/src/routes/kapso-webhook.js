@@ -3,7 +3,7 @@
  *
  * Configura este webhook en app.kapso.ai:
  *   Tu número → Webhooks → Add webhook
- *   URL:    POST https://TU-BACKEND.onrender.com/kapso-webhook
+ *   URL:    POST https://whatsapp-crm-api-production-f804.up.railway.app/kapso-webhook
  *   Events: whatsapp.message.received
  *   Habilita firma y copia el secret → guárdalo en KAPSO_WEBHOOK_SECRET
  *

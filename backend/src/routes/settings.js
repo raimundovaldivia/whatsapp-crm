@@ -349,7 +349,7 @@ router.get('/whatsapp/test', async (req, res) => {
       const apiKey  = wc.kapso_api_key || process.env.KAPSO_API_KEY;
       const phoneId = wc.phone_number_id;
       if (!phoneId) return res.json({ success: false, error: 'Falta Phone Number ID. Reconecta WhatsApp con Kapso.' });
-      if (!apiKey)  return res.json({ success: false, error: 'No hay Kapso API Key. Agrega KAPSO_API_KEY en Render o reconecta.' });
+      if (!apiKey)  return res.json({ success: false, error: 'No hay Kapso API Key. Agrega KAPSO_API_KEY en Railway o reconecta.' });
 
       // Verificar API key consultando el perfil del número vía Kapso
       try {

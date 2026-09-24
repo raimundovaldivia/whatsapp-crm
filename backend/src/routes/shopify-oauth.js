@@ -12,8 +12,8 @@
  *   SHOPIFY_API_KEY      = client_id de la app (Shopify Partner dashboard)
  *   SHOPIFY_API_SECRET   = client_secret de la app
  *   SHOPIFY_SCOPES       = (opcional) scopes separados por coma
- *   CRM_PUBLIC_URL       = URL pública del backend (ej: https://crm.onrender.com)
- *   FRONTEND_URL         = URL del frontend (ej: https://crm.onrender.com)
+ *   CRM_PUBLIC_URL       = URL pública del backend (ej: https://tu-servicio.up.railway.app)
+ *   FRONTEND_URL         = URL del frontend (ej: https://tu-servicio.up.railway.app)
  */
 
 const express    = require('express');

@@ -12,7 +12,7 @@
  *
  * Webhooks en Kapso:
  *   1. En app.kapso.ai → tu número → Webhooks → crear webhook
- *   2. URL: POST https://TU-BACKEND.onrender.com/kapso-webhook
+ *   2. URL: POST https://whatsapp-crm-api-production-f804.up.railway.app/kapso-webhook
  *   3. Eventos a suscribir: whatsapp.message.received
  *
  * Docs: https://docs.kapso.ai

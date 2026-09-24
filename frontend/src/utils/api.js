@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// En producción VITE_BACKEND_URL = URL del backend de Render (ej: https://whatsapp-crm-api.onrender.com)
+// En producción VITE_BACKEND_URL = URL del backend de Railway (ej: https://whatsapp-crm-api-production-f804.up.railway.app)
 // En desarrollo = localhost:3001
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
@@ -36,7 +36,6 @@ export const authAPI = {
 export const setupAPI = {
   status: () => api.get('/setup/status').then(r => r.data.data),
   connectWhatsApp: (data) => api.post('/setup/whatsapp', data).then(r => r.data),
-  connectShopify: (data) => api.post('/setup/shopify', data).then(r => r.data),
   shopifyStatus: () => api.get('/setup/shopify-status').then(r => r.data),
   whatsappStatus: () => api.get('/setup/whatsapp-status').then(r => r.data),
   complete: () => api.post('/setup/complete').then(r => r.data),

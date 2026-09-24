@@ -37,8 +37,8 @@ CRM multi-tenant de WhatsApp con agentes de IA para automatizar ventas. Las tien
 ## Arquitectura
 
 ```
-frontend/          → React + Vite (Static Site en Render)
-backend/           → Node.js + Express + Socket.io (Web Service en Render)
+frontend/          → React + Vite (servicio frontend en Railway)
+backend/           → Node.js + Express + Socket.io (servicio backend en Railway)
   src/
     routes/        → API REST endpoints
     services/      → lógica de negocio
@@ -55,8 +55,8 @@ backend/           → Node.js + Express + Socket.io (Web Service en Render)
 ```
 
 **URLs de producción:**
-- Backend: `https://whatsapp-crm-front.onrender.com`
-- Frontend: `https://whatsapp-crm-6fzm.onrender.com` (Static Site — requiere Manual Deploy)
+- Backend: `https://whatsapp-crm-api-production-f804.up.railway.app`
+- Frontend: `https://whatsapp-crm-production-c76b.up.railway.app`
 - Repo: `https://github.com/raimundovaldivia/whatsapp-crm`
 
 ---
@@ -88,7 +88,7 @@ git commit -m "tipo: descripción\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@
 git push origin main
 ```
 
-Después del push: **backend en Railway hace auto-deploy**. El frontend (Render Static Site) requiere **Manual Deploy** en el dashboard de Render.
+Después del push: **backend en Railway hace auto-deploy**. El frontend también se despliega en Railway; comprobar el estado de ambos servicios.
 
 ---
 
@@ -335,7 +335,7 @@ La tabla `shopify_orders` tiene `shipping_city` (histórico) y `shipping_address
 - `max_tokens`: **8192 mínimo** (menos → respuesta truncada, `JSON.parse` devuelve `[]` silenciosamente)
 - Fallback si IA falla: `predictedDays = avgFreqDays - daysInactive`
 
-**Caché:** una vez por día en `reengagement_daily_cache`. Refresh asíncrono (`?refresh=true`) porque Render corta conexiones a los 30s. El análisis tarda 3-5 min.
+**Caché:** una vez por día en `reengagement_daily_cache`. Refresh asíncrono (`?refresh=true`) para evitar mantener conexiones abiertas durante el análisis. El análisis tarda 3-5 min.
 
 ---
 

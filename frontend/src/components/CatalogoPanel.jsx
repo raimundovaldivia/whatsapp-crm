@@ -32,14 +32,14 @@ export default function CatalogoPanel() {
     try {
       const params = new URLSearchParams({ limit: 200 });
       if (debouncedSearch) params.set('search', debouncedSearch);
-      // Timeout de 60s para aguantar el cold start de Render (gratis ~ 30-45s)
+      // Timeout de 60s para consultas de catálogo grandes
       const res = await api.get(`/catalogo?${params}`, { timeout: 60000 });
       setProducts(res.data.products || []);
       setTotal(res.data.total || 0);
       setShop(res.data.shop || '');
     } catch (err) {
       const msg = err.code === 'ECONNABORTED'
-        ? 'La tienda Shopify tardó mucho en responder. Render necesita ~30s para arrancar — intenta de nuevo.'
+        ? 'La tienda Shopify tardó mucho en responder. Intenta nuevamente en unos segundos.'
         : (err.response?.data?.error || err.message || 'Error cargando catálogo');
       setError(msg);
     } finally {
