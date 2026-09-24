@@ -217,6 +217,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
         FROM shopify_orders
         WHERE organization_id = $1
           AND (crm_status IS NULL OR crm_status NOT IN ('en_camino', 'entregado', 'cancelled'))
+          AND (delivery_date IS NULL OR delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
           AND delivered_at IS NULL   -- ya se repartió: no vuelve a la lista
         ORDER BY synced_at ASC
       `, [req.orgId]),
@@ -261,6 +262,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
         ) so ON true
         WHERE o.organization_id = $1
           AND (o.status IS NULL OR o.status NOT IN ('en_camino', 'entregado', 'cancelled'))
+          AND (o.delivery_date IS NULL OR o.delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
           AND o.delivered_at IS NULL   -- ya se repartió (aunque quede en 'paid'): no vuelve a la lista
         ORDER BY o.created_at ASC
       `, [req.orgId]),
@@ -761,7 +763,8 @@ async function partitionDispatchable(pool, orgId, orders) {
     const { rows } = await pool.query(
       `SELECT id::text AS id FROM orders
         WHERE organization_id = $1 AND id = ANY($2::int[])
-          AND (delivered_at IS NOT NULL OR status IN ('entregado', 'cancelled', 'paid'))`,
+          AND (delivered_at IS NOT NULL OR status IN ('entregado', 'cancelled', 'paid')
+            OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)`,
       [orgId, botIds]
     );
     rows.forEach(r => done.add('bot_' + r.id));
@@ -770,7 +773,8 @@ async function partitionDispatchable(pool, orgId, orders) {
     const { rows } = await pool.query(
       `SELECT shopify_order_id AS id FROM shopify_orders
         WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])
-          AND (delivered_at IS NOT NULL OR crm_status IN ('entregado', 'cancelled'))`,
+          AND (delivered_at IS NOT NULL OR crm_status IN ('entregado', 'cancelled')
+            OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)`,
       [orgId, shopIds]
     );
     rows.forEach(r => done.add('shopify_' + r.id));
@@ -830,7 +834,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
       finalOrders = part.keep;
       skipped = part.skip;
       if (finalOrders.length === 0)
-        return res.status(400).json({ success: false, error: 'Todos los pedidos de esta ruta ya fueron entregados o cancelados.', skipped });
+        return res.status(400).json({ success: false, error: 'No hay pedidos para despachar hoy: ya fueron entregados, cancelados o están programados para otro día.', skipped });
     }
 
     // Si no se optimizó, igual guardar las paradas en orden de selección:
@@ -906,7 +910,7 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
         const part = await partitionDispatchable(pool, req.orgId, curOrders);
         skipped = part.skip;
         if (part.keep.length === 0)
-          return res.status(400).json({ success: false, error: 'Todos los pedidos de esta ruta ya fueron entregados o cancelados.', skipped });
+          return res.status(400).json({ success: false, error: 'No hay pedidos para despachar hoy: ya fueron entregados, cancelados o están programados para otro día.', skipped });
         if (skipped.length) {
           const curStops = Array.isArray(cur.optimized_route) ? cur.optimized_route : JSON.parse(cur.optimized_route || '[]');
           await pool.query(
@@ -1062,6 +1066,11 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
     const existing = new Set(cur.map(o => `${o.source}_${o.id}`));
     const toAdd    = orders.filter(o => o && o.source && o.id != null && !existing.has(`${o.source}_${o.id}`));
     if (!toAdd.length) return res.json({ success: true, added: 0, route });
+
+    const eligible = await partitionDispatchable(pool, req.orgId, toAdd);
+    if (eligible.skip.length) {
+      return res.status(400).json({ success: false, error: 'Hay pedidos que no se pueden despachar hoy. Actualiza la lista de pedidos.', skipped: eligible.skip });
+    }
 
     const newOrders = [...cur, ...toAdd];
     const baseStops = curStops.length ? curStops : cur.map((o, i) => ({ ...o, stopNumber: i + 1 }));

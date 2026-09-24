@@ -522,7 +522,7 @@ function NuevoReparto({ colors }) {
         {sentRoute.skipped?.length > 0 && (
           <div style={{ maxWidth: 420, padding: '12px 14px', backgroundColor: `${colors.orange || '#e8a33d'}18`, border: `1px solid ${colors.orange || '#e8a33d'}55`, borderRadius: '10px', color: colors.textSecondary, fontSize: '13px' }}>
             <div style={{ fontWeight: 700, color: colors.textPrimary, marginBottom: 6 }}>
-              ⏭️ {sentRoute.skipped.length} pedido{sentRoute.skipped.length > 1 ? 's' : ''} ya entregado{sentRoute.skipped.length > 1 ? 's' : ''} — no se enviaron
+              ⏭️ {sentRoute.skipped.length} pedido{sentRoute.skipped.length > 1 ? 's' : ''} no disponible{sentRoute.skipped.length > 1 ? 's' : ''} para despachar hoy — no se enviaron
             </div>
             {sentRoute.skipped.slice(0, 12).map((o, i) => (
               <div key={i}>• {o.customerName || o.orderName || o.id}</div>

@@ -156,3 +156,41 @@ test('Meta signature checks whole batch and persists every message/status under 
     const bad=response();await auth.verifyWebhook('meta')({...req,rawBody:Buffer.from('{}')},bad,()=>assert.fail('invalid signature'));assert.equal(bad.code,401);
   } finally {await f.engine.close();}
 });
+test('dispatch excludes future bot and Shopify deliveries and rechecks stale routes', async () => {
+  const f = await fixture();
+  try {
+    await f.engine.exec(`
+      UPDATE orders SET status='sent', delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date + 1 WHERE id=1;
+      UPDATE orders SET status='sent', delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date WHERE id=2;
+      INSERT INTO orders(id,organization_id,items,total_price,status,delivery_date) VALUES
+        (3,1,'[]',100,'sent',NULL),
+        (4,1,'[]',100,'sent',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date - 1);
+      UPDATE shopify_orders SET delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date + 4;
+      INSERT INTO shopify_orders(organization_id,shopify_order_id,delivery_date) VALUES
+        (1,'today',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date),
+        (1,'overdue',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date - 1),
+        (1,'undated',NULL);
+    `);
+    const router = load('src/routes/delivery.js', {'../db/database': f.db, '../middleware/auth': {requireAuth: noop, requireRole: () => noop}});
+    const call = async (method, path, body={}, params={}) => {
+      const res=response();
+      await handler(router,method,path)({orgId:1,role:'owner',body,params},res);
+      return res;
+    };
+    const list=await call('get','/orders');
+    assert.equal(list.code,200);
+    assert.deepEqual(Array.from(list.body.orders,o=>`${o.source}_${o.id}`).sort(),
+      ['bot_2','bot_3','bot_4','shopify_overdue','shopify_today','shopify_undated'].sort());
+    // Ignore stale or forged dates from the browser; use the database date.
+    const future=[{source:'bot',id:1,deliveryDate:'2000-01-01'},{source:'shopify',id:'gid://shopify/Order/42'}];
+    assert.equal((await call('post','/routes',{orders:future,send:true})).code,400);
+    await f.query("UPDATE delivery_routes SET status='draft' WHERE id=1");
+    assert.equal((await call('patch','/routes/1',{status:'sent'},{id:'1'})).code,400);
+    assert.equal((await call('post','/routes/2/orders',{orders:future},{id:'2'})).code,400);
+    assert.equal((await f.query('SELECT status FROM orders WHERE id=1')).rows[0].status,'sent');
+    // It becomes eligible automatically on its scheduled day.
+    await f.query("UPDATE orders SET delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date WHERE id=1");
+    assert.ok((await call('get','/orders')).body.orders.some(o=>o.source==='bot' && String(o.id)==='1'));
+  } finally { await f.engine.close(); }
+});
+
