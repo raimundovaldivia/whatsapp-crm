@@ -317,7 +317,7 @@ async function sendChargeRequest(orgId, order, opts = {}) {
       await db.updateConversationLastMessage(conv.id, text);
       if (io && outMsg) {
         const finalConv = await db.getConversationById(conv.id);
-        io.emit(`new_message_${orgId}`, { message: outMsg, conversation: finalConv });
+        io.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: outMsg, conversation: finalConv });
       }
     }
   } catch (err) {

@@ -13,6 +13,9 @@ data/
 
 # Build del frontend
 frontend/dist/
+mobile/dist-audit/
+mobile-admin/dist-audit/
+mobile-admin/.expo/
 
 # Logs
 *.log

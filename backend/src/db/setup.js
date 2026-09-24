@@ -304,6 +304,28 @@ async function setupDatabase() {
       -- Migración: opt-out (no quiere recibir mensajes)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS opt_out BOOLEAN DEFAULT FALSE;
 
+      CREATE TABLE IF NOT EXISTS shopify_orders (
+        id                  SERIAL PRIMARY KEY,
+        organization_id     INTEGER NOT NULL,
+        shopify_order_id    TEXT NOT NULL,
+        shopify_name        TEXT,
+        financial_status    TEXT,
+        fulfillment_status  TEXT,
+        total_price         DECIMAL(12,2),
+        customer_name       TEXT,
+        customer_email      TEXT,
+        customer_phone      TEXT,
+        shipping_city       TEXT,
+        items               JSONB DEFAULT '[]',
+        raw_json            JSONB,
+        shopify_created_at  TIMESTAMP,
+        synced_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(organization_id, shopify_order_id),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_shopify_orders_org_date
+        ON shopify_orders(organization_id, shopify_created_at DESC);
+
       -- Migración: dirección editable en shopify_orders
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address1 TEXT;
 
@@ -440,6 +462,8 @@ async function setupDatabase() {
       -- (Su fecha aproximada es cuando se marcó el pago o la última actualización.)
       UPDATE orders SET delivered_at = COALESCE(payment_marked_at, updated_at, created_at)
         WHERE delivered_at IS NULL AND status IN ('entregado', 'paid');
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_at TIMESTAMP;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
       UPDATE shopify_orders SET delivered_at = COALESCE(payment_marked_at, updated_at, synced_at)
         WHERE delivered_at IS NULL AND crm_status = 'entregado';
 
@@ -536,28 +560,6 @@ async function setupDatabase() {
         NOT VALID;
 
       -- ─── CACHÉ DE ÓRDENES DE SHOPIFY ────────────────────────────────
-      CREATE TABLE IF NOT EXISTS shopify_orders (
-        id                  SERIAL PRIMARY KEY,
-        organization_id     INTEGER NOT NULL,
-        shopify_order_id    TEXT NOT NULL,
-        shopify_name        TEXT,
-        financial_status    TEXT,
-        fulfillment_status  TEXT,
-        total_price         DECIMAL(12,2),
-        customer_name       TEXT,
-        customer_email      TEXT,
-        customer_phone      TEXT,
-        shipping_city       TEXT,
-        items               JSONB DEFAULT '[]',
-        raw_json            JSONB,
-        shopify_created_at  TIMESTAMP,
-        synced_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(organization_id, shopify_order_id),
-        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
-      );
-      CREATE INDEX IF NOT EXISTS idx_shopify_orders_org_date
-        ON shopify_orders(organization_id, shopify_created_at DESC);
-
       -- ─── REPARTOS (rutas de entrega asignadas al repartidor) ─────
 
       CREATE TABLE IF NOT EXISTS delivery_routes (
@@ -864,6 +866,45 @@ async function setupDatabase() {
     //   admin_window_warning_sent  → ISO de la ventana en que ya se avisó (para no repetir)
     // Se guardan como settings por org; no requieren columnas nuevas.
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS webhook_inbox (
+        id BIGSERIAL PRIMARY KEY,
+        provider TEXT NOT NULL,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        event_key TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        headers JSONB NOT NULL,
+        params JSONB NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','completed','needs_review')),
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(provider, organization_id, event_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_webhook_pending ON webhook_inbox(status, id);
+      DROP INDEX IF EXISTS idx_webhook_org_processing;
+      CREATE TABLE IF NOT EXISTS webhook_streams (
+        id BIGSERIAL PRIMARY KEY,
+        provider TEXT NOT NULL,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        stream_key TEXT NOT NULL,
+        processing BOOLEAN NOT NULL DEFAULT FALSE,
+        available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(provider, organization_id, stream_key)
+      );
+      ALTER TABLE webhook_inbox ADD COLUMN IF NOT EXISTS stream_id BIGINT REFERENCES webhook_streams(id);
+      INSERT INTO webhook_streams(provider, organization_id, stream_key)
+        SELECT DISTINCT provider,organization_id,'organization' FROM webhook_inbox WHERE stream_id IS NULL
+        ON CONFLICT DO NOTHING;
+      UPDATE webhook_inbox w SET stream_id=s.id FROM webhook_streams s
+        WHERE w.stream_id IS NULL AND s.provider=w.provider AND s.organization_id=w.organization_id AND s.stream_key='organization';
+      CREATE INDEX IF NOT EXISTS idx_webhook_stream_status ON webhook_inbox(stream_id,status,id);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE delivery_expenses ADD COLUMN IF NOT EXISTS client_request_id TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_request
+        ON delivery_expenses(organization_id, driver_user_id, client_request_id);
+    `);
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

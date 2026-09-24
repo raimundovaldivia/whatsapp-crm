@@ -14,10 +14,10 @@ const db             = require('../db/database');
 const { getPool }    = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
 const Anthropic = require('@anthropic-ai/sdk');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 
-router.use(requireAuth);
+router.use(requireAuth, requireRole('owner', 'admin', 'supervisor'));
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -1425,7 +1425,7 @@ router.post('/send', async (req, res) => {
       });
       await db.updateConversationLastMessage(convId, savedContent);
       const updated = await db.getConversationById(convId);
-      io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
+      io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
       // Marcar conversación como "esperando respuesta a template"
       if (isTemplate) {
         await db.updatePipelineState(convId, 'template_sent');
@@ -1539,7 +1539,7 @@ router.post('/send-bulk', async (req, res) => {
         });
         await db.updateConversationLastMessage(convId, savedContent);
         const updated = await db.getConversationById(convId);
-        io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
+        io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
         // No tocamos pipeline_state — 'template_sent' no es un valor válido
       }
 

@@ -6,11 +6,11 @@ services:
     rootDir: backend
     buildCommand: npm install
     startCommand: node src/index.js
-    disk:
-      name: crm-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: NODE_VERSION
+        value: 24
       - key: NODE_ENV
         value: production
       - key: PORT

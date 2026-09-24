@@ -14,12 +14,17 @@ const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
 const collection  = require('../services/payment-collection');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 router.use(requireAuth);
+router.use((req, res, next) => {
+  if (req.method === 'GET') return next();
+  const deliveryEdit = req.method === 'PATCH' && (/^\/(set-items|reschedule)$/.test(req.path) || /^\/(?:shopify\/)?\d+\/address$/.test(req.path));
+  return requireRole('owner', 'admin', 'supervisor', ...(deliveryEdit ? ['coordinador'] : []))(req, res, next);
+});
 
 /**
  * POST /api/orders
@@ -653,7 +658,7 @@ router.patch('/payment-method', async (req, res) => {
   }
 });
 
-router.get('/:id', async (req, res) => {
+router.get('/:id(\\d+)', async (req, res) => {
   try {
     const { rows: [order] } = await getPool().query(
       `SELECT o.*, c.phone_number, c.contact_name

@@ -6,13 +6,14 @@ const whatsappService = require('../services/whatsapp');
 const twilioService   = require('../services/twilio-whatsapp');
 const kapsoService    = require('../services/kapso-whatsapp');
 const { notifyAdminHandoff } = require('../services/notifications');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 // Todas las rutas requieren auth
 router.use(requireAuth);
+const { mergeConversations } = require('../services/merge-conversations');
 
 /**
  * GET /api/conversations
@@ -87,7 +88,7 @@ router.post('/:id/messages', async (req, res) => {
 
     await db.updateConversationLastMessage(conv.id, text.trim());
     const updated = await db.getConversationById(conv.id);
-    io?.emit(`new_message_${req.orgId}`, { message, conversation: updated });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updated });
 
     res.json({ success: true, data: message });
   } catch (err) {
@@ -108,7 +109,7 @@ router.patch('/:id/agent-mode', async (req, res) => {
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
     await db.setAgentMode(conv.id, mode);
-    io?.emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode });
+    io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode });
 
     // Notificar al admin si se cambia a modo humano manualmente desde el CRM
     if (mode === 'human') {
@@ -126,6 +127,7 @@ router.patch('/:id/agent-mode', async (req, res) => {
  */
 router.patch('/:id/read', async (req, res) => {
   try {
+    if (!await db.getConversationById(Number(req.params.id), req.orgId)) return res.status(404).json({ error: 'Conversación no encontrada' });
     await db.markConversationAsRead(parseInt(req.params.id));
     res.json({ success: true });
   } catch (err) {
@@ -189,7 +191,7 @@ router.post('/start', async (req, res) => {
 
     await db.updateConversationLastMessage(convId, text.trim());
     const conv = await db.getConversationById(convId);
-    io?.emit(`new_message_${req.orgId}`, { message, conversation: conv });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: conv });
 
     res.json({ success: true, data: { conversationId: convId, message, conversation: conv } });
   } catch (err) {
@@ -205,6 +207,7 @@ router.post('/start', async (req, res) => {
  */
 router.patch('/:id/pipeline-state', async (req, res) => {
   try {
+    if (!await db.getConversationById(Number(req.params.id), req.orgId)) return res.status(404).json({ error: 'Conversación no encontrada' });
     const { state, excludeHotLead } = req.body;
     const VALID = ['exploring', 'interested', 'collecting_order', 'awaiting_payment', 'done'];
     if (!VALID.includes(state)) {
@@ -214,8 +217,8 @@ router.patch('/:id/pipeline-state', async (req, res) => {
     // Si se excluye de hot leads, marcar la bandera para que el scan no la vuelva a añadir
     if (excludeHotLead) {
       await getPool().query(
-        'UPDATE conversations SET hot_lead_excluded = TRUE, updated_at = NOW() WHERE id = $1',
-        [parseInt(req.params.id)]
+        'UPDATE conversations SET hot_lead_excluded = TRUE, updated_at = NOW() WHERE id = $1 AND organization_id = $2',
+        [parseInt(req.params.id), req.orgId]
       );
     }
     res.json({ success: true, state, excludeHotLead: !!excludeHotLead });
@@ -342,7 +345,7 @@ router.post('/:id/orders', async (req, res) => {
       await db.updateConversationLastMessage(convId, summary);
       const updatedConv = await db.getConversationById(convId);
       const io = req.app.get('io');
-      io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
+      io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
     }
 
     res.json({ success: true, order });
@@ -441,7 +444,7 @@ router.post('/:id/send-template', async (req, res) => {
 
     await db.updateConversationLastMessage(conv.id, `[Template enviado: ${templateName.trim()}]`);
     const updated = await db.getConversationById(conv.id);
-    io?.emit(`new_message_${req.orgId}`, { message, conversation: updated });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updated });
 
     res.json({ success: true, data: message });
   } catch (err) {
@@ -494,7 +497,7 @@ router.delete('/:id/messages', async (req, res) => {
     console.log(`[DevTool] 🗑️  ${rowCount} mensajes borrados en conv ${conv.id} por ${user.email}`);
 
     const freshConv = await db.getConversationById(conv.id);
-    io?.emit(`new_message_${req.orgId}`, { message: null, conversation: freshConv });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: null, conversation: freshConv });
 
     res.json({ success: true, deleted: rowCount });
   } catch (err) {
@@ -507,7 +510,7 @@ router.delete('/:id/messages', async (req, res) => {
  * Encuentra conversaciones duplicadas (mismo teléfono con/sin '+') y las fusiona.
  * Mantiene la que tiene más mensajes y borra la otra.
  */
-router.post('/merge-duplicates', async (req, res) => {
+router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
   try {
     let merged = 0;
@@ -528,24 +531,7 @@ router.post('/merge-duplicates', async (req, res) => {
     );
 
     for (const row of pairs.rows) {
-      const { keep_id, dupe_id, dupe_name, keep_name } = row;
-      // Mover mensajes del duplicado (con +) al que conservamos (sin +)
-      await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [keep_id, dupe_id]);
-      // Copiar nombre si el duplicado tiene uno mejor
-      const keepIsGeneric = !keep_name || keep_name === 'Cliente' || /^\d+$/.test(keep_name);
-      if (dupe_name && !/^\d+$/.test(dupe_name) && dupe_name !== 'Cliente' && keepIsGeneric) {
-        await pool.query('UPDATE conversations SET contact_name = $1, updated_at = NOW() WHERE id = $2', [dupe_name, keep_id]);
-      }
-      // Sincronizar last_message y last_message_at del que conservamos
-      await pool.query(
-        `UPDATE conversations c SET
-           last_message = sub.last_message, last_message_at = sub.last_message_at, updated_at = NOW()
-         FROM (SELECT content AS last_message, created_at AS last_message_at
-               FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
-         WHERE c.id = $1`,
-        [keep_id]
-      );
-      await pool.query('DELETE FROM conversations WHERE id = $1', [dupe_id]);
+      await mergeConversations(req.orgId, row.keep_id, row.dupe_id);
       merged++;
     }
 
@@ -566,21 +552,7 @@ router.post('/merge-duplicates', async (req, res) => {
     );
 
     for (const row of pairsNoCC.rows) {
-      const { keep_id, dupe_id, dupe_name, keep_name } = row;
-      await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [keep_id, dupe_id]);
-      const keepIsGeneric = !keep_name || keep_name === 'Cliente' || /^\d+$/.test(keep_name);
-      if (dupe_name && !/^\d+$/.test(dupe_name) && dupe_name !== 'Cliente' && keepIsGeneric) {
-        await pool.query('UPDATE conversations SET contact_name = $1, updated_at = NOW() WHERE id = $2', [dupe_name, keep_id]);
-      }
-      await pool.query(
-        `UPDATE conversations c SET
-           last_message = sub.last_message, last_message_at = sub.last_message_at, updated_at = NOW()
-         FROM (SELECT content AS last_message, created_at AS last_message_at
-               FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
-         WHERE c.id = $1`,
-        [keep_id]
-      );
-      await pool.query('DELETE FROM conversations WHERE id = $1', [dupe_id]);
+      await mergeConversations(req.orgId, row.keep_id, row.dupe_id);
       merged++;
     }
 
@@ -615,21 +587,7 @@ router.post('/merge-duplicates', async (req, res) => {
     );
 
     for (const row of [...pairsShortVsPlusFull.rows, ...pairsShortVsPlusFullInv.rows]) {
-      const { keep_id, dupe_id, dupe_name, keep_name } = row;
-      await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [keep_id, dupe_id]);
-      const keepIsGeneric = !keep_name || keep_name === 'Cliente' || /^\d+$/.test(keep_name);
-      if (dupe_name && !/^\d+$/.test(dupe_name) && dupe_name !== 'Cliente' && keepIsGeneric) {
-        await pool.query('UPDATE conversations SET contact_name = $1, updated_at = NOW() WHERE id = $2', [dupe_name, keep_id]);
-      }
-      await pool.query(
-        `UPDATE conversations c SET
-           last_message = sub.last_message, last_message_at = sub.last_message_at, updated_at = NOW()
-         FROM (SELECT content AS last_message, created_at AS last_message_at
-               FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
-         WHERE c.id = $1`,
-        [keep_id]
-      );
-      await pool.query('DELETE FROM conversations WHERE id = $1', [dupe_id]);
+      await mergeConversations(req.orgId, row.keep_id, row.dupe_id);
       merged++;
     }
 
@@ -770,36 +728,12 @@ router.get('/search-by-phone', async (req, res) => {
  * Fusiona UNA conversación específica (sourceId del body) dentro de targetId.
  * Mueve los mensajes y borra la conversación fuente.
  */
-router.post('/merge-into/:targetId', async (req, res) => {
-  const pool = getPool();
+router.post('/merge-into/:targetId', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   try {
-    const targetId = parseInt(req.params.targetId);
-    const { sourceId } = req.body;
-    if (!sourceId || !targetId || sourceId === targetId) {
-      return res.status(400).json({ success: false, error: 'Parámetros inválidos' });
-    }
-    // Verificar que ambas son de esta org
-    const target = await pool.query('SELECT id FROM conversations WHERE id = $1 AND organization_id = $2', [targetId, req.orgId]);
-    const source = await pool.query('SELECT id FROM conversations WHERE id = $1 AND organization_id = $2', [sourceId, req.orgId]);
-    if (!target.rows.length || !source.rows.length) {
-      return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
-    }
-    await pool.query('UPDATE messages SET conversation_id = $1 WHERE conversation_id = $2', [targetId, sourceId]);
-    // Actualizar last_message del target
-    await pool.query(
-      `UPDATE conversations SET
-         last_message    = sub.content,
-         last_message_at = sub.created_at,
-         updated_at      = NOW()
-       FROM (SELECT content, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1) sub
-       WHERE conversations.id = $1`,
-      [targetId]
-    );
-    await pool.query('DELETE FROM conversations WHERE id = $1', [sourceId]);
+    const targetId = Number(req.params.targetId), sourceId = Number(req.body.sourceId);
+    await mergeConversations(req.orgId, targetId, sourceId);
     res.json({ success: true, mergedInto: targetId, deleted: sourceId });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  } catch (err) { res.status(err.status || 500).json({ success: false, error: err.message }); }
 });
 
 /**
@@ -874,7 +808,7 @@ Si es de noche (>21h), escribe: SKIP. Sin comillas. Solo el mensaje.`;
         await pool.query('UPDATE conversations SET follow_up_sent_at = NOW() WHERE id = $1', [conv.id]);
 
         const updatedConv = await db.getConversationById(conv.id);
-        io?.emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
+        io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
         sent++;
         await new Promise(r => setTimeout(r, 1200));
       } catch (e) {
@@ -1139,46 +1073,20 @@ router.get('/media/:mediaRef', async (req, res) => {
       }
     } catch (_) {}
 
-    console.log(`[Media proxy] Request for: ${ref.slice(0,80)}`);
-
-    // ── 1. Verificar cache en memoria primero (evita re-descargar URLs expiradas) ──
-    const cached = mediaCache.get(ref);
-    if (cached) {
-      console.log(`[Media proxy] Cache hit — ${cached.data.byteLength} bytes | ${cached.contentType}`);
-      res.set('Content-Type', cached.contentType);
-      res.set('Cache-Control', 'private, max-age=3600');
-      return res.send(cached.data);
-    }
-
+    const { rows } = await getPool().query(
+      'SELECT 1 FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.organization_id = $1 AND m.media_id = $2 LIMIT 1',
+      [req.orgId, ref]);
+    if (!rows.length) return res.status(404).json({ error: 'Media no disponible' });
+    const cacheKey = req.orgId + ':' + ref;
+    const cached = mediaCache.get(cacheKey);
     let data, contentType;
-
-    if (ref.startsWith('https://')) {
-      // Ambos dominios de Kapso (api.kapso.ai y app.kapso.ai/Active Storage) requieren X-API-Key
-      const dlHeaders = ref.includes('kapso.ai') ? { 'X-API-Key': apiKey } : {};
-      console.log(`[Media proxy] Fetching URL: ${ref.slice(0,80)} | auth:${!!dlHeaders['X-API-Key']}`);
-      const resp = await axios.get(ref, {
-        headers: dlHeaders,
-        responseType: 'arraybuffer',
-        maxRedirects: 5,
-        timeout: 20000,
-      });
-      data = resp.data;
-      contentType = resp.headers['content-type'] || 'image/jpeg';
-    } else {
-      // WhatsApp media ID — obtener URL de descarga primero
-      console.log(`[Media proxy] Getting media URL for ID: ${ref}`);
-      const mediaInfo = await kapsoSvc.getMediaUrl(ref, whatsappConfig);
-      console.log(`[Media proxy] Got URL: ${String(mediaInfo?.url).slice(0,80)}`);
-      const result = await kapsoSvc.downloadMedia(mediaInfo.url, whatsappConfig);
-      data = result.data;
-      contentType = result.contentType;
+    if (cached) ({ data, contentType } = cached);
+    else {
+      const url = ref.startsWith('https://') ? ref : (await kapsoSvc.getMediaUrl(ref, whatsappConfig)).url;
+      ({ data, contentType } = await kapsoSvc.downloadMedia(url, whatsappConfig));
+      mediaCache.set(cacheKey, data, contentType);
     }
-
-    console.log(`[Media proxy] OK — ${data?.byteLength} bytes | ${contentType}`);
-
-    // Guardar en cache para futuras requests
-    mediaCache.set(ref, data, contentType);
-
+    res.set('X-Content-Type-Options', 'nosniff');
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'private, max-age=3600');
     res.send(Buffer.from(data));

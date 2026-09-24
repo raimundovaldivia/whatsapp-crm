@@ -153,7 +153,7 @@ async function processScheduledOrder(order, io) {
   // 7. Notificar al CRM en tiempo real
   const updatedConv = await db.getConversationById(convId).catch(() => null);
   if (updatedConv && io) {
-    io.emit(`new_message_${orgId}`, {
+    io.to(`org_${orgId}`).emit(`new_message_${orgId}`, {
       message:      { conversationId: convId, direction: 'outbound', content, sentBy: 'ai' },
       conversation: updatedConv,
     });

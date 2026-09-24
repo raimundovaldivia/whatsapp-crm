@@ -11,9 +11,9 @@
 const express = require('express');
 const router  = express.Router();
 const db      = require('../db/database');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
-router.use(requireAuth);
+router.use(requireAuth, requireRole('owner', 'admin'));
 
 // Keys que gestionamos (whitelist)
 const STORE_KEYS = [

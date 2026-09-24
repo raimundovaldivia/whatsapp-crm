@@ -425,7 +425,7 @@ function NuevoReparto({ colors }) {
 
   async function handleExportXlsx() {
     if (selectedOrders.length === 0) return;
-    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
+    const XLSX = await import('xlsx');
 
     // ── Hoja 1: Despacho (formato software externo) ──────────────
     const HEADERS = [

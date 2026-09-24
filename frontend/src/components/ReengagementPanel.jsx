@@ -364,7 +364,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
 
   const exportToExcel = async () => {
     if (!candidates.length) return;
-    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
+    const XLSX = await import('xlsx');
 
     const windowLabel = { hoy: 'Hoy-Mañana', semana: 'Esta semana', mes: 'Este mes', lejano: '1-6 meses', desconocido: 'Desconocido' };
 

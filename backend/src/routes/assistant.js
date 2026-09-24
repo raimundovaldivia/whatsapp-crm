@@ -10,9 +10,9 @@ const express   = require('express');
 const router    = express.Router();
 const db        = require('../db/database');
 const assistant = require('../services/agents/assistant');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
-router.use(requireAuth);
+router.use(requireAuth, requireRole('owner', 'admin'));
 
 /**
  * POST /api/assistant/chat

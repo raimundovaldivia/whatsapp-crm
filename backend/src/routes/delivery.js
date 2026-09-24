@@ -34,6 +34,9 @@ let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 router.use(requireAuth);
+const { routeItems } = require('../services/delivery-items');
+router.get('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
+router.patch('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
 
 // ─── Geocodificación (dirección → lat/lng) ───────────────────────────────────
 // Convierte direcciones en coordenadas para pintar el mapa. Usa la misma
@@ -663,9 +666,14 @@ router.get('/catalog', async (req, res) => {
 router.post('/expenses', async (req, res) => {
   const pool = getPool();
   try {
-    const { amount, category, note, routeId, photoBase64, photoMime } = req.body;
+    const { amount, category, note, routeId, photoBase64, photoMime, clientRequestId } = req.body;
+    if (clientRequestId != null && !/^[a-zA-Z0-9_-]{8,100}$/.test(clientRequestId)) return res.status(400).json({ error: 'Identificador inválido' });
     const amt = Math.round(parseFloat(amount) || 0);
-    if (!amt || amt <= 0) return res.status(400).json({ success: false, error: 'Monto inválido' });
+    if (!Number.isSafeInteger(amt) || amt <= 0 || amt > 2147483647) return res.status(400).json({ success: false, error: 'Monto inválido' });
+    if (routeId) {
+      const { rows } = await pool.query('SELECT id FROM delivery_routes WHERE id = $1 AND organization_id = $2 AND ($3::integer IS NULL OR driver_user_id = $3)', [Number(routeId), req.orgId, req.role === 'repartidor' ? req.userId : null]);
+      if (!rows.length) return res.status(404).json({ error: 'Ruta no encontrada' });
+    }
     let photoBuf = null;
     if (photoBase64) {
       photoBuf = Buffer.from(String(photoBase64).replace(/^data:[^;]+;base64,/, ''), 'base64');
@@ -675,11 +683,13 @@ router.post('/expenses', async (req, res) => {
     try { const u = await db.getUserById(req.userId); driverName = u?.name || u?.email || null; } catch {}
     const { rows: [row] } = await pool.query(
       `INSERT INTO delivery_expenses
-         (organization_id, route_id, driver_user_id, driver_name, amount, category, note, photo, photo_mime)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
+         (organization_id, route_id, driver_user_id, driver_name, amount, category, note, photo, photo_mime, client_request_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (organization_id, driver_user_id, client_request_id)
+       DO UPDATE SET client_request_id = EXCLUDED.client_request_id RETURNING id, created_at`,
       [req.orgId, routeId ? parseInt(routeId) : null, req.userId, driverName, amt,
        (category || '').slice(0, 40), (note || '').slice(0, 300),
-       photoBuf, photoBuf ? (photoMime || 'image/jpeg') : null]
+       photoBuf, photoBuf ? (photoMime || 'image/jpeg') : null, clientRequestId || null]
     );
     console.log(`[Delivery/expenses POST] ✅ id=${row.id} org=${req.orgId} driver=${driverName || req.userId} $${amt} ${category || ''} foto=${photoBuf ? Math.round(photoBuf.length / 1024) + 'KB' : 'no'}`);
     res.status(201).json({ success: true, id: row.id, created_at: row.created_at });
@@ -1124,14 +1134,14 @@ router.delete('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordi
 // ":stopKey" cuando el valor contiene "/". Por eso la app manda el stopKey en
 // el body. La ruta legacy queda para los pedidos del bot ("bot_12").
 
-router.patch('/routes/:id/stops', (req, res) => {
+router.patch('/routes/:id/stops', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), (req, res) => {
   const stopKey = req.body?.stopKey;
   if (!stopKey || typeof stopKey !== 'string')
     return res.status(400).json({ success: false, error: 'Falta stopKey en el body' });
   return applyStopUpdate(req, res, req.params.id, stopKey);
 });
 
-router.patch('/routes/:id/stops/:stopKey', (req, res) => {
+router.patch('/routes/:id/stops/:stopKey', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), (req, res) => {
   return applyStopUpdate(req, res, req.params.id, req.params.stopKey);
 });
 
@@ -1215,7 +1225,8 @@ async function applyStopUpdate(req, res, id, stopKey) {
         price:    Math.max(0, Math.round(parseFloat(e?.price) || 0)),
       })).filter(e => e.name && e.quantity > 0).slice(0, 30)
     : [];
-  const pool = getPool();
+  let pool;
+  let committed = false;
 
   const VALID = ['entregado', 'cancelled', 'pending', 'postponed'];
   if (!VALID.includes(status))
@@ -1230,6 +1241,21 @@ async function applyStopUpdate(req, res, id, stopKey) {
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
 
   try {
+    pool = await getPool().connect();
+    await pool.query('BEGIN');
+    const { rows: [owned] } = await pool.query(
+      "SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2 AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL) FOR UPDATE",
+      [Number(id), req.orgId, driverScope]);
+    if (!owned) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+    if (!['sent', 'in_progress'].includes(owned.status)) throw Object.assign(new Error('La ruta no está activa'), { status: 409 });
+    const members = Array.isArray(owned.orders) ? owned.orders : JSON.parse(owned.orders || '[]');
+    if (!members.some(o => String(o.source) + '_' + String(o.id) === stopKey)) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
+    const [kind, orderKey] = splitStopKey(stopKey);
+    if (!['bot', 'shopify'].includes(kind)) throw Object.assign(new Error('Pedido inválido'), { status: 400 });
+    const table = kind === 'bot' ? 'orders' : 'shopify_orders';
+    const column = kind === 'bot' ? 'id' : 'shopify_order_id';
+    const order = await pool.query('SELECT 1 FROM ' + table + ' WHERE ' + column + ' = $1 AND organization_id = $2 FOR UPDATE', [kind === 'bot' ? Number(orderKey) : orderKey, req.orgId]);
+    if (!order.rows.length) throw Object.assign(new Error('Pedido no encontrado'), { status: 404 });
     // Actualizar stop_statuses (y el medio de pago, si se entregó) en la ruta
     const paymentJson = status === 'entregado' && paymentMethod
       ? JSON.stringify({ [stopKey]: paymentMethod })
@@ -1251,7 +1277,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
         RETURNING stop_statuses, stop_payments, stop_notes, stop_extras, orders`,
       [stopKey, status, parseInt(id), req.orgId, driverScope, paymentJson, noteJson, extrasJson]
     );
-    if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada o no asignada a ti' });
+    if (!route) throw new Error('Ruta no encontrada');
 
     // Actualizar el estado real del pedido en la tabla correspondiente.
     // El medio de pago solo se guarda al entregar: en 'cancelled' o 'pending'
@@ -1319,8 +1345,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
 
     // ── Venta extra: sumar a la orden y marcarla como modificada en reparto ──
     if (status === 'entregado' && cleanExtras.length) {
-      try { await applyExtraToOrder(pool, source, orderId, req.orgId, cleanExtras); }
-      catch (e) { console.error('[Delivery/extra]', e.message); }
+      await applyExtraToOrder(pool, source, orderId, req.orgId, cleanExtras);
     }
 
     // ── Cerrar el pedido agendado al entregar ─────────────────────────────
@@ -1370,10 +1395,28 @@ async function applyStopUpdate(req, res, id, stopKey) {
           }
         }
       } catch (err) {
-        // Cosmético: no debe impedir que la parada quede marcada como entregada
-        console.error('[Delivery/stop] No se pudo cerrar el pedido agendado:', err.message);
+        throw err;
       }
     }
+
+    // Si todos los pedidos están procesados → completar la ruta
+    const orders     = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
+    const statuses   = route.stop_statuses || {};
+    const allDone    = orders.every(o => {
+      const key = `${o.source}_${o.id}`;
+      return ['entregado', 'cancelled', 'postponed'].includes(statuses[key]);
+    });
+    if (allDone && orders.length > 0) {
+      await pool.query(
+        `UPDATE delivery_routes SET status = 'completed', completed_at = NOW() WHERE id = $1`,
+        [parseInt(id)]
+      );
+    }
+
+    await pool.query('COMMIT');
+    committed = true;
+    pool.release();
+    pool = null;
 
     // ── Cobro automático por transferencia ────────────────────────────────
     // Solo si la org lo activó (setting charge_settings.autoSendOnTransfer).
@@ -1399,20 +1442,6 @@ async function applyStopUpdate(req, res, id, stopKey) {
       }
     }
 
-    // Si todos los pedidos están procesados → completar la ruta
-    const orders     = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
-    const statuses   = route.stop_statuses || {};
-    const allDone    = orders.every(o => {
-      const key = `${o.source}_${o.id}`;
-      return ['entregado', 'cancelled', 'postponed'].includes(statuses[key]);
-    });
-    if (allDone && orders.length > 0) {
-      await pool.query(
-        `UPDATE delivery_routes SET status = 'completed', completed_at = NOW() WHERE id = $1`,
-        [parseInt(id)]
-      );
-    }
-
     res.json({
       success:       true,
       stopStatuses:  route.stop_statuses,
@@ -1421,9 +1450,10 @@ async function applyStopUpdate(req, res, id, stopKey) {
       autoCharge,
     });
   } catch (err) {
+    if (pool && !committed) await pool.query('ROLLBACK');
     console.error('[Delivery/stop]', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
+    res.status(err.status || 500).json({ success: false, error: err.message });
+  } finally { pool?.release(); }
 }
 
 // ─── Resumen del día ─────────────────────────────────────────────────────────

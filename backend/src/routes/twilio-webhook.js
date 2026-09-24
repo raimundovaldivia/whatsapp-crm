@@ -20,7 +20,7 @@ function setSocketIO(socketIO) { io = socketIO; }
  * POST /twilio-webhook
  * Twilio envía los mensajes como application/x-www-form-urlencoded
  */
-router.post('/', async (req, res) => {
+router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), require('../services/webhook-inbox').durableWebhook('twilio', async (req, res) => {
   // Twilio espera respuesta TwiML vacía (sin mensaje automático de Twilio)
   res.set('Content-Type', 'text/xml');
   res.send('<Response></Response>');
@@ -59,7 +59,7 @@ router.post('/', async (req, res) => {
 
     // 3. Emitir al CRM en tiempo real
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
     // 4. Si está en modo humano, no responder con IA
     if (updatedConv.agent_mode !== 'ai') return;
@@ -87,20 +87,21 @@ router.post('/', async (req, res) => {
     await db.updateConversationLastMessage(conversation.id, result.response);
 
     if (result.switchToHuman) {
-      io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
     }
 
     const finalConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
     if (result.orderCreated) {
-      io?.emit(`order_created_${org.id}`, { conversationId: conversation.id, order: result.orderCreated });
+      io?.to(`org_${org.id}`).emit(`order_created_${org.id}`, { conversationId: conversation.id, order: result.orderCreated });
     }
 
   } catch (err) {
     console.error('[TwilioWebhook] Error procesando mensaje:', err);
+    throw err;
   }
-});
+}));
 
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

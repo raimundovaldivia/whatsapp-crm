@@ -93,7 +93,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
     }
     setLoadingItems(true);
     try {
-      const data  = await getOrderItems(orderSource, orderId);
+      const data  = await getOrderItems(orderSource, orderId, routeId);
       const items = Array.isArray(data?.items) ? data.items : [];
       setEditItems(items.map(it => ({
         name:     it.name,
@@ -131,7 +131,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
         price:    Number(it.price) || 0,
         ...(it.extra !== undefined ? { extra: it.extra } : {}),
       }));
-      const resp = await setOrderItems(orderSource, orderId, payload);
+      const resp = await setOrderItems(orderSource, orderId, payload, routeId);
       const newTotal = resp?.total;
       setShowItemsEditor(false);
       setEditItems([]);

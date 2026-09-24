@@ -39,7 +39,7 @@ async function extractItems(buffer) {
   try {
     pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   } catch (e) {
-    throw new Error('Falta la librería pdfjs-dist en el servidor. En la carpeta backend ejecuta: npm install pdfjs-dist@5 — y vuelve a desplegar.');
+    throw new Error('Falta la librería pdfjs-dist en el servidor. En la carpeta backend ejecuta: npm ci — y vuelve a desplegar.');
   }
   const doc = await pdfjs.getDocument({
     data: new Uint8Array(buffer), useSystemFonts: true, disableFontFace: true, isEvalSupported: false,

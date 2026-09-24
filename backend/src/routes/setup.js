@@ -16,7 +16,8 @@ const db         = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
 const kapsoPlatform = require('../services/kapso-platform');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
+router.use(requireAuth, requireRole('owner', 'admin'));
 
 /* ─────────────────────────────────────────────────────────────
    WHATSAPP

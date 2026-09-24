@@ -457,20 +457,6 @@ async function getMediaUrl(mediaId, config) {
  * - URLs de app.kapso.ai/rails/active_storage → auto-autenticadas (firmadas), sin auth
  * - URLs de lookaside.fbsbx.com (Facebook CDN) → sin auth
  */
-async function downloadMedia(url, config) {
-  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
-  const headers = {};
-  // Ambos dominios de Kapso (api.kapso.ai y app.kapso.ai/Active Storage) requieren X-API-Key
-  if (url.includes('kapso.ai')) {
-    headers['X-API-Key'] = apiKey;
-  }
-  const resp = await axios.get(url, {
-    headers,
-    responseType: 'arraybuffer',
-    maxRedirects: 5,
-    timeout: 20000,
-  });
-  return { data: resp.data, contentType: resp.headers['content-type'] || 'image/jpeg' };
-}
+const { downloadMedia } = require('./safe-media');
 
 module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createTemplate, getMediaUrl, downloadMedia };

@@ -1,11 +1,24 @@
 const jwt = require('jsonwebtoken');
 const db = require('../db/database');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'cambiar_en_produccion_secret_muy_largo';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET === 'cambiar_en_produccion_secret_muy_largo') {
+  throw new Error('JWT_SECRET debe ser un secreto aleatorio de al menos 32 caracteres');
+}
+const VALID_ROLES = new Set(['owner', 'admin', 'supervisor', 'agent', 'coordinador', 'repartidor']);
+async function authenticateToken(token) {
+  const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+  const user = await db.getUserById(payload.userId);
+  if (!user || !VALID_ROLES.has(user.role) || user.organization_id !== payload.orgId ||
+      user.role !== payload.role || Number(user.auth_version || 0) !== Number(payload.authVersion || 0)) {
+    throw new Error('Sesión revocada');
+  }
+  return user;
+}
 
 function generateToken(user) {
   return jwt.sign(
-    { userId: user.id, orgId: user.organization_id, role: user.role },
+    { userId: user.id, orgId: user.organization_id, role: user.role, authVersion: user.auth_version || 0 },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -32,13 +45,13 @@ const RESTRICTED_ROLE_PREFIXES = {
   coordinador: COORDINADOR_ALLOWED_PREFIXES,
 };
 
-function requireAuth(req, res, next) {
-  // Aceptar token por header Authorization O por query param _token (para redirects OAuth)
+async function requireAuth(req, res, next) {
+  // Query tokens are limited to read-only media, never administrative actions.
   let token;
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
     token = authHeader.slice(7);
-  } else if (req.query._token) {
+  } else if (req.method === 'GET' && req.query._token && /\/(media\/|payment-proofs\/|expenses\/)/.test(req.originalUrl || req.path)) {
     token = req.query._token;
   }
 
@@ -47,18 +60,19 @@ function requireAuth(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.userId = payload.userId;
-    req.orgId  = payload.orgId;
-    req.role   = payload.role;
+    const user = await authenticateToken(token);
+    req.userId = user.id;
+    req.orgId = user.organization_id;
+    req.role = user.role;
   } catch {
     return res.status(401).json({ success: false, error: 'Token inválido o expirado' });
   }
 
   const allowedPrefixes = RESTRICTED_ROLE_PREFIXES[req.role];
   if (allowedPrefixes) {
-    const url = req.originalUrl || req.url || '';
-    const allowed = allowedPrefixes.some(p => url.startsWith(p));
+    const url = (req.originalUrl || req.url || '').split('?')[0];
+    const moduleRead = req.method === 'GET' && url === '/api/settings/modules';
+    const allowed = moduleRead || allowedPrefixes.some(p => (url === p || url.startsWith(p + '/')));
     if (!allowed) {
       return res.status(403).json({ success: false, error: 'Esta cuenta solo tiene acceso al módulo de despachos' });
     }
@@ -76,4 +90,4 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { generateToken, requireAuth, requireRole, JWT_SECRET, REPARTIDOR_ALLOWED_PREFIXES, COORDINADOR_ALLOWED_PREFIXES };
+module.exports = { authenticateToken, generateToken, requireAuth, requireRole, JWT_SECRET, REPARTIDOR_ALLOWED_PREFIXES, COORDINADOR_ALLOWED_PREFIXES };

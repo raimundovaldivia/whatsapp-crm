@@ -20,7 +20,11 @@ const collection      = require('../services/payment-collection');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
-router.use(requireRole('owner', 'admin'));
+router.use((req, res, next) => {
+  if (req.method === 'GET' && req.path === '/modules') return next();
+  const roles = req.path === '/warehouse' ? ['owner', 'admin', 'supervisor', 'coordinador'] : ['owner', 'admin'];
+  return requireRole(...roles)(req, res, next);
+});
 
 /**
  * GET /api/settings

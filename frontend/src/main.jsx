@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
-import Tienda from './components/Tienda.jsx'
+const App = React.lazy(() => import('./App.jsx'))
+const Tienda = React.lazy(() => import('./components/Tienda.jsx'))
 import './index.css'
 
 // Dominios propios de tiendas → mapeo hostname → slug
@@ -17,6 +17,8 @@ const isTienda   = domainSlug || (pathParts[0] === 'tienda' && pathParts[1]);
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
+    <React.Suspense fallback={<div role="status" style={{ padding: 24 }}>Cargando…</div>}>
     {isTienda ? <Tienda slug={domainSlug || pathParts[1]} /> : <App />}
+    </React.Suspense>
   </React.StrictMode>,
 )

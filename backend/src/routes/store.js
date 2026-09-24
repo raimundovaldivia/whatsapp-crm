@@ -91,6 +91,10 @@ router.post('/:slug/orders', async (req, res) => {
 
     const { name, phone, address, city, items } = req.body;
 
+    if (![name, phone, address].every(v => typeof v === 'string' && v.length <= 300) ||
+        !Array.isArray(items) || items.length < 1 || items.length > 100 ||
+        (city !== undefined && (typeof city !== 'string' || city.length > 150))) return res.status(400).json({ error: 'Datos de pedido inválidos' });
+    if (!/^\d{8,15}$/.test(phone.replace(/\D/g, ''))) return res.status(400).json({ error: 'Teléfono inválido' });
     // Validaciones básicas
     if (!name?.trim())    return res.status(400).json({ error: 'Nombre requerido' });
     if (!phone?.trim())   return res.status(400).json({ error: 'Teléfono requerido' });
@@ -105,10 +109,13 @@ router.post('/:slug/orders', async (req, res) => {
     let total = 0;
 
     for (const item of items) {
-      const product = productMap.get(parseInt(item.productId));
+      if (!item || typeof item !== 'object') return res.status(400).json({ error: 'Producto inválido' });
+      const product = productMap.get(Number(item.productId));
       if (!product) return res.status(400).json({ error: `Producto ${item.productId} no encontrado` });
-      const qty   = parseInt(item.quantity) || 1;
-      const price = parseFloat(product.price);
+      const qty = item.quantity;
+      if (!Number.isSafeInteger(qty) || qty < 1 || qty > 1000) return res.status(400).json({ error: 'Cantidad inválida' });
+      const price = Number(product.price);
+      if (!Number.isFinite(price) || price < 0) return res.status(400).json({ error: 'Precio inválido' });
       resolvedItems.push({ id: product.id, title: product.title, quantity: qty, price });
       total += price * qty;
     }

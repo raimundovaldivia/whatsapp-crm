@@ -1,76 +1,90 @@
-/**
- * expenseQueue — Gastos que no alcanzaron a subirse (sin señal, timeout).
- *
- * Un repartidor rinde el gasto en la calle, muchas veces sin buena señal. Si
- * la subida falla, el gasto NO se pierde: queda guardado en el teléfono y se
- * reintenta solo cada vez que la app vuelve a primer plano o entra a una
- * pantalla. El usuario ve cuántos hay pendientes.
- */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createExpense } from '../services/api';
+import { createExpense, getSavedSession } from '../services/api';
 
-const KEY = 'pending_expenses_v1';
-let flushing = false;
+let mutations = Promise.resolve();
+const flushing = new Set();
 const listeners = new Set();
-
 export function onQueueChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-async function notify() { const n = (await readQueue()).length; listeners.forEach(fn => { try { fn(n); } catch {} }); }
-
-async function readQueue() {
-  try { const raw = await AsyncStorage.getItem(KEY); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; }
-  catch { return []; }
+function notify(n) { listeners.forEach(fn => { try { fn(n); } catch {} }); }
+function serialize(fn) {
+  const next = mutations.then(fn, fn);
+  mutations = next.catch(() => {});
+  return next;
 }
-async function writeQueue(arr) {
-  try { await AsyncStorage.setItem(KEY, JSON.stringify(arr)); } catch {}
-  notify();
+async function identity() {
+  const session = await getSavedSession();
+  if (!session.token || !session.user?.id) throw new Error('Inicia sesión para guardar gastos');
+  return { session, key: `pending_expenses_v2:${encodeURIComponent(session.baseUrl)}:${session.user.id}` };
+}
+async function read(key) {
+  const raw = await AsyncStorage.getItem(key);
+  const items = raw ? JSON.parse(raw) : [];
+  if (!Array.isArray(items)) throw new Error('No se puede leer la cola de gastos');
+  return items;
+}
+async function mutate(key, fn) {
+  return serialize(async () => {
+    const items = fn(await read(key));
+    await AsyncStorage.setItem(key, JSON.stringify(items));
+    notify(items.length);
+    return items;
+  });
+}
+export async function pendingCount() {
+  const { key } = await identity();
+  return (await serialize(() => read(key))).length;
+}
+export async function enqueueExpense(expense, expectedSession = null) {
+  const { key, session } = await identity();
+  if (expectedSession && (session.token !== expectedSession.token || session.baseUrl !== expectedSession.baseUrl || session.user.id !== expectedSession.user?.id)) throw new Error('La sesión cambió');
+  const id = expense.clientRequestId || `expense_${Date.now()}_${Math.random().toString(36).slice(2,14)}`;
+  const items = await mutate(key, q => q.some(x => x.clientRequestId === id) ? q : [...q, {
+    ...expense, clientRequestId: id, _queuedAt: new Date().toISOString(),
+  }]);
+  return items.length;
 }
 
-export async function pendingCount() { return (await readQueue()).length; }
-
-/** Guarda un gasto para subirlo después. */
-export async function enqueueExpense(expense) {
-  const q = await readQueue();
-  q.push({ ...expense, _id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, _queuedAt: new Date().toISOString(), _tries: 0 });
-  await writeQueue(q);
-  return q.length;
+export async function legacyExpenses() { return serialize(() => read('pending_expenses_v1')); }
+// Called only after the user confirms ownership of unscoped entries from v1.
+export async function recoverLegacyExpenses() {
+  const { key } = await identity();
+  return serialize(async () => {
+    const old = await read('pending_expenses_v1');
+    const current = await read(key);
+    for (const expense of old) {
+      const id = expense.clientRequestId || `legacy_${expense._id || Date.now()}`;
+      if (!current.some(x => x.clientRequestId === id)) current.push({ ...expense, clientRequestId: id });
+    }
+    await AsyncStorage.setItem(key, JSON.stringify(current));
+    await AsyncStorage.setItem('pending_expenses_v1', '[]');
+    notify(current.length);
+    return current.length;
+  });
 }
-
-/**
- * Intenta subir todo lo pendiente. Devuelve { uploaded, remaining }.
- * Una falla de red deja el resto para la próxima; un rechazo del servidor
- * (400: monto inválido, foto muy pesada) descarta ese gasto para no reintentar
- * eternamente, y se informa.
- */
 export async function flushExpenses() {
-  if (flushing) return { uploaded: 0, remaining: await pendingCount() };
-  flushing = true;
+  const { key, session } = await identity();
+  if (flushing.has(key)) return { uploaded: 0, remaining: (await read(key)).length };
+  flushing.add(key);
   let uploaded = 0;
   const rejected = [];
   try {
-    let q = await readQueue();
-    for (const item of [...q]) {
-      const { _id, _queuedAt, _tries, ...payload } = item;
+    for (const item of await serialize(() => read(key))) {
+      if (item._rejected) continue;
+      const { _queuedAt, ...payload } = item;
       try {
-        await createExpense({ ...payload, note: payload.note ? `${payload.note} (rendido ${fmtWhen(_queuedAt)})` : `Rendido ${fmtWhen(_queuedAt)}` });
-        q = q.filter(x => x._id !== _id);
+        await createExpense(payload, session);
+        await mutate(key, q => q.filter(x => x.clientRequestId !== item.clientRequestId));
         uploaded++;
-        await writeQueue(q);
-      } catch (e) {
-        const st = e.response?.status;
-        if (st === 400) { rejected.push(e.response?.data?.error || 'rechazado'); q = q.filter(x => x._id !== _id); await writeQueue(q); continue; }
-        if (st === 401) break;                  // sesión vencida: la app vuelve al login
-        item._tries = (_tries || 0) + 1;        // red / 5xx: dejarlo y parar (sin señal, los demás también fallarán)
-        await writeQueue(q);
+      } catch (err) {
+        if (err.response?.status === 400) {
+          const reason = err.response.data?.error || 'Revisa el gasto';
+          rejected.push(reason);
+          await mutate(key, q => q.map(x => x.clientRequestId === item.clientRequestId ? { ...x, _rejected: reason } : x));
+          continue;
+        }
         break;
       }
     }
-    return { uploaded, remaining: q.length, rejected };
-  } finally {
-    flushing = false;
-  }
-}
-
-function fmtWhen(iso) {
-  try { return new Date(iso).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
-  catch { return ''; }
+    return { uploaded, remaining: (await read(key)).length, rejected };
+  } finally { flushing.delete(key); }
 }

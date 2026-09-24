@@ -121,7 +121,7 @@ async function runFollowUp(io = null) {
         // Notificar al panel en tiempo real
         if (io) {
           const updatedConv = await db.getConversationById(conv.id);
-          io.emit(`new_message_${conv.organization_id}`, {
+          io.to(`org_${conv.organization_id}`).emit(`new_message_${conv.organization_id}`, {
             message:      { conversationId: conv.id, direction: 'outbound', content: message, agentType: 'follow_up' },
             conversation: updatedConv,
           });

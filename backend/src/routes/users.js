@@ -52,7 +52,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { email, username, password, name, role } = req.body;
-    if (!password || !role) {
+    if (typeof password !== 'string' || password.length < 8 || password.length > 128 || !role) {
       return res.status(400).json({ success: false, error: 'Password y rol son requeridos' });
     }
     if (!VALID_ROLES.includes(role)) {

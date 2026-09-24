@@ -5,7 +5,7 @@
  *   Tu número → Webhooks → Add webhook
  *   URL:    POST https://TU-BACKEND.onrender.com/kapso-webhook
  *   Events: whatsapp.message.received
- *   (Opcional) Habilita firma y copia el secret → guárdalo en KAPSO_WEBHOOK_SECRET
+ *   Habilita firma y copia el secret → guárdalo en KAPSO_WEBHOOK_SECRET
  *
  * Kapso envía JSON con Content-Type: application/json.
  * La org se identifica por el phone_number_id que viene en cada evento.
@@ -28,102 +28,17 @@ const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify')
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
-// ── Debug store: últimos 20 webhooks recibidos (en memoria) ─────────
-const debugLog = [];
-function pushDebug(entry) {
-  debugLog.unshift({ ts: new Date().toISOString(), ...entry });
-  if (debugLog.length > 20) debugLog.pop();
-}
-
-// GET /kapso-webhook/debug — retorna los últimos webhooks (sin auth para facilitar debug)
-router.get('/debug', (req, res) => {
-  res.json({ count: debugLog.length, entries: debugLog });
-});
-
-/**
- * Debounce por conversación — evita múltiples respuestas del bot cuando
- * el cliente manda varios mensajes rápidos en sucesión.
- * El pipeline se ejecuta 3 segundos después del ÚLTIMO mensaje recibido.
- */
-const DEBOUNCE_MS   = 3000; // espera desde el último mensaje antes de procesar
-const MAX_RERUNS    = 2;    // reejecuciones seguidas tras una corrida (anti-bucle)
-
-const pendingPipeline = new Map(); // key: `${orgId}:${conversationId}` → timer
-const runningPipeline = new Map(); // key → { rerunFn, reruns } mientras se ejecuta
-
-/**
- * Encola la ejecución del pipeline con debounce Y candado por conversación.
- *
- * El debounce por sí solo no alcanzaba: cancelaba el TIMER pendiente, pero no
- * la ejecución ya en curso. Como una corrida del pipeline tarda varios segundos
- * (llamadas al LLM), los mensajes que llegaban durante ese rato agendaban una
- * corrida nueva que arrancaba en paralelo. Cada una leía un estado distinto de
- * la conversación y contestaba por su cuenta: el cliente recibía varias
- * respuestas que se contradecían entre sí (dos confirmaciones del mismo pedido
- * con precios distintos, preguntas por datos que ya había dado).
- *
- * Ahora solo puede haber UNA corrida por conversación a la vez. Lo que llega
- * mientras se ejecuta no abre una corrida paralela: queda como reejecución
- * pendiente — y solo la última, porque el pipeline relee de la DB el mensaje
- * más reciente, así que las intermedias no aportan nada.
- */
-// Un mensaje que es SOLO un saludo ("Buenas tardes", "Hola") casi siempre
-// viene seguido de la pregunta real unos segundos después. Con 3 s el bot
-// alcanzaba a contestar "¿En qué te ayudo?" y luego contestaba la pregunta
-// aparte: dos respuestas para un solo mensaje. Para esos se espera más.
-const OPENER_DEBOUNCE_MS = 12000;
-const OPENER_RE = /^(hola+|holi+|buenas+(\s+(tardes|d[ií]as|noches))?|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hey|qu[eé]\s+tal|hola\s+buenas)[\s!.,?¡¿]*$/iu;
-function isOpener(text) { return OPENER_RE.test(String(text || '').trim()); }
-
-function schedulePipeline(orgId, conversationId, fn, waitMs = DEBOUNCE_MS) {
-  const key = `${orgId}:${conversationId}`;
-  if (pendingPipeline.has(key)) clearTimeout(pendingPipeline.get(key));
-
-  const timer = setTimeout(() => {
-    pendingPipeline.delete(key);
-
-    // Ya hay una corrida en vuelo: dejar esta como la próxima y salir.
-    const inFlight = runningPipeline.get(key);
-    if (inFlight) {
-      inFlight.rerunFn = fn;
-      console.log(`[KapsoWebhook] ⏸️ Pipeline en curso para conv ${conversationId} — se encola una reejecución`);
-      return;
-    }
-
-    runPipelineLocked(key, conversationId, fn, 0);
-  }, waitMs);
-
-  pendingPipeline.set(key, timer);
-}
-
-async function runPipelineLocked(key, conversationId, fn, reruns) {
-  const entry = { rerunFn: null, reruns };
-  runningPipeline.set(key, entry);
-
-  try {
-    await fn();
-  } catch (err) {
-    console.error(`[KapsoWebhook] Pipeline falló para conv ${conversationId}:`, err.message);
-  } finally {
-    runningPipeline.delete(key);
-  }
-
-  // Llegaron mensajes mientras se ejecutaba → procesar el más reciente.
-  if (entry.rerunFn) {
-    if (reruns >= MAX_RERUNS) {
-      console.warn(`[KapsoWebhook] ⚠️ Conv ${conversationId} alcanzó el máximo de reejecuciones — se descarta la última`);
-      return;
-    }
-    console.log(`[KapsoWebhook] 🔄 Reejecutando pipeline de conv ${conversationId} (${reruns + 1}/${MAX_RERUNS})`);
-    await runPipelineLocked(key, conversationId, entry.rerunFn, reruns + 1);
-  }
+// Debounce and exclusion live in PostgreSQL streams. The worker persists
+// each message in the batch before running its latest scheduled response.
+function schedulePipeline(orgId, conversationId, fn) {
+  require('../services/webhook-inbox').defer(orgId + ':' + conversationId, fn);
 }
 
 /**
  * POST /kapso-webhook
  * Kapso envía JSON; ya está parseado por express.json() en index.js
  */
-router.post('/', async (req, res) => {
+router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), require('../services/webhook-inbox').durableWebhook('kapso', async (req, res) => {
   // Responder 200 inmediatamente (Kapso reintenta si no recibe respuesta rápida)
   res.sendStatus(200);
 
@@ -135,7 +50,6 @@ router.post('/', async (req, res) => {
 
   const msgType = body?.message?.type || '—';
   console.log(`[KapsoWebhook] ← ${event || '(sin evento)'} | type:${msgType} | phone_number_id: ${body?.phone_number_id || '?'}`);
-  pushDebug({ event, msgType, phone_number_id: body?.phone_number_id, raw: JSON.stringify(body).slice(0, 800) });
 
   if (!event) {
     console.warn('[KapsoWebhook] Sin X-Webhook-Event ni body.event. Ignorando.');
@@ -156,26 +70,11 @@ router.post('/', async (req, res) => {
   }
   const { org, whatsappConfig } = orgResult;
 
-  // ── Verificación de firma HMAC (si hay webhook_secret configurado) ────
-  // Nota: verificación de firma desactivada como bloqueo — JSON.stringify(body)
-  // no reproduce exactamente el raw body original, causando falsos negativos.
-  // Se loggea como advertencia pero no se bloquea el procesamiento.
-  const signature  = req.headers['x-webhook-signature'];
-  const secret     = whatsappConfig.webhook_secret || process.env.KAPSO_WEBHOOK_SECRET;
-  if (secret && signature) {
-    const rawBody = JSON.stringify(body);
-    const valid = kapsoService.verifySignature(rawBody, signature, secret);
-    if (!valid) {
-      console.warn(`[KapsoWebhook] ⚠️ Firma no verificada para org ${org.name} (continuando de todas formas)`);
-      // No retornamos — seguimos procesando el mensaje
-    }
-  }
-
   // ── Actualizar estado de mensaje (delivered/read/failed) ─────────────
   const statusUpdate = kapsoService.parseStatusUpdate(body, event);
   if (statusUpdate) {
     await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status);
-    io?.emit(`status_update_${org.id}`, statusUpdate);
+    io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, statusUpdate);
     return;
   }
 
@@ -268,7 +167,7 @@ router.post('/', async (req, res) => {
     // En modo humano el ejecutivo lo ve en el CRM — no contestar encima
     if (conversation.agent_mode && conversation.agent_mode !== 'ai') {
       const updatedConv = await db.getConversationById(conversation.id);
-      io?.emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
+      io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
       return;
     }
     const reply = isVideo
@@ -285,7 +184,7 @@ router.post('/', async (req, res) => {
       });
     }
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, {
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
       message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef },
       conversation: updatedConv,
     });
@@ -324,7 +223,7 @@ router.post('/', async (req, res) => {
 
     // 3. Emitir al CRM en tiempo real (el mensaje siempre aparece inmediatamente)
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
     // 3b. Notificar a agentes con new_messages habilitado (sin await para no bloquear)
     notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
@@ -345,7 +244,7 @@ router.post('/', async (req, res) => {
       if (!isFinite(refMins) || refMins < AUTO_RESET_MINUTES) return;
       // Auto-reset a modo IA y SEGUIR procesando este mensaje (antes se descartaba)
       await db.setAgentMode(conversation.id, 'ai');
-      io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
       if (typeof db.clearLastEscalation === 'function') {
         await db.clearLastEscalation(conversation.id).catch(() => {});
       }
@@ -359,7 +258,6 @@ router.post('/', async (req, res) => {
     const capturedFrom  = parsed.from;
     const capturedConvId = conversation.id;
 
-    const waitMs = isOpener(capturedText) ? OPENER_DEBOUNCE_MS : DEBOUNCE_MS;
     schedulePipeline(org.id, capturedConvId, async () => {
       const log = createBotLogger(org.name, capturedFrom);
       // Leer de la DB los mensajes del cliente que llegaron seguidos (pueden ser
@@ -387,10 +285,10 @@ router.post('/', async (req, res) => {
       log.in(textToProcess);
 
       try {
-        io?.emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: true });
+        io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: true });
         const tPipeline = Date.now();
         const result = await pipeline.processMessage(org.id, capturedConvId, textToProcess, log);
-        io?.emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
+        io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
 
         if (result.duplicate) {
           log.step('duplicate', 'pedido ya creado por otro proceso — respuesta silenciada');
@@ -428,7 +326,7 @@ router.post('/', async (req, res) => {
         const escalateWithAck = async (ackText, reason, botWasGoingToSay) => {
           await db.setAgentMode(capturedConvId, 'human');
           await db.setLastEscalation(capturedConvId, textToProcess, reason).catch(() => {});
-          io?.emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
+          io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
           notifyAdminHelp(org.id, updatedConv || conversation, botWasGoingToSay, reason).catch(() => {});
 
           let ackSent = null;
@@ -448,7 +346,7 @@ router.post('/', async (req, res) => {
           });
           await db.updateConversationLastMessage(capturedConvId, ackText);
           const convNow = await db.getConversationById(capturedConvId);
-          io?.emit(`new_message_${org.id}`, { message: ackMsg, conversation: convNow });
+          io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: ackMsg, conversation: convNow });
         };
 
         if (!result.switchToHuman) {
@@ -503,7 +401,7 @@ router.post('/', async (req, res) => {
           if (sendErr.is24hWindow) {
             windowExpired = true;
             log.windowExpired(capturedFrom);
-            io?.emit(`window_expired_${org.id}`, { conversationId: capturedConvId, phone: capturedFrom });
+            io?.to(`org_${org.id}`).emit(`window_expired_${org.id}`, { conversationId: capturedConvId, phone: capturedFrom });
           } else {
             throw sendErr;
           }
@@ -524,7 +422,7 @@ router.post('/', async (req, res) => {
         await db.updateConversationLastMessage(capturedConvId, result.response);
 
         if (result.orderCreated) {
-          io?.emit(`order_created_${org.id}`, {
+          io?.to(`org_${org.id}`).emit(`order_created_${org.id}`, {
             conversationId: capturedConvId,
             order: result.orderCreated,
           });
@@ -536,7 +434,7 @@ router.post('/', async (req, res) => {
         if (result.orderUpdated || result.orderCancelled) {
           const ev = result.orderUpdated ? 'modificó' : 'canceló';
           const oid = (result.orderUpdated || result.orderCancelled).orderId;
-          io?.emit(`order_updated_${org.id}`, { conversationId: capturedConvId, orderId: oid, event: result.orderUpdated ? 'updated' : 'cancelled' });
+          io?.to(`org_${org.id}`).emit(`order_updated_${org.id}`, { conversationId: capturedConvId, orderId: oid, event: result.orderUpdated ? 'updated' : 'cancelled' });
           const who = (updatedConv || conversation).contact_name || capturedFrom;
           const shopifyNote = result.orderUpdated?.shopifyDraftId ? '\n⚠️ Este pedido tiene Draft Order en Shopify — ajústalo allá también.' : '';
           notifyAdmin(org.id, {
@@ -547,25 +445,27 @@ router.post('/', async (req, res) => {
         }
 
         const finalConv = await db.getConversationById(capturedConvId);
-        io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
         log.done();
 
       } catch (err) {
-        io?.emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
+        io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
         if (err.response) {
           log.error('HTTP', new Error(`${err.response.status} ${err.config?.url} — ${JSON.stringify(err.response.data)}`));
         } else {
           log.error('pipeline', err);
         }
         log.done();
+        throw err;
       }
-    }, waitMs);
+    });
 
   } catch (outerErr) {
     console.error('[KapsoWebhook] Error procesando mensaje entrante:', outerErr.message);
+    throw outerErr;
   }
-});
+}));
 
 /**
  * Maneja respuestas del admin desde su WhatsApp personal.
@@ -617,7 +517,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
         });
         await db.updateConversationLastMessage(session.convId, handoffMsg);
         const hConv = await db.getConversationById(session.convId);
-        io?.emit(`new_message_${org.id}`, { message: hMsg, conversation: hConv });
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: hMsg, conversation: hConv });
       }
       // Mantener human mode — el admin atiende desde acá o el CRM
       if (pending) await db.markAdminReplyHandled(pending.id);
@@ -660,12 +560,12 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     // pasan 24h sin respuesta humana. Antes acá se reseteaba a 'ai' de inmediato
     // y el bot contestaba encima del admin, con información desactualizada.
     await db.setAgentMode(session.convId, 'human');
-    io?.emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'human' });
+    io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'human' });
     if (pending) await db.markAdminReplyHandled(pending.id);
     secretary.closeSession(org.id);
 
     const finalConv = await db.getConversationById(session.convId);
-    io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
     // Confirmar al admin qué se mandó
     const preview = customerMessage.slice(0, 100);
@@ -689,6 +589,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
 
   } catch (err) {
     console.error('[AdminRelay] Error:', err.message);
+    throw err;
   }
 }
 
@@ -709,7 +610,6 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     let analysis = { is_payment_proof: false };
     let data, contentType;
     const downloadUrl = parsed.mediaUrl; // URL directa de Kapso (preferred)
-    pushDebug({ step: 'download_start', downloadUrl: downloadUrl?.slice(0, 80), mediaId: parsed.mediaId });
     try {
       if (downloadUrl) {
         ({ data, contentType } = await kapsoService.downloadMedia(downloadUrl, whatsappConfig));
@@ -718,16 +618,14 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         const mediaInfo = await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig);
         ({ data, contentType } = await kapsoService.downloadMedia(mediaInfo.url, whatsappConfig));
       }
-      pushDebug({ step: 'download_ok', bytes: data?.byteLength, contentType });
       if (data) {
         // Guardar en cache para que el proxy del browser pueda servirlo sin re-descargar
         const cacheKey = downloadUrl || parsed.mediaId;
-        mediaCache.set(cacheKey, data, contentType);
+        mediaCache.set(org.id + ':' + cacheKey, data, contentType);
         analysis = await analyzePaymentProof(data, contentType);
         console.log(`[KapsoWebhook] 🤖 Análisis IA:`, JSON.stringify(analysis));
       }
     } catch (aiErr) {
-      pushDebug({ step: 'download_error', error: aiErr.message });
       console.warn('[KapsoWebhook] Error descargando/analizando imagen:', aiErr.message);
       // Si descarga o análisis falla, tratar como comprobante por seguridad
       analysis = { is_payment_proof: true, confidence: 'low' };
@@ -737,7 +635,6 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     // El proxy la descarga con X-API-Key desde Railway — funciona correctamente.
     // getMediaUrl(numericId) devuelve 404, así que no usamos el ID numérico.
     const mediaRef = downloadUrl || parsed.mediaId;
-    pushDebug({ step: 'will_save', is_payment_proof: analysis.is_payment_proof, mediaRef: mediaRef?.slice(0, 80) });
     console.log(`[KapsoWebhook] 🔍 is_payment_proof=${analysis.is_payment_proof} | mediaRef=${mediaRef?.slice(0,60)}`);
 
     // ── 2. Si NO es comprobante → analizar con Vision y pasar al bot ────────
@@ -756,7 +653,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
       // Emitir al CRM inmediatamente — no esperar Vision ni pipeline
       const earlyConv = await db.getConversationById(conversation.id);
-      io?.emit(`new_message_${org.id}`, {
+      io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
         message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
         conversation: earlyConv,
       });
@@ -782,12 +679,12 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
       const imgLog = createBotLogger(org.name, parsed.from);
       imgLog.in(imageContext);
-      io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
+      io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
       let imgResult;
       try {
         imgResult = await pipeline.processMessage(org.id, conversation.id, imageContext, imgLog);
       } finally {
-        io?.emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
+        io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
       }
 
       if (imgResult && !imgResult.duplicate) {
@@ -802,14 +699,14 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         });
         await db.updateConversationLastMessage(conversation.id, imgResult.response);
         const updatedConv = await db.getConversationById(conversation.id);
-        io?.emit(`new_message_${org.id}`, {
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
           message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
           conversation: updatedConv,
         });
-        io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
       } else {
         const updatedConv = await db.getConversationById(conversation.id);
-        io?.emit(`new_message_${org.id}`, {
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
           message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
           conversation: updatedConv,
         });
@@ -832,7 +729,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
     // Emitir al CRM inmediatamente — no esperar análisis ni notificaciones
     const earlyConv2 = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, {
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
       message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image', media_id: mediaRef },
       conversation: earlyConv2,
     });
@@ -942,14 +839,15 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
     // ── 8. Emitir al CRM en tiempo real ─────────────────────────────
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, {
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
       message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image', media_id: mediaRef },
       conversation: updatedConv,
     });
-    io?.emit(`payment_proof_${org.id}`, { proof, conversationId: conversation.id });
+    io?.to(`org_${org.id}`).emit(`payment_proof_${org.id}`, { proof, conversationId: conversation.id });
 
   } catch (err) {
     console.error('[KapsoWebhook] Error procesando imagen:', err.message, err.stack?.split('\n')[1]);
+    throw err;
   }
 }
 

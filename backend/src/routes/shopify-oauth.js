@@ -22,7 +22,7 @@ const crypto     = require('crypto');
 const axios      = require('axios');
 const db         = require('../db/database');
 const { getPool } = require('../db/database');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 const shopifyApi = require('../services/shopify-api');
 
 const API_KEY    = process.env.SHOPIFY_API_KEY    || '';
@@ -74,7 +74,7 @@ setInterval(() => {
  * Devuelve la URL de OAuth para que el frontend redirija.
  * El frontend llama esto via api.get() (que ya sabe la URL del backend).
  */
-router.get('/auth-url', requireAuth, (req, res) => {
+router.get('/auth-url', requireAuth, requireRole('owner', 'admin'), (req, res) => {
   const raw = req.query.shop;
   if (!raw) return res.status(400).json({ error: 'Falta el parámetro "shop"' });
 
@@ -108,7 +108,7 @@ router.get('/auth-url', requireAuth, (req, res) => {
  * Protegido con requireAuth — el orgId viene del JWT.
  * Redirige al usuario a la pantalla de instalación/autorización de Shopify.
  */
-router.get('/connect', requireAuth, (req, res) => {
+router.get('/connect', requireAuth, requireRole('owner', 'admin'), (req, res) => {
   const raw = req.query.shop;
   if (!raw) return res.status(400).json({ error: 'Falta el parámetro "shop"' });
 
@@ -161,14 +161,14 @@ router.get('/callback', async (req, res) => {
   delete params.hmac;
   const message = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('&');
   const digest  = crypto.createHmac('sha256', API_SECRET).update(message).digest('hex');
-  if (!crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmac))) {
+  if (typeof hmac !== 'string' || !/^[a-f0-9]{64}$/i.test(hmac) || !crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmac))) {
     console.error('[ShopifyOAuth] HMAC inválido');
     return res.redirect(`${FRONTEND}?shopify_error=invalid_hmac`);
   }
 
   // ── Verificar state (CSRF) ──────────────────────────────────────
   const pending = pendingStates.get(state);
-  if (!pending || pending.shop !== shop) {
+  if (!pending || pending.expiresAt <= Date.now() || pending.shop !== shop) {
     console.error('[ShopifyOAuth] State inválido o expirado');
     return res.redirect(`${FRONTEND}?shopify_error=invalid_state`);
   }
@@ -213,7 +213,7 @@ router.get('/callback', async (req, res) => {
  * GET /shopify-oauth/status
  * Devuelve el estado de la conexión Shopify para la org autenticada.
  */
-router.get('/status', requireAuth, async (req, res) => {
+router.get('/status', requireAuth, requireRole('owner', 'admin'), async (req, res) => {
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ connected: false });
@@ -232,7 +232,7 @@ router.get('/status', requireAuth, async (req, res) => {
  * Desconecta Shopify: limpia el access token y marca como desconectado.
  * No borra el row para no romper FK con la tabla agents.
  */
-router.delete('/disconnect', requireAuth, async (req, res) => {
+router.delete('/disconnect', requireAuth, requireRole('owner', 'admin'), async (req, res) => {
   try {
     await getPool().query(
       `UPDATE data_sources
@@ -250,7 +250,7 @@ router.delete('/disconnect', requireAuth, async (req, res) => {
 
 // ─── POST /api/shopify-oauth/sync-customers ───────────────────────
 // Sincronización manual de clientes Shopify → tabla contacts
-router.post('/sync-customers', requireAuth, async (req, res) => {
+router.post('/sync-customers', requireAuth, requireRole('owner', 'admin'), async (req, res) => {
   try {
     const stats = await syncShopifyCustomers(req.orgId);
     res.json({ success: true, ...stats });

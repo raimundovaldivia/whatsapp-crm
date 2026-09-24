@@ -19,7 +19,8 @@ const TTL_MS      = 30 * 60 * 1000; // 30 minutos
 const cache = new Map();
 
 function set(mediaRef, data, contentType) {
-  if (!mediaRef || !data) return;
+  if (!mediaRef || !data || data.byteLength > 10 * 1024 * 1024) return;
+  while ([...cache.values()].reduce((n, e) => n + e.data.byteLength, 0) + data.byteLength > 40 * 1024 * 1024 && cache.size) cache.delete(cache.keys().next().value);
 
   // Evict oldest if at capacity
   if (cache.size >= MAX_ENTRIES) {

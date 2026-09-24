@@ -19,9 +19,9 @@
     "@react-navigation/native-stack": "^7.0.0",
     "axios": "^1.7.2",
     "expo": "^57.0.0",
-    "expo-constants": "~57.0.7",
-    "expo-device": "~57.0.7",
-    "expo-notifications": "~0.32.12",
+    "expo-constants": "~57.0.19",
+    "expo-device": "~57.0.2",
+    "expo-notifications": "~57.0.20",
     "expo-status-bar": "~57.0.1",
     "expo-updates": "~57.0.22",
     "react": "19.2.3",
@@ -32,5 +32,10 @@
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
+  },
+  "overrides": {
+    "xcode": {
+      "uuid": "^11.1.1"
+    }
   }
 }

@@ -52,7 +52,7 @@ router.post('/register', async (req, res) => {
       success: true,
       data: {
         token,
-        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+        user: { id: user.id, email: user.email, name: user.name, role: user.role, organization_id: user.organization_id },
         organization: { id: org.id, name: org.name, slug: org.slug, setup_done: org.setup_done },
       },
     });
@@ -89,7 +89,7 @@ router.post('/login', async (req, res) => {
       success: true,
       data: {
         token,
-        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+        user: { id: user.id, email: user.email, name: user.name, role: user.role, organization_id: user.organization_id },
         organization: { id: org.id, name: org.name, slug: org.slug, setup_done: org.setup_done },
       },
     });
@@ -109,7 +109,7 @@ router.get('/me', requireAuth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+        user: { id: user.id, email: user.email, name: user.name, role: user.role, organization_id: user.organization_id },
         organization: { id: org.id, name: org.name, slug: org.slug, setup_done: org.setup_done },
       },
     });

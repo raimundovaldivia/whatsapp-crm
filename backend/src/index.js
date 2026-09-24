@@ -57,19 +57,12 @@ const botEvalRouter        = require('./routes/bot-eval');          // Evaluaci�
 const app    = express();
 const server = http.createServer(app);
 
-// ─── SOCKET.IO — Notificaciones en tiempo real al panel ──────────
-const io = new Server(server, {
-  cors: {
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (origin.endsWith('.onrender.com')) return callback(null, true);
-      if (origin.endsWith('.railway.app')) return callback(null, true);
-      if (!isProd && origin.startsWith('http://localhost')) return callback(null, true);
-      callback(new Error(`CORS: origin ${origin} not allowed`));
-    },
-    methods: ['GET', 'POST'],
-  },
-});
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',').map(s => s.trim()).filter(Boolean);
+const checkOrigin = (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin));
+app.disable('x-powered-by');
+if (process.env.TRUST_PROXY_HOPS) app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS));
+const io = new Server(server, { cors: { origin: checkOrigin, methods: ['GET', 'POST'] } });
+require('./services/socket-auth').configureSocketAuth(io);
 
 // Pasar Socket.IO a los routers que lo necesitan
 webhookRouter.setSocketIO(io);
@@ -81,49 +74,25 @@ ordersRouter.setSocketIO(io);
 deliveryRouter.setSocketIO(io);
 reengagementRouter.setSocketIO(io);   // Mensajería masiva: emitir mensajes al panel en vivo
 
-io.on('connection', (socket) => {
-  socket.on('join_org', (orgId) => {
-    socket.join(`org_${orgId}`);
-    console.log(`[Socket.io] Panel conectado → org_${orgId}`);
-  });
-});
-
-// ─── CORS ────────────────────────────────────────────────────────
-// Acepta cualquier origen en desarrollo; en producción acepta los dominios
-// configurados en FRONTEND_URL (puede ser lista separada por comas)
-const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
-  .split(',').map(s => s.trim()).filter(Boolean);
-
-app.use(cors({
-  origin: true,
-  credentials: true,
-}));
-
-// ─── BODY PARSERS ────────────────────────────────────────────────
-app.use((req, res, next) => {
-  if (req.path.startsWith('/twilio-webhook')) {
-    express.urlencoded({ extended: false })(req, res, next);
-  } else if (req.path.startsWith('/shopify-webhook')) {
-    let rawBody = '';
-    req.on('data', chunk => { rawBody += chunk.toString(); });
-    req.on('end', () => {
-      req.rawBody = rawBody;
-      try { req.body = JSON.parse(rawBody); } catch { req.body = {}; }
-      next();
-    });
-  } else {
-    next();
-  }
-});
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cors({ origin: checkOrigin, credentials: false }));
+const captureRaw = (req, _res, buffer) => { req.rawBody = Buffer.from(buffer); };
+app.use(express.json({ limit: '10mb', verify: captureRaw }));
+app.use(express.urlencoded({ extended: false, limit: '1mb', verify: captureRaw }));
+const { rateLimit } = require('express-rate-limit');
+app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.use('/store', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.post('/store/:slug/orders', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false }));
 
 // ─── HEALTH CHECK ────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({
   status: 'ok',
   timestamp: new Date().toISOString(),
 }));
+
+app.get('/ready', async (_req, res) => {
+  try { await require('./db/database').getPool().query('SELECT 1'); res.json({ status: 'ready' }); }
+  catch { res.status(503).json({ status: 'unavailable' }); }
+});
 
 // ─── RUTAS ───────────────────────────────────────────────────────
 app.use('/webhook',           webhookRouter);        // POST — Meta webhook
@@ -156,6 +125,20 @@ app.use('/api/push',          pushRouter);           // Registro de tokens push 
 app.use('/api/bot-eval',      botEvalRouter);        // Evaluación del bot y ciclo de mejora
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
+app.get('/api/webhook-inbox', require('./middleware/auth').requireAuth,
+  require('./middleware/auth').requireRole('owner', 'admin'), async (req, res) => {
+    try {
+      const { rows } = await require('./db/database').getPool().query(
+        "SELECT id, provider, status, created_at, updated_at FROM webhook_inbox WHERE organization_id = $1 AND status <> 'completed' ORDER BY id DESC LIMIT 100", [req.orgId]);
+      res.json({ events: rows });
+    } catch { res.status(503).json({ error: 'No disponible' }); }
+  });
+
+app.use((err, _req, res, _next) => {
+  console.error('[HTTP]', err.message);
+  res.status(err.status === 413 ? 413 : err.status === 400 ? 400 : 500).json({ error: 'Solicitud no procesada' });
+});
+
 // ─── ARRANCAR ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 
@@ -169,6 +152,7 @@ setupDatabase().then(() => {
     console.log(`   WhatsApp Kapso  : POST /kapso-webhook`);
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
+    require('./services/webhook-inbox').startWebhookWorker();
     startFollowUpJob(io);
     startScheduledFollowUpJob(io);
     startAdminWindowJob();
@@ -180,6 +164,23 @@ setupDatabase().then(() => {
 });
 
 process.on('unhandledRejection', (err) => console.error('[Error no manejado]', err));
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const deadline = setTimeout(() => process.exit(1), 30000);
+  deadline.unref();
+  server.close();
+  io.disconnectSockets(true);
+  try {
+    await require('./services/webhook-inbox').stopWebhookWorker();
+    await require('./db/database').getPool().end();
+    process.exit(0);
+  } catch { process.exit(1); }
+}
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);
 
 
 // Deploy marker: 2026-09-18T00:49:43Z (evaluacion del bot + app central)

@@ -53,7 +53,7 @@ async function getUserByEmail(email) {
 
 async function getUserById(id) {
   return queryOne(
-    'SELECT id, organization_id, email, name, role FROM users WHERE id = $1',
+    'SELECT id, organization_id, email, name, role, auth_version FROM users WHERE id = $1',
     [id]
   );
 }
@@ -82,7 +82,7 @@ async function getUserByWhatsappPhone(orgId, phone) {
 
 async function updateUserWaPhone(userId, orgId, waPhone) {
   return queryOne(
-    `UPDATE users SET whatsapp_phone = $1 WHERE id = $2 AND organization_id = $3
+    `UPDATE users SET whatsapp_phone = $1 WHERE id = $2 AND organization_id = $3 AND role <> 'owner'
      RETURNING id, email, name, role, whatsapp_phone, wa_notifications`,
     [waPhone || null, userId, orgId]
   );
@@ -128,7 +128,7 @@ async function touchUserWaWindow(orgId, phone) {
 
 async function updateUserRole(userId, orgId, role) {
   return queryOne(
-    `UPDATE users SET role = $1
+    `UPDATE users SET role = $1, auth_version = auth_version + 1
      WHERE id = $2 AND organization_id = $3
      RETURNING id, email, name, role`,
     [role, userId, orgId]
@@ -137,7 +137,7 @@ async function updateUserRole(userId, orgId, role) {
 
 async function deleteOrgUser(userId, orgId) {
   const result = await pool.query(
-    'DELETE FROM users WHERE id = $1 AND organization_id = $2',
+    "DELETE FROM users WHERE id = $1 AND organization_id = $2 AND role <> 'owner'",
     [userId, orgId]
   );
   return result.rowCount > 0;
@@ -865,11 +865,22 @@ async function getPaymentProofs(orgId, statusFilter = null) {
   );
 }
 
-async function updatePaymentProof(id, { status, notes }) {
-  return queryOne(
-    `UPDATE payment_proofs SET status = $1, notes = $2 WHERE id = $3 RETURNING *`,
-    [status, notes || null, id]
-  );
+async function updatePaymentProof(id, { status, notes }, orgId) {
+  if (!orgId) throw new Error('Organización requerida');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [proof] } = await client.query(
+      'UPDATE payment_proofs SET status = $1, notes = $2 WHERE id = $3 AND organization_id = $4 RETURNING *',
+      [status, notes || null, id, orgId]);
+    if (proof && status === 'verified' && proof.order_id) {
+      const result = await client.query("UPDATE orders SET status = 'paid', updated_at = NOW() WHERE id = $1 AND organization_id = $2 RETURNING id", [proof.order_id, orgId]);
+      if (!result.rowCount) throw new Error('Pedido del comprobante no encontrado');
+    }
+    await client.query('COMMIT');
+    return proof || null;
+  } catch (err) { await client.query('ROLLBACK'); throw err; }
+  finally { client.release(); }
 }
 
 // ─── ESCALATION FEEDBACK ──────────────────────────────────────

@@ -441,7 +441,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const handleExportXlsx = async () => {
     const selOrders = getSelOrders();
     if (selOrders.length === 0) return;
-    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
+    const XLSX = await import('xlsx');
 
     const HEADERS = [
       'Título* Requerido', 'Dirección completa* Requerida', 'Carga',

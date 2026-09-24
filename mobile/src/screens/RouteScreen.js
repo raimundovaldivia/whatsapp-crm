@@ -16,9 +16,9 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { getRoute, createExpense } from '../services/api';
+import { getRoute, createExpense, getSavedSession } from '../services/api';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
-import { enqueueExpense, flushExpenses, pendingCount, onQueueChange } from '../utils/expenseQueue';
+import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const EXPENSE_CATS = ['Combustible', 'Peaje', 'Comida', 'Mantención', 'Otro'];
@@ -95,6 +95,13 @@ export default function RouteScreen({ route: navRoute, navigation }) {
     let alive = true;
     pendingCount().then(n => alive && setExpPending(n));
     const off = onQueueChange(n => alive && setExpPending(n));
+    legacyExpenses().then(items => {
+      if (!alive || !items.length) return;
+      Alert.alert('Gastos anteriores', `Encontramos ${items.length} gastos de la versión anterior. Confirma que son tuyos y que no estén registrados antes de recuperarlos.`, [
+        { text: 'Revisar después', style: 'cancel' },
+        { text: 'Son míos, recuperar', onPress: () => recoverLegacyExpenses().then(() => flushExpenses()).catch(() => Alert.alert('No se pudo recuperar', 'Los gastos anteriores se conservaron. Intenta nuevamente.')) },
+      ]);
+    }).catch(() => {});
     flushExpenses().then(r => {
       if (!alive) return;
       if (r.uploaded > 0) Alert.alert('Gastos subidos', `Se subieron ${r.uploaded} gasto(s) que estaban pendientes ✅`);
@@ -116,10 +123,12 @@ export default function RouteScreen({ route: navRoute, navigation }) {
     const amt = parseInt(String(expAmt).replace(/\D/g, '')) || 0;
     if (amt <= 0) { Alert.alert('Monto', 'Ingresa el monto del gasto.'); return; }
     setExpSaving(true);
-    const payload = { amount: amt, category: expCat, note: expNote, routeId,
+    const payload = { clientRequestId: `expense_${Date.now()}_${Math.random().toString(36).slice(2, 14)}`, amount: amt, category: expCat, note: expNote, routeId,
       photoBase64: expPhoto?.base64 || null, photoMime: 'image/jpeg' };
     try {
-      await createExpense(payload);
+      const session = await getSavedSession();
+      payload._session = session;
+      await createExpense(payload, session);
       setExpOpen(false); resetExpense();
       Alert.alert('Listo', 'Gasto registrado ✅');
     } catch (e) {
@@ -127,7 +136,9 @@ export default function RouteScreen({ route: navRoute, navigation }) {
       if (st === 401) return;
       if (st === 400) { Alert.alert('No se pudo guardar', e.response?.data?.error || 'Revisa el monto o la foto.'); return; }
       // Sin señal / timeout / error del servidor → no perder el gasto: queda en el teléfono
-      const n = await enqueueExpense(payload);
+      let n;
+      try { const { _session, ...expense } = payload; n = await enqueueExpense(expense, _session); }
+      catch { Alert.alert('No se pudo guardar', 'El gasto sigue en el formulario. Libera espacio e intenta de nuevo.'); return; }
       setExpOpen(false); resetExpense();
       Alert.alert('Guardado en el teléfono 📵',
         `No hay conexión ahora. El gasto quedó guardado y se subirá solo cuando vuelva la señal (${n} pendiente${n === 1 ? '' : 's'}).`);

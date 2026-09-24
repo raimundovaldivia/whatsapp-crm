@@ -10,7 +10,7 @@ const express       = require('express');
 const router        = express.Router();
 const db            = require('../db/database');
 const kapsoService  = require('../services/kapso-whatsapp');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
 
@@ -51,19 +51,14 @@ router.get('/:id/image', async (req, res) => {
 });
 
 // ── PATCH /api/payment-proofs/:id ───────────────────────────────────
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   try {
     const { status, notes } = req.body;
     if (!['verified', 'rejected', 'pending'].includes(status)) {
       return res.status(400).json({ error: 'Estado inválido. Usa: verified, rejected o pending' });
     }
-    const proof = await db.updatePaymentProof(parseInt(req.params.id), { status, notes });
+    const proof = await db.updatePaymentProof(parseInt(req.params.id), { status, notes }, req.orgId);
     if (!proof) return res.status(404).json({ error: 'Comprobante no encontrado' });
-
-    // Si se verifica, marcar el pedido asociado como pagado
-    if (status === 'verified' && proof.order_id) {
-      await db.updateOrder(proof.order_id, { status: 'paid' }).catch(() => {});
-    }
 
     res.json({ proof });
   } catch (err) {

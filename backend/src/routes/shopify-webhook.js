@@ -32,35 +32,14 @@ function setSocketIO(socketIO) { io = socketIO; }
  * Shopify firma cada webhook con HMAC-SHA256 usando el webhook secret
  */
 async function verifyShopifyHmac(req, res, next) {
-  const hmacHeader = req.headers['x-shopify-hmac-sha256'];
-  const orgId      = req.params.orgId;
-
-  if (!hmacHeader) {
-    return res.status(401).json({ error: 'Sin firma HMAC' });
-  }
-
-  // Obtener el webhook secret de la org
-  const ds = await db.getPrimaryDataSource(parseInt(orgId));
-  if (!ds) return res.status(404).json({ error: 'Org no encontrada' });
-
-  const webhookSecret = ds.config?.webhookSecret;
-  if (!webhookSecret) {
-    // Si no hay secret configurado, aceptar igual (para testing)
-    console.warn(`[Shopify WH] Org ${orgId} sin webhook secret — aceptando sin verificar`);
-    return next();
-  }
-
-  const digest = crypto
-    .createHmac('sha256', webhookSecret)
-    .update(req.rawBody || '', 'utf8')
-    .digest('base64');
-
-  if (digest !== hmacHeader) {
-    console.warn(`[Shopify WH] HMAC inválido para org ${orgId}`);
-    return res.status(401).json({ error: 'Firma inválida' });
-  }
-
-  next();
+  try {
+    const ds = await db.getPrimaryDataSource(Number(req.params.orgId));
+    const secret = ds?.config?.webhookSecret || process.env.SHOPIFY_API_SECRET;
+    if (!require('../middleware/webhook-auth').validHmac(req.rawBody, req.headers['x-shopify-hmac-sha256'], secret, 'base64')) return res.sendStatus(401);
+    const expectedShop = String(ds?.config?.storeUrl || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+    if (!expectedShop || expectedShop !== String(req.headers['x-shopify-shop-domain'] || '').toLowerCase()) return res.sendStatus(401);
+    next();
+  } catch (err) { console.error('[ShopifyWebhookAuth]', err.message); res.sendStatus(503); }
 }
 
 /**
@@ -68,7 +47,7 @@ async function verifyShopifyHmac(req, res, next) {
  * URL que configuras en cada app de Shopify.
  * El :orgId identifica qué organización/tienda está enviando el evento.
  */
-router.post('/:orgId', verifyShopifyHmac, async (req, res) => {
+router.post('/:orgId', verifyShopifyHmac, require('../services/webhook-inbox').durableWebhook('shopify', async (req, res) => {
   // Responder 200 inmediatamente (Shopify reintenta si no recibe respuesta rápida)
   res.sendStatus(200);
 
@@ -100,8 +79,9 @@ router.post('/:orgId', verifyShopifyHmac, async (req, res) => {
     }
   } catch (err) {
     console.error(`[Shopify WH] Error procesando ${topic}:`, err.message);
+    throw err;
   }
-});
+}));
 
 // ─── HANDLERS ─────────────────────────────────────────────────────
 
@@ -130,7 +110,7 @@ async function handleOrderPaid(orgId, shopifyOrder) {
 
   await db.updatePipelineState(localOrder.conversation_id, 'done');
 
-  io?.emit(`order_paid_${orgId}`, {
+  io?.to(`org_${orgId}`).emit(`order_paid_${orgId}`, {
     orderId:          localOrder.id,
     shopifyOrderId:   String(shopifyOrder.id),
     conversationId:   localOrder.conversation_id,
@@ -212,7 +192,7 @@ async function handleOrderCreate(orgId, shopifyOrder) {
 
   if (localOrder && !localOrder.shopify_order_id) {
     await db.updateOrder(localOrder.id, { shopify_order_id: String(shopifyOrder.id) });
-    io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, shopifyOrderId: String(shopifyOrder.id) });
+    io?.to(`org_${orgId}`).emit(`order_updated_${orgId}`, { orderId: localOrder.id, shopifyOrderId: String(shopifyOrder.id) });
   }
 
   // Cualquier orden nueva = cliente activo, no contactar por reenganche
@@ -226,7 +206,7 @@ async function handleOrderCancelled(orgId, shopifyOrder) {
   const localOrder = await findLocalOrder(orgId, { shopifyOrderId: String(shopifyOrder.id) });
   if (localOrder) {
     await db.updateOrder(localOrder.id, { status: 'cancelled' });
-    io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: 'cancelled' });
+    io?.to(`org_${orgId}`).emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: 'cancelled' });
 
     const conv = await db.getConversationById(localOrder.conversation_id);
     const wc   = await db.getWhatsappConfig(orgId);
@@ -252,7 +232,7 @@ async function handleOrderUpdated(orgId, shopifyOrder) {
 
   if (newStatus !== localOrder.status) {
     await db.updateOrder(localOrder.id, { status: newStatus });
-    io?.emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: newStatus });
+    io?.to(`org_${orgId}`).emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: newStatus });
   }
 }
 
@@ -264,7 +244,7 @@ async function handleDraftOrderUpdate(orgId, draftOrder) {
     const localOrder = await findLocalOrder(orgId, { shopifyDraftId: String(draftOrder.id) });
     if (localOrder) {
       await db.updateOrder(localOrder.id, { status: 'paid', shopify_order_id: String(draftOrder.order_id || '') });
-      io?.emit(`order_paid_${orgId}`, { orderId: localOrder.id });
+      io?.to(`org_${orgId}`).emit(`order_paid_${orgId}`, { orderId: localOrder.id });
     }
   }
 }

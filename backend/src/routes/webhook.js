@@ -45,7 +45,7 @@ router.get('/', async (req, res) => {
 /**
  * POST /webhook — Mensajes entrantes de WhatsApp
  */
-router.post('/', async (req, res) => {
+router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), require('../services/webhook-inbox').durableWebhook('meta', async (req, res) => {
   res.sendStatus(200); // Responder siempre 200 a Meta
 
   const body = req.body;
@@ -72,7 +72,7 @@ router.post('/', async (req, res) => {
   const statusUpdate = whatsappService.parseStatusUpdate(body);
   if (statusUpdate) {
     await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status);
-    io?.emit(`status_update_${org.id}`, statusUpdate);
+    io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, statusUpdate);
     return;
   }
 
@@ -101,7 +101,7 @@ router.post('/', async (req, res) => {
 
     // 3. Emitir al CRM en tiempo real
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
     // 4. Si está en modo humano, verificar si hace mucho que no responde un humano
     if (updatedConv.agent_mode !== 'ai') {
@@ -114,7 +114,7 @@ router.post('/', async (req, res) => {
       // Auto-reset a modo IA
       console.log(`[Webhook] Auto-reset a modo IA (sin respuesta humana en ${Math.round(mins)}min)`);
       await db.setAgentMode(conversation.id, 'ai');
-      io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
     }
 
     // 5. Verificar que tenemos access_token válido antes de procesar con IA
@@ -147,15 +147,15 @@ router.post('/', async (req, res) => {
 
     // 8. Si el pipeline indica cambiar a modo humano
     if (result.switchToHuman) {
-      io?.emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
     }
 
     const finalConv = await db.getConversationById(conversation.id);
-    io?.emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
     // 9. Si se creó una orden, notificar al CRM
     if (result.orderCreated) {
-      io?.emit(`order_created_${org.id}`, {
+      io?.to(`org_${org.id}`).emit(`order_created_${org.id}`, {
         conversationId: conversation.id,
         order: result.orderCreated,
       });
@@ -163,8 +163,9 @@ router.post('/', async (req, res) => {
 
   } catch (err) {
     console.error('[Webhook] Error procesando mensaje:', err);
+    throw err;
   }
-});
+}));
 
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

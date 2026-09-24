@@ -10,12 +10,12 @@ export function useSocket(orgId, onNewMessage, onAgentModeChanged, onMessageStat
   useEffect(() => {
     if (!orgId) return;
 
-    const socket = io(BACKEND_URL, { transports: ['websocket', 'polling'] });
+    const socket = io(BACKEND_URL, { transports: ['websocket', 'polling'], auth: { token: localStorage.getItem('crm_token') } });
     socketRef.current = socket;
 
     socket.on('connect', () => {
       setConnected(true);
-      socket.emit('join_org', orgId); // Unirse a la sala de la organización
+      // The server derives the organization from the authenticated session.
     });
 
     socket.on('disconnect', () => setConnected(false));

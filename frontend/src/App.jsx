@@ -1,22 +1,22 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { lazy, useState, useCallback, useEffect, useRef } from 'react';
 import AuthPage       from './components/AuthPage.jsx';
 import SetupWizard    from './components/SetupWizard.jsx';
 import NavBar         from './components/NavBar.jsx';
 import Sidebar        from './components/Sidebar.jsx';
 import ChatWindow     from './components/ChatWindow.jsx';
 import EmptyState     from './components/EmptyState.jsx';
-import OrdersPanel    from './components/OrdersPanel.jsx';
-import CatalogoPanel  from './components/CatalogoPanel.jsx';
-import DashboardPanel     from './components/DashboardPanel.jsx';
-import StatsPanel         from './components/StatsPanel.jsx';
-import ClientesPanel    from './components/ClientesPanel.jsx';
-import SettingsPanel     from './components/SettingsPanel.jsx';
-import PaymentProofsPanel   from './components/PaymentProofsPanel.jsx';
-import ProductsPanel        from './components/ProductsPanel.jsx';
-import RepartosPanel        from './components/RepartosPanel.jsx';
-import EvaluacionPanel      from './components/EvaluacionPanel.jsx';
-import UsersPanel           from './components/UsersPanel.jsx';
-import ReengagementPanel    from './components/ReengagementPanel.jsx';
+const OrdersPanel = lazy(() => import('./components/OrdersPanel.jsx'));
+const CatalogoPanel = lazy(() => import('./components/CatalogoPanel.jsx'));
+const DashboardPanel = lazy(() => import('./components/DashboardPanel.jsx'));
+const StatsPanel = lazy(() => import('./components/StatsPanel.jsx'));
+const ClientesPanel = lazy(() => import('./components/ClientesPanel.jsx'));
+const SettingsPanel = lazy(() => import('./components/SettingsPanel.jsx'));
+const PaymentProofsPanel = lazy(() => import('./components/PaymentProofsPanel.jsx'));
+const ProductsPanel = lazy(() => import('./components/ProductsPanel.jsx'));
+const RepartosPanel = lazy(() => import('./components/RepartosPanel.jsx'));
+const EvaluacionPanel = lazy(() => import('./components/EvaluacionPanel.jsx'));
+const UsersPanel = lazy(() => import('./components/UsersPanel.jsx'));
+const ReengagementPanel = lazy(() => import('./components/ReengagementPanel.jsx'));
 import AdminAlertsBanner    from './components/AdminAlertsBanner.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
@@ -214,7 +214,7 @@ export default function App() {
     setPendingProofs(n => n + 1);
   }, []);
 
-  const { connected } = useSocket(org?.id, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated, handleBotTyping, handlePaymentProof);
+  const { connected } = useSocket(['owner', 'admin', 'supervisor', 'agent'].includes(user?.role) ? org?.id : null, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated, handleBotTyping, handlePaymentProof);
 
   // En móvil, volver al sidebar limpiando la selección
   const handleBackToSidebar = useCallback(() => setSelectedId(null), []);
@@ -284,7 +284,7 @@ export default function App() {
   // Cargar módulos activos de la organización (una vez que hay sesión)
   useEffect(() => {
     if (!user) return;
-    api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({}));
+    api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({ stats: false, orders: false, repartos: false, pagos: false, clientes: false, mensajeria: false, productos: false, evaluacion: false }));
   }, [user]);
 
   // Un módulo de sección está activo salvo que esté explícitamente en false.

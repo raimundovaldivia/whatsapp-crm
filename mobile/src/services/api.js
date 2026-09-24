@@ -194,10 +194,14 @@ export async function getSellCatalog() {
 }
 
 // Rendir un gasto (petróleo, peaje, etc.) con foto opcional en base64.
-export async function createExpense({ amount, category, note, routeId, photoBase64, photoMime }) {
+export async function createExpense({ amount, category, note, routeId, photoBase64, photoMime, clientRequestId }, expectedSession = null) {
   const client = await getClient();
+  if (expectedSession) {
+    const current = await getSavedSession();
+    if (current.token !== expectedSession.token || current.baseUrl !== expectedSession.baseUrl || current.user?.id !== expectedSession.user?.id) throw new Error('La sesión cambió');
+  }
   const res = await client.post('/api/delivery/expenses',
-    { amount, category, note, routeId, photoBase64, photoMime },
+    { amount, category, note, routeId, photoBase64, photoMime, clientRequestId },
     { timeout: 120000 });   // fotos de 1-3 MB con señal de calle: darle tiempo
   return res.data;
 }
@@ -220,16 +224,16 @@ export async function getModules() {
 
 // Lee los items de un pedido para editarlos en la parada.
 // Devuelve { items: [{name, quantity, price, extra}], total }.
-export async function getOrderItems(source, id) {
+export async function getOrderItems(source, id, routeId) {
   const client = await getClient();
-  const res = await client.get('/api/orders/order-items', { params: { source, id } });
+  const res = await client.get(`/api/delivery/routes/${routeId}/order-items`, { params: { source, id } });
   return res.data;
 }
 
 // Guarda los items editados. El total se recalcula en el backend.
 // Los items con quantity 0 los descarta el servidor. Devuelve { total, items }.
-export async function setOrderItems(source, id, items) {
+export async function setOrderItems(source, id, items, routeId) {
   const client = await getClient();
-  const res = await client.patch('/api/orders/set-items', { source, id, items });
+  const res = await client.patch(`/api/delivery/routes/${routeId}/order-items`, { source, id, items });
   return res.data;
 }
