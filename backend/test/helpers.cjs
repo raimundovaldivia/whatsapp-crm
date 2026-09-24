@@ -5,11 +5,13 @@ const root = path.resolve(__dirname, '..');
 function load(file, deps = {}, extra = {}) {
   const module = { exports: {} };
   const context = {
-    module, exports: module.exports, Buffer, URL, process: { env: { JWT_SECRET: 'test-secret-only-'.repeat(4) } },
+    __dirname: path.dirname(path.join(root, file)), module, exports: module.exports, Buffer, URL, process: { env: { JWT_SECRET: 'test-secret-only-'.repeat(4) } },
     console: { log(){}, warn(){}, error(){} },
     setInterval: () => ({ unref(){} }), clearInterval(){}, setTimeout, clearTimeout,
     require(name) {
       if (Object.hasOwn(deps, name)) return deps[name];
+      if (name === '../services/solution-catalog' || name === './solution-catalog') return load('src/services/solution-catalog.js', deps, extra);
+      if (name === '../middleware/commercial-access') return load('src/middleware/commercial-access.js', deps, extra);
       if (['../services/delivery-items','../services/merge-conversations','../services/meta-events'].includes(name)) return load('src/services/' + name.split('/').at(-1) + '.js', deps, extra);
       if (name === 'express' || name === 'jsonwebtoken' || name === 'ipaddr.js' || name === 'crypto' || name.startsWith('node:')) return require(name);
       return {};

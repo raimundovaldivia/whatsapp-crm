@@ -47,6 +47,7 @@ async function runScheduledFollowUp(io = null) {
 async function processScheduledOrder(order, io) {
   const { id, organization_id: orgId, conversation_id: convId, phone, customer_name, product_notes, desired_date, template_name } = order;
 
+  if (!await require('./commercial').permitted(orgId,'orders')) return;
   const name    = customer_name || 'Cliente';
   const product = product_notes || 'tu pedido';
 

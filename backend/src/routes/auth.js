@@ -10,7 +10,9 @@ const { generateToken, requireAuth } = require('../middleware/auth');
  */
 router.post('/register', async (req, res) => {
   try {
-    const { businessName, email, password, name } = req.body;
+    const { businessName, password, name } = req.body;
+    const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (typeof businessName !== 'string' || !businessName.trim() || businessName.length > 150 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || typeof password !== 'string' || password.length > 128 || (name !== undefined && (typeof name !== 'string' || name.length > 150))) return res.status(400).json({ error:'Revisa el nombre del negocio, correo y contraseña' });
 
     if (!businessName || !email || !password) {
       return res.status(400).json({ success: false, error: 'businessName, email y password son requeridos' });
@@ -31,20 +33,16 @@ router.post('/register', async (req, res) => {
       .replace(/-+/g, '-')
       .slice(0, 30) + '-' + Date.now().toString(36);
 
-    // Crear organización
-    const org = await db.createOrganization({ name: businessName, slug });
-
-    // Hash de contraseña
     const passwordHash = await bcrypt.hash(password, 12);
-
-    // Crear usuario owner
-    const user = await db.createUser({
-      organizationId: org.id,
-      email,
-      passwordHash,
-      name: name || businessName,
-      role: 'owner',
-    });
+    const client = await db.getPool().connect();
+    let org, user;
+    try {
+      await client.query('BEGIN');
+      org = (await client.query('INSERT INTO organizations(name,slug) VALUES($1,$2) RETURNING *',[businessName.trim(),slug])).rows[0];
+      user = (await client.query("INSERT INTO users(organization_id,email,password_hash,name,role) VALUES($1,$2,$3,$4,'owner') RETURNING id,email,name,role,organization_id",[org.id,email,passwordHash,name || businessName])).rows[0];
+      await client.query('COMMIT');
+    } catch(error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
 
     const token = generateToken(user);
 
@@ -57,8 +55,8 @@ router.post('/register', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[Auth] Register error:', err);
-    res.status(500).json({ success: false, error: err.message });
+    console.error('[Auth] Register error:', err.message);
+    res.status(err.code === '23505' ? 409 : 500).json({ success: false, error: err.code === '23505' ? 'Este correo ya está registrado' : 'No se pudo crear la cuenta' });
   }
 });
 

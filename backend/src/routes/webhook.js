@@ -125,6 +125,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
 
     // 6. Ejecutar pipeline de 3 agentes
     const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);
+    if (result.skipped || !result.response) return;
 
     // 7. Enviar respuesta por WhatsApp
     const sentResult = await whatsappService.sendTextMessage(

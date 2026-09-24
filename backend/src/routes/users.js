@@ -86,7 +86,7 @@ router.post('/', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await db.createUser({
+    const user = await require('../services/commercial').createUserWithinLimit({
       organizationId: req.orgId,
       email: loginId,
       passwordHash,
@@ -100,7 +100,7 @@ router.post('/', async (req, res) => {
     });
   } catch (err) {
     console.error('[Users] POST /', err);
-    res.status(500).json({ success: false, error: 'Error al crear usuario' });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Error al crear usuario' });
   }
 });
 

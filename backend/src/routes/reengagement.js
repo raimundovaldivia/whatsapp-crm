@@ -1458,6 +1458,7 @@ router.post('/send-bulk', async (req, res) => {
 
   const results = [];
   for (const item of items) {
+    if (!await require('../services/commercial').permitted(req.orgId,'marketing')) { results.push({success:false,error:'Contrato no disponible'}); break; }
     // Normalizar teléfono: con código de país, sin "+"
     item.phone = db.normalizePhone(item.phone);
     try {

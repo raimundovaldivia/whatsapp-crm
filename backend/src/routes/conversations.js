@@ -1176,6 +1176,7 @@ router.post('/retry-unanswered', async (req, res) => {
     for (const conv of rows) {
       try {
         const result = await pipeline.processMessage(req.orgId, conv.id, conv.last_inbound);
+        if (result.skipped || !result.response) continue;
 
         if (result?.response && !result?.duplicate) {
           // Enviar y guardar en DB

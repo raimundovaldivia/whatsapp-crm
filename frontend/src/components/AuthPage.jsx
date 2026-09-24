@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
+const SolutionsPanel = lazy(() => import('./SolutionsPanel.jsx'));
 import { MessageSquare, Bot, ShoppingBag, Eye, EyeOff, Zap, TrendingUp, Users, ArrowRight, CheckCircle } from 'lucide-react';
 import { authAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -6,6 +7,7 @@ import { useTheme } from '../theme.js';
 export default function AuthPage({ onAuth }) {
   const { colors, isDark } = useTheme();
   const [mode, setMode] = useState('login');
+  const [showSolutions,setShowSolutions] = useState(false);
   const [form, setForm] = useState({ businessName: '', name: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -36,6 +38,8 @@ export default function AuthPage({ onAuth }) {
     { icon: <Zap size={18} />, title: 'Pipeline automatizado', desc: 'Recopila datos del pedido y lo gestiona sin intervención' },
   ];
 
+  if (showSolutions) return <div className="sol-modal"><Suspense fallback={<p>Cargando soluciones…</p>}><SolutionsPanel publicView onClose={()=>setShowSolutions(false)} onStart={()=>{setShowSolutions(false);setMode('register');}}/></Suspense></div>;
+
   const inp = {
     width: '100%', backgroundColor: isDark ? '#0f1820' : colors.bgInput,
     border: `1.5px solid ${colors.border}`,
@@ -48,6 +52,7 @@ export default function AuthPage({ onAuth }) {
       minHeight: '100vh', backgroundColor: colors.bgApp,
       display: 'flex', overflow: 'hidden',
     }}>
+
 
       {/* ── Panel izquierdo: Branding ── */}
       <div style={{
@@ -111,11 +116,11 @@ export default function AuthPage({ onAuth }) {
           color: colors.textPrimary, fontSize: '32px', fontWeight: 700,
           lineHeight: 1.25, marginBottom: '16px', margin: '0 0 16px',
         }}>
-          Convierte chats en<br />
-          <span style={{ color: colors.green }}>ventas automáticas</span>
+          Haz crecer tu tienda<br />
+          <span style={{ color: colors.green }}>con soluciones conectadas</span>
         </h2>
         <p style={{ color: colors.textSecondary, fontSize: '15px', lineHeight: 1.6, marginBottom: '40px' }}>
-          Tu tienda Shopify conectada a un agente de IA que atiende, vende y gestiona pedidos por WhatsApp — sin intervención humana.
+          Conecta WhatsApp y Shopify. Elige los módulos de ventas, marketing, pagos y logística que necesita tu negocio.
         </p>
 
         {/* Features */}
@@ -149,7 +154,7 @@ export default function AuthPage({ onAuth }) {
         }}>
           <Users size={16} color={colors.green} />
           <span style={{ color: colors.textSecondary, fontSize: '13px' }}>
-            Tiendas Shopify usando el agente IA en <strong style={{ color: colors.green }}>Chile, México y Argentina</strong>
+            Una operación compartida. <strong style={{ color: colors.green }}>Siete soluciones para crecer a tu ritmo.</strong>
           </span>
         </div>
       </div>
@@ -183,7 +188,7 @@ export default function AuthPage({ onAuth }) {
           {/* Título contextual */}
           <div style={{ marginBottom: '28px' }}>
             <h2 style={{ color: colors.textPrimary, fontSize: '22px', fontWeight: 700, margin: '0 0 6px' }}>
-              {mode === 'login' ? 'Bienvenido de vuelta' : 'Empieza gratis hoy'}
+              {mode === 'login' ? 'Bienvenido de vuelta' : 'Crea tu cuenta base'}
             </h2>
             <p style={{ color: colors.textSecondary, fontSize: '14px', margin: 0 }}>
               {mode === 'login'
@@ -305,17 +310,18 @@ export default function AuthPage({ onAuth }) {
                 </>
               ) : (
                 <>
-                  {mode === 'login' ? 'Entrar' : 'Crear cuenta gratis'}
+                  {mode === 'login' ? 'Entrar' : 'Crear cuenta base'}
                   <ArrowRight size={16} />
                 </>
               )}
             </button>
           </form>
 
+          <button type="button" onClick={()=>setShowSolutions(true)} style={{width:'100%',marginTop:18,padding:12,borderRadius:10,border:`1px solid ${colors.border}`,background:'transparent',color:colors.green,cursor:'pointer'}}>Explorar las 7 soluciones</button>
           {/* Beneficios registro */}
           {mode === 'register' && (
             <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {['Sin tarjeta de crédito', 'Configuración en 5 minutos', 'Soporte incluido'].map(b => (
+              {['Registro sin tarjeta', 'Módulos por contratación asistida', 'Condiciones acordadas antes de activar'].map(b => (
                 <div key={b} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: colors.textSecondary, fontSize: '12.5px' }}>
                   <CheckCircle size={13} color={colors.green} />
                   {b}

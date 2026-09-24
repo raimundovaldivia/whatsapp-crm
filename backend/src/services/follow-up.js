@@ -81,6 +81,7 @@ async function runFollowUp(io = null) {
     console.log(`[FollowUp] 🔍 ${stalled.length} conversación(es) abandonada(s) encontradas`);
 
     for (const conv of stalled) {
+      if (!await require('./commercial').permitted(conv.organization_id,'marketing')) continue;
       try {
         // Obtener historial y configuración de la org
         const history      = await db.getLastMessages(conv.id, 8);

@@ -5,6 +5,7 @@ import NavBar         from './components/NavBar.jsx';
 import Sidebar        from './components/Sidebar.jsx';
 import ChatWindow     from './components/ChatWindow.jsx';
 import EmptyState     from './components/EmptyState.jsx';
+const SolutionsPanel = lazy(() => import('./components/SolutionsPanel.jsx'));
 const OrdersPanel = lazy(() => import('./components/OrdersPanel.jsx'));
 const CatalogoPanel = lazy(() => import('./components/CatalogoPanel.jsx'));
 const DashboardPanel = lazy(() => import('./components/DashboardPanel.jsx'));
@@ -68,7 +69,7 @@ export default function App() {
       .then(data => {
         setUser(data.user);
         setOrg(data.organization);
-        if (!data.organization.setup_done) setView('settings');
+        if (!data.organization.setup_done) setView('solutions');
         else if (data.user.role === 'coordinador') setView('repartos');
         setAppState('crm');
       })
@@ -78,7 +79,7 @@ export default function App() {
   const handleAuth = useCallback((data) => {
     setUser(data.user);
     setOrg(data.organization);
-    if (!data.organization.setup_done) setView('settings');
+    if (!data.organization.setup_done) setView('solutions');
     else if (data.user.role === 'coordinador') setView('repartos');
     setAppState('crm');
   }, []);
@@ -272,8 +273,8 @@ export default function App() {
 
   // Qué vistas puede ver cada rol
   const ROLE_VIEWS = {
-    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users']),
-    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users']),
+    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
+    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
     supervisor: new Set(['chats', 'orders', 'repartos', 'pagos']),
     coordinador: new Set(['repartos']),
     agent:      new Set(['chats']),
@@ -284,12 +285,17 @@ export default function App() {
   // Cargar módulos activos de la organización (una vez que hay sesión)
   useEffect(() => {
     if (!user) return;
-    api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({ stats: false, orders: false, repartos: false, pagos: false, clientes: false, mensajeria: false, productos: false, evaluacion: false }));
+    const refreshModules = () => api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({ stats: false, orders: false, repartos: false, pagos: false, clientes: false, mensajeria: false, productos: false, evaluacion: false }));
+    refreshModules();
+    window.addEventListener('focus', refreshModules);
+    window.addEventListener('commercial-changed', refreshModules);
+    const timer = setInterval(refreshModules, 60000);
+    return () => { clearInterval(timer); window.removeEventListener('focus', refreshModules); window.removeEventListener('commercial-changed', refreshModules); };
   }, [user]);
 
   // Un módulo de sección está activo salvo que esté explícitamente en false.
   const moduleOn = (k) => !modules || modules[k] !== false;
-  const ALWAYS_ON_VIEWS = new Set(['chats', 'settings', 'users', 'dashboard', 'catalogo']);
+  const ALWAYS_ON_VIEWS = new Set(['chats', 'settings', 'users', 'catalogo', 'solutions']);
 
   // Si la vista actual pertenece a un módulo desactivado, volver a Chats.
   useEffect(() => {
@@ -516,6 +522,7 @@ export default function App() {
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}
+      {view === 'solutions' && ['owner','admin'].includes(userRole) && <SolutionsPanel />}
 
       {/* Vista Equipo (admin/owner only) */}
       {view === 'users' && allowedViews.has('users') && <UsersPanel />}

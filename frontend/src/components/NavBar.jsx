@@ -1,10 +1,10 @@
-import { MessageSquare, Package, ShoppingBag, BarChart2, Settings, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck, UserCog, Megaphone } from 'lucide-react';
+import { Layers, MessageSquare, Package, ShoppingBag, BarChart2, Settings, Wifi, WifiOff, Users, Sun, Moon, Receipt, Store, Truck, UserCog, Megaphone } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 // Qué vistas puede ver cada rol
 const ROLE_VIEWS = {
-  owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'users'],
-  admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'users'],
+  owner:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
+  admin:      ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
   supervisor: ['chats', 'orders', 'repartos', 'pagos'],
   coordinador: ['repartos'],
   agent:      ['chats'],
@@ -39,7 +39,7 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
   if (isMobile) {
     const mobileItems = [
       ...navItems.filter(i => MOBILE_KEYS.slice(0, 4).includes(i.key)),
-      ...(canSettings ? [{ key: 'settings', icon: Settings, label: 'Ajustes' }] : []),
+      ...(canSettings ? [{ key:'solutions',icon:Layers,label:'Soluciones' }, { key: 'settings', icon: Settings, label: 'Ajustes' }] : []),
     ];
 
     return (
@@ -145,6 +145,7 @@ export default function NavBar({ view, onChangeView, orgName, connected, onLogou
         {isDark ? <Sun size={18} /> : <Moon size={18} />}
       </NavItem>
 
+      {canSettings && <NavItem active={view === 'solutions'} label="Mis soluciones" onClick={() => onChangeView('solutions')} colors={colors}><Layers size={20}/></NavItem>}
       {canUsers && (
         <NavItem active={view === 'users'} label="Equipo" onClick={() => onChangeView('users')} colors={colors}>
           <UserCog size={20} />

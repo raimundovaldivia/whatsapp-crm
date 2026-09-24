@@ -66,6 +66,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
 
     // 5. Ejecutar pipeline de 3 agentes
     const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);
+    if (result.skipped || !result.response) return;
 
     // 6. Enviar respuesta por Twilio
     const sentResult = await twilioService.sendTextMessage(

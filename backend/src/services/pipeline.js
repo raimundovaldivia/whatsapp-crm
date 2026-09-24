@@ -29,6 +29,12 @@ function EDITABLE_OR_ACTIVE(status) {
  * @returns {{ response: string, agentType: string, newState: string }}
  */
 async function processMessage(orgId, conversationId, userMessage, log = null) {
+  try { await require('./commercial').consumeBotTurn(orgId); }
+  catch(error) {
+    if (![403,429].includes(error.status)) throw error;
+    log?.step?.('commercial_pause', error.message);
+    return { response: null, skipped: true, reason: error.code || 'COMMERCIAL_ACCESS' };
+  }
   const noop = { step:()=>{}, context:()=>{}, intent:()=>{}, escalation:()=>{}, agent:()=>{}, error:()=>{} };
   const L = log || noop;
   const conversation = await db.getConversationById(conversationId);

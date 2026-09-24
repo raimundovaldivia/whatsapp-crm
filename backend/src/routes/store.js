@@ -22,6 +22,14 @@ async function getOrgBySlug(slug) {
   return rows[0] || null;
 }
 
+router.use('/:slug', async (req,res,next) => {
+  try {
+    const org = await getOrgBySlug(req.params.slug);
+    if (!org || !await require('../services/commercial').permitted(org.id,'storefront')) return res.status(404).json({error:'Tienda no disponible'});
+    next();
+  } catch { res.status(503).json({error:'Tienda temporalmente no disponible'}); }
+});
+
 // ── GET /store/:slug/info ───────────────────────────────────────────
 router.get('/:slug/info', async (req, res) => {
   try {
@@ -47,7 +55,7 @@ router.get('/:slug/info', async (req, res) => {
       db.getSetting(org.id, 'store_about_us'),
     ]);
 
-    let heroTags = ['🥚 Huevos libres', '🫒 Aceitunas', '🧀 Quesos', '🚚 Lun – Sáb'];
+    let heroTags = [];
     try { if (heroTagsRaw) heroTags = JSON.parse(heroTagsRaw); } catch {}
 
     res.json({
@@ -55,12 +63,12 @@ router.get('/:slug/info', async (req, res) => {
       logo:         storeLogo  || null,
       color:        storeColor || '#22c55e',
       slug:         org.slug,
-      announcement: announcement || '🚚 Delivery gratis en compras sobre el mínimo',
-      heroTitle:    heroTitle    || 'Productos frescos directo al hogar',
-      heroSubtitle: heroSubtitle || 'Sin intermediarios. Animales criados en libertad, productos que llegan frescos a tu puerta.',
+      announcement: announcement || '',
+      heroTitle:    heroTitle    || org.name,
+      heroSubtitle: heroSubtitle || 'Descubre nuestro catálogo y realiza tu pedido.',
       heroTags,
       whatsappPhone: whatsappPhone || null,
-      freeShipping:  freeShippingRaw ? parseInt(freeShippingRaw) : 10000,
+      freeShipping:  freeShippingRaw ? parseInt(freeShippingRaw) : null,
       howToBuy:     howToBuy  || null,
       aboutUs:      aboutUs   || null,
     });

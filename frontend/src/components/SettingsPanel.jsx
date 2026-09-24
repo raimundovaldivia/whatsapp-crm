@@ -1843,6 +1843,7 @@ function ModulosTab() {
     try {
       const res = await api.put('/settings/modules', { modules: { [key]: val } });
       if (res.data?.modules) setModules(m => ({ ...m, ...res.data.modules }));
+      window.dispatchEvent(new Event('commercial-changed'));
     } catch (err) {
       setModules(prev);
       setError(err.response?.data?.error || 'No se pudo guardar el cambio');
@@ -1883,7 +1884,7 @@ function ModulosTab() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <div>
         <h2 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 700, margin: '0 0 4px' }}>Módulos</h2>
-        <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>Activa o desactiva módulos de tu ecommerce.</p>
+        <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>Configura las funciones de tus módulos contratados. Para ampliar tu acceso, visita Mis soluciones.</p>
       </div>
       {error && <Alert type="error" msg={error} colors={colors} />}
       {group('Secciones', MODULOS_SECCIONES)}

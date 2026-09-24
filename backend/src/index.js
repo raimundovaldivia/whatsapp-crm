@@ -94,6 +94,9 @@ app.get('/ready', async (_req, res) => {
   catch { res.status(503).json({ status: 'unavailable' }); }
 });
 
+app.use('/api/commercial', require('./routes/commercial'));
+app.use('/api', require('./middleware/commercial-access').commercialAccess);
+
 // ─── RUTAS ───────────────────────────────────────────────────────
 app.use('/webhook',           webhookRouter);        // POST — Meta webhook
 app.use('/twilio-webhook',    twilioWebhookRouter);  // POST — Twilio webhook

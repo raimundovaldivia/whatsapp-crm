@@ -100,11 +100,12 @@ export default function Tienda({ slug }) {
   }, [loading]);
 
   const PRIMARY      = store?.color        || '#22c55e';
-  const FREE_SHIP    = store?.freeShipping  ?? 10000;
-  const ANNOUNCEMENT = store?.announcement  || `🚚 Delivery gratis en compras sobre ${fmt(FREE_SHIP)}`;
-  const HERO_TITLE   = store?.heroTitle     || 'Productos frescos directo al hogar';
-  const HERO_SUB     = store?.heroSubtitle  || 'Sin intermediarios. Animales criados en libertad, productos que llegan frescos a tu puerta.';
-  const HERO_TAGS    = store?.heroTags      || ['🥚 Huevos libres', '🫒 Aceitunas', '🧀 Quesos', '🚚 Lun – Sáb'];
+  const FREE_SHIP    = store?.freeShipping ?? null;
+  const HAS_FREE_SHIP = Number.isFinite(FREE_SHIP) && FREE_SHIP >= 0;
+  const ANNOUNCEMENT = store?.announcement || (HAS_FREE_SHIP ? `🚚 Delivery gratis en compras sobre ${fmt(FREE_SHIP)}` : 'Consulta las condiciones de entrega al realizar tu pedido');
+  const HERO_TITLE   = store?.heroTitle || storeName;
+  const HERO_SUB     = store?.heroSubtitle  || 'Descubre nuestro catálogo y realiza tu pedido.';
+  const HERO_TAGS    = store?.heroTags      || [];
   const WA_PHONE     = store?.whatsappPhone || null;
   const HOW_TO_BUY   = store?.howToBuy      || null;
   const ABOUT_US     = store?.aboutUs       || null;
@@ -347,13 +348,13 @@ export default function Tienda({ slug }) {
       </header>
 
       {/* Delivery progress bar (cuando hay items en carrito) */}
-      {activeTab === 'productos' && cartTotal > 0 && (
-        <div style={{ backgroundColor: cartTotal >= FREE_SHIP ? '#f0fdf4' : '#fefce8', borderBottom: `1px solid ${cartTotal >= FREE_SHIP ? '#bbf7d0' : '#fef08a'}`, padding: '8px 16px', textAlign: 'center' }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: cartTotal >= FREE_SHIP ? '#166534' : '#854d0e', marginBottom: 5 }}>
-            {cartTotal >= FREE_SHIP ? '✅ ¡Delivery gratis incluido!' : `Agrega ${fmt(FREE_SHIP - cartTotal)} más para delivery gratis`}
+      {activeTab === 'productos' && HAS_FREE_SHIP && cartTotal > 0 && (
+        <div style={{ backgroundColor: (HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '#f0fdf4' : '#fefce8', borderBottom: `1px solid ${(HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '#bbf7d0' : '#fef08a'}`, padding: '8px 16px', textAlign: 'center' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: (HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '#166534' : '#854d0e', marginBottom: 5 }}>
+            {(HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '✅ ¡Delivery gratis incluido!' : `Agrega ${fmt(FREE_SHIP - cartTotal)} más para delivery gratis`}
           </div>
           <div style={{ maxWidth: 300, margin: '0 auto', height: 5, backgroundColor: '#e5e7eb', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${Math.min(100, (cartTotal / FREE_SHIP) * 100)}%`, backgroundColor: PRIMARY, borderRadius: 3, transition: 'width .3s' }} />
+            <div style={{ height: '100%', width: `${(FREE_SHIP === 0 ? 100 : Math.min(100, (cartTotal / FREE_SHIP) * 100))}%`, backgroundColor: PRIMARY, borderRadius: 3, transition: 'width .3s' }} />
           </div>
         </div>
       )}
@@ -600,7 +601,7 @@ export default function Tienda({ slug }) {
                   { n: '1', icon: '🛒', t: 'Elige', d: 'Arma tu pedido.' },
                   { n: '2', icon: '📅', t: 'Pide', d: 'Lun a sáb hasta las 11 AM.' },
                   { n: '3', icon: '🌿', t: 'Preparamos', d: 'Directo del campo.' },
-                  { n: '4', icon: '🚚', t: 'Llega', d: FREE_SHIP > 0 ? `Gratis sobre ${fmt(FREE_SHIP)}.` : 'A coordinar.' },
+                  { n: '4', icon: '🚚', t: 'Llega', d: HAS_FREE_SHIP ? `Gratis sobre ${fmt(FREE_SHIP)}.` : 'A coordinar.' },
                 ].map(s => (
                   <div key={s.n} style={{ background: 'white', borderRadius: 12, padding: isMobile ? '18px 12px' : '24px 16px', border: '1px solid #e5e7eb' }}>
                     <div style={{ width: 36, height: 36, borderRadius: '50%', background: `${PRIMARY}20`, color: PRIMARY, fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>{s.n}</div>
@@ -619,7 +620,7 @@ export default function Tienda({ slug }) {
               {logoUrl
                 ? <img src={logoUrl} alt={storeName} style={{ height: isMobile ? 32 : 40, filter: 'brightness(0) invert(1)', marginBottom: 10, opacity: 0.8 }} />
                 : <div style={{ fontSize: isMobile ? 16 : 18, fontWeight: 800, color: 'white', marginBottom: 10 }}>{storeName}</div>}
-              <p style={{ margin: '0 0 10px', fontSize: 13 }}>Productos frescos del campo a tu mesa</p>
+              <p style={{ margin: '0 0 10px', fontSize: 13 }}>Conoce nuestros productos y condiciones de entrega</p>
               <p style={{ margin: 0, fontSize: 12 }}>© {new Date().getFullYear()} {storeName}</p>
             </div>
           </footer>
@@ -641,7 +642,7 @@ export default function Tienda({ slug }) {
                   { n: '1', icon: '🛒', t: 'Elige tus productos', d: 'Navega el catálogo y añade lo que quieras al carrito.' },
                   { n: '2', icon: '📱', t: 'Confirma tu pedido', d: 'Rellena tus datos de entrega: nombre, WhatsApp y dirección.' },
                   { n: '3', icon: '✅', t: 'Recibe confirmación', d: 'Te enviamos un mensaje de WhatsApp con el resumen del pedido.' },
-                  { n: '4', icon: '🚚', t: 'Llega a tu puerta', d: FREE_SHIP > 0 ? `Delivery gratis en pedidos sobre ${fmt(FREE_SHIP)}.` : 'Coordinamos la entrega contigo por WhatsApp.' },
+                  { n: '4', icon: '🚚', t: 'Llega a tu puerta', d: HAS_FREE_SHIP ? `Delivery gratis en pedidos sobre ${fmt(FREE_SHIP)}.` : 'Coordinamos la entrega contigo por WhatsApp.' },
                 ].map(s => (
                   <div key={s.n} style={{ display: 'flex', gap: 16, alignItems: 'flex-start', background: '#f9fafb', borderRadius: 14, padding: isMobile ? '16px 14px' : '20px 20px', border: '1px solid #e5e7eb' }}>
                     <div style={{ width: 40, height: 40, borderRadius: '50%', background: `${PRIMARY}20`, color: PRIMARY, fontWeight: 800, fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.n}</div>
@@ -693,7 +694,7 @@ export default function Tienda({ slug }) {
               ? <img src={logoUrl} alt={storeName} style={{ height: isMobile ? 56 : 72, width: 'auto', objectFit: 'contain', marginBottom: 20 }} />
               : <div style={{ fontSize: isMobile ? 28 : 36, fontWeight: 900, color: PRIMARY, marginBottom: 12 }}>{storeName}</div>}
             <p style={{ margin: '0 auto', fontSize: isMobile ? 15 : 17, color: '#374151', lineHeight: 1.8, maxWidth: 480 }}>
-              {ABOUT_US || `Somos ${storeName}, una empresa dedicada a traer los mejores productos frescos directo del campo a tu mesa, sin intermediarios, con amor y compromiso.`}
+              {ABOUT_US || `Somos ${storeName}, tu tienda. Consulta nuestro catálogo y contáctanos para conocer más.`}
             </p>
           </div>
 
@@ -754,8 +755,8 @@ export default function Tienda({ slug }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 12, fontWeight: 800, fontSize: 16 }}>
               <span>Total</span><span>{fmt(cartTotal)}</span>
             </div>
-            <div style={{ fontSize: 12, color: cartTotal >= FREE_SHIP ? '#16a34a' : '#6b7280', marginTop: 4 }}>
-              {cartTotal >= FREE_SHIP ? '✅ Delivery gratis' : '💳 Pago contra entrega'}
+            <div style={{ fontSize: 12, color: (HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '#16a34a' : '#6b7280', marginTop: 4 }}>
+              {(HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '✅ Delivery gratis' : 'Envío a confirmar'}
             </div>
           </div>
 
@@ -807,13 +808,13 @@ export default function Tienda({ slug }) {
             </div>
 
             {/* Progreso envío */}
-            {cartTotal > 0 && (
+            {HAS_FREE_SHIP && cartTotal > 0 && (
               <div style={{ padding: '10px 20px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: cartTotal >= FREE_SHIP ? '#16a34a' : '#374151', marginBottom: 5 }}>
-                  {cartTotal >= FREE_SHIP ? '✅ ¡Delivery gratis!' : `Faltan ${fmt(FREE_SHIP - cartTotal)} para envío gratis`}
+                <div style={{ fontSize: 12, fontWeight: 600, color: (HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '#16a34a' : '#374151', marginBottom: 5 }}>
+                  {(HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '✅ ¡Delivery gratis!' : `Faltan ${fmt(FREE_SHIP - cartTotal)} para envío gratis`}
                 </div>
                 <div style={{ height: 5, background: '#e5e7eb', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${Math.min(100, (cartTotal / FREE_SHIP) * 100)}%`, background: PRIMARY, borderRadius: 3, transition: 'width .3s' }} />
+                  <div style={{ height: '100%', width: `${(FREE_SHIP === 0 ? 100 : Math.min(100, (cartTotal / FREE_SHIP) * 100))}%`, background: PRIMARY, borderRadius: 3, transition: 'width .3s' }} />
                 </div>
               </div>
             )}
@@ -854,7 +855,7 @@ export default function Tienda({ slug }) {
                   <span>Subtotal</span><span style={{ fontWeight: 600, color: '#111827' }}>{fmt(cartTotal)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, fontSize: 13, color: '#6b7280' }}>
-                  <span>Envío</span><span style={{ fontWeight: 600, color: cartTotal >= FREE_SHIP ? '#16a34a' : '#111827' }}>{cartTotal >= FREE_SHIP ? 'Gratis' : 'Al confirmar'}</span>
+                  <span>Envío</span><span style={{ fontWeight: 600, color: (HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? '#16a34a' : '#111827' }}>{(HAS_FREE_SHIP && cartTotal >= FREE_SHIP) ? 'Gratis' : 'Al confirmar'}</span>
                 </div>
                 <button onClick={() => { setCartOpen(false); setView('checkout'); }}
                   style={{ width: '100%', padding: 14, borderRadius: 12, border: 'none', background: PRIMARY, color: 'white', fontWeight: 800, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>

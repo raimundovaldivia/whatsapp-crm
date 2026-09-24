@@ -905,6 +905,7 @@ async function setupDatabase() {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_request
         ON delivery_expenses(organization_id, driver_user_id, client_request_id);
     `);
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

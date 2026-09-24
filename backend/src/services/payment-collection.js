@@ -99,6 +99,7 @@ function kapsoCreds(wc) {
  * @returns {{ ok, name, status, reason?, error? }}
  */
 async function submitChargeTemplate(orgId, { resubmit = false } = {}) {
+  await require('./commercial').assertModule(orgId,'payments');
   const wc = await db.getWhatsappConfig(orgId);
   if (!wc || wc.provider !== 'kapso') return { ok: false, error: 'La creación de templates solo está disponible con Kapso.' };
   const { apiKey, wabaId } = kapsoCreds(wc);
@@ -256,6 +257,7 @@ async function registerChargeSent(source, orderId, orgId) {
  * @returns {{ ok: boolean, reason?: string, message?: string }}
  */
 async function sendChargeRequest(orgId, order, opts = {}) {
+  if (!await require('./commercial').permitted(orgId,'payments')) return { ok:false, reason:'modulo_no_contratado' };
   const { force = false, io = null, templateOverride = null } = opts;
 
   if (!order?.customer_phone) {

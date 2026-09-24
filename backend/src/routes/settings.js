@@ -83,29 +83,9 @@ router.put('/', async (req, res) => {
 // ── Módulos del ecommerce (feature flags activables) ────────────────────────
 // Mapa central { moduleKey: bool } que decide qué secciones/funciones están
 // activas para esta organización. Se lee en el arranque del panel.
-const MODULE_DEFAULTS = {
-  // Secciones (ocultan/muestran su pestaña en la barra lateral)
-  stats:       true,
-  orders:      true,
-  repartos:    true,
-  pagos:       true,
-  clientes:    true,
-  mensajeria:  true,
-  productos:   true,
-  evaluacion:  true,
-  // Funciones opcionales
-  edit_delivered_items: false,  // editar productos/monto entregado (Despachos + app repartidor)
-  cobranza:             false,  // cobro automatico por transferencia (auto-provisiona el template)
-};
-
-async function getModules(orgId) {
-  let saved = {};
-  try {
-    const raw = await db.getSetting(orgId, 'modules');
-    saved = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : {};
-  } catch { saved = {}; }
-  return { ...MODULE_DEFAULTS, ...saved };
-}
+const commercial = require('../services/commercial');
+const { DEFAULT_FLAGS: MODULE_DEFAULTS, FLAG_SOLUTION } = require('../services/solution-catalog');
+const getModules = commercial.effectiveFlags;
 
 router.get('/modules', async (req, res) => {
   try {
@@ -118,6 +98,10 @@ router.get('/modules', async (req, res) => {
 router.put('/modules', async (req, res) => {
   try {
     const incoming = req.body?.modules || {};
+    for (const [key,value] of Object.entries(incoming)) {
+      if (!Object.hasOwn(MODULE_DEFAULTS,key) || typeof value !== 'boolean') return res.status(400).json({ error: 'Preferencia inválida' });
+      if (value && FLAG_SOLUTION[key] && !await commercial.permitted(req.orgId,FLAG_SOLUTION[key])) return res.status(403).json({ error: 'Solicita este módulo desde Mis soluciones antes de activarlo' });
+    }
     const current = await getModules(req.orgId);
     const next = { ...current };
     for (const [k, v] of Object.entries(incoming)) {
@@ -133,7 +117,7 @@ router.put('/modules', async (req, res) => {
         .then(r => console.log('[Modulos] template de cobranza:', JSON.stringify(r)))
         .catch(e => console.warn('[Modulos] template de cobranza fallo:', e.message));
     }
-    res.json({ success: true, modules: next, cobranzaTemplate });
+    res.json({ success: true, modules: await getModules(req.orgId), cobranzaTemplate });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -147,7 +131,7 @@ router.put('/modules', async (req, res) => {
  * Body: { message, history: [{role, content}], orderDraft: {}, pipelineState: 'exploring' }
  * Response: { response, agentType, newState, orderDraft }
  */
-router.post('/test-bot', async (req, res) => {
+router.post('/test-bot', require('../middleware/commercial-access').requireSolution('sales_ai'), async (req, res) => {
   try {
     const { message, history = [], orderDraft = {}, pipelineState = 'exploring' } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: 'Mensaje vacío' });
@@ -557,7 +541,7 @@ router.get('/delivery-info', async (req, res) => {
   }
 });
 
-router.post('/delivery-info', async (req, res) => {
+router.post('/delivery-info', require('../middleware/commercial-access').requireSolution('delivery'), async (req, res) => {
   try {
     const { schedule = '', zone = '', minimum = '', paymentMethods = '' } = req.body;
     await db.setSetting(req.orgId, 'delivery_info', JSON.stringify({ schedule, zone, minimum, paymentMethods }));
@@ -582,7 +566,7 @@ router.get('/warehouse', async (req, res) => {
   }
 });
 
-router.post('/warehouse', async (req, res) => {
+router.post('/warehouse', require('../middleware/commercial-access').requireSolution('delivery'), async (req, res) => {
   try {
     const address = (req.body?.address || '').trim();
     if (!address) {
@@ -632,7 +616,7 @@ router.get('/charge-settings', async (req, res) => {
   }
 });
 
-router.post('/charge-settings', async (req, res) => {
+router.post('/charge-settings', require('../middleware/commercial-access').requireSolution('payments'), async (req, res) => {
   try {
     const { template, bankDetails, autoSendOnTransfer, waTemplate } = req.body;
     if (template !== undefined && typeof template !== 'string') {
@@ -663,7 +647,7 @@ router.post('/charge-settings', async (req, res) => {
 });
 
 // Crear/enviar a aprobación el template de cobranza (botón en la pestaña Cobranza)
-router.post('/charge-settings/template', async (req, res) => {
+router.post('/charge-settings/template', require('../middleware/commercial-access').requireSolution('payments'), async (req, res) => {
   try {
     const r = await collection.submitChargeTemplate(req.orgId, { resubmit: !!req.body?.resubmit });
     if (!r.ok) return res.status(400).json({ success: false, error: r.error });

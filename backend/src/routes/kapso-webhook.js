@@ -137,7 +137,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   // ── Audio sin transcript → transcribir si hay OPENAI_API_KEY (Whisper) ──
   // Kapso ya transcribe si la opción está activa en su panel; esto es el
   // respaldo cuando no viene transcript.
-  if (parsed.type === 'audio' && !parsed.text && process.env.OPENAI_API_KEY && (parsed.mediaUrl || parsed.mediaId)) {
+  if (parsed.type === 'audio' && !parsed.text && await require('../services/commercial').permitted(org.id,'sales_ai') && process.env.OPENAI_API_KEY && (parsed.mediaUrl || parsed.mediaId)) {
     const transcript = await transcribeAudio(parsed, whatsappConfig).catch(e => {
       console.warn('[KapsoWebhook] transcripción falló:', e.message);
       return null;
@@ -165,7 +165,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
     // En modo humano el ejecutivo lo ve en el CRM — no contestar encima
-    if (conversation.agent_mode && conversation.agent_mode !== 'ai') {
+    if (!await require('../services/commercial').permitted(org.id,'sales_ai') || (conversation.agent_mode && conversation.agent_mode !== 'ai')) {
       const updatedConv = await db.getConversationById(conversation.id);
       io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
       return;
@@ -290,6 +290,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         const result = await pipeline.processMessage(org.id, capturedConvId, textToProcess, log);
         io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
 
+        if (result.skipped) { log.done(); return; }
         if (result.duplicate) {
           log.step('duplicate', 'pedido ya creado por otro proceso — respuesta silenciada');
           log.done();
@@ -472,6 +473,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
  * Cuando el admin responde, su mensaje se reenvía al cliente pendiente más reciente.
  */
 async function handleAdminReply(org, whatsappConfig, parsed) {
+  if (!await require('../services/commercial').permitted(org.id,'sales_ai')) return;
   if (!parsed.text) return;
 
   try {
@@ -599,6 +601,17 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
  */
 async function handlePaymentProof(org, whatsappConfig, parsed) {
   try {
+    const commercial = require('../services/commercial');
+    const payments = await commercial.permitted(org.id,'payments');
+    const sales = await commercial.permitted(org.id,'sales_ai');
+    if (!payments && !sales) {
+      const conversation = await db.upsertConversation(org.id,parsed.from,parsed.contactName);
+      const message = await db.saveMessage({conversationId:conversation.id,whatsappMessageId:parsed.messageId,direction:'inbound',content:'📷 [Imagen]',type:'image',sentBy:'client',mediaId:parsed.mediaUrl || parsed.mediaId});
+      await db.updateConversationLastMessage(conversation.id,'📷 [Imagen]',true);
+      await db.updateLastInbound(conversation.id);
+      io?.to(`org_${org.id}`).emit(`new_message_${org.id}`,{message,conversation:await db.getConversationById(conversation.id)});
+      return;
+    }
     console.log(`[KapsoWebhook] 📸 Imagen de ${parsed.from} | mediaId: ${parsed.mediaId} — analizando con IA...`);
 
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
@@ -622,7 +635,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         // Guardar en cache para que el proxy del browser pueda servirlo sin re-descargar
         const cacheKey = downloadUrl || parsed.mediaId;
         mediaCache.set(org.id + ':' + cacheKey, data, contentType);
-        analysis = await analyzePaymentProof(data, contentType);
+        if (payments) analysis = await analyzePaymentProof(data, contentType);
         console.log(`[KapsoWebhook] 🤖 Análisis IA:`, JSON.stringify(analysis));
       }
     } catch (aiErr) {
@@ -658,6 +671,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         conversation: earlyConv,
       });
 
+      if (!sales) return;
       // Analizar imagen con Claude Vision y pasar contexto al pipeline
       let imageContext = '[imagen]';
       if (data && contentType) {
@@ -687,7 +701,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
       }
 
-      if (imgResult && !imgResult.duplicate) {
+      if (imgResult && !imgResult.duplicate && !imgResult.skipped && imgResult.response) {
         const sentMsg = await kapsoService.sendTextMessage(parsed.from, imgResult.response, whatsappConfig).catch(() => null);
         const outMsg = await db.saveMessage({
           conversationId:    conversation.id,
