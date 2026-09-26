@@ -36,7 +36,7 @@ export default function SolutionsPanel({ publicView = false, onStart, onClose })
         <div className="sol-base"><div><span className="sol-badge">BASE COMPARTIDA</span><h2>Tu equipo y tus clientes, conectados</h2><p>Conversaciones, clientes, usuarios, permisos e integraciones. Los módulos contratados amplían esta base.</p></div>{publicView ? <button className="sol-primary" onClick={onStart}>Crear mi cuenta</button> : <div><strong>{statusNames[data.state] || 'Cuenta base'}</strong><p>{date(data.contract?.expires_at)}</p></div>}</div>
         {!publicView && <div className="sol-meters">
           <Usage title="Turnos del agente de ventas" used={data.usage.bot_turns} limit={data.limits.bot_turns} detail={`Mes ${data.period} · Cada procesamiento iniciado cuenta como un turno.`} />
-          <Usage title="Usuarios del equipo" used={data.usage.seats} limit={data.limits.seats} detail="Incluye al dueño y a los repartidores." />
+          <Usage title="Usuarios activos" used={data.usage.seats} limit={data.limits.seats} detail="Incluye al dueño y a los repartidores activos. Las cuentas suspendidas no ocupan cupos." />
           <div className="sol-card"><h3>Contratación asistida</h3><p>Solicita los módulos que necesitas. La activación se confirma con nuestro equipo.</p><small>Solicitar no genera un cobro ni activa automáticamente una solución.</small></div>
         </div>}
         <div className="sol-section"><h2>Soluciones para cada etapa</h2><p>Precios y condiciones según tu operación. IA, WhatsApp y otros proveedores pueden generar costos adicionales que se acuerdan en la propuesta.</p></div>

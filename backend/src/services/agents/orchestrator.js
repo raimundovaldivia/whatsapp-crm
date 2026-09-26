@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { buildMessages } = require('./conversation-context');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -33,6 +34,8 @@ Tu ÚNICA tarea es clasificar el mensaje del cliente en UNA de estas categorías
 REGLAS:
 - Si el mensaje es MUY corto (1-3 palabras) y es el inicio, probablemente es "greeting"
 - Si ya hay historial de conversación largo, no es "greeting"
+- Una respuesta breve ("sí", "dale", "no", "dos") se interpreta según la ÚLTIMA pregunta del bot. Confirmar una zona, un precio o que quiere información NO confirma una compra.
+- Responder a una campaña no significa querer comprar. Clasifica lo que el cliente realmente dice.
 - "delivery_inquiry" es distinto de "support": delivery_inquiry es ANTES de comprar, support es DESPUÉS${orderRules}
 - Estado actual de la conversación: ${pipelineState}
 
@@ -40,25 +43,26 @@ Responde SOLO con el JSON: {"intent": "categoria", "confidence": 0.0-1.0, "reaso
 Nada más. Solo el JSON.`;
 
   // Más contexto histórico para clasificar mejor
-  const history = conversationHistory.slice(-8).map(m => ({
-    role: m.direction === 'inbound' ? 'user' : 'assistant',
-    content: m.content,
-  }));
+  const messages = buildMessages(conversationHistory, userMessage, 8);
 
   try {
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 100,
       system: SYSTEM,
-      messages: [...history, { role: 'user', content: userMessage }],
+      messages,
     });
 
     const text = response.content[0]?.text || '{}';
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
+    const allowed = ['greeting', 'exploring', 'interested', 'wants_to_order', 'objection',
+      'delivery_inquiry', 'support', 'post_sale', 'human_request',
+      ...(hasActiveOrder ? ['modify_order', 'cancel_order'] : [])];
+    const valid = allowed.includes(json.intent);
     return {
-      intent: json.intent || 'exploring',
-      confidence: json.confidence || 0.5,
-      reason: json.reason || '',
+      intent: valid ? json.intent : 'exploring',
+      confidence: valid && Number.isFinite(json.confidence) ? Math.max(0, Math.min(1, json.confidence)) : 0.5,
+      reason: typeof json.reason === 'string' ? json.reason : '',
     };
   } catch (err) {
     console.error('[Orchestrator] Error clasificando intención:', err.message);
@@ -71,7 +75,7 @@ Nada más. Solo el JSON.`;
  *
  * @returns {{ escalate: boolean, reason: string, urgency: 'low'|'medium'|'high', loopDetected?: boolean }}
  */
-async function checkEscalation(userMessage, conversationHistory, pipelineState, orgId = null) {
+async function checkEscalation(userMessage, conversationHistory = [], pipelineState, orgId = null) {
   // ── 0. Romper bucle de escalación ────────────────────────────────
   const ESCALATION_PHRASES = [
     'voy a conectarte', 'te voy a conectar', 'ya te atienden',
@@ -82,9 +86,6 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
   const escalationLoopCount = recentBotMsgs.filter(m =>
     ESCALATION_PHRASES.some(phrase => m.content?.toLowerCase().includes(phrase))
   ).length;
-  if (escalationLoopCount >= 2) {
-    return { escalate: false, loopDetected: true, reason: 'Rompiendo bucle — bot ya escaló múltiples veces', urgency: 'low' };
-  }
 
   // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────
   const simpleMsg = /^(hola|hi|hello|hey|buenas?|buen[oa]s? (días?|tardes?|noches?)|como estas?|qué tal|cómo estás?|saludos?|holis?|que tal|ke tal|bien|gracias?|ok|okay|si|no|claro|dale|perfecto|listo|entendido|ya|oka|okey|👍|😊|🙏)\s*[!?\.]*$/i;
@@ -100,6 +101,8 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     /\b(asesor|ejecutivo|persona real|humano)\b.*por favor/i,
     /necesito (hablar|ayuda) (de|con) (una persona|alguien)/i,
     /comunicarme? con (alguien|una persona)/i,
+    /^(un |una )?(asesor|ejecutivo|humano|persona real|agente|vendedor)( por favor)?[.!?\s]*$/i,
+    /pasame? (con|a) (un |una )?(persona|humano|asesor|agente)/i,
   ];
   if (hardEscalationPatterns.some(p => p.test(userMessage))) {
     return { escalate: true, reason: 'Cliente solicita hablar con una persona explícitamente', urgency: 'high' };
@@ -130,6 +133,11 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
   ];
   if (postSaleComplexPatterns.some(p => p.test(userMessage))) {
     return { escalate: true, reason: 'Situación de posventa compleja detectada', urgency: 'medium' };
+  }
+
+  // Avoid speculative repeated escalations, never override an explicit request or complaint.
+  if (escalationLoopCount >= 2) {
+    return { escalate: false, loopDetected: true, reason: 'Rompiendo bucle — bot ya escaló múltiples veces', urgency: 'low' };
   }
 
   // ── 5. Solo usar IA si hay suficiente historial ─────────────────
@@ -181,9 +189,8 @@ Estado actual: ${pipelineState}
 
 Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgency": "low|medium|high"}`;
 
-  const recent = conversationHistory.slice(-12)
-    .filter(m => m.content?.length > 2)
-    .map(m => `${m.direction === 'inbound' ? 'CLIENTE' : 'BOT'}: ${m.content}`)
+  const recent = buildMessages(conversationHistory, userMessage, 12)
+    .map(m => `${m.role === 'user' ? 'CLIENTE' : 'BOT'}: ${m.content}`)
     .join('\n');
 
   try {
@@ -191,7 +198,7 @@ Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgenc
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 100,
       system: ESCALATION_SYSTEM,
-      messages: [{ role: 'user', content: `${recent}\nCLIENTE: ${userMessage}` }],
+      messages: [{ role: 'user', content: recent }],
     });
 
     const text = response.content[0]?.text || '{}';

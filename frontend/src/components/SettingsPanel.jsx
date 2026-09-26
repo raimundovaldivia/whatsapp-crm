@@ -909,6 +909,8 @@ function IATab({ onSwitchTab }) {
 
   // Teléfono del admin para alertas de modo humano
   const [adminAlertPhone, setAdminAlertPhone] = useState('');
+  const [attentionHours, setAttentionHours] = useState(null);
+  const [alertTest, setAlertTest] = useState('');
 
   // Template de despacho para pedidos agendados
   const [dispatchTemplate, setDispatchTemplate] = useState('');
@@ -966,6 +968,7 @@ function IATab({ onSwitchTab }) {
       if (d?.payment_mode) setPaymentMode(d.payment_mode);
       if (d?.payment_info !== undefined) setPaymentInfo(d.payment_info || '');
       if (d?.admin_alert_phone) setAdminAlertPhone(d.admin_alert_phone);
+      setAttentionHours(d?.human_attention_hours || null);
       if (d?.scheduled_dispatch_template !== undefined) setDispatchTemplate(d.scheduled_dispatch_template || '');
       setDriverSell(d?.driver_sell_enabled === true);
     }).catch(() => {}).finally(() => setLoading(false));
@@ -1074,7 +1077,7 @@ function IATab({ onSwitchTab }) {
     setSaving(true); setError(''); setSuccess('');
     try {
       await Promise.all([
-        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone, scheduled_dispatch_template: dispatchTemplate, driver_sell_enabled: driverSell }),
+        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone, human_attention_hours: attentionHours, scheduled_dispatch_template: dispatchTemplate, driver_sell_enabled: driverSell }),
         storeSettingsAPI.saveStoreContext(storeContext),
         storeSettingsAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
       ]);
@@ -1324,6 +1327,27 @@ function IATab({ onSwitchTab }) {
             <p style={{ ...hintStyle, marginTop: '6px' }}>
               Cuando una conversación pase a modo humano (por el bot o manualmente), este número recibirá un WhatsApp de alerta. Sin código +, con código de país (ej: 56912345678).
             </p>
+          </div>
+
+          <div>
+            <button disabled={alertTest==='Enviando…'} onClick={async()=>{
+              setAlertTest('Enviando…');
+              try { const {data:r}=await api.post('/admin-alerts/test');
+                setAlertTest(r.sent?'Proveedor aceptó el aviso. Revisa su entrega en la bandeja de avisos.':r.queued?'Aviso en cola: escribe al WhatsApp del negocio desde el teléfono administrador.':'El aviso falló. Revisa el teléfono guardado y la conexión.');
+              } catch { setAlertTest('No se pudo enviar la prueba.'); }
+            }}>Probar aviso al administrador</button>
+            <p style={hintStyle}>{alertTest || 'Envía una prueba al teléfono administrador guardado. Guarda los cambios antes de probar.'}</p>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Seguimiento de atención humana</label>
+            <label><input type="checkbox" checked={!!attentionHours} onChange={e => setAttentionHours(e.target.checked ? {days:[1,2,3,4,5],start:9,end:18,timezone:'America/Santiago'} : null)} /> Recordar a los 10 minutos y avisar al administrador a los 30</label>
+            {attentionHours && <>
+              <div style={{display:'flex',flexWrap:'wrap',gap:8,margin:'10px 0'}}>{['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map((day,i) => <label key={day}><input type="checkbox" checked={attentionHours.days.includes(i)} onChange={e => setAttentionHours(h=>({...h,days:e.target.checked?[...h.days,i]:h.days.filter(d=>d!==i)}))} />{day}</label>)}</div>
+              <label>Desde <input type="number" min="0" max="23" value={attentionHours.start} onChange={e=>setAttentionHours(h=>({...h,start:Number(e.target.value)}))} /> horas</label>{' '}
+              <label>Hasta <input type="number" min="1" max="24" value={attentionHours.end} onChange={e=>setAttentionHours(h=>({...h,end:Number(e.target.value)}))} /> horas</label>
+            </>}
+            <p style={hintStyle}>Horario de Chile. Solo cuentan minutos de atención. Los avisos iniciales llegan en cualquier horario; los recordatorios son internos y no envían mensajes al cliente.</p>
           </div>
 
           {/* Template de despacho para pedidos agendados */}

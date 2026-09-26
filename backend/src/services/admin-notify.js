@@ -23,6 +23,7 @@
 const db           = require('../db/database');
 const { getPool }  = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
+const delivery = require('./admin-delivery');
 
 const WINDOW_MS          = 24 * 60 * 60 * 1000;      // ventana de 24h de WhatsApp
 const WARN_BEFORE_MS     = 2  * 60 * 60 * 1000;      // avisar cuando quedan ≤ 2h
@@ -42,6 +43,12 @@ async function isWindowOpen(orgId) {
   return windowState(last).open;
 }
 
+async function recipientSuspended(orgId, phone) {
+  const { rows } = await getPool().query(`SELECT id FROM users WHERE organization_id=$1 AND active=FALSE
+    AND regexp_replace(whatsapp_phone,'[^0-9]','','g')=$2 LIMIT 1`, [orgId,db.normalizePhone(phone)]);
+  return rows.length > 0;
+}
+
 // ─── Envío principal ───────────────────────────────────────────────────────────
 
 /**
@@ -55,7 +62,7 @@ async function isWindowOpen(orgId) {
  *   - wc:              config WhatsApp ya cargada (opcional, se busca si falta)
  * @returns {Promise<{sent:boolean, queued:boolean, reason?:string}>}
  */
-async function notifyAdmin(orgId, { body, kind = 'help', conversationId = null, wc = null } = {}) {
+async function notifyAdmin(orgId, { body, kind = 'help', conversationId = null, wc = null, recipientPhone = null } = {}) {
   if (!body) return { sent: false, queued: false, reason: 'sin_cuerpo' };
 
   // Push a la app Central (independiente de la ventana de 24h de WhatsApp).
@@ -65,15 +72,25 @@ async function notifyAdmin(orgId, { body, kind = 'help', conversationId = null, 
     require('./push').pushAdmins(orgId, { title, body: body.replace(/\*/g, ''), data: { kind, conversationId } }).catch(() => {});
   } catch (_) {}
 
-  const adminPhone = await db.getSetting(orgId, 'admin_alert_phone').catch(() => null);
-  if (!adminPhone) return { sent: false, queued: false, reason: 'sin_admin_phone' };
+  const adminPhone = recipientPhone || await db.getSetting(orgId, 'admin_alert_phone').catch(() => null);
+  if (adminPhone && await recipientSuspended(orgId, adminPhone)) {
+    await delivery.blocked(orgId, { conversationId, kind, phone: adminPhone, reason: 'usuario_suspendido' });
+    return { sent: false, queued: false, reason: 'usuario_suspendido' };
+  }
+  if (!adminPhone) {
+    await delivery.blocked(orgId, { conversationId, kind, reason: 'sin_admin_phone' });
+    return { sent: false, queued: false, reason: 'sin_admin_phone' };
+  }
 
   const cfg = wc || await db.getWhatsappConfig(orgId).catch(() => null);
-  if (!cfg || cfg.provider !== 'kapso') return { sent: false, queued: false, reason: 'sin_kapso' };
+  if (!cfg || cfg.provider !== 'kapso') {
+    await delivery.blocked(orgId, { conversationId, kind, phone: adminPhone, reason: 'sin_kapso' });
+    return { sent: false, queued: false, reason: 'sin_kapso' };
+  }
 
   try {
-    await kapsoService.sendTextMessage(adminPhone, body, cfg);
-    console.log(`[AdminNotify] ✅ Alerta entregada al admin (${kind})`);
+    await delivery.send(orgId, { phone: adminPhone, body, config: cfg, kind, conversationId });
+    console.log(`[AdminNotify] Aviso aceptado para envío al admin (entrega aún no confirmada) (${kind})`);
     return { sent: true, queued: false };
   } catch (err) {
     if (err.is24hWindow) {
@@ -97,8 +114,8 @@ async function queueMessage(orgId, adminPhone, body, kind, conversationId) {
     const { rowCount } = await pool.query(
       `UPDATE admin_outbox
           SET body = $1, created_at = NOW()
-        WHERE organization_id = $2 AND conversation_id = $3 AND kind = $4 AND status = 'pending'`,
-      [body, orgId, conversationId, kind]
+        WHERE organization_id = $2 AND conversation_id = $3 AND kind = $4 AND status = 'pending' AND admin_phone=$5`,
+      [body, orgId, conversationId, kind, adminPhone]
     );
     if (rowCount > 0) return;
   }
@@ -128,7 +145,10 @@ async function markAdminWindowOpen(orgId, wc = null) {
  * reciente), descarta las muy viejas y encabeza con un resumen de qué había
  * quedado pendiente. Si algún envío vuelve a fallar por ventana, lo deja en cola.
  */
-async function drainAdminOutbox(orgId, wc = null) {
+async function drainAdminOutbox(orgId, wc = null, recipientPhone = null) {
+  const recipient = recipientPhone || await db.getSetting(orgId, 'admin_alert_phone');
+  if (!recipient) return { drained: 0 };
+  if (await recipientSuspended(orgId, recipient)) return { drained: 0, reason: 'usuario_suspendido' };
   const pool = getPool();
 
   // Expirar lo demasiado viejo (una consulta de hace 2 días ya no sirve)
@@ -140,11 +160,12 @@ async function drainAdminOutbox(orgId, wc = null) {
   );
 
   const { rows } = await pool.query(
-    `SELECT DISTINCT ON (COALESCE(conversation_id, -id)) id, admin_phone, body, kind
+    `SELECT id, admin_phone, body, kind, conversation_id
        FROM admin_outbox
       WHERE organization_id = $1 AND status = 'pending'
-      ORDER BY COALESCE(conversation_id, -id), created_at DESC`,
-    [orgId]
+        AND regexp_replace(admin_phone,'[^0-9]','','g')=$2
+      ORDER BY created_at ASC LIMIT 10`,
+    [orgId, db.normalizePhone(recipient)]
   );
   if (rows.length === 0) return { drained: 0 };
 
@@ -166,7 +187,7 @@ async function drainAdminOutbox(orgId, wc = null) {
   let drained = 0;
   for (const row of batch) {
     try {
-      await kapsoService.sendTextMessage(adminPhone, row.body, cfg);
+      await delivery.send(orgId, { phone: row.admin_phone, body: row.body, config: cfg, kind: row.kind, conversationId: row.conversation_id });
       await pool.query(`UPDATE admin_outbox SET status = 'sent', sent_at = NOW() WHERE id = $1`, [row.id]);
       drained++;
     } catch (err) {
@@ -177,16 +198,6 @@ async function drainAdminOutbox(orgId, wc = null) {
       }
       console.error('[AdminNotify] Error drenando alerta:', err.message);
     }
-  }
-
-  // Marcar como enviadas también las duplicadas de las conversaciones ya cubiertas
-  const doneConvIds = batch.map(r => r.conversation_id).filter(v => v != null);
-  if (doneConvIds.length) {
-    await pool.query(
-      `UPDATE admin_outbox SET status = 'sent', sent_at = NOW()
-        WHERE organization_id = $1 AND status = 'pending' AND conversation_id = ANY($2)`,
-      [orgId, doneConvIds]
-    );
   }
 
   if (drained > 0) console.log(`[AdminNotify] 📤 ${drained} alerta(s) pendientes entregadas al admin`);
@@ -215,6 +226,7 @@ function windowWarnMessage(msLeft, pendingCount = 0) {
  */
 async function warnAdminPhone(orgId, wc, adminPhone) {
   if (!adminPhone) return;
+  if (await recipientSuspended(orgId, adminPhone)) return;
   const pool = getPool();
   const lastInbound = await db.getSetting(orgId, 'admin_window_last_inbound').catch(() => null);
   const { open, msLeft } = windowState(lastInbound);
@@ -243,7 +255,7 @@ async function warnUserWindows(orgId, wc, adminPhone) {
     `SELECT id, name, whatsapp_phone, wa_last_inbound, wa_window_warned
        FROM users
       WHERE organization_id = $1
-        AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
+        AND active=TRUE AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
         AND (wa_notifications->>'new_messages')::boolean = true`,
     [orgId]
   );

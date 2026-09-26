@@ -12,9 +12,11 @@ async function mergeConversations(orgId, targetId, sourceId) {
       [orgId, [targetId, sourceId]]);
     if (rows.length !== 2) throw Object.assign(new Error('Conversación no encontrada'), { status: 404 });
     // Transfer every FK dependency before deleting the source. Failures roll back.
-    for (const table of ['messages', 'orders', 'payment_proofs', 'scheduled_orders', 'escalation_feedback', 'admin_pending_replies', 'admin_outbox']) {
+    for (const table of ['messages', 'orders', 'payment_proofs', 'scheduled_orders', 'escalation_feedback', 'admin_pending_replies', 'admin_outbox', 'admin_assignments', 'admin_notification_deliveries', 'human_attention_reminders']) {
       await client.query(`UPDATE ${table} SET conversation_id = $1 WHERE conversation_id = $2`, [targetId, sourceId]);
     }
+    await client.query(`UPDATE conversations SET agent_mode='human' WHERE id=$1
+      AND EXISTS(SELECT 1 FROM admin_assignments WHERE conversation_id=$1)`, [targetId]);
     const source = rows.find(r => r.id === sourceId), target = rows.find(r => r.id === targetId);
     const generic = !target.contact_name || target.contact_name === 'Cliente' || /^\d+$/.test(target.contact_name);
     await client.query(`UPDATE conversations SET

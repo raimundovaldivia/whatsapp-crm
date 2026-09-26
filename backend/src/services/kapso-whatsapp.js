@@ -38,7 +38,7 @@ function is24hWindowError(err) {
   const body = err.response?.data;
   // Kapso devuelve el error como string o como objeto
   const msg = typeof body === 'string' ? body
-    : body?.error || body?.message || JSON.stringify(body || '');
+    : JSON.stringify(body || '');
   return typeof msg === 'string' && (
     msg.includes('24-hour window') ||
     msg.includes('non-template') ||

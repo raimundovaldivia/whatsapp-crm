@@ -228,7 +228,7 @@ export default function App() {
     // mientras el socket estaba caído o la conversación no estaba abierta.
     // Hacemos merge (no reemplazo) para evitar flash visual.
     try {
-      const { messages: msgs } = await conversationsAPI.getMessages(id);
+      const { messages: msgs, conversation } = await conversationsAPI.getMessages(id);
       loadedConvIds.current.add(id);
       setMessages(prev => {
         const existing = prev[id] || [];
@@ -240,7 +240,9 @@ export default function App() {
         const merged = [...existing, ...newMsgs].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         return { ...prev, [id]: merged };
       });
-      setConversations(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c));
+      setConversations(prev => prev.some(c => c.id === id)
+        ? prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c)
+        : conversation ? [{ ...conversation, unread_count: 0 }, ...prev] : prev);
     } catch (err) { console.error(err); }
   }, []);
 
@@ -412,7 +414,7 @@ export default function App() {
 
       {/* Control de alertas al admin en cola (tarjeta flotante; se autooculta si no hay nada).
           Solo para roles con acceso de gestión. */}
-      {['owner', 'admin', 'supervisor'].includes(userRole) && <AdminAlertsBanner />}
+      {['owner', 'admin', 'supervisor'].includes(userRole) && <AdminAlertsBanner onOpenConversation={handleSelectConversation} />}
 
       {/* Barra de navegación (lateral desktop / inferior móvil) */}
       <NavBar

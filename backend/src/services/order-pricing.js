@@ -71,7 +71,8 @@ function flattenCatalog(products = []) {
           price:        Number(v.price) || Number(p.priceMin) || Number(p.price) || 0,
           bulk_price:   null,
           bulk_min_qty: null,
-          available:    v.available !== false && v.stock !== 0,
+          available:    v.available !== false,
+          stock:        v.stock ?? v.inventoryQuantity ?? null,
         });
       }
     } else {
@@ -85,7 +86,8 @@ function flattenCatalog(products = []) {
         price:        Number(p.priceMin) || Number(p.price) || 0,
         bulk_price:   p.bulk_price != null ? Number(p.bulk_price) : (p.bulkPrice != null ? Number(p.bulkPrice) : null),
         bulk_min_qty: p.bulk_min_qty != null ? Number(p.bulk_min_qty) : (p.bulkMinQty != null ? Number(p.bulkMinQty) : null),
-        available:    p.available !== false,
+        available:    p.available !== false && p.variants?.[0]?.available !== false,
+        stock:        p.variants?.[0]?.stock ?? p.variants?.[0]?.inventoryQuantity ?? p.inventoryQuantity ?? p.inventory_quantity ?? p.stock ?? null,
       });
     }
   }
@@ -182,8 +184,13 @@ function priceItems(items = [], products = [], opts = {}) {
   for (const raw of items) {
     if (!raw) continue;
     const name = raw.product_name || raw.name || raw.title || '';
-    const qty  = Math.max(1, parseInt(raw.quantity, 10) || 1);
+    const qty = raw.quantity == null ? 1 : Number(raw.quantity);
     if (!name.trim()) continue;
+    if (!Number.isSafeInteger(qty) || qty < 1 || qty > 10000) {
+      unmatched.push(name);
+      priced.push({ name, product_name:name, quantity:0, price:0, matched:false, invalid_quantity:true });
+      continue;
+    }
 
     const m = matchProduct(name, catalog);
     if (!m) {
@@ -219,7 +226,19 @@ function priceItems(items = [], products = [], opts = {}) {
     if (prev) { prev.quantity += it.quantity; continue; }
     merged.push({ ...it, _k: k });
   }
-  merged.forEach(x => delete x._k);
+  merged.forEach(x => {
+    delete x._k;
+    if (!x.matched) return;
+    const candidate = catalog.find(c => c.product_id === x.product_id && c.variant_id === x.variant_id);
+    const repriced = unitPriceFor(candidate, x.quantity, specialPrices);
+    x.price = repriced.price;
+    x.unit_source = repriced.source;
+    if (!candidate.available || (candidate.stock != null && Number(candidate.stock) >= 0 && Number(candidate.stock) < x.quantity)) {
+      x.matched = false;
+      x.unavailable = true;
+      unmatched.push(x.name);
+    }
+  });
 
   const subtotal = merged.reduce((s, it) => s + it.price * it.quantity, 0);
   const discountPct = Math.min(MAX_DISCOUNT_PCT, Math.max(0, Number(opts.discountPct) || 0));
@@ -242,6 +261,8 @@ function itemLines(items = []) {
 function pricingContext(pricing) {
   if (!pricing || !pricing.items?.length) return 'Aún no hay productos en el pedido.';
   const lines = pricing.items.map(it => {
+    if (it.invalid_quantity) return `- "${it.name}": cantidad inválida; solicita un número entero positivo.`;
+    if (it.unavailable) return `- ${it.quantity}x "${it.name}": sin stock suficiente; no confirmes el pedido.`;
     if (it.ambiguous) return `- ${it.quantity}x "${it.name}"  ⚠️ AMBIGUO: puede ser ${it.alternatives.join(' o ')} — pregunta al cliente cuál (no muestres el resumen todavía)`;
     if (!it.matched) return `- ${it.quantity}x "${it.name}"  ⚠️ NO está en el catálogo tal cual — pide al cliente que aclare cuál es (no muestres el resumen todavía)`;
     return `- ${it.quantity}x ${it.name} @ ${fmt(it.price)} c/u = ${fmt(it.price * it.quantity)}`;
@@ -268,7 +289,7 @@ function normalizeDraft(draft = {}) {
   const d = { ...draft };
   if (!Array.isArray(d.items)) d.items = [];
   if (d.product_name && d.items.length === 0) {
-    d.items = [{ product_name: d.product_name, quantity: parseInt(d.quantity, 10) || 1, price: d.price || null }];
+    d.items = [{ product_name: d.product_name, quantity: d.quantity == null ? 1 : Number(d.quantity), price: d.price || null }];
   }
   delete d.product_name; delete d.quantity; delete d.price;
   return d;

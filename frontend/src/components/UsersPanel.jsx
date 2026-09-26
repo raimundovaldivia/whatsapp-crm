@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UserCog, Plus, Trash2, X, Smartphone, Bell, BellOff, ChevronDown, ChevronUp } from 'lucide-react';
+import { UserCog, Plus, X, Smartphone, Bell, BellOff, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
@@ -89,17 +89,16 @@ export default function UsersPanel() {
     }
   };
 
-  const handleDelete = async (userId, userEmail) => {
-    if (!confirm(`¿Eliminar al usuario ${userEmail}? Esta acción no se puede deshacer.`)) return;
-    setDeletingId(userId);
+  const handleStatus = async (user) => {
+    const active = user.active === false;
+    if (!active && !confirm(`¿Suspender a ${user.email}? Se cerrará su acceso y conservará su historial.`)) return;
+    setDeletingId(user.id);
     try {
-      await api.delete(`/users/${userId}`);
-      setUsers(prev => prev.filter(u => u.id !== userId));
+      await api.patch(`/users/${user.id}/status`, { active });
+      await loadUsers();
     } catch (e) {
-      alert(e.response?.data?.error || 'Error al eliminar usuario');
-    } finally {
-      setDeletingId(null);
-    }
+      alert(e.response?.data?.error || 'Error al cambiar el estado');
+    } finally { setDeletingId(null); }
   };
 
   const handleSavePhone = async (userId) => {
@@ -150,7 +149,7 @@ export default function UsersPanel() {
           <UserCog size={24} color={colors.green} />
           <div>
             <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: colors.textPrimary }}>Equipo</h1>
-            <p style={{ margin: 0, fontSize: '13px', color: colors.textSecondary }}>Gestión de usuarios, roles y comandos WhatsApp</p>
+            <p style={{ margin: 0, fontSize: '13px', color: colors.textSecondary }}>{users.filter(u => u.active !== false).length} usuarios activos · Las cuentas suspendidas conservan su historial y no ocupan cupos.</p>
           </div>
         </div>
         <button onClick={() => { setShowCreate(true); setFormError(null); }}
@@ -161,9 +160,9 @@ export default function UsersPanel() {
 
       {/* Info WA commands */}
       <div style={{ marginBottom: '20px', padding: '14px 18px', borderRadius: '10px', backgroundColor: colors.green + '11', border: `1px solid ${colors.green}33`, fontSize: '13px', color: colors.textSecondary }}>
-        <span style={{ fontWeight: 600, color: colors.green }}>📱 Comandos WhatsApp</span>{' '}
-        Los usuarios con teléfono WA registrado pueden enviar comandos al número del negocio:{' '}
-        <span style={{ fontFamily: 'monospace', color: colors.textPrimary }}>CHATS, VER, MSG, PEDIDOS, PAGAR, PAUSAR, ACTIVAR, AYUDA</span>
+        <span style={{ fontWeight: 600, color: colors.green }}>📱 Secretaria por WhatsApp</span>{' '}
+        Cada teléfono registrado identifica a una persona y su rol. El equipo de atención puede conversar en privado con la secretaria, consultar al cliente asignado y preparar respuestas. Los repartidores y coordinadores mantienen el acceso de su rol desde el CRM.{' '}
+        <span style={{ color: colors.textPrimary }}>Ejemplos: “¿Qué pidió este cliente?” o “Dile que llegará mañana”. La secretaria muestra las acciones propuestas antes de ejecutarlas.</span>
       </div>
 
       {/* Modal crear */}
@@ -192,13 +191,14 @@ export default function UsersPanel() {
                   ]
                 : [
                     { label: 'Email', key: 'email', type: 'email', placeholder: 'usuario@empresa.com', req: true },
-                    { label: 'Contraseña', key: 'password', type: 'password', placeholder: 'Mínimo 6 caracteres', req: true },
+                    { label: 'Contraseña', key: 'password', type: 'password', placeholder: 'Mínimo 8 caracteres', req: true },
                     { label: 'Nombre (opcional)', key: 'name', type: 'text', placeholder: 'Nombre del usuario', req: false },
                   ]
               ).map(({ label, key, type, placeholder, req }) => (
                 <div key={key} style={{ marginBottom: '14px' }}>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '4px' }}>{label}</label>
                   <input type={type} value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} placeholder={placeholder} required={req}
+                    minLength={key === 'password' ? 8 : undefined}
                     autoCapitalize={key === 'username' ? 'none' : undefined}
                     style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgInput, color: colors.textPrimary, fontSize: '14px' }} />
                   {key === 'username' && (
@@ -246,7 +246,7 @@ export default function UsersPanel() {
                     </div>
                     <div>
                       <div style={{ fontSize: '14px', fontWeight: 600, color: colors.textPrimary }}>{u.name || '—'}</div>
-                      <div style={{ fontSize: '12px', color: colors.textSecondary }}>{u.email}</div>
+                      <div style={{ fontSize: '12px', color: colors.textSecondary }}>{u.email}{u.active === false ? ' · Suspendido' : ' · Activo'}</div>
                     </div>
                   </div>
 
@@ -275,9 +275,9 @@ export default function UsersPanel() {
 
                   {/* Eliminar */}
                   {!isOwner ? (
-                    <button onClick={() => handleDelete(u.id, u.email)} disabled={deletingId === u.id} title="Eliminar usuario"
+                    <button onClick={() => handleStatus(u)} disabled={deletingId === u.id} title={u.active === false ? 'Reactivar usuario' : 'Suspender usuario'}
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: deletingId === u.id ? colors.textSecondary : colors.danger, padding: '4px', borderRadius: '6px', opacity: deletingId === u.id ? 0.5 : 1 }}>
-                      <Trash2 size={15} />
+                      {deletingId === u.id ? 'Guardando…' : u.active === false ? 'Reactivar' : 'Suspender'}
                     </button>
                   ) : <div style={{ width: '22px' }} />}
                 </div>

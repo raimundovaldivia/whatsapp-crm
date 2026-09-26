@@ -4,6 +4,16 @@ const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { load, handler, response, noop } = require('./helpers.cjs');
 const authStub = { requireAuth:noop, requireRole:()=>noop };
+test('suspended users cannot reuse tokens or regain WhatsApp access through the alert phone',async()=>{
+ const user={id:9,organization_id:2,role:'admin',active:true,auth_version:0};
+ const auth=load('src/middleware/auth.js',{'../db/database':{getUserById:async()=>user}});
+ const token=auth.generateToken(user);user.active=false;
+ await assert.rejects(()=>auth.authenticateToken(token));
+ const identity=load('src/services/staff-identity.js',{'../db/database':{
+   normalizePhone:p=>p,getPool:()=>({query:async()=>({rows:[user]})}),getSetting:async()=>{throw Error('Must not use fallback');}
+ }});
+ const actor=await identity.resolve(2,'123');assert.equal(actor.role,'suspended');assert.equal(identity.canAttend(actor),false);
+});
 
 test('JWT requires a configured strong secret',()=>{
   assert.throws(()=>load('src/middleware/auth.js',{}, {process:{env:{}}}), /JWT_SECRET/);

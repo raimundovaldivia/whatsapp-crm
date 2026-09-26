@@ -577,6 +577,8 @@ async function setupDatabase() {
       ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS extracted_reference TEXT;
       ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS ai_confidence       TEXT;
       ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS amount_matches      BOOLEAN;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS image_sha256        TEXT;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS extracted_currency  TEXT;
 
       -- Migración: status pre_verified para comprobantes auto-validados
       DO $$
@@ -935,6 +937,8 @@ async function setupDatabase() {
         ON delivery_expenses(organization_id, driver_user_id, client_request_id);
     `);
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'members.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'admin-handoff.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

@@ -19,8 +19,11 @@ import { adminAlertsAPI } from '../utils/api.js';
 
 const POLL_MS = 60000; // refrescar cada minuto
 const AMBER   = '#f59e0b';
+const DELIVERY_LABELS = { sending: 'Enviando; sin confirmación', accepted: 'Aceptado; entrega sin confirmar',
+  sent: 'Enviado; entrega sin confirmar', delivered: 'Entregado', read: 'Leído',
+  queued: 'En cola por ventana cerrada', failed: 'Falló el aviso' };
 
-export default function AdminAlertsBanner() {
+export default function AdminAlertsBanner({ onOpenConversation }) {
   const { colors } = useTheme();
   const [data,     setData]     = useState(null);   // { count, windowOpen, alerts, adminConfigured }
   const [expanded, setExpanded] = useState(false);
@@ -41,7 +44,7 @@ export default function AdminAlertsBanner() {
   }, [load]);
 
   // Nada en cola → no mostrar nada
-  if (!data || !data.count) return null;
+  if (!data || (!data.count && !data.deliveries?.length && !data.attention?.length)) return null;
 
   const flush = async () => {
     setFlushing(true); setMsg(null);
@@ -74,9 +77,9 @@ export default function AdminAlertsBanner() {
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 14px' }}>
         <AlertTriangle size={18} color={AMBER} style={{ flexShrink: 0, marginTop: '1px' }} />
         <div style={{ flex: 1, minWidth: 0, color: '#fde68a', fontSize: '13px', lineHeight: 1.45 }}>
-          <strong>{data.count} aviso{data.count === 1 ? '' : 's'} al admin en espera</strong>
+          <strong>{data.attention?.length ? `${data.attention.length} chat(s) pendientes de respuesta` : data.count ? `${data.count} aviso(s) al encargado en espera` : 'Avisos al encargado'}</strong>
           <div style={{ fontSize: '12px', marginTop: '2px', color: '#fcd9a0' }}>
-            {data.windowOpen
+            {!data.count ? 'Verifica si los avisos fueron entregados o siguen sin confirmación.' : data.windowOpen
               ? 'El canal está abierto — puedes reenviarlos ahora.'
               : 'El canal de WhatsApp del admin está cerrado; llegan solos cuando el admin escriba al número del negocio.'}
           </div>
@@ -90,7 +93,7 @@ export default function AdminAlertsBanner() {
 
       {/* Acciones */}
       <div style={{ display: 'flex', gap: '8px', padding: '0 14px 12px' }}>
-        {data.windowOpen && (
+        {data.windowOpen && data.count > 0 && (
           <button onClick={flush} disabled={flushing}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flex: 1,
               backgroundColor: AMBER, color: '#1c1206', border: 'none', borderRadius: '8px', padding: '8px',
@@ -121,6 +124,24 @@ export default function AdminAlertsBanner() {
               ⚠️ No hay número de admin configurado en Ajustes → los avisos no tienen a quién llegar.
             </div>
           )}
+          {(data.attention || []).map(c => (
+            <button key={`attention-${c.id}`} onClick={() => onOpenConversation?.(c.id)}
+              style={{ textAlign: 'left', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', background: colors.bgPanel, color: colors.textPrimary, cursor: 'pointer' }}>
+              <strong>{c.contact_name || c.phone_number} · #{c.id}</strong>
+              <div>{c.admin_phone ? `Encargado: +${c.admin_phone}` : 'Sin encargado · Atención del administrador'}</div>
+              <div style={{color: colors.textMuted}}>{(c.preview || '[Archivo recibido]').slice(0,120)}</div>
+              <div style={{color: colors.textMuted}}>Pendiente desde {new Date(c.pending_since).toLocaleString('es-CL')}</div>
+              <span>Abrir conversación</span>
+            </button>
+          ))}
+          {(data.deliveries || []).map(d => (
+            <div key={`delivery-${d.id}`} style={{ color: colors.textPrimary, fontSize: '12px', padding: '8px 0', borderBottom: `1px solid ${colors.border}` }}>
+              <strong>{d.client_name}{d.conversation_id ? ` (#${d.conversation_id})` : ''}</strong>
+              <div>{DELIVERY_LABELS[d.status] || 'Sin confirmación'}</div>
+              <div style={{ color: colors.textMuted }}>{new Date(d.created_at).toLocaleString('es-CL')}</div>
+              {d.status === 'failed' && <div style={{ color: '#fca5a5' }}>Revisa la configuración y el registro del aviso.</div>}
+            </div>
+          ))}
           {data.alerts.map(a => (
             <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px',
               backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '8px 10px' }}>

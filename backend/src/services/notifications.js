@@ -24,11 +24,7 @@ const { notifyAdmin } = require('./admin-notify');
  */
 async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente solicitó asistencia') {
   try {
-    const adminPhone = await db.getSetting(orgId, 'admin_alert_phone');
-    if (!adminPhone) return;
-
     const wc = await db.getWhatsappConfig(orgId);
-    if (!wc || wc.provider !== 'kapso') return;
 
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
@@ -62,9 +58,9 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
       `📋 *Motivo:* ${reason}`,
       contextStr,
       '',
-      '👆 *Respóndeme aquí y envío tu mensaje al cliente directamente.*',
+      `Escribe *TOMAR ${conversation.id}* para atender a este cliente.`,
       '',
-      '_Si hay varios clientes esperando, se responde el más reciente primero._',
+      'La asignación se mantiene hasta que escribas CERRAR o BOT.',
     ].filter(Boolean).join('\n');
 
     // Va por notifyAdmin: si tu ventana de 24h está cerrada, queda en cola y se
@@ -148,8 +144,7 @@ async function notifyAgentsPayment(orgId, clientName, clientPhone, amount) {
 
 /**
  * Consulta silenciosa al admin: el bot no sabe cómo responder y le pide guía.
- * El admin responde con el texto a enviar (bot lo manda como si fuera él),
- * o escribe "TOMAR" para tomar el control directamente.
+ * El admin escribe "TOMAR <id>" y conserva la conversación hasta CERRAR o BOT.
  *
  * @param {number} orgId
  * @param {object} conversation     - objeto conversación (id, contact_name, phone_number)
@@ -158,11 +153,7 @@ async function notifyAgentsPayment(orgId, clientName, clientPhone, amount) {
  */
 async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
   try {
-    const adminPhone = await db.getSetting(orgId, 'admin_alert_phone');
-    if (!adminPhone) return;
-
     const wc = await db.getWhatsappConfig(orgId);
-    if (!wc || wc.provider !== 'kapso') return;
 
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
@@ -198,14 +189,14 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
       '',
       botWasGoingToSay ? `💬 _El bot iba a decir: "${botWasGoingToSay.slice(0, 120)}..."_` : '',
       '',
-      '👆 *Respondé aquí* → lo envío como bot (el cliente no sabe que sos vos).',
-      '📲 Escribí *TOMAR* → te paso el control para que lo atiendas directamente.',
+      `Escribe *TOMAR ${conversation.id}* para atender a este cliente.`,
+      'Luego puedes consultarme sobre el cliente o pedirme que prepare una respuesta. CERRAR termina la atención; BOT la devuelve al bot.',
     ].filter(Boolean).join('\n');
 
     // Va por notifyAdmin: si la ventana está cerrada, la consulta queda en cola
     // (deduplicada por conversación) y llega cuando el admin reabra el canal.
     const r = await notifyAdmin(orgId, { body: msg, kind: 'help', conversationId: conversation.id, wc });
-    console.log(`[Notifications] ❓ Admin consultado — conv #${conversation.id} (${r.sent ? 'entregado' : r.queued ? 'en cola' : r.reason})`);
+    console.log(`[Notifications] ❓ Admin consultado — conv #${conversation.id} (${r.sent ? 'aceptado, entrega sin confirmar' : r.queued ? 'en cola' : r.reason})`);
   } catch (err) {
     console.warn('[Notifications] notifyAdminHelp error:', err.message);
   }

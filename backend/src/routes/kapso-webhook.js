@@ -17,13 +17,15 @@ const db             = require('../db/database');
 const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
 const { notifyAdminHandoff, notifyAdminHelp, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
-const secretary = require('../services/admin-secretary');
+const adminRelay = require('../services/admin-relay');
+const adminAssignment = require('../services/admin-assignment');
+const delivery = require('../services/admin-delivery');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
 const mediaCache                = require('../services/media-cache');
-const { handleAgentCommand }    = require('../services/agent-commands');
+const staffIdentity = require('../services/staff-identity');
 const guardrail                 = require('../services/response-guardrail');
-const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
+const { notifyAdmin, markAdminWindowOpen, drainAdminOutbox } = require('../services/admin-notify');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -74,6 +76,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   const statusUpdate = kapsoService.parseStatusUpdate(body, event);
   if (statusUpdate) {
     const updated = await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status, statusUpdate.error, org.id);
+    await delivery.receipt(org.id, statusUpdate);
     if (updated) io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, { ...statusUpdate, error: updated.delivery_error });
     return;
   }
@@ -93,28 +96,23 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   // cierre se mide por persona y sus respuestas por WhatsApp siguen entregándose.
   if (parsed.from) db.touchUserWaWindow(org.id, parsed.from).catch(() => {});
 
-  // ── Admin relay: si el mensaje viene del teléfono del admin → enrutar al cliente ──
-  const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
-  if (adminPhone && parsed.from && db.normalizePhone(parsed.from) === db.normalizePhone(adminPhone)) {
-    // El admin escribió → su ventana de 24h se reabre. Registrarlo y entregar
-    // las alertas que quedaron en cola mientras el canal estaba cerrado.
-    markAdminWindowOpen(org.id, whatsappConfig).catch(e =>
-      console.warn('[KapsoWebhook] drenado de cola admin falló:', e.message));
-    await handleAdminReply(org, whatsappConfig, parsed);
+  // Registered staff always converse privately with the secretary, without a # prefix.
+  const staff = await staffIdentity.resolve(org.id, parsed.from);
+  if (staff) {
+    if (staffIdentity.canAttend(staff)) {
+      const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
+      if (adminPhone && db.normalizePhone(adminPhone) === db.normalizePhone(parsed.from)) {
+        await markAdminWindowOpen(org.id, whatsappConfig);
+      } else {
+        await drainAdminOutbox(org.id, whatsappConfig, parsed.from);
+      }
+    }
+    await require('../services/staff-secretary').handle(org, whatsappConfig, parsed, io);
     return;
   }
 
-  // ── Agente registrado: solo si el mensaje empieza con "#" → procesar como comando ──
-  // Mensajes sin "#" van al flujo normal (el agente puede chatear con el bot o aparecer como conversación)
-  if (parsed.from && parsed.type === 'text' && parsed.text && parsed.text.trimStart().startsWith('#')) {
-    const agent = await db.getUserByWhatsappPhone(org.id, parsed.from).catch(() => null);
-    if (agent) {
-      const commandText = parsed.text.trimStart().slice(1).trim(); // quitar el "#"
-      console.log(`[KapsoWebhook] 🤖 Comando de agente ${agent.name || agent.email}: "${commandText.slice(0, 80)}"`);
-      await handleAgentCommand(org, whatsappConfig, agent, commandText);
-      return;
-    }
-  }
+  // An assigned conversation bypasses every automated reply, including media/payment flows.
+  if (await adminRelay.receive(org, whatsappConfig, parsed, io)) return;
 
   // ── Imagen o documento-imagen entrante → posible comprobante de pago ────
   // WhatsApp puede enviar imágenes como type:'image' o type:'document' (PNG/JPG como archivo)
@@ -228,28 +226,10 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     // 3b. Notificar a agentes con new_messages habilitado (sin await para no bloquear)
     notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
 
-    // 4. Si está en modo humano/pendiente, verificar si corresponde auto-reset.
-    //    Referencia = lo MÁS RECIENTE entre la última respuesta humana y la
-    //    última escalación del bot. Antes, si ningún humano respondía nunca,
-    //    la conversación quedaba muda para siempre; ahora vuelve al bot a las
-    //    24 h de la escalación. Un takeover manual desde el CRM (sin
-    //    escalación ni respuesta) sigue esperando al humano, como antes.
+    // Manual attention never expires back to AI. Notify even after an old/closed case.
     if (updatedConv.agent_mode !== 'ai') {
-      const AUTO_RESET_MINUTES = 1440;
-      const humanMins = await db.minutesSinceLastHumanReply(conversation.id);
-      const escMins   = updatedConv.last_escalation_at
-        ? (Date.now() - new Date(updatedConv.last_escalation_at).getTime()) / 60000
-        : Infinity;
-      const refMins = Math.min(humanMins, escMins);
-      if (!isFinite(refMins) || refMins < AUTO_RESET_MINUTES) return;
-      // Auto-reset a modo IA y SEGUIR procesando este mensaje (antes se descartaba)
-      await db.setAgentMode(conversation.id, 'ai');
-      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
-      if (typeof db.clearLastEscalation === 'function') {
-        await db.clearLastEscalation(conversation.id).catch(() => {});
-      }
-      await db.updatePipelineState(conversation.id, 'exploring', {}).catch(() => {});
-      console.log(`[KapsoWebhook] 🔁 Conv ${conversation.id} vuelve a IA tras ${Math.round(refMins / 60)}h sin atención humana`);
+      await require('../services/human-attention').incoming(org.id, updatedConv, parsed.text);
+      return;
     }
 
     // 5. Debounce: esperar 3s desde el ÚLTIMO mensaje antes de ejecutar pipeline.
@@ -259,6 +239,8 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     const capturedConvId = conversation.id;
 
     schedulePipeline(org.id, capturedConvId, async () => {
+      const current = await db.getConversationById(capturedConvId);
+      if (!current || current.agent_mode !== 'ai') return;
       const log = createBotLogger(org.name, capturedFrom);
       // Leer de la DB los mensajes del cliente que llegaron seguidos (pueden ser
       // varios durante el debounce: "Buenas tardes" + "¿Mañana reparten?").
@@ -291,6 +273,8 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
 
         if (result.skipped) { log.done(); return; }
+        const activeAssignment = await adminAssignment.forConversation(org.id, capturedConvId);
+        if (activeAssignment?.conversation_id === capturedConvId) { log.done(); return; }
         if (result.duplicate) {
           log.step('duplicate', 'pedido ya creado por otro proceso — respuesta silenciada');
           log.done();
@@ -472,133 +456,6 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
  * Maneja respuestas del admin desde su WhatsApp personal.
  * Cuando el admin responde, su mensaje se reenvía al cliente pendiente más reciente.
  */
-async function handleAdminReply(org, whatsappConfig, parsed) {
-  if (!await require('../services/commercial').permitted(org.id,'sales_ai')) return;
-  if (!parsed.text) return;
-
-  try {
-    // Buscar pendiente activo para esta org
-    const pending = await db.getLatestPendingAdminReply(org.id);
-
-    // Verificar si hay sesión de secretaria activa aunque no haya pendiente nuevo
-    const hasActiveSession = !!secretary.getSession(org.id);
-
-    if (!pending && !hasActiveSession) {
-      await kapsoService.sendTextMessage(
-        parsed.from,
-        'ℹ️ No hay clientes esperando respuesta en este momento.',
-        whatsappConfig
-      ).catch(() => {});
-      return;
-    }
-
-    console.log(`[AdminRelay] 📨 Admin escribe — conv #${pending?.conversation_id || 'sesión activa'}`);
-
-    // ── Procesar con la secretaria (IA conversacional) ────────────────
-    const result = await secretary.processAdminMessage(org.id, parsed.text, pending);
-
-    if (!result) {
-      await kapsoService.sendTextMessage(parsed.from, 'ℹ️ Sin conversación activa.', whatsappConfig).catch(() => {});
-      return;
-    }
-
-    const { type, adminMessage, customerMessage, session } = result;
-
-    // ── TAKEOVER: admin quiere atender directamente ───────────────────
-    if (type === 'takeover') {
-      const handoffMsg = 'En un momento alguien del equipo te escribe directamente 🙏';
-      const sentHandoff = await kapsoService.sendTextMessage(session.customerPhone, handoffMsg, whatsappConfig).catch(() => null);
-      if (sentHandoff) {
-        const hMsg = await db.saveMessage({
-          conversationId:    session.convId,
-          whatsappMessageId: sentHandoff?.messages?.[0]?.id || null,
-          direction:         'outbound',
-          content:           handoffMsg,
-          sentBy:            'ai',
-          status:            'sent',
-        });
-        await db.updateConversationLastMessage(session.convId, handoffMsg);
-        const hConv = await db.getConversationById(session.convId);
-        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: hMsg, conversation: hConv });
-      }
-      // Mantener human mode — el admin atiende desde acá o el CRM
-      if (pending) await db.markAdminReplyHandled(pending.id);
-      secretary.closeSession(org.id);
-
-      await kapsoService.sendTextMessage(
-        parsed.from,
-        `${adminMessage}\n\nRespondé aquí para escribirle a *${session.customerName}*, o atiéndelo desde el CRM.`,
-        whatsappConfig
-      ).catch(() => {});
-      return;
-    }
-
-    // ── ANSWER: el admin preguntó algo sobre el cliente — solo responderle a él ──
-    if (type === 'answer') {
-      await kapsoService.sendTextMessage(parsed.from, adminMessage, whatsappConfig).catch(() => {});
-      // La sesión sigue abierta — el admin continúa la conversación
-      return;
-    }
-
-    // ── SEND: enviar al cliente el mensaje generado ───────────────────
-    const sentMsg = await kapsoService.sendTextMessage(session.customerPhone, customerMessage, whatsappConfig);
-
-    const outMsg = await db.saveMessage({
-      conversationId:    session.convId,
-      whatsappMessageId: sentMsg?.messages?.[0]?.id || null,
-      direction:         'outbound',
-      content:           customerMessage,
-      // 'human': lo dictó el admin. Además es lo que mira minutesSinceLastHumanReply()
-      // para el auto-reset de 24h — si se guardara como 'ai', la conversación
-      // quedaría en modo humano para siempre.
-      sentBy:            'human',
-      agentType:         'human_guided',
-      status:            'sent',
-    });
-    await db.updateConversationLastMessage(session.convId, customerMessage);
-
-    // Mantener modo humano: el admin está conversando él mismo con el cliente.
-    // El auto-reset de 24h (paso 4 del webhook) devuelve el hilo al bot cuando
-    // pasan 24h sin respuesta humana. Antes acá se reseteaba a 'ai' de inmediato
-    // y el bot contestaba encima del admin, con información desactualizada.
-    await db.setAgentMode(session.convId, 'human');
-    io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'human' });
-    if (pending) await db.markAdminReplyHandled(pending.id);
-    secretary.closeSession(org.id);
-
-    const finalConv = await db.getConversationById(session.convId);
-    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
-
-    // Confirmar al admin qué se mandó
-    const preview = customerMessage.slice(0, 100);
-    await kapsoService.sendTextMessage(
-      parsed.from,
-      `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nEl hilo con *${session.customerName}* queda en modo humano — el bot no responde hasta que pasen 24h sin respuesta tuya, o lo devuelvas a IA desde el CRM.`,
-      whatsappConfig
-    ).catch(() => {});
-
-    // Avisar si hay otro cliente esperando
-    const nextPending = await db.getLatestPendingAdminReply(org.id);
-    if (nextPending) {
-      const nextConv = await db.getConversationById(nextPending.conversation_id).catch(() => null);
-      const nextName = nextConv?.contact_name || nextPending.customer_phone;
-      await kapsoService.sendTextMessage(
-        parsed.from,
-        `📨 Hay otro cliente esperando: *${nextName}*\n"${nextPending.context || '(sin contexto)'}"\n\nRespondé cuando quieras.`,
-        whatsappConfig
-      ).catch(() => {});
-    }
-
-  } catch (err) {
-    console.error('[AdminRelay] Error:', err.message);
-    throw err;
-  }
-}
-
-/**
- * Maneja una imagen entrante como posible comprobante de pago.
- * Guarda el comprobante, responde al cliente y notifica al admin.
- */
 async function handlePaymentProof(org, whatsappConfig, parsed) {
   try {
     const commercial = require('../services/commercial');
@@ -749,27 +606,35 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     });
 
     // ── 4. Elegir el pedido al que corresponde el comprobante ─────────
-    // Candidatos: pedidos ENTREGADOS por transferencia sin comprobante (se
-    // les mandó el cobro) primero, luego pedidos en curso. Si el monto de la
-    // captura calza con alguno, ese gana; si no, el de mayor prioridad.
+    // Match against the remaining documented balance. Ambiguous orders need review.
     const candidates = await db.getOrdersAwaitingPayment(conversation.id).catch(() => []);
-    const toNum = v => parseFloat(String(v ?? '').replace(/[^0-9.]/g, ''));
-    const paidAmt = analysis.amount ? toNum(analysis.amount) : NaN;
+    const { positiveAmount, getOrderProofBalance, balanceText } = require('../services/payment-proof-balance');
+    const balances = new Map();
+    for (const candidate of candidates) {
+      balances.set(candidate.id, await getOrderProofBalance(org.id, candidate.id, candidate.total_price));
+    }
+    const paidCents = positiveAmount(analysis.amount);
+    const paidAmt = paidCents === null ? NaN : paidCents / 100;
     let pendingOrder = null;
     if (!isNaN(paidAmt)) {
-      pendingOrder = candidates.find(o => Math.abs(toNum(o.total_price) - paidAmt) <= 1) || null;
+      const matching = candidates.filter(o => balances.get(o.id).remaining > 0
+        && Math.abs(balances.get(o.id).remaining - paidAmt) <= 1);
+      if (matching.length === 1) pendingOrder = matching[0];
     }
-    if (!pendingOrder) pendingOrder = candidates[0] || null;
+    if (!pendingOrder && candidates.length === 1) pendingOrder = candidates[0];
     const wasDelivered = !!pendingOrder && pendingOrder.status === 'entregado';
 
     let amountMatches  = null;
     let proofStatus    = 'pending';
 
     if (!isNaN(paidAmt) && pendingOrder?.total_price) {
-      const orderAmt = toNum(pendingOrder.total_price);
+      const orderAmt = Number(pendingOrder.total_price);
       if (!isNaN(orderAmt)) {
-        amountMatches = Math.abs(orderAmt - paidAmt) <= 1; // tolerancia $1
-        proofStatus   = amountMatches ? 'pre_verified' : 'pending';
+        // A partial payment is pending coverage, not an amount discrepancy.
+        amountMatches = Math.abs(orderAmt - paidAmt) <= 1 ? true : paidAmt > orderAmt ? false : null;
+        // Cumulative receipts remain pending bank review; matching an image is not settlement.
+        proofStatus = amountMatches && !balances.get(pendingOrder.id).count
+          && analysis.confidence === 'high' && analysis.currency === 'CLP' ? 'pre_verified' : 'pending';
         console.log(`[KapsoWebhook] 💰 Pedido #${pendingOrder.id} (${pendingOrder.status}) $${orderAmt} | Pagado: $${paidAmt} | Match: ${amountMatches}`);
       }
     }
@@ -783,44 +648,35 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       customerPhone:      parsed.from,
       customerName:       conversation.contact_name || parsed.contactName,
       orderSummary:       pendingOrder ? `${pendingOrder.customer_name || ''} — $${pendingOrder.total_price || '?'}` : null,
-      extractedAmount:    analysis.amount    || null,
+      extractedAmount:    Number.isFinite(paidAmt) ? paidAmt : null,
       extractedDate:      analysis.date      || null,
       extractedBank:      analysis.bank      || null,
       extractedReference: analysis.reference || null,
       aiConfidence:       analysis.confidence || null,
       amountMatches,
       status:             proofStatus,
+      imageSha256:        data ? require('crypto').createHash('sha256').update(Buffer.from(data)).digest('hex') : null,
+      extractedCurrency:  typeof analysis.currency === 'string' ? analysis.currency.trim().toUpperCase() : null,
     });
+
+    const balance = pendingOrder
+      ? await getOrderProofBalance(org.id, pendingOrder.id, pendingOrder.total_price) : null;
 
     // Actualizar estado del pedido. Un pedido YA ENTREGADO no retrocede a
     // "pago recibido": se queda en entregado y el comprobante pre_verified lo
     // saca de "Por cobrar" (la conciliación con la cartola lo pasa a pagado).
-    if (pendingOrder && !wasDelivered) {
+    if (pendingOrder && !wasDelivered && proofStatus === 'pre_verified') {
       await db.updateOrder(pendingOrder.id, { status: 'payment_received' }).catch(() => {});
     }
 
     // ── 6. Responder al cliente ──────────────────────────────────────
     const firstName = (conversation.contact_name || parsed.contactName || '').trim().split(/\s+/)[0] || '';
     const hi = firstName ? ` ${firstName}` : '';
-    const amountTxt = analysis.amount ? `$${Number(analysis.amount).toLocaleString('es-CL')}` : '';
     let reply;
-    if (wasDelivered) {
-      // Cobranza post-entrega: el pedido ya está en manos del cliente. Nada de
-      // "pronto despacharemos" — solo dar por recibido el pago.
-      const ref = `tu pedido #${pendingOrder.id}`;
-      if (amountMatches === true) {
-        reply = `✅ ¡Comprobante recibido${hi}! El pago de ${amountTxt} por ${ref} quedó registrado. ¡Muchas gracias! 🙌`;
-      } else if (amountMatches === false) {
-        reply = `✅ Recibimos tu comprobante${hi}. El monto (${amountTxt}) no coincide con ${ref} ($${Number(pendingOrder.total_price).toLocaleString('es-CL')}), así que el equipo lo revisa y te confirma por acá 🔍`;
-      } else {
-        reply = `✅ ¡Recibimos tu comprobante${hi}! Lo dejamos registrado para ${ref} y te confirmamos en cuanto lo verifiquemos. ¡Gracias! 🙌`;
-      }
-    } else if (amountMatches === true) {
-      reply = `✅ ¡Comprobante recibido y verificado automáticamente! Tu pago de ${amountTxt} fue confirmado. Pronto despacharemos tu pedido 🚀`;
-    } else if (amountMatches === false) {
-      reply = `✅ Recibimos tu comprobante. Nuestro equipo lo revisará porque detectamos una diferencia en el monto — te confirmaremos pronto 🔍`;
+    if (balance) {
+      reply = `✅ Comprobante recibido${hi} para tu pedido #${pendingOrder.id}. ${balanceText(balance)}`;
     } else {
-      reply = `✅ ¡Recibimos tu comprobante de pago! Lo verificaremos a la brevedad y te avisaremos cuando tu pedido esté listo para despacho 🚀`;
+      reply = `✅ Recibimos tu comprobante${hi}. El equipo revisará a qué pedido corresponde y te confirmará por aquí.`;
     }
 
     const sentMsg = await kapsoService.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
@@ -838,9 +694,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         : '\n📦 *Pedido:* no encontré uno pendiente para este cliente';
       const amountLine  = analysis.amount  ? `\n💵 *Monto pagado:* $${analysis.amount?.toLocaleString('es-CL')} ${analysis.currency || ''}` : '';
       const bankLine    = analysis.bank    ? `\n🏦 *Banco:* ${analysis.bank}` : '';
-      const matchLine   = amountMatches === true  ? '\n✅ *Monto coincide — pre-verificado*'
-                        : amountMatches === false ? '\n⚠️ *Monto NO coincide — revisar manualmente*'
-                        : '';
+      const matchLine = balance ? `\n📊 ${balanceText(balance)}` : '\nPedido por identificar.';
       const adminMsg = `📸 *Comprobante de pago recibido*\n\n👤 *Cliente:* ${clientName} (${parsed.from})${orderLine}${amountLine}${bankLine}${matchLine}\n\nRevísalo en el CRM → Pagos.`;
       notifyAdmin(org.id, { body: adminMsg, kind: 'payment', conversationId: conversation.id })
         .catch(() => {});

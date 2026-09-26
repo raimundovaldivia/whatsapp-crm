@@ -49,6 +49,11 @@ router.get('/', async (req, res) => {
       if (!convSet.has(key)) { convSet.add(key); uniqueCount++; }
     }
 
+    const { rows: deliveries } = await pool.query(`SELECT d.id, d.conversation_id, d.kind,
+      d.status, d.error, d.created_at, d.delivered_at, d.read_at,
+      COALESCE(c.contact_name,c.phone_number,'Cliente') AS client_name
+      FROM admin_notification_deliveries d LEFT JOIN conversations c ON c.id=d.conversation_id
+      WHERE d.organization_id=$1 ORDER BY d.created_at DESC LIMIT 30`, [req.orgId]);
     res.json({
       success: true,
       windowOpen,
@@ -65,10 +70,22 @@ router.get('/', async (req, res) => {
         preview:      (r.body || '').slice(0, 200),
         createdAt:    r.created_at,
       })),
+      deliveries,
+      attention: await require('../services/human-attention').pending(req.orgId),
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// Send a fixed diagnostic only to the saved administrator phone.
+router.post('/test', async (req,res) => {
+  try {
+    const result=await require('../services/admin-notify').notifyAdmin(req.orgId,{
+      kind:'test', body:'✅ Prueba de avisos del CRM. Este es el número configurado para recibir las consultas que necesitan atención humana. No es un mensaje de un cliente.'
+    });
+    res.json({success:true,...result});
+  } catch(error) { res.status(500).json({success:false,error:'No se pudo registrar el aviso de prueba'}); }
 });
 
 // ── POST /api/admin-alerts/flush ─────────────────────────────────────

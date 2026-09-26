@@ -41,6 +41,7 @@ router.get('/', async (req, res) => {
       payment_mode:           (await db.getSetting(req.orgId, 'payment_mode')) || 'link',
       payment_info:           (await db.getSetting(req.orgId, 'payment_info')) || '',
       admin_alert_phone:           (await db.getSetting(req.orgId, 'admin_alert_phone')) || '',
+      human_attention_hours:      JSON.parse(await db.getSetting(req.orgId, 'human_attention_hours') || 'null'),
       scheduled_dispatch_template: (await db.getSetting(req.orgId, 'scheduled_dispatch_template')) || '',
       driver_sell_enabled:         (await db.getSetting(req.orgId, 'driver_sell_enabled')) === 'true',
       bot_improvement_rules,
@@ -56,6 +57,12 @@ router.get('/', async (req, res) => {
  */
 router.put('/', async (req, res) => {
   try {
+    const hours = req.body.human_attention_hours;
+    if (hours !== undefined && hours !== null) {
+      if (!Array.isArray(hours.days) || !hours.days.length || hours.days.some(d => !Number.isInteger(d) || d<0 || d>6)
+        || !Number.isInteger(hours.start) || !Number.isInteger(hours.end) || hours.start<0 || hours.end>24 || hours.start>=hours.end
+        || hours.timezone !== 'America/Santiago') return res.status(400).json({error:'Horario de atención inválido'});
+    }
     const { ai_enabled_global, ai_system_prompt_extra, payment_mode, payment_info, admin_alert_phone, bot_improvement_rules, scheduled_dispatch_template, driver_sell_enabled } = req.body;
     if (ai_enabled_global !== undefined)
       await db.setSetting(req.orgId, 'ai_enabled_global', ai_enabled_global ? 'true' : 'false');
@@ -73,6 +80,7 @@ router.put('/', async (req, res) => {
       await db.setSetting(req.orgId, 'scheduled_dispatch_template', scheduled_dispatch_template.trim());
     if (driver_sell_enabled !== undefined)
       await db.setSetting(req.orgId, 'driver_sell_enabled', driver_sell_enabled ? 'true' : 'false');
+    if (hours !== undefined) await db.setSetting(req.orgId,'human_attention_hours',JSON.stringify(hours));
 
     res.json({ success: true });
   } catch (err) {

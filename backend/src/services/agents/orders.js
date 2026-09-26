@@ -171,7 +171,7 @@ Solo el JSON, nada más.`;
 
     // Compatibilidad: si el modelo devolvió el formato viejo, convertirlo
     if (!Array.isArray(extracted.items) && extracted.product_name) {
-      extracted.items = [{ product_name: extracted.product_name, quantity: parseInt(extracted.quantity, 10) || 1 }];
+      extracted.items = [{ product_name: extracted.product_name, quantity: extracted.quantity == null ? 1 : Number(extracted.quantity) }];
     }
     delete extracted.product_name; delete extracted.quantity; delete extracted.price;
 
@@ -183,7 +183,7 @@ Solo el JSON, nada más.`;
       if (key === 'items') {
         const clean = value
           .filter(it => it && (it.product_name || it.name))
-          .map(it => ({ product_name: it.product_name || it.name, quantity: Math.max(1, parseInt(it.quantity, 10) || 1) }));
+          .map(it => ({ product_name: it.product_name || it.name, quantity: it.quantity == null ? 1 : Number(it.quantity) }));
         if (clean.length) merged.items = clean;
         continue;
       }
@@ -203,32 +203,13 @@ Solo el JSON, nada más.`;
 
 /**
  * Verifica si el cliente confirmó la orden.
- * IMPORTANTE: Solo confiamos en ORDEN_CONFIRMADA del agente.
- * La comprobación del mensaje del cliente es un fallback defensivo
- * que solo aplica si ya tenemos TODOS los datos (resumen ya fue mostrado).
+ * Solo una respuesta explícita del cliente puede confirmar.
+ * El pipeline comprueba además que ya se mostró el mismo resumen valorizado.
  */
-function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
-  // El agente emite la señal interna → confianza total
-  if (agentResponse.includes('ORDEN_CONFIRMADA')) return true;
-
-  // Fallback: el cliente confirma Y ya tenemos todos los datos (el resumen ya fue mostrado)
-  if (hasRequiredData(orderDraft)) {
-    const confirmWords = ['sí', 'si', 'yes', 'confirmo', 'correcto', 'adelante', 'procede', 'dale', 'listo', 'ok', 'okey', 'oka', 'vamo', 'vamos', '👍'];
-    const lowerMsg = userMessage.toLowerCase().trim();
-    const isShortConfirmation = lowerMsg.length <= 20;
-    if (isShortConfirmation && confirmWords.some(w => lowerMsg === w || lowerMsg.startsWith(w) || lowerMsg === w + '!' || lowerMsg === w + '.')) {
-      return true;
-    }
-
-    const paymentPhrases = ['listo el pago', 'ya pagué', 'ya pague', 'hice la transferencia',
-      'hice el pago', 'ya transferí', 'ya transferi', 'transferido', 'pago realizado',
-      'ya deposité', 'ya deposite', 'acabo de pagar', 'listo pagué', 'listo pague'];
-    if (paymentPhrases.some(p => lowerMsg.includes(p))) {
-      return true;
-    }
-  }
-
-  return false;
+function isOrderConfirmed(_agentResponse, userMessage, orderDraft = {}) {
+  if (!hasRequiredData(orderDraft)) return false;
+  const message = String(userMessage || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[!.¡\s]+$/g,'');
+  return /^(si|yes|confirmo|confirmar|confirmo el pedido|si confirmo|correcto|adelante|procede|dale|listo|ok|okey|oka|vamos|👍)$/.test(message);
 }
 
 /**

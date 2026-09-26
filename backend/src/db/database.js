@@ -53,14 +53,14 @@ async function getUserByEmail(email) {
 
 async function getUserById(id) {
   return queryOne(
-    'SELECT id, organization_id, email, name, role, auth_version FROM users WHERE id = $1',
+    'SELECT id, organization_id, email, name, role, auth_version, active FROM users WHERE id = $1',
     [id]
   );
 }
 
 async function listOrgUsers(orgId) {
   return query(
-    `SELECT id, email, name, role, whatsapp_phone, wa_notifications, created_at
+    `SELECT id, email, name, role, active, whatsapp_phone, wa_notifications, created_at
      FROM users
      WHERE organization_id = $1
      ORDER BY created_at ASC`,
@@ -74,18 +74,28 @@ async function getUserByWhatsappPhone(orgId, phone) {
     `SELECT id, organization_id, email, name, role, whatsapp_phone, wa_notifications
      FROM users
      WHERE organization_id = $1
-       AND (whatsapp_phone = $2 OR whatsapp_phone = $3)`,
+       AND active = TRUE AND (whatsapp_phone = $2 OR whatsapp_phone = $3)`,
     [orgId, phone, normalized]
   );
   return result[0] || null;
 }
 
 async function updateUserWaPhone(userId, orgId, waPhone) {
-  return queryOne(
-    `UPDATE users SET whatsapp_phone = $1 WHERE id = $2 AND organization_id = $3 AND role <> 'owner'
-     RETURNING id, email, name, role, whatsapp_phone, wa_notifications`,
-    [waPhone || null, userId, orgId]
-  );
+  const phone = waPhone ? normalizePhone(waPhone) : null;
+  if (phone && !/^\d{7,15}$/.test(phone)) throw Object.assign(new Error('Teléfono inválido; incluye el código de país.'), {status:400});
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE', [orgId]);
+    if (phone) {
+      const duplicate = await client.query("SELECT id FROM users WHERE organization_id=$1 AND id<>$2 AND regexp_replace(whatsapp_phone,'[^0-9]','','g')=$3",[orgId,userId,phone]);
+      if (duplicate.rows.length) throw Object.assign(new Error('Este teléfono ya está asociado a otro usuario.'), {status:409});
+    }
+    const {rows} = await client.query(`UPDATE users SET whatsapp_phone=$1 WHERE id=$2 AND organization_id=$3 AND role<>'owner'
+      RETURNING id,email,name,role,whatsapp_phone,wa_notifications`,[phone,userId,orgId]);
+    await client.query('COMMIT'); return rows[0] || null;
+  } catch(error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 async function updateUserNotifications(userId, orgId, notifications) {
@@ -102,7 +112,7 @@ async function getAgentsWithNotification(orgId, notifKey) {
      FROM users
      WHERE organization_id = $1
        AND whatsapp_phone IS NOT NULL
-       AND whatsapp_phone <> ''
+       AND whatsapp_phone <> '' AND active = TRUE
        AND (wa_notifications->>'${notifKey}')::boolean = true`,
     [orgId]
   );
@@ -129,7 +139,7 @@ async function touchUserWaWindow(orgId, phone) {
 async function updateUserRole(userId, orgId, role) {
   return queryOne(
     `UPDATE users SET role = $1, auth_version = auth_version + 1
-     WHERE id = $2 AND organization_id = $3
+     WHERE id = $2 AND organization_id = $3 AND role <> 'owner'
      RETURNING id, email, name, role`,
     [role, userId, orgId]
   );
@@ -286,7 +296,7 @@ async function createDefaultAgents(orgId, dataSourceId) {
 //       "56961899016"  → "56961899016" (sin cambio)
 function normalizePhone(phoneNumber) {
   if (!phoneNumber) return '';
-  let phone = String(phoneNumber).replace(/^\+/, '').trim();
+  let phone = String(phoneNumber).replace(/[\s()+.-]/g, '');
   // Móvil chileno sin código de país: 9 dígitos empezando en 9
   if (/^9\d{8}$/.test(phone)) phone = '56' + phone;
   return phone;
@@ -489,10 +499,19 @@ async function markConversationAsRead(id) {
 }
 
 async function setAgentMode(id, mode) {
-  await pool.query(
-    'UPDATE conversations SET agent_mode = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-    [mode, id]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT id FROM organizations WHERE id=(SELECT organization_id FROM conversations WHERE id=$1) FOR UPDATE', [id]);
+    await client.query('UPDATE conversations SET agent_mode=$1, updated_at=CURRENT_TIMESTAMP WHERE id=$2', [mode,id]);
+    if (mode === 'ai') {
+      await client.query('DELETE FROM admin_assignments WHERE conversation_id=$1', [id]);
+      await client.query("UPDATE admin_pending_replies SET status='replied' WHERE conversation_id=$1 AND status='pending'", [id]);
+      await client.query("UPDATE admin_outbox SET status='expired' WHERE conversation_id=$1 AND kind IN ('help','handoff','reply') AND status='pending'", [id]);
+    }
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 async function updatePipelineState(id, state, orderDraft = null) {
@@ -853,15 +872,17 @@ async function deleteProduct(orgId, id) {
 // ─── PAYMENT PROOFS ────────────────────────────────────────────────
 
 async function savePaymentProof({ orgId, conversationId, orderId, mediaId, customerPhone, customerName, orderSummary,
-                                   extractedAmount, extractedDate, extractedBank, extractedReference, aiConfidence, amountMatches, status }) {
+                                   extractedAmount, extractedDate, extractedBank, extractedReference, aiConfidence, amountMatches, status,
+                                   imageSha256, extractedCurrency }) {
   return queryOne(
     `INSERT INTO payment_proofs
        (organization_id, conversation_id, order_id, media_id, customer_phone, customer_name, order_summary,
-        extracted_amount, extracted_date, extracted_bank, extracted_reference, ai_confidence, amount_matches, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, 'pending')) RETURNING *`,
+        extracted_amount, extracted_date, extracted_bank, extracted_reference, ai_confidence, amount_matches, status,
+        image_sha256, extracted_currency)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, 'pending'), $15, $16) RETURNING *`,
     [orgId, conversationId, orderId || null, mediaId, customerPhone || null, customerName || null, orderSummary || null,
      extractedAmount || null, extractedDate || null, extractedBank || null, extractedReference || null,
-     aiConfidence || null, amountMatches ?? null, status || null]
+     aiConfidence || null, amountMatches ?? null, status || null, imageSha256 || null, extractedCurrency || null]
   );
 }
 

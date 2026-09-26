@@ -19,11 +19,36 @@ async function fixture() {
   await engine.exec(migration);
   await engine.exec("INSERT INTO organizations VALUES(2,'New shop','new',NOW()); INSERT INTO users VALUES(2,2,'tenant@example.test','hash','Tenant','owner'); SELECT setval('users_id_seq',2);");
   await engine.exec(migration);
+  await engine.exec("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0;");
+  await engine.exec(fs.readFileSync(path.join(__dirname,'../src/db/members.sql'),'utf8'));
   const db={getPool:()=>pool,getSetting:async()=>null,getOrgById:async id=>(await query('SELECT * FROM organizations WHERE id=$1',[id])).rows[0]};
   const service=load('src/services/commercial.js',{'../db/database':db,'./solution-catalog':catalog},{process:{env:{PLATFORM_ADMIN_USER_IDS:'1'}}});
   return {engine,query,pool,db,service};
 }
 const contract = overrides => ({status:'active',modules:['orders','sales_ai'],limits:{bot_turns:2,seats:2},expires_at:null,revision:0,reason:'Contrato de prueba acordado',...overrides});
+test('suspension preserves identity and active seats remain atomic on reactivation',async()=>{
+ const f=await fixture();try {
+  const members=load('src/services/members.js',{'../db/database':f.db,'./commercial':f.service,'./solution-catalog':catalog});
+  await f.service.updateContract(2,1,contract());
+  const staff=await f.service.createUserWithinLimit({organizationId:2,email:'staff@test.local',passwordHash:'hash',name:'Staff',role:'agent'});
+  await assert.rejects(()=>members.setActive(2,2,2,false),/propietario/);
+  await assert.rejects(()=>members.setActive(2,2,1,false),/encontrado/);
+  await assert.rejects(()=>members.setActive(2,staff.id,staff.id,false),/permisos/);
+  const database=load('src/db/database.js',{pg:{Pool:class {query(...args){return f.query(...args);}}}});
+  assert.equal(await database.updateUserRole(2,2,'agent'),null,'owner cannot be demoted through the data layer');
+  await members.setActive(2,2,staff.id,false);
+  assert.equal((await f.service.summary(2)).usage.seats,1);
+  assert.equal((await f.query('SELECT auth_version FROM users WHERE id=$1',[staff.id])).rows[0].auth_version,1);
+  await members.setActive(2,2,staff.id,false);
+  const attempts=await Promise.allSettled([
+    members.setActive(2,2,staff.id,true),
+    f.service.createUserWithinLimit({organizationId:2,email:'other@test.local',passwordHash:'hash',name:'Other',role:'agent'})
+  ]);
+  assert.equal(attempts.filter(x=>x.status==='fulfilled').length,1);
+  assert.equal((await f.service.summary(2)).usage.seats,2);
+  assert.equal((await f.query("SELECT count(*)::int AS n FROM commercial_audit WHERE action='member.suspended'")).rows[0].n,1);
+ }finally{await f.engine.close();}
+});
 test('migration preserves existing access exactly once; new shops fail closed and UI preferences cannot grant modules',async()=>{
  const f=await fixture();try {
   assert.equal(await f.service.permitted(1,'sales_ai'),true);
@@ -81,6 +106,8 @@ test('HTTP access: tenant admin cannot alter contracts, spoof tenant, or call un
   assert.equal((await call('/api/commercial/admin/organizations',2)).status,403);
   assert.equal((await call('/api/commercial/admin/organizations/1/contract',2,contract(),'PUT')).status,403);
   assert.equal((await call('/api/orders',2)).status,403);
+  assert.equal((await call('/api/Orders',2)).status,403);
+  assert.equal((await call('/api/ORDERS',0)).status,401);
   await call('/api/commercial/requests',2,{module:'orders',organization_id:1});
   await call('/api/commercial/requests',2,{module:'orders'});
   const requests=(await f.query('SELECT * FROM commercial_requests')).rows;assert.equal(requests.length,1);assert.equal(requests[0].organization_id,2);
@@ -96,8 +123,14 @@ test('tenant settings cannot enable an uncontracted module; suspended pipeline d
  const auth={requireAuth:(_q,_r,n)=>n(),requireRole:()=>((_q,_r,n)=>n())};
  const settings=load('src/routes/settings.js',{'../services/commercial':commercial,'../services/solution-catalog':catalog,'../middleware/auth':auth,'../db/database':{setSetting:async()=>{wrote=true;}}});
  const {handler}=require('./helpers.cjs');const res=response();await handler(settings,'put','/modules')({orgId:2,body:{modules:{orders:true}}},res);assert.equal(res.code,403);assert.equal(wrote,false);
- const pipeline=load('src/services/pipeline.js',{'./commercial':commercial});
+ const pipeline=load('src/services/pipeline.js',{'./commercial':commercial,'../db/database':{getSetting:async()=>null}});
  assert.equal((await pipeline.processMessage(2,1,'test')).skipped,true);
+});
+
+test('global bot pause stops processing before consuming the contracted quota',async()=>{
+ const pipeline=load('src/services/pipeline.js',{'../db/database':{getSetting:async()=> 'false'},
+  './commercial':{consumeBotTurn:async()=>assert.fail('Paused bot cannot consume quota')}});
+ assert.equal((await pipeline.processMessage(2,1,'hola')).reason,'BOT_PAUSED');
 });
 test('WhatsApp assistant never executes model-generated SQL or grants operators from tenant roles',async()=>{
  let query=false,sent='';

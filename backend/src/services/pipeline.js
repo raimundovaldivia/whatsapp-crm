@@ -29,6 +29,10 @@ function EDITABLE_OR_ACTIVE(status) {
  * @returns {{ response: string, agentType: string, newState: string }}
  */
 async function processMessage(orgId, conversationId, userMessage, log = null) {
+  const globallyEnabled = await db.getSetting(orgId, 'ai_enabled_global');
+  if (globallyEnabled === 'false' || globallyEnabled === false) {
+    return { response: null, skipped: true, reason: 'BOT_PAUSED' };
+  }
   try { await require('./commercial').consumeBotTurn(orgId); }
   catch(error) {
     if (![403,429].includes(error.status)) throw error;
@@ -330,6 +334,11 @@ Reglas estrictas para responder sobre este pedido:
       chargeOrder = pend.find(o => String(o.customer_phone || '').replace(/\D/g, '').slice(-9) === tail) || null;
     }
     if (chargeOrder) {
+      if (chargeOrder.source === 'bot') {
+        const { getOrderProofBalance, balanceText } = require('./payment-proof-balance');
+        const balance = await getOrderProofBalance(orgId, chargeOrder.id, chargeOrder.total_price);
+        if (balance.count) chargeOrder.proofBalanceText = balanceText(balance);
+      }
       const total = `$${Number(chargeOrder.total_price || 0).toLocaleString('es-CL')}`;
       const when  = chargeOrder.payment_marked_at
         ? new Date(chargeOrder.payment_marked_at).toLocaleDateString('es-CL', { day: 'numeric', month: 'long' })
@@ -343,11 +352,12 @@ Reglas estrictas para responder sobre este pedido:
       chargeSection = `## Pedido ${chargeOrder.order_label} YA ENTREGADO — pago por transferencia pendiente ⚠️
 El cliente YA RECIBIÓ este pedido${when ? ` (entregado el ${when})` : ''} por ${total} y eligió pagar por transferencia.
 ${proofLine}${cobroLine ? `\n${cobroLine}` : ''}
+${chargeOrder.proofBalanceText || ''}
 
 Reglas estrictas:
 1. Este pedido NO se despacha ni se coordina: ya está entregado. NUNCA digas "queda listo para el despacho", "te contactamos para coordinar la entrega" ni nada parecido sobre este pedido.
 2. Si dice que transfirió / pagó: agradece y, si aún no ha mandado el comprobante, pídele la captura por este chat. Si ya lo mandó, dile que lo tenemos y que se lo confirmamos.
-3. Si pregunta cuánto debe o los datos para transferir: ${total} por el pedido ${chargeOrder.order_label}; los datos bancarios están en la sección de Instrucciones de Pago.
+3. El total del pedido es ${total}. Si hay abonos arriba, informa su suma y SOLO el saldo pendiente por respaldar; no vuelvas a cobrar el total. Si los comprobantes completan el total, reconoce que la suma es correcta y falta la revisión bancaria. Los datos bancarios están en Instrucciones de Pago.
 4. Si quiere hacer OTRO pedido, atiéndelo normalmente — es un pedido nuevo, distinto de este.`;
       console.log(`[Pipeline] 💸 Pedido por cobrar inyectado al contexto: ${chargeOrder.order_label}`);
     }
@@ -670,7 +680,7 @@ REGLAS ABSOLUTAS:
     const hi = first ? ` ${first}` : '';
     const total = `$${Number(chargeOrder.total_price || 0).toLocaleString('es-CL')}`;
     const response = chargeOrder.proofs_pending > 0
-      ? `¡Gracias${hi}! 🙌 Ya nos llegó tu comprobante del pedido ${chargeOrder.order_label}, lo estamos revisando y te confirmamos por acá.`
+      ? `¡Gracias${hi}! 🙌 Ya nos llegó tu comprobante del pedido ${chargeOrder.order_label}. ${chargeOrder.proofBalanceText || 'Lo estamos revisando y te confirmamos por acá.'}`
       : `¡Gracias${hi}! 🙌 Cuando puedas, mándanos la captura del comprobante por este chat y dejamos registrado el pago del pedido ${chargeOrder.order_label} (${total}).`;
     L.agent('orchestrator', 0);
     L.step('paid_notice', `cliente dice que pagó ${chargeOrder.order_label}`);
@@ -1047,8 +1057,8 @@ REGLAS ABSOLUTAS:
     return { response: salesResponse, agentType: 'sales', newState: effectiveState };
   }
 
-  // El cliente quiere hablar con humano — salvo si ya detectamos bucle de escalación
-  if (intent === 'human_request' && !escalationResult.loopDetected) {
+  // An explicit request takes priority over suppression of speculative escalations.
+  if (intent === 'human_request') {
     await db.setAgentMode(conversationId, 'human');
     await db.updatePipelineState(conversationId, 'exploring');
     L.agent('orchestrator', 0);
@@ -1070,7 +1080,7 @@ REGLAS ABSOLUTAS:
     // forzar collecting_order — el agente de ventas no debía mandar un link aquí
     const hasShopUrl = tiendaUrl && salesResponse.includes(tiendaUrl);
     const hasShopifyUrl = shop && salesResponse.includes(shop);
-    if ((hasShopUrl || hasShopifyUrl) && (intent === 'wants_to_order' || isTemplateReply)) {
+    if ((hasShopUrl || hasShopifyUrl) && intent === 'wants_to_order') {
       console.warn('[Pipeline] ⚠️  Agente mandó URL de tienda al cerrar venta — forzando collecting_order');
       // Delegar a handleOrderCollection para que pre-llene los datos del cliente
       L.agent('orders', Date.now() - tWarm);
@@ -1350,14 +1360,11 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const pricingText   = pricing.pricingContext(priced);
   const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
 
-  // 3. ¿Confirmó?
-  //    REGLA DURA: si el modelo le dice al cliente "tu pedido queda
-  //    registrado" / "todo listo" sin emitir ORDEN_CONFIRMADA, ese texto NO
-  //    sale. Se trata como confirmación: con datos completos se crea el pedido
-  //    de verdad (y el cliente recibe el resumen real); si falta algo, se pide.
-  const claimed = ordersAgent.claimsRegistered(agentResponse);
-  if (claimed) console.warn(`[Pipeline] ⚠️  El agente afirmó "pedido registrado" sin ORDEN_CONFIRMADA — forzando cierre real (conv ${conversationId})`);
-  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft) || claimed;
+  // Only the customer can confirm a server-priced summary; model claims have no authority.
+  const confirmation = require('./order-confirmation');
+  const claimed = ordersAgent.claimsRegistered(agentResponse) || agentResponse.includes('ORDEN_CONFIRMADA');
+  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft)
+    && confirmation.matches(orderDraft, updatedDraft);
   const allMatched = priced.items.length > 0 && priced.items.every(it => it.matched);
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft) && allMatched) {
@@ -1487,6 +1494,16 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     const missing = ordersAgent.missingFields(updatedDraft);
     const missingMsg = `Casi listo 😊 Solo me falta: ${missing.join(', ')}. ¿Me lo puedes confirmar?`;
     return { response: missingMsg, agentType: 'orders', newState: 'collecting_order' };
+  }
+
+  if (ordersAgent.hasRequiredData(updatedDraft) && allMatched) {
+    updatedDraft.confirmation_fingerprint = confirmation.fingerprint(updatedDraft);
+    await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
+    return { response: `Revisa tu pedido:\n\n${pricing.summaryBlock(priced)}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}\n\n¿Confirmas este pedido? Responde “confirmo” o indícame qué deseas cambiar.`, agentType: 'orders', newState: 'collecting_order' };
+  }
+  if (claimed) {
+    const missing = ordersAgent.missingFields(updatedDraft);
+    return { response: missing.length ? `Para preparar el pedido falta: ${missing.join(', ')}.` : 'Necesito revisar los productos y su disponibilidad antes de pedirte la confirmación.', agentType: 'orders', newState: 'collecting_order' };
   }
 
   // Aún recopilando datos — quitar la palabra clave si apareció en el texto
@@ -1621,4 +1638,4 @@ async function createShopifyOrder(orgId, conversationId, draft) {
   return shopifyResult;
 }
 
-module.exports = { processMessage };
+module.exports = { processMessage, handleOrderCollection };

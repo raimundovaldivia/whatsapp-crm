@@ -131,7 +131,7 @@ router.patch('/:id', async (req, res) => {
     res.json({ success: true, data: updated });
   } catch (err) {
     console.error('[Users] PATCH /:id', err);
-    res.status(500).json({ success: false, error: 'Error al actualizar usuario' });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Error al actualizar usuario' });
   }
 });
 
@@ -140,6 +140,15 @@ router.patch('/:id', async (req, res) => {
  * Cambia el rol de un usuario
  * Body: { role }
  */
+router.patch('/:id/status', async (req, res) => {
+  try {
+    const user = await require('../services/members').setActive(req.orgId, req.userId, Number(req.params.id), req.body.active);
+    res.json({ success: true, data: user });
+  } catch (error) {
+    res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'No se pudo cambiar el estado' });
+  }
+});
+
 router.patch('/:id/role', async (req, res) => {
   try {
     const { role } = req.body;
@@ -168,7 +177,7 @@ router.patch('/:id/role', async (req, res) => {
 
 /**
  * DELETE /api/users/:id
- * Elimina un usuario de la organización
+ * Compatibilidad: suspende un usuario y conserva su historial.
  */
 router.delete('/:id', async (req, res) => {
   try {
@@ -179,7 +188,7 @@ router.delete('/:id', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No puedes eliminarte a ti mismo' });
     }
 
-    const deleted = await db.deleteOrgUser(userId, req.orgId);
+    const deleted = await require('../services/members').setActive(req.orgId, req.userId, userId, false);
     if (!deleted) {
       return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
     }
@@ -187,7 +196,7 @@ router.delete('/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('[Users] DELETE /:id', err);
-    res.status(500).json({ success: false, error: 'Error al eliminar usuario' });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Error al suspender usuario' });
   }
 });
 

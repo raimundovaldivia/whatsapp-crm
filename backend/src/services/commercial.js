@@ -30,7 +30,7 @@ async function summary(orgId) {
   const [contract, usage, users, requests] = await Promise.all([
     contractFor(orgId),
     db.getPool().query("SELECT metric,quantity FROM commercial_usage WHERE organization_id=$1 AND period=date_trunc('month',NOW() AT TIME ZONE 'UTC')::date", [orgId]),
-    db.getPool().query('SELECT count(*)::int AS count FROM users WHERE organization_id=$1', [orgId]),
+    db.getPool().query('SELECT count(*)::int AS count FROM users WHERE organization_id=$1 AND active=TRUE', [orgId]),
     db.getPool().query('SELECT id,module_key,status,note,created_at FROM commercial_requests WHERE organization_id=$1 ORDER BY id DESC LIMIT 50', [orgId]),
   ]);
   const expired = contract && ['legacy','trial','active'].includes(contract.status) && contract.expires_at && new Date(contract.expires_at) <= new Date();
@@ -63,7 +63,7 @@ async function createUserWithinLimit(data) {
     await client.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE', [data.organizationId]);
     const contract = await contractFor(data.organizationId, client);
     const limit = access(contract) ? contract.limits.seats : LIMITS.seats.default;
-    const count = (await client.query('SELECT count(*)::int AS count FROM users WHERE organization_id=$1', [data.organizationId])).rows[0].count;
+    const count = (await client.query('SELECT count(*)::int AS count FROM users WHERE organization_id=$1 AND active=TRUE', [data.organizationId])).rows[0].count;
     if (limit !== null && count >= limit) throw fail(409, 'Se alcanzó el límite de usuarios de tu contrato', 'QUOTA_EXCEEDED');
     const result = await client.query(`INSERT INTO users(organization_id,email,password_hash,name,role) VALUES($1,$2,$3,$4,$5)
       RETURNING id,organization_id,email,name,role`, [data.organizationId,data.email,data.passwordHash,data.name,data.role]);

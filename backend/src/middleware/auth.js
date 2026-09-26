@@ -9,7 +9,7 @@ const VALID_ROLES = new Set(['owner', 'admin', 'supervisor', 'agent', 'coordinad
 async function authenticateToken(token) {
   const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
   const user = await db.getUserById(payload.userId);
-  if (!user || !VALID_ROLES.has(user.role) || user.organization_id !== payload.orgId ||
+  if (!user || user.active === false || !VALID_ROLES.has(user.role) || user.organization_id !== payload.orgId ||
       user.role !== payload.role || Number(user.auth_version || 0) !== Number(payload.authVersion || 0)) {
     throw new Error('Sesión revocada');
   }

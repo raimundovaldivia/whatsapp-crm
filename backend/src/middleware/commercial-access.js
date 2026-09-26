@@ -6,7 +6,7 @@ function requireSolution(key) {
   return async (req,res,next) => { try { await commercial.assertModule(req.orgId,key); next(); } catch(e) { res.status(e.status || 503).json({error:e.status?e.message:'No se pudo comprobar el acceso',code:e.code}); } };
 }
 function commercialAccess(req,res,next) {
-  const key = routes[req.path.split('/')[1]];
+  const key = routes[req.path.toLowerCase().split('/')[1]];
   if (!key) return next();
   requireAuth(req,res,() => requireSolution(key)(req,res,next));
 }

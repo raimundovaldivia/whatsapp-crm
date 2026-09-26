@@ -24,7 +24,7 @@ Configurar `PLATFORM_ADMIN_USER_IDS` en el backend de Railway con los identifica
 
 ## Límites y costes
 
-- `seats`: todos los usuarios de la organización, incluidos propietario y repartidores. No elimina usuarios existentes al reducir el límite; bloquea nuevas altas.
+- `seats`: usuarios activos de la organización, incluidos propietario y repartidores. Suspender conserva identidad e historial y libera el cupo; reactivar vuelve a validar el límite. Reducir el límite no suspende cuentas automáticamente.
 - `bot_turns`: turnos del agente de ventas iniciados por mes calendario UTC. Incluye intentos que luego fallen en el proveedor. El incremento y el límite son atómicos entre instancias.
 - `null` significa sin límite. La cuenta base admite tres usuarios.
 - El medidor de turnos **no representa todo el consumo de IA**: análisis de imágenes, transcripciones, asistente y evaluaciones no se facturan por este contador. Los costes de WhatsApp, proveedores y otros servicios se deben contemplar en el acuerdo comercial.
