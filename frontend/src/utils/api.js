@@ -17,11 +17,14 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   r => r,
   err => {
-    if (err.response?.status === 401) {
+    const url = String(err.config?.url || '');
+    const isAuthAttempt = url.endsWith('/auth/login') || url.endsWith('/auth/register');
+    if (err.response?.status === 401 && !isAuthAttempt) {
       localStorage.removeItem('crm_token');
       localStorage.removeItem('crm_user');
       localStorage.removeItem('crm_org');
-      window.location.href = '/';
+      // Evita un bucle de recarga si varias solicitudes fallan a la vez.
+      if (window.location.pathname !== '/') window.location.replace('/');
     }
     return Promise.reject(err);
   }
