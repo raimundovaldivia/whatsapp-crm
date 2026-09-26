@@ -597,7 +597,8 @@ async function cancelScheduledOrder(id) {
 
 // ─── MESSAGES ─────────────────────────────────────────────────────
 
-async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = 'sent', sentBy = 'ai', agentType = null, mediaId = null }) {
+async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = null, sentBy = 'ai', agentType = null, mediaId = null }) {
+  status = status || (direction === 'outbound' && (type === 'template' || content?.startsWith('[Template:')) ? 'pending' : 'sent');
   try {
     return await queryOne(
       `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type, media_id)
@@ -629,10 +630,22 @@ async function getLastMessages(conversationId, limit = 10) {
   return rows.reverse();
 }
 
-async function updateMessageStatus(whatsappMessageId, status) {
-  await pool.query(
-    'UPDATE messages SET status = $1 WHERE whatsapp_message_id = $2',
-    [status, whatsappMessageId]
+async function updateMessageStatus(whatsappMessageId, status, error = null, orgId) {
+  if (!orgId || !['sent', 'delivered', 'read', 'failed'].includes(status)) return null;
+  const raw = Array.isArray(error) ? error[0] : error;
+  const detail = raw ? {
+    code: raw.code ?? null,
+    message: String(raw.error_data?.details || raw.message || raw.title || (typeof raw === 'string' ? raw : 'Error del proveedor')).slice(0, 1000),
+  } : null;
+  return queryOne(
+    `UPDATE messages m SET status = $1, delivery_error = $3::jsonb
+       FROM conversations c
+      WHERE m.whatsapp_message_id = $2 AND c.id = m.conversation_id AND c.organization_id = $4
+        AND (m.status = $1 OR m.status = 'pending'
+          OR (m.status = 'sent' AND $1 IN ('delivered','read','failed'))
+          OR (m.status = 'delivered' AND $1 = 'read'))
+      RETURNING m.*`,
+    [status, whatsappMessageId, status === 'failed' ? JSON.stringify(detail) : null, orgId]
   );
 }
 

@@ -294,7 +294,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         components:    buildComponents(candidate),
         previewText:   getPreviewText(candidate),
       });
-      showToast(testMode ? `🧪 Enviado a tu número (${TEST_PHONE})` : '✅ Template enviado');
+      showToast(testMode ? `🧪 Enviado a tu número (${TEST_PHONE})` : 'Plantilla aceptada · pendiente de confirmación');
       if (!testMode) {
         setCandidates(prev => prev.filter(c => c.phone !== phone));
         setSelected(prev => { const n = new Set(prev); n.delete(phone); return n; });
@@ -336,11 +336,11 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
     try {
       const res = await reengagementAPI.sendBulk(items);
       if (testMode) {
-        showToast(`🧪 ${res.sent} mensajes enviados a tu número (${TEST_PHONE})`);
+        showToast(`🧪 ${res.sent} solicitudes aceptadas para tu número (${TEST_PHONE})`);
       } else {
         const skippedMsg = res.skipped > 0 ? ` · ${res.skipped} omitidos (ya enviado hoy)` : '';
         const failedMsg  = res.failed  > 0 ? ` · ${res.failed} fallaron` : '';
-        showToast(`✅ ${res.sent} enviados${skippedMsg}${failedMsg}`);
+        showToast(`✅ ${res.sent} aceptados por WhatsApp${skippedMsg}${failedMsg}`);
         const sent = new Set(res.results.filter(r => r.success).map(r => r.phone));
         setCandidates(prev => prev.filter(c => !sent.has(c.phone)));
         setSelected(new Set());
@@ -1354,7 +1354,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         setSendProgress({ done: Math.min(i + CHUNK, items.length), total: items.length });
       }
       setResults({ sent, failed, skipped });
-      showToast(`✅ ${sent} enviados${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
+      showToast(`✅ ${sent} aceptados por WhatsApp${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
     } catch (err) {
       showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
     } finally {
@@ -1530,7 +1530,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       {/* Resultado */}
       {results && (
         <div style={{ padding: '10px 20px', backgroundColor: `${colors.green}18`, borderBottom: `1px solid ${colors.green}33`, display: 'flex', gap: '16px', alignItems: 'center' }}>
-          <span style={{ color: colors.green, fontWeight: 700, fontSize: '13px' }}>✅ {results.sent} enviados</span>
+          <span style={{ color: colors.green, fontWeight: 700, fontSize: '13px' }}>✅ {results.sent} aceptados por WhatsApp</span>
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
         </div>
       )}

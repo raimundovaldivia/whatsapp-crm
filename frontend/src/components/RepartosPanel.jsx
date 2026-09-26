@@ -948,10 +948,11 @@ function chargeInfo(row) {
   if (row.paid) return { label: 'Pagado', color: '#22c55e', icon: '✅' };
   if (row.payment_method === 'efectivo') return { label: 'Efectivo al entregar', color: '#22c55e', icon: '💵' };
   if (row.payment_method !== 'transferencia') return null;
-  if (row.charge?.sent_at) {
-    const when = new Date(row.charge.sent_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
-    return { label: `Cobro enviado ${when}${row.charge.count > 1 ? ` (×${row.charge.count})` : ''}${row.charge.pending ? ' · sin comprobante' : ''}`, color: row.charge.pending ? '#fbbf24' : '#22c55e', icon: '💸' };
-  }
+  const state = row.charge?.status;
+  if (state === 'failed') return { label: `Cobro no enviado${row.charge.error?.code ? ` (${row.charge.error.code})` : ''} — reintentar`, color: '#f87171', icon: '⚠️' };
+  if (state === 'pending' || state === 'sent') return { label: 'Cobro pendiente de entrega', color: '#fbbf24', icon: '⏳' };
+  if (state === 'unknown') return { label: 'Envío anterior sin verificar', color: '#fbbf24', icon: '⚠️' };
+  if (state === 'delivered' || state === 'read') return { label: 'Aviso de cobro entregado' + (row.charge.pending ? ' · sin comprobante' : ''), color: '#38bdf8', icon: '💬' };
   if (row.charge?.pending) return { label: 'Cobro NO enviado — por cobrar', color: '#f87171', icon: '⚠️' };
   return { label: 'Transferencia', color: '#38bdf8', icon: '🏦' };
 }
@@ -991,11 +992,30 @@ function DespachosRepartos({ colors }) {
     api.get('/settings/modules').then(r => setCanEditItems(!!(r.data?.modules?.edit_delivered_items))).catch(() => {});
   }, []);
 
+  async function verifyCharges(d, ev) {
+    ev.stopPropagation(); setCharging(d.day);
+    const selection = d.rows.filter(r => r.charge?.pending && ['unknown','pending','sent'].includes(r.charge?.status)).map(r => ({ source: r.source, id: r.order_id }));
+    const unique = [...new Map(selection.map(o => [`${o.source}_${o.id}`,o])).values()];
+    let results = [];
+    try {
+      for (let i=0; i<unique.length; i+=5) {
+        const {data} = await api.post('/orders/verify-charges', {orders: unique.slice(i,i+5)}, {timeout:60000});
+        results = results.concat(data.results || []);
+        if (data.results?.some(r => r.error)) break;
+      }
+      const failed = results.filter(r => r.status === 'failed').length;
+      const delivered = results.filter(r => ['delivered','read'].includes(r.status)).length;
+      setChargeMsg({day:d.day,text:`Verificados: ${failed} fallidos listos para reintentar, ${delivered} entregados. Los demás siguen sin confirmación. No se envió ningún mensaje.`,ok:true});
+      load();
+    } catch(e) { setChargeMsg({day:d.day,text:e.response?.data?.error || 'No se pudo verificar. No se reenvió.',ok:false}); }
+    finally { setCharging(''); }
+  }
+
   // Abre el modal de cobro: elige template y muestra la vista previa antes de enviar.
   async function openChargeModal(d, ev) {
     ev?.stopPropagation?.();
     const pend = (d.rows || []).filter(r =>
-      r.status === 'entregado' && r.payment_method === 'transferencia' && r.charge?.pending
+      r.status === 'entregado' && r.payment_method === 'transferencia' && r.charge?.retryable
     );
     if (!pend.length) return;
     setChargeModal({ day: d.day, rows: pend });
@@ -1029,7 +1049,7 @@ function DespachosRepartos({ colors }) {
     try {
       const { data } = await api.post('/orders/send-charge', { orders, template: chargeTpl || undefined });
       const sent = data.sent || 0, failed = data.failed || 0;
-      setChargeMsg({ day, text: failed === 0 ? `\u2705 ${sent} cobro(s) enviado(s)` : `Enviados ${sent}, fallaron ${failed}. Revisa que el template esté aprobado (Ajustes \u2192 Cobranza).`, ok: failed === 0 });
+      setChargeMsg({ day, text: failed === 0 ? `${sent} solicitud(es) aceptada(s); pendientes de confirmación de entrega` : `${sent} aceptados, ${failed} no enviados. ${data.results?.find(r => r.error)?.error || 'Revisa el estado de cada cobro.'}`, ok: failed === 0 });
       load();
     } catch (e) {
       setChargeMsg({ day, text: e.response?.data?.error || 'Error enviando los cobros', ok: false });
@@ -1116,7 +1136,7 @@ function DespachosRepartos({ colors }) {
   const days = [];
   const byDay = {};
   for (const r of filtered) {
-    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, fallidos: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, extras: 0 }; days.push(byDay[r.day]); }
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, fallidos: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0 }; days.push(byDay[r.day]); }
     const d = byDay[r.day];
     d.rows.push(r);
     if (r.status === 'entregado') {
@@ -1126,8 +1146,9 @@ function DespachosRepartos({ colors }) {
       else if (r.payment_method === 'transferencia') d.transferencia += amount;
       else if (r.payment_method) d.otro += amount;
       if (r.payment_method === 'transferencia') {
-        if (r.charge?.sent_at) d.cobrosEnviados++;
-        else if (r.charge?.pending) d.cobrosPendientes++;
+        if (['delivered', 'read'].includes(r.charge?.status)) d.cobrosEnviados++;
+        else if (r.charge?.retryable) d.cobrosPendientes++;
+        else if (['unknown','pending','sent'].includes(r.charge?.status)) d.cobrosSinConfirmar++;
       }
       d.extras += r.extra_total || 0;
     } else if (r.status === 'cancelled') d.fallidos++;
@@ -1214,7 +1235,7 @@ function DespachosRepartos({ colors }) {
         {chip(`${totals.fallidos} fallidos`, '#f87171')}
         {chip(`💵 ${CLP(totals.efectivo)} efectivo`, '#22c55e')}
         {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
-        {chip(`💸 ${totals.cobrosEnviados} cobros enviados`, '#fbbf24')}
+        {chip(`💸 ${totals.cobrosEnviados} avisos de cobro entregados`, '#fbbf24')}
         {totals.cobrosPendientes > 0 && chip(`⚠️ ${totals.cobrosPendientes} sin cobrar`, '#f87171')}
         {totals.gastos > 0 && chip(`🧾 ${CLP(totals.gastos)} gastos`, '#fb923c')}
         {totals.gastos > 0 && chip(`💰 ${CLP(totals.netoEfectivo)} neto efectivo`, totals.netoEfectivo >= 0 ? '#22c55e' : '#f87171')}
@@ -1243,7 +1264,9 @@ function DespachosRepartos({ colors }) {
               {d.pendientes > 0 && chip(`${d.pendientes} pend.`, '#fb923c')}
               {chip(`💵 ${CLP(d.efectivo)}`, '#22c55e')}
               {chip(`🏦 ${CLP(d.transferencia)}`, '#38bdf8')}
-              {d.transferencia > 0 && chip(`💸 ${d.cobrosEnviados}/${d.cobrosEnviados + d.cobrosPendientes} cobrados`, d.cobrosPendientes ? '#fbbf24' : '#22c55e')}
+              {d.transferencia > 0 && chip(`💬 ${d.cobrosEnviados} avisos entregados`, '#38bdf8')}
+              {d.cobrosSinConfirmar > 0 && chip(`⚠️ ${d.cobrosSinConfirmar} sin confirmar`, '#fbbf24')}
+              {d.cobrosSinConfirmar > 0 && <button disabled={!!charging} onClick={ev => verifyCharges(d, ev)} style={{cursor:'pointer',borderRadius:'999px',padding:'4px 12px',border:`1px solid ${colors.border}`,background:colors.bgPanel,color:colors.textPrimary}}>{charging === d.day ? 'Verificando…' : 'Verificar envíos'}</button>}
               {d.extras > 0 && chip(`🥚 +${CLP(d.extras)} extras`, '#c4b5fd')}
               {d.gastos > 0 && chip(`🧾 ${CLP(d.gastos)} gastos`, '#fb923c')}
               {d.cobrosPendientes > 0 && (

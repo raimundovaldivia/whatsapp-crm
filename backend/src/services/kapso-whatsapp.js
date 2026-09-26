@@ -13,7 +13,7 @@
  * Webhooks en Kapso:
  *   1. En app.kapso.ai → tu número → Webhooks → crear webhook
  *   2. URL: POST https://whatsapp-crm-api-production-f804.up.railway.app/kapso-webhook
- *   3. Eventos a suscribir: whatsapp.message.received
+ *   3. Eventos: whatsapp.message.received, whatsapp.message.sent, whatsapp.message.delivered, whatsapp.message.read, whatsapp.message.failed
  *
  * Docs: https://docs.kapso.ai
  */
@@ -296,11 +296,14 @@ function parseStatusUpdate(body, event) {
 
     // Extraer status limpio del event name: "whatsapp.message.delivered" → "delivered"
     const status = evtName.split('.').pop();
+    const receipts = Array.isArray(message.kapso?.statuses) ? message.kapso.statuses : [];
+    const receipt = [...receipts].reverse().find(item => item.status === status);
 
     return {
       messageId:   message.id,
       status,
       recipientId: body.conversation?.phone_number || null,
+      error: receipt?.errors || message.errors || message.error || null,
     };
   } catch { return null; }
 }
@@ -396,12 +399,20 @@ async function sendTemplate(to, templateName, languageCode = 'es', components = 
         },
       }
     );
+    if (response.data?.error) {
+      const failure = new Error(response.data.error.message || 'WhatsApp rechazó la plantilla');
+      failure.response = { status: 400, data: response.data };
+      throw failure;
+    }
+    if (!response.data?.messages?.[0]?.id) throw new Error('WhatsApp no confirmó la aceptación de la plantilla. No se registró como enviada.');
     return response.data;
   } catch (err) {
-    const status  = err.response?.status;
-    const errBody = err.response?.data;
-    const detail  = errBody ? JSON.stringify(errBody) : err.message;
-    console.error(`[KapsoWA] sendTemplate FAILED — to:${to} template:${templateName} status:${status} — ${detail}`);
+    const providerError = err.response?.data?.error;
+    if (providerError) {
+      const code = providerError.code;
+      const detail = providerError.error_data?.details || providerError.message || 'Plantilla rechazada';
+      err.message = `${code ? `WhatsApp (${code}): ` : 'WhatsApp: '}${detail}${String(code) === '131042' ? ' Revisa la facturación y el método de pago de la cuenta de WhatsApp en Meta.' : ''}`;
+    }
     throw err;
   }
 }
@@ -459,4 +470,16 @@ async function getMediaUrl(mediaId, config) {
  */
 const { downloadMedia } = require('./safe-media');
 
-module.exports = { sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createTemplate, getMediaUrl, downloadMedia };
+async function getMessageStatus(messageId, config) {
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey || !config.phone_number_id) throw new Error('Falta conexión con Kapso');
+  const { data } = await axios.get(`${BASE_URL}/${API_VER}/${encodeURIComponent(config.phone_number_id)}/messages/${encodeURIComponent(messageId)}`, {
+    headers: { 'X-API-Key': apiKey }, params: { fields: 'kapso()' }, timeout: 8000,
+  });
+  if (data?.id !== messageId || data?.kapso?.direction !== 'outbound') throw new Error('Mensaje no verificable');
+  const status = data.kapso.status;
+  if (!['sent','delivered','read','failed'].includes(status)) return null;
+  return parseStatusUpdate({ message: data }, `whatsapp.message.${status}`);
+}
+
+module.exports = { getMessageStatus, sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createTemplate, getMediaUrl, downloadMedia };

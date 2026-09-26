@@ -442,7 +442,7 @@ router.post('/:id/send-template', async (req, res) => {
       agentType:         null,
     });
 
-    await db.updateConversationLastMessage(conv.id, `[Template enviado: ${templateName.trim()}]`);
+    await db.updateConversationLastMessage(conv.id, `[Template: ${templateName.trim()}]`);
     const updated = await db.getConversationById(conv.id);
     io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updated });
 

@@ -71,8 +71,8 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
   // Actualizar status de mensaje (delivery receipt)
   const statusUpdate = whatsappService.parseStatusUpdate(body);
   if (statusUpdate) {
-    await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status);
-    io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, statusUpdate);
+    const updated = await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status, statusUpdate.error, org.id);
+    if (updated) io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, { ...statusUpdate, error: updated.delivery_error });
     return;
   }
 

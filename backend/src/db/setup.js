@@ -124,6 +124,10 @@ async function setupDatabase() {
 
       -- Migración: media_id para mensajes con imagen o audio
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_id TEXT;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivery_error JSONB;
+      ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_status_check;
+      ALTER TABLE messages ADD CONSTRAINT messages_status_check
+        CHECK(status IN ('pending','sent','delivered','read','failed'));
 
       -- ─── ÓRDENES CREADAS ─────────────────────────────────────────
 
@@ -398,6 +402,7 @@ async function setupDatabase() {
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
       -- Varias rutas (cambios de estado, entrega, cobranza) escriben updated_at.
       -- La tabla original solo tenía created_at, así que la agregamos aquí.
@@ -497,7 +502,31 @@ async function setupDatabase() {
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
+      -- Link historical collection receipts only when both sides match uniquely.
+      WITH attempts AS (
+        SELECT 'bot' AS source, id::text AS id, organization_id, customer_phone, charge_requested_at FROM orders WHERE charge_message_id IS NULL AND charge_requested_at IS NOT NULL
+        UNION ALL
+        SELECT 'shopify', shopify_order_id, organization_id, customer_phone, charge_requested_at FROM shopify_orders WHERE charge_message_id IS NULL AND charge_requested_at IS NOT NULL
+      ), candidates AS (
+        SELECT a.source, a.id, a.organization_id, m.whatsapp_message_id,
+          COUNT(*) OVER (PARTITION BY a.source, a.id, a.organization_id) AS order_matches,
+          COUNT(*) OVER (PARTITION BY m.id) AS message_matches
+        FROM attempts a JOIN conversations c ON c.organization_id=a.organization_id
+          AND regexp_replace(c.phone_number, '[^0-9]', '', 'g')=regexp_replace(a.customer_phone, '[^0-9]', '', 'g')
+        JOIN messages m ON m.conversation_id=c.id AND m.agent_type='cobranza' AND m.direction='outbound'
+          AND m.status IN ('failed','delivered','read') AND m.whatsapp_message_id IS NOT NULL
+          AND m.created_at BETWEEN a.charge_requested_at - INTERVAL '30 seconds' AND a.charge_requested_at
+        WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.charge_message_id=m.whatsapp_message_id)
+          AND NOT EXISTS (SELECT 1 FROM shopify_orders o WHERE o.charge_message_id=m.whatsapp_message_id)
+      ), linked_bot AS (
+        UPDATE orders o SET charge_message_id=c.whatsapp_message_id FROM candidates c
+        WHERE c.source='bot' AND o.id::text=c.id AND o.organization_id=c.organization_id AND c.order_matches=1 AND c.message_matches=1
+      )
+      UPDATE shopify_orders o SET charge_message_id=c.whatsapp_message_id FROM candidates c
+      WHERE c.source='shopify' AND o.shopify_order_id=c.id AND o.organization_id=c.organization_id AND c.order_matches=1 AND c.message_matches=1;
+
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS delivery_modified BOOLEAN DEFAULT FALSE;
 

@@ -1,5 +1,5 @@
 import { formatTime } from '../utils/dates.js';
-import { Bot, User, Check, CheckCheck, FileText, Image } from 'lucide-react';
+import { Bot, User, Check, CheckCheck, AlertCircle, Clock, FileText, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { API_BASE } from '../utils/api.js';
 
@@ -32,6 +32,8 @@ export default function MessageBubble({ message }) {
   const time = message.created_at ? formatTime(message.created_at) : '';
 
   const StatusIcon = ({ status }) => {
+    if (status === 'failed') return <AlertCircle size={14} aria-label="No enviado" style={{ color: colors.red }} />;
+    if (status === 'pending' || !status) return <Clock size={14} aria-label="Pendiente de confirmación" style={{ color: colors.textSecondary }} />;
     if (status === 'read')      return <CheckCheck size={14} style={{ color: '#53bdeb' }} />;
     if (status === 'delivered') return <CheckCheck size={14} style={{ color: colors.textSecondary }} />;
     return <Check size={14} style={{ color: colors.textSecondary }} />;
@@ -67,6 +69,17 @@ export default function MessageBubble({ message }) {
           </div>
         )}
 
+        {isOutbound && message.status === 'failed' && (
+          <div role="alert" style={{ color: colors.red, fontSize: '12px', marginBottom: '4px', maxWidth: '420px' }}>
+            No enviado. {String(message.delivery_error?.code) === '131042'
+              ? 'Meta informó un problema de pago o elegibilidad. Revisa la facturación y el método de pago de WhatsApp.'
+              : message.delivery_error?.message || 'WhatsApp informó que el envío falló.'}
+            {message.delivery_error?.code && ` (Código ${message.delivery_error.code})`}
+          </div>
+        )}
+        {isOutbound && message.status === 'pending' && (
+          <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '4px' }}>Aceptado por WhatsApp · pendiente de confirmación de envío</div>
+        )}
         {/* Burbuja */}
         <div style={{
           backgroundColor: isOutbound ? getOutboundBg() : colors.bgPanel,

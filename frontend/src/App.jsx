@@ -189,11 +189,11 @@ export default function App() {
     setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, agent_mode: mode } : c));
   }, []);
 
-  const handleMessageStatus = useCallback(({ messageId, status }) => {
+  const handleMessageStatus = useCallback(({ messageId, status, error }) => {
     setMessages(prev => {
       const updated = {};
       for (const [id, msgs] of Object.entries(prev)) {
-        updated[id] = msgs.map(m => m.whatsapp_message_id === messageId ? { ...m, status } : m);
+        updated[id] = msgs.map(m => m.whatsapp_message_id === messageId ? { ...m, status, delivery_error: error || null } : m);
       }
       return updated;
     });

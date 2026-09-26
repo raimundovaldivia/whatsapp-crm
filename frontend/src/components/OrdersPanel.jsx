@@ -270,9 +270,9 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       const res = await api.post('/orders/send-charge', { orders: selection });
       const { sent = 0, failed = 0, results = [] } = res.data || {};
       setChargeResults(results);
-      if (failed === 0) showToast(`✅ ${sent} cobro${sent === 1 ? '' : 's'} enviado${sent === 1 ? '' : 's'}`);
+      if (failed === 0) showToast(`${sent} solicitudes aceptadas; pendientes de entrega`);
       else if (sent === 0) showToast(`No se pudo enviar ninguno de los ${failed}`, 'error');
-      else showToast(`${sent} enviado${sent === 1 ? '' : 's'}, ${failed} sin enviar`, 'error');
+      else showToast(`${sent} aceptados, ${failed} sin enviar`, 'error');
       setChargeSel(new Set());
       await loadCharges();
     } catch (err) {
@@ -797,7 +797,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                             {o.proofs_pending > 0 && <span style={{ color:'#60a5fa' }}>📎 comprobante sin revisar</span>}
                             {yaCobrado && (
                               <span>
-                                💬 cobrado {o.charge_request_count > 1 ? `${o.charge_request_count} veces` : '1 vez'}
+                                {o.charge_status === 'failed' ? '⚠️ No enviado — reintentar' : ['delivered','read'].includes(o.charge_status) ? '💬 Aviso entregado' : ['pending','sent'].includes(o.charge_status) ? '⏳ Pendiente de entrega' : '⚠️ Envío sin verificar'}
                               </span>
                             )}
                           </div>

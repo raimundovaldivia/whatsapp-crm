@@ -227,23 +227,25 @@ async function sendByProvider(phone, text, wc) {
 /**
  * Marca el cobro como enviado en la tabla que corresponda.
  */
-async function registerChargeSent(source, orderId, orgId) {
+async function registerChargeSent(source, orderId, orgId, messageId) {
   const pool = getPool();
   if (source === 'shopify') {
     await pool.query(
       `UPDATE shopify_orders
           SET charge_requested_at  = NOW(),
+              charge_message_id = $3,
               charge_request_count = COALESCE(charge_request_count, 0) + 1
         WHERE shopify_order_id = $1 AND organization_id = $2`,
-      [String(orderId), orgId]
+      [String(orderId), orgId, messageId]
     );
   } else {
     await pool.query(
       `UPDATE orders
           SET charge_requested_at  = NOW(),
+              charge_message_id = $3,
               charge_request_count = COALESCE(charge_request_count, 0) + 1
         WHERE id = $1 AND organization_id = $2`,
-      [parseInt(orderId), orgId]
+      [parseInt(orderId), orgId, messageId]
     );
   }
 }
@@ -257,6 +259,24 @@ async function registerChargeSent(source, orderId, orgId) {
  * @returns {{ ok: boolean, reason?: string, message?: string }}
  */
 async function sendChargeRequest(orgId, order, opts = {}) {
+  if (!order || !['bot','shopify'].includes(order.source)) return { ok: false, reason: 'pedido_invalido' };
+  const client = await getPool().connect();
+  const lockKey = `charge:${orgId}:${order.source}:${order.id}`;
+  let locked = false;
+  try {
+    const { rows: [lock] } = await client.query('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked', [lockKey]);
+    locked = !!lock.locked;
+    if (!locked) return { ok: false, reason: 'envio_en_curso' };
+    const current = await getOrderForCharge(orgId, order.source, order.id);
+    if (!current) return { ok: false, reason: 'no_por_cobrar' };
+    return await sendChargeRequestLocked(orgId, current, opts);
+  } finally {
+    if (locked) await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]);
+    client.release();
+  }
+}
+
+async function sendChargeRequestLocked(orgId, order, opts = {}) {
   if (!await require('./commercial').permitted(orgId,'payments')) return { ok:false, reason:'modulo_no_contratado' };
   const { force = false, io = null, templateOverride = null } = opts;
 
@@ -264,8 +284,11 @@ async function sendChargeRequest(orgId, order, opts = {}) {
     return { ok: false, reason: 'sin_telefono' };
   }
 
+  // Do not resend unconfirmed attempts. A confirmed failure may retry immediately.
+  if (order.charge_status === 'pending' || order.charge_status === 'sent') return { ok: false, reason: 'envio_pendiente', error: 'El envío anterior espera confirmación. No se duplicó.' };
+  if (order.charge_requested_at && !order.charge_status) return { ok: false, reason: 'envio_sin_verificar', error: 'El cobro anterior no tiene confirmación verificable. Revisa su historial antes de reenviar.' };
   // Anti-duplicado: no volver a cobrar si se cobró hace poco.
-  if (!force && order.charge_requested_at) {
+  if (!force && order.charge_status !== 'failed' && order.charge_requested_at) {
     const hours = (Date.now() - new Date(order.charge_requested_at).getTime()) / 3600000;
     if (hours < MIN_HOURS_BETWEEN_CHARGES) {
       return { ok: false, reason: 'cobrado_recien', hoursAgo: Math.round(hours * 10) / 10 };
@@ -302,6 +325,9 @@ async function sendChargeRequest(orgId, order, opts = {}) {
     }
   }
 
+  const messageId = sent?.messageId || sent?.messages?.[0]?.id || sent?.sid;
+  if (!messageId) return { ok: false, reason: 'sin_confirmacion', error: 'El proveedor no confirmó la aceptación del mensaje.' };
+
   // Dejar el mensaje en el hilo de la conversación, para que quede trazabilidad
   // en el CRM y el bot vea el contexto.
   try {
@@ -309,12 +335,12 @@ async function sendChargeRequest(orgId, order, opts = {}) {
     if (conv?.id) {
       const outMsg = await db.saveMessage({
         conversationId:    conv.id,
-        whatsappMessageId: sent?.messageId || sent?.messages?.[0]?.id || null,
+        whatsappMessageId: messageId,
         direction:         'outbound',
         content:           via.startsWith('template:') ? `[Template: ${settings.waTemplate}] ${text}` : text,
         sentBy:            'system',
         agentType:         'cobranza',
-        status:            'sent',
+        status:            'pending',
       });
       await db.updateConversationLastMessage(conv.id, text);
       if (io && outMsg) {
@@ -326,10 +352,10 @@ async function sendChargeRequest(orgId, order, opts = {}) {
     console.error('[Cobranza] Mensaje enviado pero no se pudo guardar en el hilo:', err.message);
   }
 
-  await registerChargeSent(order.source, order.id, orgId);
+  await registerChargeSent(order.source, order.id, orgId, messageId);
   console.log(`[Cobranza] 💸 Cobro enviado a ${order.customer_phone} — pedido ${order.order_label} (${via})`);
 
-  return { ok: true, message: text, via };
+  return { ok: true, status: 'pending', message: text, via };
 }
 
 /**
@@ -384,6 +410,8 @@ async function getPendingCharges(orgId) {
             o.created_at                 AS created_at,
             o.payment_marked_at          AS payment_marked_at,
             o.charge_requested_at        AS charge_requested_at,
+            o.charge_message_id AS charge_message_id,
+            (SELECT m.status FROM messages m JOIN conversations mc ON mc.id=m.conversation_id WHERE m.whatsapp_message_id=o.charge_message_id AND mc.organization_id=o.organization_id) AS charge_status,
             COALESCE(o.charge_request_count, 0) AS charge_request_count,
             (SELECT COUNT(*) FROM payment_proofs pp
               WHERE pp.order_id = o.id
@@ -411,6 +439,8 @@ async function getPendingCharges(orgId) {
             s.shopify_created_at         AS created_at,
             s.payment_marked_at          AS payment_marked_at,
             s.charge_requested_at        AS charge_requested_at,
+            s.charge_message_id AS charge_message_id,
+            (SELECT m.status FROM messages m JOIN conversations mc ON mc.id=m.conversation_id WHERE m.whatsapp_message_id=s.charge_message_id AND mc.organization_id=s.organization_id) AS charge_status,
             COALESCE(s.charge_request_count, 0) AS charge_request_count,
             0                            AS proofs_pending
        FROM shopify_orders s
@@ -442,7 +472,57 @@ async function getOrderForCharge(orgId, source, orderId) {
   return all.find(o => o.source === source && String(o.id) === String(orderId)) || null;
 }
 
+// Read-only provider reconciliation: never sends a message.
+async function reconcileCharges(orgId, selection, io) {
+  const wc = await db.getWhatsappConfig(orgId);
+  if (!await require('./commercial').permitted(orgId, 'payments')) throw new Error('Módulo de cobranza no habilitado');
+  if (wc?.provider !== 'kapso') throw new Error('Esta verificación requiere una conexión Kapso');
+  const pending = await getPendingCharges(orgId);
+  const { rows: candidates } = await getPool().query(`      WITH attempts AS (
+        SELECT 'bot' AS source, id::text AS id, organization_id, customer_phone, charge_requested_at FROM orders WHERE organization_id=$1 AND charge_message_id IS NULL AND charge_requested_at IS NOT NULL
+        UNION ALL
+        SELECT 'shopify', shopify_order_id, organization_id, customer_phone, charge_requested_at FROM shopify_orders WHERE organization_id=$1 AND charge_message_id IS NULL AND charge_requested_at IS NOT NULL
+      ), candidates AS (
+        SELECT a.source, a.id, a.organization_id, a.charge_requested_at::text AS attempt_at, m.whatsapp_message_id,
+          COUNT(*) OVER (PARTITION BY a.source, a.id, a.organization_id) AS order_matches,
+          COUNT(*) OVER (PARTITION BY m.id) AS message_matches
+        FROM attempts a JOIN conversations c ON c.organization_id=a.organization_id
+          AND regexp_replace(c.phone_number, '[^0-9]', '', 'g')=regexp_replace(a.customer_phone, '[^0-9]', '', 'g')
+        JOIN messages m ON m.conversation_id=c.id AND m.agent_type='cobranza' AND m.direction='outbound'
+           AND m.whatsapp_message_id IS NOT NULL
+          AND m.created_at BETWEEN a.charge_requested_at - INTERVAL '30 seconds' AND a.charge_requested_at
+        WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.charge_message_id=m.whatsapp_message_id)
+          AND NOT EXISTS (SELECT 1 FROM shopify_orders o WHERE o.charge_message_id=m.whatsapp_message_id)
+      ) SELECT * FROM candidates WHERE order_matches=1 AND message_matches=1 AND organization_id=$1`, [orgId]);
+  const results = [];
+  for (const sel of selection) {
+    const order = pending.find(o => o.source === sel.source && String(o.id) === String(sel.id));
+    if (!order) { results.push({ ...sel, status: 'unknown' }); continue; }
+    const candidate = candidates.find(c => c.source === order.source && String(c.id) === String(order.id));
+    const messageId = order.charge_message_id || candidate?.whatsapp_message_id;
+    if (!messageId) { results.push({ ...sel, status: 'unknown' }); continue; }
+    try {
+      const receipt = await kapsoService.getMessageStatus(messageId, wc);
+      if (!receipt) { results.push({ ...sel, status: 'unknown' }); continue; }
+      const message = await db.updateMessageStatus(messageId, receipt.status, receipt.error, orgId);
+      // Link only the attempt we just checked; do not overwrite a concurrent retry.
+      if (!order.charge_message_id) {
+        const table = order.source === 'bot' ? 'orders' : 'shopify_orders';
+        const idCol = order.source === 'bot' ? 'id' : 'shopify_order_id';
+        await getPool().query(`UPDATE ${table} SET charge_message_id=$1 WHERE organization_id=$2 AND ${idCol}=$3 AND charge_message_id IS NULL AND charge_requested_at=$4`, [messageId,orgId,order.id,candidate.attempt_at]);
+      }
+      if (message) io?.to(`org_${orgId}`).emit(`status_update_${orgId}`, { ...receipt, error: message.delivery_error });
+      results.push({ ...sel, status: message?.status || receipt.status });
+    } catch (err) {
+      results.push({ ...sel, status: 'unknown', error: 'No se pudo verificar con Kapso. No se reenvió.' });
+      if ([401,403,429].includes(err.response?.status)) break;
+    }
+  }
+  return results;
+}
+
 module.exports = {
+  reconcileCharges,
   submitChargeTemplate,
   fetchTemplateStatus,
   CHARGE_TEMPLATE_NAME,

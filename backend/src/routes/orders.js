@@ -520,6 +520,15 @@ router.get('/pending-charge', async (req, res) => {
  * Nunca falla en bloque: devuelve el resultado pedido por pedido, para que el
  * panel pueda mostrar cuáles salieron y cuáles no (y por qué).
  */
+router.post('/verify-charges', async (req, res) => {
+  const selection = req.body.orders;
+  if (!Array.isArray(selection) || !selection.length || selection.length > 5 || selection.some(o => !o || !['bot','shopify'].includes(o.source) || o.id == null)) return res.status(400).json({ success: false, error: 'Selecciona entre 1 y 5 pedidos válidos' });
+  try {
+    const results = await collection.reconcileCharges(req.orgId, selection, io);
+    res.json({ success: true, results });
+  } catch (err) { res.status(502).json({ success: false, error: err.message }); }
+});
+
 router.post('/send-charge', async (req, res) => {
   const { orders: selection = [], force = false, template = null } = req.body;
   if (!Array.isArray(selection) || selection.length === 0) {

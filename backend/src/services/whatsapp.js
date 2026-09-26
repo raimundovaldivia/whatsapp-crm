@@ -55,7 +55,7 @@ function parseStatusUpdate(body) {
     const value = body?.entry?.[0]?.changes?.[0]?.value;
     if (!value?.statuses?.length) return null;
     const status = value.statuses[0];
-    return { messageId: status.id, status: status.status, recipientId: status.recipient_id };
+    return { messageId: status.id, status: status.status, recipientId: status.recipient_id, error: status.errors || null };
   } catch { return null; }
 }
 

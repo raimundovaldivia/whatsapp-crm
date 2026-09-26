@@ -4,7 +4,7 @@
  * Configura este webhook en app.kapso.ai:
  *   Tu número → Webhooks → Add webhook
  *   URL:    POST https://whatsapp-crm-api-production-f804.up.railway.app/kapso-webhook
- *   Events: whatsapp.message.received
+ *   Events: whatsapp.message.received, whatsapp.message.sent, whatsapp.message.delivered, whatsapp.message.read, whatsapp.message.failed
  *   Habilita firma y copia el secret → guárdalo en KAPSO_WEBHOOK_SECRET
  *
  * Kapso envía JSON con Content-Type: application/json.
@@ -73,8 +73,8 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   // ── Actualizar estado de mensaje (delivered/read/failed) ─────────────
   const statusUpdate = kapsoService.parseStatusUpdate(body, event);
   if (statusUpdate) {
-    await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status);
-    io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, statusUpdate);
+    const updated = await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status, statusUpdate.error, org.id);
+    if (updated) io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, { ...statusUpdate, error: updated.delivery_error });
     return;
   }
 

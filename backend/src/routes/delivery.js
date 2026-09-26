@@ -1553,12 +1553,16 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     const [botRows, shopRows, pending] = await Promise.all([
       botIds.size ? pool.query(
         `SELECT id::text AS id, status, payment_method, charge_requested_at, charge_request_count, total_price, customer_phone,
-                delivery_modified, customer_modified
+                delivery_modified, customer_modified,
+                (SELECT m.status FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=orders.charge_message_id AND c.organization_id=orders.organization_id) AS charge_status,
+                (SELECT m.delivery_error FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=orders.charge_message_id AND c.organization_id=orders.organization_id) AS charge_error
            FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])`,
         [req.orgId, [...botIds].map(Number)]).then(r => r.rows) : [],
       shopIds.size ? pool.query(
         `SELECT shopify_order_id AS id, crm_status AS status, financial_status, payment_method, charge_requested_at,
-                charge_request_count, total_price, customer_phone, delivery_modified
+                charge_request_count, total_price, customer_phone, delivery_modified,
+                (SELECT m.status FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=shopify_orders.charge_message_id AND c.organization_id=shopify_orders.organization_id) AS charge_status,
+                (SELECT m.delivery_error FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=shopify_orders.charge_message_id AND c.organization_id=shopify_orders.organization_id) AS charge_error
            FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])`,
         [req.orgId, [...shopIds]]).then(r => r.rows) : [],
       collection.getPendingCharges(req.orgId).catch(() => []),
@@ -1622,7 +1626,11 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           payment_method: paymentMethod,            // efectivo | transferencia | otro | null
           paid,
           charge: {
-            sent_at: ord?.charge_requested_at || null,
+            sent_at: ['sent','delivered','read'].includes(ord?.charge_status) ? ord?.charge_requested_at : null,
+            requested_at: ord?.charge_requested_at || null,
+            status: ord?.charge_status || (ord?.charge_requested_at ? 'unknown' : null),
+            error: ord?.charge_error || null,
+            retryable: pendingSet.has(key) && (!ord?.charge_requested_at || ord?.charge_status === 'failed'),
             count:   Number(ord?.charge_request_count) || 0,
             pending: pendingSet.has(key),           // sigue en "Por cobrar"
           },

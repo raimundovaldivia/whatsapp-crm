@@ -135,14 +135,14 @@ async function processScheduledOrder(order, io) {
 
   // 5. Guardar mensaje en DB y actualizar pipeline_state → template_sent (warm lead)
   const content = `[Template: ${tplName}]\n\n📅 Despacho de pedido agendado: ${product}`;
-  await db.saveMessage({
+  const savedMessage = await db.saveMessage({
     conversationId:    convId,
     whatsappMessageId: sentResult?.messages?.[0]?.id || null,
     direction:         'outbound',
     content,
     sentBy:            'ai',
     agentType:         'system',
-    status:            'sent',
+    status:            'pending',
   });
 
   await db.updateConversationLastMessage(convId, content);
@@ -155,7 +155,7 @@ async function processScheduledOrder(order, io) {
   const updatedConv = await db.getConversationById(convId).catch(() => null);
   if (updatedConv && io) {
     io.to(`org_${orgId}`).emit(`new_message_${orgId}`, {
-      message:      { conversationId: convId, direction: 'outbound', content, sentBy: 'ai' },
+      message:      savedMessage,
       conversation: updatedConv,
     });
   }
