@@ -116,6 +116,45 @@ async function notifyAgentsNewMessage(orgId, conversation, messageText) {
 }
 
 /**
+ * Avisa que llegó una respuesta mientras una persona conserva el control.
+ * El primer mensaje avisa de inmediato; mensajes consecutivos se agrupan
+ * durante unos minutos para no bombardear al administrador.
+ */
+async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
+  try {
+    if (!conversation?.id || conversation.agent_mode !== 'human') return { sent: false, reason: 'modo_inactivo' };
+    const claimed = await db.claimHumanPendingNotification(conversation.id, 5);
+    if (!claimed) return { sent: false, reason: 'aviso_reciente' };
+
+    const clientName = conversation.contact_name || conversation.phone_number || 'Cliente';
+    const clientPhone = conversation.phone_number || '';
+    const text = String(messageText || '').slice(0, 300);
+
+    await db.createAdminPendingReply(orgId, conversation.id, clientPhone, text);
+    const body = [
+      '🔔 *Tienes una respuesta pendiente*',
+      '',
+      `👤 *${clientName}*${clientPhone && clientPhone !== clientName ? ` (+${clientPhone})` : ''}`,
+      text ? `💬 “${text}”` : '',
+      '',
+      'La conversación está en modo humano y espera tu respuesta.',
+      '👆 *Respóndeme aquí y envío tu mensaje al cliente directamente.*',
+    ].filter(Boolean).join('\n');
+
+    const result = await notifyAdmin(orgId, {
+      body,
+      kind: 'handoff',
+      conversationId: conversation.id,
+    });
+    console.log(`[Notifications] Respuesta humana pendiente avisada — conv #${conversation.id}`);
+    return result;
+  } catch (err) {
+    console.warn('[Notifications] No se pudo avisar la respuesta pendiente:', err.message);
+    return { sent: false, reason: 'error' };
+  }
+}
+
+/**
  * Notifica a agentes con notify_payments=true cuando llega un comprobante de pago.
  * @param {number} orgId
  * @param {string} clientName
@@ -211,4 +250,10 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
   }
 }
 
-module.exports = { notifyAdminHandoff, notifyAdminHelp, notifyAgentsNewMessage, notifyAgentsPayment };
+module.exports = {
+  notifyAdminHandoff,
+  notifyAdminHelp,
+  notifyAdminHumanPendingReply,
+  notifyAgentsNewMessage,
+  notifyAgentsPayment,
+};

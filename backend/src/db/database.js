@@ -492,10 +492,29 @@ async function markConversationAsRead(id) {
 async function setAgentMode(id, mode) {
   await pool.query(
     `UPDATE conversations
-        SET agent_mode = $1, agent_mode_changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        SET agent_mode = $1,
+            agent_mode_changed_at = CURRENT_TIMESTAMP,
+            human_pending_notified_at = CASE WHEN $1 IN ('ai','human') THEN NULL ELSE human_pending_notified_at END,
+            updated_at = CURRENT_TIMESTAMP
       WHERE id = $2`,
     [mode, id]
   );
+}
+
+async function claimHumanPendingNotification(conversationId, cooldownMinutes = 5) {
+  const row = await queryOne(
+    `UPDATE conversations
+        SET human_pending_notified_at = NOW()
+      WHERE id = $1
+        AND agent_mode = 'human'
+        AND (
+          human_pending_notified_at IS NULL
+          OR human_pending_notified_at < NOW() - ($2::int || ' minutes')::interval
+        )
+      RETURNING id`,
+    [conversationId, cooldownMinutes]
+  );
+  return !!row;
 }
 
 async function updatePipelineState(id, state, orderDraft = null) {
@@ -1472,6 +1491,13 @@ async function getShopifyOrdersSyncedAt(orgId) {
 // ─── ADMIN RELAY (respuestas del admin vía WhatsApp personal) ────────────────
 
 async function createAdminPendingReply(orgId, conversationId, customerPhone, context) {
+  const updated = await pool.query(
+    `UPDATE admin_pending_replies
+        SET customer_phone = $3, context = $4, created_at = NOW()
+      WHERE org_id = $1 AND conversation_id = $2 AND status = 'pending'`,
+    [orgId, conversationId, customerPhone, context || null]
+  );
+  if (updated.rowCount > 0) return;
   await pool.query(
     `INSERT INTO admin_pending_replies (org_id, conversation_id, customer_phone, context)
      VALUES ($1, $2, $3, $4)`,
@@ -1510,7 +1536,7 @@ module.exports = {
   createAgent, getAgents, createDefaultAgents,
   // Conversations
   upsertConversation, getAllConversations, getConversationById,
-  updateConversationLastMessage, markConversationAsRead, setAgentMode,
+  updateConversationLastMessage, markConversationAsRead, setAgentMode, claimHumanPendingNotification,
   updatePipelineState, getOrderDraft, claimOrderCreation,
   // Scheduled orders
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,

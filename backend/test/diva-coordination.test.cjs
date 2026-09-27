@@ -114,3 +114,41 @@ test('un template automático reactiva a Diva para atender la respuesta', async 
 
   assert.deepEqual(changes, [{ id: 19, mode: 'ai' }, { cleared: 19 }]);
 });
+
+test('Diva avisa una respuesta pendiente en modo humano sin duplicar mensajes seguidos', async () => {
+  const pending = [];
+  const alerts = [];
+  let canNotify = true;
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      claimHumanPendingNotification: async () => {
+        const result = canNotify;
+        canNotify = false;
+        return result;
+      },
+      createAdminPendingReply: async (...args) => pending.push(args),
+    },
+    './kapso-whatsapp': {},
+    './admin-notify': {
+      notifyAdmin: async (orgId, options) => {
+        alerts.push({ orgId, ...options });
+        return { sent: true, queued: false };
+      },
+    },
+  });
+  const conversation = {
+    id: 31,
+    agent_mode: 'human',
+    contact_name: 'José Pozo',
+    phone_number: '56995979357',
+  };
+
+  await notifications.notifyAdminHumanPendingReply(4, conversation, 'Hola, quiero 2 bandejas jumbo');
+  await notifications.notifyAdminHumanPendingReply(4, conversation, '¿Me confirma?');
+
+  assert.equal(alerts.length, 1);
+  assert.equal(pending.length, 1);
+  assert.match(alerts[0].body, /José Pozo/);
+  assert.match(alerts[0].body, /2 bandejas jumbo/);
+  assert.match(alerts[0].body, /modo humano/i);
+});

@@ -502,6 +502,8 @@ async function setupDatabase() {
 
       -- Recordatorio enviado al cliente cuando una escalación lleva mucho sin respuesta humana
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS escalation_reminder_at TIMESTAMP;
+      -- Evita repetir al admin una alerta por cada mensaje seguido del mismo cliente.
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS human_pending_notified_at TIMESTAMP;
 
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;

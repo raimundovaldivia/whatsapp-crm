@@ -16,7 +16,7 @@ const router         = express.Router();
 const db             = require('../db/database');
 const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
-const { notifyAdminHandoff, notifyAdminHelp, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
+const { notifyAdminHandoff, notifyAdminHelp, notifyAdminHumanPendingReply, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
 const secretary = require('../services/admin-secretary');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
@@ -180,6 +180,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       if (!resumed) {
         const updatedConv = await db.getConversationById(conversation.id);
         io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
+        if (updatedConv.agent_mode === 'human') await notifyAdminHumanPendingReply(org.id, updatedConv, label);
         return;
       }
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
@@ -247,7 +248,10 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     //    inicia una atención activa con Diva y no se pierde.
     if (updatedConv.agent_mode !== 'ai') {
       const resumed = await resumeDivaOnInbound(conversation, db);
-      if (!resumed) return;
+      if (!resumed) {
+        if (updatedConv.agent_mode === 'human') await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
+        return;
+      }
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
       console.log(`[KapsoWebhook] 🔁 Conv ${conversation.id} inicia un hilo nuevo y vuelve a Diva`);
     }

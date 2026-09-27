@@ -142,6 +142,7 @@ test('Meta signature checks whole batch and persists every message/status under 
     const router=load('src/routes/webhook.js',{
       '../services/webhook-inbox':worker,'../middleware/webhook-auth':{verifyWebhook:()=>noop},
       '../services/whatsapp':{...wa,markAsRead:async()=>{}},
+      '../services/notifications':{notifyAdminHumanPendingReply:async()=>{}},
       '../db/database':{
         getOrgByPhoneNumberId:async id=>({org:{id:id==='a'?1:2,name:id},whatsappConfig:{provider:'meta'}}),
         updateMessageStatus:async id=>{seen.push(id)},upsertConversation:async(org)=>({id:org}),

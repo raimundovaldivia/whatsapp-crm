@@ -13,6 +13,7 @@ const twilioService  = require('../services/twilio-whatsapp');
 const whatsappService = require('../services/whatsapp');
 const pipeline       = require('../services/pipeline');
 const { resumeDivaOnInbound } = require('../services/conversation-mode');
+const { notifyAdminHumanPendingReply } = require('../services/notifications');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -65,7 +66,10 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
     // 4. Mantener silencio solo mientras la intervención humana siga activa.
     if (updatedConv.agent_mode !== 'ai') {
       const resumed = await resumeDivaOnInbound(conversation, db);
-      if (!resumed) return;
+      if (!resumed) {
+        if (updatedConv.agent_mode === 'human') await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
+        return;
+      }
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
     }
 
