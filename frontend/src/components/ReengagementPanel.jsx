@@ -1191,6 +1191,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [sending,        setSending]        = useState(false);
   const [reviewPlan,     setReviewPlan]     = useState(null);
   const [reviewIdx,      setReviewIdx]      = useState(0);
+  const [guidedReview,   setGuidedReview]   = useState(false);
+  const [reviewedItems,  setReviewedItems]  = useState(new Set());
   const [results,        setResults]        = useState(null);
   const [toast,          setToast]          = useState(null);
   const [testMode,       setTestMode]       = useState(false);
@@ -1269,6 +1271,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setVarSuffix(Array.from({ length: tplVarCount }, () => ''));
     setVarFallback(Array.from({ length: tplVarCount }, () => ''));
     setReviewPlan(null);
+    setGuidedReview(false);
+    setReviewedItems(new Set());
   }, [selTpl?.name, tplVarCount]);
 
   function favProduct(phone) { return favMap[normPhone(phone)] || ''; }
@@ -1396,6 +1400,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     }
 
     setReviewIdx(0);
+    setGuidedReview(false);
+    setReviewedItems(new Set());
     setReviewPlan({
       templateName: selTpl.name,
       entries,
@@ -1403,6 +1409,22 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       testPhone: TEST_PHONE,
       createdAt: Date.now(),
     });
+  }
+
+  function startGuidedReview() {
+    setGuidedReview(true);
+    setReviewIdx(0);
+    setReviewedItems(new Set());
+  }
+
+  function markReviewedAndContinue() {
+    if (!reviewPlan?.entries?.length) return;
+    setReviewedItems(previous => {
+      const next = new Set(previous);
+      next.add(reviewIdx);
+      return next;
+    });
+    if (reviewIdx < reviewPlan.entries.length - 1) setReviewIdx(reviewIdx + 1);
   }
 
   async function confirmSend() {
@@ -1756,6 +1778,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       {reviewPlan && (() => {
         const idx = Math.min(reviewIdx, reviewPlan.entries.length - 1);
         const entry = reviewPlan.entries[idx];
+        const reviewedCount = reviewedItems.size;
+        const guidedComplete = guidedReview && reviewedCount === reviewPlan.entries.length;
         return (
           <div role="dialog" aria-modal="true" aria-label="Revisar envío masivo" style={{ position: 'fixed', inset: 0, zIndex: 10000, backgroundColor: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
             <div style={{ width: 'min(760px, 96vw)', maxHeight: '90vh', overflowY: 'auto', backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
@@ -1776,7 +1800,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
               <div style={{ padding: '0 18px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 7 }}>
-                  <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>Mensaje {idx + 1} de {reviewPlan.entries.length} · {toTitleCase(entry.contact?.name) || entry.contact?.phone}</span>
+                  <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>
+                    Mensaje {idx + 1} de {reviewPlan.entries.length} · {toTitleCase(entry.contact?.name) || entry.contact?.phone}
+                    {guidedReview && reviewedItems.has(idx) && <span style={{ color: colors.green, marginLeft: 7 }}>✓ Revisado</span>}
+                  </span>
                   {reviewPlan.entries.length > 1 && <span style={{ display: 'flex', gap: 6 }}>
                     <button onClick={() => setReviewIdx(i => Math.max(0, i - 1))} disabled={idx === 0 || sending} style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: colors.radiusSm, color: colors.textSecondary, padding: '3px 12px', cursor: idx === 0 ? 'default' : 'pointer', opacity: idx === 0 ? 0.5 : 1 }}>←</button>
                     <button onClick={() => setReviewIdx(i => Math.min(reviewPlan.entries.length - 1, i + 1))} disabled={idx === reviewPlan.entries.length - 1 || sending} style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: colors.radiusSm, color: colors.textSecondary, padding: '3px 12px', cursor: idx === reviewPlan.entries.length - 1 ? 'default' : 'pointer', opacity: idx === reviewPlan.entries.length - 1 ? 0.5 : 1 }}>→</button>
@@ -1784,13 +1811,31 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 </div>
                 <div style={{ whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }}>{entry.previewText || '(Template sin cuerpo de texto)'}</div>
                 <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 7 }}>Destino real: {entry.item.phone} · Puedes recorrer todos los mensajes antes de confirmar.</div>
+                {guidedReview && (
+                  <div style={{ marginTop: 10, padding: '9px 11px', borderRadius: 8, backgroundColor: `${colors.green}12`, border: `1px solid ${colors.green}33`, color: colors.textSecondary, fontSize: 12, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                    <span>Revisión detallada</span>
+                    <strong style={{ color: guidedComplete ? colors.green : colors.textPrimary }}>{reviewedCount} de {reviewPlan.entries.length} revisados</strong>
+                  </div>
+                )}
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '13px 18px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 10, padding: '13px 18px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+                {!guidedReview ? (
+                  <button onClick={startGuidedReview} disabled={sending} style={{ marginRight: 'auto', display: 'flex', alignItems: 'center', gap: 7, padding: '8px 15px', borderRadius: 8, border: `1px solid ${colors.green}66`, backgroundColor: `${colors.green}18`, color: colors.green, fontWeight: 750, cursor: sending ? 'not-allowed' : 'pointer' }}>
+                    <CheckSquare size={14} /> Revisar uno por uno
+                  </button>
+                ) : (
+                  <div style={{ marginRight: 'auto', display: 'flex', gap: 8 }}>
+                    <button onClick={() => setReviewIdx(i => Math.max(0, i - 1))} disabled={idx === 0 || sending} style={{ padding: '8px 13px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, cursor: idx === 0 || sending ? 'not-allowed' : 'pointer', opacity: idx === 0 ? 0.5 : 1 }}>Anterior</button>
+                    <button onClick={markReviewedAndContinue} disabled={sending} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: `1px solid ${colors.green}66`, backgroundColor: colors.green, color: '#fff', fontWeight: 750, cursor: sending ? 'not-allowed' : 'pointer' }}>
+                      <Check size={14} /> {idx < reviewPlan.entries.length - 1 ? 'Revisado · siguiente' : 'Marcar último revisado'}
+                    </button>
+                  </div>
+                )}
                 <button onClick={() => setReviewPlan(null)} disabled={sending} style={{ padding: '8px 15px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, cursor: sending ? 'not-allowed' : 'pointer' }}>Volver y corregir</button>
-                <button onClick={confirmSend} disabled={sending} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: colors.green, color: '#fff', fontWeight: 800, cursor: sending ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
+                <button onClick={confirmSend} disabled={sending || (guidedReview && !guidedComplete)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: guidedReview && !guidedComplete ? colors.bgHover : colors.green, color: guidedReview && !guidedComplete ? colors.textMuted : '#fff', fontWeight: 800, cursor: sending || (guidedReview && !guidedComplete) ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
                   {sending ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
-                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : `Confirmar y enviar ${reviewPlan.entries.length}`}
+                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : guidedReview && !guidedComplete ? `Faltan ${reviewPlan.entries.length - reviewedCount} por revisar` : `Confirmar y enviar ${reviewPlan.entries.length}`}
                 </button>
               </div>
             </div>
