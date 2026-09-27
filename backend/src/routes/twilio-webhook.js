@@ -12,6 +12,7 @@ const db             = require('../db/database');
 const twilioService  = require('../services/twilio-whatsapp');
 const whatsappService = require('../services/whatsapp');
 const pipeline       = require('../services/pipeline');
+const { resumeDivaOnInbound } = require('../services/conversation-mode');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -61,8 +62,12 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
     const updatedConv = await db.getConversationById(conversation.id);
     io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
-    // 4. Si está en modo humano, no responder con IA
-    if (updatedConv.agent_mode !== 'ai') return;
+    // 4. Mantener silencio solo mientras la intervención humana siga activa.
+    if (updatedConv.agent_mode !== 'ai') {
+      const resumed = await resumeDivaOnInbound(conversation, db);
+      if (!resumed) return;
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
+    }
 
     // 5. Ejecutar pipeline de 3 agentes
     const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);

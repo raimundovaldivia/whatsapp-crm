@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 const pipeline = require('../services/pipeline');
+const { resumeDivaOnInbound } = require('../services/conversation-mode');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -103,17 +104,11 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
     const updatedConv = await db.getConversationById(conversation.id);
     io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
-    // 4. Si está en modo humano, verificar si hace mucho que no responde un humano
+    // 4. Si terminó la intervención humana, Diva procesa este mismo mensaje.
     if (updatedConv.agent_mode !== 'ai') {
-      const AUTO_RESET_MINUTES = 120; // 2 horas sin respuesta humana → vuelve a IA
-      const mins = await db.minutesSinceLastHumanReply(conversation.id);
-      if (mins < AUTO_RESET_MINUTES) {
-        console.log(`[Webhook] Modo humano activo (último humano hace ${Math.round(mins)}min), sin respuesta IA`);
-        return;
-      }
-      // Auto-reset a modo IA
-      console.log(`[Webhook] Auto-reset a modo IA (sin respuesta humana en ${Math.round(mins)}min)`);
-      await db.setAgentMode(conversation.id, 'ai');
+      const resumed = await resumeDivaOnInbound(conversation, db);
+      if (!resumed) return;
+      console.log(`[Webhook] Conv ${conversation.id} inicia un hilo nuevo y vuelve a Diva`);
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
     }
 

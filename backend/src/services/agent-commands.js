@@ -15,6 +15,7 @@
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
 const Anthropic    = require('@anthropic-ai/sdk');
+const { activateDivaForAutomatedMessage } = require('./conversation-mode');
 const {
   buildBodyTemplateComponent,
   getTemplateVariables,
@@ -474,6 +475,7 @@ async function executeCampaign(org, wc, session) {
         status: 'pending',
       });
       await db.updateConversationLastMessage(conv.id, `[Template: ${session.template.name}]`);
+      await activateDivaForAutomatedMessage(conv.id, db);
       await db.updatePipelineState(conv.id, 'template_sent').catch(() => {});
       await db.getPool().query(
         'UPDATE contacts SET last_template_sent_at = NOW() WHERE organization_id = $1 AND phone = $2',

@@ -16,6 +16,7 @@ const shopifyApi = require('../services/shopify-api');
 const Anthropic = require('@anthropic-ai/sdk');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
+const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
 const {
   getBodyComponent,
   getMissingBodyParameters,
@@ -1425,6 +1426,9 @@ router.post('/send', async (req, res) => {
         sentBy:            'ai',
       });
       await db.updateConversationLastMessage(convId, savedContent);
+      if (isTemplate) {
+        await activateDivaForAutomatedMessage(convId, db);
+      }
       const updated = await db.getConversationById(convId);
       io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
       // Marcar conversación como "esperando respuesta a template"
@@ -1539,9 +1543,12 @@ router.post('/send-bulk', async (req, res) => {
           sentBy:            'ai',
         });
         await db.updateConversationLastMessage(convId, savedContent);
+        if (isTemplate) {
+          await activateDivaForAutomatedMessage(convId, db);
+          await db.updatePipelineState(convId, 'template_sent');
+        }
         const updated = await db.getConversationById(convId);
         io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
-        // No tocamos pipeline_state — 'template_sent' no es un valor válido
       }
 
       // Registrar envío para prevenir duplicados el mismo día

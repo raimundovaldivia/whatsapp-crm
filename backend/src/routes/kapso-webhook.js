@@ -24,6 +24,7 @@ const mediaCache                = require('../services/media-cache');
 const { handleAgentCommand, hasActiveCampaign } = require('../services/agent-commands');
 const guardrail                 = require('../services/response-guardrail');
 const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
+const { resumeDivaOnInbound } = require('../services/conversation-mode');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -167,11 +168,21 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     await db.updateConversationLastMessage(conversation.id, label, true);
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
-    // En modo humano el ejecutivo lo ve en el CRM — no contestar encima
-    if (!await require('../services/commercial').permitted(org.id,'sales_ai') || (conversation.agent_mode && conversation.agent_mode !== 'ai')) {
+    // En modo humano activo el ejecutivo lo ve en el CRM. Si ese hilo ya
+    // terminó, Diva retoma también los adjuntos sin transcripción.
+    if (!await require('../services/commercial').permitted(org.id,'sales_ai')) {
       const updatedConv = await db.getConversationById(conversation.id);
       io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
       return;
+    }
+    if (conversation.agent_mode && conversation.agent_mode !== 'ai') {
+      const resumed = await resumeDivaOnInbound(conversation, db);
+      if (!resumed) {
+        const updatedConv = await db.getConversationById(conversation.id);
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
+        return;
+      }
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
     }
     const reply = isVideo
       ? 'Recibí tu video, pero no puedo verlo por aquí 😊 ¿Me cuentas por escrito qué necesitas?'
@@ -232,27 +243,13 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
 
     // 4. Si Diva está coordinando o alguien tomó el control, mantener silencio
-    //    durante el hilo. Si el mensaje anterior fue hace 24 h o más, ese hilo
-    //    ya terminó y este nuevo mensaje inicia una atención activa con Diva.
+    //    durante ese hilo. Cuando la intervención ya venció, este nuevo mensaje
+    //    inicia una atención activa con Diva y no se pierde.
     if (updatedConv.agent_mode !== 'ai') {
-      const AUTO_RESET_MINUTES = 1440;
-      const referenceAt = [
-        conversation.last_message_at,
-        conversation.agent_mode_changed_at,
-        conversation.last_escalation_at,
-      ].filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite);
-      const refMins = referenceAt.length
-        ? (Date.now() - Math.max(...referenceAt)) / 60000
-        : Infinity;
-      if (refMins < AUTO_RESET_MINUTES) return;
-      // Auto-reset a modo IA y SEGUIR procesando este mensaje (antes se descartaba)
-      await db.setAgentMode(conversation.id, 'ai');
+      const resumed = await resumeDivaOnInbound(conversation, db);
+      if (!resumed) return;
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
-      if (typeof db.clearLastEscalation === 'function') {
-        await db.clearLastEscalation(conversation.id).catch(() => {});
-      }
-      await db.updatePipelineState(conversation.id, 'exploring', {}).catch(() => {});
-      console.log(`[KapsoWebhook] 🔁 Conv ${conversation.id} vuelve a Diva tras ${Math.round(refMins / 60)}h sin actividad`);
+      console.log(`[KapsoWebhook] 🔁 Conv ${conversation.id} inicia un hilo nuevo y vuelve a Diva`);
     }
 
     // 5. Debounce: esperar 3s desde el ÚLTIMO mensaje antes de ejecutar pipeline.

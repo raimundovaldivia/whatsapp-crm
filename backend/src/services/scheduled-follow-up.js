@@ -12,6 +12,7 @@
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
+const { activateDivaForAutomatedMessage } = require('./conversation-mode');
 
 /**
  * Envía los follow-ups de pedidos agendados para HOY y días anteriores no enviados.
@@ -146,6 +147,7 @@ async function processScheduledOrder(order, io) {
   });
 
   await db.updateConversationLastMessage(convId, content);
+  await activateDivaForAutomatedMessage(convId, db);
   await db.updatePipelineState(convId, 'template_sent');  // el pipeline lo trata como warm lead
 
   // 6. Marcar como enviado

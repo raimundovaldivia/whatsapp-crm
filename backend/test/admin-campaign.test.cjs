@@ -7,6 +7,7 @@ test('admin campaign uses live templates and requires exact confirmation before 
   const adminReplies = [];
   const templateSends = [];
   const savedMessages = [];
+  const modeChanges = [];
   const pool = {
     query: async sql => {
       if (sql.includes('FROM contacts c')) {
@@ -23,6 +24,7 @@ test('admin campaign uses live templates and requires exact confirmation before 
     saveMessage: async message => { savedMessages.push(message); return message; },
     updateConversationLastMessage: async () => {},
     updatePipelineState: async () => {},
+    setAgentMode: async (id, mode) => modeChanges.push({ id, mode }),
   };
   const kapso = {
     getTemplates: async () => [{
@@ -75,5 +77,6 @@ test('admin campaign uses live templates and requires exact confirmation before 
   assert.equal(templateSends[0].components[0].parameters[0].text, 'Ana');
   assert.equal(savedMessages[0].status, 'pending');
   assert.equal(savedMessages[0].whatsappMessageId, 'wamid.campaign');
+  assert.deepEqual(modeChanges, [{ id: 7, mode: 'ai' }]);
   assert.match(adminReplies.at(-1), /pendientes de confirmación de entrega/);
 });
