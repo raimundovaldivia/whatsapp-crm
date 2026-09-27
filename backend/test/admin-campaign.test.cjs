@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { load } = require('./helpers.cjs');
+const templateRenderer = require('../src/utils/template-renderer.mjs');
 
 test('admin campaign uses live templates and requires exact confirmation before sending', async () => {
   const adminReplies = [];
@@ -44,6 +45,7 @@ test('admin campaign uses live templates and requires exact confirmation before 
     '../db/database': db,
     './kapso-whatsapp': kapso,
     './commercial': { assertModule: async () => true },
+    '../utils/template-renderer.mjs': templateRenderer,
     '@anthropic-ai/sdk': Anthropic,
   });
   const org = { id: 1 };

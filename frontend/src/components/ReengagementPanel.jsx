@@ -9,6 +9,12 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
+import {
+  buildBodyTemplateComponent,
+  getBodyComponent,
+  getTemplateVariables,
+  renderTemplate,
+} from '../utils/template-renderer.js';
 
 function Tooltip({ text, children, position = 'top' }) {
   const { colors } = useTheme();
@@ -186,11 +192,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
   useEffect(() => { loadTemplates(); }, []);
 
   const parseTemplateVars = (tpl) => {
-    if (!tpl) return [];
-    const bodyComp = (tpl.components || []).find(c => c.type === 'BODY');
-    if (!bodyComp?.text) return [];
-    const matches = [...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)];
-    return [...new Set(matches.map(m => m[1]))].sort();
+    return getTemplateVariables(getBodyComponent(tpl)?.text || '');
   };
 
   // Construir components para envío usando el pick de IA
@@ -199,13 +201,15 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
     if (!pick?.vars) return [];
     const tpl = templates.find(t => t.name === pick.templateName);
     if (!tpl) return [];
-    const vars = parseTemplateVars(tpl);
-    if (vars.length === 0) return [];
-    const parameters = vars.map(v => ({ type: 'text', text: pick.vars[v] ?? '' }));
-    return [{ type: 'body', parameters }];
+    return buildBodyTemplateComponent(getBodyComponent(tpl)?.text || '', pick.vars);
   };
 
-  const getPreviewText = (candidate) => clientPicks[candidate?.phone]?.previewText || '';
+  const getPreviewText = (candidate) => {
+    const pick = clientPicks[candidate?.phone];
+    const tpl = templates.find(t => t.name === pick?.templateName);
+    const body = getBodyComponent(tpl)?.text || '';
+    return body ? renderTemplate(body, pick?.vars || {}) : '';
+  };
 
   // IA elige template + rellena variables para un cliente
   const aiPickForOne = async (phone) => {
@@ -1221,8 +1225,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     api.get('/contacts/favorite-products').then(r => setFavMap(r.data?.favorites || {})).catch(() => {});
   }, []);
 
-  const tplBody = (selTpl?.components || []).find(c => c.type === 'BODY');
-  const tplVarCount = tplBody?.text ? new Set([...tplBody.text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1])).size : 0;
+  const tplBody = getBodyComponent(selTpl);
+  const tplVars = getTemplateVariables(tplBody?.text || '');
+  const tplVarCount = tplVars.length;
 
   // Al cambiar de template, resetear el mapeo de variables (1=Nombre, resto=Producto favorito)
   useEffect(() => {
@@ -1237,8 +1242,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     if (mode === 'name') v = toTitleCase((contact?.name || 'Cliente').split(' ')[0]);
     else if (mode === 'text') v = (varText[i] || '');
     else v = favProduct(contact?.phone);
-    v = String(v || '').replace(/\s+/g, ' ').trim();
-    return v || '-';
+    v = String(v ?? '');
+    return v === '' ? '-' : v;
   }
 
   const ONE_WEEK_AGO = Date.now() - 7 * 24 * 60 * 60 * 1000;
@@ -1306,24 +1311,19 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setSending(true);
     setResults(null);
 
-    // Detectar variables del template ({{1}}, {{2}}, ...)
-    const bodyComp = (selTpl.components || []).find(c => c.type === 'BODY');
-    const varMatches = bodyComp?.text ? [...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)] : [];
-    const varCount = new Set(varMatches.map(m => m[1])).size;
+    const bodyComp = getBodyComponent(selTpl);
+    const variableNumbers = getTemplateVariables(bodyComp?.text || '');
 
     const items = Array.from(selected).map(phone => {
       const contact = contacts.find(c => c.phone === phone);
       const nombre = toTitleCase((contact?.name || 'Cliente').split(' ')[0]); // primer nombre, formateado
 
       // Rellenar cada variable segun el mapeo elegido (Nombre / Producto favorito / Texto)
-      const params = [];
-      for (let i = 0; i < varCount; i++) params.push({ type: 'text', text: varValue(i, contact) });
-      const components = varCount > 0 ? [{ type: 'body', parameters: params }] : [];
+      const values = Object.fromEntries(variableNumbers.map((number, index) => [number, varValue(index, contact)]));
+      const components = buildBodyTemplateComponent(bodyComp?.text || '', values);
 
       // Texto de preview para el chat (reemplaza cada {{N}} por su valor mapeado)
-      const previewText = bodyComp?.text
-        ? bodyComp.text.replace(/\{\{(\d+)\}\}/g, (_, n) => varValue(Number(n) - 1, contact))
-        : null;
+      const previewText = bodyComp?.text ? renderTemplate(bodyComp.text, values) : null;
 
       return {
         phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
@@ -1539,9 +1539,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       {!loading && selTpl && tplVarCount > 0 && (
         <div style={{ padding: '8px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>Variables del mensaje:</span>
-          {Array.from({ length: tplVarCount }).map((_, i) => (
-            <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ color: colors.textMuted, fontSize: 12 }}>{`{{${i + 1}}}`}</span>
+          {tplVars.map((number, i) => (
+            <span key={number} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ color: colors.textMuted, fontSize: 12 }}>{`{{${number}}}`}</span>
               <select value={varMap[i] || (i === 0 ? 'name' : 'fav')}
                 onChange={e => setVarMap(m => { const n = [...m]; while (n.length < tplVarCount) n.push('fav'); n[i] = e.target.value; return n; })}
                 style={{ padding: '3px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }}>
@@ -1550,9 +1550,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 <option value="text">Texto fijo</option>
               </select>
               {varMap[i] === 'text' && (
-                <input value={varText[i] || ''}
+                <textarea value={varText[i] || ''} rows={2}
                   onChange={e => setVarText(t => { const n = [...t]; while (n.length < tplVarCount) n.push(''); n[i] = e.target.value; return n; })}
-                  placeholder="texto" style={{ width: 120, padding: '3px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
+                  placeholder="Texto, también puede tener varias líneas"
+                  style={{ width: 210, minHeight: 46, resize: 'vertical', whiteSpace: 'pre-wrap', padding: '5px 7px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
               )}
             </span>
           ))}
@@ -1565,9 +1566,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         if (!sel.length) return null;
         const idx = Math.min(previewIdx, sel.length - 1);
         const c = sel[idx];
-        const bodyComp = (selTpl.components || []).find(x => x.type === 'BODY');
-        const nombre = toTitleCase((c?.name || 'Cliente').split(' ')[0]);
-        const text = bodyComp?.text ? bodyComp.text.replace(/\{\{(\d+)\}\}/g, (_, n) => varValue(Number(n) - 1, c)) : '(Este template no tiene cuerpo de texto para previsualizar)';
+        const bodyComp = getBodyComponent(selTpl);
+        const values = Object.fromEntries(tplVars.map((number, index) => [number, varValue(index, c)]));
+        const text = bodyComp?.text ? renderTemplate(bodyComp.text, values) : '(Este template no tiene cuerpo de texto para previsualizar)';
         return (
           <div style={{ padding: '10px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>

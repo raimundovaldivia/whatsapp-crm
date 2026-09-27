@@ -15,6 +15,11 @@
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
 const Anthropic    = require('@anthropic-ai/sdk');
+const {
+  buildBodyTemplateComponent,
+  getTemplateVariables,
+  renderTemplate,
+} = require('../utils/template-renderer.mjs');
 
 const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const ASSISTANT_NAME = 'Diva';
@@ -232,9 +237,7 @@ function getTemplateBody(template) {
 }
 
 function getBodyVariableNumbers(body) {
-  return [...new Set([...(body || '').matchAll(/\{\{(\d+)\}\}/g)].map(match => Number(match[1])))]
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
+  return getTemplateVariables(body).map(Number);
 }
 
 function hasUnsupportedTemplateVariables(template) {
@@ -244,15 +247,14 @@ function hasUnsupportedTemplateVariables(template) {
 }
 
 function renderTemplateBody(body, values, recipient) {
-  let rendered = body || '';
-  getBodyVariableNumbers(body).forEach((number, index) => {
-    const configured = values?.[index] || '';
+  const variables = Object.fromEntries(getBodyVariableNumbers(body).map((number, index) => {
+    const configured = values?.[index] ?? '';
     const value = /^\{?nombre\}?$/i.test(configured.trim())
       ? (recipient?.name || 'Cliente').trim().split(/\s+/)[0]
       : configured;
-    rendered = rendered.replace(new RegExp(`\\{\\{${number}\\}\\}`, 'g'), value || `{{${number}}}`);
-  });
-  return rendered;
+    return [String(number), value];
+  }));
+  return renderTemplate(body, variables);
 }
 
 function formatTemplateList(templates) {
@@ -442,16 +444,14 @@ async function executeCampaign(org, wc, session) {
 
   for (let index = 0; index < session.recipients.length; index++) {
     const recipient = session.recipients[index];
-    const values = variables.map((_, valueIndex) => {
+    const values = Object.fromEntries(variables.map((number, valueIndex) => {
       const configured = session.variableValues?.[valueIndex] || '';
       const value = /^\{?nombre\}?$/i.test(configured.trim())
         ? (recipient.name || 'Cliente').trim().split(/\s+/)[0]
         : configured;
-      return String(value || 'Cliente').replace(/[\n\r\t]+/g, ' ').slice(0, 900);
-    });
-    const components = values.length
-      ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }]
-      : [];
+      return [String(number), String(value || 'Cliente').slice(0, 900)];
+    }));
+    const components = buildBodyTemplateComponent(body, values);
 
     try {
       const sent = await kapsoService.sendTemplate(

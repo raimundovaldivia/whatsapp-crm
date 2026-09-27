@@ -16,6 +16,12 @@ const shopifyApi = require('../services/shopify-api');
 const Anthropic = require('@anthropic-ai/sdk');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
+const {
+  getBodyComponent,
+  getMissingBodyParameters,
+  renderTemplate,
+  renderTemplateFromComponents,
+} = require('../utils/template-renderer.mjs');
 
 router.use(requireAuth, requireRole('owner', 'admin', 'supervisor'));
 
@@ -892,9 +898,8 @@ ${tplDescriptions}
 
 PROCESO OBLIGATORIO:
 1. Elige el template más apropiado para este cliente.
-2. Escribe el MENSAJE COMPLETO final en "rendered_message" — exactamente cómo quedará cuando se envíe, con todas las variables reemplazadas.
-3. Lee "rendered_message" y verifica que NO tenga palabras repetidas ni frases sin sentido.
-4. Extrae los valores de cada variable comparando "rendered_message" con el cuerpo del template.
+2. Completa en "vars" exactamente todas las variables numeradas presentes en el cuerpo.
+3. Verifica que al reemplazarlas no queden palabras repetidas ni frases sin sentido.
 
 REGLAS CRÍTICAS para las variables:
 - Cada variable reemplaza EXACTAMENTE su marcador {{N}} — nada más, nada menos.
@@ -907,7 +912,6 @@ Responde SOLO con JSON válido (sin texto extra, sin markdown):
 {
   "templateName": "nombre_exacto_del_template",
   "reason": "por qué este template es el mejor (1 oración corta)",
-  "rendered_message": "el mensaje completo final tal como lo recibirá el cliente",
   "vars": { "1": "valor", "2": "valor", ... }
 }`;
 
@@ -929,17 +933,7 @@ Responde SOLO con JSON válido (sin texto extra, sin markdown):
     picked.templateName = tplFinal.name; // normalizar por si la IA devolvió nombre incorrecto
 
     const vars = picked.vars || {};
-
-    // Usar rendered_message de la IA si existe (ya verificado por ella misma)
-    // Si no, reconstruir desde las variables como fallback
-    let previewText = picked.rendered_message || '';
-    if (!previewText) {
-      const bodyComp = (tplFinal.components || []).find(comp => comp.type === 'BODY');
-      previewText = bodyComp?.text || '';
-      for (const [k, v] of Object.entries(vars)) {
-        previewText = previewText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
-      }
-    }
+    const previewText = renderTemplate(getBodyComponent(tplFinal)?.text || '', vars);
 
     res.json({
       success:      true,
@@ -1367,7 +1361,7 @@ router.post('/submit-templates', async (req, res) => {
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send', async (req, res) => {
   try {
-    let { phone, message, templateName, languageCode, components, previewText } = req.body;
+    let { phone, message, templateName, languageCode, components } = req.body;
     if (!phone) return res.status(400).json({ success: false, error: 'phone requerido' });
     // Normalizar: con código de país, sin "+"
     phone = db.normalizePhone(phone);
@@ -1389,11 +1383,18 @@ router.post('/send', async (req, res) => {
         return res.status(400).json({ success: false, error: 'Templates solo disponibles con Kapso o Meta' });
       }
       const kapsoService = require('../services/kapso-whatsapp');
+      const templates = await kapsoService.getTemplates(wc);
+      const template = templates.find(item => item.name === templateName);
+      if (!template) return res.status(400).json({ success: false, error: `Template ${templateName} no encontrado` });
+      const body = getBodyComponent(template)?.text || '';
+      const missing = getMissingBodyParameters(body, components || []);
+      if (missing.length) return res.status(400).json({ success: false, error: `Faltan valores para ${missing.map(number => `{{${number}}}`).join(', ')}` });
+      const rendered = renderTemplateFromComponents(body, components || []);
       sentResult = await kapsoService.sendTemplate(
         phone, templateName, languageCode || 'es', components || [], wc
       );
-      savedContent = previewText
-        ? `[Template: ${templateName}]\n\n${previewText}`
+      savedContent = rendered
+        ? `[Template: ${templateName}]\n\n${rendered}`
         : `[Template: ${templateName}]`;
     } else {
       // ── Modo Texto libre ─────────────────────────────────────────
@@ -1456,6 +1457,18 @@ router.post('/send-bulk', async (req, res) => {
   const wc = await db.getWhatsappConfig(req.orgId);
   if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
+  const templateItems = items.filter(item => item.templateName);
+  let templatesByName = new Map();
+  if (templateItems.length) {
+    try {
+      const kapsoService = require('../services/kapso-whatsapp');
+      const templates = await kapsoService.getTemplates(wc);
+      templatesByName = new Map(templates.map(template => [template.name, template]));
+    } catch (err) {
+      return res.status(502).json({ success: false, error: `No se pudieron validar los templates: ${err.message}` });
+    }
+  }
+
   const results = [];
   for (const item of items) {
     if (!await require('../services/commercial').permitted(req.orgId,'marketing')) { results.push({success:false,error:'Contrato no disponible'}); break; }
@@ -1486,31 +1499,18 @@ router.post('/send-bulk', async (req, res) => {
 
       if (isTemplate) {
         const kapsoService = require('../services/kapso-whatsapp');
-        try {
-          sentResult = await kapsoService.sendTemplate(
-            item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
-          );
-          console.log(`[SendBulk] Kapso response for ${item.phone} / ${item.templateName}:`, JSON.stringify(sentResult));
-        } catch (tplErr) {
-          // Error 132000: faltan parámetros — reintenta con la cantidad correcta
-          const metaCode = tplErr.response?.data?.error?.code;
-          const details  = tplErr.response?.data?.error?.error_data?.details || '';
-          const needed   = parseInt((details.match(/expected number of params \((\d+)\)/) || [])[1] || '0');
-          if (metaCode === 132000 && needed > 0) {
-            const name = item.contactName || 'Cliente';
-            const autoComponents = [{
-              type: 'body',
-              parameters: Array.from({ length: needed }, () => ({ type: 'text', text: name })),
-            }];
-            sentResult = await kapsoService.sendTemplate(
-              item.phone, item.templateName, item.languageCode || 'es', autoComponents, wc
-            );
-          } else {
-            throw tplErr;
-          }
-        }
-        savedContent = item.previewText
-          ? `[Template: ${item.templateName}]\n\n${item.previewText}`
+        const template = templatesByName.get(item.templateName);
+        if (!template) throw new Error(`Template ${item.templateName} no encontrado`);
+        const body = getBodyComponent(template)?.text || '';
+        const missing = getMissingBodyParameters(body, item.components || []);
+        if (missing.length) throw new Error(`Faltan valores para ${missing.map(number => `{{${number}}}`).join(', ')}`);
+        const rendered = renderTemplateFromComponents(body, item.components || []);
+        sentResult = await kapsoService.sendTemplate(
+          item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
+        );
+        console.log(`[SendBulk] Kapso response for ${item.phone} / ${item.templateName}:`, JSON.stringify(sentResult));
+        savedContent = rendered
+          ? `[Template: ${item.templateName}]\n\n${rendered}`
           : `[Template: ${item.templateName}]`;
       } else {
         if (wc.provider === 'twilio') {

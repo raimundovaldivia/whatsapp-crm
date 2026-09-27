@@ -7,6 +7,7 @@ const twilioService   = require('../services/twilio-whatsapp');
 const kapsoService    = require('../services/kapso-whatsapp');
 const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -408,7 +409,7 @@ router.post('/:id/escalation-feedback', async (req, res) => {
  */
 router.post('/:id/send-template', async (req, res) => {
   try {
-    const { templateName, languageCode, components, previewText } = req.body;
+    const { templateName, languageCode, components } = req.body;
     if (!templateName?.trim()) {
       return res.status(400).json({ success: false, error: 'templateName requerido' });
     }
@@ -424,6 +425,13 @@ router.post('/:id/send-template', async (req, res) => {
     }
 
     const kapsoService = require('../services/kapso-whatsapp');
+    const templates = await kapsoService.getTemplates(wc);
+    const template = templates.find(item => item.name === templateName.trim());
+    if (!template) return res.status(400).json({ success: false, error: `Template ${templateName.trim()} no encontrado` });
+    const body = getBodyComponent(template)?.text || '';
+    const missing = getMissingBodyParameters(body, components || []);
+    if (missing.length) return res.status(400).json({ success: false, error: `Faltan valores para ${missing.map(number => `{{${number}}}`).join(', ')}` });
+    const rendered = renderTemplateFromComponents(body, components || []);
     const sentResult = await kapsoService.sendTemplate(
       conv.phone_number,
       templateName.trim(),
@@ -432,8 +440,8 @@ router.post('/:id/send-template', async (req, res) => {
       wc
     );
 
-    const savedContent = previewText
-      ? `[Template: ${templateName.trim()}]\n\n${previewText}`
+    const savedContent = rendered
+      ? `[Template: ${templateName.trim()}]\n\n${rendered}`
       : `[Template: ${templateName.trim()}]`;
 
     const message = await db.saveMessage({
@@ -445,7 +453,7 @@ router.post('/:id/send-template', async (req, res) => {
       agentType:         null,
     });
 
-    await db.updateConversationLastMessage(conv.id, `[Template: ${templateName.trim()}]`);
+    await db.updateConversationLastMessage(conv.id, savedContent);
     const updated = await db.getConversationById(conv.id);
     io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updated });
 

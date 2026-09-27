@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { templatesAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import { getTemplateVariables, renderTemplate } from '../utils/template-renderer.js';
 
 const LANGUAGES = [
   { value: 'es',    label: 'Español (es)' },
@@ -58,9 +59,7 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
   const headerComp = template.components?.find(c => c.type === 'HEADER');
   const footerComp = template.components?.find(c => c.type === 'FOOTER');
 
-  const vars = bodyComp?.text
-    ? [...new Set([...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
-    : [];
+  const vars = getTemplateVariables(bodyComp?.text || '');
 
   return (
     <div style={{
@@ -163,9 +162,7 @@ function CreateTemplateForm({ onCreated, colors }) {
   // ── Valores de muestra para Meta ──
   const [varSamples,  setVarSamples]  = useState({});
 
-  const vars = body
-    ? [...new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
-    : [];
+  const vars = getTemplateVariables(body);
 
   const handleGenerate = async () => {
     if (!goal.trim()) return;
@@ -408,15 +405,16 @@ function CreateTemplateForm({ onCreated, colors }) {
                 {aiVarDescs[n] && (
                   <span style={{ color: colors.textSecondary, fontSize: '11px', flexShrink: 0 }}>{aiVarDescs[n]}</span>
                 )}
-                <input
-                  value={varSamples[n] || ''}
+                <textarea
+                  value={varSamples[n] ?? ''}
                   onChange={e => setVarSamples(prev => ({ ...prev, [n]: e.target.value }))}
                   placeholder={aiVarDescs[n] ? `ej: ${aiVarDescs[n] === 'nombre del cliente' ? 'Juan' : aiVarDescs[n]}` : `valor de muestra para {{${n}}}`}
+                  rows={Math.max(2, String(varSamples[n] ?? '').split('\n').length)}
                   style={{
                     flex: 1, backgroundColor: colors.bgApp, color: colors.textPrimary,
                     border: `1px solid ${varSamples[n]?.trim() ? colors.green + '66' : colors.red + '44'}`,
                     borderRadius: '7px', padding: '7px 10px', fontSize: '13px',
-                    outline: 'none', fontFamily: 'inherit',
+                    outline: 'none', fontFamily: 'inherit', resize: 'vertical', whiteSpace: 'pre-wrap',
                   }}
                 />
               </div>
@@ -449,10 +447,7 @@ function CreateTemplateForm({ onCreated, colors }) {
           <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px', border: `1px solid ${colors.border}`, maxWidth: '360px' }}>
             {header && <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '6px' }}>{header}</div>}
             <div style={{ color: colors.textPrimary, fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-              {body.replace(/\{\{(\d+)\}\}/g, (_, n) => {
-                const desc = aiVarDescs[n];
-                return desc ? `[${desc}]` : `[var${n}]`;
-              })}
+              {renderTemplate(body, varSamples)}
             </div>
             {footer && <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '6px' }}>{footer}</div>}
           </div>

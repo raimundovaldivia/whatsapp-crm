@@ -4,6 +4,7 @@ import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import { buildBodyTemplateComponent, getBodyComponent, getTemplateVariables, renderTemplate } from '../utils/template-renderer.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
@@ -298,10 +299,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   const parseVars = (tpl) => {
     if (!tpl) return [];
-    const bodyComp = (tpl.components || []).find(c => c.type === 'BODY');
-    if (!bodyComp?.text) return [];
-    const matches = [...bodyComp.text.matchAll(/\{\{(\d+)\}\}/g)];
-    return [...new Set(matches.map(m => m[1]))].sort();
+    return getTemplateVariables(getBodyComponent(tpl)?.text || '');
   };
 
   const handleSelectTpl = (tpl) => {
@@ -316,39 +314,48 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const buildTplComponents = () => {
     if (!selectedTemplate) return [];
     const vars = parseVars(selectedTemplate);
-    if (vars.length === 0) return [];
     const contactName = conversation.contact_name || conversation.phone_number;
-    const parameters = vars.map(v => {
+    const values = Object.fromEntries(vars.map(v => {
       const mapping = templateVarMap[v] || 'manual';
       let text = '';
       if (mapping === 'name')  text = contactName;
       else if (mapping === 'phone') text = conversation.phone_number;
-      else text = templateManualVars[v] || '';
-      return { type: 'text', text };
-    });
-    return [{ type: 'body', parameters }];
+      else text = templateManualVars[v] ?? '';
+      return [v, text];
+    }));
+    return buildBodyTemplateComponent(getBodyComponent(selectedTemplate)?.text || '', values);
   };
 
   const previewTpl = () => {
     if (!selectedTemplate) return '';
-    const bodyComp = (selectedTemplate.components || []).find(c => c.type === 'BODY');
+    const bodyComp = getBodyComponent(selectedTemplate);
     if (!bodyComp?.text) return `[Template: ${selectedTemplate.name}]`;
-    let text = bodyComp.text;
     const vars = parseVars(selectedTemplate);
     const contactName = conversation.contact_name || conversation.phone_number;
+    const values = {};
     vars.forEach(v => {
       const mapping = templateVarMap[v] || 'manual';
-      let val = '';
-      if (mapping === 'name')       val = contactName;
-      else if (mapping === 'phone') val = conversation.phone_number;
-      else val = templateManualVars[v] || `{{${v}}}`;
-      text = text.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), val);
+      if (mapping === 'name') values[v] = contactName;
+      else if (mapping === 'phone') values[v] = conversation.phone_number;
+      else if (Object.prototype.hasOwnProperty.call(templateManualVars, v)) values[v] = templateManualVars[v];
     });
-    return text;
+    return renderTemplate(bodyComp.text, values);
   };
+
+  const missingTemplateVars = () => selectedTemplate
+    ? parseVars(selectedTemplate).filter(v => {
+        const mapping = templateVarMap[v] || 'manual';
+        return mapping === 'manual' && (templateManualVars[v] === undefined || templateManualVars[v] === '');
+      })
+    : [];
 
   const sendTemplateMessage = async () => {
     if (!selectedTemplate) return;
+    const missing = missingTemplateVars();
+    if (missing.length) {
+      setTemplatesError(`Completa ${missing.map(v => `{{${v}}}`).join(', ')} antes de enviar.`);
+      return;
+    }
     setSendingTemplate(true);
     try {
       await conversationsAPI.sendTemplate(conversation.id, {
@@ -1491,9 +1498,10 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                               <option value="manual">Texto fijo</option>
                             </select>
                             {(templateVarMap[v] || 'manual') === 'manual' && (
-                              <input value={templateManualVars[v] || ''} onChange={e => setTemplateManualVars(prev => ({ ...prev, [v]: e.target.value }))}
+                              <textarea value={templateManualVars[v] ?? ''} onChange={e => setTemplateManualVars(prev => ({ ...prev, [v]: e.target.value }))}
                                 placeholder={`Texto para {{${v}}}...`}
-                                style={{ flex: 1, backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '5px', padding: '4px 8px', fontSize: '12px', outline: 'none' }} />
+                                rows={Math.max(2, String(templateManualVars[v] ?? '').split('\n').length)}
+                                style={{ flex: 1, backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '5px', padding: '4px 8px', fontSize: '12px', outline: 'none', resize: 'vertical', whiteSpace: 'pre-wrap' }} />
                             )}
                           </div>
                         ))}
@@ -1516,6 +1524,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                       </div>
                     </div>
                   )}
+                  {selectedTemplate && missingTemplateVars().length > 0 && (
+                    <div style={{ color: colors.red, fontSize: '12px' }}>
+                      Completa {missingTemplateVars().map(v => `{{${v}}}`).join(', ')} para poder enviar.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1525,8 +1538,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   style={{ padding: '8px 16px', borderRadius: '8px', backgroundColor: 'transparent', color: colors.textSecondary, border: `1px solid ${colors.borderStrong}`, cursor: 'pointer', fontSize: '13px' }}>
                   Cancelar
                 </button>
-                <button onClick={sendTemplateMessage} disabled={!selectedTemplate || sendingTemplate}
-                  style={{ padding: '8px 20px', borderRadius: '8px', backgroundColor: selectedTemplate ? colors.infoSoft : colors.bgHover, color: selectedTemplate ? '#000' : colors.textSecondary, border: 'none', cursor: selectedTemplate ? 'pointer' : 'not-allowed', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', opacity: sendingTemplate ? 0.7 : 1 }}>
+                <button onClick={sendTemplateMessage} disabled={!selectedTemplate || sendingTemplate || missingTemplateVars().length > 0}
+                  style={{ padding: '8px 20px', borderRadius: '8px', backgroundColor: selectedTemplate && missingTemplateVars().length === 0 ? colors.infoSoft : colors.bgHover, color: selectedTemplate && missingTemplateVars().length === 0 ? '#000' : colors.textSecondary, border: 'none', cursor: selectedTemplate && missingTemplateVars().length === 0 ? 'pointer' : 'not-allowed', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', opacity: sendingTemplate ? 0.7 : 1 }}>
                   {sendingTemplate ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Enviando...</> : <><Send size={13} /> Enviar Template</>}
                 </button>
               </div>

@@ -11,6 +11,7 @@ const router       = express.Router();
 const db           = require('../db/database');
 const kapsoService = require('../services/kapso-whatsapp');
 const { requireAuth } = require('../middleware/auth');
+const { getTemplateVariables, hasTemplateVariableValue } = require('../utils/template-renderer.mjs');
 
 router.use(requireAuth);
 
@@ -144,13 +145,21 @@ router.post('/', async (req, res) => {
     }
 
     // BODY con example — Meta lo exige cuando hay variables {{N}}
-    const bodyVars = [...new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
-      .sort((a, b) => +a - +b);
+    const bodyVars = getTemplateVariables(body);
+    const missingSamples = bodyVars.filter(n => !hasTemplateVariableValue(varSamples, n) || String(varSamples[n]) === '');
+    if (missingSamples.length) {
+      return res.status(400).json({
+        success: false,
+        error: `Faltan valores de muestra para ${missingSamples.map(n => `{{${n}}}`).join(', ')}`,
+      });
+    }
 
-    const bodyComponent = { type: 'BODY', text: body.trim() };
-    if (bodyVars.length > 0 && varSamples && Object.keys(varSamples).length > 0) {
+    const bodyComponent = { type: 'BODY', text: body };
+    if (bodyVars.length > 0) {
       bodyComponent.example = {
-        body_text: [ bodyVars.map(n => (varSamples[n] || `muestra${n}`).trim()) ],
+        body_text: [bodyVars.map(n => hasTemplateVariableValue(varSamples, n)
+          ? String(varSamples[n])
+          : `muestra${n}`)],
       };
     }
     components.push(bodyComponent);
