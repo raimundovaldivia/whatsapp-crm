@@ -21,7 +21,7 @@ const secretary = require('../services/admin-secretary');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
 const mediaCache                = require('../services/media-cache');
-const { handleAgentCommand }    = require('../services/agent-commands');
+const { handleAgentCommand, hasActiveCampaign } = require('../services/agent-commands');
 const guardrail                 = require('../services/response-guardrail');
 const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
 
@@ -104,12 +104,15 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     return;
   }
 
-  // ── Agente registrado: solo si el mensaje empieza con "#" → procesar como comando ──
-  // Mensajes sin "#" van al flujo normal (el agente puede chatear con el bot o aparecer como conversación)
-  if (parsed.from && parsed.type === 'text' && parsed.text && parsed.text.trimStart().startsWith('#')) {
+  // ── Equipo registrado ────────────────────────────────────────────────
+  // Dueños y administradores siempre entran al asistente de gestión. Así no
+  // caen por error en el bot de ventas ni reciben capacidades inventadas.
+  // Supervisores conservan el prefijo # para no cambiar su uso actual.
+  if (parsed.from && parsed.type === 'text' && parsed.text) {
     const agent = await db.getUserByWhatsappPhone(org.id, parsed.from).catch(() => null);
-    if (agent) {
-      const commandText = parsed.text.trimStart().slice(1).trim(); // quitar el "#"
+    const prefixed = parsed.text.trimStart().startsWith('#');
+    if (agent && (prefixed || ['owner', 'admin'].includes(agent.role))) {
+      const commandText = prefixed ? parsed.text.trimStart().slice(1).trim() : parsed.text.trim();
       console.log(`[KapsoWebhook] 🤖 Comando de agente ${agent.name || agent.email}: "${commandText.slice(0, 80)}"`);
       await handleAgentCommand(org, whatsappConfig, agent, commandText);
       return;
@@ -473,8 +476,8 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
  * Cuando el admin responde, su mensaje se reenvía al cliente pendiente más reciente.
  */
 async function handleAdminReply(org, whatsappConfig, parsed) {
-  if (!await require('../services/commercial').permitted(org.id,'sales_ai')) return;
   if (!parsed.text) return;
+  const salesEnabled = await require('../services/commercial').permitted(org.id, 'sales_ai');
 
   try {
     // Buscar pendiente activo para esta org
@@ -483,14 +486,33 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     // Verificar si hay sesión de secretaria activa aunque no haya pendiente nuevo
     const hasActiveSession = !!secretary.getSession(org.id);
 
-    if (!pending && !hasActiveSession) {
-      await kapsoService.sendTextMessage(
-        parsed.from,
-        'ℹ️ No hay clientes esperando respuesta en este momento.',
-        whatsappConfig
-      ).catch(() => {});
+    // Las consultas de gestión explícitas no pertenecen al cliente pendiente.
+    // Se enrutan al asistente administrativo incluso si hay una sesión abierta.
+    const managementIntent = parsed.text.trimStart().startsWith('#') ||
+      /\b(template|plantilla|campa[nñ]a|promoci[oó]n|mensajes? masiv|m[uú]ltiples mensajes|ayuda del bot)\b/i.test(parsed.text) ||
+      /puedes?.*enviar.*(m[aá]s|varios|m[uú]ltiples)/i.test(parsed.text);
+
+    const registered = await db.getUserByWhatsappPhone(org.id, parsed.from).catch(() => null);
+    const agent = registered || {
+      id: `admin-phone-${org.id}`,
+      name: 'Administrador',
+      email: '',
+      role: 'owner',
+      whatsapp_phone: parsed.from,
+      wa_notifications: {},
+    };
+
+    if ((!pending && !hasActiveSession) || managementIntent || hasActiveCampaign(org.id, agent)) {
+      const commandText = parsed.text.trimStart().startsWith('#')
+        ? parsed.text.trimStart().slice(1).trim()
+        : parsed.text.trim();
+      await handleAgentCommand(org, whatsappConfig, agent, commandText);
       return;
     }
+
+    // El relay hacia clientes pertenece al agente de ventas. Las consultas
+    // administrativas de arriba pueden funcionar aunque ese módulo esté apagado.
+    if (!salesEnabled) return;
 
     console.log(`[AdminRelay] 📨 Admin escribe — conv #${pending?.conversation_id || 'sesión activa'}`);
 

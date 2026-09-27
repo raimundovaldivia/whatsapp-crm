@@ -18,32 +18,69 @@ const Anthropic    = require('@anthropic-ai/sdk');
 
 const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+const campaignSessions = new Map();
+const CAMPAIGN_SESSION_MS = 45 * 60 * 1000;
+
+function sessionKey(orgId, agent) {
+  const phone = typeof db.normalizePhone === 'function'
+    ? db.normalizePhone(agent.whatsapp_phone || '')
+    : String(agent.whatsapp_phone || '').replace(/\D/g, '');
+  return `${orgId}:${agent.id || phone}`;
+}
+
+function getCampaignSession(orgId, agent) {
+  const key = sessionKey(orgId, agent);
+  const session = campaignSessions.get(key);
+  if (!session) return null;
+  if (Date.now() - session.updatedAt > CAMPAIGN_SESSION_MS) {
+    campaignSessions.delete(key);
+    return null;
+  }
+  return session;
+}
+
+function saveCampaignSession(orgId, agent, patch) {
+  const key = sessionKey(orgId, agent);
+  const next = { ...(campaignSessions.get(key) || {}), ...patch, updatedAt: Date.now() };
+  campaignSessions.set(key, next);
+  return next;
+}
+
+function clearCampaignSession(orgId, agent) {
+  campaignSessions.delete(sessionKey(orgId, agent));
+}
+
+function hasActiveCampaign(orgId, agent) {
+  return !!getCampaignSession(orgId, agent);
+}
+
 function buildSystemPrompt() {
-  return 'Eres el asistente de gestión de una tienda. Devuelve únicamente JSON. Para acciones explícitas usa {"action":"manage","command":"PAUSAR|ACTIVAR|MSG|PAGAR|CHATS|PEDIDOS|ESTADO","params":{"phone":"...","text":"...","orderId":123}}. Para ayuda usa {"action":"help"}. Para preguntas generales usa {"action":"answer","text":"..."}. No tienes acceso a SQL ni consultas libres. Deriva preguntas analíticas al panel de Estadísticas. No inventes datos ni acciones que no pidió el usuario.';
+  return 'Eres el asistente de gestión de una tienda. Devuelve únicamente JSON. Para acciones explícitas usa {"action":"manage","command":"PAUSAR|ACTIVAR|MSG|PAGAR|CHATS|PEDIDOS|ESTADO|TEMPLATES|CAMPANA","params":{"phone":"...","text":"...","orderId":123}}. TEMPLATES consulta templates reales aprobados. CAMPANA inicia una campaña guiada que siempre exige vista previa y confirmación. Para ayuda usa {"action":"help"}. Para preguntas generales usa {"action":"answer","text":"..."}. No tienes acceso a SQL ni consultas libres. Deriva preguntas analíticas al panel de Estadísticas. Nunca afirmes que enviaste, programaste o ejecutaste algo si no corresponde a uno de esos comandos. Nunca inventes templates ni capacidades.';
 }
 
 // ─── Texto de ayuda ───────────────────────────────────────────────────────────
-const HELP_TEXT = `🤖 *Asistente CRM con IA*
-_Escribe con # para activar el agente_
+const HELP_TEXT = `🤖 *Asistente de administración*
 
 Puedes solicitar acciones de gestión en lenguaje natural:
 
 📊 Para análisis de ventas y clientes, usa Estadísticas en el CRM.
 
-⚙️ *Gestión:*
-• _#pausar 56987654321_ — pausa el bot
-• _#activar 56987654321_ — reactiva el bot
-• _#msg 56987654321 Hola!_ — envía mensaje
-• _#pagar 42_ — marca pedido como pagado
-• _#chats_ — conversaciones activas
-• _#pedidos_ — pedidos pendientes
+📣 *Promociones:*
+• _templates disponibles_ — consulta los aprobados en WhatsApp
+• _crear campaña_ — elige template, público y revisa una vista previa
+• Ninguna campaña se ejecuta sin que escribas *CONFIRMAR ENVÍO*
 
-_Los mensajes sin # van al chat normal del bot._`;
+⚙️ *Gestión:*
+• _pausar 56987654321_ — pausa el bot
+• _activar 56987654321_ — reactiva el bot
+• _msg 56987654321 Hola!_ — envía un mensaje individual
+• _pagar 42_ — marca un pedido como pagado
+• _chats_ — conversaciones activas
+• _pedidos_ — pedidos pendientes`;
 
 // ─── Función principal ────────────────────────────────────────────────────────
 async function handleAgentCommand(org, wc, agent, text) {
   if (!['owner','admin','supervisor'].includes(agent.role)) return;
-  if (!await require('./commercial').permitted(org.id,'sales_ai')) return;
   const raw = (text || '').trim();
   try {
     const reply = await processAICommand(org, wc, agent, raw);
@@ -64,6 +101,28 @@ async function handleAgentCommand(org, wc, agent, text) {
 
 async function processAICommand(org, wc, agent, raw) {
   console.log(`[AgentCmd] 🤖 ${agent.name || agent.email}: "${raw.slice(0, 100)}"`);
+
+  const normalized = raw.toLocaleLowerCase('es').trim();
+  const activeCampaign = getCampaignSession(org.id, agent);
+
+  // Una campaña es una conversación guiada y determinística. No se deja al
+  // modelo decidir si envía: el último paso exige la frase CONFIRMAR ENVÍO.
+  if (activeCampaign) {
+    return handleCampaignStep(org, wc, agent, raw, activeCampaign);
+  }
+  if (/\b(cancelar|cancela|salir)\b/.test(normalized)) {
+    clearCampaignSession(org.id, agent);
+    return 'No hay una campaña en preparación.';
+  }
+  if (/\b(template|plantilla)s?\b/.test(normalized) && /\b(cu[aá]l|qu[eé]|ver|lista|disponible|tienes|tiene)\b/.test(normalized)) {
+    return startCampaign(org, wc, agent, { listOnly: true });
+  }
+  if (/\b(campa[nñ]a|promoci[oó]n|masiv[oa]|varios clientes|m[uú]ltiples mensajes)\b/.test(normalized)) {
+    return startCampaign(org, wc, agent);
+  }
+  if (/puedes?.*enviar.*(m[aá]s|varios|m[uú]ltiples)/.test(normalized)) {
+    return 'Puedo preparar campañas usando templates aprobados de WhatsApp. Primero consulto los templates reales, luego eliges el público y te muestro una vista previa. Solo se ejecuta si escribes *CONFIRMAR ENVÍO*.\n\nEscribe _templates disponibles_ para comenzar.';
+  }
 
   // ── Parsear intención con Claude Haiku ──
   let parsed;
@@ -143,9 +202,295 @@ async function executeManageCommand(org, wc, agent, command, params) {
     case 'ESTADO':
       return cmdEstado(agent);
 
+    case 'TEMPLATES':
+    case 'PLANTILLAS':
+      return await startCampaign(org, wc, agent, { listOnly: true });
+
+    case 'CAMPANA':
+    case 'CAMPAÑA':
+    case 'PROMOCION':
+    case 'PROMOCIÓN':
+      return await startCampaign(org, wc, agent);
+
     default:
       return `❓ Acción no reconocida: ${command}\n\nEscribe _#ayuda_ para ver las opciones.`;
   }
+}
+
+// ─── Campañas guiadas desde el WhatsApp del administrador ───────────────────
+
+function getTemplateBody(template) {
+  const component = (template.components || []).find(c => String(c.type || '').toUpperCase() === 'BODY');
+  return component?.text || '';
+}
+
+function getBodyVariableNumbers(body) {
+  return [...new Set([...(body || '').matchAll(/\{\{(\d+)\}\}/g)].map(match => Number(match[1])))]
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+}
+
+function hasUnsupportedTemplateVariables(template) {
+  return (template.components || []).some(component =>
+    String(component.type || '').toUpperCase() !== 'BODY' && /\{\{\d+\}\}/.test(component.text || '')
+  );
+}
+
+function renderTemplateBody(body, values, recipient) {
+  let rendered = body || '';
+  getBodyVariableNumbers(body).forEach((number, index) => {
+    const configured = values?.[index] || '';
+    const value = /^\{?nombre\}?$/i.test(configured.trim())
+      ? (recipient?.name || 'Cliente').trim().split(/\s+/)[0]
+      : configured;
+    rendered = rendered.replace(new RegExp(`\\{\\{${number}\\}\\}`, 'g'), value || `{{${number}}}`);
+  });
+  return rendered;
+}
+
+function formatTemplateList(templates) {
+  return templates.slice(0, 12).map((template, index) => {
+    const body = getTemplateBody(template).replace(/\s+/g, ' ').trim();
+    return `${index + 1}. *${template.name}* (${template.language || 'es'})\n_${body.slice(0, 150)}${body.length > 150 ? '…' : ''}_`;
+  }).join('\n\n');
+}
+
+async function startCampaign(org, wc, agent, { listOnly = false } = {}) {
+  await require('./commercial').assertModule(org.id, 'marketing');
+  const templates = (await kapsoService.getTemplates(wc)).filter(template =>
+    String(template.status || 'APPROVED').toUpperCase() === 'APPROVED'
+  );
+  if (!templates.length) {
+    clearCampaignSession(org.id, agent);
+    return 'No encontré templates aprobados en tu cuenta de WhatsApp. Puedes crearlos y revisar su estado desde *Configuración → Templates* en el CRM.';
+  }
+
+  saveCampaignSession(org.id, agent, { stage: 'template', templates });
+  return [
+    `📣 *Templates aprobados (${templates.length})*`,
+    '',
+    formatTemplateList(templates),
+    templates.length > 12 ? `\n_Mostrando 12 de ${templates.length}._` : '',
+    '',
+    listOnly
+      ? 'Para preparar una promoción, responde con el *número o nombre exacto* del template.'
+      : 'Responde con el *número o nombre exacto* del template que quieres usar.',
+    '_Escribe cancelar para salir._',
+  ].filter(Boolean).join('\n');
+}
+
+function selectTemplate(templates, raw) {
+  const trimmed = raw.trim();
+  const ordinal = Number((trimmed.match(/^(?:usar\s+)?(?:template|plantilla)?\s*(\d{1,2})\s*$/i) || [])[1]);
+  if (ordinal >= 1 && ordinal <= templates.length) return templates[ordinal - 1];
+  const normalized = trimmed.toLocaleLowerCase('es');
+  return templates.find(template =>
+    normalized === String(template.name).toLocaleLowerCase('es') ||
+    normalized.includes(String(template.name).toLocaleLowerCase('es'))
+  ) || null;
+}
+
+async function getCampaignAudience(orgId, raw) {
+  const normalized = raw.toLocaleLowerCase('es').trim();
+  const digits = raw.replace(/\D/g, '');
+  const pool = db.getPool();
+
+  if (digits.length >= 8 && !/todos|clientes|leads|contactos/.test(normalized)) {
+    const phone = db.normalizePhone(digits);
+    const { rows } = await pool.query(
+      `SELECT phone, COALESCE(NULLIF(name, ''), 'Cliente') AS name
+         FROM contacts WHERE organization_id = $1 AND phone IN ($2, $3) LIMIT 1`,
+      [orgId, phone, '+' + phone]
+    );
+    return { label: phone, recipients: rows.length ? rows : [{ phone, name: 'Cliente' }] };
+  }
+
+  let contactType = null;
+  let label = '';
+  if (/\bleads?\b/.test(normalized)) { contactType = 'lead'; label = 'Leads de WhatsApp'; }
+  else if (/todos.*contactos|contactos.*todos/.test(normalized)) { label = 'Todos los contactos'; }
+  else if (/todos|clientes|compradores/.test(normalized)) { contactType = 'customer'; label = 'Todos los clientes'; }
+  else return null;
+
+  const params = [orgId];
+  let typeCondition = '';
+  if (contactType) {
+    params.push(contactType);
+    typeCondition = `AND c.contact_type = $${params.length}`;
+  }
+  const { rows } = await pool.query(
+    `SELECT c.phone, COALESCE(NULLIF(c.name, ''), 'Cliente') AS name
+       FROM contacts c
+      WHERE c.organization_id = $1
+        ${typeCondition}
+        AND COALESCE(c.opt_out, FALSE) = FALSE
+        AND c.phone IS NOT NULL AND c.phone <> ''
+        AND (c.last_template_sent_at IS NULL OR c.last_template_sent_at < DATE_TRUNC('day', NOW()))
+        AND NOT EXISTS (
+          SELECT 1 FROM conversations cv
+           WHERE cv.organization_id = c.organization_id
+             AND regexp_replace(cv.phone_number, '[^0-9]', '', 'g') = regexp_replace(c.phone, '[^0-9]', '', 'g')
+             AND cv.pipeline_state = 'opted_out'
+        )
+      ORDER BY c.last_order_at DESC NULLS LAST, c.updated_at DESC
+      LIMIT 500`,
+    params
+  );
+  return { label, recipients: rows };
+}
+
+function campaignPreview(session) {
+  const sample = session.recipients[0] || { name: 'Cliente' };
+  const body = renderTemplateBody(getTemplateBody(session.template), session.variableValues, sample);
+  return [
+    '📋 *Vista previa de campaña*',
+    `Template: *${session.template.name}*`,
+    `Público: *${session.audienceLabel}*`,
+    `Destinatarios aptos: *${session.recipients.length}*`,
+    '',
+    `_${body.slice(0, 600)}${body.length > 600 ? '…' : ''}_`,
+    '',
+    'Todavía no se envió nada.',
+    'Para ejecutarla escribe exactamente: *CONFIRMAR ENVÍO*',
+    '_También puedes escribir cancelar._',
+  ].join('\n');
+}
+
+async function handleCampaignStep(org, wc, agent, raw, session) {
+  const normalized = raw.toLocaleLowerCase('es').trim();
+  if (/^(cancelar|cancela|salir|no)$/.test(normalized)) {
+    clearCampaignSession(org.id, agent);
+    return '✅ Campaña cancelada. No se envió ningún mensaje.';
+  }
+
+  if (session.stage === 'template') {
+    if (/\b(template|plantilla)s?\b/.test(normalized) && /\b(ver|lista|disponible|tienes|tiene)\b/.test(normalized)) {
+      return `📣 *Templates aprobados*\n\n${formatTemplateList(session.templates)}\n\nResponde con el *número o nombre exacto* del que quieres usar.`;
+    }
+    const template = selectTemplate(session.templates, raw);
+    if (!template) return 'No reconocí ese template. Responde con el número o el nombre exacto de la lista, o escribe *cancelar*.';
+    if (hasUnsupportedTemplateVariables(template)) {
+      return `El template *${template.name}* tiene variables fuera del texto principal. Por seguridad, prepáralo desde *Mensajería* en el CRM. Elige otro template o escribe cancelar.`;
+    }
+    const variables = getBodyVariableNumbers(getTemplateBody(template));
+    if (variables.length) {
+      saveCampaignSession(org.id, agent, { stage: 'variables', template, variables });
+      return [
+        `Elegiste *${template.name}*. Tiene ${variables.length} variable${variables.length === 1 ? '' : 's'}: ${variables.map(number => `{{${number}}}`).join(', ')}.`,
+        '',
+        `Responde con ${variables.length} valor${variables.length === 1 ? '' : 'es'} separado${variables.length === 1 ? '' : 's'} por *|*.`,
+        'Usa *{nombre}* si quieres personalizar con el nombre de cada cliente.',
+        `Ejemplo: _valores: ${variables.map((_, index) => index === 0 ? '{nombre}' : `valor ${index + 1}`).join(' | ')}_`,
+      ].join('\n');
+    }
+    saveCampaignSession(org.id, agent, { stage: 'audience', template, variableValues: [] });
+    return `Elegiste *${template.name}*.\n\n¿A quién quieres enviarlo? Responde *todos los clientes*, *leads*, *todos los contactos* o un número de teléfono.`;
+  }
+
+  if (session.stage === 'variables') {
+    const valueText = raw.replace(/^valores?\s*:\s*/i, '').trim();
+    const values = valueText.split('|').map(value => value.trim()).filter(Boolean);
+    if (values.length !== session.variables.length) {
+      return `Necesito exactamente ${session.variables.length} valor${session.variables.length === 1 ? '' : 'es'}, separado${session.variables.length === 1 ? '' : 's'} por *|*. Puedes usar *{nombre}* para personalizar.`;
+    }
+    saveCampaignSession(org.id, agent, { stage: 'audience', variableValues: values });
+    return '¿A quién quieres enviarlo? Responde *todos los clientes*, *leads*, *todos los contactos* o un número de teléfono.';
+  }
+
+  if (session.stage === 'audience') {
+    const audience = await getCampaignAudience(org.id, raw);
+    if (!audience) return 'No reconocí el público. Responde *todos los clientes*, *leads*, *todos los contactos* o un número de teléfono.';
+    if (!audience.recipients.length) return `No hay destinatarios aptos en *${audience.label}*. Se excluyen quienes no aceptan mensajes y quienes ya recibieron un template hoy.`;
+    const ready = saveCampaignSession(org.id, agent, {
+      stage: 'confirm', audienceLabel: audience.label, recipients: audience.recipients,
+    });
+    return campaignPreview(ready);
+  }
+
+  if (session.stage === 'confirm') {
+    if (!/^confirmar\s+env[ií]o[.!]?$/i.test(raw.trim())) {
+      return 'La campaña sigue pendiente y no se envió nada. Para ejecutarla escribe exactamente *CONFIRMAR ENVÍO* o escribe *cancelar*.';
+    }
+    await kapsoService.sendTextMessage(
+      agent.whatsapp_phone,
+      `⏳ Iniciando campaña para ${session.recipients.length} destinatario${session.recipients.length === 1 ? '' : 's'}. Te avisaré cuando termine.`,
+      wc
+    ).catch(() => {});
+    const result = await executeCampaign(org, wc, session);
+    clearCampaignSession(org.id, agent);
+    return result;
+  }
+
+  clearCampaignSession(org.id, agent);
+  return 'La preparación anterior venció. Escribe *crear campaña* para comenzar de nuevo.';
+}
+
+async function executeCampaign(org, wc, session) {
+  await require('./commercial').assertModule(org.id, 'marketing');
+  const body = getTemplateBody(session.template);
+  const variables = getBodyVariableNumbers(body);
+  let accepted = 0;
+  let failed = 0;
+  const errors = new Map();
+
+  for (let index = 0; index < session.recipients.length; index++) {
+    const recipient = session.recipients[index];
+    const values = variables.map((_, valueIndex) => {
+      const configured = session.variableValues?.[valueIndex] || '';
+      const value = /^\{?nombre\}?$/i.test(configured.trim())
+        ? (recipient.name || 'Cliente').trim().split(/\s+/)[0]
+        : configured;
+      return String(value || 'Cliente').replace(/[\n\r\t]+/g, ' ').slice(0, 900);
+    });
+    const components = values.length
+      ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }]
+      : [];
+
+    try {
+      const sent = await kapsoService.sendTemplate(
+        db.normalizePhone(recipient.phone),
+        session.template.name,
+        session.template.language || 'es',
+        components,
+        wc
+      );
+      const preview = renderTemplateBody(body, session.variableValues, recipient);
+      const conv = await db.upsertConversation(org.id, recipient.phone, recipient.name || 'Cliente');
+      await db.saveMessage({
+        conversationId: conv.id,
+        whatsappMessageId: sent?.messages?.[0]?.id || null,
+        direction: 'outbound',
+        content: `[Template: ${session.template.name}]\n\n${preview}`,
+        type: 'template',
+        sentBy: 'human',
+        agentType: 'admin_campaign',
+        status: 'pending',
+      });
+      await db.updateConversationLastMessage(conv.id, `[Template: ${session.template.name}]`);
+      await db.updatePipelineState(conv.id, 'template_sent').catch(() => {});
+      await db.getPool().query(
+        'UPDATE contacts SET last_template_sent_at = NOW() WHERE organization_id = $1 AND phone = $2',
+        [org.id, recipient.phone]
+      );
+      accepted++;
+    } catch (error) {
+      failed++;
+      const detail = error.response?.data?.error?.message || error.response?.data?.message || error.message || 'Error desconocido';
+      errors.set(detail, (errors.get(detail) || 0) + 1);
+    }
+
+    if (index < session.recipients.length - 1) await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  const errorLines = [...errors.entries()].slice(0, 3).map(([message, amount]) => `• ${amount} × ${message.slice(0, 120)}`);
+  return [
+    '📣 *Campaña procesada*',
+    `✅ Aceptados por WhatsApp: *${accepted}*`,
+    `❌ Fallos inmediatos: *${failed}*`,
+    '',
+    accepted ? 'Los aceptados quedan pendientes de confirmación de entrega. Su estado real se actualizará con los comprobantes de WhatsApp.' : '',
+    errorLines.length ? `\n*Errores:*\n${errorLines.join('\n')}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 // ─── Implementaciones de acciones ─────────────────────────────────────────────
@@ -342,4 +687,4 @@ function cmdEstado(agent) {
   ].join('\n');
 }
 
-module.exports = { handleAgentCommand };
+module.exports = { handleAgentCommand, hasActiveCampaign };
