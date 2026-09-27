@@ -1770,40 +1770,135 @@ function HistorialRepartos({ colors }) {
 
 // ─── Gastos rendidos por los repartidores ───────────────────────────────────
 function GastosRepartos({ colors }) {
+  const today = isoDay(new Date());
+  const monthStart = `${today.slice(0, 8)}01`;
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading]   = useState(true);
   const [total, setTotal]       = useState(0);
+  const [count, setCount]       = useState(0);
+  const [byDay, setByDay]       = useState([]);
+  const [from, setFrom]         = useState(monthStart);
+  const [to, setTo]             = useState(today);
+  const [draftFrom, setDraftFrom] = useState(monthStart);
+  const [draftTo, setDraftTo]     = useState(today);
+  const [rangeError, setRangeError] = useState('');
   const [photo, setPhoto]       = useState(null); // url en modal
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get('/delivery/expenses');
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const r = await api.get(`/delivery/expenses${params.size ? `?${params}` : ''}`);
       setExpenses(r.data.expenses || []);
       setTotal(r.data.total || 0);
-    } catch { setExpenses([]); }
+      setCount(r.data.count ?? (r.data.expenses || []).length);
+      setByDay(r.data.byDay || []);
+    } catch {
+      setExpenses([]);
+      setTotal(0);
+      setCount(0);
+      setByDay([]);
+    }
     finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
+  }, [from, to]);
+  useEffect(() => { load(); }, [load]);
 
   const token = (() => { try { return localStorage.getItem('crm_token') || ''; } catch { return ''; } })();
   const photoUrl = id => `${API_BASE}/api/delivery/expenses/${id}/photo?_token=${encodeURIComponent(token)}`;
   const clp = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
+  const average = count ? total / count : 0;
+
+  const shiftDay = (date, delta) => {
+    const [year, month, day] = date.split('-').map(Number);
+    const shifted = new Date(Date.UTC(year, month - 1, day + delta));
+    return shifted.toISOString().slice(0, 10);
+  };
+
+  const setPreset = (preset) => {
+    let nextFrom = '';
+    let nextTo = '';
+    if (preset === 'today') nextFrom = nextTo = today;
+    if (preset === 'week') { nextFrom = shiftDay(today, -6); nextTo = today; }
+    if (preset === 'month') { nextFrom = monthStart; nextTo = today; }
+    setDraftFrom(nextFrom);
+    setDraftTo(nextTo);
+    setRangeError('');
+    setFrom(nextFrom);
+    setTo(nextTo);
+  };
+
+  const applyRange = () => {
+    if (draftFrom && draftTo && draftFrom > draftTo) {
+      setRangeError('La fecha inicial no puede ser posterior a la fecha final.');
+      return;
+    }
+    setRangeError('');
+    setFrom(draftFrom);
+    setTo(draftTo);
+  };
+
+  const rangeLabel = !from && !to
+    ? 'Todos los registros'
+    : from === to
+      ? new Date(`${from}T12:00:00`).toLocaleDateString('es-CL')
+      : `${from ? new Date(`${from}T12:00:00`).toLocaleDateString('es-CL') : 'Inicio'} – ${to ? new Date(`${to}T12:00:00`).toLocaleDateString('es-CL') : 'Hoy'}`;
 
   async function del(id) {
     try { await api.delete(`/delivery/expenses/${id}`); load(); } catch {}
   }
 
-  if (loading) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textMuted, fontSize: '14px' }}>Cargando gastos...</div>;
-
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-        <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '15px' }}>Gastos rendidos ({expenses.length})</span>
-        <span style={{ color: colors.textPrimary, fontWeight: 800, fontSize: '16px' }}>Total: {clp(total)}</span>
+    <div style={{ height: '100%', minHeight: 0, overflowY: 'auto', padding: '20px', boxSizing: 'border-box' }}>
+      <div style={{ position: 'sticky', top: '-20px', zIndex: 4, backgroundColor: colors.bgPanel, padding: '20px 0 14px', marginTop: '-20px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', marginBottom: '12px' }}>
+          <div>
+            <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: '17px' }}>Gastos rendidos</div>
+            <div style={{ color: colors.textMuted, fontSize: '12px', marginTop: '3px' }}>{rangeLabel}</div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {[
+              ['today', 'Hoy'],
+              ['week', '7 días'],
+              ['month', 'Este mes'],
+              ['all', 'Todo'],
+            ].map(([key, label]) => (
+              <button key={key} onClick={() => setPreset(key)} style={{
+                padding: '7px 11px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 650,
+                border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary,
+              }}>{label}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '10px', flexWrap: 'wrap', padding: '12px', borderRadius: '12px', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}` }}>
+          <DateField label="Desde" value={draftFrom} onChange={setDraftFrom} colors={colors} />
+          <DateField label="Hasta" value={draftTo} onChange={setDraftTo} colors={colors} />
+          <button onClick={applyRange} disabled={loading} style={{
+            padding: '9px 16px', height: '38px', border: 'none', borderRadius: '8px', cursor: loading ? 'wait' : 'pointer',
+            backgroundColor: colors.green, color: '#fff', fontSize: '13px', fontWeight: 750, opacity: loading ? 0.65 : 1,
+          }}>{loading ? 'Filtrando…' : 'Aplicar filtro'}</button>
+          {rangeError && <span style={{ color: colors.red, fontSize: '12px', width: '100%' }}>{rangeError}</span>}
+        </div>
       </div>
 
-      {expenses.length === 0 ? (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', marginBottom: '12px' }}>
+        <SummaryCard label="Total del período" value={clp(total)} accent={colors.green} colors={colors} />
+        <SummaryCard label="Gastos registrados" value={count.toLocaleString('es-CL')} colors={colors} />
+        <SummaryCard label="Promedio por gasto" value={clp(average)} colors={colors} />
+      </div>
+
+      {byDay.length > 0 && <DailyExpenseChart data={byDay} clp={clp} colors={colors} />}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 10px' }}>
+        <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '14px' }}>Detalle ({count})</span>
+        {count > expenses.length && <span style={{ color: colors.textMuted, fontSize: '11px' }}>Mostrando los últimos {expenses.length}</span>}
+      </div>
+
+      {loading && expenses.length === 0 ? (
+        <div style={{ padding: '50px', textAlign: 'center', color: colors.textMuted, fontSize: '14px' }}>Cargando gastos…</div>
+      ) : expenses.length === 0 ? (
         <p style={{ color: colors.textMuted, fontSize: '14px' }}>Aún no hay gastos rendidos. El repartidor los agrega desde la app (💸 Gasto en la ruta).</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1835,6 +1930,51 @@ function GastosRepartos({ colors }) {
           <img src={photo} alt="boleta" style={{ maxWidth: '90%', maxHeight: '90%', borderRadius: '8px' }} />
         </div>
       )}
+    </div>
+  );
+}
+
+function DateField({ label, value, onChange, colors }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '155px' }}>
+      <span style={{ color: colors.textSecondary, fontSize: '11px', fontWeight: 650 }}>{label}</span>
+      <input type="date" value={value} onChange={event => onChange(event.target.value)} style={{
+        height: '38px', boxSizing: 'border-box', padding: '0 10px', borderRadius: '8px',
+        border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgInput,
+        color: colors.textPrimary, colorScheme: 'dark', fontSize: '13px', outline: 'none',
+      }} />
+    </label>
+  );
+}
+
+function SummaryCard({ label, value, accent, colors }) {
+  return (
+    <div style={{ padding: '14px 16px', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: '11px' }}>
+      <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '5px' }}>{label}</div>
+      <div style={{ color: accent || colors.textPrimary, fontSize: '20px', fontWeight: 800 }}>{value}</div>
+    </div>
+  );
+}
+
+function DailyExpenseChart({ data, clp, colors }) {
+  const max = Math.max(...data.map(item => Number(item.total) || 0), 1);
+  return (
+    <div style={{ backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: '11px', padding: '14px 16px' }}>
+      <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px', marginBottom: '12px' }}>Total por día</div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', height: '112px', overflowX: 'auto', paddingBottom: '3px' }}>
+        {data.map(item => {
+          const amount = Number(item.total) || 0;
+          const date = new Date(`${String(item.day).slice(0, 10)}T12:00:00`);
+          return (
+            <div key={item.day} title={`${date.toLocaleDateString('es-CL')}: ${clp(amount)} · ${item.count} gasto${item.count === 1 ? '' : 's'}`}
+              style={{ minWidth: '54px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', gap: '5px' }}>
+              <span style={{ color: colors.textSecondary, fontSize: '10px', whiteSpace: 'nowrap' }}>{clp(amount)}</span>
+              <div style={{ width: '30px', height: `${Math.max(7, Math.round((amount / max) * 64))}px`, borderRadius: '6px 6px 2px 2px', backgroundColor: colors.green, opacity: 0.85 }} />
+              <span style={{ color: colors.textMuted, fontSize: '10px', whiteSpace: 'nowrap' }}>{date.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' })}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

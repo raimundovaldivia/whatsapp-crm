@@ -710,13 +710,29 @@ router.get('/expenses', async (req, res) => {
     if (own) { params.push(req.userId); where += ` AND driver_user_id = $${params.length}`; }
     if (req.query.from) { params.push(req.query.from); where += ` AND created_at >= $${params.length}`; }
     if (req.query.to)   { params.push(req.query.to + ' 23:59:59'); where += ` AND created_at <= $${params.length}`; }
-    const { rows } = await pool.query(
-      `SELECT id, route_id, driver_user_id, driver_name, amount, category, note,
-              (photo IS NOT NULL) AS has_photo, created_at
-         FROM delivery_expenses WHERE ${where}
-        ORDER BY created_at DESC LIMIT 500`, params);
-    const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
-    res.json({ success: true, expenses: rows, total });
+    const [expensesResult, summaryResult, dailyResult] = await Promise.all([
+      pool.query(
+        `SELECT id, route_id, driver_user_id, driver_name, amount, category, note,
+                (photo IS NOT NULL) AS has_photo, created_at
+           FROM delivery_expenses WHERE ${where}
+          ORDER BY created_at DESC LIMIT 500`, params),
+      pool.query(
+        `SELECT COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total
+           FROM delivery_expenses WHERE ${where}`, params),
+      pool.query(
+        `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day,
+                COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total
+           FROM delivery_expenses WHERE ${where}
+          GROUP BY created_at::date ORDER BY created_at::date`, params),
+    ]);
+    const summary = summaryResult.rows[0] || { count: 0, total: 0 };
+    res.json({
+      success: true,
+      expenses: expensesResult.rows,
+      total: summary.total,
+      count: summary.count,
+      byDay: dailyResult.rows,
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
