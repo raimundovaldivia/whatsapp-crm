@@ -51,6 +51,7 @@ test('admin campaign uses live templates and requires exact confirmation before 
   const agent = { id: 2, role: 'owner', name: 'Rai', whatsapp_phone: '56999999999' };
 
   await service.handleAgentCommand(org, wc, agent, 'qué templates tienes disponibles');
+  assert.match(adminReplies.at(-1), /Diva/);
   assert.match(adminReplies.at(-1), /promo_huevos/);
 
   await service.handleAgentCommand(org, wc, agent, '1');

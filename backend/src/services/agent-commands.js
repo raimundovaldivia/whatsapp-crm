@@ -17,6 +17,7 @@ const kapsoService = require('./kapso-whatsapp');
 const Anthropic    = require('@anthropic-ai/sdk');
 
 const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const ASSISTANT_NAME = 'Diva';
 
 const campaignSessions = new Map();
 const CAMPAIGN_SESSION_MS = 45 * 60 * 1000;
@@ -55,11 +56,13 @@ function hasActiveCampaign(orgId, agent) {
 }
 
 function buildSystemPrompt() {
-  return 'Eres el asistente de gestión de una tienda. Devuelve únicamente JSON. Para acciones explícitas usa {"action":"manage","command":"PAUSAR|ACTIVAR|MSG|PAGAR|CHATS|PEDIDOS|ESTADO|TEMPLATES|CAMPANA","params":{"phone":"...","text":"...","orderId":123}}. TEMPLATES consulta templates reales aprobados. CAMPANA inicia una campaña guiada que siempre exige vista previa y confirmación. Para ayuda usa {"action":"help"}. Para preguntas generales usa {"action":"answer","text":"..."}. No tienes acceso a SQL ni consultas libres. Deriva preguntas analíticas al panel de Estadísticas. Nunca afirmes que enviaste, programaste o ejecutaste algo si no corresponde a uno de esos comandos. Nunca inventes templates ni capacidades.';
+  return `Tu nombre es ${ASSISTANT_NAME}. Eres la asistente de gestión de la tienda y hablas con su administrador. Tu trato es agradable, educado, cercano y claro. Siempre muestras disposición para resolver la duda o el problema y propones el siguiente paso útil cuando corresponda. Sé breve y práctica; no uses un tono robótico ni exageradamente informal. Devuelve únicamente JSON. Para acciones explícitas usa {"action":"manage","command":"PAUSAR|ACTIVAR|MSG|PAGAR|CHATS|PEDIDOS|ESTADO|TEMPLATES|CAMPANA","params":{"phone":"...","text":"...","orderId":123}}. TEMPLATES consulta templates reales aprobados. CAMPANA inicia una campaña guiada que siempre exige vista previa y confirmación. Para ayuda usa {"action":"help"}. Para preguntas generales usa {"action":"answer","text":"..."}. No tienes acceso a SQL ni consultas libres. Deriva preguntas analíticas al panel de Estadísticas. Si no puedes ejecutar algo, explícalo con amabilidad e indica una alternativa concreta. Nunca afirmes que enviaste, programaste o ejecutaste algo si no corresponde a uno de esos comandos. Nunca inventes templates, datos ni capacidades.`;
 }
 
 // ─── Texto de ayuda ───────────────────────────────────────────────────────────
-const HELP_TEXT = `🤖 *Asistente de administración*
+const HELP_TEXT = `✨ *Soy Diva, tu asistente de administración*
+
+Estoy aquí para ayudarte a resolver dudas y realizar tareas de gestión desde WhatsApp.
 
 Puedes solicitar acciones de gestión en lenguaje natural:
 
@@ -93,7 +96,7 @@ async function handleAgentCommand(org, wc, agent, text) {
     console.error('[AgentCmd] Error procesando comando:', err.message);
     await kapsoService.sendTextMessage(
       agent.whatsapp_phone,
-      `❌ Error procesando tu consulta: ${err.message.slice(0, 100)}`,
+      `Lo siento, no pude completar tu solicitud por este error: ${err.message.slice(0, 100)}. Puedes intentarlo nuevamente y con gusto te ayudaré.`,
       wc
     ).catch(() => {});
   }
@@ -114,6 +117,9 @@ async function processAICommand(org, wc, agent, raw) {
     clearCampaignSession(org.id, agent);
     return 'No hay una campaña en preparación.';
   }
+  if (/\b(qui[eé]n eres|c[oó]mo te llamas|cu[aá]l es tu nombre|tu nombre)\b/.test(normalized)) {
+    return `Soy *${ASSISTANT_NAME}*, tu asistente de administración. Estoy aquí para ayudarte a resolver dudas y gestionar tareas de la tienda. Puedes preguntarme qué puedo hacer o contarme qué necesitas.`;
+  }
   if (/\b(template|plantilla)s?\b/.test(normalized) && /\b(cu[aá]l|qu[eé]|ver|lista|disponible|tienes|tiene)\b/.test(normalized)) {
     return startCampaign(org, wc, agent, { listOnly: true });
   }
@@ -121,7 +127,7 @@ async function processAICommand(org, wc, agent, raw) {
     return startCampaign(org, wc, agent);
   }
   if (/puedes?.*enviar.*(m[aá]s|varios|m[uú]ltiples)/.test(normalized)) {
-    return 'Puedo preparar campañas usando templates aprobados de WhatsApp. Primero consulto los templates reales, luego eliges el público y te muestro una vista previa. Solo se ejecuta si escribes *CONFIRMAR ENVÍO*.\n\nEscribe _templates disponibles_ para comenzar.';
+    return `Sí, puedo ayudarte a preparar una campaña usando los templates aprobados de WhatsApp. Primero consulto los templates reales, luego eliges el público y te muestro una vista previa. Solo se ejecuta si escribes *CONFIRMAR ENVÍO*.\n\nEscribe _templates disponibles_ y ${ASSISTANT_NAME} te guiará paso a paso.`;
   }
 
   // ── Parsear intención con Claude Haiku ──
@@ -164,7 +170,7 @@ async function processAICommand(org, wc, agent, raw) {
     return await executeManageCommand(org, wc, agent, parsed.command, parsed.params || {});
   }
 
-  return `🤔 No entendí tu consulta. Escribe _#ayuda_ para ver qué puedo hacer.`;
+  return `No alcancé a entender tu consulta. Cuéntame de otra forma qué necesitas o escribe _ayuda_ y con gusto te mostraré lo que puedo hacer.`;
 }
 
 // ─── Ejecutar comandos de gestión ─────────────────────────────────────────────
@@ -262,12 +268,12 @@ async function startCampaign(org, wc, agent, { listOnly = false } = {}) {
   );
   if (!templates.length) {
     clearCampaignSession(org.id, agent);
-    return 'No encontré templates aprobados en tu cuenta de WhatsApp. Puedes crearlos y revisar su estado desde *Configuración → Templates* en el CRM.';
+    return 'No encontré templates aprobados en tu cuenta de WhatsApp. Puedes crearlos y revisar su estado desde *Configuración → Templates* en el CRM. Cuando estén aprobados, vuelve a escribirme y con gusto te ayudaré a preparar la campaña.';
   }
 
   saveCampaignSession(org.id, agent, { stage: 'template', templates });
   return [
-    `📣 *Templates aprobados (${templates.length})*`,
+    `✨ *Diva encontró ${templates.length} template${templates.length === 1 ? '' : 's'} aprobado${templates.length === 1 ? '' : 's'}*`,
     '',
     formatTemplateList(templates),
     templates.length > 12 ? `\n_Mostrando 12 de ${templates.length}._` : '',
