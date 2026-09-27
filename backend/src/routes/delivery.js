@@ -720,10 +720,10 @@ router.get('/expenses', async (req, res) => {
         `SELECT COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total
            FROM delivery_expenses WHERE ${where}`, params),
       pool.query(
-        `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day,
+        `SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD') AS day,
                 COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total
            FROM delivery_expenses WHERE ${where}
-          GROUP BY created_at::date ORDER BY created_at::date`, params),
+          GROUP BY 1 ORDER BY 1`, params),
     ]);
     const summary = summaryResult.rows[0] || { count: 0, total: 0 };
     res.json({
