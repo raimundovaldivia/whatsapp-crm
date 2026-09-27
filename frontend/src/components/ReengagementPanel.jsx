@@ -1142,6 +1142,33 @@ function toTitleCase(s) {
   }).join(' ');
 }
 
+function formatDaysSince(dateValue) {
+  if (!dateValue) return '';
+  const timestamp = new Date(dateValue).getTime();
+  if (!Number.isFinite(timestamp)) return '';
+  const days = Math.max(0, Math.floor((Date.now() - timestamp) / (24 * 60 * 60 * 1000)));
+  if (days === 0) return 'menos de un día';
+  if (days === 1) return '1 día';
+  if (days < 14) return `${days} días`;
+  if (days < 60) {
+    const weeks = Math.floor(days / 7);
+    return `${weeks} ${weeks === 1 ? 'semana' : 'semanas'}`;
+  }
+  if (days < 730) {
+    const months = Math.floor(days / 30);
+    return `${months} ${months === 1 ? 'mes' : 'meses'}`;
+  }
+  const years = Math.floor(days / 365);
+  return `${years} ${years === 1 ? 'año' : 'años'}`;
+}
+
+function formatOrderDate(dateValue) {
+  if (!dateValue) return '';
+  const date = new Date(dateValue);
+  if (!Number.isFinite(date.getTime())) return '';
+  return new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
+}
+
 function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [contacts,       setContacts]       = useState([]);
   const [sources,        setSources]        = useState(null);
@@ -1155,10 +1182,15 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [selTpl,         setSelTpl]         = useState(parentTemplates[0] || null);
   const [previewIdx,     setPreviewIdx]     = useState(0);
   const [favMap,  setFavMap]  = useState({});    // telefono -> producto favorito
-  const [varMap,  setVarMap]  = useState([]);    // por variable: 'name' | 'fav' | 'text'
+  const [varMap,  setVarMap]  = useState([]);    // fuente de datos por variable
   const [varText, setVarText] = useState([]);    // texto fijo por variable
+  const [varPrefix, setVarPrefix] = useState([]); // texto fijo antes del dato dinámico
+  const [varSuffix, setVarSuffix] = useState([]); // texto fijo después del dato dinámico
+  const [varFallback, setVarFallback] = useState([]); // valor si el contacto no tiene el dato
   const [sendProgress, setSendProgress] = useState({ done: 0, total: 0 });
   const [sending,        setSending]        = useState(false);
+  const [reviewPlan,     setReviewPlan]     = useState(null);
+  const [reviewIdx,      setReviewIdx]      = useState(0);
   const [results,        setResults]        = useState(null);
   const [toast,          setToast]          = useState(null);
   const [testMode,       setTestMode]       = useState(false);
@@ -1233,17 +1265,38 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   useEffect(() => {
     setVarMap(Array.from({ length: tplVarCount }, (_, i) => (i === 0 ? 'name' : 'fav')));
     setVarText(Array.from({ length: tplVarCount }, () => ''));
+    setVarPrefix(Array.from({ length: tplVarCount }, () => ''));
+    setVarSuffix(Array.from({ length: tplVarCount }, () => ''));
+    setVarFallback(Array.from({ length: tplVarCount }, () => ''));
+    setReviewPlan(null);
   }, [selTpl?.name, tplVarCount]);
 
-  function favProduct(phone) { return favMap[normPhone(phone)] || 'tu producto habitual'; }
+  function favProduct(phone) { return favMap[normPhone(phone)] || ''; }
+  function defaultFallback(mode) {
+    if (mode === 'name' || mode === 'full_name') return 'Cliente';
+    if (mode === 'fav') return 'tu producto habitual';
+    if (mode === 'since_order') return 'un tiempo';
+    if (mode === 'last_order_date') return 'hace un tiempo';
+    if (mode === 'orders_count') return '0';
+    return '';
+  }
   function varValue(i, contact) {
     const mode = varMap[i] || (i === 0 ? 'name' : 'fav');
     let v;
     if (mode === 'name') v = toTitleCase((contact?.name || 'Cliente').split(' ')[0]);
-    else if (mode === 'text') v = (varText[i] || '');
-    else v = favProduct(contact?.phone);
-    v = String(v ?? '');
-    return v === '' ? '-' : v;
+    else if (mode === 'full_name') v = toTitleCase(contact?.name || 'Cliente');
+    else if (mode === 'fav') v = favProduct(contact?.phone);
+    else if (mode === 'since_order') v = formatDaysSince(contact?.last_order_at);
+    else if (mode === 'last_order_date') v = formatOrderDate(contact?.last_order_at);
+    else if (mode === 'orders_count') v = contact?.total_orders ?? '';
+    else if (mode === 'city') v = contact?.city || '';
+    else if (mode === 'phone') v = contact?.phone || '';
+    else if (mode === 'text') v = varText[i] || '';
+    else v = '';
+    v = String(v ?? '').trim();
+    if (!v && mode !== 'text') v = String(varFallback[i] || defaultFallback(mode)).trim();
+    if (!v) return '';
+    return `${varPrefix[i] || ''}${v}${varSuffix[i] || ''}`;
   }
 
   const ONE_WEEK_AGO = Date.now() - 7 * 24 * 60 * 60 * 1000;
@@ -1302,39 +1355,61 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
   function clearProduct() { setProdTerm(''); setProdPhones(null); }
 
-  async function handleSend() {
+  function prepareReview() {
     if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
     if (selected.size === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
     if (testMode && !TEST_PHONE) { showToast('Ingresa un número de prueba antes de enviar', 'error'); return; }
-    if (!window.confirm(`¿Enviar "${selTpl.name}" a ${selected.size} contactos?`)) return;
-
-    setSending(true);
-    setResults(null);
 
     const bodyComp = getBodyComponent(selTpl);
     const variableNumbers = getTemplateVariables(bodyComp?.text || '');
 
-    const items = Array.from(selected).map(phone => {
+    const entries = Array.from(selected).map(phone => {
       const contact = contacts.find(c => c.phone === phone);
       const nombre = toTitleCase((contact?.name || 'Cliente').split(' ')[0]); // primer nombre, formateado
 
-      // Rellenar cada variable segun el mapeo elegido (Nombre / Producto favorito / Texto)
       const values = Object.fromEntries(variableNumbers.map((number, index) => [number, varValue(index, contact)]));
       const components = buildBodyTemplateComponent(bodyComp?.text || '', values);
-
-      // Texto de preview para el chat (reemplaza cada {{N}} por su valor mapeado)
       const previewText = bodyComp?.text ? renderTemplate(bodyComp.text, values) : null;
 
       return {
-        phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
-        templateName: selTpl.name,
-        languageCode: selTpl.language || 'es',
-        components,
-        contactName: nombre,
+        contact,
+        values,
         previewText,
-        ...(testMode && TEST_PHONE ? { force: true } : {}),
+        item: {
+          phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
+          templateName: selTpl.name,
+          languageCode: selTpl.language || 'es',
+          components,
+          contactName: nombre,
+          previewText,
+          ...(testMode && TEST_PHONE ? { force: true } : {}),
+        },
       };
     });
+
+    const missing = entries.flatMap(entry => variableNumbers
+      .filter(number => !String(entry.values[number] || '').trim())
+      .map(number => `${toTitleCase(entry.contact?.name) || entry.contact?.phone}: {{${number}}}`));
+    if (missing.length) {
+      showToast(`Completa las variables vacías antes de revisar (${missing.slice(0, 3).join(', ')})`, 'error');
+      return;
+    }
+
+    setReviewIdx(0);
+    setReviewPlan({
+      templateName: selTpl.name,
+      entries,
+      testMode,
+      testPhone: TEST_PHONE,
+      createdAt: Date.now(),
+    });
+  }
+
+  async function confirmSend() {
+    if (!reviewPlan?.entries?.length || sending) return;
+    const items = reviewPlan.entries.map(entry => entry.item);
+    setSending(true);
+    setResults(null);
     try {
       // Enviar por lotes para mostrar progreso en vivo (contador X/total).
       const CHUNK = 8;
@@ -1355,6 +1430,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       }
       setResults({ sent, failed, skipped });
       showToast(`✅ ${sent} aceptados por WhatsApp${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
+      setReviewPlan(null);
     } catch (err) {
       showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
     } finally {
@@ -1497,7 +1573,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </button>
 
         {/* Enviar */}
-        <button onClick={handleSend} disabled={sending || selected.size === 0 || !selTpl} style={{
+        <button onClick={prepareReview} disabled={sending || selected.size === 0 || !selTpl} style={{
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '7px 16px', borderRadius: colors.radiusMd, border: 'none',
           backgroundColor: (selected.size > 0 && selTpl) ? colors.green : colors.bgHover,
@@ -1506,7 +1582,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           opacity: sending ? 0.7 : 1,
         }}>
           <Send size={14} />
-          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : `Enviar a ${selected.size}`}
+          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : `Revisar envío a ${selected.size}`}
         </button>
       </div>
 
@@ -1539,24 +1615,50 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       {!loading && selTpl && tplVarCount > 0 && (
         <div style={{ padding: '8px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>Variables del mensaje:</span>
-          {tplVars.map((number, i) => (
-            <span key={number} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {tplVars.map((number, i) => {
+            const mode = varMap[i] || (i === 0 ? 'name' : 'fav');
+            return (
+            <span key={number} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, padding: '5px 7px', border: `1px solid ${colors.border}`, borderRadius: colors.radiusMd }}>
               <span style={{ color: colors.textMuted, fontSize: 12 }}>{`{{${number}}}`}</span>
-              <select value={varMap[i] || (i === 0 ? 'name' : 'fav')}
+              <select value={mode}
                 onChange={e => setVarMap(m => { const n = [...m]; while (n.length < tplVarCount) n.push('fav'); n[i] = e.target.value; return n; })}
                 style={{ padding: '3px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }}>
-                <option value="name">Nombre</option>
+                <option value="name">Primer nombre</option>
+                <option value="full_name">Nombre completo</option>
                 <option value="fav">Producto favorito</option>
+                <option value="since_order">Tiempo sin comprar</option>
+                <option value="last_order_date">Fecha última compra</option>
+                <option value="orders_count">Cantidad de pedidos</option>
+                <option value="city">Ciudad</option>
+                <option value="phone">Teléfono</option>
                 <option value="text">Texto fijo</option>
               </select>
-              {varMap[i] === 'text' && (
+              {mode === 'text' ? (
                 <textarea value={varText[i] || ''} rows={2}
                   onChange={e => setVarText(t => { const n = [...t]; while (n.length < tplVarCount) n.push(''); n[i] = e.target.value; return n; })}
                   placeholder="Texto, también puede tener varias líneas"
                   style={{ width: 210, minHeight: 46, resize: 'vertical', whiteSpace: 'pre-wrap', padding: '5px 7px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
+              ) : (
+                <>
+                  <input value={varPrefix[i] || ''}
+                    onChange={e => setVarPrefix(t => { const n = [...t]; while (n.length < tplVarCount) n.push(''); n[i] = e.target.value; return n; })}
+                    placeholder="Texto antes (opcional)"
+                    title="Se agrega dentro de la misma variable, antes del dato"
+                    style={{ width: 145, padding: '4px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
+                  <input value={varSuffix[i] || ''}
+                    onChange={e => setVarSuffix(t => { const n = [...t]; while (n.length < tplVarCount) n.push(''); n[i] = e.target.value; return n; })}
+                    placeholder="Texto después (opcional)"
+                    title="Se agrega dentro de la misma variable, después del dato"
+                    style={{ width: 155, padding: '4px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
+                  <input value={varFallback[i] || ''}
+                    onChange={e => setVarFallback(t => { const n = [...t]; while (n.length < tplVarCount) n.push(''); n[i] = e.target.value; return n; })}
+                    placeholder={`Si falta: ${defaultFallback(mode) || 'texto alternativo'}`}
+                    title="Texto predeterminado cuando el contacto no tiene este dato"
+                    style={{ width: 170, padding: '4px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
+                </>
               )}
             </span>
-          ))}
+          );})}
         </div>
       )}
 
@@ -1586,7 +1688,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             </div>
             <div style={{ whiteSpace: 'pre-wrap', background: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '10px 12px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.5 }}>{text}</div>
             <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
-              Así llega el mensaje (el nombre se cambia por cada cliente).{testMode && TEST_PHONE ? ` En modo prueba todos van a ${TEST_PHONE}.` : ''}
+              Así llega el mensaje; todas las variables cambian según cada cliente.{testMode && TEST_PHONE ? ` En modo prueba todos van a ${TEST_PHONE}.` : ''}
             </div>
           </div>
         );
@@ -1649,6 +1751,52 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           );
         })}
       </div>
+
+      {/* Confirmación intermedia: esta instantánea es exactamente la que se enviará. */}
+      {reviewPlan && (() => {
+        const idx = Math.min(reviewIdx, reviewPlan.entries.length - 1);
+        const entry = reviewPlan.entries[idx];
+        return (
+          <div role="dialog" aria-modal="true" aria-label="Revisar envío masivo" style={{ position: 'fixed', inset: 0, zIndex: 10000, backgroundColor: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+            <div style={{ width: 'min(760px, 96vw)', maxHeight: '90vh', overflowY: 'auto', backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 18px', borderBottom: `1px solid ${colors.border}` }}>
+                <CheckSquare size={19} color={colors.green} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: 15 }}>Revisa antes de enviar</div>
+                  <div style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>Esta vista usa exactamente los mensajes preparados que se enviarán.</div>
+                </div>
+                <button onClick={() => setReviewPlan(null)} disabled={sending} aria-label="Cerrar revisión" style={{ border: 'none', background: 'none', color: colors.textMuted, cursor: sending ? 'not-allowed' : 'pointer', padding: 4 }}><X size={18} /></button>
+              </div>
+
+              <div style={{ padding: '14px 18px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+                <div style={{ padding: 10, borderRadius: 8, backgroundColor: colors.bgCard }}><div style={{ color: colors.textMuted, fontSize: 11 }}>Template</div><div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 700, wordBreak: 'break-word' }}>{reviewPlan.templateName}</div></div>
+                <div style={{ padding: 10, borderRadius: 8, backgroundColor: colors.bgCard }}><div style={{ color: colors.textMuted, fontSize: 11 }}>Mensajes</div><div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 700 }}>{reviewPlan.entries.length}</div></div>
+                <div style={{ padding: 10, borderRadius: 8, backgroundColor: colors.bgCard }}><div style={{ color: colors.textMuted, fontSize: 11 }}>Destino</div><div style={{ color: reviewPlan.testMode ? colors.yellow : colors.textPrimary, fontSize: 13, fontWeight: 700 }}>{reviewPlan.testMode ? `Prueba: ${reviewPlan.testPhone}` : 'Clientes seleccionados'}</div></div>
+              </div>
+
+              <div style={{ padding: '0 18px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 7 }}>
+                  <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>Mensaje {idx + 1} de {reviewPlan.entries.length} · {toTitleCase(entry.contact?.name) || entry.contact?.phone}</span>
+                  {reviewPlan.entries.length > 1 && <span style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => setReviewIdx(i => Math.max(0, i - 1))} disabled={idx === 0 || sending} style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: colors.radiusSm, color: colors.textSecondary, padding: '3px 12px', cursor: idx === 0 ? 'default' : 'pointer', opacity: idx === 0 ? 0.5 : 1 }}>←</button>
+                    <button onClick={() => setReviewIdx(i => Math.min(reviewPlan.entries.length - 1, i + 1))} disabled={idx === reviewPlan.entries.length - 1 || sending} style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: colors.radiusSm, color: colors.textSecondary, padding: '3px 12px', cursor: idx === reviewPlan.entries.length - 1 ? 'default' : 'pointer', opacity: idx === reviewPlan.entries.length - 1 ? 0.5 : 1 }}>→</button>
+                  </span>}
+                </div>
+                <div style={{ whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }}>{entry.previewText || '(Template sin cuerpo de texto)'}</div>
+                <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 7 }}>Destino real: {entry.item.phone} · Puedes recorrer todos los mensajes antes de confirmar.</div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '13px 18px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+                <button onClick={() => setReviewPlan(null)} disabled={sending} style={{ padding: '8px 15px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, cursor: sending ? 'not-allowed' : 'pointer' }}>Volver y corregir</button>
+                <button onClick={confirmSend} disabled={sending} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: colors.green, color: '#fff', fontWeight: 800, cursor: sending ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
+                  {sending ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
+                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : `Confirmar y enviar ${reviewPlan.entries.length}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
