@@ -88,7 +88,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
     await db.updateConversationLastMessage(conversation.id, result.response);
 
     if (result.switchToHuman) {
-      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'coordinating' });
     }
 
     const finalConv = await db.getConversationById(conversation.id);

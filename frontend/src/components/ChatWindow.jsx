@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2 } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -120,6 +120,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const inputRef = useRef(null);
 
   const isHumanMode = conversation.agent_mode === 'human';
+  const isCoordinating = conversation.agent_mode === 'coordinating';
   const isDevUser = currentUserEmail === DEV_EMAIL;
   const HOT_STATES = ['interested', 'collecting_order'];
   const isHotLead = HOT_STATES.includes(conversation.pipeline_state);
@@ -753,7 +754,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           </button>
           <AgentToggle
             mode={conversation.agent_mode}
-            onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode)}
+            onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode, conversation.agent_mode === 'human' ? 'ai' : 'human')}
             isMobile={isMobile}
           />
         </div>
@@ -788,6 +789,27 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             }}
           >
             <Play size={11} /> Reactivar IA
+          </button>
+        </div>
+      )}
+
+      {/* Banner Diva coordinando con el equipo */}
+      {isCoordinating && (
+        <div style={{
+          backgroundColor: isDark ? '#2a2142' : '#f1eafe',
+          color: isDark ? '#c4b5fd' : '#5b21b6',
+          padding: '8px 16px', fontSize: '13px', fontWeight: 500,
+          display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+        }}>
+          <MessagesSquare size={14} />
+          <span style={{ flex: 1 }}>Diva está coordinando una respuesta con el equipo.</span>
+          <button onClick={() => onToggleAgentMode(conversation.id, conversation.agent_mode, 'human')}
+            style={{ border: 'none', borderRadius: '12px', padding: '4px 10px', cursor: 'pointer', color: 'white', background: '#7c3aed' }}>
+            Tomar control
+          </button>
+          <button onClick={() => onToggleAgentMode(conversation.id, conversation.agent_mode, 'ai')}
+            style={{ border: 'none', borderRadius: '12px', padding: '4px 10px', cursor: 'pointer', color: 'white', background: colors.green }}>
+            Activar Diva
           </button>
         </div>
       )}

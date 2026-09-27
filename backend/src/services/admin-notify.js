@@ -203,9 +203,9 @@ function windowWarnMessage(msLeft, pendingCount = 0) {
     ? `\n\nHay ${pendingCount} aviso(s) en espera que te llegarán apenas escribas.`
     : '';
   return (
-    `⏰ *Tu canal de alertas se cierra en ~${tiempo}.*\n\n` +
+    `✨ *Diva te avisa: tu canal de alertas se cierra en ~${tiempo}.*\n\n` +
     `WhatsApp deja de dejarme escribirte si pasan 24h sin que me escribas. ` +
-    `Mandame cualquier mensaje (una palabra basta) para seguir recibiendo los avisos de clientes.${extra}`
+    `Envíame cualquier mensaje (una palabra basta) para seguir recibiendo los avisos de clientes.${extra}`
   );
 }
 
@@ -233,28 +233,40 @@ async function warnAdminPhone(orgId, wc, adminPhone) {
 }
 
 /**
- * Aviso a cada miembro del equipo con notificaciones activadas — cada uno con su
- * propia ventana (users.wa_last_inbound). Se salta al que coincide con el
- * admin_alert_phone (ya avisado en warnAdminPhone) para no duplicar.
+ * Aviso a cada usuario que vinculó su WhatsApp — cada uno con su propia ventana.
+ * Al cerrarse, Diva usa push porque WhatsApp ya no permite texto libre.
  */
 async function warnUserWindows(orgId, wc, adminPhone) {
   const pool = getPool();
   const { rows: users } = await pool.query(
-    `SELECT id, name, whatsapp_phone, wa_last_inbound, wa_window_warned
+    `SELECT id, name, whatsapp_phone, wa_last_inbound, wa_window_warned, wa_window_closed_notified
        FROM users
       WHERE organization_id = $1
-        AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
-        AND (wa_notifications->>'new_messages')::boolean = true`,
+        AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''`,
     [orgId]
   );
   const adminDigits = (adminPhone || '').replace(/[^0-9]/g, '');
 
   for (const u of users) {
     try {
-      if (adminDigits && u.whatsapp_phone.replace(/[^0-9]/g, '') === adminDigits) continue;
       if (!u.wa_last_inbound) continue;   // nunca escribió: no hay ventana abierta que avisar
       const { open, msLeft } = windowState(u.wa_last_inbound);
-      if (!open || msLeft > WARN_BEFORE_MS) continue;
+      if (!open) {
+        const alreadyNotified = u.wa_window_closed_notified
+          && new Date(u.wa_window_closed_notified) >= new Date(u.wa_last_inbound);
+        if (!alreadyNotified) {
+          await require('./push').pushUser(orgId, u.id, {
+            title: 'Diva · WhatsApp desconectado',
+            body: 'La ventana de 24 horas terminó. Escríbele a Diva por WhatsApp para volver a recibir avisos.',
+            data: { kind: 'whatsapp_window_closed' },
+          }).catch(() => {});
+          await pool.query(`UPDATE users SET wa_window_closed_notified = NOW() WHERE id = $1`, [u.id]);
+        }
+        continue;
+      }
+      // El teléfono principal ya recibió el aviso previo en warnAdminPhone.
+      if (adminDigits && u.whatsapp_phone.replace(/[^0-9]/g, '') === adminDigits) continue;
+      if (msLeft > WARN_BEFORE_MS) continue;
       // no repetir dentro de la misma ventana
       if (u.wa_window_warned && new Date(u.wa_window_warned) >= new Date(u.wa_last_inbound)) continue;
 
@@ -283,7 +295,6 @@ async function sweepAdminWindowWarnings() {
         UNION
         SELECT organization_id FROM users
           WHERE whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
-            AND (wa_notifications->>'new_messages')::boolean = true
       ) t`
     );
     orgs = rows.map(r => r.organization_id);

@@ -32,6 +32,7 @@ export default function ChatListScreen({ navigation }) {
 
   const renderItem = ({ item }) => {
     const human = item.agent_mode === 'human';
+    const coordinating = item.agent_mode === 'coordinating';
     const unread = item.unread_count > 0 || item.unread;
     return (
       <TouchableOpacity
@@ -52,6 +53,7 @@ export default function ChatListScreen({ navigation }) {
               {item.last_message || '—'}
             </Text>
             {human && <Text style={{ color: colors.orange, fontSize: 10, fontWeight: '800' }}>👤 humano</Text>}
+            {coordinating && <Text style={{ color: colors.purple, fontSize: 10, fontWeight: '800' }}>💬 coordinando</Text>}
             {unread ? <View style={{ minWidth: 18, height: 18, borderRadius: 9, backgroundColor: colors.green, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 }}><Text style={{ color: '#04210f', fontSize: 11, fontWeight: '800' }}>{item.unread_count || '•'}</Text></View> : null}
           </View>
         </View>

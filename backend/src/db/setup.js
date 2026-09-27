@@ -210,6 +210,10 @@ async function setupDatabase() {
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_trigger TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_reason TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_at TIMESTAMP;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS agent_mode_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_agent_mode_check;
+      ALTER TABLE conversations ADD CONSTRAINT conversations_agent_mode_check
+        CHECK(agent_mode IN ('ai','coordinating','human'));
 
       -- Migración: ventana 24h y follow-up automático
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_inbound_at TIMESTAMP;
@@ -809,6 +813,7 @@ async function setupDatabase() {
       -- cierre (igual que el aviso del admin, pero individual).
       ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_last_inbound  TIMESTAMP;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_window_warned TIMESTAMP;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_window_closed_notified TIMESTAMP;
     `);
 
     // ─── DESPACHOS: módulo de repartos ───────────────────────────────

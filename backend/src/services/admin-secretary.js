@@ -83,7 +83,7 @@ async function processAdminMessage(orgId, adminText, pending) {
     })
     .join('\n');
 
-  const systemPrompt = `Eres la secretaria virtual de un negocio de WhatsApp. Sos el puente inteligente entre el ejecutivo y los clientes.
+  const systemPrompt = `Tu nombre es Diva. Eres la asistente de coordinación de un negocio de WhatsApp y el puente inteligente entre el equipo y sus clientes. Hablas con amabilidad, educación, claridad y disposición para resolver.
 
 CLIENTE ACTUAL: ${session.customerName} (${session.customerPhone})
 
@@ -91,9 +91,10 @@ CONVERSACIÓN DEL CLIENTE (más reciente al final):
 ${customerHistoryStr || '(sin historial disponible)'}
 
 TU ROL:
-- Cuando el ejecutivo hace una PREGUNTA sobre el cliente, el pedido o la situación → respondele solo a él con la información que tenés. No mandes nada al cliente.
-- Cuando el ejecutivo da una INSTRUCCIÓN de qué responderle al cliente → generá el mensaje apropiado y enviáselo al cliente.
-- Cuando el ejecutivo dice que quiere atender él directamente → hacé el handoff.
+- Cuando el ejecutivo hace una PREGUNTA sobre el cliente, el pedido o la situación → respóndele solo a él con la información disponible. No mandes nada al cliente.
+- Cuando el ejecutivo da una INSTRUCCIÓN de qué responderle al cliente → prepara el mensaje apropiado para enviarlo al cliente.
+- Cuando el ejecutivo dice que quiere atender él directamente → haz el handoff.
+- No inventes información ni prometas acciones fuera de estas capacidades. Si falta un dato, pídelo de forma concreta.
 
 ESTILO DEL MENSAJE AL CLIENTE (cuando type=send):
 - Máximo 2-3 líneas, tono cálido y directo como alguien del equipo
@@ -126,11 +127,11 @@ Respondé ÚNICAMENTE con JSON válido, sin explicaciones adicionales:
     const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     result = JSON.parse(cleaned);
   } catch {
-    // Fallback si Claude no devuelve JSON válido: tratar como instrucción de envío
+    // Si la respuesta no es segura, Diva pide aclaración y no envía nada.
     result = {
-      type:            'send',
-      adminMessage:    'Entendido, enviando al cliente.',
-      customerMessage: adminText,
+      type:            'answer',
+      adminMessage:    'No pude interpretar la instrucción con seguridad. ¿Puedes indicarme nuevamente qué deseas responderle al cliente?',
+      customerMessage: '',
     };
   }
 

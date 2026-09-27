@@ -258,8 +258,8 @@ export default function App() {
     );
   }, []);
 
-  const handleToggleAgentMode = useCallback(async (convId, currentMode) => {
-    const newMode = currentMode === 'ai' ? 'human' : 'ai';
+  const handleToggleAgentMode = useCallback(async (convId, currentMode, requestedMode = null) => {
+    const newMode = requestedMode || (currentMode === 'human' ? 'ai' : 'human');
     await conversationsAPI.setAgentMode(convId, newMode);
     setConversations(prev => prev.map(c => c.id === convId ? { ...c, agent_mode: newMode } : c));
   }, []);

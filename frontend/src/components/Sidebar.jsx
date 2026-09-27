@@ -72,6 +72,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   };
 
   const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
+  const coordinatingCount = conversations.filter(c => c.agent_mode === 'coordinating').length;
   const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
@@ -80,6 +81,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
 
   const filtered = conversations.filter(c => {
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
+    if (activeTab === 'coordinating' && c.agent_mode !== 'coordinating') return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
     if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
     if (activeTab === 'hot'     && (!HOT_STATES.includes(c.pipeline_state) || c.hot_lead_excluded)) return false;
@@ -420,7 +422,8 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
           { key: 'unread',  label: 'No leídos',  count: unreadCount,          color: colors.dangerSoft,      dot: null },
           { key: 'hot',     label: '🔥 Hot',     count: hotCount,             color: '#f97316',      dot: null },
           { key: 'stalled', label: '⏳ Sin cierre', count: stalledCount,      color: colors.purpleSoft,      dot: null },
-          { key: 'ai',      label: '🤖 IA',      count: aiCount,              color: colors.green,   dot: null },
+          { key: 'ai',      label: '✨ Diva',    count: aiCount,              color: colors.green,   dot: null },
+          { key: 'coordinating', label: '💬 Coordinando', count: coordinatingCount, color: colors.purpleSoft, dot: coordinatingCount > 0 },
           { key: 'human',   label: '👤 Humano',  count: humanCount,           color: colors.yellow,  dot: humanUnread > 0 },
         ].map(tab => {
           const active = activeTab === tab.key;

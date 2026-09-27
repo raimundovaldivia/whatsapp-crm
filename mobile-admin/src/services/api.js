@@ -86,7 +86,7 @@ export async function sendMessage(convId, content) {
   const { data } = await c.post(`/api/conversations/${convId}/messages`, { text: content });
   return data;
 }
-export async function setAgentMode(convId, mode) {   // 'human' | 'ai'
+export async function setAgentMode(convId, mode) {   // 'human' | 'coordinating' | 'ai'
   const c = await getClient();
   const { data } = await c.patch(`/api/conversations/${convId}/agent-mode`, { mode });
   return data;

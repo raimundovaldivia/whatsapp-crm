@@ -63,6 +63,7 @@ function buildSystemPrompt() {
 const HELP_TEXT = `✨ *Soy Diva, tu asistente de administración*
 
 Estoy aquí para ayudarte a resolver dudas y realizar tareas de gestión desde WhatsApp.
+Cuando un cliente necesite apoyo, también puedo coordinar contigo una respuesta sin confundirlo con el modo humano.
 
 Puedes solicitar acciones de gestión en lenguaje natural:
 
@@ -514,13 +515,13 @@ async function cmdChats(org) {
   const lines = sorted.slice(0, 10).map(c => {
     const name   = c.contact_name && c.contact_name !== c.phone_number ? c.contact_name : c.phone_number;
     const unread = c.unread_count > 0 ? ` 🔴 ${c.unread_count}` : '';
-    const mode   = c.agent_mode === 'human' ? ' 🟡' : '';
+    const mode   = c.agent_mode === 'human' ? ' 🟡' : c.agent_mode === 'coordinating' ? ' 🟣' : '';
     const last   = c.last_message ? ` — _${c.last_message.slice(0, 50)}_` : '';
     return `• *${name}* (${c.phone_number})${unread}${mode}${last}`;
   });
 
   const total = convs.length;
-  return `💬 *Conversaciones* (${Math.min(10, total)} de ${total})\n🔴 = sin leer  🟡 = agente activo\n\n` + lines.join('\n');
+  return `💬 *Conversaciones* (${Math.min(10, total)} de ${total})\n🔴 = sin leer  🟣 = Diva coordinando  🟡 = modo humano\n\n` + lines.join('\n');
 }
 
 async function cmdPedidos(org) {
@@ -581,7 +582,7 @@ async function cmdVer(org, phone) {
   if (!messages.length) return `📭 No hay mensajes con ${conv.contact_name || phone}.`;
 
   const name = conv.contact_name && conv.contact_name !== phone ? conv.contact_name : phone;
-  const mode = conv.agent_mode === 'human' ? '🟡 Agente activo' : '🤖 Bot activo';
+  const mode = conv.agent_mode === 'human' ? '🟡 Modo humano' : conv.agent_mode === 'coordinating' ? '🟣 Diva coordinando' : '✨ Diva activa';
   const lines = messages.map(m => {
     const dir  = m.direction === 'inbound' ? '←' : '→';
     const who  = m.direction === 'inbound' ? name : 'Bot';
@@ -632,6 +633,7 @@ async function cmdMsg(org, phone, msgText, agent, wc) {
     agentType:         agent.name || agent.email,
   });
   await db.updateConversationLastMessage(conv.id, msgText, false);
+  await db.setAgentMode(conv.id, 'human');
 
   const name = conv.contact_name && conv.contact_name !== targetPhone ? conv.contact_name : targetPhone;
   return `✅ Mensaje enviado a *${name}*:\n_"${msgText.slice(0, 80)}"_`;

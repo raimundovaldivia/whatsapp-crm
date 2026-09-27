@@ -59,4 +59,39 @@ async function pushAdmins(orgId, { title = 'Diez Ríos', body = '', data = {} } 
   }
 }
 
-module.exports = { pushAdmins };
+/** Envía un push a todos los dispositivos de un usuario específico. */
+async function pushUser(orgId, userId, { title = 'Diva', body = '', data = {} } = {}) {
+  if (!body || !userId) return { sent: 0 };
+  try {
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `SELECT token FROM push_tokens WHERE organization_id = $1 AND user_id = $2`,
+      [orgId, userId]
+    );
+    const tokens = rows.map(row => row.token).filter(token => typeof token === 'string' && token.startsWith('ExponentPushToken'));
+    if (!tokens.length) return { sent: 0 };
+    const invalid = [];
+    for (let i = 0; i < tokens.length; i += 100) {
+      const chunk = tokens.slice(i, i + 100).map(to => ({
+        to, title, body, sound: 'default', channelId: 'default', priority: 'high', data,
+      }));
+      try {
+        const { data: resp } = await axios.post(EXPO_URL, chunk, {
+          headers: { 'Content-Type': 'application/json' }, timeout: 10000,
+        });
+        (resp?.data || []).forEach((ticket, index) => {
+          if (ticket?.status === 'error' && ticket?.details?.error === 'DeviceNotRegistered') invalid.push(chunk[index].to);
+        });
+      } catch (err) {
+        console.warn('[Push] Error enviando a usuario:', err.message);
+      }
+    }
+    if (invalid.length) await pool.query(`DELETE FROM push_tokens WHERE token = ANY($1)`, [invalid]).catch(() => {});
+    return { sent: tokens.length - invalid.length };
+  } catch (err) {
+    console.warn('[Push] pushUser falló:', err.message);
+    return { sent: 0, error: err.message };
+  }
+}
+
+module.exports = { pushAdmins, pushUser };

@@ -1,5 +1,5 @@
 import { timeAgo } from '../utils/dates.js';
-import { Bot, User } from 'lucide-react';
+import { Bot, User, MessagesSquare } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 export default function ConversationItem({ conversation, selected, onClick }) {
@@ -63,16 +63,15 @@ export default function ConversationItem({ conversation, selected, onClick }) {
           width: '16px',
           height: '16px',
           borderRadius: '50%',
-          backgroundColor: agent_mode === 'ai' ? colors.green : colors.yellow,
+          backgroundColor: agent_mode === 'ai' ? colors.green : agent_mode === 'coordinating' ? colors.purpleSoft : colors.yellow,
           border: `2px solid ${colors.bgApp}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
         }}>
-          {agent_mode === 'ai'
-            ? <Bot size={8} color="white" />
-            : <User size={8} color="white" />
-          }
+          {agent_mode === 'ai' ? <Bot size={8} color="white" />
+            : agent_mode === 'coordinating' ? <MessagesSquare size={8} color="white" />
+            : <User size={8} color="white" />}
         </div>
       </div>
 

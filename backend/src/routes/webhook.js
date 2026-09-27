@@ -148,7 +148,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
 
     // 8. Si el pipeline indica cambiar a modo humano
     if (result.switchToHuman) {
-      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'coordinating' });
     }
 
     const finalConv = await db.getConversationById(conversation.id);

@@ -29,6 +29,7 @@ const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follo
 const { startScheduledFollowUpJob } = require('./services/scheduled-follow-up'); // Job pedidos agendados
 const { startAdminWindowJob } = require('./services/admin-notify');
 const { startEscalationWatchJob } = require('./services/escalation-watch'); // Recordatorio si una escalación queda sin respuesta              // Aviso previo + cola de alertas admin
+const { startConversationModeWatchJob } = require('./services/conversation-mode-watch');
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
 const shopifyOAuthRouter   = require('./routes/shopify-oauth');   // Shopify OAuth flow
 const authRouter           = require('./routes/auth');
@@ -160,6 +161,7 @@ setupDatabase().then(() => {
     startScheduledFollowUpJob(io);
     startAdminWindowJob();
     startEscalationWatchJob();
+    startConversationModeWatchJob(io);
   });
 }).catch(err => {
   console.error('Error iniciando DB:', err);

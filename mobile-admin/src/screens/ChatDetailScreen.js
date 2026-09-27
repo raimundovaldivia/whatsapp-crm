@@ -29,6 +29,7 @@ export default function ChatDetailScreen({ route, navigation }) {
   }, [navigation, name]);
 
   const human = conv?.agent_mode === 'human';
+  const coordinating = conv?.agent_mode === 'coordinating';
 
   async function toggleMode() {
     const next = human ? 'ai' : 'human';
@@ -73,10 +74,10 @@ export default function ChatDetailScreen({ route, navigation }) {
       {/* Barra de modo */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 10, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.bgPanel }}>
         <Text style={{ color: human ? colors.orange : colors.green, fontWeight: '700', fontSize: 13 }}>
-          {human ? '👤 Atendiendo tú (bot en pausa)' : '🤖 Bot activo'}
+          {human ? '👤 Atendiendo tú (Diva en pausa)' : coordinating ? '💬 Diva coordinando con el equipo' : '✨ Diva activa'}
         </Text>
         <TouchableOpacity onPress={toggleMode} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingVertical: 5, paddingHorizontal: 10 }}>
-          <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700' }}>{human ? 'Devolver al bot' : 'Tomar el control'}</Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700' }}>{human ? 'Devolver a Diva' : 'Tomar el control'}</Text>
         </TouchableOpacity>
       </View>
 

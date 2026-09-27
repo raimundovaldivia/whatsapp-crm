@@ -39,6 +39,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   const L = log || noop;
   const conversation = await db.getConversationById(conversationId);
   const history = await db.getLastMessages(conversationId, 16);
+  const deliveryEnabled = await require('./commercial').permitted(orgId, 'delivery').catch(() => false);
 
   // URL pública de la tienda integrada (para links en catálogo y system prompt)
   const tiendaUrl = await db.getSetting(orgId, 'store_public_url') || null;
@@ -181,7 +182,7 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
       botRulesSection = `## Reglas aprendidas de conversaciones anteriores\nSigue SIEMPRE estas reglas — fueron definidas a partir de errores reales detectados en conversaciones pasadas:\n${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
     }
   } catch { /* JSON inválido — ignorar */ }
-  const deliveryRaw   = await db.getSetting(orgId, 'delivery_info');
+  const deliveryRaw   = deliveryEnabled ? await db.getSetting(orgId, 'delivery_info') : null;
   let deliverySection = '';
   let deliverySchedule = '';   // el horario tal cual, para responder "¿a qué hora llega?" con dato real
   if (deliveryRaw) {
@@ -261,6 +262,7 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   let pendingOrderSection = '';
   let activeOrder = null;          // visible para modificar / cancelar más abajo
   let activeOrderSummary = '';
+  let activeDeliveryRoute = null;
   try {
     activeOrder = await db.getActiveOrderForBot(conversationId);
     if (activeOrder) {
@@ -312,6 +314,24 @@ Reglas estrictas para responder sobre este pedido:
 4. Si el cliente quiere modificar o cancelar → dile que sí se puede hacer aquí mismo y pregúntale qué quiere cambiar (el sistema lo procesa automáticamente cuando lo diga).`;
 
       console.log(`[Pipeline] 📦 Pedido activo inyectado al contexto: id=${activeOrder.id} status=${activeOrder.status}`);
+
+      // Si Logística está contratada, vincular el pedido con su ruta activa.
+      // La respuesta al cliente usa esta fuente real y evita inventar una hora.
+      if (deliveryEnabled && activeOrder.status === 'en_camino') {
+        const { rows: routeRows } = await getPool().query(
+          `SELECT id, name, status, driver_name, orders, stop_statuses
+             FROM delivery_routes r
+            WHERE r.organization_id = $1
+              AND r.status IN ('sent','in_progress')
+              AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(r.orders) stop
+                 WHERE stop->>'source' = 'bot' AND stop->>'id' = $2
+              )
+            ORDER BY r.created_at DESC LIMIT 1`,
+          [orgId, String(activeOrder.id)]
+        );
+        activeDeliveryRoute = routeRows[0] || null;
+      }
     }
   } catch (e) {
     console.warn('[Pipeline] activeOrder bot context error:', e.message);
@@ -717,7 +737,7 @@ REGLAS ABSOLUTAS:
   // Si el agente de escalación detecta que se necesita humano
   if (escalationResult.escalate) {
     console.log(`[Pipeline] 🚨 Escalación detectada (${escalationResult.urgency}): ${escalationResult.reason}`);
-    await db.setAgentMode(conversationId, 'human');
+    await db.setAgentMode(conversationId, 'coordinating');
     await db.setLastEscalation(conversationId, userMessage, escalationResult.reason);
     await db.updatePipelineState(conversationId, currentState); // mantiene el estado actual
 
@@ -770,7 +790,7 @@ REGLAS ABSOLUTAS:
     /\b(mi|el)\s+pedido\b.{0,30}\b(llega|viene|hora|cu[aá]ndo|en\s+camino|ruta)\b/i,
     /\bpara\s+cu[aá]ndo\s+(lo\s+)?(tengo|llega|entregan)\b/i,
   ];
-  if (activeOrder && userMessage.length <= 160
+  if (deliveryEnabled && activeOrder && userMessage.length <= 160
       && intent !== 'modify_order' && intent !== 'cancel_order'
       && DELIVERY_STATUS_PATTERNS.some(p => p.test(userMessage))) {
     const first = (conversation.contact_name || activeOrder.customer_name || '').trim().split(/\s+/)[0] || '';
@@ -791,7 +811,15 @@ REGLAS ABSOLUTAS:
     if (schedFuture) {
       response = `Tu pedido quedó agendado para el ${schedFuture} 📅.${win} Ese día te avisamos cuando vaya saliendo. ¿Algo más?`;
     } else if (activeOrder.status === 'en_camino') {
-      response = `¡Tu pedido va en la ruta de hoy${hi}! 🚚${win} No te puedo dar una hora exacta porque depende del orden del recorrido, pero apenas el repartidor vaya llegando te avisamos. 😊`;
+      let routeProgress = '';
+      if (activeDeliveryRoute) {
+        const stops = Array.isArray(activeDeliveryRoute.orders) ? activeDeliveryRoute.orders : JSON.parse(activeDeliveryRoute.orders || '[]');
+        const position = stops.findIndex(stop => String(stop.source) === 'bot' && String(stop.id) === String(activeOrder.id));
+        const statuses = activeDeliveryRoute.stop_statuses || {};
+        const processed = stops.filter(stop => ['entregado','cancelled','postponed'].includes(statuses[`${stop.source}_${stop.id}`])).length;
+        if (position >= 0) routeProgress = ` Está incluida como parada ${position + 1} de ${stops.length}; la ruta lleva ${processed} parada${processed === 1 ? '' : 's'} procesada${processed === 1 ? '' : 's'}.`;
+      }
+      response = `¡Tu pedido va en la ruta de hoy${hi}! 🚚${routeProgress}${win} No te puedo dar una hora exacta porque depende del recorrido, pero apenas el repartidor vaya llegando te avisamos. 😊`;
     } else if (activeOrder.status === 'por_despachar') {
       response = `Tu pedido está listo para salir${hi} 📦.${win} Hoy te llega dentro de ese horario; cuando salga a la ruta te avisamos. 😊`;
     } else {
@@ -1049,7 +1077,7 @@ REGLAS ABSOLUTAS:
 
   // El cliente quiere hablar con humano — salvo si ya detectamos bucle de escalación
   if (intent === 'human_request' && !escalationResult.loopDetected) {
-    await db.setAgentMode(conversationId, 'human');
+    await db.setAgentMode(conversationId, 'coordinating');
     await db.updatePipelineState(conversationId, 'exploring');
     L.agent('orchestrator', 0);
     return {
@@ -1409,7 +1437,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         };
       } catch (err) {
         console.error('[Pipeline] ❌ Error modificando pedido:', err.message);
-        await db.setAgentMode(conversationId, 'human');
+        await db.setAgentMode(conversationId, 'coordinating');
         return {
           response: `Recibí los cambios 📝 pero hubo un problema técnico al actualizar tu pedido 😔 Se lo paso al equipo para que lo corrija y te confirmen por aquí.`,
           agentType: 'orders', newState: 'collecting_order', switchToHuman: true,
@@ -1448,7 +1476,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id } };
       } catch (err) {
         console.error('[Pipeline] ❌ Error guardando pedido COD:', err.message);
-        await db.setAgentMode(conversationId, 'human');
+        await db.setAgentMode(conversationId, 'coordinating');
         return { response: techErrorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true, escalationReason: `Error creando pedido: ${err.message}` };
       }
     }
@@ -1467,7 +1495,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       if (status === 401 || detail?.includes('Invalid API key') || detail?.includes('access token')) {
         console.error('[Pipeline] ⚠️  Token de Shopify inválido — reconecta Shopify desde Ajustes del CRM.');
       }
-      await db.setAgentMode(conversationId, 'human');
+      await db.setAgentMode(conversationId, 'coordinating');
       return { response: techErrorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true, escalationReason: `Error creando orden Shopify: ${detail}` };
     }
   }

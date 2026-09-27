@@ -118,7 +118,8 @@ async function touchUserWaWindow(orgId, phone) {
   if (!phone) return;
   return query(
     `UPDATE users
-        SET wa_last_inbound = NOW(), wa_window_warned = NULL
+        SET wa_last_inbound = NOW(), wa_window_warned = NULL,
+            wa_window_closed_notified = NULL
       WHERE organization_id = $1
         AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''
         AND regexp_replace(whatsapp_phone, '[^0-9]', '', 'g') = regexp_replace($2, '[^0-9]', '', 'g')`,
@@ -490,7 +491,9 @@ async function markConversationAsRead(id) {
 
 async function setAgentMode(id, mode) {
   await pool.query(
-    'UPDATE conversations SET agent_mode = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+    `UPDATE conversations
+        SET agent_mode = $1, agent_mode_changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2`,
     [mode, id]
   );
 }

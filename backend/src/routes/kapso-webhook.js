@@ -231,20 +231,20 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     // 3b. Notificar a agentes con new_messages habilitado (sin await para no bloquear)
     notifyAgentsNewMessage(org.id, updatedConv, parsed.text).catch(() => {});
 
-    // 4. Si está en modo humano/pendiente, verificar si corresponde auto-reset.
-    //    Referencia = lo MÁS RECIENTE entre la última respuesta humana y la
-    //    última escalación del bot. Antes, si ningún humano respondía nunca,
-    //    la conversación quedaba muda para siempre; ahora vuelve al bot a las
-    //    24 h de la escalación. Un takeover manual desde el CRM (sin
-    //    escalación ni respuesta) sigue esperando al humano, como antes.
+    // 4. Si Diva está coordinando o alguien tomó el control, mantener silencio
+    //    durante el hilo. Si el mensaje anterior fue hace 24 h o más, ese hilo
+    //    ya terminó y este nuevo mensaje inicia una atención activa con Diva.
     if (updatedConv.agent_mode !== 'ai') {
       const AUTO_RESET_MINUTES = 1440;
-      const humanMins = await db.minutesSinceLastHumanReply(conversation.id);
-      const escMins   = updatedConv.last_escalation_at
-        ? (Date.now() - new Date(updatedConv.last_escalation_at).getTime()) / 60000
+      const referenceAt = [
+        conversation.last_message_at,
+        conversation.agent_mode_changed_at,
+        conversation.last_escalation_at,
+      ].filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite);
+      const refMins = referenceAt.length
+        ? (Date.now() - Math.max(...referenceAt)) / 60000
         : Infinity;
-      const refMins = Math.min(humanMins, escMins);
-      if (!isFinite(refMins) || refMins < AUTO_RESET_MINUTES) return;
+      if (refMins < AUTO_RESET_MINUTES) return;
       // Auto-reset a modo IA y SEGUIR procesando este mensaje (antes se descartaba)
       await db.setAgentMode(conversation.id, 'ai');
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
@@ -252,7 +252,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         await db.clearLastEscalation(conversation.id).catch(() => {});
       }
       await db.updatePipelineState(conversation.id, 'exploring', {}).catch(() => {});
-      console.log(`[KapsoWebhook] 🔁 Conv ${conversation.id} vuelve a IA tras ${Math.round(refMins / 60)}h sin atención humana`);
+      console.log(`[KapsoWebhook] 🔁 Conv ${conversation.id} vuelve a Diva tras ${Math.round(refMins / 60)}h sin actividad`);
     }
 
     // 5. Debounce: esperar 3s desde el ÚLTIMO mensaje antes de ejecutar pipeline.
@@ -328,9 +328,9 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         // así para siempre. Ahora: acuse inmediato + recordatorio si el equipo
         // tarda (escalation-watch.js) + vuelta al bot a las 24 h.
         const escalateWithAck = async (ackText, reason, botWasGoingToSay) => {
-          await db.setAgentMode(capturedConvId, 'human');
+          await db.setAgentMode(capturedConvId, 'coordinating');
           await db.setLastEscalation(capturedConvId, textToProcess, reason).catch(() => {});
-          io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'human' });
+          io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'coordinating' });
           notifyAdminHelp(org.id, updatedConv || conversation, botWasGoingToSay, reason).catch(() => {});
 
           let ackSent = null;
@@ -543,7 +543,9 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
         const hConv = await db.getConversationById(session.convId);
         io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: hMsg, conversation: hConv });
       }
-      // Mantener human mode — el admin atiende desde acá o el CRM
+      // El administrador tomó el control: este sí es el modo humano real.
+      await db.setAgentMode(session.convId, 'human');
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'human' });
       if (pending) await db.markAdminReplyHandled(pending.id);
       secretary.closeSession(org.id);
 
@@ -579,12 +581,11 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     });
     await db.updateConversationLastMessage(session.convId, customerMessage);
 
-    // Mantener modo humano: el admin está conversando él mismo con el cliente.
-    // El auto-reset de 24h (paso 4 del webhook) devuelve el hilo al bot cuando
-    // pasan 24h sin respuesta humana. Antes acá se reseteaba a 'ai' de inmediato
-    // y el bot contestaba encima del admin, con información desactualizada.
-    await db.setAgentMode(session.convId, 'human');
-    io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'human' });
+    // Diva coordinó una respuesta puntual. Al enviarla, el hilo vuelve a quedar
+    // activo para que pueda atender el siguiente mensaje del cliente.
+    await db.setAgentMode(session.convId, 'ai');
+    await db.clearLastEscalation(session.convId).catch(() => {});
+    io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'ai' });
     if (pending) await db.markAdminReplyHandled(pending.id);
     secretary.closeSession(org.id);
 
@@ -595,7 +596,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     const preview = customerMessage.slice(0, 100);
     await kapsoService.sendTextMessage(
       parsed.from,
-      `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nEl hilo con *${session.customerName}* queda en modo humano — el bot no responde hasta que pasen 24h sin respuesta tuya, o lo devuelvas a IA desde el CRM.`,
+      `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nDiva envió tu respuesta a *${session.customerName}* y dejó el chat activo para continuar atendiendo.`,
       whatsappConfig
     ).catch(() => {});
 

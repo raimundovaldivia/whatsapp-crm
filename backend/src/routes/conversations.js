@@ -87,6 +87,9 @@ router.post('/:id/messages', async (req, res) => {
     });
 
     await db.updateConversationLastMessage(conv.id, text.trim());
+    // Una respuesta escrita desde el CRM significa que una persona tomó el hilo.
+    await db.setAgentMode(conv.id, 'human');
+    io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode: 'human' });
     const updated = await db.getConversationById(conv.id);
     io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updated });
 
@@ -103,7 +106,7 @@ router.post('/:id/messages', async (req, res) => {
 router.patch('/:id/agent-mode', async (req, res) => {
   try {
     const { mode } = req.body;
-    if (!['ai', 'human'].includes(mode)) return res.status(400).json({ success: false, error: 'mode inválido' });
+    if (!['ai', 'coordinating', 'human'].includes(mode)) return res.status(400).json({ success: false, error: 'mode inválido' });
 
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
