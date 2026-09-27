@@ -27,6 +27,7 @@ const MORE_NAV_ITEMS = [
   { key: 'productos',  icon: Store,     label: 'Mi tienda' },
   { key: 'stats',      icon: BarChart2, label: 'Estadísticas' },
   { key: 'evaluacion', icon: Check,     label: 'Evaluación' },
+  { key: 'settings',   icon: Settings,  label: 'Configuración' },
   { key: 'solutions',  icon: Layers,    label: 'Soluciones' },
   { key: 'users',      icon: UserCog,   label: 'Equipo' },
 ];
@@ -128,7 +129,7 @@ function DesktopNav({ view, onChangeView, orgName, connected, onLogout, unreadCo
       {openMenu === 'account' && (
         <Popover title={orgName || 'Mi cuenta'} colors={colors} top={12}>
           {allowed.includes('settings') && (
-            <MenuRow icon={Settings} label="Mi cuenta" active={view === 'settings'}
+            <MenuRow icon={Settings} label="Configuración de la cuenta" active={view === 'settings'}
               onClick={() => goTo('settings')} colors={colors} />
           )}
           <MenuRow icon={LogOut} label="Cerrar sesión" danger onClick={() => {
@@ -177,9 +178,6 @@ function MobileNav({ view, onChangeView, unreadCount, pendingOrders, pendingProo
                 <MenuRow key={item.key} icon={item.icon} label={item.label} active={view === item.key}
                   onClick={() => goTo(item.key)} colors={colors} />
               ))}
-              {allowed.includes('settings') && (
-                <MenuRow icon={Settings} label="Mi cuenta" active={view === 'settings'} onClick={() => goTo('settings')} colors={colors} />
-              )}
               <MenuRow icon={isDark ? Sun : Moon} label={isDark ? 'Modo claro' : 'Modo oscuro'} onClick={toggle} colors={colors} />
               <MenuRow icon={LogOut} label="Cerrar sesión" danger onClick={onLogout} colors={colors} />
             </div>

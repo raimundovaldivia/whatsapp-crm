@@ -1,4 +1,4 @@
-import { lazy, useState, useCallback, useEffect, useRef } from 'react';
+import { lazy, startTransition, useState, useCallback, useEffect, useRef } from 'react';
 import AuthPage       from './components/AuthPage.jsx';
 import SetupWizard    from './components/SetupWizard.jsx';
 import NavBar         from './components/NavBar.jsx';
@@ -308,7 +308,10 @@ export default function App() {
     const allowed = ROLE_VIEWS[user?.role] || ROLE_VIEWS.agent;
     if (!allowed.has(newView)) return; // silently block unauthorized navigation
     if (modules && !ALWAYS_ON_VIEWS.has(newView) && modules[newView] === false) return; // módulo desactivado
-    setView(newView);
+    // Las vistas secundarias se descargan la primera vez que se abren. Mantener
+    // la vista actual evita que el Suspense global reemplace todo el CRM por
+    // una pantalla de "Cargando…" durante ese instante.
+    startTransition(() => setView(newView));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.role, modules]);
 
