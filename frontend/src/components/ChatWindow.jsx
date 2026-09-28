@@ -582,6 +582,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       <div style={{
         padding: isMobile ? '8px 10px' : '10px 16px',
         backgroundColor: colors.bgPanel,
+        position: isMobile ? 'sticky' : 'relative',
+        top: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -593,7 +595,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         {/* Left: back + avatar + contact info */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
           {isMobile && onBack && (
-            <button onClick={onBack} style={{
+            <button onClick={onBack} aria-label="Volver a todos los chats" title="Volver a todos los chats" style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
               color: colors.textSecondary, display: 'flex', alignItems: 'center',
               borderRadius: '8px', flexShrink: 0,

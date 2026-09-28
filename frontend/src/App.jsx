@@ -224,6 +224,7 @@ export default function App() {
   const handleSelectConversation = useCallback(async (id) => {
     setView('chats');
     setSelectedId(id);
+    if (isMobile) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     // Siempre re-fetchear al seleccionar para no perder mensajes que llegaron
     // mientras el socket estaba caído o la conversación no estaba abierta.
     // Hacemos merge (no reemplazo) para evitar flash visual.
@@ -242,7 +243,7 @@ export default function App() {
       });
       setConversations(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c));
     } catch (err) { console.error(err); }
-  }, []);
+  }, [isMobile]);
 
   const handleSendMessage = useCallback(async (convId, text) => {
     const msg = await conversationsAPI.sendMessage(convId, text);
@@ -311,9 +312,10 @@ export default function App() {
     // Las vistas secundarias se descargan la primera vez que se abren. Mantener
     // la vista actual evita que el Suspense global reemplace todo el CRM por
     // una pantalla de "Cargando…" durante ese instante.
+    if (isMobile && newView === 'chats') setSelectedId(null);
     startTransition(() => setView(newView));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.role, modules]);
+  }, [user?.role, modules, isMobile]);
 
   // ── Render ──────────────────────────────────────────────────────
   if (appState === 'loading') return (
@@ -406,7 +408,8 @@ export default function App() {
   return (
     <ThemeCtx.Provider value={{ colors, isDark: theme === 'dark', toggle: toggleTheme }}>
     <div style={{
-      display: 'flex', height: '100vh', width: '100vw',
+      display: 'flex', height: isMobile ? '100dvh' : '100vh', width: '100vw',
+      minHeight: 0,
       overflow: 'hidden', backgroundColor: colors.bgApp,
       flexDirection: isMobile ? 'column' : 'row',
       paddingBottom: isMobile ? '60px' : 0,
