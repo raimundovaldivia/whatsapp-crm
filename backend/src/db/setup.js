@@ -833,7 +833,8 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_notes     JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}',
-        ADD COLUMN IF NOT EXISTS stop_times     JSONB DEFAULT '{}';
+        ADD COLUMN IF NOT EXISTS stop_times     JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS load_checklist JSONB DEFAULT '{}';
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
         ON delivery_routes(organization_id, driver_user_id, status);
     `);

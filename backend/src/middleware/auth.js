@@ -32,12 +32,12 @@ function generateToken(user) {
  * Se compara contra req.originalUrl porque requireAuth se monta por router
  * y req.path ahí ya viene recortado.
  */
-const REPARTIDOR_ALLOWED_PREFIXES = ['/api/delivery', '/api/auth'];
+const REPARTIDOR_ALLOWED_PREFIXES = ['/api/delivery', '/api/auth', '/api/push'];
 
 // 'coordinador': cargo mixto. Reparte (app) Y arma/optimiza rutas en la web,
 // pero SOLO ve el módulo de despachos: rutas, la bodega y los pedidos (para
 // editar direcciones antes de optimizar). Nada de chats, clientes ni config.
-const COORDINADOR_ALLOWED_PREFIXES = ['/api/delivery', '/api/auth', '/api/settings/warehouse', '/api/orders'];
+const COORDINADOR_ALLOWED_PREFIXES = ['/api/delivery', '/api/auth', '/api/settings/warehouse', '/api/orders', '/api/push'];
 
 // Roles restringidos a un subconjunto de rutas (por prefijo de URL).
 const RESTRICTED_ROLE_PREFIXES = {

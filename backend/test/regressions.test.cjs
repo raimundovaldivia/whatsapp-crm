@@ -142,6 +142,59 @@ test('mobile item editor enforces module flag and route membership',async()=>{
     res=response();await routeItems({...request,method:'GET',query:{source:'bot',id:1}},res);assert.equal(res.body.items[0].quantity,2);
   } finally {await f.engine.close();}
 });
+test('driver route shows cash balance, persists load checklist and keeps order history details',async()=>{
+  const f=await fixture();
+  try {
+    const stop={source:'bot',id:1,stopNumber:1,customerName:'Cliente prueba',orderName:'#1',totalPrice:100,items:[{name:'Huevos XL',quantity:2}]};
+    await f.query('UPDATE orders SET items=$1,total_price=100 WHERE id=1',[JSON.stringify(stop.items)]);
+    await f.query(`UPDATE delivery_routes
+      SET optimized_route=$1, stop_statuses='{"bot_1":"entregado"}', stop_payments='{"bot_1":"efectivo"}'
+      WHERE id=1`,[JSON.stringify([stop])]);
+    await f.query("INSERT INTO delivery_expenses(organization_id,route_id,driver_user_id,amount,category) VALUES(1,1,10,30,'Peaje')");
+    const router=load('src/routes/delivery.js',{
+      '../db/database':f.db,
+      '../middleware/auth':{requireAuth:noop,requireRole:()=>noop},
+      '../services/push':{},
+    });
+    const getRes=response();
+    await handler(router,'get','/routes/1')({orgId:1,userId:10,role:'repartidor',params:{id:'1'}},getRes);
+    assert.equal(getRes.code,200);
+    assert.deepEqual(JSON.parse(JSON.stringify(getRes.body.route.financial_summary)),{
+      routeValue:100,deliveredValue:100,cashCollected:100,transferCollected:0,
+      otherCollected:0,expenseCount:1,expensesTotal:30,netCash:70,
+    });
+
+    const checkRes=response();
+    await handler(router,'patch','/routes/1/load-checklist')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{itemName:'Huevos XL',checked:true}},checkRes);
+    assert.equal(checkRes.code,200);
+    assert.equal(checkRes.body.loadChecklist['Huevos XL'],true);
+    assert.equal((await f.query("SELECT load_checklist->>'Huevos XL' checked FROM delivery_routes WHERE id=1")).rows[0].checked,'true');
+
+    await f.query("UPDATE delivery_routes SET status='completed',completed_at=NOW() WHERE id=1");
+    const historyRes=response();
+    await handler(router,'get','/routes/history')({orgId:1,userId:10,role:'repartidor',query:{}},historyRes);
+    assert.equal(historyRes.code,200);
+    assert.equal(historyRes.body.routes[0].stop_payments.bot_1,'efectivo');
+    assert.equal(historyRes.body.routes[0].optimized_route[0].customerName,'Cliente prueba');
+  } finally {await f.engine.close();}
+});
+test('assigning an active route sends the driver a push notification with route context',async()=>{
+  const f=await fixture();const sent=[];
+  try {
+    const router=load('src/routes/delivery.js',{
+      '../db/database':f.db,
+      '../middleware/auth':{requireAuth:noop,requireRole:()=>noop},
+      '../services/push':{pushUser:async(...args)=>{sent.push(args);}},
+    });
+    const res=response();
+    await handler(router,'patch','/routes/1')({orgId:1,userId:10,role:'owner',params:{id:'1'},body:{driverUserId:10}},res);
+    assert.equal(res.code,200);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0][1],10);
+    assert.equal(sent[0][2].data.routeId,'1');
+    assert.equal(sent[0][2].data.routeName,'Own');
+  } finally {await f.engine.close();}
+});
 test('durable streams batch messages, isolate workers and survive new arrivals during processing',async()=>{
   const f=await fixture();
   try {

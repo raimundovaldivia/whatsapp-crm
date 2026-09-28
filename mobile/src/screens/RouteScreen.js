@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { getRoute, createExpense, getSavedSession } from '../services/api';
+import { getRoute, createExpense, getSavedSession, updateLoadChecklist } from '../services/api';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
 
@@ -76,6 +76,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [showManifest, setShowManifest] = useState(false);
+  const [checkBusy, setCheckBusy] = useState('');
   // Rótulo de paradas: números (1, 2, 3…) o letras (A, B, C… como Google Maps).
   const [labelMode, setLabelMode] = useState('numbers');
   useFocusEffect(useCallback(() => { loadStopLabelMode().then(setLabelMode); }, []));
@@ -131,6 +132,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
       payload._session = session;
       await createExpense(payload, session);
       setExpOpen(false); resetExpense();
+      await load();
       Alert.alert('Listo', 'Gasto registrado ✅');
     } catch (e) {
       const st = e.response?.status;
@@ -182,6 +184,9 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const manifestUnits = manifest.reduce((acc, [, q]) => acc + q, 0);
   const statuses   = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
   const payments   = route?.stop_payments && typeof route.stop_payments === 'object' ? route.stop_payments : {};
+  const loadChecklist = route?.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
+  const financial = route?.financial_summary || {};
+  const checkedLoad = manifest.filter(([name]) => !!loadChecklist[name]).length;
   const stateOf    = stop => statuses[stopKeyOf(stop)] || 'pending';
   const colorOf    = stop => STOP_COLORS[stateOf(stop)] || STOP_COLORS.pending;
 
@@ -215,6 +220,19 @@ export default function RouteScreen({ route: navRoute, navigation }) {
     Linking.openURL(url).catch(() =>
       Linking.openURL(`https://www.google.com/maps/dir/${addrs.map(encodeURIComponent).join('/')}`)
     );
+  }
+
+  async function toggleLoad(itemName) {
+    const next = !loadChecklist[itemName];
+    setCheckBusy(itemName);
+    setRoute(current => ({ ...current, load_checklist: { ...(current?.load_checklist || {}), [itemName]: next } }));
+    try {
+      const saved = await updateLoadChecklist(routeId, itemName, next);
+      setRoute(current => ({ ...current, load_checklist: saved }));
+    } catch (err) {
+      setRoute(current => ({ ...current, load_checklist: { ...(current?.load_checklist || {}), [itemName]: !next } }));
+      Alert.alert('No se pudo guardar', err.response?.data?.error || 'Revisa tu conexión e intenta nuevamente.');
+    } finally { setCheckBusy(''); }
   }
 
   return (
@@ -252,20 +270,40 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           keyExtractor={stopKeyOf}
           refreshing={loading}
           onRefresh={load}
-          ListHeaderComponent={manifest.length > 0 ? (
-            <View style={s.manifestCard}>
-              <TouchableOpacity style={s.manifestHead} onPress={() => setShowManifest(v => !v)} activeOpacity={0.7}>
-                <Text style={s.manifestTitle}>📦 Lo que llevas · {manifestUnits} u.</Text>
-                <Text style={s.manifestToggle}>{showManifest ? 'Ocultar' : 'Ver'}</Text>
-              </TouchableOpacity>
-              {showManifest && manifest.map(([name, qty]) => (
-                <View key={name} style={s.manifestRow}>
-                  <Text style={s.manifestName} numberOfLines={1}>{name}</Text>
-                  <Text style={s.manifestQty}>{qty}</Text>
+          ListHeaderComponent={(
+            <>
+              <View style={s.moneyCard}>
+                <View style={s.moneyHead}><Text style={s.moneyTitle}>💰 Resumen del recorrido</Text><Text style={s.moneyValue}>{CLP(financial.routeValue)}</Text></View>
+                <View style={s.moneyGrid}>
+                  <View style={s.moneyItem}><Text style={s.moneyLabel}>Efectivo recibido</Text><Text style={[s.moneyNumber, { color: C.green }]}>{CLP(financial.cashCollected)}</Text></View>
+                  <View style={s.moneyItem}><Text style={s.moneyLabel}>Transferencias</Text><Text style={[s.moneyNumber, { color: C.blue }]}>{CLP(financial.transferCollected)}</Text></View>
+                  <View style={s.moneyItem}><Text style={s.moneyLabel}>Gastos ({financial.expenseCount || 0})</Text><Text style={[s.moneyNumber, { color: C.orange }]}>-{CLP(financial.expensesTotal)}</Text></View>
+                  <View style={s.moneyItem}><Text style={s.moneyLabel}>Efectivo neto</Text><Text style={[s.moneyNumber, { color: Number(financial.netCash) >= 0 ? C.green : C.red }]}>{CLP(financial.netCash)}</Text></View>
                 </View>
-              ))}
-            </View>
-          ) : null}
+              </View>
+              {manifest.length > 0 && (
+                <View style={s.manifestCard}>
+                  <TouchableOpacity style={s.manifestHead} onPress={() => setShowManifest(v => !v)} activeOpacity={0.7}>
+                    <View>
+                      <Text style={s.manifestTitle}>📦 Control de carga · {checkedLoad}/{manifest.length}</Text>
+                      <Text style={s.manifestProgress}>{manifestUnits} unidades en total{checkedLoad === manifest.length ? ' · carga completa ✅' : ''}</Text>
+                    </View>
+                    <Text style={s.manifestToggle}>{showManifest ? 'Ocultar' : 'Revisar'}</Text>
+                  </TouchableOpacity>
+                  {showManifest && manifest.map(([name, qty]) => {
+                    const checked = !!loadChecklist[name];
+                    return (
+                      <TouchableOpacity key={name} style={s.manifestRow} onPress={() => toggleLoad(name)} disabled={checkBusy === name} activeOpacity={0.75}>
+                        <View style={[s.loadCheck, checked && s.loadCheckOn]}><Text style={s.loadCheckText}>{checked ? '✓' : ''}</Text></View>
+                        <Text style={[s.manifestName, checked && s.manifestNameDone]}>{name}</Text>
+                        <Text style={s.manifestQty}>{qty}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </>
+          )}
           renderItem={({ item: stop }) => {
             const state  = stateOf(stop);
             const color  = colorOf(stop);
@@ -366,10 +404,24 @@ const s = StyleSheet.create({
   manifestCard: { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, marginHorizontal: 12, marginTop: 10, marginBottom: 10, overflow: 'hidden' },
   manifestHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 11 },
   manifestTitle:{ color: C.text, fontWeight: '700', fontSize: 14 },
+  manifestProgress:{ color: C.muted, fontSize: 11, marginTop: 3 },
   manifestToggle:{ color: C.green, fontWeight: '600', fontSize: 13 },
-  manifestRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 7, borderTopWidth: 1, borderTopColor: C.border },
+  manifestRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: 1, borderTopColor: C.border },
   manifestName: { color: C.muted, fontSize: 14, flex: 1, marginRight: 10 },
+  manifestNameDone:{ color: C.green, textDecorationLine: 'line-through' },
   manifestQty:  { color: C.text, fontWeight: '800', fontSize: 15 },
+  loadCheck:    { width: 25, height: 25, borderRadius: 7, borderWidth: 2, borderColor: C.border, alignItems: 'center', justifyContent: 'center' },
+  loadCheckOn:  { backgroundColor: C.green, borderColor: C.green },
+  loadCheckText:{ color: '#052e16', fontSize: 16, fontWeight: '900' },
+
+  moneyCard:    { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.green + '55', marginHorizontal: 12, marginTop: 10, padding: 14, gap: 10 },
+  moneyHead:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  moneyTitle:   { color: C.text, fontSize: 14, fontWeight: '800' },
+  moneyValue:   { color: C.text, fontSize: 16, fontWeight: '900' },
+  moneyGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  moneyItem:    { width: '48%', flexGrow: 1, backgroundColor: C.bg, borderRadius: 9, padding: 10 },
+  moneyLabel:   { color: C.muted, fontSize: 10 },
+  moneyNumber:  { color: C.text, fontSize: 15, fontWeight: '800', marginTop: 3 },
 
   listContainer:{ flex: 1 },
   listHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.border },

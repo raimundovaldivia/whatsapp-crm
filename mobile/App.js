@@ -8,8 +8,8 @@
  * errores en cada pantalla.
  */
 import 'react-native-gesture-handler';
-import React, { useState, useEffect, useCallback } from 'react';
-import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
@@ -23,8 +23,10 @@ import HistoryScreen from './src/screens/HistoryScreen';
 import ExpensesScreen from './src/screens/ExpensesScreen';
 import StopScreen    from './src/screens/StopScreen';
 import { logout, getSavedSession, validateSession, onSessionExpired } from './src/services/api';
+import { registerForPush, unregisterForPush, listenForRouteNotifications } from './src/push';
 
 const Stack = createNativeStackNavigator();
+const navigationRef = createNavigationContainerRef();
 
 const BG    = '#0f172a';
 const GREEN = '#22c55e';
@@ -38,6 +40,7 @@ const navTheme = {
 export default function App() {
   const [user,    setUser]    = useState(null);
   const [loading, setLoading] = useState(true);
+  const pendingRoute = useRef(null);
 
   // Restaurar sesión guardada y validarla contra el backend
   useEffect(() => {
@@ -63,6 +66,15 @@ export default function App() {
   // Cuando cualquier llamada devuelve 401 → volver al login
   useEffect(() => onSessionExpired(() => setUser(null)), []);
 
+  useEffect(() => {
+    if (!user) return;
+    registerForPush();
+    return listenForRouteNotifications(route => {
+      if (navigationRef.isReady()) navigationRef.navigate('Route', route);
+      else pendingRoute.current = route;
+    });
+  }, [user]);
+
   // Actualización OTA al abrir: si hay una versión nueva publicada con
   // `eas update`, se descarga y la app se reinicia sola (tarda 1-3 s con
   // buena señal). Sin esto había que cerrar y abrir dos veces, y nadie sabía
@@ -85,6 +97,7 @@ export default function App() {
   }, []);
 
   const handleLogout = useCallback(async () => {
+    await unregisterForPush();
     await logout();
     setUser(null);
   }, []);
@@ -104,7 +117,12 @@ export default function App() {
       {!user ? (
         <LoginScreen onLogin={(data) => setUser(data.user || { name: '' })} />
       ) : (
-        <NavigationContainer theme={navTheme}>
+        <NavigationContainer ref={navigationRef} theme={navTheme} onReady={() => {
+          if (pendingRoute.current) {
+            navigationRef.navigate('Route', pendingRoute.current);
+            pendingRoute.current = null;
+          }
+        }}>
           <Stack.Navigator
             screenOptions={{
               headerStyle:      { backgroundColor: '#1e293b' },

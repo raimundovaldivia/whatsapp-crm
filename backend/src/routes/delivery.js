@@ -29,6 +29,7 @@ const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
 const deliveryNotifications = require('../services/delivery-notifications');
+const push = require('../services/push');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 let io;
@@ -38,6 +39,22 @@ router.use(requireAuth);
 const { routeItems } = require('../services/delivery-items');
 router.get('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
 router.patch('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
+
+function notifyAssignedDriver(orgId, route, message = null) {
+  if (!route?.driver_user_id || !push.pushUser) return;
+  try {
+    let orders = route.orders || [];
+    if (typeof orders === 'string') {
+      try { orders = JSON.parse(orders); } catch { orders = []; }
+    }
+    const pending = push.pushUser(orgId, route.driver_user_id, {
+      title: '🚚 Nueva ruta asignada',
+      body: message || `${route.name || 'Tienes una nueva ruta'} · ${orders.length} paradas`,
+      data: { kind: 'delivery_route', routeId: String(route.id), routeName: route.name || 'Ruta' },
+    });
+    pending?.catch?.(() => {});
+  } catch {}
+}
 
 // ─── Geocodificación (dirección → lat/lng) ───────────────────────────────────
 // Convierte direcciones en coordenadas para pintar el mapa. Usa la misma
@@ -577,6 +594,7 @@ router.get('/routes/history', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT r.id, r.name, r.status, r.driver_name, r.driver_user_id,
              r.orders, r.optimized_route, r.stop_statuses,
+             r.stop_payments, r.stop_notes, r.stop_extras, r.stop_times,
              r.total_distance, r.total_duration, r.created_at, r.sent_at, r.completed_at,
              u.name AS driver_user_name
         FROM delivery_routes r
@@ -592,6 +610,54 @@ router.get('/routes/history', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+async function routeFinancialSummary(pool, route, orgId) {
+  const orders = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
+  const stops = Array.isArray(route.optimized_route) && route.optimized_route.length
+    ? route.optimized_route
+    : orders;
+  const botIds = orders.filter(order => order.source === 'bot').map(order => Number(order.id)).filter(Number.isFinite);
+  const shopIds = orders.filter(order => order.source === 'shopify').map(order => String(order.id));
+  const [botResult, shopResult, expenseResult] = await Promise.all([
+    botIds.length
+      ? pool.query('SELECT id::text AS id, total_price FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
+      : { rows: [] },
+    shopIds.length
+      ? pool.query('SELECT shopify_order_id AS id, total_price FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopIds])
+      : { rows: [] },
+    pool.query(
+      'SELECT COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total FROM delivery_expenses WHERE organization_id = $1 AND route_id = $2',
+      [orgId, route.id]
+    ),
+  ]);
+  const totals = new Map();
+  botResult.rows.forEach(row => totals.set(`bot_${row.id}`, Number(row.total_price) || 0));
+  shopResult.rows.forEach(row => totals.set(`shopify_${row.id}`, Number(row.total_price) || 0));
+  const statuses = route.stop_statuses || {};
+  const payments = route.stop_payments || {};
+  let routeValue = 0, deliveredValue = 0, cashCollected = 0, transferCollected = 0, otherCollected = 0;
+  for (const stop of stops) {
+    const key = `${stop.source}_${stop.id}`;
+    const amount = totals.get(key) ?? (Number(stop.totalPrice || stop.total_price) || 0);
+    routeValue += amount;
+    if (statuses[key] !== 'entregado') continue;
+    deliveredValue += amount;
+    if (payments[key] === 'efectivo') cashCollected += amount;
+    else if (payments[key] === 'transferencia') transferCollected += amount;
+    else otherCollected += amount;
+  }
+  const expense = expenseResult.rows[0] || { count: 0, total: 0 };
+  return {
+    routeValue: Math.round(routeValue),
+    deliveredValue: Math.round(deliveredValue),
+    cashCollected: Math.round(cashCollected),
+    transferCollected: Math.round(transferCollected),
+    otherCollected: Math.round(otherCollected),
+    expenseCount: Number(expense.count) || 0,
+    expensesTotal: Number(expense.total) || 0,
+    netCash: Math.round(cashCollected - (Number(expense.total) || 0)),
+  };
+}
 
 /**
  * Detalle de una ruta. La app lo usa para refrescar el estado de las paradas
@@ -609,7 +675,39 @@ router.get('/routes/:id', async (req, res) => {
          AND ($3::int IS NULL OR r.driver_user_id = $3 OR r.driver_user_id IS NULL)
     `, [parseInt(req.params.id), req.orgId, driverScope]);
     if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+    route.financial_summary = await routeFinancialSummary(pool, route, req.orgId);
     res.json({ success: true, route });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim().slice(0, 160) : '';
+  const checked = req.body?.checked;
+  if (!itemName || typeof checked !== 'boolean') return res.status(400).json({ success: false, error: 'Falta producto o estado de carga' });
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
+  const pool = getPool();
+  try {
+    const { rows: [route] } = await pool.query(
+      `SELECT id, status, orders, optimized_route, load_checklist
+         FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2
+          AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)`,
+      [Number(req.params.id), req.orgId, driverScope]
+    );
+    if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada o no asignada a ti' });
+    const stops = Array.isArray(route.optimized_route) && route.optimized_route.length ? route.optimized_route : (route.orders || []);
+    const names = new Set(stops.flatMap(stop => (stop.items || []).map(item => String(item.name || item.title || item.product_name || '').trim())).filter(Boolean));
+    if (!names.has(itemName)) return res.status(400).json({ success: false, error: 'Ese producto no pertenece a la carga de esta ruta' });
+    const { rows: [updated] } = await pool.query(
+      `UPDATE delivery_routes
+          SET load_checklist = COALESCE(load_checklist, '{}'::jsonb) || jsonb_build_object($1::text, $2::boolean)
+        WHERE id = $3 AND organization_id = $4
+        RETURNING load_checklist`,
+      [itemName, checked, route.id, req.orgId]
+    );
+    res.json({ success: true, loadChecklist: updated.load_checklist || {} });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -960,6 +1058,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
     }
 
     if (skipped.length) console.log(`[Delivery/routes POST] ⏭️ ${skipped.length} pedido(s) ya entregados omitidos al enviar`);
+    if (send) notifyAssignedDriver(req.orgId, route);
     res.json({ success: true, route, skipped });
   } catch (err) {
     console.error('[Delivery/routes POST]', err.message);
@@ -1072,6 +1171,9 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
       ].filter(Boolean));
       const nBack = restored.reduce((a, r) => a + (r && r.rowCount ? r.rowCount : 0), 0);
       console.log(`[Delivery/routes PATCH] ruta ${id} cancelada, ${nBack} pedido(s) devueltos a por_despachar`);
+    }
+    if (status === 'sent' || (driverUserId !== undefined && ['sent', 'in_progress'].includes(route.status))) {
+      notifyAssignedDriver(req.orgId, route);
     }
     res.json({ success: true, route, skipped });
   } catch (err) {
@@ -1187,6 +1289,9 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
       [route.id, req.orgId]
     );
     console.log(`[Delivery/routes ADD] ✅ ${toAdd.length} pedido(s) agregados a ruta ${route.id} (${route.status})`);
+    if (['sent', 'in_progress'].includes(route.status)) {
+      notifyAssignedDriver(req.orgId, updated, `${updated.name || 'Tu ruta'} fue actualizada con ${toAdd.length} parada${toAdd.length === 1 ? '' : 's'} nueva${toAdd.length === 1 ? '' : 's'}`);
+    }
     res.json({ success: true, added: toAdd.length, route: updated });
   } catch (err) {
     console.error('[Delivery/routes ADD]', err.message);

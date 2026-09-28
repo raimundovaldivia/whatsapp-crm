@@ -21,10 +21,10 @@ module.exports = {
   expo: {
     name: 'Despachos',
     slug: 'whatsapp-crm-despachos',
-    version: '1.1.0',
+    version: '1.2.0',
     // OTA (EAS Update): la app instalada descarga cambios de JS por internet.
     // Solo cambios NATIVOS (librerías nuevas, permisos, SDK) requieren nuevo APK.
-    runtimeVersion: '1.0.0',
+    runtimeVersion: '1.2.0',
     updates: {
       url: 'https://u.expo.dev/2a8cb9c5-30f8-44bc-812b-35c51e758b49',
       fallbackToCacheTimeout: 0,
@@ -63,6 +63,10 @@ module.exports = {
       [
         'expo-location',
         { locationWhenInUsePermission: 'Usamos tu ubicación para mostrarte en el mapa de la ruta.' },
+      ],
+      [
+        'expo-notifications',
+        { color: '#22c55e' },
       ],
     ],
     extra: {

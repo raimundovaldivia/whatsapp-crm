@@ -14,6 +14,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getRouteHistory } from '../services/api';
 
+const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
+
 const C = {
   bg:     '#0f172a',
   card:   '#1e293b',
@@ -28,6 +30,8 @@ const C = {
 
 const STATUS_LABEL = { completed: 'Completada', cancelled: 'Cancelada' };
 const STATUS_COLOR = { completed: C.green, cancelled: C.red };
+const STOP_LABEL = { entregado: 'Entregado', cancelled: 'Cancelado', postponed: 'Reprogramado', not_delivered: 'Sin entrega', pending: 'Pendiente' };
+const PAY_LABEL = { efectivo: 'Efectivo', transferencia: 'Transferencia', otro: 'Otro' };
 
 function stopsOf(route) {
   const opt = Array.isArray(route?.optimized_route) ? route.optimized_route : [];
@@ -62,6 +66,7 @@ export default function HistoryScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError]     = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
 
   const load = useCallback(async (isRefresh) => {
     if (isRefresh) setRefreshing(true); else setLoading(true);
@@ -115,25 +120,51 @@ export default function HistoryScreen({ navigation }) {
             const { total, done, fail, postponed } = summarize(route);
             const color = STATUS_COLOR[route.status] || C.muted;
             return (
-              <TouchableOpacity key={route.id} style={s.card} onPress={() => openRoute(route)} activeOpacity={0.85}>
-                <View style={s.cardHead}>
-                  <Text style={s.routeName} numberOfLines={2}>{route.name}</Text>
-                  <View style={[s.badge, { borderColor: `${color}88`, backgroundColor: `${color}22` }]}>
-                    <Text style={[s.badgeText, { color }]}>{STATUS_LABEL[route.status] || route.status}</Text>
+              <View key={route.id} style={s.card}>
+                <TouchableOpacity onPress={() => openRoute(route)} activeOpacity={0.85}>
+                  <View style={s.cardHead}>
+                    <Text style={s.routeName} numberOfLines={2}>{route.name}</Text>
+                    <View style={[s.badge, { borderColor: `${color}88`, backgroundColor: `${color}22` }]}>
+                      <Text style={[s.badgeText, { color }]}>{STATUS_LABEL[route.status] || route.status}</Text>
+                    </View>
                   </View>
+                  <Text style={s.date}>{fmtDate(route)}</Text>
+                  <View style={s.stats}>
+                    <View style={s.stat}><Text style={s.statNum}>{total}</Text><Text style={s.statLabel}>Pedidos</Text></View>
+                    <View style={s.stat}><Text style={[s.statNum, { color: C.green }]}>{done}</Text><Text style={s.statLabel}>Entregados</Text></View>
+                    <View style={s.stat}><Text style={[s.statNum, { color: C.red }]}>{fail}</Text><Text style={s.statLabel}>Sin entrega</Text></View>
+                    {postponed > 0 && <View style={s.stat}><Text style={[s.statNum, { color: C.orange }]}>{postponed}</Text><Text style={s.statLabel}>Reprogramados</Text></View>}
+                  </View>
+                </TouchableOpacity>
+                <View style={s.cardActions}>
+                  <TouchableOpacity onPress={() => setExpandedId(expandedId === route.id ? null : route.id)} style={s.ordersBtn}>
+                    <Text style={s.ordersBtnText}>{expandedId === route.id ? 'Ocultar pedidos' : 'Ver historial de pedidos'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => openRoute(route)} style={s.reviewBtn}><Text style={s.reviewText}>Revisar ruta →</Text></TouchableOpacity>
                 </View>
-                <Text style={s.date}>{fmtDate(route)}</Text>
-                <View style={s.stats}>
-                  <View style={s.stat}><Text style={s.statNum}>{total}</Text><Text style={s.statLabel}>Paradas</Text></View>
-                  <View style={s.stat}><Text style={[s.statNum, { color: C.green }]}>{done}</Text><Text style={s.statLabel}>Entregados</Text></View>
-                  <View style={s.stat}><Text style={[s.statNum, { color: C.red }]}>{fail}</Text><Text style={s.statLabel}>Sin entrega</Text></View>
-                  {postponed > 0 && <View style={s.stat}><Text style={[s.statNum, { color: C.orange }]}>{postponed}</Text><Text style={s.statLabel}>Reprogramados</Text></View>}
-                  {route.total_distance ? (
-                    <View style={s.stat}><Text style={s.statNum}>{route.total_distance}</Text><Text style={s.statLabel}>Distancia</Text></View>
-                  ) : null}
-                </View>
-                <Text style={s.openHint}>Revisar / corregir →</Text>
-              </TouchableOpacity>
+                {expandedId === route.id && (
+                  <View style={s.ordersList}>
+                    {stopsOf(route).map((stop, index) => {
+                      const key = `${stop.source}_${stop.id}`;
+                      const state = route.stop_statuses?.[key] || 'pending';
+                      const payment = route.stop_payments?.[key];
+                      return (
+                        <View key={key} style={s.orderRow}>
+                          <View style={s.orderNum}><Text style={s.orderNumText}>{stop.stopNumber || index + 1}</Text></View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={s.orderName}>{stop.customerName || stop.orderName || `Pedido ${index + 1}`}</Text>
+                            <Text style={s.orderMeta}>{stop.orderName || ''}{payment ? ` · ${PAY_LABEL[payment] || payment}` : ''}</Text>
+                          </View>
+                          <View style={s.orderRight}>
+                            <Text style={[s.orderStatus, { color: state === 'entregado' ? C.green : state === 'postponed' ? C.orange : C.red }]}>{STOP_LABEL[state] || state}</Text>
+                            <Text style={s.orderAmount}>{CLP(stop.totalPrice || stop.total_price)}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
             );
           })}
         </ScrollView>
@@ -166,5 +197,18 @@ const s = StyleSheet.create({
   stat:      { alignItems: 'center' },
   statNum:   { color: C.text, fontSize: 18, fontWeight: '800' },
   statLabel: { color: C.muted, fontSize: 11, marginTop: 2 },
-  openHint:  { color: C.blue, fontSize: 12, fontWeight: '700', marginTop: 12, textAlign: 'right' },
+  cardActions:{ flexDirection: 'row', gap: 8, marginTop: 12 },
+  ordersBtn: { flex: 1, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 9, padding: 9, alignItems: 'center' },
+  ordersBtnText:{ color: C.text, fontSize: 11, fontWeight: '700' },
+  reviewBtn: { paddingHorizontal: 11, paddingVertical: 9, justifyContent: 'center' },
+  reviewText:{ color: C.blue, fontSize: 11, fontWeight: '700' },
+  ordersList:{ marginTop: 10, borderTopWidth: 1, borderTopColor: C.border },
+  orderRow:  { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.border },
+  orderNum:  { width: 27, height: 27, borderRadius: 14, backgroundColor: C.border, alignItems: 'center', justifyContent: 'center' },
+  orderNumText:{ color: C.text, fontSize: 11, fontWeight: '800' },
+  orderName: { color: C.text, fontSize: 12, fontWeight: '700' },
+  orderMeta: { color: C.muted, fontSize: 10, marginTop: 2 },
+  orderRight:{ alignItems: 'flex-end' },
+  orderStatus:{ fontSize: 10, fontWeight: '700' },
+  orderAmount:{ color: C.text, fontSize: 11, fontWeight: '800', marginTop: 2 },
 });

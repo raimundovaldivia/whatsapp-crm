@@ -162,6 +162,22 @@ export async function getRoute(routeId) {
   return res.data?.route || null;
 }
 
+export async function updateLoadChecklist(routeId, itemName, checked) {
+  const client = await getClient();
+  const res = await client.patch(`/api/delivery/routes/${routeId}/load-checklist`, { itemName, checked });
+  return res.data?.loadChecklist || {};
+}
+
+export async function registerPushToken(expoToken) {
+  const client = await getClient();
+  await client.post('/api/push/register', { token: expoToken, platform: 'expo' });
+}
+
+export async function unregisterPushToken(expoToken) {
+  const client = await getClient();
+  await client.post('/api/push/unregister', { token: expoToken });
+}
+
 /**
  * Marcar una parada como entregada, cancelada o pendiente.
  *

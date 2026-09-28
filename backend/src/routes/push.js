@@ -4,7 +4,8 @@
  *   POST /api/push/register    { token, platform }   → guarda/actualiza el token
  *   POST /api/push/unregister  { token }             → lo borra (logout)
  *
- * Solo cuentas owner / admin / supervisor (las que usan la app Central).
+ * Disponible para administradores y repartidores. Cada token queda ligado al
+ * usuario autenticado, por lo que un aviso de ruta llega solo al chofer asignado.
  */
 const express = require('express');
 const router  = express.Router();
@@ -12,7 +13,7 @@ const { getPool } = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
-router.use(requireRole('owner', 'admin', 'supervisor'));
+router.use(requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'));
 
 router.post('/register', async (req, res) => {
   const { token, platform } = req.body || {};
