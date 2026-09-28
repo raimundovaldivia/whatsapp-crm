@@ -16,14 +16,19 @@ const { getPool } = require('../db/database');
 const db          = require('../db/database');
 const kapso       = require('./kapso-whatsapp');
 const { notifyAdmin } = require('./admin-notify');
+const { isCustomerMessagingHour } = require('./outbound-policy');
 
 const DEFAULT_REMINDER_MINUTES = 45;
 const CHECK_EVERY_MS = 10 * 60 * 1000;
 
 let running = false;
 
-async function sweepEscalations() {
+async function sweepEscalations(now = new Date()) {
   if (running) return;
+  if (!isCustomerMessagingHour(now)) {
+    console.log('[EscalationWatch] Fuera del horario 09:00-20:59 de Chile — no se contactará a clientes');
+    return { processed: 0, reason: 'outside_customer_hours' };
+  }
   running = true;
   const pool = getPool();
   try {

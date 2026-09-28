@@ -13,12 +13,18 @@
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
 const { activateDivaForAutomatedMessage } = require('./conversation-mode');
+const { isCustomerMessagingHour } = require('./outbound-policy');
 
 /**
  * Envía los follow-ups de pedidos agendados para HOY y días anteriores no enviados.
  * @param {object} io - Socket.IO para notificaciones en tiempo real (opcional)
  */
-async function runScheduledFollowUp(io = null) {
+async function runScheduledFollowUp(io = null, now = new Date()) {
+  if (!isCustomerMessagingHour(now)) {
+    console.log('[ScheduledFollowUp] Fuera del horario 09:00-20:59 de Chile — se posterga la revisión');
+    return { processed: 0, reason: 'outside_customer_hours' };
+  }
+
   console.log('[ScheduledFollowUp] 🔔 Revisando pedidos agendados pendientes...');
 
   let orders;
@@ -26,12 +32,12 @@ async function runScheduledFollowUp(io = null) {
     orders = await db.getPendingScheduledOrders();
   } catch (err) {
     console.error('[ScheduledFollowUp] Error consultando DB:', err.message);
-    return;
+    return { processed: 0 };
   }
 
   if (!orders.length) {
     console.log('[ScheduledFollowUp] Sin pedidos pendientes para hoy.');
-    return;
+    return { processed: 0 };
   }
 
   console.log(`[ScheduledFollowUp] ${orders.length} pedido(s) agendado(s) a enviar`);
@@ -43,6 +49,8 @@ async function runScheduledFollowUp(io = null) {
       console.error(`[ScheduledFollowUp] Error procesando scheduled_order #${order.id}:`, err.message);
     }
   }
+
+  return { processed: orders.length };
 }
 
 async function processScheduledOrder(order, io) {
@@ -166,41 +174,17 @@ async function processScheduledOrder(order, io) {
 }
 
 /**
- * Calcula ms hasta las 9:00 AM hora de Santiago del próximo día.
- * Si ya son más de las 9:00 AM, corre de inmediato en la siguiente oportunidad.
- */
-function msUntilNineAM() {
-  // Chile time: UTC-3 (o UTC-4 en invierno). Aproximamos con UTC-4 como base.
-  const now  = new Date();
-  const next = new Date();
-  next.setUTCHours(13, 0, 0, 0); // 13:00 UTC ≈ 9:00 AM Chile (UTC-4)
-  if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
-  return next - now;
-}
-
-/**
- * Inicia el job. Corre a las ~9AM Chile cada día.
- * También corre una vez al arranque (con 2 min de delay) para catchear días perdidos.
+ * Revisa cada 15 minutos. La regla horaria usa America/Santiago y la base de
+ * datos evita repetir pedidos ya procesados. Así también funciona correctamente
+ * durante los cambios de horario de Chile.
  * @param {object} io - Socket.IO (opcional)
  */
 function startScheduledFollowUpJob(io = null) {
-  console.log('[ScheduledFollowUp] 🚀 Job iniciado — corre diariamente a las 9:00 AM');
+  const CHECK_EVERY_MS = 15 * 60 * 1000;
+  console.log('[ScheduledFollowUp] 🚀 Job iniciado — revisa cada 15 min y solo envía entre 09:00 y 20:59 (Chile)');
 
-  // Corrida inicial al arrancar (por si hay pedidos de días anteriores)
   setTimeout(() => runScheduledFollowUp(io), 2 * 60 * 1000);
-
-  // Programar la primera corrida a las 9 AM
-  const scheduleNext = () => {
-    const delay = msUntilNineAM();
-    console.log(`[ScheduledFollowUp] Próxima corrida en ${Math.round(delay / 60000)} minutos`);
-    setTimeout(() => {
-      runScheduledFollowUp(io);
-      // Después de la primera, repetir cada 24h
-      setInterval(() => runScheduledFollowUp(io), 24 * 60 * 60 * 1000);
-    }, delay);
-  };
-
-  scheduleNext();
+  setInterval(() => runScheduledFollowUp(io), CHECK_EVERY_MS);
 }
 
 module.exports = { startScheduledFollowUpJob, runScheduledFollowUp };

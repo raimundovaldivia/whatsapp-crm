@@ -12,6 +12,10 @@
 const Anthropic        = require('@anthropic-ai/sdk');
 const db               = require('../db/database');
 const kapsoService     = require('./kapso-whatsapp');
+const {
+  isCustomerMessagingHour,
+  shouldSkipAutomatedFollowUp,
+} = require('./outbound-policy');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -36,7 +40,8 @@ REGLAS CRÍTICAS:
 - NUNCA menciones "ventana de chat", "bot", "sistema", "recordatorio automático" ni nada técnico
 - NUNCA seas genérico: "Hola, ¿necesitas ayuda?" está PROHIBIDO
 - Usa emojis con moderación (1-2 máximo)
-- Si es de noche (después de las 21h), espera y no envíes nada (devuelve exactamente: SKIP)
+- Este proceso solo se ejecuta entre las 09:00 y las 20:59 hora de Chile
+- Si el cliente dijo que no necesita por ahora, que comprará cuando pueda o ya se cerró la conversación, devuelve exactamente: SKIP
 - Si el cliente ya confirmó pedido, devuelve exactamente: SKIP
 
 Solo el mensaje, nada más. Sin comillas.`;
@@ -71,12 +76,17 @@ async function generateFollowUpMessage(conv, history, storeContext) {
   return text;
 }
 
-async function runFollowUp(io = null) {
+async function runFollowUp(io = null, now = new Date()) {
   let sent = 0, skipped = 0;
 
   try {
+    if (!isCustomerMessagingHour(now)) {
+      console.log('[FollowUp] Fuera del horario 09:00-20:59 de Chile — no se enviarán mensajes');
+      return { sent, skipped, reason: 'outside_customer_hours' };
+    }
+
     const stalled = await db.getStalledConversations();
-    if (!stalled.length) return;
+    if (!stalled.length) return { sent, skipped };
 
     console.log(`[FollowUp] 🔍 ${stalled.length} conversación(es) abandonada(s) encontradas`);
 
@@ -86,6 +96,14 @@ async function runFollowUp(io = null) {
         // Obtener historial y configuración de la org
         const history      = await db.getLastMessages(conv.id, 8);
         const storeContext = await db.getSetting(conv.organization_id, 'store_context') || '';
+
+        if (shouldSkipAutomatedFollowUp(history)) {
+          console.log(`[FollowUp] SKIP conv ${conv.id}: el cliente postergó o el hilo ya fue cerrado`);
+          await db.updatePipelineState(conv.id, 'future_interest').catch(() => {});
+          await db.updateFollowUpSent(conv.id).catch(() => {});
+          skipped++;
+          continue;
+        }
 
         // Generar mensaje con IA
         const message = await generateFollowUpMessage(conv, history, storeContext);
@@ -146,6 +164,8 @@ async function runFollowUp(io = null) {
   } catch (err) {
     console.error('[FollowUp] Error general:', err.message);
   }
+
+  return { sent, skipped };
 }
 
 /**
@@ -155,7 +175,7 @@ async function runFollowUp(io = null) {
 function startFollowUpJob(io = null) {
   const INTERVAL_MS = 30 * 60 * 1000; // 30 minutos
 
-  console.log('[FollowUp] 🚀 Job iniciado — corre cada 30 minutos');
+  console.log('[FollowUp] 🚀 Job iniciado — revisa cada 30 minutos y solo envía entre 09:00 y 20:59 (Chile)');
 
   // Primera corrida después de 5 minutos del arranque (para no saturar el inicio)
   setTimeout(() => {

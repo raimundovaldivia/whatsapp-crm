@@ -8,6 +8,7 @@ const kapsoService    = require('../services/kapso-whatsapp');
 const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
+const { isCustomerMessagingHour, shouldSkipAutomatedFollowUp } = require('../services/outbound-policy');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -755,6 +756,14 @@ router.post('/merge-into/:targetId', requireRole('owner', 'admin', 'supervisor')
 router.post('/trigger-follow-up', async (req, res) => {
   const pool = getPool();
   try {
+    if (!isCustomerMessagingHour()) {
+      return res.status(409).json({
+        success: false,
+        error: 'OUTSIDE_CUSTOMER_HOURS',
+        message: 'Los seguimientos automáticos solo se envían entre las 09:00 y las 20:59, hora de Chile.',
+      });
+    }
+
     const Anthropic    = require('@anthropic-ai/sdk');
     const kapsoService = require('../services/kapso-whatsapp');
     const client       = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -767,7 +776,7 @@ router.post('/trigger-follow-up', async (req, res) => {
        FROM conversations c
        WHERE c.organization_id = $1
          AND c.agent_mode = 'ai'
-         AND c.pipeline_state NOT IN ('done')
+         AND c.pipeline_state NOT IN ('done', 'future_interest', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out')
          AND c.last_message_at < NOW() - INTERVAL '2 hours'
          AND c.last_message_at > NOW() - INTERVAL '22 hours'
          AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '6 hours')
@@ -787,7 +796,8 @@ CONTEXTO TIENDA: ${storeContext}
 ÚLTIMOS MENSAJES:
 {HISTORIAL}
 Escribe UN mensaje de 1-2 líneas para retomar. Tono cálido y casual. Referencia algo específico.
-Si es de noche (>21h), escribe: SKIP. Sin comillas. Solo el mensaje.`;
+Si el cliente dijo que no necesita por ahora, que comprará cuando pueda o la conversación ya se cerró, escribe: SKIP.
+Sin comillas. Solo el mensaje.`;
 
     const hora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
 
@@ -795,6 +805,11 @@ Si es de noche (>21h), escribe: SKIP. Sin comillas. Solo el mensaje.`;
       try {
         const msgs = await db.getLastMessages(conv.id, 8);
         if (!msgs.length) continue;
+        if (shouldSkipAutomatedFollowUp(msgs)) {
+          await db.updatePipelineState(conv.id, 'future_interest').catch(() => {});
+          await pool.query('UPDATE conversations SET follow_up_sent_at = NOW() WHERE id = $1', [conv.id]);
+          continue;
+        }
 
         const historial = msgs.map(m =>
           `${m.direction === 'inbound' ? (conv.contact_name || 'Cliente') : 'Nosotros'}: ${(m.content || '').slice(0, 200)}`
