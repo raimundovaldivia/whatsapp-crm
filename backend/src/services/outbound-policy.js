@@ -41,6 +41,8 @@ const CUSTOMER_PAUSED_PATTERNS = [
   /\b(familiar|amigo|conocido).{0,35}\bproveedor\b/,
   /\btengo.{0,35}\bproveedor\b/,
   /\b(no necesito|no requiero|estoy abastecid[oa]|tengo suficiente)\b/,
+  /\bno\s+(aun|todavia)\b/,
+  /\bme\s+(regalaron|dieron|trajeron)\b/,
 ];
 
 const RENEWED_PURCHASE_PATTERNS = [

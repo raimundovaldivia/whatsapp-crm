@@ -16,6 +16,7 @@ const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
 const pricing      = require('./order-pricing');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
+const { isLikelyAutomaticReply, isGiftedStockReply } = require('./inbound-message-policy');
 
 // Un pedido al que todavía tiene sentido anotarle una preferencia de entrega:
 // registrado y no cancelado/entregado. Incluye los que ya salieron a reparto
@@ -38,6 +39,14 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   const noop = { step:()=>{}, context:()=>{}, intent:()=>{}, escalation:()=>{}, agent:()=>{}, error:()=>{} };
   const L = log || noop;
   const conversation = await db.getConversationById(conversationId);
+
+  // Una autorespuesta comercial no es intención de compra. Conservamos
+  // template_sent para que la próxima respuesta humana active el flujo real.
+  if (conversation?.pipeline_state === 'template_sent' && isLikelyAutomaticReply(userMessage)) {
+    L.step('automatic_reply', 'autorespuesta comercial ignorada después de template');
+    console.log(`[Pipeline] 🤖 Autorespuesta comercial ignorada para conv ${conversationId}`);
+    return { response: null, skipped: true, reason: 'AUTOMATIC_REPLY' };
+  }
   const history = await db.getLastMessages(conversationId, 16);
   const deliveryEnabled = await require('./commercial').permitted(orgId, 'delivery').catch(() => false);
 
@@ -636,6 +645,20 @@ REGLAS ABSOLUTAS:
       response: 'Listo, te damos de baja. No recibirás más mensajes nuestros. Si en algún momento quieres volver, solo escríbenos. ¡Hasta pronto! 👋',
       agentType: 'orchestrator',
       newState: 'opted_out',
+    };
+  }
+
+  // Ya tiene producto porque se lo regalaron: cerrar sin presión y persistir
+  // un estado excluido del job de ventas abandonadas.
+  if (!['collecting_order', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out'].includes(currentState)
+      && isGiftedStockReply(userMessage)) {
+    await db.updatePipelineState(conversationId, 'future_interest');
+    L.agent('orchestrator', 0);
+    L.step('gifted_stock', 'cliente recibió producto por otra vía; seguimiento pausado');
+    return {
+      response: '¡Qué buena suerte! 😄 Cuando se te acaben, aquí estamos.',
+      agentType: 'orchestrator',
+      newState: 'future_interest',
     };
   }
 

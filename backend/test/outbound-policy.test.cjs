@@ -27,6 +27,13 @@ test('no insiste cuando el cliente ya postergó la compra', () => {
   ]), true);
 });
 
+test('no persigue a quien dijo que aún tiene huevos porque se los regalaron', () => {
+  assert.equal(shouldSkipAutomatedFollowUp([
+    { direction: 'outbound', content: '¿Te preparamos tu pedido?' },
+    { direction: 'inbound', content: 'No aún  Me regalaron huevitos...😃' },
+  ]), true);
+});
+
 test('no reabre un hilo que Diva ya cerró', () => {
   assert.equal(shouldSkipAutomatedFollowUp([
     { direction: 'inbound', content: 'Gracias' },
