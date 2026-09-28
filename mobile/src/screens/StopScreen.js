@@ -3,7 +3,10 @@ import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   Linking, Alert, ActivityIndicator, Platform, ScrollView,
 } from 'react-native';
-import { updateStopStatus, getSellCatalog, getModules, getOrderItems, setOrderItems } from '../services/api';
+import {
+  updateStopStatus, getSellCatalog, getModules, getOrderItems, setOrderItems,
+  getEnRouteNotificationStatus, sendEnRouteNotification,
+} from '../services/api';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 
@@ -49,6 +52,9 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const [editItems,        setEditItems]        = useState([]); // [{ name, quantity, price, extra }]
   const [loadingItems,     setLoadingItems]     = useState(false);
   const [savingItems,      setSavingItems]      = useState(false);
+  const [enRouteWindow,    setEnRouteWindow]    = useState({ loading: true, available: false, message: '' });
+  const [sendingEnRoute,   setSendingEnRoute]   = useState(false);
+  const [enRouteSent,      setEnRouteSent]      = useState(false);
 
   useEffect(() => {
     getSellCatalog()
@@ -62,6 +68,24 @@ export default function StopScreen({ route: navRoute, navigation }) {
       .then(m => setEditItemsEnabled(!!m?.edit_delivered_items))
       .catch(() => setEditItemsEnabled(false));
   }, []);
+
+  useEffect(() => {
+    if (!stop?.phone) {
+      setEnRouteWindow({ loading: false, available: false, message: 'Este pedido no tiene teléfono registrado.' });
+      return;
+    }
+    let active = true;
+    getEnRouteNotificationStatus(routeId, stopKey)
+      .then(data => {
+        if (active) setEnRouteWindow({ loading: false, available: !!data?.available, message: data?.message || '' });
+      })
+      .catch(err => {
+        if (!active) return;
+        const message = err.response?.data?.message || err.response?.data?.error || 'No se pudo comprobar la ventana de WhatsApp.';
+        setEnRouteWindow({ loading: false, available: false, message });
+      });
+    return () => { active = false; };
+  }, [routeId, stopKey, stop?.phone]);
 
   const extrasList  = Object.values(extras).filter(e => e.quantity > 0);
   const extrasTotal = extrasList.reduce((s, e) => s + e.price * e.quantity, 0);
@@ -180,6 +204,34 @@ export default function StopScreen({ route: navRoute, navigation }) {
     Linking.openURL(`https://wa.me/${phoneDigits}?text=${text}`).catch(() =>
       Alert.alert('WhatsApp', 'No se pudo abrir WhatsApp en este teléfono.')
     );
+  }
+
+  function confirmEnRouteNotification() {
+    Alert.alert(
+      'Avisar que vas en camino',
+      `Diva le enviará un mensaje a ${stop.customerName || 'este cliente'} desde el WhatsApp del negocio.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Enviar aviso', onPress: notifyEnRoute },
+      ]
+    );
+  }
+
+  async function notifyEnRoute() {
+    setSendingEnRoute(true);
+    try {
+      await sendEnRouteNotification(routeId, stopKey);
+      setEnRouteSent(true);
+      Alert.alert('Aviso enviado', 'Diva le informó al cliente que su pedido va en camino.');
+    } catch (err) {
+      if (err.response?.status === 401) return;
+      const expired = err.response?.data?.error === 'WINDOW_EXPIRED';
+      const message = err.response?.data?.message || err.response?.data?.error || 'No se pudo enviar el aviso.';
+      if (expired) setEnRouteWindow({ loading: false, available: false, message });
+      Alert.alert(expired ? 'Se cerró la ventana' : 'No se pudo enviar', message);
+    } finally {
+      setSendingEnRoute(false);
+    }
   }
 
   /** Envía el estado al backend y cierra la parada. */
@@ -408,6 +460,26 @@ export default function StopScreen({ route: navRoute, navigation }) {
             </View>
           )}
 
+          <View style={s.enRouteBox}>
+            <TouchableOpacity
+              style={[
+                s.enRouteBtn,
+                (!enRouteWindow.available || enRouteWindow.loading || sendingEnRoute || enRouteSent) && s.enRouteBtnDisabled,
+              ]}
+              onPress={confirmEnRouteNotification}
+              disabled={!enRouteWindow.available || enRouteWindow.loading || sendingEnRoute || enRouteSent}
+              activeOpacity={0.85}>
+              {sendingEnRoute || enRouteWindow.loading
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={s.enRouteBtnText}>{enRouteSent ? '✓ Aviso enviado' : '🚚 Avisar con Diva: voy en camino'}</Text>}
+            </TouchableOpacity>
+            {!enRouteSent && (
+              <Text style={[s.enRouteHint, enRouteWindow.available && { color: C.green }]}>
+                {enRouteWindow.loading ? 'Comprobando el chat…' : enRouteWindow.message}
+              </Text>
+            )}
+          </View>
+
           {sellEnabled && catalog.length > 0 && (
             <View style={s.sellBox}>
               <TouchableOpacity style={s.sellHead} onPress={() => setShowPicker(v => !v)} activeOpacity={0.7}>
@@ -557,6 +629,12 @@ const s = StyleSheet.create({
   contactRow:   { flexDirection: 'row', gap: 10 },
   callBtn:      { backgroundColor: C.card, borderRadius: 14, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: C.border },
   callBtnText:  { color: C.text, fontWeight: '700', fontSize: 15 },
+
+  enRouteBox:         { gap: 6 },
+  enRouteBtn:         { backgroundColor: C.green, borderRadius: 14, padding: 17, alignItems: 'center', minHeight: 56, justifyContent: 'center' },
+  enRouteBtnDisabled: { backgroundColor: C.border, opacity: 0.7 },
+  enRouteBtnText:     { color: '#fff', fontWeight: '800', fontSize: 16, textAlign: 'center' },
+  enRouteHint:        { color: C.muted, fontSize: 12, lineHeight: 17, textAlign: 'center', paddingHorizontal: 8 },
 
   statusRow:    { flexDirection: 'row', gap: 12, marginTop: 4 },
   postponeRowBtn:  { marginTop: 10, borderRadius: 12, padding: 14, alignItems: 'center', backgroundColor: C.card, borderWidth: 1, borderColor: C.orange + '66' },

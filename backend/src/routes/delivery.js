@@ -28,6 +28,7 @@ const axios   = require('axios');
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
+const deliveryNotifications = require('../services/delivery-notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 let io;
@@ -611,6 +612,66 @@ router.get('/routes/:id', async (req, res) => {
     res.json({ success: true, route });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+async function getOwnedActiveStop(req, routeId, stopKey) {
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
+  const { rows: [route] } = await getPool().query(`
+    SELECT id, status, orders
+      FROM delivery_routes
+     WHERE id = $1 AND organization_id = $2
+       AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
+     LIMIT 1`, [Number(routeId), req.orgId, driverScope]);
+  if (!route) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+  if (!['sent', 'in_progress'].includes(route.status)) throw Object.assign(new Error('La ruta no está activa'), { status: 409 });
+  const orders = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
+  const stop = orders.find(item => `${item.source}_${item.id}` === stopKey);
+  if (!stop) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
+  return stop;
+}
+
+// La app consulta esta ruta al abrir una parada para habilitar el botón solo
+// cuando el cliente escribió durante las últimas 24 horas.
+router.get('/routes/:id/en-route-status', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  try {
+    const stopKey = String(req.query.stopKey || '');
+    if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
+    const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
+    const window = await deliveryNotifications.getCustomerServiceWindow(req.orgId, stop.phone);
+    res.json({
+      success: true,
+      ...window,
+      message: window.available
+        ? 'Puedes avisarle desde Diva sin usar un template.'
+        : 'La ventana de 24 horas está cerrada. Para avisar se necesita un template aprobado.',
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ success: false, error: error.message });
+  }
+});
+
+// Envía un texto operativo desde el número del negocio. Se vuelve a validar la
+// ventana justo antes de enviar para cubrir el caso en que haya expirado desde
+// que el repartidor abrió la parada.
+router.post('/routes/:id/notify-en-route', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  try {
+    const stopKey = String(req.body?.stopKey || '');
+    if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
+    const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
+    const result = await deliveryNotifications.sendEnRouteNotification(req.orgId, stop);
+    if (result.message) {
+      const conversation = await db.getConversationById(result.conversationId, req.orgId).catch(() => null);
+      io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: result.message, conversation });
+    }
+    res.json({ success: true, sent: true, text: result.text });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      success: false,
+      error: error.code || error.message,
+      message: error.message,
+      window: error.window || null,
+    });
   }
 });
 

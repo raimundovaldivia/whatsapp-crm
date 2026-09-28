@@ -31,6 +31,10 @@ Funciona con cualquier tienda del CRM — con Shopify conectado o sin él.
 - Al marcar "Entregado", la app pregunta cómo pagó el cliente. Si fue
   transferencia, el pedido aparece en **Pedidos → Por cobrar** hasta que
   llegue el comprobante.
+- En cada parada, **Avisar con Diva: voy en camino** envía el aviso desde el
+  WhatsApp del negocio y lo registra en el chat. El botón solo se habilita si
+  el cliente escribió durante las últimas 24 horas; fuera de esa ventana la
+  app indica que corresponde usar un template aprobado.
 
 ---
 
@@ -125,6 +129,8 @@ mobile/
 | GET    | `/api/auth/me`                      | Validar token guardado                    |
 | GET    | `/api/delivery/routes/active`       | Rutas activas del repartidor              |
 | GET    | `/api/delivery/routes/:id`          | Detalle de una ruta (refresco)            |
+| GET    | `/api/delivery/routes/:id/en-route-status` | Comprueba la ventana de 24 h de una parada |
+| POST   | `/api/delivery/routes/:id/notify-en-route` | Diva avisa que el pedido va en camino      |
 | PATCH  | `/api/delivery/routes/:id/stops`    | Marcar parada `{ stopKey, status, paymentMethod }` |
 
 El `stopKey` va en el **body**, no en la URL: los pedidos de Shopify tienen

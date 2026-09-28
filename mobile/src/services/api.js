@@ -186,6 +186,20 @@ export async function updateStopStatus(routeId, stopKey, status, paymentMethod, 
   return res.data;
 }
 
+/** Estado de la ventana de 24 h para poder avisar que el pedido va en camino. */
+export async function getEnRouteNotificationStatus(routeId, stopKey) {
+  const client = await getClient();
+  const res = await client.get(`/api/delivery/routes/${routeId}/en-route-status`, { params: { stopKey } });
+  return res.data;
+}
+
+/** Envía desde Diva el aviso operativo "tu pedido va en camino". */
+export async function sendEnRouteNotification(routeId, stopKey) {
+  const client = await getClient();
+  const res = await client.post(`/api/delivery/routes/${routeId}/notify-en-route`, { stopKey });
+  return res.data;
+}
+
 // Catálogo para venta en ruta ("bandejas extras"). Devuelve { enabled, products }.
 export async function getSellCatalog() {
   const client = await getClient();
