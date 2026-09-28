@@ -22,10 +22,14 @@ test('Diva coordinates safely and never sends an ambiguous admin instruction', a
   });
 
   const result = await secretary.processAdminMessage(1, 'respóndele eso', {
-    id: 5, conversation_id: 9, customer_phone: '56911111111',
+    id: 5,
+    conversation_id: 9,
+    customer_phone: '56911111111',
+    context: 'Recomendación: disculparse y no volver a insistir.',
   });
 
   assert.match(systemPrompt, /Tu nombre es Diva/);
+  assert.match(systemPrompt, /disculparse y no volver a insistir/);
   assert.equal(result.type, 'answer');
   assert.equal(result.customerMessage, '');
   assert.match(result.adminMessage, /interpretar la instrucción con seguridad/);
@@ -244,4 +248,53 @@ test('el administrador no recibe duplicado el aviso de pago si también es agent
   await notifications.notifyAgentsPayment(1, 'Gloria', '56983721996', '$40.000 CLP');
 
   assert.deepEqual(recipients, ['56922222222']);
+});
+
+test('Diva analiza el historial y entrega una conclusión en vez de copiar toda la conversación', async () => {
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async () => ({
+        content: [{ text: JSON.stringify({
+          situation: 'Karina había pedido esperar hasta la próxima semana, pero Diva volvió a contactarla antes de tiempo. El equipo ya se disculpó y ella respondió con emojis de risa.',
+          customerNeed: 'No está haciendo una nueva consulta; su último mensaje parece distender la situación.',
+          recommendation: 'Cerrar con amabilidad y no volver a contactarla hasta que ella escriba.',
+          evidence: ['Cliente: Hola, no llego hasta la próxima semana.', 'Cliente: 🤭🤭🤭'],
+        }) }],
+      }) };
+    }
+  }
+  const alerts = [];
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      claimHumanPendingNotification: async () => true,
+      getLastMessages: async () => [
+        { direction: 'inbound', content: 'Hola, no llego hasta la próxima semana.' },
+        { direction: 'outbound', sent_by: 'ai', content: '¿Ya llegaste a La Serena?' },
+        { direction: 'outbound', sent_by: 'human', content: 'Mil disculpas por la desconfiguración.' },
+        { direction: 'inbound', content: '🤭🤭🤭' },
+      ],
+      createAdminPendingReply: async () => {},
+    },
+    '@anthropic-ai/sdk': Anthropic,
+    './kapso-whatsapp': {},
+    './admin-notify': {
+      notifyAdmin: async (_orgId, options) => {
+        alerts.push(options.body);
+        return { sent: true };
+      },
+    },
+  }, {
+    process: { env: { ANTHROPIC_API_KEY: 'test-key' } },
+  });
+
+  await notifications.notifyAdminHumanPendingReply(1, {
+    id: 55,
+    agent_mode: 'human',
+    contact_name: 'Karina',
+    phone_number: '56977101282',
+  }, '🤭🤭🤭');
+
+  assert.match(alerts[0], /Karina había pedido esperar hasta la próxima semana/);
+  assert.match(alerts[0], /Cerrar con amabilidad y no volver a contactarla/);
+  assert.doesNotMatch(alerts[0], /Contexto reciente/);
 });

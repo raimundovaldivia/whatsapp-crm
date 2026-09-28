@@ -39,6 +39,7 @@ async function openSession(orgId, pending) {
     pendingId:     pending.id,
     customerPhone: pending.customer_phone,
     customerName:  conv?.contact_name || pending.customer_phone,
+    alertContext:  pending.context || '',
     customerHistory: messages,
     adminHistory:  [], // turnos admin↔bot (para multi-turno)
     lastActivity:  Date.now(),
@@ -93,6 +94,9 @@ async function processAdminMessage(orgId, adminText, pending) {
 
 CLIENTE ACTUAL: ${session.customerName} (${session.customerPhone})
 
+RESUMEN Y RECOMENDACIÓN QUE YA VIO EL ADMINISTRADOR EN EL AVISO:
+${session.alertContext || '(sin resumen previo)'}
+
 CONVERSACIÓN DEL CLIENTE (más reciente al final):
 ${customerHistoryStr || '(sin historial disponible)'}
 
@@ -100,6 +104,7 @@ TU ROL:
 - Cuando el ejecutivo hace una PREGUNTA sobre el cliente, el pedido o la situación → respóndele solo a él con la información disponible. No mandes nada al cliente.
 - Cuando el ejecutivo da una INSTRUCCIÓN de qué responderle al cliente → prepara el mensaje apropiado para enviarlo al cliente.
 - Cuando el ejecutivo dice que quiere atender él directamente → haz el handoff.
+- Si responde "sí", "hazlo", "envía eso" o algo equivalente, aplica la recomendación del aviso únicamente cuando sea clara y segura.
 - Entiende referencias de los turnos anteriores como "dile eso", "confírmale" o "mejor mañana", pero solo si el dato referido es inequívoco.
 - Conserva literalmente fechas, horas, precios, direcciones y compromisos indicados por el administrador. No los suavices ni los completes por intuición.
 - No inventes información ni prometas acciones fuera de estas capacidades. Si falta un dato indispensable, haz una sola pregunta concreta.

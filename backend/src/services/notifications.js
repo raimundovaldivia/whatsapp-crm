@@ -40,6 +40,83 @@ async function getRecentConversationContext(conversationId, limit = 8) {
   }
 }
 
+function fallbackConversationBrief(contextLines, reason = '') {
+  const lastClient = [...contextLines].reverse().find(line => line.startsWith('Cliente:'));
+  const previous = contextLines.length > 1 ? contextLines.at(-2) : null;
+  const situationParts = [];
+  if (reason) situationParts.push(cleanContextText(reason, 320));
+  if (previous && lastClient) {
+    situationParts.push(`El último intercambio relevante fue “${cleanContextText(previous, 180)}” y luego “${cleanContextText(lastClient, 180)}”.`);
+  } else if (lastClient) {
+    situationParts.push(`El último mensaje fue “${cleanContextText(lastClient, 220)}”.`);
+  }
+  return {
+    situation: situationParts.join(' ') || 'No fue posible recuperar suficiente conversación para resumir el caso.',
+    customerNeed: lastClient
+      ? `Interpretar y responder el último mensaje del cliente sin repetir lo ya conversado.`
+      : 'Revisar el chat antes de responder.',
+    recommendation: contextLines.length
+      ? 'Responder únicamente al estado actual de la conversación y evitar reiniciar la venta.'
+      : 'Abrir la conversación en el CRM; no responder desde este aviso sin historial.',
+    evidence: contextLines.slice(-3),
+  };
+}
+
+/**
+ * Analiza el historial para el administrador. No copia todo el chat: explica
+ * qué ocurrió, qué parece necesitar el cliente y cuál es el siguiente paso.
+ */
+async function getAdminConversationBrief(conversationId, reason = '') {
+  const contextLines = await getRecentConversationContext(conversationId, 10);
+  const fallback = fallbackConversationBrief(contextLines, reason);
+  if (!contextLines.length || !process.env.ANTHROPIC_API_KEY) return fallback;
+
+  try {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 350,
+      system: `Analiza una conversación de atención comercial para informar al administrador. Debes comprender la secuencia, no copiarla ni describir cada turno.
+
+Devuelve SOLO JSON válido con:
+{"situation":"qué pasó y por qué llegó a este punto, máximo 2 frases","customerNeed":"qué necesita o expresa ahora el cliente, 1 frase","recommendation":"qué conviene responder o hacer ahora, 1 frase","evidence":["máximo 2 mensajes textuales indispensables"]}
+
+Reglas:
+- No inventes hechos, fechas, intenciones ni emociones. Si un emoji es ambiguo, dilo.
+- Identifica si Diva repitió, insistió, contradijo un acuerdo o escribió en un momento inadecuado.
+- Distingue el problema original del estado actual. Si el equipo ya se disculpó, indícalo.
+- La recomendación debe ser concreta y evitar nuevas preguntas o seguimientos innecesarios.`,
+      messages: [{
+        role: 'user',
+        content: `${reason ? `MOTIVO DEL AVISO: ${cleanContextText(reason, 400)}\n\n` : ''}CONVERSACIÓN (más reciente al final):\n${contextLines.join('\n')}`,
+      }],
+    });
+    const raw = response.content?.[0]?.text?.trim() || '';
+    const parsed = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+    return {
+      situation: cleanContextText(parsed.situation, 420) || fallback.situation,
+      customerNeed: cleanContextText(parsed.customerNeed, 260) || fallback.customerNeed,
+      recommendation: cleanContextText(parsed.recommendation, 300) || fallback.recommendation,
+      evidence: Array.isArray(parsed.evidence)
+        ? parsed.evidence.map(item => cleanContextText(item, 220)).filter(Boolean).slice(0, 2)
+        : fallback.evidence.slice(-2),
+    };
+  } catch (err) {
+    console.warn('[Notifications] No se pudo analizar el contexto; usando resumen seguro:', err.message);
+    return fallback;
+  }
+}
+
+function formatConversationBrief(brief) {
+  return [
+    `🧭 *Qué pasó:* ${brief.situation}`,
+    `🎯 *Qué necesita ahora:* ${brief.customerNeed}`,
+    `💡 *Recomendación:* ${brief.recommendation}`,
+    brief.evidence?.length ? `🔎 *Mensajes clave:*\n${brief.evidence.map(line => `• ${line}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n');
+}
+
 /**
  * Notifica al administrador que una conversación necesita atención humana.
  * Crea un registro en admin_pending_replies para que la respuesta del admin
@@ -60,28 +137,25 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
 
-    const contextLines = await getRecentConversationContext(conversation.id);
-
-    const contextStr = contextLines.length > 0
-      ? `\n\n🧭 *Contexto reciente* (de más antiguo a más nuevo):\n${contextLines.join('\n')}`
-      : '';
+    const brief = await getAdminConversationBrief(conversation.id, reason);
+    const briefText = formatConversationBrief(brief);
 
     // Crear registro pendiente para el admin relay
     await db.createAdminPendingReply(
       orgId,
       conversation.id,
       clientPhone,
-      contextLines.join(' | ')
+      briefText
     );
 
     const msg = [
       '🔔 *Cliente necesita tu respuesta*',
       '',
       `👤 *${clientName}*${clientPhone && clientPhone !== clientName ? ` (+${clientPhone})` : ''}`,
-      `📋 *Motivo:* ${reason}`,
-      contextStr,
       '',
-      `👉 *Qué necesito de ti:* con el contexto anterior, indícame qué responderle a ${clientName}.`,
+      briefText,
+      '',
+      `👉 *Qué necesito de ti:* confirma la recomendación, corrígela o escribe el mensaje exacto para ${clientName}.`,
       'Cuando me des una instrucción clara, te mostraré qué se envió.',
       '',
       clientPhone ? `_Si tienes varios avisos abiertos, elige este chat con: #msg ${clientPhone} <respuesta>_` : '',
@@ -149,19 +223,22 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
     const clientName = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
     const text = String(messageText || '').slice(0, 300);
-    let contextLines = await getRecentConversationContext(conversation.id);
-    if (!contextLines.length && text) contextLines = [`Cliente: ${cleanContextText(text)}`];
+    const brief = await getAdminConversationBrief(
+      conversation.id,
+      `El chat está en modo humano y el cliente acaba de enviar: “${cleanContextText(text, 220)}”.`
+    );
+    const briefText = formatConversationBrief(brief);
 
-    await db.createAdminPendingReply(orgId, conversation.id, clientPhone, text);
+    await db.createAdminPendingReply(orgId, conversation.id, clientPhone, briefText);
     const body = [
       '🔔 *Hay una conversación esperando por ti*',
       '',
       `👤 *${clientName}*${clientPhone && clientPhone !== clientName ? ` (+${clientPhone})` : ''}`,
       '🟡 *Estado:* el chat está en modo humano; Diva no responderá mientras lo atiendes.',
       '',
-      contextLines.length ? `🧭 *Contexto reciente:*\n${contextLines.join('\n')}` : '',
+      briefText,
       '',
-      `👉 *Qué necesito de ti:* con el contexto anterior, responde qué quieres decirle a ${clientName}.`,
+      `👉 *Qué necesito de ti:* confirma la recomendación, corrígela o escribe el mensaje exacto para ${clientName}.`,
       clientPhone ? `_Si hay varios clientes esperando, usa: #msg ${clientPhone} <respuesta>_` : '',
     ].filter(Boolean).join('\n');
 
@@ -237,30 +314,22 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
 
-    const contextLines = await getRecentConversationContext(conversation.id);
+    const brief = await getAdminConversationBrief(conversation.id, reason);
+    const briefText = formatConversationBrief(brief);
 
-    // No crear pendiente duplicado si ya hay uno activo para esta conversación
-    const existingPending = await db.getLatestPendingAdminReply(orgId);
-    if (existingPending && existingPending.conversation_id === conversation.id) {
-      console.log(`[Notifications] Ya hay pendiente activo para conv #${conversation.id} — actualizando contexto`);
-      // Solo re-notificar si cambió algo sustancial (no crear nuevo registro)
-    } else {
-      await db.createAdminPendingReply(
-        orgId, conversation.id, clientPhone,
-        contextLines.filter(line => line.startsWith('Cliente:')).join(' | ')
-      );
-    }
+    // createAdminPendingReply actualiza el contexto si ya existía un pendiente
+    // para este mismo chat, sin crear duplicados.
+    await db.createAdminPendingReply(orgId, conversation.id, clientPhone, briefText);
 
     const msg = [
       `❓ *Necesito tu criterio con ${clientName}*`,
       clientPhone && clientPhone !== clientName ? `📱 ${clientPhone}` : '',
-      reason ? `🧭 *Qué ocurrió:* ${reason}` : '',
       '',
-      contextLines.length ? `*Conversación reciente:*\n${contextLines.join('\n')}` : '(No pude recuperar el historial reciente)',
+      briefText,
       '',
       botWasGoingToSay ? `🛑 *Respuesta que Diva detuvo para no enviarla sin tu aprobación:*\n“${cleanContextText(botWasGoingToSay, 240)}”` : '',
       '',
-      `👉 *Qué necesito de ti:* con el contexto anterior, dime qué responderle a ${clientName}.`,
+      `👉 *Qué necesito de ti:* confirma la recomendación, corrígela o escribe el mensaje exacto para ${clientName}.`,
       'Si escribes *TOMAR*, te paso el control del chat y Diva deja de responder.',
       clientPhone ? `_Con varios avisos abiertos, responde directamente con: #msg ${clientPhone} <respuesta>_` : '',
     ].filter(Boolean).join('\n');
@@ -281,4 +350,6 @@ module.exports = {
   notifyAgentsNewMessage,
   notifyAgentsPayment,
   getRecentConversationContext,
+  getAdminConversationBrief,
+  formatConversationBrief,
 };
