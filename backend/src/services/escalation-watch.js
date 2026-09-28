@@ -16,6 +16,7 @@ const { getPool } = require('../db/database');
 const db          = require('../db/database');
 const kapso       = require('./kapso-whatsapp');
 const { notifyAdmin } = require('./admin-notify');
+const { getRecentConversationContext } = require('./notifications');
 const { isCustomerMessagingHour } = require('./outbound-policy');
 
 const DEFAULT_REMINDER_MINUTES = 45;
@@ -79,8 +80,17 @@ async function sweepEscalations(now = new Date()) {
         await pool.query('UPDATE conversations SET escalation_reminder_at = NOW() WHERE id = $1', [c.id]);
 
         const who = c.contact_name || c.phone_number;
+        const contextLines = await getRecentConversationContext(c.id);
         await notifyAdmin(c.organization_id, {
-          body: `⏰ *${who}* lleva ${waited} min esperando respuesta.\n📝 Motivo: ${c.last_escalation_reason || 'escalación del bot'}\n\nRespóndele desde el CRM o contesta aquí.`,
+          body: [
+            `⏰ *${who} sigue esperando hace ${waited} min*`,
+            `🧭 *Motivo:* ${c.last_escalation_reason || 'Diva pidió apoyo del equipo'}`,
+            '',
+            contextLines.length ? `*Contexto reciente:*\n${contextLines.join('\n')}` : '',
+            '',
+            `👉 *Qué necesito de ti:* dime qué responderle a ${who}, o atiéndelo desde el CRM.`,
+            `_Si tienes varios avisos abiertos: #msg ${c.phone_number} <respuesta>_`,
+          ].filter(Boolean).join('\n'),
           kind: 'help',
           conversationId: c.id,
         }).catch(() => {});

@@ -13,6 +13,33 @@ const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
 const { notifyAdmin } = require('./admin-notify');
 
+function cleanContextText(value, max = 220) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function contextSpeaker(message) {
+  if (message.direction === 'inbound') return 'Cliente';
+  return message.sent_by === 'human' || message.agent_type === 'human_guided'
+    ? 'Equipo'
+    : 'Diva';
+}
+
+/**
+ * Resume los últimos turnos en orden cronológico. Así cada aviso conserva la
+ * conversación necesaria para que el administrador pueda decidir qué hacer.
+ */
+async function getRecentConversationContext(conversationId, limit = 6) {
+  try {
+    const messages = await db.getLastMessages(conversationId, Math.max(limit + 2, 8));
+    return messages
+      .filter(message => message.content && !String(message.content).startsWith('🎤 [Audio]'))
+      .slice(-limit)
+      .map(message => `${contextSpeaker(message)}: ${cleanContextText(message.content)}`);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Notifica al administrador que una conversación necesita atención humana.
  * Crea un registro en admin_pending_replies para que la respuesta del admin
@@ -33,18 +60,10 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
 
-    // Obtener últimos mensajes del cliente para dar contexto
-    let contextLines = [];
-    try {
-      const lastMessages = await db.getLastMessages(conversation.id, 8);
-      contextLines = lastMessages
-        .filter(m => m.direction === 'inbound' && m.content && !m.content.startsWith('🎤 [Audio]'))
-        .slice(-3)
-        .map(m => `"${m.content.slice(0, 120)}"`);
-    } catch { /* continuar sin contexto */ }
+    const contextLines = await getRecentConversationContext(conversation.id);
 
     const contextStr = contextLines.length > 0
-      ? `\n\n💬 Últimos mensajes del cliente:\n${contextLines.join('\n')}`
+      ? `\n\n🧭 *Contexto reciente* (de más antiguo a más nuevo):\n${contextLines.join('\n')}`
       : '';
 
     // Crear registro pendiente para el admin relay
@@ -62,9 +81,10 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
       `📋 *Motivo:* ${reason}`,
       contextStr,
       '',
-      '👆 *Respóndeme aquí y envío tu mensaje al cliente directamente.*',
+      `👉 *Qué necesito de ti:* indícame qué responderle a ${clientName}. También puedes preguntarme qué ocurrió antes de decidir.`,
+      'Cuando me des una instrucción clara, te mostraré qué se envió.',
       '',
-      '_Si hay varios clientes esperando, se responde el más reciente primero._',
+      clientPhone ? `_Si tienes varios avisos abiertos, elige este chat con: #msg ${clientPhone} <respuesta>_` : '',
     ].filter(Boolean).join('\n');
 
     // Va por notifyAdmin: si tu ventana de 24h está cerrada, queda en cola y se
@@ -129,16 +149,20 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
     const clientName = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
     const text = String(messageText || '').slice(0, 300);
+    let contextLines = await getRecentConversationContext(conversation.id);
+    if (!contextLines.length && text) contextLines = [`Cliente: ${cleanContextText(text)}`];
 
     await db.createAdminPendingReply(orgId, conversation.id, clientPhone, text);
     const body = [
-      '🔔 *Tienes una respuesta pendiente*',
+      '🔔 *Hay una conversación esperando por ti*',
       '',
       `👤 *${clientName}*${clientPhone && clientPhone !== clientName ? ` (+${clientPhone})` : ''}`,
-      text ? `💬 “${text}”` : '',
+      '🟡 *Estado:* el chat está en modo humano; Diva no responderá mientras lo atiendes.',
       '',
-      'La conversación está en modo humano y espera tu respuesta.',
-      '👆 *Respóndeme aquí y envío tu mensaje al cliente directamente.*',
+      contextLines.length ? `🧭 *Contexto reciente:*\n${contextLines.join('\n')}` : '',
+      '',
+      `👉 *Qué necesito de ti:* responde qué quieres decirle a ${clientName}, o pregúntame primero por el contexto.`,
+      clientPhone ? `_Si hay varios clientes esperando, usa: #msg ${clientPhone} <respuesta>_` : '',
     ].filter(Boolean).join('\n');
 
     const result = await notifyAdmin(orgId, {
@@ -169,6 +193,13 @@ async function notifyAgentsPayment(orgId, clientName, clientPhone, amount) {
     const agents = await db.getAgentsWithNotification(orgId, 'payments');
     if (!agents.length) return;
 
+    // El administrador ya recibe el aviso detallado. Si también figura como
+    // agente de pagos, no mandarle una segunda notificación simplificada.
+    const adminPhone = await db.getSetting(orgId, 'admin_alert_phone').catch(() => null);
+    const digits = value => String(value || '').replace(/\D/g, '');
+    const recipients = agents.filter(agent => !adminPhone || digits(agent.whatsapp_phone) !== digits(adminPhone));
+    if (!recipients.length) return;
+
     const msg = [
       `💸 *Comprobante de pago recibido*`,
       `👤 ${clientName || clientPhone}`,
@@ -177,7 +208,7 @@ async function notifyAgentsPayment(orgId, clientName, clientPhone, amount) {
       `_Revísalo en el CRM → Pagos_`,
     ].filter(Boolean).join('\n');
 
-    await Promise.allSettled(agents.map(agent =>
+    await Promise.allSettled(recipients.map(agent =>
       kapsoService.sendTextMessage(agent.whatsapp_phone, msg, wc).catch(() => {})
     ));
   } catch (err) {
@@ -206,15 +237,7 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
 
-    // Últimos mensajes del cliente para dar contexto
-    let contextLines = [];
-    try {
-      const lastMessages = await db.getLastMessages(conversation.id, 6);
-      contextLines = lastMessages
-        .filter(m => m.content && !m.content.startsWith('🎤') && !m.content.startsWith('[Template'))
-        .slice(-4)
-        .map(m => `${m.direction === 'inbound' ? '→' : '←'} ${m.content.slice(0, 120)}`);
-    } catch { /* continuar sin contexto */ }
+    const contextLines = await getRecentConversationContext(conversation.id);
 
     // No crear pendiente duplicado si ya hay uno activo para esta conversación
     const existingPending = await db.getLatestPendingAdminReply(orgId);
@@ -224,21 +247,22 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
     } else {
       await db.createAdminPendingReply(
         orgId, conversation.id, clientPhone,
-        contextLines.filter(l => l.startsWith('→')).map(l => l.slice(2)).join(' | ')
+        contextLines.filter(line => line.startsWith('Cliente:')).join(' | ')
       );
     }
 
     const msg = [
-      `❓ *${clientName}* necesita respuesta`,
+      `❓ *Necesito tu criterio con ${clientName}*`,
       clientPhone && clientPhone !== clientName ? `📱 ${clientPhone}` : '',
-      reason ? `📋 ${reason}` : '',
+      reason ? `🧭 *Qué ocurrió:* ${reason}` : '',
       '',
-      contextLines.length ? contextLines.join('\n') : '(sin historial)',
+      contextLines.length ? `*Conversación reciente:*\n${contextLines.join('\n')}` : '(No pude recuperar el historial reciente)',
       '',
-      botWasGoingToSay ? `💬 _El bot iba a decir: "${botWasGoingToSay.slice(0, 120)}..."_` : '',
+      botWasGoingToSay ? `🛑 *Respuesta que Diva detuvo para no enviarla sin tu aprobación:*\n“${cleanContextText(botWasGoingToSay, 240)}”` : '',
       '',
-      '👆 *Respondé aquí* → lo envío como bot (el cliente no sabe que sos vos).',
-      '📲 Escribí *TOMAR* → te paso el control para que lo atiendas directamente.',
+      `👉 *Qué necesito de ti:* dime qué responderle a ${clientName}. También puedes preguntarme algo sobre la conversación antes de decidir.`,
+      'Si escribes *TOMAR*, te paso el control del chat y Diva deja de responder.',
+      clientPhone ? `_Con varios avisos abiertos, responde directamente con: #msg ${clientPhone} <respuesta>_` : '',
     ].filter(Boolean).join('\n');
 
     // Va por notifyAdmin: si la ventana está cerrada, la consulta queda en cola
@@ -256,4 +280,5 @@ module.exports = {
   notifyAdminHumanPendingReply,
   notifyAgentsNewMessage,
   notifyAgentsPayment,
+  getRecentConversationContext,
 };

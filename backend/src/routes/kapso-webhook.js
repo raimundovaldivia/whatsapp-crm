@@ -865,7 +865,12 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       const matchLine   = amountMatches === true  ? '\n✅ *Monto coincide — pre-verificado*'
                         : amountMatches === false ? '\n⚠️ *Monto NO coincide — revisar manualmente*'
                         : '';
-      const adminMsg = `📸 *Comprobante de pago recibido*\n\n👤 *Cliente:* ${clientName} (${parsed.from})${orderLine}${amountLine}${bankLine}${matchLine}\n\nRevísalo en el CRM → Pagos.`;
+      const requestedAction = amountMatches === true
+        ? '👉 *Qué necesitas hacer:* confirmar el comprobante en CRM → Pagos. No necesitas responderle al cliente; Diva ya confirmó la recepción.'
+        : amountMatches === false
+          ? '👉 *Qué necesitas hacer:* revisar la diferencia en CRM → Pagos y decidir si corresponde contactar al cliente.'
+          : '👉 *Qué necesitas hacer:* revisar el comprobante en CRM → Pagos antes de confirmarlo.';
+      const adminMsg = `📸 *Comprobante de pago recibido*\n\n👤 *Cliente:* ${clientName} (${parsed.from})${orderLine}${amountLine}${bankLine}${matchLine}\n\n${requestedAction}`;
       notifyAdmin(org.id, { body: adminMsg, kind: 'payment', conversationId: conversation.id })
         .catch(() => {});
     }

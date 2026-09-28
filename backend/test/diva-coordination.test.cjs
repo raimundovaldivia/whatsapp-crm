@@ -184,3 +184,63 @@ test('Diva avisa una respuesta pendiente en modo humano sin duplicar mensajes se
   assert.match(alerts[0].body, /2 bandejas jumbo/);
   assert.match(alerts[0].body, /modo humano/i);
 });
+
+test('la consulta al administrador incluye la conversación y explica qué decisión necesita', async () => {
+  const alerts = [];
+  const pending = [];
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      getSetting: async () => '56990000000',
+      getWhatsappConfig: async () => ({ provider: 'kapso' }),
+      getLastMessages: async () => [
+        { direction: 'outbound', sent_by: 'ai', content: '¿Ya llegaste a La Serena?' },
+        { direction: 'inbound', sent_by: 'client', content: '😵‍💫😵‍💫😵‍💫' },
+      ],
+      getLatestPendingAdminReply: async () => null,
+      createAdminPendingReply: async (...args) => pending.push(args),
+    },
+    './kapso-whatsapp': {},
+    './admin-notify': {
+      notifyAdmin: async (orgId, options) => {
+        alerts.push({ orgId, ...options });
+        return { sent: true };
+      },
+    },
+  });
+
+  await notifications.notifyAdminHelp(
+    1,
+    { id: 9, contact_name: 'Karina', phone_number: '56977101282' },
+    'Esto lo tiene que ver alguien del equipo.',
+    'La clienta mostró frustración porque no se respetó lo acordado.'
+  );
+
+  assert.equal(alerts.length, 1);
+  assert.equal(pending.length, 1);
+  assert.match(alerts[0].body, /Diva: ¿Ya llegaste a La Serena\?/);
+  assert.match(alerts[0].body, /Cliente: 😵‍💫😵‍💫😵‍💫/);
+  assert.match(alerts[0].body, /Qué necesito de ti/);
+  assert.match(alerts[0].body, /#msg 56977101282/);
+});
+
+test('el administrador no recibe duplicado el aviso de pago si también es agente', async () => {
+  const recipients = [];
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      getWhatsappConfig: async () => ({ provider: 'kapso' }),
+      getSetting: async () => '+56 9 1111 1111',
+      getAgentsWithNotification: async () => [
+        { whatsapp_phone: '56911111111' },
+        { whatsapp_phone: '56922222222' },
+      ],
+    },
+    './kapso-whatsapp': {
+      sendTextMessage: async phone => recipients.push(phone),
+    },
+    './admin-notify': { notifyAdmin: async () => ({ sent: true }) },
+  });
+
+  await notifications.notifyAgentsPayment(1, 'Gloria', '56983721996', '$40.000 CLP');
+
+  assert.deepEqual(recipients, ['56922222222']);
+});
