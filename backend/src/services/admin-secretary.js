@@ -74,6 +74,12 @@ async function processAdminMessage(orgId, adminText, pending) {
   }
   touchSession(orgId);
 
+  // Mantener el contexto del cliente actualizado durante coordinaciones largas.
+  // Si el cliente escribió mientras el administrador pensaba la respuesta,
+  // Diva debe conocerlo antes de interpretar la siguiente instrucción.
+  session.customerHistory = await db.getLastMessages(session.convId, 20)
+    .catch(() => session.customerHistory);
+
   // Formatear historial de la conversación con el cliente
   const customerHistoryStr = session.customerHistory
     .filter(m => m.content && !m.content.startsWith('[Template') && !m.content.startsWith('🎤'))
@@ -83,7 +89,7 @@ async function processAdminMessage(orgId, adminText, pending) {
     })
     .join('\n');
 
-  const systemPrompt = `Tu nombre es Diva. Eres la asistente de coordinación de un negocio de WhatsApp y el puente inteligente entre el equipo y sus clientes. Hablas con amabilidad, educación, claridad y disposición para resolver.
+  const systemPrompt = `Tu nombre es Diva. Eres la asistente de coordinación de un negocio de WhatsApp y trabajas junto al administrador para resolver conversaciones reales con clientes.
 
 CLIENTE ACTUAL: ${session.customerName} (${session.customerPhone})
 
@@ -94,11 +100,20 @@ TU ROL:
 - Cuando el ejecutivo hace una PREGUNTA sobre el cliente, el pedido o la situación → respóndele solo a él con la información disponible. No mandes nada al cliente.
 - Cuando el ejecutivo da una INSTRUCCIÓN de qué responderle al cliente → prepara el mensaje apropiado para enviarlo al cliente.
 - Cuando el ejecutivo dice que quiere atender él directamente → haz el handoff.
-- No inventes información ni prometas acciones fuera de estas capacidades. Si falta un dato, pídelo de forma concreta.
+- Entiende referencias de los turnos anteriores como "dile eso", "confírmale" o "mejor mañana", pero solo si el dato referido es inequívoco.
+- Conserva literalmente fechas, horas, precios, direcciones y compromisos indicados por el administrador. No los suavices ni los completes por intuición.
+- No inventes información ni prometas acciones fuera de estas capacidades. Si falta un dato indispensable, haz una sola pregunta concreta.
+
+ESTILO CON EL ADMINISTRADOR:
+- Habla como una colega eficiente: primero la respuesta o decisión, después un siguiente paso breve cuando ayude.
+- Evita repetir el contexto completo, saludar en cada turno o responder con frases genéricas.
+- Si no hay evidencia suficiente, dilo directamente y especifica qué dato falta.
 
 ESTILO DEL MENSAJE AL CLIENTE (cuando type=send):
-- Máximo 2-3 líneas, tono cálido y directo como alguien del equipo
-- Usá el nombre del cliente si está disponible
+- Máximo 2-3 líneas, tono cálido, natural y directo como alguien real del equipo
+- Usa el nombre solo cuando suene natural; no lo repitas en todos los mensajes
+- Responde exactamente a lo último que preguntó el cliente y reconoce su emoción si está molesto o preocupado
+- No repitas información que el cliente ya confirmó ni hagas más de una pregunta a la vez
 - Sin asteriscos, sin listas, sin markdown
 
 Respondé ÚNICAMENTE con JSON válido, sin explicaciones adicionales:
@@ -139,7 +154,7 @@ Respondé ÚNICAMENTE con JSON válido, sin explicaciones adicionales:
   session.adminHistory = [
     ...messages,
     { role: 'assistant', content: JSON.stringify(result) },
-  ];
+  ].slice(-10);
 
   return { ...result, session };
 }

@@ -31,6 +31,38 @@ test('Diva coordinates safely and never sends an ambiguous admin instruction', a
   assert.match(result.adminMessage, /interpretar la instrucción con seguridad/);
 });
 
+test('Diva refresca la conversación del cliente durante una coordinación activa', async () => {
+  const prompts = [];
+  let reads = 0;
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async input => {
+        prompts.push(input.system);
+        return { content: [{ text: JSON.stringify({ type: 'answer', adminMessage: 'Entendido.', customerMessage: '' }) }] };
+      } };
+    }
+  }
+  const secretary = load('src/services/admin-secretary.js', {
+    '../db/database': {
+      getConversationById: async () => ({ contact_name: 'Carolina' }),
+      getLastMessages: async () => {
+        reads++;
+        return reads < 3
+          ? [{ direction: 'inbound', content: '¿A qué hora llega?' }]
+          : [{ direction: 'inbound', content: 'Ya no necesito cambiar la hora, gracias.' }];
+      },
+    },
+    '@anthropic-ai/sdk': Anthropic,
+  });
+  const pending = { id: 12, conversation_id: 44, customer_phone: '56922222222' };
+
+  await secretary.processAdminMessage(77, '¿Qué necesita?', pending);
+  await secretary.processAdminMessage(77, '¿Y ahora?', pending);
+
+  assert.match(prompts[1], /Ya no necesito cambiar la hora/);
+  assert.doesNotMatch(prompts[1], /Cliente: ¿A qué hora llega\?/);
+});
+
 test('inactive coordinating and human chats return to Diva and pending coordination expires', async () => {
   const queries = [];
   const events = [];

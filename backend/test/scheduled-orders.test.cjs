@@ -107,3 +107,49 @@ test('pipeline agenda la fecha respondida tras decir que aún queda stock sin es
   assert.equal(scheduledOrder.desiredDate, '2026-10-16');
   assert.equal(escalationChecks, 0);
 });
+
+test('una conversación ya agendada recibe contexto humano y reglas contra repeticiones', async () => {
+  let capturedSystem = '';
+  class ConversationalAnthropic {
+    constructor() {
+      this.messages = { create: async input => {
+        capturedSystem = input.system;
+        return { content: [{ text: '¡De nada, Sandra! Quedó reservado para el viernes 😊' }] };
+      } };
+    }
+  }
+  const db = {
+    getConversationById: async () => ({ id: 9, organization_id: 1, phone_number: '56933333333', contact_name: 'Sandra', pipeline_state: 'scheduled', agent_mode: 'ai' }),
+    getLastMessages: async () => [{ direction: 'inbound', content: 'Muchas gracias' }],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Sandra', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => [],
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    getPool: () => ({ query: async sql => sql.includes('FROM scheduled_orders')
+      ? { rows: [{ id: 3, desired_date: '2026-10-02', product_notes: '1 bandeja de huevos XL' }] }
+      : { rows: [], rowCount: 0 } }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './scheduled-orders': {
+      isFutureOrderIntent: scheduled.isFutureOrderIntent,
+      isSoftFutureIntent: scheduled.isSoftFutureIntent,
+      extractScheduledOrderData: async () => ({}),
+      formatDateEs: () => 'viernes 2 de octubre',
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+    '@anthropic-ai/sdk': ConversationalAnthropic,
+  });
+
+  const result = await pipeline.processMessage(1, 9, 'Muchas gracias');
+  assert.equal(result.newState, 'scheduled');
+  assert.match(result.response, /De nada, Sandra/);
+  assert.match(capturedSystem, /no volver a venderle ni reiniciar el pedido/i);
+  assert.match(capturedSystem, /Si solo agradece, confirma brevemente y cierra sin preguntas/i);
+  assert.match(capturedSystem, /no recites de nuevo todos los datos/i);
+});

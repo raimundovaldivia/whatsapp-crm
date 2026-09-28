@@ -27,6 +27,9 @@ const ASSISTANT_NAME = 'Diva';
 
 const campaignSessions = new Map();
 const CAMPAIGN_SESSION_MS = 45 * 60 * 1000;
+const adminDialogueSessions = new Map();
+const ADMIN_DIALOGUE_SESSION_MS = 45 * 60 * 1000;
+const ADMIN_DIALOGUE_MAX_MESSAGES = 8;
 
 function sessionKey(orgId, agent) {
   const phone = typeof db.normalizePhone === 'function'
@@ -61,8 +64,38 @@ function hasActiveCampaign(orgId, agent) {
   return !!getCampaignSession(orgId, agent);
 }
 
+function getAdminDialogue(orgId, agent) {
+  const key = sessionKey(orgId, agent);
+  const session = adminDialogueSessions.get(key);
+  if (!session || Date.now() - session.updatedAt > ADMIN_DIALOGUE_SESSION_MS) {
+    adminDialogueSessions.delete(key);
+    return [];
+  }
+  return session.messages || [];
+}
+
+function rememberAdminDialogue(orgId, agent, userText, assistantPayload) {
+  const key = sessionKey(orgId, agent);
+  const messages = [
+    ...getAdminDialogue(orgId, agent),
+    { role: 'user', content: userText },
+    { role: 'assistant', content: JSON.stringify(assistantPayload) },
+  ].slice(-ADMIN_DIALOGUE_MAX_MESSAGES);
+  adminDialogueSessions.set(key, { messages, updatedAt: Date.now() });
+}
+
 function buildSystemPrompt() {
-  return `Tu nombre es ${ASSISTANT_NAME}. Eres la asistente de gestión de la tienda y hablas con su administrador. Tu trato es agradable, educado, cercano y claro. Siempre muestras disposición para resolver la duda o el problema y propones el siguiente paso útil cuando corresponda. Sé breve y práctica; no uses un tono robótico ni exageradamente informal. Devuelve únicamente JSON. Para acciones explícitas usa {"action":"manage","command":"PAUSAR|ACTIVAR|MSG|PAGAR|CHATS|PEDIDOS|ESTADO|TEMPLATES|CAMPANA","params":{"phone":"...","text":"...","orderId":123}}. TEMPLATES consulta templates reales aprobados. CAMPANA inicia una campaña guiada que siempre exige vista previa y confirmación. Para ayuda usa {"action":"help"}. Para preguntas generales usa {"action":"answer","text":"..."}. No tienes acceso a SQL ni consultas libres. Deriva preguntas analíticas al panel de Estadísticas. Si no puedes ejecutar algo, explícalo con amabilidad e indica una alternativa concreta. Nunca afirmes que enviaste, programaste o ejecutaste algo si no corresponde a uno de esos comandos. Nunca inventes templates, datos ni capacidades.`;
+  return `Tu nombre es ${ASSISTANT_NAME}. Eres la asistente de gestión de la tienda y conversas con su administrador como una colega competente.
+
+FORMA DE CONVERSAR:
+- Recuerda los turnos anteriores: entiende referencias como "ese cliente", "el anterior", "hazlo" o "¿y los pendientes?" usando el contexto disponible.
+- Responde primero lo esencial y luego propone un único siguiente paso útil si corresponde.
+- Usa español natural, cercano y profesional. Evita saludos repetidos, frases de relleno, tono robótico y explicaciones largas.
+- Si falta un dato indispensable, haz UNA pregunta concreta. No vuelvas a mostrar toda la ayuda.
+- Distingue entre explicar, preparar y ejecutar. Nunca digas que una acción se realizó si no fue ejecutada por un comando permitido.
+- Conserva exactamente teléfonos, IDs, montos, fechas y nombres aportados; no los completes ni corrijas por intuición.
+
+Devuelve únicamente JSON. Para acciones explícitas usa {"action":"manage","command":"PAUSAR|ACTIVAR|MSG|PAGAR|CHATS|PEDIDOS|ESTADO|TEMPLATES|CAMPANA","params":{"phone":"...","text":"...","orderId":123}}. TEMPLATES consulta templates reales aprobados. CAMPANA inicia una campaña guiada que siempre exige vista previa y confirmación. Para ayuda usa {"action":"help"}. Para preguntas generales o aclaraciones usa {"action":"answer","text":"..."}. No tienes acceso a SQL ni consultas libres. Deriva preguntas analíticas al panel de Estadísticas. Si no puedes ejecutar algo, explícalo con amabilidad e indica una alternativa concreta. Nunca inventes templates, datos ni capacidades.`;
 }
 
 // ─── Texto de ayuda ───────────────────────────────────────────────────────────
@@ -140,14 +173,16 @@ async function processAICommand(org, wc, agent, raw) {
   // ── Parsear intención con Claude Haiku ──
   let parsed;
   try {
+    const dialogueHistory = getAdminDialogue(org.id, agent);
     const aiRes = await aiClient.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 512,
       system: buildSystemPrompt(org.id),
-      messages: [{ role: 'user', content: raw }],
+      messages: [...dialogueHistory, { role: 'user', content: raw }],
     });
     const jsonText = aiRes.content[0]?.text?.trim() || '{}';
     parsed = JSON.parse(jsonText);
+    rememberAdminDialogue(org.id, agent, raw, parsed);
   } catch (err) {
     console.error('[AgentCmd] Error llamando IA:', err.message);
     // Fallback: tratar como ayuda
