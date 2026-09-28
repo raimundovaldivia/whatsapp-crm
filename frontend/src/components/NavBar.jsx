@@ -165,7 +165,7 @@ function MobileNav({ view, onChangeView, unreadCount, pendingOrders, pendingProo
           position: 'fixed', inset: 0, zIndex: 98, backgroundColor: 'rgba(0,0,0,.45)',
         }}>
           <div onClick={event => event.stopPropagation()} style={{
-            position: 'absolute', left: 10, right: 10, bottom: 70,
+            position: 'absolute', left: 10, right: 10, bottom: 'calc(70px + env(safe-area-inset-bottom, 0px))',
             backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
             borderRadius: '16px', padding: '10px', boxShadow: '0 16px 40px rgba(0,0,0,.28)',
           }}>
@@ -187,7 +187,9 @@ function MobileNav({ view, onChangeView, unreadCount, pendingOrders, pendingProo
 
       <nav aria-label="Navegación principal" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
-        height: '60px', backgroundColor: colors.navBg, borderTop: `1px solid ${colors.border}`,
+        height: 'calc(60px + env(safe-area-inset-bottom, 0px))',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)', boxSizing: 'border-box',
+        backgroundColor: colors.navBg, borderTop: `1px solid ${colors.border}`,
         display: 'flex', alignItems: 'stretch', boxShadow: '0 -2px 12px rgba(0,0,0,0.12)',
       }}>
         {visibleMain.map(item => (

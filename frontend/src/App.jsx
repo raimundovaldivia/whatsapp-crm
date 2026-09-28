@@ -412,7 +412,7 @@ export default function App() {
       minHeight: 0,
       overflow: 'hidden', backgroundColor: colors.bgApp,
       flexDirection: isMobile ? 'column' : 'row',
-      paddingBottom: isMobile ? '60px' : 0,
+      paddingBottom: isMobile ? 'calc(60px + env(safe-area-inset-bottom, 0px))' : 0,
       boxSizing: 'border-box',
     }}>
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -15,6 +15,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+
+  useEffect(() => {
+    setMobileActionsOpen(false);
+  }, [conversation.id]);
 
   // ── Editar contacto ──────────────────────────────────────────────
   const [showEditContact, setShowEditContact]     = useState(false);
@@ -611,20 +616,25 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           }}>
             {initials}
           </div>
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
             <div
               onClick={openEditContact}
               title="Editar contacto"
               style={{
                 fontWeight: 600, fontSize: isMobile ? '14px' : '15px', color: colors.textPrimary,
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                maxWidth: isMobile ? '110px' : 'none',
+                maxWidth: '100%',
                 cursor: 'pointer',
                 borderBottom: `1px dashed ${colors.border}`,
-                display: 'inline-block',
+                display: 'block',
               }}>
               {displayContactName}
             </div>
+            {isMobile && displayContactName !== conversation.phone_number && (
+              <div style={{ color: colors.textSecondary, fontSize: '10px', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {String(conversation.phone_number).startsWith('+') ? '' : '+'}{conversation.phone_number}
+              </div>
+            )}
             {!isMobile && (
               <div onClick={openHistory}
                 style={{ fontSize: '12px', color: colors.green, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
@@ -637,7 +647,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         </div>
 
         {/* Right: action buttons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '4px' : '8px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '8px', flexShrink: 0, position: 'relative' }}>
           {isDevUser && (
             <button
               onClick={handleDeleteMessages}
@@ -649,7 +659,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
                 color: deleting ? colors.textMuted : colors.red,
                 cursor: deleting ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', gap: '4px',
+                display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
                 fontSize: '11px', transition: 'all 0.15s',
               }}
             >
@@ -666,7 +676,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
               color: colors.green,
               cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '4px',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', transition: 'all 0.15s',
             }}
           >
@@ -682,7 +692,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
               color: colors.infoSoft,
               cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '4px',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', transition: 'all 0.15s',
             }}
           >
@@ -700,7 +710,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 padding: '4px 10px',
                 color: '#f97316',
                 cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: '4px',
+                display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
                 fontSize: '11px', fontWeight: 600, transition: 'all 0.15s',
               }}
               onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f9731620'; }}
@@ -720,7 +730,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               padding: '4px 10px',
               color: optOut ? colors.danger : colors.textMuted,
               cursor: togglingOptOut ? 'not-allowed' : 'pointer',
-              display: 'flex', alignItems: 'center', gap: '4px',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', fontWeight: optOut ? 600 : 400, transition: 'all 0.15s',
             }}
           >
@@ -737,7 +747,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               padding: '4px 10px',
               color: isEmpresa ? 'white' : colors.textMuted,
               cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '4px',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', fontWeight: isEmpresa ? 600 : 400, transition: 'all 0.15s',
             }}
             onMouseEnter={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#4f46e5' : colors.indigo + '20'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.indigo; }}
@@ -754,7 +764,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
               color: colors.purpleSoft,
               cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '4px',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', transition: 'all 0.15s',
             }}
           >
@@ -766,6 +776,63 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             onToggle={() => onToggleAgentMode(conversation.id, conversation.agent_mode, conversation.agent_mode === 'human' ? 'ai' : 'human')}
             isMobile={isMobile}
           />
+          {isMobile && (
+            <>
+              {mobileActionsOpen && (
+                <button
+                  aria-label="Cerrar menú de acciones"
+                  onClick={() => setMobileActionsOpen(false)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 18, background: 'transparent', border: 'none' }}
+                />
+              )}
+              <button
+                onClick={() => setMobileActionsOpen(open => !open)}
+                aria-label="Más acciones del chat"
+                aria-expanded={mobileActionsOpen}
+                style={{
+                  width: '34px', height: '34px', borderRadius: '10px', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: mobileActionsOpen ? colors.bgHover : 'transparent',
+                  color: colors.textSecondary, border: `1px solid ${colors.borderStrong}`,
+                }}
+              >
+                <MoreVertical size={18} />
+              </button>
+              {mobileActionsOpen && (
+                <div style={{
+                  position: 'absolute', top: '44px', right: 0, zIndex: 20,
+                  width: '238px', maxHeight: 'min(430px, calc(100dvh - 150px))', overflowY: 'auto',
+                  padding: '7px', borderRadius: '14px', backgroundColor: colors.bgPanel,
+                  border: `1px solid ${colors.border}`, boxShadow: '0 14px 38px rgba(0,0,0,.38)',
+                }}>
+                  <MobileHeaderAction icon={<ShoppingCart size={17} />} label="Crear pedido" colors={colors}
+                    onClick={() => { setMobileActionsOpen(false); openOrderModal(); }} />
+                  <MobileHeaderAction icon={<FileText size={17} />} label="Enviar template" colors={colors}
+                    onClick={() => { setMobileActionsOpen(false); openTemplateModal(); }} />
+                  <MobileHeaderAction icon={<History size={17} />} label="Historial de compras" colors={colors}
+                    onClick={() => { setMobileActionsOpen(false); openHistory(); }} />
+                  <MobileHeaderAction icon={<BarChart2 size={17} />} label="Analizar conversación" colors={colors}
+                    onClick={() => { setMobileActionsOpen(false); openAnalysis(); }} />
+                  <MobileHeaderAction icon={<span style={{ fontSize: '15px' }}>🏢</span>}
+                    label={isEmpresa ? 'Marcar como particular' : 'Marcar como empresa'} colors={colors}
+                    active={isEmpresa} onClick={() => { setMobileActionsOpen(false); handleToggleEmpresa(); }} />
+                  <MobileHeaderAction icon={<BellOff size={17} />}
+                    label={optOut ? 'Volver a contactar' : 'No contactar'} colors={colors}
+                    active={optOut} danger={optOut} disabled={togglingOptOut}
+                    onClick={() => { setMobileActionsOpen(false); handleToggleOptOut(); }} />
+                  {isHotLead && (
+                    <MobileHeaderAction icon={<span style={{ fontSize: '15px' }}>🔥</span>} label="Quitar de Hot Leads" colors={colors}
+                      onClick={() => { setMobileActionsOpen(false); handleRemoveHotLead(); }} />
+                  )}
+                  {isDevUser && (
+                    <MobileHeaderAction icon={<Trash2 size={17} />} label={deleting ? 'Borrando mensajes…' : 'Borrar mensajes'}
+                      colors={colors} danger disabled={deleting}
+                      onClick={() => { setMobileActionsOpen(false); handleDeleteMessages(); }} />
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -1786,5 +1853,26 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         </div>
       )}
     </div>
+  );
+}
+
+function MobileHeaderAction({ icon, label, colors, onClick, active = false, danger = false, disabled = false }) {
+  const color = danger ? colors.danger : active ? colors.green : colors.textPrimary;
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        width: '100%', minHeight: '42px', padding: '0 10px', borderRadius: '9px',
+        display: 'flex', alignItems: 'center', gap: '10px', textAlign: 'left',
+        color, backgroundColor: active ? `${color}16` : 'transparent', border: 'none',
+        opacity: disabled ? 0.55 : 1, cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      <span style={{ width: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        {icon}
+      </span>
+      <span style={{ fontSize: '13px', fontWeight: active ? 650 : 500 }}>{label}</span>
+    </button>
   );
 }
