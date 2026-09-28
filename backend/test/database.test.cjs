@@ -29,6 +29,10 @@ test('PostgreSQL migrations, tenant payment isolation, rollback and expense idem
       const res=response();await handler(router,'post','/expenses')({orgId:1,userId:10,role:'repartidor',body:{amount:100,clientRequestId:'expense_test_123'}},res);assert.equal(res.code,201);
     }
     assert.equal((await engine.query('SELECT COUNT(*)::int AS n FROM delivery_expenses')).rows[0].n,1);
+    await engine.exec("UPDATE delivery_expenses SET created_at='2026-09-28 02:30:00+00' WHERE driver_user_id=10; INSERT INTO delivery_expenses(organization_id,driver_user_id,amount,category,created_at) VALUES(1,11,900,'Otro','2026-09-27 15:00:00+00')");
+    let expenseRes=response();await handler(router,'get','/expenses')({orgId:1,userId:10,role:'repartidor',query:{from:'2026-09-27',to:'2026-09-27'}},expenseRes);
+    assert.equal(expenseRes.code,200);assert.equal(expenseRes.body.total,100);assert.equal(expenseRes.body.count,1);assert.equal(expenseRes.body.byDay[0].day,'2026-09-27');
+    expenseRes=response();await handler(router,'get','/expenses')({orgId:1,userId:10,role:'repartidor',query:{from:'27-09-2026'}},expenseRes);assert.equal(expenseRes.code,400);
     const inbox=load('src/services/webhook-inbox.js',{'../db/database':{getPool:()=>new Pool()}});
     let calls=0;
     const receive=inbox.durableWebhook('test',async()=>{calls++;inbox.track(Promise.resolve());});

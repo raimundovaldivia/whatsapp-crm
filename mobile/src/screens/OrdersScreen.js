@@ -121,11 +121,16 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
           <Text style={s.headerTitle}>🚚 Mis rutas</Text>
           <Text style={s.headerSub}>{firstName ? `Hola ${firstName}` : 'Rutas asignadas'}</Text>
         </View>
-        <TouchableOpacity onPress={() => navigation.navigate('History')} style={s.histBtn}>
-          <Text style={s.histText}>🗂️ Historial</Text>
-        </TouchableOpacity>
         <TouchableOpacity onPress={handleLogout} style={s.logoutBtn}>
           <Text style={s.logoutText}>Salir</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={s.shortcutRow}>
+        <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={s.shortcutBtn}>
+          <Text style={s.shortcutText}>💸 Mis gastos</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.navigate('History')} style={s.shortcutBtn}>
+          <Text style={s.shortcutText}>🗂️ Historial de rutas</Text>
         </TouchableOpacity>
       </View>
 
@@ -256,8 +261,9 @@ const s = StyleSheet.create({
   headerSub:    { color: C.muted, fontSize: 13, marginTop: 2 },
   logoutBtn:    { backgroundColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
   logoutText:   { color: C.muted, fontSize: 13, fontWeight: '600' },
-  histBtn:      { backgroundColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8 },
-  histText:     { color: C.text, fontSize: 13, fontWeight: '700' },
+  shortcutRow:  { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.border },
+  shortcutBtn:  { flex: 1, backgroundColor: C.card, borderRadius: 10, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: C.border },
+  shortcutText: { color: C.text, fontSize: 13, fontWeight: '700' },
 
   scroll:       { flex: 1 },
   scrollContent:{ padding: 16, gap: 14, paddingBottom: 40 },

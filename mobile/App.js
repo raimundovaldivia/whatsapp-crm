@@ -20,6 +20,7 @@ import LoginScreen   from './src/screens/LoginScreen';
 import OrdersScreen  from './src/screens/OrdersScreen';
 import RouteScreen   from './src/screens/RouteScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
+import ExpensesScreen from './src/screens/ExpensesScreen';
 import StopScreen    from './src/screens/StopScreen';
 import { logout, getSavedSession, validateSession, onSessionExpired } from './src/services/api';
 
@@ -121,6 +122,12 @@ export default function App() {
               name="History"
               component={HistoryScreen}
               options={{ title: 'Rutas anteriores', headerBackTitle: 'Rutas' }}
+            />
+
+            <Stack.Screen
+              name="Expenses"
+              component={ExpensesScreen}
+              options={{ title: 'Mis gastos', headerBackTitle: 'Rutas' }}
             />
 
             <Stack.Screen

@@ -765,12 +765,16 @@ router.post('/expenses', async (req, res) => {
 router.get('/expenses', async (req, res) => {
   const pool = getPool();
   try {
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    if ((req.query.from && !datePattern.test(req.query.from)) || (req.query.to && !datePattern.test(req.query.to))) {
+      return res.status(400).json({ success: false, error: 'Fechas inválidas. Usa YYYY-MM-DD' });
+    }
     const own = req.role === 'repartidor';
     const params = [req.orgId];
     let where = 'organization_id = $1';
     if (own) { params.push(req.userId); where += ` AND driver_user_id = $${params.length}`; }
-    if (req.query.from) { params.push(req.query.from); where += ` AND created_at >= $${params.length}`; }
-    if (req.query.to)   { params.push(req.query.to + ' 23:59:59'); where += ` AND created_at <= $${params.length}`; }
+    if (req.query.from) { params.push(req.query.from); where += ` AND ((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago')::date >= $${params.length}::date`; }
+    if (req.query.to)   { params.push(req.query.to); where += ` AND ((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago')::date <= $${params.length}::date`; }
     const [expensesResult, summaryResult, dailyResult] = await Promise.all([
       pool.query(
         `SELECT id, route_id, driver_user_id, driver_name, amount, category, note,
@@ -781,7 +785,7 @@ router.get('/expenses', async (req, res) => {
         `SELECT COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total
            FROM delivery_expenses WHERE ${where}`, params),
       pool.query(
-        `SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD') AS day,
+        `SELECT TO_CHAR(((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago')::date, 'YYYY-MM-DD') AS day,
                 COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total
            FROM delivery_expenses WHERE ${where}
           GROUP BY 1 ORDER BY 1`, params),

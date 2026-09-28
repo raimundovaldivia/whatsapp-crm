@@ -220,6 +220,13 @@ export async function createExpense({ amount, category, note, routeId, photoBase
   return res.data;
 }
 
+// Gastos del repartidor autenticado dentro de un rango de fechas local.
+export async function getExpenses(from, to) {
+  const client = await getClient();
+  const res = await client.get('/api/delivery/expenses', { params: { from, to } });
+  return res.data;
+}
+
 // ── Resumen del día ───────────────────────────────────────────────────
 export async function getDailySummary() {
   const client = await getClient();
