@@ -44,7 +44,7 @@ test('pipeline agenda una respuesta a template con fecha antes de iniciar un ped
   const pipeline = load('src/services/pipeline.js', {
     '../db/database': db,
     './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
-    './inbound-message-policy': { isLikelyAutomaticReply: () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
     './scheduled-orders': {
       isFutureOrderIntent: scheduled.isFutureOrderIntent,
       isSoftFutureIntent: scheduled.isSoftFutureIntent,
@@ -87,7 +87,7 @@ test('pipeline agenda la fecha respondida tras decir que aún queda stock sin es
   const pipeline = load('src/services/pipeline.js', {
     '../db/database': db,
     './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
-    './inbound-message-policy': { isLikelyAutomaticReply: () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
     './scheduled-orders': {
       isFutureOrderIntent: scheduled.isFutureOrderIntent,
       isSoftFutureIntent: scheduled.isSoftFutureIntent,
