@@ -170,7 +170,7 @@ export async function getRoute(routeId) {
  *
  * @param {number} routeId
  * @param {string} stopKey        "shopify_<id>" o "bot_<id>"
- * @param {string} status         'entregado' | 'cancelled' | 'pending'
+ * @param {string} status         'entregado' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
  * @param {string} [paymentMethod] 'efectivo' | 'transferencia' | 'otro' — solo al entregar.
  *        Si es transferencia, el pedido queda en "Por cobrar" en el CRM
  *        hasta que llegue el comprobante.

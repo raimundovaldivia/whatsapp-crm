@@ -1292,7 +1292,7 @@ async function applyExtraToOrder(pool, source, orderId, orgId, extras) {
 }
 
 async function applyStopUpdate(req, res, id, stopKey) {
-  const { status, paymentMethod, note, extras, deliverAfter } = req.body;  // status: 'entregado' | 'cancelled' | 'pending' | 'postponed'
+  const { status, paymentMethod, note, extras, deliverAfter } = req.body;  // status: 'entregado' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
   let cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
   // Reprogramado: el cliente pidió que se le entregue otro día.
   const deliverDate = status === 'postponed' && /^\d{4}-\d{2}-\d{2}$/.test(String(deliverAfter || '')) ? deliverAfter : null;
@@ -1314,9 +1314,11 @@ async function applyStopUpdate(req, res, id, stopKey) {
   let pool;
   let committed = false;
 
-  const VALID = ['entregado', 'cancelled', 'pending', 'postponed'];
+  const VALID = ['entregado', 'cancelled', 'pending', 'postponed', 'not_delivered'];
   if (!VALID.includes(status))
     return res.status(400).json({ success: false, error: `Estado inválido. Opciones: ${VALID.join(', ')}` });
+  if (['cancelled', 'not_delivered'].includes(status) && !cleanNote)
+    return res.status(400).json({ success: false, error: 'Indica el motivo para cerrar esta parada' });
 
   const VALID_PAYMENT = ['efectivo', 'transferencia', 'otro'];
   if (paymentMethod && !VALID_PAYMENT.includes(paymentMethod))
@@ -1366,25 +1368,27 @@ async function applyStopUpdate(req, res, id, stopKey) {
     if (!route) throw new Error('Ruta no encontrada');
 
     // Actualizar el estado real del pedido en la tabla correspondiente.
-    // El medio de pago solo se guarda al entregar: en 'cancelled' o 'pending'
-    // no hubo cobro, así que se deja como estaba.
+    // cancelled es una cancelación definitiva. postponed vuelve a por despachar
+    // con la nueva fecha. not_delivered solo cierra la parada y conserva intacto
+    // el pedido para que el equipo decida qué hacer después.
     const [source, orderId] = splitStopKey(stopKey);
-    // "Fallido" (cancelled) y "Reprogramado" (postponed) NO matan el pedido:
-    // vuelve a 'por_despachar' para salir de nuevo. Solo se anota que hubo un
-    // intento fallido. Una cancelación real la hace el admin/bot, no el
-    // repartidor. 'pending' (desmarcar) lo deja en_camino.
-    const isFailedAttempt = status === 'cancelled' || status === 'postponed';
     const newOrderStatus = status === 'entregado' ? 'entregado'
-                         : isFailedAttempt         ? 'por_despachar'   // vuelve a la lista para otra ruta
+                         : status === 'cancelled'  ? 'cancelled'
+                         : status === 'postponed'  ? 'por_despachar'
                          : 'en_camino';
-    const attemptStatus = status === 'cancelled' ? 'fallido' : status === 'postponed' ? 'reprogramado' : null;
+    const attemptStatus = status === 'cancelled' ? 'cancelado_definitivo'
+                        : status === 'postponed' ? 'reprogramado'
+                        : null;
     const savePayment = status === 'entregado' && !!paymentMethod;
     const wasDelivered = status === 'entregado';   // señal de entrega, independiente del pago
     // Pago en efectivo al entregar = el pedido queda pagado de inmediato.
     // (Transferencia queda "por cobrar" hasta que llegue el comprobante.)
     const paidByCash = status === 'entregado' && paymentMethod === 'efectivo';
 
-    if (source === 'shopify') {
+    if (status === 'not_delivered') {
+      // A propósito no se modifica la orden. El resultado y el motivo quedan
+      // guardados en la parada de la ruta.
+    } else if (source === 'shopify') {
       // Shopify marca "pagado" con financial_status = 'paid'.
       await pool.query(
         `UPDATE shopify_orders
@@ -1397,7 +1401,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 last_attempt_status = CASE WHEN $10::text IS NOT NULL THEN $10 ELSE last_attempt_status END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
                 delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8
-                                         WHEN $10::text = 'fallido' AND $11::text <> '' THEN $11
+                                         WHEN $10::text = 'cancelado_definitivo' AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
         [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
@@ -1422,7 +1426,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
                 delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8
-                                         WHEN $10::text = 'fallido' AND $11::text <> '' THEN $11
+                                         WHEN $10::text = 'cancelado_definitivo' AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE id = $2 AND organization_id = $3`,
         [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
@@ -1437,8 +1441,8 @@ async function applyStopUpdate(req, res, id, stopKey) {
     // ── Cerrar el pedido agendado al entregar ─────────────────────────────
     // Si la conversación quedó en estado 'scheduled', el bot le sigue diciendo
     // al cliente que su pedido "está apartado" para una fecha que ya pasó.
-    // La entrega es el momento en que eso deja de ser cierto.
-    if (status === 'entregado') {
+    // La entrega o cancelación definitiva son el momento en que eso deja de ser cierto.
+    if (status === 'entregado' || status === 'cancelled') {
       try {
         let convId = null;
         if (source === 'bot') {
@@ -1464,11 +1468,13 @@ async function applyStopUpdate(req, res, id, stopKey) {
         }
 
         if (convId) {
+          const scheduledStatus = status === 'cancelled' ? 'cancelled' : 'sent';
           const { rowCount } = await pool.query(
             `UPDATE scheduled_orders
-                SET status = 'sent', sent_at = COALESCE(sent_at, NOW())
+                SET status = $2,
+                    sent_at = CASE WHEN $2 = 'sent' THEN COALESCE(sent_at, NOW()) ELSE sent_at END
               WHERE conversation_id = $1 AND status = 'pending'`,
-            [convId]
+            [convId, scheduledStatus]
           );
           const { rowCount: stateReset } = await pool.query(
             `UPDATE conversations
@@ -1477,7 +1483,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
             [convId]
           );
           if (rowCount || stateReset) {
-            console.log(`[Delivery/stop] 📅 Entrega cierra agendado en conv ${convId} (${rowCount} agendado${rowCount === 1 ? '' : 's'}, estado ${stateReset ? 'reseteado' : 'sin cambio'})`);
+            console.log(`[Delivery/stop] 📅 ${status === 'cancelled' ? 'Cancelación' : 'Entrega'} cierra agendado en conv ${convId} (${rowCount} agendado${rowCount === 1 ? '' : 's'}, estado ${stateReset ? 'reseteado' : 'sin cambio'})`);
           }
         }
       } catch (err) {
@@ -1490,7 +1496,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     const statuses   = route.stop_statuses || {};
     const allDone    = orders.every(o => {
       const key = `${o.source}_${o.id}`;
-      return ['entregado', 'cancelled', 'postponed'].includes(statuses[key]);
+      return ['entregado', 'cancelled', 'postponed', 'not_delivered'].includes(statuses[key]);
     });
     if (allDone && orders.length > 0) {
       await pool.query(
@@ -1648,7 +1654,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     const shopMap = new Map(shopRows.map(r => [String(r.id), r]));
     const pendingSet = new Set(pending.map(p => `${p.source}_${p.id}`));
 
-    // Rutas canceladas: solo las paradas que alcanzaron a marcarse (entregado/fallido/reprogramado)
+    // Rutas canceladas: solo las paradas que alcanzaron a marcarse.
     const { rows: cancelledRoutes } = await pool.query(`
       SELECT id, name, status, driver_name, driver_user_id, orders, optimized_route,
              stop_statuses, stop_payments, stop_notes, stop_extras, stop_times,
@@ -1699,7 +1705,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           total: Number(ord?.total_price ?? st.totalPrice) || 0,
           extras: extraList, extra_total: extraTotal,
           note: notes[key] || null,
-          status,                                   // entregado | cancelled | pending
+          status,                                   // entregado | cancelled | postponed | not_delivered | pending
           payment_method: paymentMethod,            // efectivo | transferencia | otro | null
           paid,
           charge: {

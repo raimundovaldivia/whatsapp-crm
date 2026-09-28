@@ -35,6 +35,7 @@ const STATUS_LABEL = {
   in_progress: 'En curso',
   completed:   'Completada',
   cancelled:   'Cancelada',
+  not_delivered: 'Sin entrega',
 };
 const STATUS_COLOR = {
   draft:       C.muted,
@@ -42,6 +43,7 @@ const STATUS_COLOR = {
   in_progress: C.orange,
   completed:   C.green,
   cancelled:   C.red,
+  not_delivered: C.blue,
 };
 
 /** Paradas de una ruta: optimized_route si existe, si no los pedidos en orden. */
@@ -56,10 +58,11 @@ function summarize(route) {
   const stops    = stopsOf(route);
   const statuses = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
   const done = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'entregado').length;
-  const fail = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'cancelled').length;
-  const pend = stops.length - done - fail;
-  const pct  = stops.length > 0 ? Math.round(((done + fail) / stops.length) * 100) : 0;
-  return { stops, statuses, done, fail, pend, pct };
+  const fail = stops.filter(s => ['cancelled', 'not_delivered'].includes(statuses[`${s.source}_${s.id}`])).length;
+  const postponed = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'postponed').length;
+  const pend = stops.filter(s => !statuses[`${s.source}_${s.id}`] || statuses[`${s.source}_${s.id}`] === 'pending').length;
+  const pct  = stops.length > 0 ? Math.round(((done + fail + postponed) / stops.length) * 100) : 0;
+  return { stops, statuses, done, fail, postponed, pend, pct };
 }
 
 export default function OrdersScreen({ navigation, user, onLogout }) {
@@ -162,7 +165,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
         )}
 
         {!loading && !error && routes.map(route => {
-          const { stops, statuses, done, fail, pend, pct } = summarize(route);
+          const { stops, statuses, done, fail, postponed, pend, pct } = summarize(route);
           const color = STATUS_COLOR[route.status] || C.muted;
           const isActive = route.status === 'sent' || route.status === 'in_progress';
           return (
@@ -199,7 +202,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                     <View style={[s.progressFill, { width: `${pct}%` }]} />
                   </View>
                   <Text style={s.progressText}>
-                    {done} entregados · {fail} fallidos · {pend} pendientes
+                    {done} entregados · {fail} sin entrega{postponed ? ` · ${postponed} reprogramados` : ''} · {pend} pendientes
                   </Text>
                 </View>
               )}
@@ -209,7 +212,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                 <View style={s.stopsPreview}>
                   {stops.slice(0, 4).map((stop, idx) => {
                     const st = statuses[`${stop.source}_${stop.id}`] || 'pending';
-                    const c  = st === 'entregado' ? C.green : st === 'cancelled' ? C.red : C.orange;
+                    const c  = st === 'entregado' ? C.green : st === 'cancelled' ? C.red : st === 'not_delivered' ? C.blue : C.orange;
                     return (
                       <View key={`${stop.source}_${stop.id}`} style={s.stopRow}>
                         <View style={[s.stopNum, { backgroundColor: c }]}>
@@ -219,7 +222,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                           {stop.customerName}
                         </Text>
                         <Text style={[s.stopStatus, { color: c }]}>
-                          {st === 'entregado' ? '✓' : st === 'cancelled' ? '✕' : '•'}
+                          {st === 'entregado' ? '✓' : st === 'cancelled' ? '✕' : st === 'not_delivered' ? '!' : '•'}
                         </Text>
                       </View>
                     );

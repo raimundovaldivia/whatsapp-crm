@@ -53,6 +53,44 @@ test('delivery: member and assignment checks, missing/completed orders, rollback
     assert.equal((await f.query('SELECT financial_status FROM shopify_orders')).rows[0].financial_status,'paid');
   } finally {await f.engine.close();}
 });
+test('delivery outcomes cancel, reschedule or close a stop without changing the order',async()=>{
+  const f=await fixture();
+  try {
+    const router=load('src/routes/delivery.js',{'../db/database':f.db,'../middleware/auth':{requireAuth:noop,requireRole:()=>noop}});
+    const call=async(body)=>{const res=response();await handler(router,'patch','/routes/1/stops')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKey:'bot_1',...body}},res);return res;};
+    const reset=()=>f.engine.exec("UPDATE delivery_routes SET status='sent', completed_at=NULL, stop_statuses='{}', stop_notes='{}' WHERE id=1; UPDATE orders SET status='sent', delivery_date=NULL, delivery_note=NULL, last_attempt_at=NULL, last_attempt_status=NULL WHERE id=1;");
+
+    assert.equal((await call({status:'cancelled'})).code,400);
+    assert.equal((await f.query('SELECT status FROM orders WHERE id=1')).rows[0].status,'sent');
+
+    await f.query("INSERT INTO scheduled_orders(organization_id,conversation_id,phone,desired_date,status) VALUES(1,1,'111',CURRENT_DATE,'pending')");
+    await f.query("UPDATE conversations SET pipeline_state='scheduled' WHERE id=1");
+    assert.equal((await call({status:'cancelled',note:'Cliente ya no necesita el pedido'})).code,200);
+    let order=(await f.query('SELECT status,delivery_note,last_attempt_status FROM orders WHERE id=1')).rows[0];
+    assert.equal(order.status,'cancelled');
+    assert.equal(order.delivery_note,'Cliente ya no necesita el pedido');
+    assert.equal(order.last_attempt_status,'cancelado_definitivo');
+    assert.equal((await f.query('SELECT status FROM scheduled_orders WHERE conversation_id=1')).rows[0].status,'cancelled');
+    assert.equal((await f.query('SELECT pipeline_state FROM conversations WHERE id=1')).rows[0].pipeline_state,'exploring');
+
+    await reset();
+    assert.equal((await call({status:'postponed',deliverAfter:'2030-02-03',note:'Después de las 18'})).code,200);
+    order=(await f.query("SELECT status,to_char(delivery_date,'YYYY-MM-DD') delivery_date,last_attempt_status FROM orders WHERE id=1")).rows[0];
+    assert.equal(order.status,'por_despachar');
+    assert.equal(order.delivery_date,'2030-02-03');
+    assert.equal(order.last_attempt_status,'reprogramado');
+
+    await reset();
+    assert.equal((await call({status:'not_delivered',note:'Cliente no responde'})).code,200);
+    order=(await f.query('SELECT status,delivery_date,delivery_note,last_attempt_status FROM orders WHERE id=1')).rows[0];
+    assert.equal(order.status,'sent');
+    assert.equal(order.delivery_date,null);
+    assert.equal(order.delivery_note,null);
+    assert.equal(order.last_attempt_status,null);
+    assert.equal((await f.query('SELECT status FROM delivery_routes WHERE id=1')).rows[0].status,'completed');
+    assert.equal((await f.query("SELECT stop_notes->>'bot_1' note FROM delivery_routes WHERE id=1")).rows[0].note,'Cliente no responde');
+  } finally {await f.engine.close();}
+});
 test('merge preserves linked business records, rejects another tenant and rolls back deletion failure',async()=>{
   const f=await fixture();
   try {

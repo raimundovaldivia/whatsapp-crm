@@ -40,8 +40,9 @@ function summarize(route) {
   const stops    = stopsOf(route);
   const statuses = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
   const done = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'entregado').length;
-  const fail = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'cancelled').length;
-  return { total: stops.length, done, fail };
+  const fail = stops.filter(s => ['cancelled', 'not_delivered'].includes(statuses[`${s.source}_${s.id}`])).length;
+  const postponed = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'postponed').length;
+  return { total: stops.length, done, fail, postponed };
 }
 
 function fmtDate(route) {
@@ -111,7 +112,7 @@ export default function HistoryScreen({ navigation }) {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.green} />}>
           <Text style={s.hint}>Toca una ruta para revisarla. Si te equivocaste en una parada, ábrela y vuelve a marcarla.</Text>
           {routes.map(route => {
-            const { total, done, fail } = summarize(route);
+            const { total, done, fail, postponed } = summarize(route);
             const color = STATUS_COLOR[route.status] || C.muted;
             return (
               <TouchableOpacity key={route.id} style={s.card} onPress={() => openRoute(route)} activeOpacity={0.85}>
@@ -125,7 +126,8 @@ export default function HistoryScreen({ navigation }) {
                 <View style={s.stats}>
                   <View style={s.stat}><Text style={s.statNum}>{total}</Text><Text style={s.statLabel}>Paradas</Text></View>
                   <View style={s.stat}><Text style={[s.statNum, { color: C.green }]}>{done}</Text><Text style={s.statLabel}>Entregados</Text></View>
-                  <View style={s.stat}><Text style={[s.statNum, { color: C.red }]}>{fail}</Text><Text style={s.statLabel}>Fallidos</Text></View>
+                  <View style={s.stat}><Text style={[s.statNum, { color: C.red }]}>{fail}</Text><Text style={s.statLabel}>Sin entrega</Text></View>
+                  {postponed > 0 && <View style={s.stat}><Text style={[s.statNum, { color: C.orange }]}>{postponed}</Text><Text style={s.statLabel}>Reprogramados</Text></View>}
                   {route.total_distance ? (
                     <View style={s.stat}><Text style={s.statNum}>{route.total_distance}</Text><Text style={s.statLabel}>Distancia</Text></View>
                   ) : null}

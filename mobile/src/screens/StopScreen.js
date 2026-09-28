@@ -31,8 +31,9 @@ export default function StopScreen({ route: navRoute, navigation }) {
   // Al entregar hay que registrar cómo pagó el cliente: se pregunta acá mismo,
   // con botones grandes, en vez de un Alert encadenado.
   const [askingPayment, setAskingPayment] = useState(false);
-  // "Entregar después": el cliente pidió otro día. Se elige con chips rápidos.
-  const [askingPostpone, setAskingPostpone] = useState(false);
+  // Motivo por el que la parada no se entregó.
+  const [outcomeMode, setOutcomeMode] = useState(null); // choose | cancel | postpone | other
+  const [outcomeReason, setOutcomeReason] = useState('');
   const [postponeDate,   setPostponeDate]   = useState(null); // YYYY-MM-DD
   const [paidWith,      setPaidWith]      = useState(null);
   // Nota que el repartidor puede dejar en la parada (ej: "dejé con conserje").
@@ -235,10 +236,11 @@ export default function StopScreen({ route: navRoute, navigation }) {
   }
 
   /** Envía el estado al backend y cierra la parada. */
-  async function submit(newStatus, paymentMethod, deliverAfter) {
+  async function submit(newStatus, paymentMethod, deliverAfter, overrideNote) {
     setLoading(true);
     try {
-      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, note, extrasArray, deliverAfter);
+      const finalNote = overrideNote === undefined ? note : overrideNote;
+      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, finalNote, extrasArray, deliverAfter);
       setStatus(newStatus);
       setPaidWith(paymentMethod || null);
       setDone(true);
@@ -289,16 +291,15 @@ export default function StopScreen({ route: navRoute, navigation }) {
     submit('postponed', null, postponeDate);
   }
 
-  /** "No encontrado" — sigue pidiendo confirmación porque cancela el pedido. */
-  function markNotFound() {
-    Alert.alert(
-      'Marcar como no encontrado',
-      `¿Confirmas que no pudiste entregar el pedido de ${stop.customerName}?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Confirmar', style: 'destructive', onPress: () => submit('cancelled') },
-      ]
-    );
+  function confirmReasonedOutcome(kind) {
+    const reason = outcomeReason.trim();
+    if (!reason) {
+      Alert.alert('Falta el motivo', kind === 'cancelled'
+        ? 'Escribe por qué el cliente canceló definitivamente el pedido.'
+        : 'Escribe qué ocurrió con esta entrega.');
+      return;
+    }
+    submit(kind, null, null, reason);
   }
 
   return (
@@ -358,16 +359,18 @@ export default function StopScreen({ route: navRoute, navigation }) {
       {/* ─── Acciones ─── */}
       {done ? (
         <View style={s.doneBox}>
-          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : status === 'postponed' ? '📅' : '❌'}</Text>
+          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : status === 'postponed' ? '📅' : status === 'cancelled' ? '🚫' : '📵'}</Text>
           <Text style={s.doneText}>
-            {status === 'entregado' ? '¡Entregado!' : status === 'postponed' ? 'Reprogramado' : 'No encontrado'}
+            {status === 'entregado' ? '¡Entregado!' : status === 'postponed' ? 'Reprogramado' : status === 'cancelled' ? 'Pedido cancelado' : 'Parada cerrada sin entrega'}
           </Text>
           {status === 'postponed' && <Text style={s.donePay}>Vuelve a "por despachar" para la ruta de ese día</Text>}
+          {status === 'cancelled' && <Text style={s.donePay}>El pedido quedó cancelado definitivamente</Text>}
+          {status === 'not_delivered' && <Text style={s.donePay}>El pedido no fue modificado</Text>}
           {paidWith === 'efectivo'     && <Text style={s.donePay}>💵 Pagado en efectivo</Text>}
           {paidWith === 'transferencia' && <Text style={s.donePay}>🏦 Por transferencia — queda pendiente el comprobante</Text>}
           <Text style={s.doneSub}>Volviendo a la ruta...</Text>
         </View>
-      ) : askingPostpone ? (
+      ) : outcomeMode === 'postpone' ? (
         /* ── Entregar después: ¿para qué día? ── */
         <View style={s.payBox}>
           <Text style={s.payTitle}>¿Para cuándo lo pidió {stop.customerName?.split(' ')[0] || 'el cliente'}?</Text>
@@ -386,7 +389,81 @@ export default function StopScreen({ route: navRoute, navigation }) {
             <Text style={s.payIcon}>📅</Text>
             <Text style={s.payBtnText}>{loading ? 'Guardando…' : 'Confirmar reprogramación'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => { setAskingPostpone(false); setPostponeDate(null); }} disabled={loading} activeOpacity={0.7}>
+          <TouchableOpacity onPress={() => { setOutcomeMode('choose'); setPostponeDate(null); }} disabled={loading} activeOpacity={0.7}>
+            <Text style={s.payCancel}>← Volver a los motivos</Text>
+          </TouchableOpacity>
+        </View>
+      ) : outcomeMode === 'cancel' || outcomeMode === 'other' ? (
+        <View style={s.payBox}>
+          <Text style={s.payTitle}>{outcomeMode === 'cancel' ? 'Cancelación definitiva' : 'Otro motivo'}</Text>
+          <Text style={s.outcomeHelp}>
+            {outcomeMode === 'cancel'
+              ? 'Este pedido quedará cancelado. Escribe el motivo indicado por el cliente.'
+              : 'La parada se cerrará sin cambiar el pedido. Escribe qué ocurrió.'}
+          </Text>
+          <TextInput
+            style={s.reasonInput}
+            value={outcomeReason}
+            onChangeText={setOutcomeReason}
+            placeholder={outcomeMode === 'cancel' ? 'Ej: cliente ya no necesita el pedido' : 'Ej: dirección incorrecta'}
+            placeholderTextColor={C.muted}
+            multiline
+            maxLength={500}
+            autoFocus
+          />
+          <TouchableOpacity
+            style={[s.payBtn, outcomeMode === 'cancel' ? s.cancelOrderBtn : s.noDeliveryBtn, (!outcomeReason.trim() || loading) && s.btnDisabled]}
+            onPress={() => confirmReasonedOutcome(outcomeMode === 'cancel' ? 'cancelled' : 'not_delivered')}
+            disabled={!outcomeReason.trim() || loading}
+            activeOpacity={0.85}>
+            {loading ? <ActivityIndicator color="#fff" /> : (
+              <Text style={s.payBtnText}>{outcomeMode === 'cancel' ? 'Confirmar cancelación' : 'Cerrar parada'}</Text>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { setOutcomeMode('choose'); setOutcomeReason(''); }} disabled={loading} activeOpacity={0.7}>
+            <Text style={s.payCancel}>← Volver a los motivos</Text>
+          </TouchableOpacity>
+        </View>
+      ) : outcomeMode === 'choose' ? (
+        <View style={s.payBox}>
+          <Text style={s.payTitle}>¿Por qué no se entregó?</Text>
+          <Text style={s.outcomeHelp}>Elige el motivo correcto. Cada opción realiza una acción distinta.</Text>
+
+          <TouchableOpacity style={[s.outcomeBtn, s.cancelOutcomeBtn]} onPress={() => setOutcomeMode('cancel')} activeOpacity={0.85}>
+            <Text style={s.outcomeIcon}>🚫</Text>
+            <View style={s.outcomeBody}>
+              <Text style={s.outcomeTitle}>Cancelación definitiva</Text>
+              <Text style={s.outcomeSub}>Cancela el pedido y pide el motivo</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[s.outcomeBtn, s.postponeOutcomeBtn]} onPress={() => setOutcomeMode('postpone')} activeOpacity={0.85}>
+            <Text style={s.outcomeIcon}>📅</Text>
+            <View style={s.outcomeBody}>
+              <Text style={s.outcomeTitle}>Cambiar fecha de entrega</Text>
+              <Text style={s.outcomeSub}>Reprograma el pedido automáticamente</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[s.outcomeBtn, s.noResponseOutcomeBtn]}
+            onPress={() => submit('not_delivered', null, null, 'Cliente no responde')}
+            disabled={loading} activeOpacity={0.85}>
+            <Text style={s.outcomeIcon}>📵</Text>
+            <View style={s.outcomeBody}>
+              <Text style={s.outcomeTitle}>Cliente no responde</Text>
+              <Text style={s.outcomeSub}>Cierra la parada sin modificar el pedido</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[s.outcomeBtn, s.otherOutcomeBtn]} onPress={() => setOutcomeMode('other')} activeOpacity={0.85}>
+            <Text style={s.outcomeIcon}>⚠️</Text>
+            <View style={s.outcomeBody}>
+              <Text style={s.outcomeTitle}>Otro motivo</Text>
+              <Text style={s.outcomeSub}>Registra lo ocurrido sin modificar el pedido</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => setOutcomeMode(null)} disabled={loading} activeOpacity={0.7}>
             <Text style={s.payCancel}>← Volver</Text>
           </TouchableOpacity>
         </View>
@@ -570,21 +647,13 @@ export default function StopScreen({ route: navRoute, navigation }) {
 
             <TouchableOpacity
               style={[s.statusBtn, s.failedBtn, loading && s.btnDisabled]}
-              onPress={markNotFound}
+              onPress={() => setOutcomeMode('choose')}
               disabled={loading}
               activeOpacity={0.85}>
               <Text style={s.statusIcon}>✕</Text>
-              <Text style={[s.statusBtnText, { color: C.red }]}>No encontrado</Text>
+              <Text style={[s.statusBtnText, { color: C.red }]}>No entregado</Text>
             </TouchableOpacity>
           </View>
-
-          <TouchableOpacity
-            style={[s.postponeRowBtn, loading && s.btnDisabled]}
-            onPress={() => setAskingPostpone(true)}
-            disabled={loading}
-            activeOpacity={0.85}>
-            <Text style={s.postponeRowText}>📅 Entregar después — el cliente pidió otro día</Text>
-          </TouchableOpacity>
         </>
       )}
     </ScrollView>
@@ -646,6 +715,19 @@ const s = StyleSheet.create({
   postponeChipSub: { color: C.muted, fontSize: 12, marginTop: 2, textTransform: 'capitalize' },
   postponeHint:    { color: C.muted, fontSize: 12, marginBottom: 12, lineHeight: 17 },
   postponeBtn:     { backgroundColor: C.orange },
+  outcomeHelp:     { color: C.muted, fontSize: 14, lineHeight: 20, textAlign: 'center', marginBottom: 4 },
+  outcomeBtn:      { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.card, borderWidth: 1, borderRadius: 14, padding: 16 },
+  cancelOutcomeBtn:{ borderColor: C.red + '88' },
+  postponeOutcomeBtn:{ borderColor: C.orange + '88' },
+  noResponseOutcomeBtn:{ borderColor: C.blue + '88' },
+  otherOutcomeBtn: { borderColor: C.border },
+  outcomeIcon:     { fontSize: 25 },
+  outcomeBody:     { flex: 1 },
+  outcomeTitle:    { color: C.text, fontSize: 16, fontWeight: '800' },
+  outcomeSub:      { color: C.muted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  reasonInput:     { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, color: C.text, fontSize: 15, minHeight: 100, textAlignVertical: 'top' },
+  cancelOrderBtn:  { backgroundColor: C.red },
+  noDeliveryBtn:   { backgroundColor: C.blue },
   statusBtn:    { flex: 1, borderRadius: 14, padding: 18, alignItems: 'center', gap: 6 },
   btnDisabled:  { opacity: 0.5 },
   deliveredBtn: { backgroundColor: C.green },

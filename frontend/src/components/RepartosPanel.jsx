@@ -938,8 +938,9 @@ const PAY_META = {
 };
 const STOP_META = {
   entregado: { label: 'Entregado',    color: '#2dd4bf' },
-  cancelled: { label: 'Fallido',      color: '#f87171' },
+  cancelled: { label: 'Cancelado',    color: '#f87171' },
   postponed: { label: 'Reprogramado', color: '#a78bfa' },
+  not_delivered: { label: 'Sin entrega', color: '#38bdf8' },
   pending:   { label: 'Pendiente',    color: '#fb923c' },
 };
 
@@ -1136,7 +1137,7 @@ function DespachosRepartos({ colors }) {
   const days = [];
   const byDay = {};
   for (const r of filtered) {
-    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, fallidos: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0 }; days.push(byDay[r.day]); }
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0 }; days.push(byDay[r.day]); }
     const d = byDay[r.day];
     d.rows.push(r);
     if (r.status === 'entregado') {
@@ -1151,7 +1152,8 @@ function DespachosRepartos({ colors }) {
         else if (['unknown','pending','sent'].includes(r.charge?.status)) d.cobrosSinConfirmar++;
       }
       d.extras += r.extra_total || 0;
-    } else if (r.status === 'cancelled') d.fallidos++;
+    } else if (r.status === 'cancelled') d.cancelados++;
+    else if (r.status === 'not_delivered') d.sinEntrega++;
     else if (r.status === 'postponed') d.reprogramados++;
     else d.pendientes++;
   }
@@ -1170,10 +1172,10 @@ function DespachosRepartos({ colors }) {
   for (const d of days) d.gastos = gastosByDay[d.day] || 0;
 
   const totals = days.reduce((t, d) => ({
-    entregados: t.entregados + d.entregados, fallidos: t.fallidos + d.fallidos,
+    entregados: t.entregados + d.entregados, cancelados: t.cancelados + d.cancelados, sinEntrega: t.sinEntrega + d.sinEntrega,
     efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia,
     cobrosEnviados: t.cobrosEnviados + d.cobrosEnviados, cobrosPendientes: t.cobrosPendientes + d.cobrosPendientes,
-  }), { entregados: 0, fallidos: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0 });
+  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0 });
   totals.gastos = gastosTotal;
   totals.netoEfectivo = totals.efectivo - gastosTotal;   // efectivo recaudado menos lo que gastó el repartidor
 
@@ -1220,8 +1222,9 @@ function DespachosRepartos({ colors }) {
         <select value={status} onChange={e => setStatus(e.target.value)} style={inp}>
           <option value="">Todos los estados</option>
           <option value="entregado">Entregado</option>
-          <option value="cancelled">Fallido</option>
+          <option value="cancelled">Cancelado</option>
           <option value="postponed">Reprogramado</option>
+          <option value="not_delivered">Sin entrega</option>
           <option value="pending">Pendiente</option>
         </select>
         <div style={{ flex: 1 }} />
@@ -1232,7 +1235,8 @@ function DespachosRepartos({ colors }) {
       {/* Totales del período */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
         {chip(`${totals.entregados} entregados`, '#2dd4bf')}
-        {chip(`${totals.fallidos} fallidos`, '#f87171')}
+        {totals.cancelados > 0 && chip(`${totals.cancelados} cancelados`, '#f87171')}
+        {totals.sinEntrega > 0 && chip(`${totals.sinEntrega} sin entrega`, '#38bdf8')}
         {chip(`💵 ${CLP(totals.efectivo)} efectivo`, '#22c55e')}
         {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
         {chip(`💸 ${totals.cobrosEnviados} avisos de cobro entregados`, '#fbbf24')}
@@ -1259,7 +1263,8 @@ function DespachosRepartos({ colors }) {
               <span style={{ fontSize: '11px', color: colors.textMuted }}>{d.rows.length} paradas</span>
               <div style={{ flex: 1 }} />
               {chip(`${d.entregados} ✓`, '#2dd4bf')}
-              {d.fallidos > 0 && chip(`${d.fallidos} ✗`, '#f87171')}
+              {d.cancelados > 0 && chip(`${d.cancelados} cancelados`, '#f87171')}
+              {d.sinEntrega > 0 && chip(`${d.sinEntrega} sin entrega`, '#38bdf8')}
               {d.reprogramados > 0 && chip(`📅 ${d.reprogramados} reprog.`, '#a78bfa')}
               {d.pendientes > 0 && chip(`${d.pendientes} pend.`, '#fb923c')}
               {chip(`💵 ${CLP(d.efectivo)}`, '#22c55e')}
@@ -1612,7 +1617,7 @@ function HistorialRepartos({ colors }) {
           const total   = parseInt(route.order_count) || 0;
           const statuses = typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
           const done    = Object.values(statuses).filter(v => v === 'entregado').length;
-          const failed  = Object.values(statuses).filter(v => v === 'cancelled').length;
+          const failed  = Object.values(statuses).filter(v => v === 'cancelled' || v === 'not_delivered').length;
 
           return (
             <div key={route.id} style={{ backgroundColor: colors.bgCard, borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
@@ -1697,9 +1702,9 @@ function HistorialRepartos({ colors }) {
                           {ordersList.map((o, idx) => {
                             const key = `${o.source}_${o.id}`;
                             const st  = statuses[key] || 'pending';
-                            const col = st === 'entregado' ? '#22c55e' : st === 'cancelled' ? '#f87171' : '#fb923c';
+                            const col = st === 'entregado' ? '#22c55e' : st === 'cancelled' ? '#f87171' : st === 'not_delivered' ? '#38bdf8' : '#fb923c';
                             return (
-                              <span key={key} title={st === 'entregado' ? 'Entregado' : st === 'cancelled' ? 'Fallido' : 'Pendiente'}
+                              <span key={key} title={st === 'entregado' ? 'Entregado' : st === 'cancelled' ? 'Cancelado' : st === 'not_delivered' ? 'Sin entrega' : st === 'postponed' ? 'Reprogramado' : 'Pendiente'}
                                 style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: colors.textSecondary, backgroundColor: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '999px', padding: '3px 10px', maxWidth: '220px' }}>
                                 <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: col, flexShrink: 0 }} />
                                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idx + 1}. {o.customerName || key}</span>
