@@ -13,6 +13,9 @@ const FUTURE_ORDER_PATTERNS = [
   /para\s+la\s+pr[oó]xima\s+semana/i,
   /la\s+semana\s+que\s+viene/i,
   /para\s+(el\s+)?(pr[oó]ximo\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)/i,
+  // Respuesta a "¿cuándo se te terminan?": puede venir solo el día, sin "para".
+  /^(el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)[\s.!]*$/i,
+  /\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b.{0,60}\b(calculad[oa]s?|entonces|s[ií]|por\s+favor)\b/i,
   /para\s+ma[nñ]ana/i,
   /para\s+pasado\s+ma[nñ]ana/i,
   /en\s+\d+\s+d[ií]as?/i,

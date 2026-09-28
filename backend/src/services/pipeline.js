@@ -515,21 +515,18 @@ Reglas estrictas:
     const producto  = activeScheduled.product_notes || 'tu pedido';
     const scheduledProductNotes = activeScheduled.product_notes;
 
-    // ── Detectar si el cliente está llegando o dando dirección de entrega ──
-    // En ese caso, ya no es un pedido futuro — es un pedido para ya. Transicionar.
+    // ── Detectar si el cliente está llegando para recibir ahora ──
+    // Una dirección por sí sola NO adelanta el pedido: puede estar completando
+    // los datos del despacho futuro. Solo una señal explícita de llegada activa
+    // el pedido real antes de la fecha agendada.
     const ARRIVAL_SIGNALS = [
       /llegando/i, /llegamos/i, /estamos\s+llegando/i, /ya\s+(vengo|voy|llego)/i,
       /ma[ñn]ana.*llegar/i, /llegar.*ma[ñn]ana/i, /al\s+llegar/i,
       /cuando\s+llegue/i, /ya\s+estoy\s+en/i,
     ];
-    const ADDRESS_SIGNALS = [
-      /\b(calle|av(enida)?|pasaje|pje\.?|#\s*\d|\d{3,5})\b/i,
-      /\b(block|depto|casa\s+\d|villa|sector|parque|condominio|pobla(ci[oó]n)?|bosque)\b/i,
-    ];
     const isArriving = ARRIVAL_SIGNALS.some(p => p.test(userMessage));
-    const hasAddress = ADDRESS_SIGNALS.some(p => p.test(userMessage));
 
-    if (isArriving || hasAddress) {
+    if (isArriving) {
       // El cliente está listo para recibir ahora → activar pedido real
       console.log(`[Pipeline] 📦 Cliente scheduled llega/da dirección — transicionando a collecting_order`);
       const preDraft = {};
@@ -560,6 +557,7 @@ REGLAS ABSOLUTAS:
 - NO repitas siempre el mismo mensaje de recordatorio. Lee lo que dijo el cliente y responde a ESO.
 - Si el cliente saluda → salúdalo brevemente y confirma en una frase que su pedido está apartado.
 - Si el cliente da información de horario/turno ("durante la mañana", "en la tarde") → acusa recibo ("Perfecto, lo anoto 👍") sin pedir más.
+- Si el cliente da o corrige una dirección → acusa recibo y mantén la fecha agendada. NUNCA conviertas el pedido en inmediato solo por recibir una dirección.
 - Si el cliente pregunta algo sobre el pedido → responde naturalmente.
 - Si el cliente quiere cambiar fecha/cantidad → dile que lo puedes ajustar y pregunta qué cambio quiere.
 - Respuestas cortas, naturales, en español latinoamericano. Máximo 2 frases.`;
@@ -657,7 +655,57 @@ REGLAS ABSOLUTAS:
   const isStockRemaining = !['scheduled','future_interest','opted_out'].includes(currentState)
     && STOCK_REMAINING_PATTERNS.some(p => p.test(userMessage));
 
+  // Registrar una fecha futura en cuanto aparece. Esto debe ocurrir ANTES de
+  // preguntar cuánto stock le queda: "para el miércoles, aún me quedan unos"
+  // ya contiene toda la decisión necesaria y no es un pedido para hoy.
+  const scheduleExplicitFutureOrder = async () => {
+    const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+    const recentTexts = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
+    const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
+    const contact = await db.getContact(orgId, conversation.phone_number).catch(() => null);
+    const templateName = await db.getSetting(orgId, 'scheduled_order_template') || null;
+
+    await db.createScheduledOrder({
+      orgId,
+      conversationId,
+      phone:        conversation.phone_number,
+      customerName: contact?.name || conversation.contact_name || null,
+      productNotes: extracted.productNotes,
+      desiredDate:  extracted.desiredDate,
+      templateName,
+    });
+    await db.updatePipelineState(conversationId, 'scheduled');
+
+    const dateLabel = formatDateEs(extracted.desiredDate);
+    L.agent('orchestrator', 0);
+    L.step('scheduled', `fecha: ${extracted.desiredDate} | producto: ${extracted.productNotes}`);
+    return {
+      response: `¡Perfecto! Te dejo agendado para el ${dateLabel} el pedido de ${extracted.productNotes} 📅 Ese día te avisamos cuando vaya saliendo.`,
+      agentType: 'orchestrator',
+      newState: 'scheduled',
+    };
+  };
+
+  // Cuando el mensaje anterior dejó la conversación esperando una fecha
+  // (por ejemplo: "¿cuánto tiempo más te duran?"), resolverla antes de pedir
+  // al modelo que clasifique o escale. Así "para el viernes 16 de octubre"
+  // crea el despacho futuro y no termina derivado a una persona.
+  if (currentState === 'future_interest' && isFutureOrderIntent(userMessage)) {
+    try {
+      return await scheduleExplicitFutureOrder();
+    } catch (err) {
+      console.warn('[Pipeline] Error agendando fecha indicada tras interés futuro:', err.message);
+    }
+  }
+
   if (isStockRemaining) {
+    if (isFutureOrderIntent(userMessage)) {
+      try {
+        return await scheduleExplicitFutureOrder();
+      } catch (err) {
+        console.warn('[Pipeline] Error agendando fecha indicada junto al stock:', err.message);
+      }
+    }
     const knownName = await db.getContact(orgId, conversation.phone_number).catch(() => null);
     const firstName = knownName?.name?.split(' ')[0] || '';
     const stockMsg = firstName
@@ -1006,7 +1054,7 @@ REGLAS ABSOLUTAS:
 
   // ── Intención futura SUAVE: "lo pienso", "ya te aviso", "quizás" ──
   // Sin fecha comprometida → no scheduled_order, solo cambiar estado y no presionar
-  if (BUY_INTENTS.includes(intent) && !isTemplateReply && isSoftFutureIntent(userMessage)) {
+  if ((BUY_INTENTS.includes(intent) || isTemplateReply) && isSoftFutureIntent(userMessage)) {
     await db.updatePipelineState(conversationId, 'future_interest');
     const tSoft = Date.now();
     const softOpts = { ...salesOpts, isFutureInterest: true };
@@ -1017,32 +1065,10 @@ REGLAS ABSOLUTAS:
   }
 
   // ── Intención futura EXPLÍCITA: "para el viernes", "la próxima semana" ──
-  if (BUY_INTENTS.includes(intent) && !isTemplateReply &&
+  if ((BUY_INTENTS.includes(intent) || isTemplateReply || currentState === 'future_interest') &&
       isFutureOrderIntent(userMessage)) {
     try {
-      const todayISO = new Date().toISOString().split('T')[0];
-      const recentTexts = history.slice(-6).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
-      const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
-
-      // Buscar template configurado para follow-up de pedidos agendados
-      const templateName = await db.getSetting(orgId, 'scheduled_order_template') || null;
-
-      await db.createScheduledOrder({
-        orgId,
-        conversationId,
-        phone:        conversation.phone_number,
-        customerName: knownCustomerData?.name || customerName || null,
-        productNotes: extracted.productNotes,
-        desiredDate:  extracted.desiredDate,
-        templateName,
-      });
-
-      await db.updatePipelineState(conversationId, 'scheduled');
-      const dateLabel = formatDateEs(extracted.desiredDate);
-      const replyMsg  = `¡Perfecto, agendado! 📅 El ${dateLabel} te escribimos para confirmar tu pedido de ${extracted.productNotes}. ¡Te esperamos!`;
-      L.agent('orchestrator', 0);
-      L.step('scheduled', `fecha: ${extracted.desiredDate} | producto: ${extracted.productNotes}`);
-      return { response: replyMsg, agentType: 'orchestrator', newState: 'scheduled' };
+      return await scheduleExplicitFutureOrder();
     } catch (err) {
       console.warn('[Pipeline] Error guardando pedido agendado, continuando normalmente:', err.message);
       // Si falla, sigue el flujo normal — no bloquear al cliente
