@@ -220,6 +220,7 @@ test('la consulta al administrador incluye la conversación y explica qué decis
   assert.match(alerts[0].body, /Diva: ¿Ya llegaste a La Serena\?/);
   assert.match(alerts[0].body, /Cliente: 😵‍💫😵‍💫😵‍💫/);
   assert.match(alerts[0].body, /Qué necesito de ti/);
+  assert.doesNotMatch(alerts[0].body, /preguntarme.*contexto/i);
   assert.match(alerts[0].body, /#msg 56977101282/);
 });
 

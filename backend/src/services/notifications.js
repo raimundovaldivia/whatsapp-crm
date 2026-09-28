@@ -28,7 +28,7 @@ function contextSpeaker(message) {
  * Resume los últimos turnos en orden cronológico. Así cada aviso conserva la
  * conversación necesaria para que el administrador pueda decidir qué hacer.
  */
-async function getRecentConversationContext(conversationId, limit = 6) {
+async function getRecentConversationContext(conversationId, limit = 8) {
   try {
     const messages = await db.getLastMessages(conversationId, Math.max(limit + 2, 8));
     return messages
@@ -81,7 +81,7 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
       `📋 *Motivo:* ${reason}`,
       contextStr,
       '',
-      `👉 *Qué necesito de ti:* indícame qué responderle a ${clientName}. También puedes preguntarme qué ocurrió antes de decidir.`,
+      `👉 *Qué necesito de ti:* con el contexto anterior, indícame qué responderle a ${clientName}.`,
       'Cuando me des una instrucción clara, te mostraré qué se envió.',
       '',
       clientPhone ? `_Si tienes varios avisos abiertos, elige este chat con: #msg ${clientPhone} <respuesta>_` : '',
@@ -161,7 +161,7 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
       '',
       contextLines.length ? `🧭 *Contexto reciente:*\n${contextLines.join('\n')}` : '',
       '',
-      `👉 *Qué necesito de ti:* responde qué quieres decirle a ${clientName}, o pregúntame primero por el contexto.`,
+      `👉 *Qué necesito de ti:* con el contexto anterior, responde qué quieres decirle a ${clientName}.`,
       clientPhone ? `_Si hay varios clientes esperando, usa: #msg ${clientPhone} <respuesta>_` : '',
     ].filter(Boolean).join('\n');
 
@@ -260,7 +260,7 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
       '',
       botWasGoingToSay ? `🛑 *Respuesta que Diva detuvo para no enviarla sin tu aprobación:*\n“${cleanContextText(botWasGoingToSay, 240)}”` : '',
       '',
-      `👉 *Qué necesito de ti:* dime qué responderle a ${clientName}. También puedes preguntarme algo sobre la conversación antes de decidir.`,
+      `👉 *Qué necesito de ti:* con el contexto anterior, dime qué responderle a ${clientName}.`,
       'Si escribes *TOMAR*, te paso el control del chat y Diva deja de responder.',
       clientPhone ? `_Con varios avisos abiertos, responde directamente con: #msg ${clientPhone} <respuesta>_` : '',
     ].filter(Boolean).join('\n');

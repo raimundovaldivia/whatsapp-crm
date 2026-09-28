@@ -88,7 +88,7 @@ async function sweepEscalations(now = new Date()) {
             '',
             contextLines.length ? `*Contexto reciente:*\n${contextLines.join('\n')}` : '',
             '',
-            `👉 *Qué necesito de ti:* dime qué responderle a ${who}, o atiéndelo desde el CRM.`,
+            `👉 *Qué necesito de ti:* con el contexto anterior, dime qué responderle a ${who}, o atiéndelo desde el CRM.`,
             `_Si tienes varios avisos abiertos: #msg ${c.phone_number} <respuesta>_`,
           ].filter(Boolean).join('\n'),
           kind: 'help',
