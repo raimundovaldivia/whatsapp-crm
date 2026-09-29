@@ -661,7 +661,11 @@ router.get('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador')
     params.push(parseInt(limit), (parseInt(page) - 1) * parseInt(limit));
 
     const { rows } = await pool.query(query, params);
-    res.json({ success: true, routes: rows });
+    // Rutas antiguas podían guardar la parada sin copiar sus productos. El
+    // panel de auditoría necesita el mismo manifiesto completo que recibe la
+    // app del repartidor, incluso para esas rutas ya existentes.
+    const routes = await Promise.all(rows.map(route => hydrateRouteItems(pool, route, req.orgId)));
+    res.json({ success: true, routes });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

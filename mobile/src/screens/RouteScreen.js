@@ -12,9 +12,10 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput,
-  Image, Alert, ScrollView, Linking, Platform, ActivityIndicator,
+  Image, Alert, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute } from '../services/api';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
@@ -71,6 +72,7 @@ function buildManifest(stops) {
 
 export default function RouteScreen({ route: navRoute, navigation }) {
   const { routeId } = navRoute.params;
+  const insets = useSafeAreaInsets();
 
   const [route,   setRoute]   = useState(null);
   const [loading, setLoading] = useState(true);
@@ -213,15 +215,8 @@ export default function RouteScreen({ route: navRoute, navigation }) {
     });
   }
 
-  function openFullRouteInMaps() {
-    const addrs = stops.map(st => st.fullAddress).filter(Boolean);
-    if (addrs.length === 0) return;
-    const url = Platform.OS === 'ios'
-      ? `maps://maps.apple.com/?daddr=${encodeURIComponent(addrs[addrs.length - 1])}`
-      : `https://www.google.com/maps/dir/${addrs.map(encodeURIComponent).join('/')}`;
-    Linking.openURL(url).catch(() =>
-      Linking.openURL(`https://www.google.com/maps/dir/${addrs.map(encodeURIComponent).join('/')}`)
-    );
+  function openRouteMap() {
+    navigation.navigate('RouteMap', { routeId, routeName: route?.name || 'Mapa de la ruta', labelMode });
   }
 
   async function toggleLoad(itemName) {
@@ -324,8 +319,8 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             <TouchableOpacity onPress={() => setExpOpen(true)} style={s.gastoBtn}>
               <Text style={s.gastoBtnText}>💸 Gasto</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={openFullRouteInMaps} style={s.mapsBtn}>
-              <Text style={s.mapsBtnText}>Maps</Text>
+            <TouchableOpacity onPress={openRouteMap} style={s.mapsBtn}>
+              <Text style={s.mapsBtnText}>Mapa</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -340,6 +335,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
         <FlatList
           data={stops}
           keyExtractor={stopKeyOf}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 48 }}
           refreshing={loading}
           onRefresh={load}
           ListHeaderComponent={(

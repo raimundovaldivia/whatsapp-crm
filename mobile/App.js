@@ -19,6 +19,7 @@ import * as Updates from 'expo-updates';
 import LoginScreen   from './src/screens/LoginScreen';
 import OrdersScreen  from './src/screens/OrdersScreen';
 import RouteScreen   from './src/screens/RouteScreen';
+import RouteMapScreen from './src/screens/RouteMapScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import ExpensesScreen from './src/screens/ExpensesScreen';
 import StopScreen    from './src/screens/StopScreen';
@@ -164,6 +165,12 @@ export default function App() {
                 title: route.params?.stop?.customerName || 'Parada',
                 headerBackTitle: 'Ruta',
               })}
+            />
+
+            <Stack.Screen
+              name="RouteMap"
+              component={RouteMapScreen}
+              options={{ title: 'Mapa de la ruta', headerBackTitle: 'Ruta' }}
             />
 
           </Stack.Navigator>
