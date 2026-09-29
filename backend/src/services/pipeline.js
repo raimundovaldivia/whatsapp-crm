@@ -1526,6 +1526,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     const itemsForDb = priced.items.map(it => ({
       name: it.name, title: it.name, quantity: it.quantity, price: it.price,
       product_id: it.product_id || null, variant_id: it.variant_id || null,
+      ...(it.locked_quote ? { locked_quote: true } : {}),
     }));
     const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city };
     const summary = pricing.summaryBlock(priced);
@@ -1738,7 +1739,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
   for (const it of items) {
     let variantId = it.variant_id || null;
     let price = it.price || null;
-    if (!variantId) {
+    if (!variantId && !it.locked_quote) {
       const resolved = await resolveVariantId(ds, it.name || it.product_name);
       variantId = resolved.variantId;
       price = price || resolved.price;
