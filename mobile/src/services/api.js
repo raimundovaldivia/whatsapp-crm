@@ -168,6 +168,12 @@ export async function updateLoadChecklist(routeId, itemName, checked) {
   return res.data?.loadChecklist || {};
 }
 
+export async function startRoute(routeId) {
+  const client = await getClient();
+  const res = await client.patch(`/api/delivery/routes/${routeId}/start`);
+  return res.data?.route || null;
+}
+
 export async function registerPushToken(expoToken) {
   const client = await getClient();
   await client.post('/api/push/register', { token: expoToken, platform: 'expo' });

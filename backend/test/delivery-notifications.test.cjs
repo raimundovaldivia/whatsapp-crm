@@ -75,7 +75,7 @@ test('si el proveedor informa que la ventana cerró, devuelve un error controlad
 test('la API móvil valida ruta, asignación y pertenencia antes de consultar o enviar', async () => {
   const route = {
     id: 5,
-    status: 'sent',
+    status: 'in_progress',
     orders: [{ source: 'bot', id: 17, phone: '56911112222', customerName: 'Katherine', orderName: '#BOT-17' }],
   };
   const pool = {

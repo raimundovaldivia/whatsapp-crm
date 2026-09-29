@@ -31,7 +31,7 @@ const C = {
 
 const STATUS_LABEL = {
   draft:       'Borrador',
-  sent:        'Nueva',
+  sent:        'Preparar carga',
   in_progress: 'En curso',
   completed:   'Completada',
   cancelled:   'Cancelada',
@@ -241,7 +241,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
               {isActive && (
                 <View style={s.startBtn}>
                   <Text style={s.startBtnText}>
-                    {route.status === 'in_progress' ? '▶  Continuar reparto' : '▶  Comenzar reparto'}
+                    {route.status === 'in_progress' ? '▶  Continuar reparto' : '📦  Consolidar carga'}
                   </Text>
                 </View>
               )}

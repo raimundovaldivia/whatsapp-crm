@@ -116,7 +116,7 @@ function RouteMap({ routes, points = [], ordered = false, warehouse, colors, hei
 
 const STATUS_META = {
   draft:       { label: 'Borrador',     color: '#94a3b8' },
-  sent:        { label: 'Enviada',      color: '#38bdf8' },
+  sent:        { label: 'Preparar carga', color: '#38bdf8' },
   in_progress: { label: 'En progreso',  color: '#fb923c' },
   completed:   { label: 'Completada',   color: '#22c55e' },
   cancelled:   { label: 'Cancelada',    color: '#f87171' },
@@ -1689,6 +1689,7 @@ function HistorialRepartos({ colors }) {
                   <div style={{ display: 'flex', gap: '20px', marginBottom: '12px', color: colors.textMuted, fontSize: '12px' }}>
                     {route.created_at && <span>Creada: {new Date(route.created_at).toLocaleString('es-CL')}</span>}
                     {route.sent_at    && <span>Enviada: {new Date(route.sent_at).toLocaleString('es-CL')}</span>}
+                    {route.started_at && <span>Iniciada: {new Date(route.started_at).toLocaleString('es-CL')}</span>}
                     {route.completed_at && <span>Completada: {new Date(route.completed_at).toLocaleString('es-CL')}</span>}
                   </div>
                   {/* Repartidor */}
@@ -1729,12 +1730,12 @@ function HistorialRepartos({ colors }) {
                   })()}
 
                   {/* ── Agregar pedido a esta ruta ── */}
-                  {!['completed', 'cancelled'].includes(route.status) && (
+                  {['draft', 'sent'].includes(route.status) && (
                     <div style={{ marginTop: '12px', borderTop: `1px dashed ${colors.border}`, paddingTop: '12px' }}>
                       {addFor !== route.id ? (
                         <button onClick={() => openAdd(route)}
                           style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '6px 12px', color: colors.blue, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
-                          + Agregar pedido{route.status === 'sent' || route.status === 'in_progress' ? ' (sale en camino al instante)' : ''}
+                          + Agregar pedido{route.status === 'sent' ? ' (reinicia el checklist de carga)' : ''}
                         </button>
                       ) : (
                         <div style={{ backgroundColor: colors.bg, borderRadius: '10px', border: `1px solid ${colors.border}`, padding: '10px' }}>

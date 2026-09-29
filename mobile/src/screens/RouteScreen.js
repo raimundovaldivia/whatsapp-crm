@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { getRoute, createExpense, getSavedSession, updateLoadChecklist } from '../services/api';
+import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute } from '../services/api';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
 
@@ -77,6 +77,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const [error,   setError]   = useState(null);
   const [showManifest, setShowManifest] = useState(false);
   const [checkBusy, setCheckBusy] = useState('');
+  const [startBusy, setStartBusy] = useState(false);
   // Rótulo de paradas: números (1, 2, 3…) o letras (A, B, C… como Google Maps).
   const [labelMode, setLabelMode] = useState('numbers');
   useFocusEffect(useCallback(() => { loadStopLabelMode().then(setLabelMode); }, []));
@@ -187,6 +188,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const loadChecklist = route?.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
   const financial = route?.financial_summary || {};
   const checkedLoad = manifest.filter(([name]) => !!loadChecklist[name]).length;
+  const loadComplete = manifest.length === 0 || checkedLoad === manifest.length;
   const stateOf    = stop => statuses[stopKeyOf(stop)] || 'pending';
   const colorOf    = stop => STOP_COLORS[stateOf(stop)] || STOP_COLORS.pending;
 
@@ -233,6 +235,76 @@ export default function RouteScreen({ route: navRoute, navigation }) {
       setRoute(current => ({ ...current, load_checklist: { ...(current?.load_checklist || {}), [itemName]: !next } }));
       Alert.alert('No se pudo guardar', err.response?.data?.error || 'Revisa tu conexión e intenta nuevamente.');
     } finally { setCheckBusy(''); }
+  }
+
+  function confirmStartRoute() {
+    if (!loadComplete || checkBusy || startBusy) return;
+    Alert.alert(
+      '¿Carga completa?',
+      `Confirmas que llevas ${manifestUnits} unidades para ${stops.length} paradas. Al continuar, los pedidos quedarán en camino.`,
+      [
+        { text: 'Seguir revisando', style: 'cancel' },
+        { text: 'Iniciar reparto', onPress: async () => {
+          setStartBusy(true);
+          try {
+            const started = await startRoute(routeId);
+            if (started) setRoute(current => ({ ...current, ...started }));
+          } catch (err) {
+            Alert.alert('No se pudo iniciar', err.response?.data?.error || 'Revisa tu conexión e intenta nuevamente.');
+            await load();
+          } finally { setStartBusy(false); }
+        } },
+      ]
+    );
+  }
+
+  if (route?.status === 'sent') {
+    return (
+      <View style={s.container}>
+        <ScrollView contentContainerStyle={s.preStartContent}>
+          <View style={s.preStartHero}>
+            <Text style={s.preStartIcon}>📦</Text>
+            <Text style={s.preStartTitle}>Consolidación de carga</Text>
+            <Text style={s.preStartText}>Revisa y marca cada producto antes de comenzar el reparto.</Text>
+          </View>
+
+          <View style={s.preStartStats}>
+            <View style={s.preStartStat}><Text style={s.preStartStatValue}>{stops.length}</Text><Text style={s.preStartStatLabel}>Paradas</Text></View>
+            <View style={s.preStartStat}><Text style={s.preStartStatValue}>{manifestUnits}</Text><Text style={s.preStartStatLabel}>Unidades</Text></View>
+            <View style={s.preStartStat}><Text style={[s.preStartStatValue, loadComplete && { color: C.green }]}>{checkedLoad}/{manifest.length}</Text><Text style={s.preStartStatLabel}>Revisados</Text></View>
+          </View>
+
+          <View style={[s.manifestCard, { marginHorizontal: 0 }]}>
+            <View style={s.manifestHead}>
+              <View>
+                <Text style={s.manifestTitle}>Checklist obligatorio</Text>
+                <Text style={s.manifestProgress}>{loadComplete ? 'Carga completa ✅' : `Faltan ${manifest.length - checkedLoad} productos por revisar`}</Text>
+              </View>
+            </View>
+            {manifest.map(([name, qty]) => {
+              const checked = !!loadChecklist[name];
+              return (
+                <TouchableOpacity key={name} style={s.manifestRow} onPress={() => toggleLoad(name)} disabled={!!checkBusy || startBusy} activeOpacity={0.75}>
+                  <View style={[s.loadCheck, checked && s.loadCheckOn]}><Text style={s.loadCheckText}>{checked ? '✓' : ''}</Text></View>
+                  <Text style={[s.manifestName, checked && s.manifestNameDone]}>{name}</Text>
+                  <View style={s.quantityBadge}><Text style={s.quantityBadgeText}>{qty}</Text></View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={s.preStartHint}>Al iniciar, la ruta y sus pedidos cambiarán a “En camino”. Después ya no se podrá modificar esta carga.</Text>
+        </ScrollView>
+        <View style={s.preStartFooter}>
+          <TouchableOpacity
+            style={[s.startRouteBtn, (!loadComplete || !!checkBusy || startBusy) && s.startRouteBtnDisabled]}
+            onPress={confirmStartRoute}
+            disabled={!loadComplete || !!checkBusy || startBusy}>
+            {startBusy ? <ActivityIndicator color="#052e16" /> : <Text style={s.startRouteBtnText}>{loadComplete ? '▶  Iniciar reparto' : `Faltan ${manifest.length - checkedLoad} por revisar`}</Text>}
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -293,7 +365,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                   {showManifest && manifest.map(([name, qty]) => {
                     const checked = !!loadChecklist[name];
                     return (
-                      <TouchableOpacity key={name} style={s.manifestRow} onPress={() => toggleLoad(name)} disabled={checkBusy === name} activeOpacity={0.75}>
+                      <TouchableOpacity key={name} style={s.manifestRow} disabled activeOpacity={1}>
                         <View style={[s.loadCheck, checked && s.loadCheckOn]}><Text style={s.loadCheckText}>{checked ? '✓' : ''}</Text></View>
                         <Text style={[s.manifestName, checked && s.manifestNameDone]}>{name}</Text>
                         <Text style={s.manifestQty}>{qty}</Text>
@@ -413,6 +485,22 @@ const s = StyleSheet.create({
   loadCheck:    { width: 25, height: 25, borderRadius: 7, borderWidth: 2, borderColor: C.border, alignItems: 'center', justifyContent: 'center' },
   loadCheckOn:  { backgroundColor: C.green, borderColor: C.green },
   loadCheckText:{ color: '#052e16', fontSize: 16, fontWeight: '900' },
+  quantityBadge:{ minWidth: 42, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: C.bg, alignItems: 'center' },
+  quantityBadgeText:{ color: C.text, fontWeight: '900', fontSize: 16 },
+  preStartContent:{ padding: 16, paddingBottom: 28 },
+  preStartHero:{ alignItems: 'center', paddingVertical: 18, paddingHorizontal: 18 },
+  preStartIcon:{ fontSize: 42, marginBottom: 8 },
+  preStartTitle:{ color: C.text, fontSize: 23, fontWeight: '900', textAlign: 'center' },
+  preStartText:{ color: C.muted, fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 7 },
+  preStartStats:{ flexDirection: 'row', gap: 8, marginBottom: 6 },
+  preStartStat:{ flex: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  preStartStatValue:{ color: C.text, fontSize: 19, fontWeight: '900' },
+  preStartStatLabel:{ color: C.muted, fontSize: 11, marginTop: 2 },
+  preStartHint:{ color: C.muted, fontSize: 12, lineHeight: 18, textAlign: 'center', paddingHorizontal: 10, marginTop: 6 },
+  preStartFooter:{ padding: 14, borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg },
+  startRouteBtn:{ minHeight: 54, borderRadius: 14, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
+  startRouteBtnDisabled:{ backgroundColor: C.border },
+  startRouteBtnText:{ color: '#052e16', fontSize: 16, fontWeight: '900' },
 
   moneyCard:    { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.green + '55', marginHorizontal: 12, marginTop: 10, padding: 14, gap: 10 },
   moneyHead:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

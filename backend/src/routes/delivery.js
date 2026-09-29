@@ -56,6 +56,49 @@ function notifyAssignedDriver(orgId, route, message = null) {
   } catch {}
 }
 
+function routeStops(route) {
+  const optimized = Array.isArray(route?.optimized_route)
+    ? route.optimized_route
+    : JSON.parse(route?.optimized_route || '[]');
+  if (optimized.length) return optimized;
+  return Array.isArray(route?.orders) ? route.orders : JSON.parse(route?.orders || '[]');
+}
+
+function buildLoadManifest(route) {
+  const totals = new Map();
+  for (const stop of routeStops(route)) {
+    for (const item of (stop.items || [])) {
+      const name = String(item.name || item.title || item.product_name || '').trim();
+      const quantity = Number(item.quantity) || 0;
+      if (!name || quantity <= 0) continue;
+      totals.set(name, (totals.get(name) || 0) + quantity);
+    }
+  }
+  return [...totals.entries()].map(([name, quantity]) => ({ name, quantity }));
+}
+
+async function markOrdersEnRoute(client, orgId, orders) {
+  const list = Array.isArray(orders) ? orders : JSON.parse(orders || '[]');
+  const shopifyIds = list.filter(o => o.source === 'shopify').map(o => o.id);
+  const botIds = list.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isFinite);
+  await Promise.all([
+    shopifyIds.length && client.query(
+      `UPDATE shopify_orders SET crm_status = 'en_camino',
+              dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
+         WHERE organization_id = $1 AND shopify_order_id = ANY($2)
+           AND delivered_at IS NULL AND COALESCE(crm_status, '') NOT IN ('en_camino', 'entregado', 'cancelled')`,
+      [orgId, shopifyIds]
+    ),
+    botIds.length && client.query(
+      `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
+              dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
+         WHERE organization_id = $1 AND id = ANY($2)
+           AND delivered_at IS NULL AND status NOT IN ('en_camino', 'entregado', 'paid', 'cancelled')`,
+      [orgId, botIds]
+    ),
+  ].filter(Boolean));
+}
+
 // ─── Geocodificación (dirección → lat/lng) ───────────────────────────────────
 // Convierte direcciones en coordenadas para pintar el mapa. Usa la misma
 // GOOGLE_MAPS_API_KEY que la optimización (Geocoding API) y cachea el resultado
@@ -618,7 +661,7 @@ router.get('/routes/history', async (req, res) => {
       SELECT r.id, r.name, r.status, r.driver_name, r.driver_user_id,
              r.orders, r.optimized_route, r.stop_statuses,
              r.stop_payments, r.stop_notes, r.stop_extras, r.stop_times,
-             r.total_distance, r.total_duration, r.created_at, r.sent_at, r.completed_at,
+             r.total_distance, r.total_duration, r.created_at, r.sent_at, r.started_at, r.completed_at,
              u.name AS driver_user_name
         FROM delivery_routes r
         LEFT JOIN users u ON u.id = r.driver_user_id
@@ -720,7 +763,8 @@ router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'superv
       [Number(req.params.id), req.orgId, driverScope]
     );
     if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada o no asignada a ti' });
-    const stops = Array.isArray(route.optimized_route) && route.optimized_route.length ? route.optimized_route : (route.orders || []);
+    if (route.status !== 'sent') return res.status(409).json({ success: false, error: 'La carga solo se puede modificar antes de iniciar el reparto' });
+    const stops = routeStops(route);
     const names = new Set(stops.flatMap(stop => (stop.items || []).map(item => String(item.name || item.title || item.product_name || '').trim())).filter(Boolean));
     if (!names.has(itemName)) return res.status(400).json({ success: false, error: 'Ese producto no pertenece a la carga de esta ruta' });
     const { rows: [updated] } = await pool.query(
@@ -736,6 +780,60 @@ router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'superv
   }
 });
 
+router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
+  let client;
+  try {
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    const { rows: [route] } = await client.query(
+      `SELECT * FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2
+          AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
+        FOR UPDATE`,
+      [Number(req.params.id), req.orgId, driverScope]
+    );
+    if (!route) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+    if (route.status === 'in_progress') {
+      await client.query('COMMIT');
+      return res.json({ success: true, route });
+    }
+    if (route.status !== 'sent') throw Object.assign(new Error('La ruta no está lista para comenzar'), { status: 409 });
+
+    const eligible = await partitionDispatchable(client, req.orgId, route.orders);
+    if (eligible.skip.length) {
+      throw Object.assign(new Error('La ruta cambió: contiene pedidos entregados, cancelados, pagados o programados para otro día. Pide al administrador que la actualice.'), { status: 409, skipped: eligible.skip });
+    }
+
+    const checklist = route.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
+    const missingItems = buildLoadManifest(route).filter(item => checklist[item.name] !== true);
+    if (missingItems.length) {
+      throw Object.assign(new Error('Completa todo el checklist de carga antes de iniciar el reparto'), { status: 409, missingItems });
+    }
+
+    const { rows: [started] } = await client.query(
+      `UPDATE delivery_routes
+          SET status = 'in_progress', started_at = COALESCE(started_at, NOW())
+        WHERE id = $1 AND organization_id = $2
+        RETURNING *`,
+      [route.id, req.orgId]
+    );
+    await markOrdersEnRoute(client, req.orgId, route.orders);
+    await client.query('COMMIT');
+    res.json({ success: true, route: started });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 500).json({
+      success: false,
+      error: err.message,
+      ...(err.missingItems ? { missingItems: err.missingItems } : {}),
+      ...(err.skipped ? { skipped: err.skipped } : {}),
+    });
+  } finally {
+    client?.release();
+  }
+});
+
 async function getOwnedActiveStop(req, routeId, stopKey) {
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   const { rows: [route] } = await getPool().query(`
@@ -745,7 +843,7 @@ async function getOwnedActiveStop(req, routeId, stopKey) {
        AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
      LIMIT 1`, [Number(routeId), req.orgId, driverScope]);
   if (!route) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
-  if (!['sent', 'in_progress'].includes(route.status)) throw Object.assign(new Error('La ruta no está activa'), { status: 409 });
+  if (route.status !== 'in_progress') throw Object.assign(new Error('Completa la consolidación de carga e inicia la ruta antes de atender pedidos'), { status: 409 });
   const orders = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
   const stop = orders.find(item => `${item.source}_${item.id}` === stopKey);
   if (!stop) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
@@ -1066,26 +1164,6 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
       send ? new Date() : null,
     ]);
 
-    // Si se envía, marcar los pedidos CRM como 'en_camino' (solo los que quedaron)
-    if (send) {
-      const shopifyIds = finalOrders.filter(o => o.source === 'shopify').map(o => o.id);
-      const botIds     = finalOrders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
-      await Promise.all([
-        shopifyIds.length && pool.query(
-          `UPDATE shopify_orders SET crm_status = 'en_camino',
-                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
-           WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
-          [req.orgId, shopifyIds]
-        ),
-        botIds.length && pool.query(
-          `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
-                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
-           WHERE organization_id = $1 AND id = ANY($2)`,
-          [req.orgId, botIds]
-        ),
-      ].filter(Boolean));
-    }
-
     if (skipped.length) console.log(`[Delivery/routes POST] ⏭️ ${skipped.length} pedido(s) ya entregados omitidos al enviar`);
     if (send) notifyAssignedDriver(req.orgId, route);
     res.json({ success: true, route, skipped });
@@ -1132,6 +1210,7 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
     }
 
     const sets = []; const params = [req.orgId, parseInt(id)];
+    if (status === 'in_progress') return res.status(409).json({ success: false, error: 'El reparto debe iniciarse desde la app después de completar el checklist de carga' });
     if (status)      { sets.push(`status = $${params.length + 1}`); params.push(status); }
     if (driverUserId !== undefined) {
       // Reasignar (o desasignar con null). Completa nombre/teléfono desde el usuario.
@@ -1144,7 +1223,11 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
       if (driverPhone !== undefined) { sets.push(`driver_phone = $${params.length + 1}`); params.push(driverPhone || null); }
     }
     if (name)        { sets.push(`name = $${params.length + 1}`); params.push(name); }
-    if (status === 'sent') { sets.push(`sent_at = NOW()`); }
+    if (status === 'sent') {
+      sets.push(`sent_at = NOW()`);
+      sets.push(`started_at = NULL`);
+      sets.push(`load_checklist = '{}'::jsonb`);
+    }
     if (status === 'completed') { sets.push(`completed_at = NOW()`); }
     if (sets.length === 0) return res.status(400).json({ success: false, error: 'Nada que actualizar' });
 
@@ -1153,27 +1236,6 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
       params
     );
     if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
-
-    // Al enviar, marcar pedidos como en_camino
-    if (status === 'sent' && route.orders) {
-      const orders    = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders);
-      const shopifyIds = orders.filter(o => o.source === 'shopify').map(o => o.id);
-      const botIds     = orders.filter(o => o.source === 'bot').map(o => parseInt(o.id));
-      await Promise.all([
-        shopifyIds.length && pool.query(
-          `UPDATE shopify_orders SET crm_status = 'en_camino',
-                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
-             WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
-          [req.orgId, shopifyIds]
-        ),
-        botIds.length && pool.query(
-          `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
-                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
-             WHERE organization_id = $1 AND id = ANY($2)`,
-          [req.orgId, botIds]
-        ),
-      ].filter(Boolean));
-    }
 
     // Al cancelar la ruta: los pedidos que iban EN CAMINO y no alcanzaron a
     // entregarse vuelven a 'por_despachar' para poder salir en otra ruta. No se
@@ -1256,9 +1318,8 @@ router.post('/routes/:id/release', requireRole('owner', 'admin', 'supervisor', '
 //
 // POST /api/delivery/routes/:id/orders   body: { orders: [ {source,id,...} ] }
 //
-// Agrega paradas al final de una ruta existente (borrador, enviada o en curso).
-// Si la ruta ya salió (sent/in_progress), los pedidos nuevos se marcan
-// 'en_camino' al toque. No re-optimiza: van al final del recorrido.
+// Agrega paradas al final de una ruta en borrador o en preparación. Si ya fue
+// enviada, reinicia el checklist para consolidar nuevamente toda la carga.
 router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const pool = getPool();
   const { orders } = req.body;
@@ -1270,6 +1331,8 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
       [parseInt(req.params.id), req.orgId]
     );
     if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+    if (route.status === 'in_progress')
+      return res.status(409).json({ success: false, error: 'La ruta ya comenzó. Crea otra ruta para los pedidos nuevos.' });
     if (['completed', 'cancelled'].includes(route.status))
       return res.status(400).json({ success: false, error: 'No se pueden agregar pedidos a una ruta cerrada. Crea una ruta nueva.' });
 
@@ -1289,36 +1352,16 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
     const newStops  = [...baseStops, ...toAdd.map((o, i) => ({ ...o, stopNumber: baseStops.length + i + 1 }))];
 
     await pool.query(
-      `UPDATE delivery_routes SET orders = $3, optimized_route = $4 WHERE id = $1 AND organization_id = $2`,
+      `UPDATE delivery_routes SET orders = $3, optimized_route = $4, load_checklist = '{}'::jsonb WHERE id = $1 AND organization_id = $2`,
       [route.id, req.orgId, JSON.stringify(newOrders), JSON.stringify(newStops)]
     );
-
-    // Si la ruta ya está en la calle, los nuevos salen 'en_camino' de inmediato.
-    if (['sent', 'in_progress'].includes(route.status)) {
-      const shopIds = toAdd.filter(o => o.source === 'shopify').map(o => o.id);
-      const botIds  = toAdd.filter(o => o.source === 'bot').map(o => parseInt(o.id));
-      await Promise.all([
-        shopIds.length && pool.query(
-          `UPDATE shopify_orders SET crm_status = 'en_camino',
-                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
-             WHERE organization_id = $1 AND shopify_order_id = ANY($2)`,
-          [req.orgId, shopIds]
-        ),
-        botIds.length && pool.query(
-          `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
-                  dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
-             WHERE organization_id = $1 AND id = ANY($2)`,
-          [req.orgId, botIds]
-        ),
-      ].filter(Boolean));
-    }
 
     const { rows: [updated] } = await pool.query(
       `SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2`,
       [route.id, req.orgId]
     );
     console.log(`[Delivery/routes ADD] ✅ ${toAdd.length} pedido(s) agregados a ruta ${route.id} (${route.status})`);
-    if (['sent', 'in_progress'].includes(route.status)) {
+    if (route.status === 'sent') {
       notifyAssignedDriver(req.orgId, updated, `${updated.name || 'Tu ruta'} fue actualizada con ${toAdd.length} parada${toAdd.length === 1 ? '' : 's'} nueva${toAdd.length === 1 ? '' : 's'}`);
     }
     res.json({ success: true, added: toAdd.length, route: updated });
@@ -1473,7 +1516,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
       "SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2 AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL) FOR UPDATE",
       [Number(id), req.orgId, driverScope]);
     if (!owned) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
-    if (!['sent', 'in_progress'].includes(owned.status)) throw Object.assign(new Error('La ruta no está activa'), { status: 409 });
+    if (owned.status !== 'in_progress') throw Object.assign(new Error('Completa la consolidación de carga e inicia la ruta antes de atender pedidos'), { status: 409 });
     const members = Array.isArray(owned.orders) ? owned.orders : JSON.parse(owned.orders || '[]');
     if (!members.some(o => String(o.source) + '_' + String(o.id) === stopKey)) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
     const [kind, orderKey] = splitStopKey(stopKey);
@@ -1496,8 +1539,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
               stop_payments = COALESCE(stop_payments, '{}'::jsonb) || $6::jsonb,
               stop_notes    = COALESCE(stop_notes, '{}'::jsonb) || $7::jsonb,
               stop_extras   = COALESCE(stop_extras, '{}'::jsonb) || $8::jsonb,
-              stop_times    = COALESCE(stop_times, '{}'::jsonb) || jsonb_build_object($1::text, to_jsonb(NOW())),
-              status = CASE WHEN status = 'sent' THEN 'in_progress' ELSE status END
+              stop_times    = COALESCE(stop_times, '{}'::jsonb) || jsonb_build_object($1::text, to_jsonb(NOW()))
         WHERE id = $3 AND organization_id = $4
           AND ($5::int IS NULL OR driver_user_id = $5 OR driver_user_id IS NULL)
         RETURNING stop_statuses, stop_payments, stop_notes, stop_extras, orders`,

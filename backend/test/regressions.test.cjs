@@ -24,9 +24,9 @@ async function fixture() {
     INSERT INTO orders(id,organization_id,conversation_id,items,total_price,status) VALUES(1,1,1,'[]','100','sent'),(2,1,2,'[]','200','sent');
     INSERT INTO shopify_orders(organization_id,shopify_order_id) VALUES(1,'gid://shopify/Order/42');
     INSERT INTO delivery_routes(id,organization_id,name,status,driver_user_id,orders) VALUES
-    (1,1,'Own','sent',10,'[{"source":"bot","id":1}]'),
+    (1,1,'Own','in_progress',10,'[{"source":"bot","id":1}]'),
     (2,1,'Other','sent',11,'[{"source":"bot","id":2}]'),
-    (3,1,'Shopify','sent',10,'[{"source":"shopify","id":"gid://shopify/Order/42"}]');`);
+    (3,1,'Shopify','in_progress',10,'[{"source":"shopify","id":"gid://shopify/Order/42"}]');`);
   const db={getPool:()=>pool};
   return {engine,query,pool,db};
 }
@@ -58,7 +58,7 @@ test('delivery outcomes cancel, reschedule or close a stop without changing the 
   try {
     const router=load('src/routes/delivery.js',{'../db/database':f.db,'../middleware/auth':{requireAuth:noop,requireRole:()=>noop}});
     const call=async(body)=>{const res=response();await handler(router,'patch','/routes/1/stops')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKey:'bot_1',...body}},res);return res;};
-    const reset=()=>f.engine.exec("UPDATE delivery_routes SET status='sent', completed_at=NULL, stop_statuses='{}', stop_notes='{}' WHERE id=1; UPDATE orders SET status='sent', delivery_date=NULL, delivery_note=NULL, last_attempt_at=NULL, last_attempt_status=NULL WHERE id=1;");
+    const reset=()=>f.engine.exec("UPDATE delivery_routes SET status='in_progress', completed_at=NULL, stop_statuses='{}', stop_notes='{}' WHERE id=1; UPDATE orders SET status='sent', delivery_date=NULL, delivery_note=NULL, last_attempt_at=NULL, last_attempt_status=NULL WHERE id=1;");
 
     assert.equal((await call({status:'cancelled'})).code,400);
     assert.equal((await f.query('SELECT status FROM orders WHERE id=1')).rows[0].status,'sent');
@@ -148,7 +148,7 @@ test('driver route shows cash balance, persists load checklist and keeps order h
     const stop={source:'bot',id:1,stopNumber:1,customerName:'Cliente prueba',orderName:'#1',totalPrice:100,items:[{name:'Huevos XL',quantity:2}]};
     await f.query('UPDATE orders SET items=$1,total_price=100 WHERE id=1',[JSON.stringify(stop.items)]);
     await f.query(`UPDATE delivery_routes
-      SET optimized_route=$1, stop_statuses='{"bot_1":"entregado"}', stop_payments='{"bot_1":"efectivo"}'
+      SET status='sent', optimized_route=$1, load_checklist='{}', stop_statuses='{"bot_1":"entregado"}', stop_payments='{"bot_1":"efectivo"}'
       WHERE id=1`,[JSON.stringify([stop])]);
     await f.query("INSERT INTO delivery_expenses(organization_id,route_id,driver_user_id,amount,category) VALUES(1,1,10,30,'Peaje')");
     const router=load('src/routes/delivery.js',{
@@ -164,11 +164,38 @@ test('driver route shows cash balance, persists load checklist and keeps order h
       otherCollected:0,expenseCount:1,expensesTotal:30,netCash:70,
     });
 
+    const blockedStop=response();
+    await handler(router,'patch','/routes/1/stops')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKey:'bot_1',status:'pending'}},blockedStop);
+    assert.equal(blockedStop.code,409);
+    const incompleteStart=response();
+    await handler(router,'patch','/routes/1/start')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{}},incompleteStart);
+    assert.equal(incompleteStart.code,409);
+    assert.equal(incompleteStart.body.missingItems[0].name,'Huevos XL');
+
     const checkRes=response();
     await handler(router,'patch','/routes/1/load-checklist')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{itemName:'Huevos XL',checked:true}},checkRes);
     assert.equal(checkRes.code,200);
     assert.equal(checkRes.body.loadChecklist['Huevos XL'],true);
     assert.equal((await f.query("SELECT load_checklist->>'Huevos XL' checked FROM delivery_routes WHERE id=1")).rows[0].checked,'true');
+
+    const startRes=response();
+    await handler(router,'patch','/routes/1/start')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{}},startRes);
+    assert.equal(startRes.code,200);
+    assert.equal(startRes.body.route.status,'in_progress');
+    assert.ok(startRes.body.route.started_at);
+    let startedOrder=(await f.query('SELECT status,dispatch_count FROM orders WHERE id=1')).rows[0];
+    assert.equal(startedOrder.status,'en_camino');
+    assert.equal(startedOrder.dispatch_count,1);
+
+    const startAgain=response();
+    await handler(router,'patch','/routes/1/start')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{}},startAgain);
+    assert.equal(startAgain.code,200);
+    startedOrder=(await f.query('SELECT dispatch_count FROM orders WHERE id=1')).rows[0];
+    assert.equal(startedOrder.dispatch_count,1);
+
+    const lateCheck=response();
+    await handler(router,'patch','/routes/1/load-checklist')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{itemName:'Huevos XL',checked:false}},lateCheck);
+    assert.equal(lateCheck.code,409);
 
     await f.query("UPDATE delivery_routes SET status='completed',completed_at=NOW() WHERE id=1");
     const historyRes=response();

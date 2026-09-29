@@ -613,6 +613,7 @@ async function setupDatabase() {
         maps_url          TEXT,
         created_at        TIMESTAMPTZ DEFAULT NOW(),
         sent_at           TIMESTAMPTZ,
+        started_at        TIMESTAMPTZ,
         completed_at      TIMESTAMPTZ
       );
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_org_status
@@ -876,7 +877,8 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS stop_notes     JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_times     JSONB DEFAULT '{}',
-        ADD COLUMN IF NOT EXISTS load_checklist JSONB DEFAULT '{}';
+        ADD COLUMN IF NOT EXISTS load_checklist JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS started_at     TIMESTAMPTZ;
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
         ON delivery_routes(organization_id, driver_user_id, status);
     `);
