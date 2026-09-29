@@ -111,8 +111,9 @@ export default function RouteMapScreen({ route: navRoute, navigation }) {
           <View style={{ flex: 1 }}>
             <Text style={s.nextLabel}>SIGUIENTE PARADA</Text>
             <Text style={s.nextName} numberOfLines={1}>{stopLabel(next.stopNumber, labelMode)}. {next.customerName}</Text>
+            <Text style={s.nextAddress} numberOfLines={1}>{next.fullAddress || 'Sin dirección registrada'}</Text>
           </View>
-          <TouchableOpacity style={s.navigateBtn} onPress={navigateNext}><Text style={s.navigateText}>Navegar</Text></TouchableOpacity>
+          <TouchableOpacity style={s.navigateBtn} onPress={navigateNext}><Text style={s.navigateText}>Abrir navegación</Text></TouchableOpacity>
         </View>
       )}
     </View>
@@ -137,9 +138,10 @@ const s = StyleSheet.create({
   map: { flex: 1, backgroundColor: C.bg },
   mapLoading: { ...StyleSheet.absoluteFillObject, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { color: C.muted, fontSize: 12 },
-  footer: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 15, paddingVertical: 10, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.border },
+  footer: { minHeight: 82, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 15, paddingVertical: 10, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.border },
   nextLabel: { color: C.muted, fontSize: 10, fontWeight: '700', letterSpacing: .7 },
   nextName: { color: C.text, fontSize: 14, fontWeight: '800', marginTop: 3 },
+  nextAddress: { color: C.muted, fontSize: 11, marginTop: 3 },
   navigateBtn: { backgroundColor: C.blue, borderRadius: 11, paddingHorizontal: 17, paddingVertical: 11 },
   navigateText: { color: '#082f49', fontSize: 13, fontWeight: '900' },
 });
