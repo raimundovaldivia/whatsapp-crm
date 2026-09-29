@@ -752,6 +752,48 @@ async function setupDatabase() {
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_template_sent_at TIMESTAMPTZ;
     `);
 
+    // Auditoría durable de campañas masivas. Guarda tanto aceptaciones como
+    // rechazos/omisiones para que un HTTP 200 no se confunda con mensajes enviados.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS broadcast_campaigns (
+        id              BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        template_name   TEXT NOT NULL,
+        total_count     INTEGER NOT NULL DEFAULT 0,
+        test_mode       BOOLEAN NOT NULL DEFAULT FALSE,
+        test_phone      TEXT,
+        status          TEXT NOT NULL DEFAULT 'processing'
+                        CHECK(status IN ('processing','completed','interrupted')),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at    TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_broadcast_campaigns_org_created
+        ON broadcast_campaigns(organization_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS broadcast_campaign_recipients (
+        id                  BIGSERIAL PRIMARY KEY,
+        campaign_id         BIGINT NOT NULL REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
+        organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        destination_phone   TEXT,
+        original_phone      TEXT,
+        contact_name        TEXT,
+        template_name       TEXT,
+        result_status       TEXT NOT NULL
+                            CHECK(result_status IN ('accepted','skipped','failed')),
+        error_code          TEXT,
+        error_message       TEXT,
+        error_detail        JSONB,
+        whatsapp_message_id TEXT,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_campaign
+        ON broadcast_campaign_recipients(campaign_id, id);
+      CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_message
+        ON broadcast_campaign_recipients(whatsapp_message_id)
+        WHERE whatsapp_message_id IS NOT NULL;
+    `);
+
     // Migración: precios especiales por empresa
     await client.query(`
       CREATE TABLE IF NOT EXISTS contact_price_overrides (

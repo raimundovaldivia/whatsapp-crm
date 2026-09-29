@@ -1198,6 +1198,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [testMode,       setTestMode]       = useState(false);
   const [testPhoneInput, setTestPhoneInput] = useState(testPhone || '');
   const TEST_PHONE = testPhoneInput.trim();
+  const [campaigns, setCampaigns] = useState([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [expandedCampaign, setExpandedCampaign] = useState(null);
+  const [campaignRecipients, setCampaignRecipients] = useState([]);
   const [prodTerm,  setProdTerm]  = useState('');    // texto del filtro por producto
   const [prodPhones, setProdPhones] = useState(null); // Set de teléfonos que compraron el producto (null = sin filtro)
   const [prodBusy,  setProdBusy]  = useState(false);
@@ -1206,6 +1210,32 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 5000);
   };
+
+  const loadCampaigns = useCallback(() => {
+    setCampaignsLoading(true);
+    return api.get('/reengagement/campaigns?limit=20')
+      .then(res => setCampaigns(res.data.campaigns || []))
+      .catch(() => setCampaigns([]))
+      .finally(() => setCampaignsLoading(false));
+  }, []);
+
+  useEffect(() => { loadCampaigns(); }, [loadCampaigns]);
+
+  async function toggleCampaignDetails(campaignId) {
+    if (String(expandedCampaign) === String(campaignId)) {
+      setExpandedCampaign(null);
+      setCampaignRecipients([]);
+      return;
+    }
+    setExpandedCampaign(campaignId);
+    setCampaignRecipients([]);
+    try {
+      const { data } = await api.get(`/reengagement/campaigns/${campaignId}`);
+      setCampaignRecipients(data.recipients || []);
+    } catch {
+      showToast('No se pudo cargar el detalle de esta campaña', 'error');
+    }
+  }
 
   // Cargar contactos y templates en paralelo
   useEffect(() => {
@@ -1381,6 +1411,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         previewText,
         item: {
           phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
+          originalPhone: phone,
           templateName: selTpl.name,
           languageCode: selTpl.language || 'es',
           components,
@@ -1430,9 +1461,18 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   async function confirmSend() {
     if (!reviewPlan?.entries?.length || sending) return;
     const items = reviewPlan.entries.map(entry => entry.item);
+    let campaignId = null;
+    let campaignStatus = 'completed';
     setSending(true);
     setResults(null);
     try {
+      const created = await api.post('/reengagement/campaigns', {
+        templateName: reviewPlan.templateName,
+        total: items.length,
+        testMode: reviewPlan.testMode,
+        testPhone: reviewPlan.testPhone || null,
+      });
+      campaignId = created.data.campaign.id;
       // Enviar por lotes para mostrar progreso en vivo (contador X/total).
       const CHUNK = 8;
       let sent = 0, failed = 0, skipped = 0;
@@ -1440,7 +1480,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       for (let i = 0; i < items.length; i += CHUNK) {
         const part = items.slice(i, i + CHUNK);
         try {
-          const res = await api.post('/reengagement/send-bulk', { items: part }, { timeout: 600000 });
+          const res = await api.post('/reengagement/send-bulk', { items: part, campaignId }, { timeout: 600000 });
           const r = res.data.results || [];
           sent    += r.filter(x => x.success).length;
           skipped += r.filter(x => x.skipped).length;
@@ -1454,8 +1494,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       showToast(`✅ ${sent} aceptados por WhatsApp${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
       setReviewPlan(null);
     } catch (err) {
+      campaignStatus = 'interrupted';
       showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
     } finally {
+      if (campaignId) {
+        await api.post(`/reengagement/campaigns/${campaignId}/finish`, { status: campaignStatus }).catch(() => {});
+      }
+      await loadCampaigns();
       setSending(false);
       setSendProgress({ done: 0, total: 0 });
     }
@@ -1632,6 +1677,75 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
         </div>
       )}
+
+      {/* Historial durable: muestra lo aceptado por WhatsApp y el motivo de cada rechazo. */}
+      <div style={{ padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: campaigns.length ? 10 : 0 }}>
+          <div>
+            <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 800 }}>Historial de envíos</div>
+            <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>“Aceptado” confirma que WhatsApp recibió el envío; entrega y lectura se actualizan después.</div>
+          </div>
+          <button onClick={loadCampaigns} disabled={campaignsLoading} style={{ border: `1px solid ${colors.border}`, borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textSecondary, padding: '5px 9px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <RefreshCw size={12} className={campaignsLoading ? 'spin' : ''} /> Actualizar
+          </button>
+        </div>
+        {!campaignsLoading && campaigns.length === 0 && (
+          <div style={{ color: colors.textMuted, fontSize: 12, paddingTop: 8 }}>Las próximas campañas quedarán registradas aquí con su resultado completo.</div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {campaigns.map(campaign => {
+            const accepted = Number(campaign.accepted_count || 0);
+            const delivered = Number(campaign.delivered_count || 0);
+            const read = Number(campaign.read_count || 0);
+            const failed = Number(campaign.failed_count || 0);
+            const skipped = Number(campaign.skipped_count || 0);
+            const pending = Number(campaign.pending_count || 0);
+            const isOpen = String(expandedCampaign) === String(campaign.id);
+            return (
+              <div key={campaign.id} style={{ border: `1px solid ${failed ? colors.red + '55' : colors.border}`, borderRadius: 9, backgroundColor: colors.bgCard, overflow: 'hidden' }}>
+                <button onClick={() => toggleCampaignDetails(campaign.id)} style={{ width: '100%', border: 'none', background: 'transparent', color: colors.textPrimary, padding: '10px 12px', cursor: 'pointer', textAlign: 'left' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 800 }}>{campaign.template_name}{campaign.test_mode ? ' · 🧪 Prueba' : ''}</div>
+                      <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>{new Date(campaign.created_at).toLocaleString('es-CL')} · {campaign.total_count} seleccionados</div>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, fontWeight: 700 }}>
+                      {read > 0 && <span style={{ color: colors.green }}>👁 {read} leídos</span>}
+                      {delivered > 0 && <span style={{ color: colors.green }}>✓ {delivered} entregados</span>}
+                      {accepted > 0 && <span style={{ color: colors.blue }}>↗ {accepted} aceptados</span>}
+                      {pending > 0 && <span style={{ color: colors.yellow }}>◷ {pending} sin procesar</span>}
+                      {skipped > 0 && <span style={{ color: colors.textMuted }}>⊘ {skipped} omitidos</span>}
+                      {failed > 0 && <span style={{ color: colors.red }}>✕ {failed} fallidos</span>}
+                    </div>
+                  </div>
+                  {(campaign.reasons || []).slice(0, 2).map((reason, idx) => (
+                    <div key={`${reason.error_code || 'reason'}-${idx}`} style={{ color: reason.result_status === 'failed' ? colors.red : colors.textSecondary, fontSize: 11, marginTop: 6 }}>
+                      {reason.total} {reason.result_status === 'failed' ? 'fallidos' : 'omitidos'}: {reason.error_message || 'Sin detalle'}{reason.error_code ? ` (código ${reason.error_code})` : ''}
+                    </div>
+                  ))}
+                </button>
+                {isOpen && (
+                  <div style={{ borderTop: `1px solid ${colors.border}`, padding: 10, maxHeight: 240, overflowY: 'auto' }}>
+                    {campaignRecipients.length === 0 ? (
+                      <div style={{ color: colors.textMuted, fontSize: 11 }}>Cargando detalle o sin destinatarios registrados.</div>
+                    ) : campaignRecipients.map(recipient => (
+                      <div key={recipient.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 1fr) minmax(90px, auto)', gap: 8, padding: '6px 2px', borderBottom: `1px solid ${colors.border}`, fontSize: 11 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: colors.textPrimary, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis' }}>{recipient.contact_name || recipient.original_phone || recipient.destination_phone}</div>
+                          {(recipient.error_message || recipient.delivery_error) && <div style={{ color: colors.red, marginTop: 2 }}>{recipient.error_message || 'WhatsApp informó un fallo de entrega'}{recipient.error_code ? ` (código ${recipient.error_code})` : ''}</div>}
+                        </div>
+                        <div style={{ color: ['read','delivered'].includes(recipient.current_status) ? colors.green : recipient.current_status === 'failed' ? colors.red : colors.textSecondary, fontWeight: 700, textAlign: 'right' }}>
+                          {({ read: 'Leído', delivered: 'Entregado', sent: 'Aceptado', pending: 'Aceptado', accepted: 'Aceptado', failed: 'Fallido', skipped: 'Omitido' })[recipient.current_status] || recipient.current_status}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Mapeo de variables del template */}
       {!loading && selTpl && tplVarCount > 0 && (

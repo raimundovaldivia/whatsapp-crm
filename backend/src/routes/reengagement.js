@@ -29,6 +29,54 @@ router.use(requireAuth, requireRole('owner', 'admin', 'supervisor'));
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
+function describeBroadcastError(err) {
+  const data = err?.response?.data;
+  const provider = data?.error || (typeof data === 'object' ? data : null);
+  const code = provider?.code != null ? String(provider.code) : null;
+  const providerDetail = provider?.error_data?.details || provider?.message;
+  const friendlyByCode = {
+    '130429': 'WhatsApp limitó temporalmente la cantidad de mensajes enviados.',
+    '131026': 'WhatsApp no pudo entregar el mensaje a ese número.',
+    '131042': 'La cuenta de WhatsApp tiene un problema de facturación o método de pago.',
+    '131047': 'La ventana de atención venció y WhatsApp rechazó el tipo de mensaje.',
+    '131048': 'WhatsApp limitó el envío por calidad o volumen para evitar spam.',
+    '131049': 'Meta omitió el mensaje para proteger la experiencia del usuario.',
+    '132000': 'La cantidad de variables no coincide con el template aprobado.',
+    '132001': 'El template o su idioma no existe para esta cuenta de WhatsApp.',
+    '132012': 'Una variable tiene un formato que no coincide con el template.',
+    '132015': 'Meta pausó el template por baja calidad.',
+    '132016': 'Meta deshabilitó el template.',
+  };
+  return {
+    code,
+    message: friendlyByCode[code] || providerDetail || err?.message || 'Error desconocido al enviar',
+    detail: data && typeof data === 'object' ? data : (err?.message ? { message: err.message } : null),
+  };
+}
+
+async function getBroadcastCampaign(orgId, campaignId) {
+  if (!campaignId) return null;
+  const { rows } = await getPool().query(
+    'SELECT * FROM broadcast_campaigns WHERE id = $1 AND organization_id = $2',
+    [campaignId, orgId]
+  );
+  return rows[0] || null;
+}
+
+async function recordBroadcastRecipient(orgId, campaignId, item, result) {
+  if (!campaignId) return;
+  await getPool().query(
+    `INSERT INTO broadcast_campaign_recipients
+       (campaign_id, organization_id, destination_phone, original_phone, contact_name,
+        template_name, result_status, error_code, error_message, error_detail, whatsapp_message_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [campaignId, orgId, item.phone || null, item.originalPhone || item.phone || null,
+      item.contactName || null, item.templateName || null, result.status,
+      result.errorCode || null, result.errorMessage || null, result.errorDetail || null,
+      result.whatsappMessageId || null]
+  );
+}
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Cache en memoria: sesión actual (respaldo al cache de DB)
@@ -1355,6 +1403,110 @@ router.post('/submit-templates', async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────────────────────────────
+   Historial auditable de campañas masivas
+───────────────────────────────────────────────────────────────────── */
+router.post('/campaigns', async (req, res) => {
+  try {
+    const { templateName, total, testMode = false, testPhone = null } = req.body || {};
+    const totalCount = Number(total);
+    if (!templateName) return res.status(400).json({ success: false, error: 'templateName requerido' });
+    if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 5000) {
+      return res.status(400).json({ success: false, error: 'Cantidad de destinatarios inválida' });
+    }
+    const { rows } = await getPool().query(
+      `INSERT INTO broadcast_campaigns
+         (organization_id, created_by, template_name, total_count, test_mode, test_phone)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [req.orgId, req.userId, templateName, totalCount, !!testMode,
+        testPhone ? db.normalizePhone(testPhone) : null]
+    );
+    res.json({ success: true, campaign: rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/campaigns/:id/finish', async (req, res) => {
+  try {
+    const status = req.body?.status === 'interrupted' ? 'interrupted' : 'completed';
+    const { rows } = await getPool().query(
+      `UPDATE broadcast_campaigns SET status = $1, completed_at = NOW()
+       WHERE id = $2 AND organization_id = $3 RETURNING *`,
+      [status, req.params.id, req.orgId]
+    );
+    if (!rows[0]) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    res.json({ success: true, campaign: rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/campaigns', async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const { rows } = await getPool().query(
+      `SELECT c.*,
+         COUNT(r.id)::int AS processed_count,
+         GREATEST(c.total_count - COUNT(r.id), 0)::int AS pending_count,
+         COUNT(*) FILTER (WHERE r.result_status = 'skipped')::int AS skipped_count,
+         COUNT(*) FILTER (WHERE r.result_status = 'failed' OR m.status = 'failed')::int AS failed_count,
+         COUNT(*) FILTER (WHERE r.result_status = 'accepted' AND m.status = 'read')::int AS read_count,
+         COUNT(*) FILTER (WHERE r.result_status = 'accepted' AND m.status = 'delivered')::int AS delivered_count,
+         COUNT(*) FILTER (WHERE r.result_status = 'accepted' AND COALESCE(m.status, 'sent') IN ('pending','sent'))::int AS accepted_count
+       FROM broadcast_campaigns c
+       LEFT JOIN broadcast_campaign_recipients r ON r.campaign_id = c.id
+       LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
+       WHERE c.organization_id = $1
+       GROUP BY c.id ORDER BY c.created_at DESC LIMIT $2`,
+      [req.orgId, limit]
+    );
+    const ids = rows.map(row => row.id);
+    let reasons = [];
+    if (ids.length) {
+      const result = await getPool().query(
+        `SELECT campaign_id, result_status, error_code, error_message, COUNT(*)::int AS total
+         FROM broadcast_campaign_recipients
+         WHERE campaign_id = ANY($1::bigint[]) AND result_status IN ('failed','skipped')
+         GROUP BY campaign_id, result_status, error_code, error_message
+         ORDER BY total DESC`,
+        [ids]
+      );
+      reasons = result.rows;
+    }
+    res.json({ success: true, campaigns: rows.map(row => ({
+      ...row,
+      reasons: reasons.filter(reason => String(reason.campaign_id) === String(row.id)),
+    })) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/campaigns/:id', async (req, res) => {
+  try {
+    const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
+    if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    const { rows } = await getPool().query(
+      `SELECT r.*,
+         CASE
+           WHEN r.result_status <> 'accepted' THEN r.result_status
+           WHEN m.status IS NOT NULL THEN m.status
+           ELSE 'sent'
+         END AS current_status,
+         m.delivery_error
+       FROM broadcast_campaign_recipients r
+       LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
+       WHERE r.campaign_id = $1 AND r.organization_id = $2
+       ORDER BY r.id`,
+      [req.params.id, req.orgId]
+    );
+    res.json({ success: true, campaign, recipients: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/send
    Soporta dos modos:
      A) Texto libre:  { phone, message }
@@ -1453,13 +1605,22 @@ router.post('/send', async (req, res) => {
      B) Template:     { phone, templateName, languageCode?, components? }
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send-bulk', async (req, res) => {
-  const { items } = req.body;
+  const { items, campaignId = null } = req.body;
   if (!Array.isArray(items) || !items.length) {
     return res.status(400).json({ success: false, error: 'items[] requerido' });
   }
 
+  if (campaignId && !await getBroadcastCampaign(req.orgId, campaignId)) {
+    return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+  }
+
   const wc = await db.getWhatsappConfig(req.orgId);
-  if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+  if (!wc) {
+    await Promise.all(items.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
+      status: 'failed', errorMessage: 'WhatsApp no configurado',
+    })));
+    return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+  }
 
   const templateItems = items.filter(item => item.templateName);
   let templatesByName = new Map();
@@ -1469,15 +1630,28 @@ router.post('/send-bulk', async (req, res) => {
       const templates = await kapsoService.getTemplates(wc);
       templatesByName = new Map(templates.map(template => [template.name, template]));
     } catch (err) {
+      const failure = describeBroadcastError(err);
+      await Promise.all(items.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
+        status: 'failed', errorCode: failure.code, errorMessage: failure.message, errorDetail: failure.detail,
+      })));
       return res.status(502).json({ success: false, error: `No se pudieron validar los templates: ${err.message}` });
     }
   }
 
   const results = [];
   for (const item of items) {
-    if (!await require('../services/commercial').permitted(req.orgId,'marketing')) { results.push({success:false,error:'Contrato no disponible'}); break; }
+    if (!await require('../services/commercial').permitted(req.orgId,'marketing')) {
+      const result = { phone: item.phone, success: false, error: 'Contrato no disponible' };
+      await recordBroadcastRecipient(req.orgId, campaignId, item, {
+        status: 'failed', errorMessage: result.error,
+      });
+      results.push(result);
+      continue;
+    }
     // Normalizar teléfono: con código de país, sin "+"
     item.phone = db.normalizePhone(item.phone);
+    let acceptedByProvider = false;
+    let acceptedMessageId = null;
     try {
       const isTemplate = !!item.templateName;
 
@@ -1485,7 +1659,11 @@ router.post('/send-bulk', async (req, res) => {
       if (isTemplate && !item.force) {
         const alreadySent = await templateSentToday(req.orgId, item.phone);
         if (alreadySent) {
-          results.push({ phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' });
+          const result = { phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' };
+          await recordBroadcastRecipient(req.orgId, campaignId, item, {
+            status: 'skipped', errorMessage: result.error,
+          });
+          results.push(result);
           continue;
         }
       }
@@ -1494,7 +1672,11 @@ router.post('/send-bulk', async (req, res) => {
       if (!item.force) {
         const declined = await customerRecentlyDeclined(req.orgId, item.phone);
         if (declined) {
-          results.push({ phone: item.phone, success: false, skipped: true, error: 'Cliente declinó recientemente' });
+          const result = { phone: item.phone, success: false, skipped: true, error: 'Cliente declinó recientemente' };
+          await recordBroadcastRecipient(req.orgId, campaignId, item, {
+            status: 'skipped', errorMessage: result.error,
+          });
+          results.push(result);
           continue;
         }
       }
@@ -1527,6 +1709,14 @@ router.post('/send-bulk', async (req, res) => {
         savedContent = item.message;
       }
 
+      // Registrar la aceptación antes de guardar la conversación. Así, si el
+      // guardado visual falla después, la campaña sigue mostrando que Meta sí aceptó.
+      acceptedMessageId = sentResult?.messages?.[0]?.id || null;
+      await recordBroadcastRecipient(req.orgId, campaignId, item, {
+        status: 'accepted', whatsappMessageId: acceptedMessageId,
+      });
+      acceptedByProvider = true;
+
       const bulkCached = analysisCache.get(req.orgId);
       const bulkClientData = bulkCached?.data?.find(x => x.phone === item.phone);
       const bulkContactName = bulkClientData?.name ? toTitleCase(bulkClientData.name) : 'Cliente';
@@ -1554,10 +1744,19 @@ router.post('/send-bulk', async (req, res) => {
       // Registrar envío para prevenir duplicados el mismo día
       if (isTemplate) await markTemplateSent(req.orgId, item.phone);
 
-      results.push({ phone: item.phone, success: true });
+      results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId });
     } catch (err) {
-      const metaDetail = err.response?.data ? JSON.stringify(err.response.data) : null;
-      results.push({ phone: item.phone, success: false, error: metaDetail || err.message });
+      if (acceptedByProvider) {
+        console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado local:`, err.message);
+        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId, warning: 'Aceptado por WhatsApp; falló el guardado en la conversación' });
+        continue;
+      }
+      const failure = describeBroadcastError(err);
+      await recordBroadcastRecipient(req.orgId, campaignId, item, {
+        status: 'failed', errorCode: failure.code,
+        errorMessage: failure.message, errorDetail: failure.detail,
+      });
+      results.push({ phone: item.phone, success: false, error: failure.message, errorCode: failure.code });
     }
 
     if (items.indexOf(item) < items.length - 1) {
