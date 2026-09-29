@@ -150,6 +150,75 @@ function matchProduct(name, catalog) {
   return best;
 }
 
+function gcd(a, b) {
+  let x = Math.abs(Number(a) || 0);
+  let y = Math.abs(Number(b) || 0);
+  while (y) [x, y] = [y, x % y];
+  return x;
+}
+
+function packageUnits(title) {
+  const text = norm(title);
+  const match = text.match(/\b(\d{1,4})\s*(?:huevos?|unidades?|uds?|u)\b/i);
+  return match ? Number(match[1]) : null;
+}
+
+function descriptorMatches(candidate, descriptor) {
+  const wanted = tokens(descriptor);
+  if (!wanted.length) return false;
+  const available = new Set(tokens(candidate.title));
+  return wanted.every(token => available.has(token));
+}
+
+/**
+ * Resuelve una presentación promocional que no existe como SKU independiente.
+ * Ejemplo real: "60 Jumbo" en una promo 40/60/100 se representa con tres
+ * bandejas Jumbo de 20, conservando $23.500 como total exacto de la línea.
+ *
+ * Solo se usa cuando el nombre normal no calza con el catálogo. La unidad base
+ * se obtiene del MCD de las opciones de la misma familia, por lo que no se
+ * confunde con una bandeja de 30 aunque 60 también sea divisible por 30.
+ */
+function matchPromotionBundle(raw, catalog, offers = []) {
+  const name = raw?.product_name || raw?.name || raw?.title || '';
+  const normalizedName = norm(name);
+  const rawQty = Math.max(1, parseInt(raw?.quantity, 10) || 1);
+  const explicitUnits = Number(normalizedName.match(/\b(\d{1,4})\b/)?.[1]) || null;
+
+  const offer = offers.find(candidate => {
+    if (!candidate?.units || !candidate?.descriptor || !candidate?.price) return false;
+    if (!descriptorMatches({ title: name }, candidate.descriptor)) return false;
+    return explicitUnits === Number(candidate.units)
+      || (!explicitUnits && rawQty === Number(candidate.units));
+  });
+  if (!offer) return null;
+
+  const family = offers.filter(candidate =>
+    candidate?.units > 0 && descriptorMatches({ title: candidate.descriptor }, offer.descriptor)
+  );
+  const baseUnits = family.length > 1
+    ? family.map(candidate => Number(candidate.units)).reduce(gcd)
+    : 0;
+  if (!baseUnits || Number(offer.units) % baseUnits !== 0) return null;
+
+  const candidates = catalog.filter(candidate =>
+    candidate.available !== false
+    && packageUnits(candidate.title) === baseUnits
+    && descriptorMatches(candidate, offer.descriptor)
+  );
+  if (candidates.length !== 1) return null;
+
+  const selections = explicitUnits ? rawQty : 1;
+  const bundleQty = Number(offer.units) / baseUnits;
+  return {
+    candidate: candidates[0],
+    quantity: bundleQty * selections,
+    unitPrice: Number(offer.price) / bundleQty,
+    lineTotal: Number(offer.price) * selections,
+    offer,
+  };
+}
+
 // ─── Precios ─────────────────────────────────────────────────────────────────
 
 /**
@@ -176,6 +245,7 @@ function unitPriceFor(candidate, qty, specialPrices = {}) {
 function priceItems(items = [], products = [], opts = {}) {
   const catalog = flattenCatalog(products);
   const specialPrices = opts.specialPrices || {};
+  const promotionOffers = Array.isArray(opts.promotionOffers) ? opts.promotionOffers : [];
   const priced = [];
   const unmatched = [];
 
@@ -185,7 +255,26 @@ function priceItems(items = [], products = [], opts = {}) {
     const qty  = Math.max(1, parseInt(raw.quantity, 10) || 1);
     if (!name.trim()) continue;
 
-    const m = matchProduct(name, catalog);
+    let m = matchProduct(name, catalog);
+    const promoBundle = (!m || m.ambiguous)
+      ? matchPromotionBundle(raw, catalog, promotionOffers)
+      : null;
+    if (promoBundle) {
+      priced.push({
+        product_name: promoBundle.candidate.title,
+        name:         promoBundle.candidate.title,
+        title:        promoBundle.candidate.title,
+        quantity:     promoBundle.quantity,
+        price:        promoBundle.unitPrice,
+        line_total:   promoBundle.lineTotal,
+        unit_source:  'promocion',
+        promotion_label: promoBundle.offer.label,
+        product_id:   promoBundle.candidate.product_id,
+        variant_id:   promoBundle.candidate.variant_id,
+        matched:      true,
+      });
+      continue;
+    }
     if (!m) {
       unmatched.push(name);
       priced.push({ product_name: name, name, title: name, quantity: qty, price: Number(raw.price) || 0, unit_source: 'desconocido', matched: false });
@@ -214,14 +303,20 @@ function priceItems(items = [], products = [], opts = {}) {
   // Fusionar líneas repetidas del mismo producto (el cliente dijo "una XL" y luego "otra XL")
   const merged = [];
   for (const it of priced) {
-    const k = it.product_id ? `${it.product_id}:${it.variant_id || ''}` : norm(it.name);
+    const k = it.product_id
+      ? `${it.product_id}:${it.variant_id || ''}:${it.unit_source === 'promocion' ? it.promotion_label : ''}`
+      : norm(it.name);
     const prev = merged.find(x => x._k === k);
-    if (prev) { prev.quantity += it.quantity; continue; }
+    if (prev) {
+      prev.quantity += it.quantity;
+      if (it.line_total != null) prev.line_total = Number(prev.line_total || 0) + Number(it.line_total);
+      continue;
+    }
     merged.push({ ...it, _k: k });
   }
   merged.forEach(x => delete x._k);
 
-  const subtotal = merged.reduce((s, it) => s + it.price * it.quantity, 0);
+  const subtotal = merged.reduce((s, it) => s + (it.line_total != null ? Number(it.line_total) : it.price * it.quantity), 0);
   const maxDiscountPct = Math.min(100, Math.max(0, Number(opts.maxDiscountPct ?? MAX_DISCOUNT_PCT) || 0));
   const discountPct = Math.min(maxDiscountPct, Math.max(0, Number(opts.discountPct) || 0));
   const discountAmount = Math.round(subtotal * discountPct / 100);
@@ -236,7 +331,10 @@ function fmt(n) { return `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}
 
 /** Líneas "📦 2x Bandeja 30 XL — $24.000" para el resumen al cliente. */
 function itemLines(items = []) {
-  return items.map(it => `📦 ${it.quantity}x ${it.name}${it.price ? ` — ${fmt(it.price * it.quantity)}` : ''}`).join('\n');
+  return items.map(it => {
+    const lineTotal = it.line_total != null ? Number(it.line_total) : it.price * it.quantity;
+    return `📦 ${it.quantity}x ${it.name}${it.price ? ` — ${fmt(lineTotal)}` : ''}`;
+  }).join('\n');
 }
 
 /** Texto para el prompt del agente de pedidos: qué hay valorizado y qué no. */
@@ -245,7 +343,9 @@ function pricingContext(pricing) {
   const lines = pricing.items.map(it => {
     if (it.ambiguous) return `- ${it.quantity}x "${it.name}"  ⚠️ AMBIGUO: puede ser ${it.alternatives.join(' o ')} — pregunta al cliente cuál (no muestres el resumen todavía)`;
     if (!it.matched) return `- ${it.quantity}x "${it.name}"  ⚠️ NO está en el catálogo tal cual — pide al cliente que aclare cuál es (no muestres el resumen todavía)`;
-    return `- ${it.quantity}x ${it.name} @ ${fmt(it.price)} c/u = ${fmt(it.price * it.quantity)}`;
+    const lineTotal = it.line_total != null ? Number(it.line_total) : it.price * it.quantity;
+    if (it.unit_source === 'promocion') return `- ${it.quantity}x ${it.name} = ${fmt(lineTotal)} total promocional (${it.promotion_label})`;
+    return `- ${it.quantity}x ${it.name} @ ${fmt(it.price)} c/u = ${fmt(lineTotal)}`;
   });
   const out = [`Subtotal: ${fmt(pricing.subtotal)}`];
   if (pricing.discountPct) out.push(`Descuento acordado: ${pricing.discountPct}% (−${fmt(pricing.discountAmount)})`);
@@ -278,6 +378,7 @@ function normalizeDraft(draft = {}) {
 module.exports = {
   flattenCatalog,
   matchProduct,
+  matchPromotionBundle,
   priceItems,
   pricingContext,
   summaryBlock,

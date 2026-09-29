@@ -1447,6 +1447,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   //     clientes existentes cualquier descuento lo maneja el equipo.
   const priced = pricing.priceItems(updatedDraft.items, products, {
     specialPrices,
+    promotionOffers: promotionContext?.active ? promotionContext.offers : [],
     discountPct: promotionContext?.active && promotionContext.discountPct
       ? promotionContext.discountPct
       : (isLead ? updatedDraft.discount_pct : 0),

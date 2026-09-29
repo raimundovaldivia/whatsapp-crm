@@ -36,6 +36,33 @@ test('el pedido usa el precio promocional exacto y no el catálogo normal', () =
   assert.equal(result.total, 70000);
 });
 
+test('60 Jumbo se convierte en 3 bandejas de 20 y conserva el total promocional', () => {
+  const realProducts = [
+    { id: '20', title: '🥚 Huevos de Campo Tamaño Jumbo – Bandeja 20 Unidades', priceMin: 10000, available: true },
+    { id: '30', title: '30 HUEVOS JUMBO', priceMin: 15000, available: true },
+    { id: '100', title: '🥚 Huevos de Gallina de Campo – Tamaño Jumbo (100 huevos)', priceMin: 45000, available: true },
+    { id: 'olive', title: '🫒 Aceitunas Verdes Enteras – Del Huaso (500 gr)', priceMin: 3700, available: true },
+  ];
+  const promo = promotion.fromHistory([template], realProducts, new Date('2026-09-29T14:00:00.000Z'));
+  const result = pricing.priceItems(
+    [
+      { product_name: '60 Jumbo', quantity: 1 },
+      { product_name: 'Aceitunas Verdes Enteras – Del Huaso (500 gr)', quantity: 1 },
+    ],
+    realProducts,
+    { specialPrices: promo.specialPrices, promotionOffers: promo.offers }
+  );
+
+  assert.equal(result.unmatched.length, 0);
+  assert.equal(result.items[0].product_id, '20');
+  assert.equal(result.items[0].quantity, 3);
+  assert.equal(result.items[0].line_total, 23500);
+  assert.equal(result.items[0].unit_source, 'promocion');
+  assert.equal(result.items[1].price, 3700);
+  assert.equal(result.total, 27200);
+  assert.match(pricing.summaryBlock(result), /3x .*Bandeja 20 Unidades — \$23\.500/i);
+});
+
 test('separa vigencia del precio y condición de entrega del mismo día', () => {
   const active = promotion.fromHistory([template], products, new Date('2026-09-29T14:00:00.000Z'));
   const reply = promotion.futureReply(active);
