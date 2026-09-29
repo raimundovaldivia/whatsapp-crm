@@ -15,6 +15,7 @@ const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
 const pricing      = require('./order-pricing');
+const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 const { isLikelyAutomaticReply, isGiftedStockReply } = require('./inbound-message-policy');
 
@@ -177,8 +178,15 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   let currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
 
+  // El template es una fuente comercial real: precios, vigencia y condiciones
+  // se extraen del mensaje efectivamente enviado, no se dejan a interpretación
+  // del modelo. La promoción activa prevalece sobre el precio de catálogo.
+  const promotionContext = promotions.fromHistory(history, products) || promotions.restore(orderDraft?.promotion);
+  if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
+  const promotionSection = promotions.promptSection(promotionContext);
+
   // Contexto que necesita el agente de pedidos para valorizar el carrito
-  const orderCtx = { products, specialPrices, isLead };
+  const orderCtx = { products, specialPrices, isLead, promotionContext };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
@@ -475,7 +483,7 @@ Reglas estrictas:
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.`;
 
-  const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Agendado vigente? ──────────────────────────────────────────────────────
   // Solo cuenta un pedido agendado cuya fecha NO haya pasado todavía.
@@ -650,6 +658,36 @@ REGLAS ABSOLUTAS:
       agentType: 'orchestrator',
       newState: 'opted_out',
     };
+  }
+
+  // Preguntar si una promo sirve para mañana no es todavía un pedido agendado:
+  // primero se aclara la regla y se pide elegir una presentación. Evita guardar
+  // "cantidad a confirmar" y separa precio promocional de entrega mismo día.
+  if (promotionContext && promotions.isFuturePromotionQuestion(userMessage)) {
+    const response = promotions.futureReply(promotionContext);
+    let nextDraft = orderDraft || {};
+    if (promotionContext.active) {
+      try {
+        const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+        const recentTexts = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
+        const requested = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
+        nextDraft = {
+          ...nextDraft,
+          promotion: promotions.snapshot(promotionContext),
+          ...(requested?.desiredDate ? { delivery_date: String(requested.desiredDate).slice(0, 10) } : {}),
+        };
+      } catch (err) {
+        console.warn('[Pipeline] No se pudo guardar fecha solicitada para promo:', err.message);
+      }
+    }
+    await db.updatePipelineState(
+      conversationId,
+      promotionContext.active ? 'interested' : 'exploring',
+      promotionContext.active ? nextDraft : {}
+    );
+    L.agent('sales', 0);
+    L.step('promotion_schedule_question', `${promotionContext.templateName} active=${promotionContext.active}`);
+    return { response, agentType: 'sales', newState: promotionContext.active ? 'interested' : 'exploring' };
   }
 
   // Ya tiene producto porque se lo regalaron: cerrar sin presión y persistir
@@ -1121,7 +1159,7 @@ REGLAS ABSOLUTAS:
       // Igual que en los otros caminos: el agente de pedidos toma el turno con
       // los datos conocidos, en vez de mandar el texto de ventas tal cual.
       L.agent('orders', Date.now() - tDel);
-      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft || {}, productosTexto, orderCtx);
     }
     await db.updatePipelineState(conversationId, effectiveState, undefined);
     L.agent('sales', Date.now() - tDel);
@@ -1155,14 +1193,14 @@ REGLAS ABSOLUTAS:
       console.warn('[Pipeline] ⚠️  Agente mandó URL de tienda al cerrar venta — forzando collecting_order');
       // Delegar a handleOrderCollection para que pre-llene los datos del cliente
       L.agent('orders', Date.now() - tWarm);
-      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft || {}, productosTexto, orderCtx);
     }
 
     // Si el agente de ventas decidió pasar a pedido, delegar a handleOrderCollection en lugar
     // de usar su respuesta genérica — así el bot pre-llena datos conocidos y no repregunta el nombre
     if (newState === 'collecting_order') {
       L.agent('orders', Date.now() - tWarm);
-      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft || {}, productosTexto, orderCtx);
     }
 
     await db.updatePipelineState(conversationId, newState, undefined);
@@ -1176,7 +1214,7 @@ REGLAS ABSOLUTAS:
   const finalState = goesToOrders(salesResponse) ? 'collecting_order' : (intent === 'interested' ? 'interested' : effectiveState);
   if (finalState === 'collecting_order') {
     L.agent('orders', Date.now() - tGen);
-    return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, {}, productosTexto, orderCtx);
+    return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft || {}, productosTexto, orderCtx);
   }
   await db.updatePipelineState(conversationId, finalState, undefined);
   L.agent('sales', Date.now() - tGen);
@@ -1358,8 +1396,9 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
  * @param {object} orderCtx — { products, specialPrices, isLead }
  */
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx = {}) {
-  const { products = [], specialPrices = {}, isLead = false } = orderCtx;
+  const { products = [], specialPrices = {}, isLead = false, promotionContext = null } = orderCtx;
   orderDraft = pricing.normalizeDraft(orderDraft || {});
+  if (promotionContext) orderDraft.promotion = promotions.snapshot(promotionContext);
 
   // 0a. ¿Se arrepintió a mitad del pedido? Antes el estado quedaba pegado en
   //     collecting_order para siempre y cada mensaje iba al agente de pedidos.
@@ -1399,6 +1438,9 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     ];
   }
   const updatedDraft = await ordersAgent.extractOrderData(extractHistory, orderDraft);
+  if (updatedDraft.delivery_date && !/^\d{4}-\d{2}-\d{2}$/.test(String(updatedDraft.delivery_date))) {
+    delete updatedDraft.delivery_date;
+  }
 
   // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a
   //     leads (es la escalera de bienvenida del prompt de ventas); para
@@ -1428,7 +1470,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   }
 
   // 2. Respuesta del agente de órdenes (con el carrito valorizado en el prompt)
-  const pricingText   = pricing.pricingContext(priced);
+  const promoPricing = promotionContext?.active
+    ? `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal.\n`
+    : '';
+  const pricingText   = promoPricing + pricing.pricingContext(priced);
   const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
 
   // 3. ¿Confirmó?
@@ -1448,7 +1493,8 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     }));
     const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city };
     const summary = pricing.summaryBlock(priced);
-    const who = `👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}`;
+    const deliveryLine = updatedDraft.delivery_date ? `\n📅 Entrega: ${formatDateEs(updatedDraft.delivery_date)}` : '';
+    const who = `👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}${deliveryLine}`;
 
     const saveContact = () => Promise.all([
       db.upsertContact(orgId, {
@@ -1473,6 +1519,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           customer_name: updatedDraft.customer_name,
           shipping_address: JSON.stringify(shippingAddress),
           customer_modified: true,
+          ...(updatedDraft.delivery_date ? { delivery_date: updatedDraft.delivery_date } : {}),
           updated_at: new Date(),
         });
         // Dejar rastro en las notas del pedido (el CRM muestra la marca "modificado por el cliente")
@@ -1521,7 +1568,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           shippingAddress,
           totalPrice:      priced.total,
         });
-        if (updatedDraft.notes) db.updateOrder(order.id, { notes: updatedDraft.notes }).catch(() => {});
+        const orderMeta = {};
+        if (updatedDraft.notes) orderMeta.notes = updatedDraft.notes;
+        if (updatedDraft.delivery_date) orderMeta.delivery_date = updatedDraft.delivery_date;
+        if (Object.keys(orderMeta).length) await db.updateOrder(order.id, orderMeta);
         saveContact();
         await db.updatePipelineState(conversationId, 'done', updatedDraft);
         console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id} (${itemsForDb.length} ítems, total ${priced.total})`);
@@ -1697,6 +1747,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     shopify_draft_id: shopifyResult.shopifyDraftId,
     invoice_url: shopifyResult.invoiceUrl,
     status: 'sent',
+    ...(draft.delivery_date ? { delivery_date: draft.delivery_date } : {}),
   });
 
   return shopifyResult;

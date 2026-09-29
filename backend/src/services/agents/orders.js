@@ -13,7 +13,8 @@ const ORDERS_SYSTEM = `Eres el asistente de pedidos de una tienda. El cliente ya
 2. Productos + cantidades (puede ser MÁS DE UN producto; si no dice cantidad, asume 1 y confírmalo)
 3. Dirección de envío (calle, número, sector/barrio si aplica)
 4. Ciudad
-5. Confirmación final
+5. Fecha de entrega, solo si el cliente pidió explícitamente un día
+6. Confirmación final
 
 ━━━ REGLAS CRÍTICAS ━━━
 - Pide UN dato a la vez. Nunca preguntes 2 cosas en el mismo mensaje.
@@ -56,6 +57,7 @@ Cuando tengas TODOS los datos y todos los ítems estén en el catálogo, muestra
 💰 Total: $[total]
 👤 [Nombre]
 📍 [Dirección], [Ciudad]
+[Si existe delivery_date: 📅 Entrega: fecha solicitada]
 
 ¿Todo correcto?"
 
@@ -139,6 +141,7 @@ Campos posibles:
 - region: región o provincia si la menciona
 - customer_phone: teléfono si el cliente lo menciona explícitamente
 - notes: instrucciones especiales de entrega si las hay (ej: "dejar en conserjería", "tocar timbre 2")
+- delivery_date: fecha solicitada para la entrega en formato YYYY-MM-DD. Hoy es ${new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' })}; convierte "mañana", días de la semana y fechas relativas. Omítelo si no pidió una fecha.
 - discount_pct: porcentaje de descuento SOLO si el Agente lo ofreció explícitamente Y el cliente lo aceptó (ej: 5, 7 o 10). Si no hubo descuento, omite el campo.
 
 REGLAS CRÍTICAS:
@@ -285,7 +288,7 @@ function missingFields(draft) {
  * (evita mostrar IDs internos que confunden al modelo)
  */
 function filterDraftForDisplay(draft) {
-  const { found_in_contacts, found_in_shopify, shopify_customer_id, pricing, subtotal, total, discount_amount, ...display } = draft;
+  const { found_in_contacts, found_in_shopify, shopify_customer_id, pricing, promotion, subtotal, total, discount_amount, ...display } = draft;
   if (Array.isArray(display.items)) {
     display.items = display.items.map(it => ({ product_name: it.name || it.product_name, quantity: it.quantity }));
   }
