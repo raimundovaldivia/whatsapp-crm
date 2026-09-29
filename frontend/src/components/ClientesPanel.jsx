@@ -97,6 +97,7 @@ function ProductSelect({ value, onChange, options, placeholder = '— Selecciona
   );
 }
 import { api } from '../utils/api.js';
+import ClientAddressFields from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 
@@ -798,10 +799,8 @@ export default function ClientesPanel({ onOpenConversation }) {
                                       style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
                                     <input value={addrEmail} onChange={e => setAddrEmail(e.target.value)} placeholder="Email" type="email"
                                       style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
-                                    <input value={addrStreet} onChange={e => setAddrStreet(e.target.value)} placeholder="Dirección (calle y número)"
-                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
-                                    <input value={addrCity} onChange={e => setAddrCity(e.target.value)} placeholder="Ciudad / Comuna"
-                                      style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                                    <ClientAddressFields phone={c.phone} address={addrStreet} city={addrCity}
+                                      onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
                                     {addrErr && <div style={{ color: colors.dangerSoft, fontSize: '11px' }}>{addrErr}</div>}
                                     <div style={{ display: 'flex', gap: '6px' }}>
                                       <button onClick={() => saveAddr(c)} disabled={addrSaving}

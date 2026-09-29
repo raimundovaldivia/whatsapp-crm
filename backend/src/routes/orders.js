@@ -32,7 +32,7 @@ router.use((req, res, next) => {
  */
 router.post('/', async (req, res) => {
   try {
-    const { customerName, phone, address, items, status, notes } = req.body;
+    const { customerName, phone, address, city, items, status, notes } = req.body;
     if (!customerName) return res.status(400).json({ error: 'customerName es requerido' });
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Agrega al menos un producto' });
 
@@ -43,7 +43,7 @@ router.post('/', async (req, res) => {
       price: Number(i.price) || 0,
     })));
 
-    const shippingJson = address ? JSON.stringify({ address1: address }) : null;
+    const shippingJson = address ? JSON.stringify({ address1: address, city: city || '' }) : null;
     const orderStatus  = status || 'nuevo';
     const pool = getPool();
 

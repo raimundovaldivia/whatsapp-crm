@@ -8,6 +8,7 @@ import {
 
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
 import ConciliacionPanel from './ConciliacionPanel.jsx';
+import ClientAddressFields from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 
@@ -1349,10 +1350,8 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
               </div>
               {addrEdit ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <input value={addrStreet} onChange={e => setAddrStreet(e.target.value)} placeholder="Calle y número"
-                    style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
-                  <input value={addrCity} onChange={e => setAddrCity(e.target.value)} placeholder="Ciudad / Comuna"
-                    style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
+                  <ClientAddressFields phone={order.customer_phone || order.phone_number} address={addrStreet} city={addrCity}
+                    onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
                   {addrErr && <div style={{ color: colors.red, fontSize: '11px' }}>{addrErr}</div>}
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <button onClick={saveAddr} disabled={addrSaving} style={{ flex: 1, padding: '5px', borderRadius: '6px', border: 'none', backgroundColor: colors.green, color: '#000', fontSize: '11px', fontWeight: 600, cursor: addrSaving ? 'not-allowed' : 'pointer', opacity: addrSaving ? 0.7 : 1 }}>
@@ -1551,18 +1550,8 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
               {/* Dirección */}
               {editingAddr ? (
                 <div style={{ marginTop: '6px' }}>
-                  <input
-                    value={addrStreet}
-                    onChange={e => setAddrStreet(e.target.value)}
-                    placeholder="Calle y número"
-                    style={{ width: '100%', marginBottom: '4px', padding: '4px 6px', borderRadius: '6px', border: `1px solid ${colors.border}`, background: colors.bgSub, color: colors.textPrimary, fontSize: '12px' }}
-                  />
-                  <input
-                    value={addrCity}
-                    onChange={e => setAddrCity(e.target.value)}
-                    placeholder="Ciudad"
-                    style={{ width: '100%', marginBottom: '6px', padding: '4px 6px', borderRadius: '6px', border: `1px solid ${colors.border}`, background: colors.bgSub, color: colors.textPrimary, fontSize: '12px' }}
-                  />
+                  <ClientAddressFields phone={order.phone} address={addrStreet} city={addrCity}
+                    onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <button onClick={saveAddr} disabled={savingAddr} style={{ flex: 1, padding: '4px', borderRadius: '6px', border: 'none', background: colors.green, color: '#fff', fontSize: '11px', cursor: 'pointer' }}>
                       {savingAddr ? '...' : 'Guardar'}
@@ -1595,7 +1584,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
 // ─── Modal nuevo pedido manual ────────────────────────────────────
 function NewOrderModal({ colors, products, onClose, onSaved }) {
   const EMPTY_ITEM = { name: '', quantity: 1, price: '' };
-  const [form, setForm] = useState({ customerName: '', phone: '', address: '', status: 'nuevo' });
+  const [form, setForm] = useState({ customerName: '', phone: '', address: '', city: '', status: 'nuevo' });
   const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -1628,7 +1617,8 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
       ...f,
       customerName: c.name || f.customerName,
       phone:        c.phone || f.phone,
-      address:      [c.address, c.city].filter(Boolean).join(', ') || f.address,
+      address:      c.address || f.address,
+      city:         c.city || f.city,
     }));
     setSuggestions([]); setSuggestFor(null);
   };
@@ -1664,7 +1654,8 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
         setForm(f => ({
           ...f,
           customerName: f.customerName || c.name || f.customerName,
-          address: f.address || [c.address, c.city].filter(Boolean).join(', ') || f.address,
+          address: f.address || c.address || f.address,
+          city: f.city || c.city || f.city,
         }));
       }
     } catch (_) {}
@@ -1739,7 +1730,8 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
 
           <div>
             <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Dirección</label>
-            <input style={inp} value={form.address} onChange={e => setField('address', e.target.value)} placeholder="Av. Ejemplo 123, La Serena" />
+            <ClientAddressFields phone={form.phone} address={form.address} city={form.city}
+              onAddressChange={value => setField('address', value)} onCityChange={value => setField('city', value)} colors={colors} />
           </div>
 
           <div>

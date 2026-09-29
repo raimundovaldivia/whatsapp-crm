@@ -72,7 +72,7 @@ router.get('/repeat-deliveries', async (req, res) => {
       ),
       pool.query(
         `SELECT customer_phone AS phone, customer_name AS name, shopify_created_at AS d,
-                NULLIF(TRIM(CONCAT_WS(', ', shipping_address1, shipping_city)), '') AS addr
+                shipping_address1 AS street, shipping_city AS city
            FROM shopify_orders
           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
             AND (crm_status = 'entregado' OR delivered_at IS NOT NULL OR LOWER(COALESCE(fulfillment_status,'')) = 'fulfilled')`,
@@ -81,24 +81,28 @@ router.get('/repeat-deliveries', async (req, res) => {
     ]);
     const norm = p => { const n = String(p || '').replace(/\D/g, ''); return /^9\d{8}$/.test(n) ? '56' + n : n; };
     const botAddr = a => {
-      if (!a) return '';
+      if (!a) return { street: '', city: '' };
       let x = a;
-      if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return String(a).trim(); } }
-      if (x && typeof x === 'object') return [x.address || x.address1, x.city].filter(Boolean).join(', ');
-      return String(a).trim();
+      if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return { street: String(a).trim(), city: '' }; } }
+      if (x && typeof x === 'object') return { street: x.address || x.address1 || '', city: x.city || '' };
+      return { street: String(a).trim(), city: '' };
     };
+    const normalized = value => String(value || '').trim().toLocaleLowerCase('es-CL').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const map = new Map();
-    const add = (r, addr) => {
+    const add = (r, location) => {
       const k = norm(r.phone); if (!k) return;
       if (!map.has(k)) map.set(k, { phone: k, name: r.name || '', deliveries: 0, addrs: new Set(), last: null });
       const e = map.get(k);
       e.deliveries++;
-      if (addr) e.addrs.add(addr);
+      const street = String(location?.street || '').trim();
+      const city = String(location?.city || '').trim();
+      // La comuna por sí sola no sirve como dirección de despacho.
+      if (street && normalized(street) !== normalized(city)) e.addrs.add([street, city].filter(Boolean).join(', '));
       if (r.name && r.name.length > (e.name ? e.name.length : 0)) e.name = r.name;
       if (!e.last || new Date(r.d) > new Date(e.last)) e.last = r.d;
     };
     for (const r of bot.rows)  add(r, botAddr(r.addr));
-    for (const r of shop.rows) add(r, r.addr ? String(r.addr).trim() : '');
+    for (const r of shop.rows) add(r, { street: r.street, city: r.city });
     const clientes = [...map.values()]
       .filter(e => e.deliveries > 1)
       .map(e => ({ phone: e.phone, name: e.name, deliveries: e.deliveries, addresses: [...e.addrs], addressCount: e.addrs.size, last: e.last }))

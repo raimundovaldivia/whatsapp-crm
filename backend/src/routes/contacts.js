@@ -105,6 +105,94 @@ router.get('/by-phone', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/contacts/:phone/addresses
+ * Reúne todas las direcciones reales conocidas del cliente (contacto,
+ * pedidos Bot y Shopify). No devuelve registros que sean solo una comuna.
+ */
+router.get('/:phone/addresses', async (req, res) => {
+  try {
+    const pool = require('../db/database').getPool();
+    const phone = String(req.params.phone || '').replace(/\s+/g, '');
+    const variants = [...new Set([
+      phone,
+      phone.startsWith('56') ? phone.slice(2) : null,
+      phone.startsWith('9') && phone.length === 9 ? `56${phone}` : null,
+      !phone.startsWith('+') && phone.startsWith('56') ? `+${phone}` : null,
+    ].filter(Boolean))];
+    const [contacts, botOrders, shopifyOrders] = await Promise.all([
+      pool.query(
+        `SELECT address1, address, city, updated_at
+           FROM contacts
+          WHERE organization_id = $1 AND phone = ANY($2::text[])`,
+        [req.orgId, variants]
+      ),
+      pool.query(
+        `SELECT shipping_address, created_at
+           FROM orders
+          WHERE organization_id = $1 AND customer_phone = ANY($2::text[])
+          ORDER BY created_at DESC`,
+        [req.orgId, variants]
+      ),
+      pool.query(
+        `SELECT shipping_address1, shipping_city, raw_json->'shippingAddress' AS raw_shipping, shopify_created_at
+           FROM shopify_orders
+          WHERE organization_id = $1 AND customer_phone = ANY($2::text[])
+          ORDER BY shopify_created_at DESC`,
+        [req.orgId, variants]
+      ),
+    ]);
+
+    const candidates = [];
+    for (const row of contacts.rows) candidates.push({ address: row.address1 || row.address, city: row.city, source: 'contact', usedAt: row.updated_at });
+    for (const row of botOrders.rows) {
+      let raw = row.shipping_address;
+      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+      candidates.push({ address: raw?.address || raw?.address1, city: raw?.city, source: 'order', usedAt: row.created_at });
+    }
+    for (const row of shopifyOrders.rows) {
+      let raw = row.raw_shipping;
+      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+      candidates.push({
+        address: row.shipping_address1 || raw?.address1 || raw?.address,
+        city: row.shipping_city || raw?.city,
+        source: 'shopify',
+        usedAt: row.shopify_created_at,
+      });
+    }
+
+    const norm = value => String(value || '').trim().toLocaleLowerCase('es-CL').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const cityNames = new Set(candidates.map(item => norm(item.city)).filter(Boolean));
+    const seen = new Set();
+    const addresses = candidates
+      .filter(item => {
+        const street = norm(item.address);
+        if (!street) return false;
+        // Una comuna guardada en el campo calle no es una dirección de entrega.
+        if (street === norm(item.city) || cityNames.has(street)) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.usedAt || 0) - new Date(a.usedAt || 0))
+      .filter(item => {
+        const key = `${norm(item.address)}|${norm(item.city)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(item => ({
+        address: String(item.address).trim(),
+        city: String(item.city || '').trim(),
+        label: [String(item.address).trim(), String(item.city || '').trim()].filter(Boolean).join(', '),
+        source: item.source,
+      }));
+
+    res.json({ success: true, data: addresses });
+  } catch (err) {
+    console.error('[Contacts/addresses]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get('/stats', async (req, res) => {
   try {
     const [total, leads, customers] = await Promise.all([
@@ -608,13 +696,14 @@ router.patch('/:phone', async (req, res) => {
 
     // Upsert en tabla contacts
     const { rows: [contact] } = await pool.query(
-      `INSERT INTO contacts (organization_id, phone, name, email, address, city, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      `INSERT INTO contacts (organization_id, phone, name, email, address, address1, city, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5, $6, NOW())
        ON CONFLICT (organization_id, phone)
        DO UPDATE SET
          name       = CASE WHEN $3 IS NOT NULL THEN $3 ELSE contacts.name END,
          email      = CASE WHEN $4 IS NOT NULL THEN $4 ELSE contacts.email END,
          address    = CASE WHEN $5 IS NOT NULL THEN $5 ELSE contacts.address END,
+         address1   = CASE WHEN $5 IS NOT NULL THEN $5 ELSE contacts.address1 END,
          city       = CASE WHEN $6 IS NOT NULL THEN $6 ELSE contacts.city END,
          updated_at = NOW()
        RETURNING *`,

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
+import ClientAddressFields from './ClientAddressFields.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { buildBodyTemplateComponent, getBodyComponent, getTemplateVariables, renderTemplate } from '../utils/template-renderer.js';
@@ -1168,26 +1169,10 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               />
             </div>
 
-            {/* Dirección */}
-            <div style={{ marginBottom:'14px' }}>
-              <label style={{ fontSize:'12px', color: colors.textSecondary, display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección</label>
-              <input
-                value={editContactAddress}
-                onChange={e => setEditContactAddress(e.target.value)}
-                placeholder="Calle, número, depto..."
-                style={{ width:'100%', padding:'9px 12px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor: colors.bgSub, color: colors.textPrimary, fontSize:'14px', boxSizing:'border-box' }}
-              />
-            </div>
-
-            {/* Ciudad */}
             <div style={{ marginBottom:'22px' }}>
-              <label style={{ fontSize:'12px', color: colors.textSecondary, display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.5px' }}>Ciudad</label>
-              <input
-                value={editContactCity}
-                onChange={e => setEditContactCity(e.target.value)}
-                placeholder="La Serena, Coquimbo..."
-                style={{ width:'100%', padding:'9px 12px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor: colors.bgSub, color: colors.textPrimary, fontSize:'14px', boxSizing:'border-box' }}
-              />
+              <label style={{ fontSize:'12px', color: colors.textSecondary, display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección</label>
+              <ClientAddressFields phone={conversation.phone_number} address={editContactAddress} city={editContactCity}
+                onAddressChange={setEditContactAddress} onCityChange={setEditContactCity} colors={colors} />
             </div>
 
             <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
@@ -1376,12 +1361,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
                     <div style={{ height:'1px', backgroundColor:colors.border, margin:'17px 0' }} />
                     <div style={{ fontSize:'12px', fontWeight:800, color:colors.textPrimary, marginBottom:'9px' }}>Entrega</div>
-                    <div style={{ display:'grid', gridTemplateColumns:'minmax(0,2fr) minmax(110px,1fr)', gap:'8px' }}>
-                      <input value={historyEdit.address} onChange={e => setHistoryEdit(current => ({ ...current, address:e.target.value }))} placeholder="Calle y número"
-                        style={{ minWidth:0, padding:'10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
-                      <input value={historyEdit.city} onChange={e => setHistoryEdit(current => ({ ...current, city:e.target.value }))} placeholder="Ciudad"
-                        style={{ minWidth:0, padding:'10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
-                    </div>
+                    <ClientAddressFields phone={conversation.phone_number} address={historyEdit.address} city={historyEdit.city}
+                      onAddressChange={value => setHistoryEdit(current => ({ ...current, address:value }))}
+                      onCityChange={value => setHistoryEdit(current => ({ ...current, city:value }))} colors={colors} />
                     <label style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'11px', color:colors.textSecondary, fontSize:'11px', cursor:'pointer' }}>
                       <input type="checkbox" checked={historyEdit.updateContact} onChange={e => setHistoryEdit(current => ({ ...current, updateContact:e.target.checked }))} />
                       Usar también como dirección registrada del cliente
@@ -1588,16 +1570,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               {/* Dirección de despacho */}
               <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
                 <div style={{ fontSize:'11px', color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección de despacho</div>
-                <input
-                  value={orderAddress} onChange={e => setOrderAddress(e.target.value)}
-                  placeholder="Calle y número"
-                  style={{ backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', outline:'none' }}
-                />
-                <input
-                  value={orderCity} onChange={e => setOrderCity(e.target.value)}
-                  placeholder="Ciudad / Comuna"
-                  style={{ backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', outline:'none' }}
-                />
+                <ClientAddressFields phone={conversation.phone_number} address={orderAddress} city={orderCity}
+                  onAddressChange={setOrderAddress} onCityChange={setOrderCity} colors={colors} compact />
               </div>
               {/* Descuento */}
               <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
