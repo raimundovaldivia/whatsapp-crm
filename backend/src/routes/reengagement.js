@@ -572,8 +572,6 @@ const DECLINE_PATTERNS = [
   /ya\s+(no\s+quiero|te\s+dije|chao|gracias)/i,
   /no\s+por\s+ahora/i,
   /d[eé]jame\s+en\s+paz/i,
-  /\bno\b.*\bcomprar\b/i,
-  /\bno\b.*\bnecesito\b/i,
   /\bno\s+gracias\b/i,
   /\bno\s+me\s+mand/i,
   /\bya\s+chao\b/i,
