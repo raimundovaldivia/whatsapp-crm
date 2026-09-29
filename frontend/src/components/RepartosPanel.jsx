@@ -214,6 +214,25 @@ function buildManifest(stops) {
 }
 const manifestUnits = (manifest) => manifest.reduce((s, [, q]) => s + q, 0);
 
+// Explica de dónde sale cada total de carga. Mantiene el nombre exacto porque
+// ese mismo valor identifica el ítem persistido en el checklist de la ruta.
+function buildManifestDetails(stops) {
+  const details = new Map();
+  for (const [stopIndex, st] of (stops || []).entries()) {
+    const customer = st.customerName || st.customer_name || `Parada ${stopIndex + 1}`;
+    for (const it of (st.items || [])) {
+      const name = String(it.name || it.title || it.product_name || 'Sin nombre').trim() || 'Sin nombre';
+      const qty = Number(it.quantity) || 0;
+      if (qty <= 0) continue;
+      if (!details.has(name)) details.set(name, { name, quantity: 0, stops: [] });
+      const row = details.get(name);
+      row.quantity += qty;
+      row.stops.push({ customer, quantity: qty, stopNumber: st.stopNumber || stopIndex + 1 });
+    }
+  }
+  return [...details.values()].sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name, 'es'));
+}
+
 // ─── Componente principal ────────────────────────────────────────────────────
 
 export default function RepartosPanel() {
@@ -1538,6 +1557,8 @@ function HistorialRepartos({ colors }) {
   const [addPool,  setAddPool]  = useState([]);     // pedidos pendientes para elegir
   const [addSel,   setAddSel]   = useState(new Set());
   const [addBusy,  setAddBusy]  = useState(false);
+  const [loadBusy, setLoadBusy] = useState('');
+  const [loadBreakdown, setLoadBreakdown] = useState({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1600,6 +1621,30 @@ function HistorialRepartos({ colors }) {
       load();
     } catch (e) {
       alert(e.response?.data?.error || e.message);
+    }
+  }
+
+  async function toggleRouteLoad(route, itemName) {
+    if (route.status !== 'sent' || loadBusy) return;
+    const checklist = route.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
+    const checked = !checklist[itemName];
+    const busyKey = `${route.id}:${itemName}`;
+    setLoadBusy(busyKey);
+    setRoutes(current => current.map(r => r.id === route.id
+      ? { ...r, load_checklist: { ...(r.load_checklist || {}), [itemName]: checked } }
+      : r));
+    try {
+      const { data } = await api.patch(`/delivery/routes/${route.id}/load-checklist`, { itemName, checked });
+      setRoutes(current => current.map(r => r.id === route.id
+        ? { ...r, load_checklist: data.loadChecklist || {} }
+        : r));
+    } catch (e) {
+      setRoutes(current => current.map(r => r.id === route.id
+        ? { ...r, load_checklist: { ...(r.load_checklist || {}), [itemName]: !checked } }
+        : r));
+      alert(e.response?.data?.error || 'No se pudo guardar la revisión de carga');
+    } finally {
+      setLoadBusy('');
     }
   }
 
@@ -1699,6 +1744,71 @@ function HistorialRepartos({ colors }) {
                       {route.driver_name} {route.driver_phone}
                     </div>
                   )}
+                  {/* Carga consolidada y auditoría por parada. El administrador
+                      puede marcarla aquí antes de que el chofer inicie la ruta. */}
+                  {(() => {
+                    const stops = Array.isArray(route.optimized_route) && route.optimized_route.length
+                      ? route.optimized_route
+                      : (Array.isArray(route.orders) ? route.orders : []);
+                    const details = buildManifestDetails(stops);
+                    if (!details.length) return (
+                      <div style={{ marginBottom: '14px', padding: '12px', border: `1px solid ${colors.border}`, borderRadius: '10px', color: colors.red, fontSize: '12px' }}>
+                        Esta ruta no tiene productos detallados. Revisa los pedidos antes de iniciar el reparto.
+                      </div>
+                    );
+                    const checklist = route.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
+                    const reviewed = details.filter(item => checklist[item.name] === true).length;
+                    const canCheck = route.status === 'sent';
+                    const showBreakdown = !!loadBreakdown[route.id];
+                    const totalUnits = details.reduce((sum, item) => sum + item.quantity, 0);
+                    return (
+                      <div style={{ marginBottom: '16px', border: `1px solid ${colors.border}`, borderRadius: '12px', overflow: 'hidden', backgroundColor: colors.bg }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', borderBottom: `1px solid ${colors.border}` }}>
+                          <Package size={16} color={colors.green} />
+                          <div style={{ flex: 1 }}>
+                            <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: '13px' }}>Carga de esta ruta</div>
+                            <div style={{ color: colors.textMuted, fontSize: '11px', marginTop: '2px' }}>
+                              {totalUnits} unidades · {reviewed}/{details.length} productos revisados
+                            </div>
+                          </div>
+                          <button onClick={() => setLoadBreakdown(current => ({ ...current, [route.id]: !showBreakdown }))}
+                            style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '7px', padding: '5px 9px', color: colors.blue, cursor: 'pointer', fontSize: '11px', fontWeight: 700 }}>
+                            {showBreakdown ? 'Ocultar cálculo' : 'Ver cálculo por cliente'}
+                          </button>
+                        </div>
+                        {details.map(item => {
+                          const checked = checklist[item.name] === true;
+                          const busy = loadBusy === `${route.id}:${item.name}`;
+                          return (
+                            <div key={item.name} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                              <button type="button" onClick={() => toggleRouteLoad(route, item.name)} disabled={!canCheck || !!loadBusy}
+                                title={canCheck ? 'Marcar producto como revisado físicamente' : 'La carga solo se modifica antes de iniciar el reparto'}
+                                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', background: 'none', border: 'none', color: colors.textPrimary, cursor: canCheck ? 'pointer' : 'default', textAlign: 'left', opacity: busy ? 0.6 : 1 }}>
+                                <span style={{ width: '20px', height: '20px', borderRadius: '5px', border: `2px solid ${checked ? colors.green : colors.border}`, backgroundColor: checked ? colors.green : 'transparent', color: '#052e16', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, flexShrink: 0 }}>{checked ? '✓' : ''}</span>
+                                <span style={{ flex: 1, fontSize: '13px', textDecoration: checked ? 'line-through' : 'none', color: checked ? colors.textMuted : colors.textPrimary }}>{item.name}</span>
+                                <span style={{ minWidth: '42px', textAlign: 'center', padding: '3px 8px', borderRadius: '999px', backgroundColor: `${colors.green}20`, color: colors.green, fontWeight: 800, fontSize: '13px' }}>{item.quantity}</span>
+                              </button>
+                              {showBreakdown && (
+                                <div style={{ padding: '0 12px 9px 42px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                  {item.stops.map((stop, index) => (
+                                    <div key={`${stop.stopNumber}-${stop.customer}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', color: colors.textMuted, fontSize: '11px' }}>
+                                      <span>{stop.stopNumber}. {stop.customer}</span>
+                                      <strong style={{ color: colors.textSecondary }}>× {stop.quantity}</strong>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <div style={{ padding: '8px 12px', color: colors.textMuted, fontSize: '11px', lineHeight: 1.4 }}>
+                          {canCheck
+                            ? 'Marca cada fila después de contar físicamente la carga. El mismo avance aparecerá en la app del repartidor.'
+                            : 'Esta es la carga registrada al preparar la ruta. El checklist queda en modo consulta después de iniciar.'}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {/* Paradas de la ruta (compacto). El detalle de pagos, notas,
                       ventas extra y cobranza vive en 📦 Despachos — aquí solo
                       qué lleva la ruta y su estado, para operar sobre ella. */}

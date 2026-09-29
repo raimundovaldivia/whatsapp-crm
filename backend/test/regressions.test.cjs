@@ -139,6 +139,9 @@ test('mobile item editor enforces module flag and route membership',async()=>{
     let res=response();await routeItems(request,res);assert.equal(res.code,403);
     enabled=true;res=response();await routeItems({...request,body:{...request.body,id:2}},res);assert.equal(res.code,404);
     res=response();await routeItems(request,res);assert.equal(res.code,200);assert.equal(res.body.total,200);
+    const syncedRoute=(await f.query('SELECT orders FROM delivery_routes WHERE id=1')).rows[0];
+    assert.equal(syncedRoute.orders[0].items[0].name,'Eggs');
+    assert.equal(syncedRoute.orders[0].items[0].quantity,2);
     res=response();await routeItems({...request,method:'GET',query:{source:'bot',id:1}},res);assert.equal(res.body.items[0].quantity,2);
   } finally {await f.engine.close();}
 });
@@ -158,6 +161,12 @@ test('driver route shows cash balance, persists load checklist and keeps order h
       '../middleware/auth':{requireAuth:noop,requireRole:()=>noop},
       '../services/push':{},
     });
+    const routeListRes=response();
+    await handler(router,'get','/routes')({orgId:1,userId:1,role:'owner',query:{}},routeListRes);
+    assert.equal(routeListRes.code,200);
+    const listedRoute=routeListRes.body.routes.find(route=>route.id===1);
+    assert.equal(listedRoute.optimized_route[0].items[0].name,'Huevos XL');
+    assert.deepEqual(listedRoute.load_checklist,{});
     const getRes=response();
     await handler(router,'get','/routes/1')({orgId:1,userId:10,role:'repartidor',params:{id:'1'}},getRes);
     assert.equal(getRes.code,200);

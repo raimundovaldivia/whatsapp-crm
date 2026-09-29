@@ -649,9 +649,10 @@ router.get('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador')
   try {
     let query = `SELECT id, name, status, driver_name, driver_phone, driver_user_id,
                         total_distance, total_duration, maps_url,
-                        created_at, sent_at, completed_at,
+                        created_at, sent_at, started_at, completed_at,
                         jsonb_array_length(orders) AS order_count,
-                        orders, stop_statuses, stop_payments
+                        orders, optimized_route, load_checklist,
+                        stop_statuses, stop_payments
                  FROM delivery_routes
                  WHERE organization_id = $1`;
     const params = [req.orgId];

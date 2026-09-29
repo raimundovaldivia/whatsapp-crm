@@ -29,6 +29,24 @@ async function routeItems(req, res) {
       const total = clean.reduce((s,i) => s+i.quantity*i.price,0);
       if (!Number.isSafeInteger(total)) throw Object.assign(new Error('Total inválido'), {status:400});
       await client.query(`UPDATE ${table} SET items=$1,total_price=$2,delivery_modified=TRUE WHERE ${column}=$3 AND organization_id=$4`, [JSON.stringify(clean),String(total),key,req.orgId]);
+      // La ruta conserva una copia de cada pedido para funcionar sin conexión.
+      // Mantenerla sincronizada evita que la carga muestre cantidades antiguas
+      // después de una corrección hecha por el repartidor o el administrador.
+      const syncStops = rawStops => {
+        const list = Array.isArray(rawStops) ? rawStops : JSON.parse(rawStops || '[]');
+        return list.map(stop => stop.source === source && String(stop.id) === String(id)
+          ? { ...stop, items: clean, totalPrice: total, total_price: total }
+          : stop);
+      };
+      const syncedOrders = syncStops(route.orders);
+      const syncedOptimized = syncStops(route.optimized_route);
+      await client.query(
+        `UPDATE delivery_routes
+            SET orders=$1, optimized_route=$2,
+                load_checklist=CASE WHEN status='sent' THEN '{}'::jsonb ELSE load_checklist END
+          WHERE id=$3 AND organization_id=$4`,
+        [JSON.stringify(syncedOrders), JSON.stringify(syncedOptimized), route.id, req.orgId]
+      );
       result = {items:clean,total};
     }
     await client.query('COMMIT');
