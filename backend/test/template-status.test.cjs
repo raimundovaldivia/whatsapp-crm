@@ -37,6 +37,10 @@ test('template acceptance is pending, failure details survive reload and stale r
  assert.equal(charges.find(o=>o.id==='2').charge_status,null);
  assert.equal(charges.find(o=>o.id==='1').conversation_id,'1');
  assert.ok(Array.isArray(charges.find(o=>o.id==='1').items));
+ assert.equal(charges.find(o=>o.id==='1').client_type,'personal');
+ assert.equal(charges.find(o=>o.id==='1').tax_document_type,'boleta');
+ await query("INSERT INTO orders(id,organization_id,conversation_id,customer_phone,items,total_price,status,payment_method) VALUES (3,1,1,'111','[]',0,'entregado','transferencia')");
+ assert.equal((await collection.getPendingCharges(1)).some(o=>o.id==='3'),false,'zero-value orders are not debt');
  await query("INSERT INTO messages(conversation_id,whatsapp_message_id,direction,content,agent_type,status,created_at) SELECT 1,'historic-unknown','outbound','charge','cobranza','sent',charge_requested_at-INTERVAL '1 second' FROM orders WHERE id=2");
  let reads=0;
  const reconcile=load('src/services/payment-collection.js',{'../db/database':{...db,getWhatsappConfig:async()=>({provider:'kapso'})},'./commercial':{permitted:async()=>true},'./kapso-whatsapp':{getMessageStatus:async id=>{reads++;return {messageId:id,status:'failed',error:[{code:131042}]}}}});

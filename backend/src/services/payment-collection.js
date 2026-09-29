@@ -405,6 +405,10 @@ async function getPendingCharges(orgId) {
             COALESCE(NULLIF(o.customer_name, ''), c.contact_name) AS customer_name,
             COALESCE(NULLIF(o.customer_phone, ''), c.phone_number) AS customer_phone,
             c.id::text                    AS conversation_id,
+            COALESCE(customer_contact.client_type, 'personal') AS client_type,
+            CASE WHEN COALESCE(customer_contact.client_type, 'personal') = 'empresa'
+                 THEN 'factura' ELSE 'boleta' END AS tax_document_type,
+            'not_issued'                  AS tax_document_status,
             o.total_price::text          AS total_price,
             CONCAT('#', o.id::text)      AS order_label,
             o.status                     AS order_status,
@@ -424,9 +428,18 @@ async function getPendingCharges(orgId) {
                 AND pp.status = 'rejected')::int AS proofs_rejected
        FROM orders o
        LEFT JOIN conversations c ON c.id = o.conversation_id
+       LEFT JOIN LATERAL (
+         SELECT co.client_type
+           FROM contacts co
+          WHERE co.organization_id = o.organization_id
+            AND regexp_replace(co.phone, '[^0-9]', '', 'g') = regexp_replace(COALESCE(NULLIF(o.customer_phone, ''), c.phone_number, ''), '[^0-9]', '', 'g')
+          ORDER BY co.updated_at DESC NULLS LAST
+          LIMIT 1
+       ) customer_contact ON TRUE
       WHERE o.organization_id = $1
         AND o.payment_method = 'transferencia'
         AND o.status = 'entregado'
+        AND COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric > 0
         AND NOT EXISTS (
           SELECT 1 FROM payment_proofs pp
            WHERE pp.order_id = o.id
@@ -443,6 +456,10 @@ async function getPendingCharges(orgId) {
               WHERE c.organization_id = s.organization_id
                 AND regexp_replace(c.phone_number, '[^0-9]', '', 'g') = regexp_replace(COALESCE(s.customer_phone, ''), '[^0-9]', '', 'g')
               ORDER BY c.updated_at DESC NULLS LAST, c.id DESC LIMIT 1) AS conversation_id,
+            COALESCE(customer_contact.client_type, 'personal') AS client_type,
+            CASE WHEN COALESCE(customer_contact.client_type, 'personal') = 'empresa'
+                 THEN 'factura' ELSE 'boleta' END AS tax_document_type,
+            'not_issued'                  AS tax_document_status,
             s.total_price::text          AS total_price,
             COALESCE(NULLIF(s.shopify_name, ''), CONCAT('#', s.shopify_order_id)) AS order_label,
             s.crm_status                 AS order_status,
@@ -457,10 +474,19 @@ async function getPendingCharges(orgId) {
             0                            AS proofs_pending,
             0                            AS proofs_rejected
        FROM shopify_orders s
+       LEFT JOIN LATERAL (
+         SELECT co.client_type
+           FROM contacts co
+          WHERE co.organization_id = s.organization_id
+            AND regexp_replace(co.phone, '[^0-9]', '', 'g') = regexp_replace(COALESCE(s.customer_phone, ''), '[^0-9]', '', 'g')
+          ORDER BY co.updated_at DESC NULLS LAST
+          LIMIT 1
+       ) customer_contact ON TRUE
       WHERE s.organization_id = $1
         AND s.payment_method = 'transferencia'
         AND s.crm_status = 'entregado'
         AND s.financial_status IS DISTINCT FROM 'paid'
+        AND COALESCE(NULLIF(s.total_price::text, ''), '0')::numeric > 0
 
       ORDER BY payment_marked_at DESC NULLS LAST, created_at DESC`,
     [orgId]

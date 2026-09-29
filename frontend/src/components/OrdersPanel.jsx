@@ -154,6 +154,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [chargeResults,  setChargeResults]  = useState(null);      // resumen del último envío
   const [chargeSearch,   setChargeSearch]   = useState('');
   const [chargeFilter,   setChargeFilter]   = useState('all');     // all | urgent | proof | uncontacted
+  const [chargeClientType, setChargeClientType] = useState('all'); // all | empresa | personal
 
   // Nuevo pedido manual
   const [showNewOrder,   setShowNewOrder]  = useState(false);
@@ -686,12 +687,18 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
             key, name: o.customer_name || 'Cliente sin nombre', phone: o.customer_phone || '',
             conversationId: o.conversation_id || null, orders: [], total: 0, oldestHours: 0,
             proofsPending: 0, proofsRejected: 0,
+            clientType: o.client_type === 'empresa' ? 'empresa' : 'personal',
+            taxDocumentType: o.tax_document_type === 'factura' ? 'factura' : 'boleta',
           };
           current.orders.push(o);
           current.total += Number(o.total_price) || 0;
           current.oldestHours = Math.max(current.oldestHours, Number(o.hours_owed) || 0);
           current.proofsPending += Number(o.proofs_pending) || 0;
           current.proofsRejected += Number(o.proofs_rejected) || 0;
+          if (o.client_type === 'empresa') {
+            current.clientType = 'empresa';
+            current.taxDocumentType = 'factura';
+          }
           if (!current.conversationId && o.conversation_id) current.conversationId = o.conversation_id;
           groupMap.set(key, current);
         });
@@ -700,6 +707,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         const visibleGroups = allGroups.filter(group => {
           const matchesSearch = !search || `${group.name} ${group.phone} ${group.orders.map(o => o.order_label).join(' ')}`.toLowerCase().includes(search);
           if (!matchesSearch) return false;
+          if (chargeClientType !== 'all' && group.clientType !== chargeClientType) return false;
           if (chargeFilter === 'urgent') return group.oldestHours >= 48;
           if (chargeFilter === 'proof') return group.proofsPending > 0 || group.proofsRejected > 0;
           if (chargeFilter === 'uncontacted') return group.orders.some(o => !o.charge_requested_at);
@@ -709,6 +717,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         const urgentGroups = allGroups.filter(group => group.oldestHours >= 48).length;
         const proofGroups = allGroups.filter(group => group.proofsPending > 0 || group.proofsRejected > 0).length;
         const uncontactedGroups = allGroups.filter(group => group.orders.some(o => !o.charge_requested_at)).length;
+        const companyGroups = allGroups.filter(group => group.clientType === 'empresa');
+        const personalGroups = allGroups.filter(group => group.clientType !== 'empresa');
+        const companyDebt = companyGroups.reduce((sum, group) => sum + group.total, 0);
+        const personalDebt = personalGroups.reduce((sum, group) => sum + group.total, 0);
 
         return (
           <div style={{ flex: 1, overflowY: 'auto', padding: '20px clamp(12px, 3vw, 24px)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -781,6 +793,27 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               </span>
             </div>
 
+            <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', padding:'10px 12px', backgroundColor:colors.bgSecondary, border:`1px solid ${colors.border}`, borderRadius:'10px' }}>
+              <span style={{ color:colors.textMuted, fontSize:'10px', fontWeight:800, textTransform:'uppercase', letterSpacing:'0.04em', marginRight:'2px' }}>Segmento</span>
+              {[
+                ['all', 'Todos', allGroups.length, totalDeuda],
+                ['empresa', 'Empresas', companyGroups.length, companyDebt],
+                ['personal', 'Personas', personalGroups.length, personalDebt],
+              ].map(([key, label, count, amount]) => (
+                <button key={key} onClick={() => setChargeClientType(key)} style={{
+                  padding:'7px 10px', borderRadius:'999px', cursor:'pointer', fontSize:'11px', fontWeight:700,
+                  color:chargeClientType === key ? colors.textPrimary : colors.textSecondary,
+                  backgroundColor:chargeClientType === key ? colors.bgHover : 'transparent',
+                  border:`1px solid ${chargeClientType === key ? colors.tealSoft : colors.border}`,
+                }}>
+                  {label} · {count} · {fmt(amount)}
+                </button>
+              ))}
+              <span style={{ marginLeft:'auto', color:colors.textMuted, fontSize:'10px' }}>
+                Preparado para automatizar por segmento, antigüedad y documento tributario
+              </span>
+            </div>
+
             {/* Aviso de envío automático */}
             {chargeSettings && !chargeSettings.autoSendOnTransfer && charges.length > 0 && (
               <div style={{ fontSize:'12px', color: colors.textMuted, backgroundColor: colors.bgSecondary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'9px 13px' }}>
@@ -847,7 +880,15 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                             return next;
                           })} style={{ cursor:'pointer' }} />
                           <div style={{ flex:'1 1 220px', minWidth:0 }}>
-                            <div style={{ color:colors.textPrimary, fontWeight:800, fontSize:'14px' }}>{group.name}</div>
+                            <div style={{ display:'flex', alignItems:'center', gap:'7px', flexWrap:'wrap' }}>
+                              <span style={{ color:colors.textPrimary, fontWeight:800, fontSize:'14px' }}>{group.name}</span>
+                              <span style={{ padding:'2px 6px', borderRadius:'999px', fontSize:'9px', fontWeight:800, textTransform:'uppercase', color:group.clientType === 'empresa' ? '#93c5fd' : colors.textMuted, border:`1px solid ${group.clientType === 'empresa' ? '#3b82f650' : colors.border}` }}>
+                                {group.clientType === 'empresa' ? 'Empresa' : 'Persona'}
+                              </span>
+                              <span title="La emisión tributaria se integrará en una próxima etapa" style={{ padding:'2px 6px', borderRadius:'999px', fontSize:'9px', fontWeight:700, color:colors.textMuted, border:`1px dashed ${colors.border}` }}>
+                                {group.taxDocumentType === 'factura' ? 'Factura' : 'Boleta'} · próxima etapa
+                              </span>
+                            </div>
                             <div style={{ color:colors.textMuted, fontSize:'11px', marginTop:'2px' }}>{group.phone || 'Sin teléfono'} · {group.orders.length} pedido{group.orders.length === 1 ? '' : 's'}</div>
                           </div>
                           {group.oldestHours > 0 && <span style={{ color:group.oldestHours >= 48 ? colors.amber : colors.textMuted, fontSize:'11px', fontWeight:group.oldestHours >= 48 ? 700 : 400 }}>
