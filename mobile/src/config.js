@@ -13,7 +13,6 @@ export const DEFAULT_API_URL =
   process.env.EXPO_PUBLIC_API_URL || 'https://whatsapp-crm-api-production-f804.up.railway.app';
 
 export const APP_NAME    = 'Despachos';
-export const APP_VERSION = '1.1.0';
 
 // Timeout de las llamadas normales al backend.
 export const API_TIMEOUT_MS = 30000;

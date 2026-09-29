@@ -10,9 +10,13 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import * as Updates from 'expo-updates';
-import { APP_VERSION } from '../config';
+import Constants from 'expo-constants';
 
-const C = { text: '#94a3b8', dim: '#475569', green: '#22c55e', card: '#1e293b', border: '#334155' };
+const C = { text: '#cbd5e1', dim: '#94a3b8', green: '#22c55e', card: '#1e293b', border: '#475569' };
+
+function installedVersion() {
+  return Constants.expoConfig?.version || Constants.manifest2?.extra?.expoClient?.version || 'desconocida';
+}
 
 function describe() {
   if (!Updates.isEnabled) return { line: 'OTA: no disponible en este APK (hay que compilar uno nuevo)', ok: false };
@@ -37,7 +41,10 @@ export default function UpdateStatus({ style }) {
     try {
       const r = await Updates.checkForUpdateAsync();
       if (!r.isAvailable) {
-        Alert.alert('Al día', 'Ya tienes la última versión publicada.');
+        Alert.alert(
+          'Sin actualizaciones compatibles',
+          `Tienes instalada la versión ${installedVersion()}. No hay una actualización OTA compatible. Las versiones que agregan funciones nativas deben instalarse desde Google Play.`,
+        );
         return;
       }
       await Updates.fetchUpdateAsync();
@@ -53,7 +60,7 @@ export default function UpdateStatus({ style }) {
 
   return (
     <View style={[s.wrap, style]}>
-      <Text style={s.version}>v{APP_VERSION}</Text>
+      <Text style={s.version}>Versión instalada {installedVersion()}</Text>
       <Text style={[s.line, !info.ok && s.warn]} numberOfLines={2}>{info.line}</Text>
       <TouchableOpacity onPress={check} disabled={busy} style={s.btn} activeOpacity={0.7}>
         {busy ? <ActivityIndicator size="small" color={C.green} /> : <Text style={s.btnText}>Buscar actualización</Text>}
@@ -63,10 +70,10 @@ export default function UpdateStatus({ style }) {
 }
 
 const s = StyleSheet.create({
-  wrap:    { alignItems: 'center', marginTop: 20, gap: 4, paddingHorizontal: 8 },
-  version: { color: C.dim, fontSize: 12 },
-  line:    { color: C.dim, fontSize: 11, textAlign: 'center' },
+  wrap:    { alignItems: 'center', marginTop: 20, gap: 6, paddingHorizontal: 8 },
+  version: { color: C.text, fontSize: 13, fontWeight: '700' },
+  line:    { color: C.dim, fontSize: 12, lineHeight: 17, textAlign: 'center' },
   warn:    { color: '#fb923c' },
-  btn:     { marginTop: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
-  btnText: { color: C.text, fontSize: 12, fontWeight: '600' },
+  btn:     { marginTop: 8, paddingHorizontal: 16, paddingVertical: 9, borderRadius: 9, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
+  btnText: { color: C.text, fontSize: 13, fontWeight: '700' },
 });
