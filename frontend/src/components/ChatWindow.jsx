@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
@@ -69,6 +69,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [showHistory, setShowHistory]       = useState(false);
   const [historyData, setHistoryData]       = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyEdit, setHistoryEdit]       = useState(null);
+  const [historyEditSaving, setHistoryEditSaving] = useState(false);
+  const [historyEditError, setHistoryEditError] = useState('');
 
   const openHistory = useCallback(async () => {
     const phone = conversation.phone_number;
@@ -84,6 +87,83 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       setHistoryLoading(false);
     }
   }, [conversation.phone_number]);
+
+  const reloadHistory = useCallback(async () => {
+    const phone = conversation.phone_number;
+    if (!phone) return;
+    const res = await api.get(`/orders/history/${encodeURIComponent(phone)}`);
+    setHistoryData(res.data?.data || null);
+  }, [conversation.phone_number]);
+
+  const openHistoryEdit = useCallback((order) => {
+    let items = [];
+    try { items = Array.isArray(order.items) ? order.items : JSON.parse(order.items || '[]'); } catch { items = []; }
+    if (!Array.isArray(items)) items = [];
+    let address = '';
+    let city = '';
+    if (order._source === 'shopify') {
+      address = order.shipping_address1 || '';
+      city = order.shipping_city || '';
+    } else {
+      let raw = order.shipping_address;
+      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+      address = raw?.address || raw?.address1 || '';
+      city = raw?.city || '';
+    }
+    setHistoryEdit({
+      source: order._source,
+      id: order._source === 'shopify' ? order.shopify_order_id : order.id,
+      dbId: order.id,
+      label: order.shopify_name || `#${order.id}`,
+      address,
+      city,
+      updateContact: true,
+      items: items.map((item, index) => ({
+        key: `${Date.now()}_${index}`,
+        name: item.name || item.title || '',
+        quantity: Math.max(1, Number(item.quantity) || 1),
+        price: Math.max(0, Number(item.price) || 0),
+      })),
+    });
+    setHistoryEditError('');
+  }, []);
+
+  const updateHistoryItem = useCallback((key, field, value) => {
+    setHistoryEdit(current => current ? {
+      ...current,
+      items: current.items.map(item => item.key === key ? { ...item, [field]: value } : item),
+    } : current);
+  }, []);
+
+  const saveHistoryEdit = useCallback(async () => {
+    if (!historyEdit) return;
+    const address = historyEdit.address.trim();
+    const cleanItems = historyEdit.items.map(item => ({
+      name: item.name.trim(),
+      quantity: Math.max(0, Math.round(Number(item.quantity) || 0)),
+      price: Math.max(0, Math.round(Number(item.price) || 0)),
+    })).filter(item => item.name && item.quantity > 0);
+    if (!address) { setHistoryEditError('Ingresa la dirección de entrega.'); return; }
+    if (!cleanItems.length) { setHistoryEditError('El pedido debe tener al menos un producto.'); return; }
+    setHistoryEditSaving(true);
+    setHistoryEditError('');
+    try {
+      await api.patch('/orders/history-edit', {
+        source: historyEdit.source,
+        id: historyEdit.id,
+        items: cleanItems,
+        address,
+        city: historyEdit.city.trim(),
+        updateContact: historyEdit.updateContact,
+      });
+      await reloadHistory();
+      setHistoryEdit(null);
+    } catch (err) {
+      setHistoryEditError(err.response?.data?.error || 'No se pudo guardar el pedido.');
+    } finally {
+      setHistoryEditSaving(false);
+    }
+  }, [historyEdit, reloadHistory]);
 
   // Order modal state
   const [showOrderModal, setShowOrderModal]   = useState(false);
@@ -1208,7 +1288,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                         };
                         const st = STATUS_STYLE[fs] || { l: (fs || '—').replace(/_/g,' ').toLowerCase().replace(/^\w/, m=>m.toUpperCase()), c: colors.textSecondary };
                         return (
-                          <div key={i} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
+                          <div key={`${o._source}_${o.id || o.shopify_order_id || i}`} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
                             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
                               <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                                 <span style={{ fontSize:'10px', padding:'1px 6px', borderRadius:'4px', backgroundColor: isShopify ? '#0d2020' : colors.bgSub, color: isShopify ? colors.tealSoft : colors.textSecondary, border:`1px solid ${isShopify ? '#1a3d3d' : colors.border}` }}>
@@ -1217,6 +1297,13 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                                 <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}{o.shopify_name ? ` · ${o.shopify_name}` : ''}</span>
                               </div>
                               <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => openHistoryEdit(o)}
+                                  title="Editar productos y dirección"
+                                  style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'4px 8px', borderRadius:'7px', border:`1px solid ${colors.border}`, backgroundColor:colors.bgSub, color:colors.textPrimary, cursor:'pointer', fontSize:'10px', fontWeight:700 }}>
+                                  <Pencil size={11} /> Editar
+                                </button>
                                 <span style={{ fontSize:'10px', fontWeight:700, padding:'2px 8px', borderRadius:'999px', color:st.c, backgroundColor:`${st.c}1f`, border:`1px solid ${st.c}55`, whiteSpace:'nowrap' }}>{st.l}</span>
                                 <span style={{ fontSize:'13px', fontWeight:700, color:colors.textPrimary }}>${Number(o.total_price||0).toLocaleString('es-CL')}</span>
                               </div>
@@ -1251,6 +1338,68 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 </>
               )}
             </div>
+
+            {historyEdit && (
+              <div onClick={e => { e.stopPropagation(); if (!historyEditSaving) setHistoryEdit(null); }} style={{ position:'fixed', inset:0, zIndex:1100, backgroundColor:'rgba(0,0,0,0.68)', display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+                <div onClick={e => e.stopPropagation()} style={{ width:'100%', maxWidth:'560px', maxHeight:'88vh', overflowY:'auto', backgroundColor:colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:'14px', boxShadow:'0 24px 70px rgba(0,0,0,.55)' }}>
+                  <div style={{ position:'sticky', top:0, zIndex:1, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'15px 18px', backgroundColor:colors.bgPanel, borderBottom:`1px solid ${colors.border}` }}>
+                    <div>
+                      <div style={{ color:colors.textPrimary, fontWeight:800, fontSize:'15px' }}>Editar pedido {historyEdit.label}</div>
+                      <div style={{ color:colors.textSecondary, fontSize:'11px', marginTop:'2px' }}>Productos, cantidades, precios y lugar de entrega</div>
+                    </div>
+                    <button type="button" onClick={() => setHistoryEdit(null)} disabled={historyEditSaving} style={{ border:0, background:'none', color:colors.textSecondary, cursor:'pointer', padding:'4px' }}><X size={18} /></button>
+                  </div>
+
+                  <div style={{ padding:'16px 18px' }}>
+                    <div style={{ fontSize:'12px', fontWeight:800, color:colors.textPrimary, marginBottom:'9px' }}>Productos</div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+                      {historyEdit.items.map((item, index) => (
+                        <div key={item.key} style={{ display:'grid', gridTemplateColumns:'minmax(0,1fr) 76px 105px 34px', gap:'7px', alignItems:'center' }}>
+                          <input value={item.name} onChange={e => updateHistoryItem(item.key, 'name', e.target.value)} placeholder="Producto"
+                            style={{ minWidth:0, padding:'9px 10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
+                          <input type="number" min="1" value={item.quantity} onChange={e => updateHistoryItem(item.key, 'quantity', e.target.value)} aria-label={`Cantidad producto ${index + 1}`}
+                            style={{ minWidth:0, padding:'9px 8px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
+                          <input type="number" min="0" value={item.price} onChange={e => updateHistoryItem(item.key, 'price', e.target.value)} aria-label={`Precio producto ${index + 1}`}
+                            style={{ minWidth:0, padding:'9px 8px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
+                          <button type="button" onClick={() => setHistoryEdit(current => ({ ...current, items:current.items.filter(row => row.key !== item.key) }))}
+                            title="Quitar producto" style={{ width:'34px', height:'34px', borderRadius:'8px', border:`1px solid ${colors.dangerSoft}55`, backgroundColor:`${colors.dangerSoft}14`, color:colors.dangerSoft, cursor:'pointer' }}><X size={14} /></button>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginTop:'10px' }}>
+                      <button type="button" onClick={() => setHistoryEdit(current => ({ ...current, items:[...current.items, { key:`new_${Date.now()}`, name:'', quantity:1, price:0 }] }))}
+                        style={{ display:'inline-flex', alignItems:'center', gap:'5px', padding:'7px 10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bgSub, color:colors.textPrimary, cursor:'pointer', fontSize:'11px', fontWeight:700 }}><Plus size={13} /> Agregar producto</button>
+                      <div style={{ color:colors.textPrimary, fontSize:'12px', fontWeight:800 }}>
+                        Total: ${historyEdit.items.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.price) || 0), 0).toLocaleString('es-CL')}
+                      </div>
+                    </div>
+
+                    <div style={{ height:'1px', backgroundColor:colors.border, margin:'17px 0' }} />
+                    <div style={{ fontSize:'12px', fontWeight:800, color:colors.textPrimary, marginBottom:'9px' }}>Entrega</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'minmax(0,2fr) minmax(110px,1fr)', gap:'8px' }}>
+                      <input value={historyEdit.address} onChange={e => setHistoryEdit(current => ({ ...current, address:e.target.value }))} placeholder="Calle y número"
+                        style={{ minWidth:0, padding:'10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
+                      <input value={historyEdit.city} onChange={e => setHistoryEdit(current => ({ ...current, city:e.target.value }))} placeholder="Ciudad"
+                        style={{ minWidth:0, padding:'10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
+                    </div>
+                    <label style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'11px', color:colors.textSecondary, fontSize:'11px', cursor:'pointer' }}>
+                      <input type="checkbox" checked={historyEdit.updateContact} onChange={e => setHistoryEdit(current => ({ ...current, updateContact:e.target.checked }))} />
+                      Usar también como dirección registrada del cliente
+                    </label>
+
+                    {historyEditError && <div style={{ marginTop:'12px', padding:'9px 11px', borderRadius:'8px', color:colors.dangerSoft, backgroundColor:`${colors.dangerSoft}12`, border:`1px solid ${colors.dangerSoft}44`, fontSize:'12px' }}>{historyEditError}</div>}
+                    <div style={{ display:'flex', justifyContent:'flex-end', gap:'9px', marginTop:'17px' }}>
+                      <button type="button" onClick={() => setHistoryEdit(null)} disabled={historyEditSaving}
+                        style={{ padding:'9px 14px', borderRadius:'8px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, cursor:'pointer' }}>Cancelar</button>
+                      <button type="button" onClick={saveHistoryEdit} disabled={historyEditSaving}
+                        style={{ padding:'9px 15px', borderRadius:'8px', border:0, backgroundColor:colors.green, color:'white', fontWeight:800, cursor:historyEditSaving?'wait':'pointer', opacity:historyEditSaving?.7:1 }}>
+                        {historyEditSaving ? 'Guardando…' : 'Guardar cambios'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

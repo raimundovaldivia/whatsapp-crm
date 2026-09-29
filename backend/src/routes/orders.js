@@ -22,7 +22,7 @@ function setSocketIO(socketIO) { io = socketIO; }
 router.use(requireAuth);
 router.use((req, res, next) => {
   if (req.method === 'GET') return next();
-  const deliveryEdit = req.method === 'PATCH' && (/^\/(set-items|reschedule)$/.test(req.path) || /^\/(?:shopify\/)?\d+\/address$/.test(req.path));
+  const deliveryEdit = req.method === 'PATCH' && (/^\/(set-items|history-edit|reschedule)$/.test(req.path) || /^\/(?:shopify\/)?\d+\/address$/.test(req.path));
   return requireRole('owner', 'admin', 'supervisor', ...(deliveryEdit ? ['coordinador'] : []))(req, res, next);
 });
 
@@ -218,7 +218,7 @@ router.get('/history/:phone', async (req, res) => {
     if (!phone.startsWith('+') && phone.startsWith('56'))    variants.push('+' + phone);
 
     const { rows: shopifyOrders } = await pool.query(`
-      SELECT shopify_order_id, shopify_name, customer_name, total_price,
+      SELECT id, shopify_order_id, shopify_name, customer_name, total_price,
              financial_status, fulfillment_status, shopify_created_at, items,
              shipping_address1, shipping_city
       FROM shopify_orders
@@ -331,7 +331,7 @@ router.get('/shopify', async (req, res) => {
  */
 router.patch('/shopify/:id/address', async (req, res) => {
   try {
-    const { address1, city, province } = req.body;
+    const { address1, city, province, updateContact = false } = req.body;
     if (!address1?.trim()) return res.status(400).json({ error: 'address1 es requerido' });
 
     const { rows } = await getPool().query(
@@ -346,12 +346,14 @@ router.patch('/shopify/:id/address', async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: 'Orden no encontrada' });
 
-    // También actualizar el contacto si no tiene dirección
-    if (rows[0].customer_phone) {
+    // Cuando se edita desde el historial, el usuario puede convertir esta
+    // dirección en la dirección vigente del cliente.
+    if (updateContact && rows[0].customer_phone) {
       await getPool().query(
         `UPDATE contacts SET
-           address1   = COALESCE(address1, $2),
-           city       = COALESCE(city, $3),
+           address1   = $2,
+           address    = $2,
+           city       = $3,
            updated_at = NOW()
          WHERE organization_id = $1 AND phone = $4`,
         [req.orgId, address1.trim(), city?.trim() || null, rows[0].customer_phone]
@@ -421,7 +423,7 @@ router.patch('/:id/items', async (req, res) => {
  */
 router.patch('/:id/address', async (req, res) => {
   try {
-    const { address, city } = req.body;
+    const { address, city, updateContact = false } = req.body;
     if (!address) return res.status(400).json({ error: 'address es requerido' });
     const addrJson = JSON.stringify({ address, city: city || '' });
     const { rows: [order] } = await getPool().query(
@@ -429,6 +431,17 @@ router.patch('/:id/address', async (req, res) => {
       [addrJson, parseInt(req.params.id), req.orgId]
     );
     if (!order) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (updateContact && order.customer_phone) {
+      await getPool().query(
+        `UPDATE contacts SET
+           address1 = $2,
+           address = $2,
+           city = $3,
+           updated_at = NOW()
+         WHERE organization_id = $1 AND phone = $4`,
+        [req.orgId, address.trim(), city?.trim() || null, order.customer_phone]
+      );
+    }
     res.json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -846,6 +859,92 @@ router.patch('/set-items', async (req, res) => {
   } catch (err) {
     console.error('[Orders/set-items]', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/orders/history-edit
+ * Edita productos y dirección como una sola operación desde el historial.
+ * Body: { source, id, items, address, city, updateContact }
+ */
+router.patch('/history-edit', async (req, res) => {
+  const { source, id, items, address, city, updateContact = false } = req.body;
+  if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
+  if (!Array.isArray(items)) return res.status(400).json({ success: false, error: 'items debe ser un array' });
+  if (!String(address || '').trim()) return res.status(400).json({ success: false, error: 'La dirección es requerida' });
+
+  const clean = items
+    .map(item => ({
+      name: String(item.name || item.title || '').trim().slice(0, 200),
+      title: String(item.name || item.title || '').trim().slice(0, 200),
+      quantity: Math.max(0, Math.round(Number(item.quantity) || 0)),
+      price: Math.max(0, Math.round(Number(item.price) || 0)),
+    }))
+    .filter(item => item.name && item.quantity > 0);
+  if (!clean.length) return res.status(400).json({ success: false, error: 'El pedido debe tener al menos un producto' });
+
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const total = clean.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    let order;
+    if (source === 'shopify') {
+      const { rows } = await client.query(
+        `UPDATE shopify_orders
+            SET items = $1::jsonb,
+                total_price = $2,
+                shipping_address1 = $3,
+                shipping_city = $4,
+                delivery_modified = TRUE,
+                synced_at = NOW()
+          WHERE shopify_order_id = $5 AND organization_id = $6
+          RETURNING *`,
+        [JSON.stringify(clean), total, address.trim(), String(city || '').trim() || null, String(id), req.orgId]
+      );
+      order = rows[0];
+    } else {
+      const { rows } = await client.query(
+        `UPDATE orders
+            SET items = $1,
+                total_price = $2,
+                shipping_address = $3,
+                delivery_modified = TRUE,
+                updated_at = NOW()
+          WHERE id = $4 AND organization_id = $5
+          RETURNING *`,
+        [JSON.stringify(clean), String(total), JSON.stringify({ address: address.trim(), city: String(city || '').trim() }), parseInt(id), req.orgId]
+      );
+      order = rows[0];
+    }
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    }
+
+    if (updateContact && order.customer_phone) {
+      const phone = String(order.customer_phone).replace(/\s+/g, '');
+      const variants = [...new Set([
+        phone,
+        phone.startsWith('56') ? phone.slice(2) : null,
+        phone.startsWith('9') && phone.length === 9 ? `56${phone}` : null,
+        !phone.startsWith('+') && phone.startsWith('56') ? `+${phone}` : null,
+      ].filter(Boolean))];
+      await client.query(
+        `UPDATE contacts
+            SET address1 = $3, address = $3, city = $4, updated_at = NOW()
+          WHERE organization_id = $1 AND phone = ANY($2::text[])`,
+        [req.orgId, variants, address.trim(), String(city || '').trim() || null]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, total, items: clean, order });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[Orders/history-edit]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
   }
 });
 
