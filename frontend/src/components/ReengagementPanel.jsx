@@ -1202,6 +1202,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [campaignsLoading, setCampaignsLoading] = useState(true);
   const [expandedCampaign, setExpandedCampaign] = useState(null);
   const [campaignRecipients, setCampaignRecipients] = useState([]);
+  const [followUpPreview, setFollowUpPreview] = useState(null);
+  const [followUpBusy, setFollowUpBusy] = useState(false);
   const [prodTerm,  setProdTerm]  = useState('');    // texto del filtro por producto
   const [prodPhones, setProdPhones] = useState(null); // Set de teléfonos que compraron el producto (null = sin filtro)
   const [prodBusy,  setProdBusy]  = useState(false);
@@ -1225,16 +1227,43 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     if (String(expandedCampaign) === String(campaignId)) {
       setExpandedCampaign(null);
       setCampaignRecipients([]);
+      setFollowUpPreview(null);
       return;
     }
     setExpandedCampaign(campaignId);
     setCampaignRecipients([]);
+    setFollowUpPreview(null);
     try {
       const { data } = await api.get(`/reengagement/campaigns/${campaignId}`);
       setCampaignRecipients(data.recipients || []);
     } catch {
       showToast('No se pudo cargar el detalle de esta campaña', 'error');
     }
+  }
+
+  async function previewFollowUp(campaignId) {
+    setFollowUpBusy(true);
+    try {
+      const { data } = await api.get(`/reengagement/campaigns/${campaignId}/follow-up-preview`);
+      setFollowUpPreview({ campaignId, ...data });
+    } catch (error) {
+      showToast(error.response?.data?.error || 'No se pudo evaluar el seguimiento', 'error');
+    } finally { setFollowUpBusy(false); }
+  }
+
+  async function scheduleFollowUp(campaign) {
+    setFollowUpBusy(true);
+    try {
+      const { data } = await api.post(`/reengagement/campaigns/${campaign.id}/follow-up`, {
+        templateName: campaign.template_name,
+        languageCode: 'es',
+      });
+      const when = new Date(data.job.scheduled_for).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' });
+      showToast(`Seguimiento programado para ${data.eligible} personas · ${when}`);
+      setFollowUpPreview(previous => previous ? { ...previous, scheduled: true, job: data.job } : previous);
+    } catch (error) {
+      showToast(error.response?.data?.error || 'No se pudo programar el seguimiento', 'error');
+    } finally { setFollowUpBusy(false); }
   }
 
   // Cargar contactos y templates en paralelo
@@ -1726,6 +1755,40 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 </button>
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${colors.border}`, padding: 10, maxHeight: 240, overflowY: 'auto' }}>
+                    {!campaign.test_mode && read > 0 && (
+                      <div style={{ border: `1px solid ${colors.border}`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: colors.bgApp }}>
+                        <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>Seguimiento inteligente para mañana</div>
+                        <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>
+                          Sólo quienes leyeron, no respondieron, no hicieron pedido, no recibieron otro template y no están dados de baja.
+                        </div>
+                        {String(followUpPreview?.campaignId) !== String(campaign.id) ? (
+                          <button onClick={() => previewFollowUp(campaign.id)} disabled={followUpBusy}
+                            style={{ marginTop: 7, border: `1px solid ${colors.blue}`, borderRadius: 6, background: 'transparent', color: colors.blue, padding: '5px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>
+                            {followUpBusy ? 'Evaluando…' : 'Revisar quiénes califican'}
+                          </button>
+                        ) : (
+                          <div style={{ marginTop: 7 }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, color: colors.textSecondary, fontSize: 11 }}>
+                              <span>👁 {followUpPreview.summary.read} leyeron</span>
+                              <span style={{ color: colors.green, fontWeight: 800 }}>✓ {followUpPreview.summary.eligible} califican</span>
+                              <span>⊘ {followUpPreview.summary.excluded} excluidos</span>
+                            </div>
+                            {Object.entries(followUpPreview.summary.reasons || {}).length > 0 && (
+                              <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>
+                                {Object.entries(followUpPreview.summary.reasons).map(([reason, total]) => `${total} ${({ respondio: 'respondieron', hizo_pedido: 'hicieron pedido', recibio_otro_template: 'recibieron otro template', opt_out: 'dados de baja' })[reason] || reason}`).join(' · ')}
+                              </div>
+                            )}
+                            {!followUpPreview.scheduled && followUpPreview.summary.eligible > 0 && (
+                              <button onClick={() => scheduleFollowUp(campaign)} disabled={followUpBusy}
+                                style={{ marginTop: 7, border: 'none', borderRadius: 6, background: colors.green, color: '#fff', padding: '6px 9px', cursor: 'pointer', fontSize: 11, fontWeight: 800 }}>
+                                {followUpBusy ? 'Programando…' : `Programar ${followUpPreview.summary.eligible} para mañana 10:00`}
+                              </button>
+                            )}
+                            {followUpPreview.scheduled && <div style={{ color: colors.green, fontSize: 11, fontWeight: 800, marginTop: 6 }}>✓ Seguimiento programado</div>}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {campaignRecipients.length === 0 ? (
                       <div style={{ color: colors.textMuted, fontSize: 11 }}>Cargando detalle o sin destinatarios registrados.</div>
                     ) : campaignRecipients.map(recipient => (

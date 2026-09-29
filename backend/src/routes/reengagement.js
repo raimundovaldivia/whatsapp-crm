@@ -68,10 +68,12 @@ async function recordBroadcastRecipient(orgId, campaignId, item, result) {
   await getPool().query(
     `INSERT INTO broadcast_campaign_recipients
        (campaign_id, organization_id, destination_phone, original_phone, contact_name,
-        template_name, result_status, error_code, error_message, error_detail, whatsapp_message_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        template_name, language_code, template_components, result_status,
+        error_code, error_message, error_detail, whatsapp_message_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [campaignId, orgId, item.phone || null, item.originalPhone || item.phone || null,
-      item.contactName || null, item.templateName || null, result.status,
+      item.contactName || null, item.templateName || null, item.languageCode || 'es',
+      item.components || null, result.status,
       result.errorCode || null, result.errorMessage || null, result.errorDetail || null,
       result.whatsappMessageId || null]
   );
@@ -1501,6 +1503,67 @@ router.get('/campaigns/:id', async (req, res) => {
     res.json({ success: true, campaign, recipients: rows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/campaigns/:id/follow-up-preview', async (req, res) => {
+  try {
+    const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
+    if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    const audience = await require('../services/campaign-follow-up').getFollowUpAudience(req.orgId, req.params.id);
+    const eligible = audience.filter(item => item.eligible);
+    const excluded = audience.filter(item => !item.eligible);
+    const { rows: [job] } = await getPool().query(
+      `SELECT * FROM broadcast_followup_jobs
+        WHERE organization_id=$1 AND source_campaign_id=$2 AND status <> 'cancelled'
+        ORDER BY created_at DESC LIMIT 1`,
+      [req.orgId, campaign.id]
+    );
+    const reasonCounts = {};
+    excluded.flatMap(item => item.reasons).forEach(reason => { reasonCounts[reason] = (reasonCounts[reason] || 0) + 1; });
+    res.json({
+      success: true,
+      campaign,
+      summary: { read: audience.length, eligible: eligible.length, excluded: excluded.length, reasons: reasonCounts },
+      job: job || null,
+      scheduled: Boolean(job && ['scheduled','processing','completed'].includes(job.status)),
+      recipients: audience.map(item => ({
+        phone: item.phone,
+        contactName: item.contact_name,
+        eligible: item.eligible,
+        reasons: item.reasons,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/campaigns/:id/follow-up', async (req, res) => {
+  try {
+    const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
+    if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    const audience = await require('../services/campaign-follow-up').getFollowUpAudience(req.orgId, req.params.id);
+    const eligible = audience.filter(item => item.eligible).length;
+    if (!eligible) return res.status(400).json({ success: false, error: 'No hay personas elegibles para seguimiento' });
+    const templateName = String(req.body?.templateName || campaign.template_name || '').trim();
+    if (!templateName) return res.status(400).json({ success: false, error: 'Falta el template de seguimiento' });
+    const { rows: [job] } = await getPool().query(`
+      INSERT INTO broadcast_followup_jobs
+        (organization_id,source_campaign_id,template_name,language_code,scheduled_for,conditions,created_by)
+      VALUES ($1,$2,$3,$4,
+        (date_trunc('day',NOW() AT TIME ZONE 'America/Santiago') + INTERVAL '1 day 10 hours') AT TIME ZONE 'America/Santiago',
+        $5,$6)
+      ON CONFLICT(source_campaign_id,scheduled_for) DO UPDATE
+        SET template_name=EXCLUDED.template_name,language_code=EXCLUDED.language_code,
+            conditions=EXCLUDED.conditions,created_by=EXCLUDED.created_by,
+            status='scheduled',last_error=NULL,completed_at=NULL
+      RETURNING *
+    `, [req.orgId, campaign.id, templateName, req.body?.languageCode || 'es',
+      require('../services/campaign-follow-up').DEFAULT_CONDITIONS, req.userId]);
+    res.json({ success: true, job, eligible });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

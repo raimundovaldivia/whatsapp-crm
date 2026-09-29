@@ -334,9 +334,10 @@ Reglas estrictas para responder sobre este pedido:
 
       // Si Logística está contratada, vincular el pedido con su ruta activa.
       // La respuesta al cliente usa esta fuente real y evita inventar una hora.
-      if (deliveryEnabled && activeOrder.status === 'en_camino') {
+      if (deliveryEnabled) {
         const { rows: routeRows } = await getPool().query(
-          `SELECT id, name, status, driver_name, orders, stop_statuses
+          `SELECT id, name, status, driver_name, orders, optimized_route,
+                  stop_statuses, stop_times, sent_at
              FROM delivery_routes r
             WHERE r.organization_id = $1
               AND r.status IN ('sent','in_progress')
@@ -923,16 +924,44 @@ REGLAS ABSOLUTAS:
     let response;
     if (schedFuture) {
       response = `Tu pedido quedó agendado para el ${schedFuture} 📅.${win} Ese día te avisamos cuando vaya saliendo. ¿Algo más?`;
-    } else if (activeOrder.status === 'en_camino') {
+    } else if (activeDeliveryRoute) {
       let routeProgress = '';
-      if (activeDeliveryRoute) {
-        const stops = Array.isArray(activeDeliveryRoute.orders) ? activeDeliveryRoute.orders : JSON.parse(activeDeliveryRoute.orders || '[]');
-        const position = stops.findIndex(stop => String(stop.source) === 'bot' && String(stop.id) === String(activeOrder.id));
-        const statuses = activeDeliveryRoute.stop_statuses || {};
-        const processed = stops.filter(stop => ['entregado','cancelled','postponed'].includes(statuses[`${stop.source}_${stop.id}`])).length;
-        if (position >= 0) routeProgress = ` Está incluida como parada ${position + 1} de ${stops.length}; la ruta lleva ${processed} parada${processed === 1 ? '' : 's'} procesada${processed === 1 ? '' : 's'}.`;
+      const optimized = Array.isArray(activeDeliveryRoute.optimized_route)
+        ? activeDeliveryRoute.optimized_route
+        : JSON.parse(activeDeliveryRoute.optimized_route || '[]');
+      const original = Array.isArray(activeDeliveryRoute.orders)
+        ? activeDeliveryRoute.orders
+        : JSON.parse(activeDeliveryRoute.orders || '[]');
+      const stops = optimized.length ? optimized : original;
+      const position = stops.findIndex(stop => String(stop.source) === 'bot' && String(stop.id) === String(activeOrder.id));
+      const statuses = activeDeliveryRoute.stop_statuses || {};
+      const finished = new Set(['entregado','cancelled','postponed']);
+      const processed = stops.filter(stop => finished.has(statuses[`${stop.source}_${stop.id}`])).length;
+      if (position >= 0) {
+        const pendingBefore = stops.slice(0, position).filter(stop => !finished.has(statuses[`${stop.source}_${stop.id}`])).length;
+        const lowerMinutes = pendingBefore * 15;
+        const upperMinutes = lowerMinutes + 30;
+        const now = new Date();
+        let base = now;
+        if (activeDeliveryRoute.status === 'sent') {
+          const start = String(deliverySchedule || '').match(/\b(\d{1,2}):(\d{2})\b/);
+          if (start) {
+            const localParts = new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'America/Santiago', hour: '2-digit', minute: '2-digit', hour12: false,
+            }).formatToParts(now);
+            const localHour = Number(localParts.find(part => part.type === 'hour')?.value || 0);
+            const localMinute = Number(localParts.find(part => part.type === 'minute')?.value || 0);
+            const waitMinutes = Number(start[1]) * 60 + Number(start[2]) - (localHour * 60 + localMinute);
+            if (waitMinutes > 0) base = new Date(now.getTime() + waitMinutes * 60000);
+          }
+        }
+        const formatTime = minutes => new Intl.DateTimeFormat('es-CL', {
+          timeZone: 'America/Santiago', hour: '2-digit', minute: '2-digit', hour12: false,
+        }).format(new Date(base.getTime() + minutes * 60000));
+        const eta = `${formatTime(lowerMinutes)}–${formatTime(upperMinutes)}`;
+        routeProgress = ` Está como parada ${position + 1} de ${stops.length}; quedan ${pendingBefore} entrega${pendingBefore === 1 ? '' : 's'} antes. Calculando unos 15 minutos por parada, el rango estimado es ${eta}.`;
       }
-      response = `¡Tu pedido va en la ruta de hoy${hi}! 🚚${routeProgress}${win} No te puedo dar una hora exacta porque depende del recorrido, pero apenas el repartidor vaya llegando te avisamos. 😊`;
+      response = `¡Tu pedido ya está en la ruta de hoy${hi}! 🚚${routeProgress}${win} Es una estimación y puede variar por tránsito o demoras; te avisamos cuando vaya acercándose. 😊`;
     } else if (activeOrder.status === 'por_despachar') {
       response = `Tu pedido está listo para salir${hi} 📦.${win} Hoy te llega dentro de ese horario; cuando salga a la ruta te avisamos. 😊`;
     } else {
@@ -1445,13 +1474,17 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a
   //     leads (es la escalera de bienvenida del prompt de ventas); para
   //     clientes existentes cualquier descuento lo maneja el equipo.
-  const priced = pricing.priceItems(updatedDraft.items, products, {
+  let priced = pricing.priceItems(updatedDraft.items, products, {
     specialPrices,
     discountPct: promotionContext?.active && promotionContext.discountPct
       ? promotionContext.discountPct
       : (isLead ? updatedDraft.discount_pct : 0),
     maxDiscountPct: promotionContext?.active && promotionContext.discountPct ? 100 : undefined,
   });
+  // Si el cliente está confirmando un resumen que ya mostró un precio total,
+  // conservar esa cotización. Evita cambiar una promoción entre "¿Todo correcto?"
+  // y el mensaje final de pedido confirmado.
+  priced = require('./order-quote').preserveConfirmedQuote(priced, history);
   updatedDraft.items    = priced.items;
   updatedDraft.subtotal = priced.subtotal;
   updatedDraft.discount_pct = priced.discountPct;

@@ -793,6 +793,31 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_message
         ON broadcast_campaign_recipients(whatsapp_message_id)
         WHERE whatsapp_message_id IS NOT NULL;
+
+      ALTER TABLE broadcast_campaign_recipients
+        ADD COLUMN IF NOT EXISTS language_code TEXT DEFAULT 'es';
+      ALTER TABLE broadcast_campaign_recipients
+        ADD COLUMN IF NOT EXISTS template_components JSONB;
+
+      CREATE TABLE IF NOT EXISTS broadcast_followup_jobs (
+        id                 BIGSERIAL PRIMARY KEY,
+        organization_id    INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        source_campaign_id BIGINT NOT NULL REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
+        target_campaign_id BIGINT REFERENCES broadcast_campaigns(id) ON DELETE SET NULL,
+        template_name      TEXT NOT NULL,
+        language_code      TEXT NOT NULL DEFAULT 'es',
+        scheduled_for      TIMESTAMPTZ NOT NULL,
+        status             TEXT NOT NULL DEFAULT 'scheduled'
+                           CHECK(status IN ('scheduled','processing','completed','cancelled','failed')),
+        conditions         JSONB NOT NULL DEFAULT '{}'::jsonb,
+        last_error         TEXT,
+        created_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at       TIMESTAMPTZ,
+        UNIQUE(source_campaign_id, scheduled_for)
+      );
+      CREATE INDEX IF NOT EXISTS idx_broadcast_followup_due
+        ON broadcast_followup_jobs(status, scheduled_for);
     `);
 
     // Migración: precios especiales por empresa

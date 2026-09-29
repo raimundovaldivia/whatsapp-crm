@@ -27,6 +27,7 @@ const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Tw
 const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
 const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follow-up
 const { startScheduledFollowUpJob } = require('./services/scheduled-follow-up'); // Job pedidos agendados
+const { startCampaignFollowUpJob } = require('./services/campaign-follow-up');
 const { startAdminWindowJob } = require('./services/admin-notify');
 const { startEscalationWatchJob } = require('./services/escalation-watch'); // Recordatorio si una escalación queda sin respuesta              // Aviso previo + cola de alertas admin
 const { startConversationModeWatchJob } = require('./services/conversation-mode-watch');
@@ -159,6 +160,7 @@ setupDatabase().then(() => {
     require('./services/webhook-inbox').startWebhookWorker();
     startFollowUpJob(io);
     startScheduledFollowUpJob(io);
+    startCampaignFollowUpJob(io);
     startAdminWindowJob();
     startEscalationWatchJob();
     startConversationModeWatchJob(io);
