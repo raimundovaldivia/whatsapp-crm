@@ -152,6 +152,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [sendingCharge,  setSendingCharge]  = useState(false);
   const [chargePreview,  setChargePreview]  = useState(null);      // pedido cuyo mensaje se está mirando
   const [chargeResults,  setChargeResults]  = useState(null);      // resumen del último envío
+  const [chargeSearch,   setChargeSearch]   = useState('');
+  const [chargeFilter,   setChargeFilter]   = useState('all');     // all | urgent | proof | uncontacted
 
   // Nuevo pedido manual
   const [showNewOrder,   setShowNewOrder]  = useState(false);
@@ -558,11 +560,11 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.bgApp, overflow: 'hidden' }}>
 
       {/* Header */}
-      <div style={{ padding: '14px 24px', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ padding: '14px clamp(12px, 3vw, 24px)', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px', flexWrap:'wrap' }}>
         <ShoppingBag size={20} color={colors.green} />
         <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600 }}>Pedidos</h1>
         {/* Tabs */}
-        <div style={{ display:'flex', gap:'4px', backgroundColor: colors.bgSecondary, borderRadius:'8px', padding:'3px' }}>
+        <div style={{ display:'flex', gap:'4px', backgroundColor: colors.bgSecondary, borderRadius:'8px', padding:'3px', overflowX:'auto', maxWidth:'100%' }}>
           {[
             { key: 'orders',    label: 'Todos' },
             { key: 'scheduled', label: `📅 Agendados${scheduledOrders.filter(o=>o.status==='pending').length ? ` (${scheduledOrders.filter(o=>o.status==='pending').length})` : ''}` },
@@ -673,9 +675,43 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
         const selTotal      = charges.filter(o => chargeSel.has(chargeKey(o)))
                                      .reduce((s, o) => s + (o.total_price || 0), 0);
         const fmt = n => `$${Math.round(n || 0).toLocaleString('es-CL')}`;
+        const customerKey = o => {
+          const phone = String(o.customer_phone || '').replace(/\D/g, '');
+          return phone ? `phone:${phone}` : `name:${String(o.customer_name || o.id).trim().toLowerCase()}`;
+        };
+        const groupMap = new Map();
+        charges.forEach(o => {
+          const key = customerKey(o);
+          const current = groupMap.get(key) || {
+            key, name: o.customer_name || 'Cliente sin nombre', phone: o.customer_phone || '',
+            conversationId: o.conversation_id || null, orders: [], total: 0, oldestHours: 0,
+            proofsPending: 0, proofsRejected: 0,
+          };
+          current.orders.push(o);
+          current.total += Number(o.total_price) || 0;
+          current.oldestHours = Math.max(current.oldestHours, Number(o.hours_owed) || 0);
+          current.proofsPending += Number(o.proofs_pending) || 0;
+          current.proofsRejected += Number(o.proofs_rejected) || 0;
+          if (!current.conversationId && o.conversation_id) current.conversationId = o.conversation_id;
+          groupMap.set(key, current);
+        });
+        const allGroups = [...groupMap.values()].sort((a, b) => b.oldestHours - a.oldestHours || b.total - a.total);
+        const search = chargeSearch.trim().toLowerCase();
+        const visibleGroups = allGroups.filter(group => {
+          const matchesSearch = !search || `${group.name} ${group.phone} ${group.orders.map(o => o.order_label).join(' ')}`.toLowerCase().includes(search);
+          if (!matchesSearch) return false;
+          if (chargeFilter === 'urgent') return group.oldestHours >= 48;
+          if (chargeFilter === 'proof') return group.proofsPending > 0 || group.proofsRejected > 0;
+          if (chargeFilter === 'uncontacted') return group.orders.some(o => !o.charge_requested_at);
+          return true;
+        });
+        const visibleCharges = visibleGroups.flatMap(group => group.orders);
+        const urgentGroups = allGroups.filter(group => group.oldestHours >= 48).length;
+        const proofGroups = allGroups.filter(group => group.proofsPending > 0 || group.proofsRejected > 0).length;
+        const uncontactedGroups = allGroups.filter(group => group.orders.some(o => !o.charge_requested_at)).length;
 
         return (
-          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px clamp(12px, 3vw, 24px)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
             {/* Resumen + acción */}
             <div style={{ display:'flex', alignItems:'center', gap:'16px', backgroundColor: colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:'12px', padding:'14px 18px', flexWrap:'wrap' }}>
@@ -683,7 +719,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                 <div style={{ fontSize:'11px', color: colors.textMuted, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em' }}>Por cobrar</div>
                 <div style={{ fontSize:'22px', fontWeight:700, color:colors.amber }}>{fmt(totalDeuda)}</div>
                 <div style={{ fontSize:'12px', color: colors.textMuted }}>
-                  {charges.length} pedido{charges.length === 1 ? '' : 's'} por transferencia sin comprobante
+                  {allGroups.length} cliente{allGroups.length === 1 ? '' : 's'} · {charges.length} pedido{charges.length === 1 ? '' : 's'} sin pago confirmado
                 </div>
               </div>
 
@@ -714,6 +750,35 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                 style={{ background:'none', color: colors.textSecondary, padding:'7px', borderRadius:'50%', display:'flex', border:'none', cursor:'pointer' }}>
                 <RefreshCw size={15} />
               </button>
+            </div>
+
+            {/* Resumen de cartera: la unidad principal es el cliente, no el pedido. */}
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:'9px' }}>
+              {[
+                ['all', 'Clientes con deuda', allGroups.length, fmt(totalDeuda), colors.amber],
+                ['urgent', 'Más de 48 horas', urgentGroups, 'prioridad alta', colors.dangerSoft],
+                ['proof', 'Comprobante pendiente', proofGroups, 'requiere revisión', '#60a5fa'],
+                ['uncontacted', 'Sin aviso de cobro', uncontactedGroups, 'contactar', colors.textPrimary],
+              ].map(([key, label, value, detail, color]) => (
+                <button key={key} onClick={() => setChargeFilter(key)} style={{
+                  textAlign:'left', padding:'12px 14px', borderRadius:'10px', cursor:'pointer',
+                  backgroundColor: chargeFilter === key ? colors.bgHover : colors.bgPanel,
+                  border:`1px solid ${chargeFilter === key ? color : colors.border}`,
+                }}>
+                  <div style={{ color:colors.textMuted, fontSize:'10px', textTransform:'uppercase', fontWeight:700 }}>{label}</div>
+                  <div style={{ color, fontSize:'20px', fontWeight:800, marginTop:'3px' }}>{value}</div>
+                  <div style={{ color:colors.textMuted, fontSize:'11px' }}>{detail}</div>
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display:'flex', gap:'9px', alignItems:'center', flexWrap:'wrap' }}>
+              <input value={chargeSearch} onChange={e => setChargeSearch(e.target.value)}
+                placeholder="Buscar cliente, teléfono o pedido…"
+                style={{ flex:'1 1 260px', minWidth:0, padding:'9px 12px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bgSecondary, color:colors.textPrimary, fontSize:'12px', outline:'none' }} />
+              <span style={{ color:colors.textMuted, fontSize:'11px' }}>
+                Mostrando {visibleGroups.length} de {allGroups.length} clientes
+              </span>
             </div>
 
             {/* Aviso de envío automático */}
@@ -750,71 +815,81 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                   Acá aparecen los pedidos que el repartidor marcó como transferencia y todavía no tienen comprobante.
                 </div>
               </div>
+            ) : visibleGroups.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'36px', color:colors.textMuted, border:`1px dashed ${colors.border}`, borderRadius:'10px' }}>
+                No hay clientes que coincidan con este filtro.
+              </div>
             ) : (
               <>
                 <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'12px', color: colors.textSecondary, cursor:'pointer', paddingLeft:'4px' }}>
                   <input type="checkbox"
-                    checked={chargeSel.size === charges.length && charges.length > 0}
-                    onChange={toggleAllCharges}
+                    checked={visibleCharges.length > 0 && visibleCharges.every(o => chargeSel.has(chargeKey(o)))}
+                    onChange={() => setChargeSel(prev => {
+                      const next = new Set(prev);
+                      const allSelected = visibleCharges.every(o => next.has(chargeKey(o)));
+                      visibleCharges.forEach(o => allSelected ? next.delete(chargeKey(o)) : next.add(chargeKey(o)));
+                      return next;
+                    })}
                     style={{ cursor:'pointer' }} />
-                  Seleccionar todos
+                  Seleccionar los {visibleCharges.length} pedidos visibles
                 </label>
 
-                <div style={{ display:'flex', flexDirection:'column', gap:'9px' }}>
-                  {charges.map(o => {
-                    const k         = chargeKey(o);
-                    const isSel     = chargeSel.has(k);
-                    const days      = o.hours_owed != null ? Math.floor(o.hours_owed / 24) : null;
-                    const antiguo   = o.hours_owed != null && o.hours_owed >= 48;
-                    const yaCobrado = !!o.charge_requested_at;
+                <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+                  {visibleGroups.map(group => {
+                    const groupSelected = group.orders.every(o => chargeSel.has(chargeKey(o)));
+                    const days = Math.floor(group.oldestHours / 24);
                     return (
-                      <div key={k} onClick={() => toggleCharge(o)}
-                        style={{
-                          backgroundColor: isSel ? colors.bgHover : colors.bgPanel,
-                          borderRadius:'12px',
-                          border:`1px solid ${isSel ? colors.amberStrong : antiguo ? colors.amberStrong + '40' : colors.border}`,
-                          padding:'13px 16px', display:'flex', gap:'12px', alignItems:'center', cursor:'pointer',
-                        }}>
-                        <input type="checkbox" checked={isSel} onChange={() => toggleCharge(o)}
-                          onClick={e => e.stopPropagation()} style={{ cursor:'pointer', flexShrink:0 }} />
-
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'3px', flexWrap:'wrap' }}>
-                            <span style={{ fontWeight:600, color: colors.textPrimary, fontSize:'14px' }}>
-                              {o.customer_name || o.customer_phone}
-                            </span>
-                            <span style={{ fontSize:'11px', color: colors.textMuted }}>{o.customer_phone || 'sin teléfono'}</span>
-                            <span style={{ fontSize:'10px', fontWeight:700, padding:'1px 6px', borderRadius:'4px', backgroundColor: o.source === 'bot' ? '#0d292940' : '#1e293b', color: o.source === 'bot' ? colors.tealSoft : '#94a3b8', display:'flex', alignItems:'center', gap:'3px' }}>
-                              {o.source === 'bot' ? <><Bot size={9} /> Bot</> : <><Store size={9} /> Shopify</>}
-                            </span>
+                      <div key={group.key} style={{ backgroundColor:colors.bgPanel, border:`1px solid ${group.oldestHours >= 48 ? colors.amberStrong + '70' : colors.border}`, borderRadius:'12px', overflow:'hidden' }}>
+                        <div style={{ padding:'12px 15px', display:'flex', alignItems:'center', gap:'11px', backgroundColor:groupSelected ? colors.bgHover : colors.bgSecondary, flexWrap:'wrap' }}>
+                          <input type="checkbox" checked={groupSelected} onChange={() => setChargeSel(prev => {
+                            const next = new Set(prev);
+                            group.orders.forEach(o => groupSelected ? next.delete(chargeKey(o)) : next.add(chargeKey(o)));
+                            return next;
+                          })} style={{ cursor:'pointer' }} />
+                          <div style={{ flex:'1 1 220px', minWidth:0 }}>
+                            <div style={{ color:colors.textPrimary, fontWeight:800, fontSize:'14px' }}>{group.name}</div>
+                            <div style={{ color:colors.textMuted, fontSize:'11px', marginTop:'2px' }}>{group.phone || 'Sin teléfono'} · {group.orders.length} pedido{group.orders.length === 1 ? '' : 's'}</div>
                           </div>
-                          <div style={{ display:'flex', gap:'12px', fontSize:'12px', color: colors.textMuted, flexWrap:'wrap' }}>
-                            <span>🧾 {o.order_label}</span>
-                            {days != null && (
-                              <span style={{ color: antiguo ? colors.amber : colors.textMuted }}>
-                                ⏱ entregado {days >= 1 ? `hace ${days} día${days === 1 ? '' : 's'}` : `hace ${o.hours_owed}h`}
-                              </span>
-                            )}
-                            {o.proofs_pending > 0 && <span style={{ color:'#60a5fa' }}>📎 comprobante sin revisar</span>}
-                            {yaCobrado && (
-                              <span>
-                                {o.charge_status === 'failed' ? '⚠️ No enviado — reintentar' : ['delivered','read'].includes(o.charge_status) ? '💬 Aviso entregado' : ['pending','sent'].includes(o.charge_status) ? '⏳ Pendiente de entrega' : '⚠️ Envío sin verificar'}
-                              </span>
-                            )}
-                          </div>
+                          {group.oldestHours > 0 && <span style={{ color:group.oldestHours >= 48 ? colors.amber : colors.textMuted, fontSize:'11px', fontWeight:group.oldestHours >= 48 ? 700 : 400 }}>
+                            ⏱ {days >= 1 ? `${days} día${days === 1 ? '' : 's'}` : `${group.oldestHours} h`} pendiente
+                          </span>}
+                          <div style={{ color:colors.amber, fontWeight:800, fontSize:'17px' }}>{fmt(group.total)}</div>
+                          {group.conversationId && <button onClick={() => openConvDrawer(group.conversationId, group.name, group.phone)}
+                            style={{ padding:'6px 9px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, cursor:'pointer', display:'flex', alignItems:'center', gap:'4px', fontSize:'11px' }}>
+                            <MessageSquare size={12} /> Ver conversación
+                          </button>}
                         </div>
 
-                        <div style={{ fontSize:'15px', fontWeight:700, color:colors.amber, flexShrink:0 }}>
-                          {fmt(o.total_price)}
-                        </div>
-
-                        <div style={{ display:'flex', gap:'6px', flexShrink:0 }}>
-                          <button
-                            onClick={e => { e.stopPropagation(); setChargePreview(o); }}
-                            title="Ver el mensaje que se le va a enviar"
-                            style={{ padding:'5px 9px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color: colors.textSecondary, fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
-                            <MessageSquare size={12} /> Ver mensaje
-                          </button>
+                        <div style={{ display:'flex', flexDirection:'column' }}>
+                          {group.orders.map(o => {
+                            const k = chargeKey(o);
+                            const isSel = chargeSel.has(k);
+                            const productText = (o.items || []).map(i => `${i.quantity || 1}x ${i.name || i.title || i.product_name || 'Producto'}`).join(', ');
+                            const chargeLabel = !o.charge_requested_at ? 'Sin aviso de cobro'
+                              : o.charge_status === 'failed' ? 'Cobro falló · reintentar'
+                              : ['delivered','read'].includes(o.charge_status) ? 'Aviso recibido por el cliente'
+                              : ['pending','sent'].includes(o.charge_status) ? 'Aviso enviado · pendiente de entrega'
+                              : 'Aviso enviado · estado sin confirmar';
+                            return (
+                              <div key={k} onClick={() => toggleCharge(o)} style={{ padding:'10px 15px 10px 42px', display:'flex', alignItems:'center', gap:'10px', borderTop:`1px solid ${colors.border}`, backgroundColor:isSel ? colors.bgHover : 'transparent', cursor:'pointer', flexWrap:'wrap' }}>
+                                <input type="checkbox" checked={isSel} onChange={() => toggleCharge(o)} onClick={e => e.stopPropagation()} style={{ cursor:'pointer' }} />
+                                <div style={{ flex:'1 1 260px', minWidth:0 }}>
+                                  <div style={{ display:'flex', gap:'7px', alignItems:'center', flexWrap:'wrap' }}>
+                                    <strong style={{ color:colors.textPrimary, fontSize:'12px' }}>{o.order_label}</strong>
+                                    <span style={{ color:o.charge_status === 'failed' || !o.charge_requested_at ? colors.amber : colors.textMuted, fontSize:'10px' }}>{chargeLabel}</span>
+                                    {o.proofs_pending > 0 && <span style={{ color:'#60a5fa', fontSize:'10px' }}>📎 Comprobante por revisar</span>}
+                                    {o.proofs_rejected > 0 && <span style={{ color:colors.dangerSoft, fontSize:'10px' }}>Comprobante rechazado</span>}
+                                  </div>
+                                  {productText && <div style={{ color:colors.textMuted, fontSize:'11px', marginTop:'3px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productText}</div>}
+                                </div>
+                                <strong style={{ color:colors.amber, fontSize:'13px' }}>{fmt(o.total_price)}</strong>
+                                <button onClick={e => { e.stopPropagation(); setChargePreview(o); }}
+                                  style={{ padding:'5px 8px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, fontSize:'10px', cursor:'pointer' }}>
+                                  Ver cobro
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     );

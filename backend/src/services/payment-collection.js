@@ -404,10 +404,13 @@ async function getPendingCharges(orgId) {
             o.id::text                   AS id,
             COALESCE(NULLIF(o.customer_name, ''), c.contact_name) AS customer_name,
             COALESCE(NULLIF(o.customer_phone, ''), c.phone_number) AS customer_phone,
+            c.id::text                    AS conversation_id,
             o.total_price::text          AS total_price,
             CONCAT('#', o.id::text)      AS order_label,
             o.status                     AS order_status,
             o.created_at                 AS created_at,
+            o.delivered_at               AS delivered_at,
+            o.items::text                AS items,
             o.payment_marked_at          AS payment_marked_at,
             o.charge_requested_at        AS charge_requested_at,
             o.charge_message_id AS charge_message_id,
@@ -416,6 +419,9 @@ async function getPendingCharges(orgId) {
             (SELECT COUNT(*) FROM payment_proofs pp
               WHERE pp.order_id = o.id
                 AND pp.status = 'pending')::int AS proofs_pending
+            ,(SELECT COUNT(*) FROM payment_proofs pp
+              WHERE pp.order_id = o.id
+                AND pp.status = 'rejected')::int AS proofs_rejected
        FROM orders o
        LEFT JOIN conversations c ON c.id = o.conversation_id
       WHERE o.organization_id = $1
@@ -433,16 +439,23 @@ async function getPendingCharges(orgId) {
             s.shopify_order_id           AS id,
             s.customer_name              AS customer_name,
             s.customer_phone             AS customer_phone,
+            (SELECT c.id::text FROM conversations c
+              WHERE c.organization_id = s.organization_id
+                AND regexp_replace(c.phone_number, '[^0-9]', '', 'g') = regexp_replace(COALESCE(s.customer_phone, ''), '[^0-9]', '', 'g')
+              ORDER BY c.updated_at DESC NULLS LAST, c.id DESC LIMIT 1) AS conversation_id,
             s.total_price::text          AS total_price,
             COALESCE(NULLIF(s.shopify_name, ''), CONCAT('#', s.shopify_order_id)) AS order_label,
             s.crm_status                 AS order_status,
             s.shopify_created_at         AS created_at,
+            s.delivered_at               AS delivered_at,
+            s.items::text                AS items,
             s.payment_marked_at          AS payment_marked_at,
             s.charge_requested_at        AS charge_requested_at,
             s.charge_message_id AS charge_message_id,
             (SELECT m.status FROM messages m JOIN conversations mc ON mc.id=m.conversation_id WHERE m.whatsapp_message_id=s.charge_message_id AND mc.organization_id=s.organization_id) AS charge_status,
             COALESCE(s.charge_request_count, 0) AS charge_request_count,
-            0                            AS proofs_pending
+            0                            AS proofs_pending,
+            0                            AS proofs_rejected
        FROM shopify_orders s
       WHERE s.organization_id = $1
         AND s.payment_method = 'transferencia'
@@ -456,6 +469,10 @@ async function getPendingCharges(orgId) {
   return rows.map(r => ({
     ...r,
     total_price: parseFloat(r.total_price) || 0,
+    items: (() => {
+      if (Array.isArray(r.items)) return r.items;
+      try { return JSON.parse(r.items || '[]'); } catch { return []; }
+    })(),
     // Horas desde que se marcó la entrega — para ordenar por antigüedad de la deuda
     hours_owed: r.payment_marked_at
       ? Math.round((Date.now() - new Date(r.payment_marked_at).getTime()) / 3600000)
