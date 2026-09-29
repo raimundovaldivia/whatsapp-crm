@@ -64,6 +64,60 @@ function routeStops(route) {
   return Array.isArray(route?.orders) ? route.orders : JSON.parse(route?.orders || '[]');
 }
 
+function jsonList(value) {
+  if (Array.isArray(value)) return value;
+  try { return JSON.parse(value || '[]'); } catch { return []; }
+}
+
+/**
+ * Rutas antiguas (y algunos resultados de optimización) pueden conservar la
+ * parada pero no su copia de `items`. La consolidación no debe quedar vacía:
+ * recupera los productos desde el pedido original y los incorpora en memoria
+ * tanto a `orders` como a `optimized_route`.
+ */
+async function hydrateRouteItems(pool, route, orgId) {
+  if (!route) return route;
+  const orders = jsonList(route.orders);
+  const optimized = jsonList(route.optimized_route);
+  const itemMap = new Map();
+
+  for (const order of orders) {
+    if (Array.isArray(order?.items) && order.items.length) itemMap.set(orderKey(order), order.items);
+  }
+
+  const all = [...orders, ...optimized];
+  const botIds = [...new Set(all.filter(item => item?.source === 'bot').map(item => Number(item.id)).filter(Number.isFinite))];
+  const shopifyIds = [...new Set(all.filter(item => item?.source === 'shopify').map(item => String(item.id)).filter(Boolean))];
+  const [botResult, shopifyResult] = await Promise.all([
+    botIds.length
+      ? pool.query('SELECT id::text AS id, items FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
+      : { rows: [] },
+    shopifyIds.length
+      ? pool.query('SELECT shopify_order_id AS id, items FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopifyIds])
+      : { rows: [] },
+  ]);
+
+  for (const row of botResult.rows) {
+    const items = jsonList(row.items);
+    if (items.length && !itemMap.has(`bot_${row.id}`)) itemMap.set(`bot_${row.id}`, items);
+  }
+  for (const row of shopifyResult.rows) {
+    const items = jsonList(row.items);
+    if (items.length && !itemMap.has(`shopify_${row.id}`)) itemMap.set(`shopify_${row.id}`, items);
+  }
+
+  const addItems = stop => {
+    if (Array.isArray(stop?.items) && stop.items.length) return stop;
+    const items = itemMap.get(orderKey(stop));
+    return items?.length ? { ...stop, items } : stop;
+  };
+  return {
+    ...route,
+    orders: orders.map(addItems),
+    optimized_route: optimized.map(addItems),
+  };
+}
+
 function buildLoadManifest(route) {
   const totals = new Map();
   for (const stop of routeStops(route)) {
@@ -741,8 +795,9 @@ router.get('/routes/:id', async (req, res) => {
          AND ($3::int IS NULL OR r.driver_user_id = $3 OR r.driver_user_id IS NULL)
     `, [parseInt(req.params.id), req.orgId, driverScope]);
     if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
-    route.financial_summary = await routeFinancialSummary(pool, route, req.orgId);
-    res.json({ success: true, route });
+    const hydratedRoute = await hydrateRouteItems(pool, route, req.orgId);
+    hydratedRoute.financial_summary = await routeFinancialSummary(pool, hydratedRoute, req.orgId);
+    res.json({ success: true, route: hydratedRoute });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -755,14 +810,15 @@ router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'superv
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   const pool = getPool();
   try {
-    const { rows: [route] } = await pool.query(
+    const { rows: [storedRoute] } = await pool.query(
       `SELECT id, status, orders, optimized_route, load_checklist
          FROM delivery_routes
         WHERE id = $1 AND organization_id = $2
           AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)`,
       [Number(req.params.id), req.orgId, driverScope]
     );
-    if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada o no asignada a ti' });
+    if (!storedRoute) return res.status(404).json({ success: false, error: 'Ruta no encontrada o no asignada a ti' });
+    const route = await hydrateRouteItems(pool, storedRoute, req.orgId);
     if (route.status !== 'sent') return res.status(409).json({ success: false, error: 'La carga solo se puede modificar antes de iniciar el reparto' });
     const stops = routeStops(route);
     const names = new Set(stops.flatMap(stop => (stop.items || []).map(item => String(item.name || item.title || item.product_name || '').trim())).filter(Boolean));
@@ -786,14 +842,15 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
   try {
     client = await getPool().connect();
     await client.query('BEGIN');
-    const { rows: [route] } = await client.query(
+    const { rows: [storedRoute] } = await client.query(
       `SELECT * FROM delivery_routes
         WHERE id = $1 AND organization_id = $2
           AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
         FOR UPDATE`,
       [Number(req.params.id), req.orgId, driverScope]
     );
-    if (!route) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+    if (!storedRoute) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+    const route = await hydrateRouteItems(client, storedRoute, req.orgId);
     if (route.status === 'in_progress') {
       await client.query('COMMIT');
       return res.json({ success: true, route });

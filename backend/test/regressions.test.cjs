@@ -145,8 +145,10 @@ test('mobile item editor enforces module flag and route membership',async()=>{
 test('driver route shows cash balance, persists load checklist and keeps order history details',async()=>{
   const f=await fixture();
   try {
-    const stop={source:'bot',id:1,stopNumber:1,customerName:'Cliente prueba',orderName:'#1',totalPrice:100,items:[{name:'Huevos XL',quantity:2}]};
-    await f.query('UPDATE orders SET items=$1,total_price=100 WHERE id=1',[JSON.stringify(stop.items)]);
+    const orderItems=[{name:'Huevos XL',quantity:2}];
+    // Reproduce una ruta ya creada cuya parada perdió la copia de productos.
+    const stop={source:'bot',id:1,stopNumber:1,customerName:'Cliente prueba',orderName:'#1',totalPrice:100};
+    await f.query('UPDATE orders SET items=$1,total_price=100 WHERE id=1',[JSON.stringify(orderItems)]);
     await f.query(`UPDATE delivery_routes
       SET status='sent', optimized_route=$1, load_checklist='{}', stop_statuses='{"bot_1":"entregado"}', stop_payments='{"bot_1":"efectivo"}'
       WHERE id=1`,[JSON.stringify([stop])]);
@@ -159,6 +161,7 @@ test('driver route shows cash balance, persists load checklist and keeps order h
     const getRes=response();
     await handler(router,'get','/routes/1')({orgId:1,userId:10,role:'repartidor',params:{id:'1'}},getRes);
     assert.equal(getRes.code,200);
+    assert.deepEqual(JSON.parse(JSON.stringify(getRes.body.route.optimized_route[0].items)),orderItems);
     assert.deepEqual(JSON.parse(JSON.stringify(getRes.body.route.financial_summary)),{
       routeValue:100,deliveredValue:100,cashCollected:100,transferCollected:0,
       otherCollected:0,expenseCount:1,expensesTotal:30,netCash:70,
