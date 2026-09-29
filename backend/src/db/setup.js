@@ -883,6 +883,60 @@ async function setupDatabase() {
         ON delivery_routes(organization_id, driver_user_id, status);
     `);
 
+    // Antes del checklist, enviar una ruta la dejaba inmediatamente en
+    // `in_progress`. Esas rutas no tienen started_at y la app nueva las
+    // interpretaría como ya iniciadas, saltándose la consolidación. Devuelve
+    // únicamente esas rutas heredadas a `sent` y libera sus pedidos para que
+    // el repartidor pueda revisar la carga y comenzarlas de forma explícita.
+    await client.query(`
+      WITH legacy_routes AS (
+        SELECT id, organization_id, orders
+          FROM delivery_routes
+         WHERE status = 'in_progress'
+           AND started_at IS NULL
+           AND completed_at IS NULL
+      ), legacy_shopify AS (
+        SELECT DISTINCT lr.organization_id, item->>'id' AS order_id
+          FROM legacy_routes lr
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lr.orders::jsonb, '[]'::jsonb)) item
+         WHERE item->>'source' = 'shopify'
+      )
+      UPDATE shopify_orders so
+         SET crm_status = 'por_despachar'
+        FROM legacy_shopify ls
+       WHERE so.organization_id = ls.organization_id
+         AND so.shopify_order_id::text = ls.order_id
+         AND so.crm_status = 'en_camino'
+         AND so.delivered_at IS NULL;
+
+      WITH legacy_routes AS (
+        SELECT id, organization_id, orders
+          FROM delivery_routes
+         WHERE status = 'in_progress'
+           AND started_at IS NULL
+           AND completed_at IS NULL
+      ), legacy_bot AS (
+        SELECT DISTINCT lr.organization_id, (item->>'id')::integer AS order_id
+          FROM legacy_routes lr
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lr.orders::jsonb, '[]'::jsonb)) item
+         WHERE item->>'source' = 'bot'
+           AND item->>'id' ~ '^\\d+$'
+      )
+      UPDATE orders o
+         SET status = 'por_despachar', updated_at = NOW()
+        FROM legacy_bot lb
+       WHERE o.organization_id = lb.organization_id
+         AND o.id = lb.order_id
+         AND o.status = 'en_camino'
+         AND o.delivered_at IS NULL;
+
+      UPDATE delivery_routes
+         SET status = 'sent', load_checklist = '{}'::jsonb
+       WHERE status = 'in_progress'
+         AND started_at IS NULL
+         AND completed_at IS NULL;
+    `);
+
     // ─── DESPACHOS: gastos rendidos por el repartidor (petróleo, peaje, etc.) ──
     // El repartidor rinde gastos del efectivo que recibe, con foto opcional
     // (boleta/surtidor). El admin los ve en Repartos. La foto se guarda como
