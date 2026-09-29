@@ -18,7 +18,11 @@ async function pushAdmins(orgId, { title = 'Diez Ríos', body = '', data = {} } 
   try {
     const pool = getPool();
     const { rows } = await pool.query(
-      `SELECT token FROM push_tokens WHERE organization_id = $1`,
+      `SELECT pt.token
+         FROM push_tokens pt
+         JOIN users u ON u.id = pt.user_id AND u.organization_id = pt.organization_id
+        WHERE pt.organization_id = $1
+          AND u.role IN ('owner', 'admin', 'supervisor', 'coordinador')`,
       [orgId]
     );
     const tokens = rows.map(r => r.token).filter(t => typeof t === 'string' && t.startsWith('ExponentPushToken'));

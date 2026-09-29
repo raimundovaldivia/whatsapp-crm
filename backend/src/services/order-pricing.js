@@ -222,7 +222,8 @@ function priceItems(items = [], products = [], opts = {}) {
   merged.forEach(x => delete x._k);
 
   const subtotal = merged.reduce((s, it) => s + it.price * it.quantity, 0);
-  const discountPct = Math.min(MAX_DISCOUNT_PCT, Math.max(0, Number(opts.discountPct) || 0));
+  const maxDiscountPct = Math.min(100, Math.max(0, Number(opts.maxDiscountPct ?? MAX_DISCOUNT_PCT) || 0));
+  const discountPct = Math.min(maxDiscountPct, Math.max(0, Number(opts.discountPct) || 0));
   const discountAmount = Math.round(subtotal * discountPct / 100);
   const total = subtotal - discountAmount;
 

@@ -54,3 +54,38 @@ test('conserva la promoción durante la toma del pedido y la vence al cambiar de
   assert.equal(promotion.restore(saved, new Date('2026-09-29T22:00:00.000Z')).specialPrices['100'], 35000);
   assert.equal(promotion.restore(saved, new Date('2026-09-30T14:00:00.000Z')).active, false);
 });
+
+test('extrae y aplica un porcentaje de descuento enviado en un template', () => {
+  const percentageTemplate = {
+    direction: 'outbound',
+    created_at: '2026-09-29T13:19:00.000Z',
+    content: '[Template: descuento_clientes_15]\n\nHoy tienes un 15% de descuento en tu pedido. Válido solo para pedidos de hoy.',
+  };
+  const promo = promotion.fromHistory([percentageTemplate], products, new Date('2026-09-29T14:00:00.000Z'));
+  assert.equal(promo.discountPct, 15);
+  assert.equal(promo.active, true);
+  const result = pricing.priceItems(
+    [{ product_name: 'Caja 100 Huevos Jumbo', quantity: 2 }],
+    products,
+    { discountPct: promo.discountPct, maxDiscountPct: 100 }
+  );
+  assert.equal(result.subtotal, 90000);
+  assert.equal(result.discountAmount, 13500);
+  assert.equal(result.total, 76500);
+  assert.match(promotion.promptSection(promo), /15% de descuento/i);
+});
+
+test('no acumula porcentaje sobre precios finales ya indicados en la promo', () => {
+  const finalPrices = {
+    ...template,
+    content: `${template.content} Ahorra hasta un 20% de descuento.`,
+  };
+  const promo = promotion.fromHistory([finalPrices], products, new Date('2026-09-29T14:00:00.000Z'));
+  assert.equal(promo.discountPct, 0);
+  const result = pricing.priceItems(
+    [{ product_name: 'Caja 100 Huevos Jumbo', quantity: 2 }],
+    products,
+    { specialPrices: promo.specialPrices, discountPct: promo.discountPct, maxDiscountPct: 100 }
+  );
+  assert.equal(result.total, 70000);
+});

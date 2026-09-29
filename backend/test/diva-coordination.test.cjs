@@ -292,9 +292,47 @@ test('Diva analiza el historial y entrega una conclusión en vez de copiar toda 
     agent_mode: 'human',
     contact_name: 'Karina',
     phone_number: '56977101282',
-  }, '🤭🤭🤭');
+  }, '¿Me confirman qué harán entonces?');
 
   assert.match(alerts[0], /Karina había pedido esperar hasta la próxima semana/);
   assert.match(alerts[0], /Cerrar con amabilidad y no volver a contactarla/);
   assert.doesNotMatch(alerts[0], /Contexto reciente/);
+});
+
+test('Diva no molesta al administrador por agradecimientos o cierres en modo humano', async () => {
+  let claims = 0;
+  let alerts = 0;
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      claimHumanPendingNotification: async () => { claims++; return true; },
+    },
+    './kapso-whatsapp': {},
+    './admin-notify': { notifyAdmin: async () => { alerts++; } },
+  });
+  const conversation = { id: 88, agent_mode: 'human', contact_name: 'María', phone_number: '56911111111' };
+
+  const thanks = await notifications.notifyAdminHumanPendingReply(1, conversation, 'Mil gracias 🙏');
+  const emoji = await notifications.notifyAdminHumanPendingReply(1, conversation, '😊😊');
+
+  assert.equal(thanks.reason, 'sin_accion');
+  assert.equal(emoji.reason, 'sin_accion');
+  assert.equal(claims, 0);
+  assert.equal(alerts, 0);
+});
+
+test('el aviso general no duplica el caso que ya está en coordinación humana', async () => {
+  let lookups = 0;
+  let sends = 0;
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      getWhatsappConfig: async () => ({ provider: 'kapso' }),
+      getAgentsWithNotification: async () => { lookups++; return [{ whatsapp_phone: '56911111111' }]; },
+    },
+    './kapso-whatsapp': { sendTextMessage: async () => { sends++; } },
+    './admin-notify': { notifyAdmin: async () => ({ sent: true }) },
+  });
+
+  await notifications.notifyAgentsNewMessage(1, { id: 4, agent_mode: 'human' }, 'Necesito ayuda');
+  assert.equal(lookups, 0);
+  assert.equal(sends, 0);
 });

@@ -17,6 +17,18 @@ function cleanContextText(value, max = 220) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+function isClosingAcknowledgement(value) {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  const words = text
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9ñ\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return !words || /^(gracias|muchas gracias|mil gracias|ok|okay|oka|listo|perfecto|entendido|dale|bueno|ya|hasta luego|chao|adios)$/.test(words);
+}
+
 function contextSpeaker(message) {
   if (message.direction === 'inbound') return 'Cliente';
   return message.sent_by === 'human' || message.agent_type === 'human_guided'
@@ -51,6 +63,9 @@ function fallbackConversationBrief(contextLines, reason = '') {
     situationParts.push(`El último mensaje fue “${cleanContextText(lastClient, 220)}”.`);
   }
   return {
+    requiresAction: true,
+    category: 'Revisión de conversación',
+    urgency: 'normal',
     situation: situationParts.join(' ') || 'No fue posible recuperar suficiente conversación para resumir el caso.',
     customerNeed: lastClient
       ? `Interpretar y responder el último mensaje del cliente sin repetir lo ya conversado.`
@@ -58,6 +73,7 @@ function fallbackConversationBrief(contextLines, reason = '') {
     recommendation: contextLines.length
       ? 'Responder únicamente al estado actual de la conversación y evitar reiniciar la venta.'
       : 'Abrir la conversación en el CRM; no responder desde este aviso sin historial.',
+    suggestedReply: '',
     evidence: contextLines.slice(-3),
   };
 }
@@ -80,13 +96,15 @@ async function getAdminConversationBrief(conversationId, reason = '') {
       system: `Analiza una conversación de atención comercial para informar al administrador. Debes comprender la secuencia, no copiarla ni describir cada turno.
 
 Devuelve SOLO JSON válido con:
-{"situation":"qué pasó y por qué llegó a este punto, máximo 2 frases","customerNeed":"qué necesita o expresa ahora el cliente, 1 frase","recommendation":"qué conviene responder o hacer ahora, 1 frase","evidence":["máximo 2 mensajes textuales indispensables"]}
+{"requiresAction":true,"category":"pedido|precio|despacho|reclamo|pago|consulta|cierre","urgency":"baja|normal|alta","situation":"qué pasó, máximo 2 frases","customerNeed":"qué necesita ahora, 1 frase","recommendation":"acción concreta que debe tomar el administrador, 1 frase","suggestedReply":"respuesta breve lista para enviar al cliente, o vacío si primero se debe revisar algo","evidence":["máximo 2 mensajes indispensables"]}
 
 Reglas:
 - No inventes hechos, fechas, intenciones ni emociones. Si un emoji es ambiguo, dilo.
+- requiresAction es false cuando el cliente solo agradece, se despide, reacciona con emojis o el caso ya quedó resuelto y no pide nada nuevo.
 - Identifica si Diva repitió, insistió, contradijo un acuerdo o escribió en un momento inadecuado.
 - Distingue el problema original del estado actual. Si el equipo ya se disculpó, indícalo.
-- La recomendación debe ser concreta y evitar nuevas preguntas o seguimientos innecesarios.`,
+- La recomendación debe indicar una decisión concreta: responder, corregir pedido, revisar pago, tomar el chat o cerrar sin responder.
+- suggestedReply debe poder enviarse tal cual, sin notas internas, y no debe inventar datos. Déjalo vacío si falta una decisión comercial.`,
       messages: [{
         role: 'user',
         content: `${reason ? `MOTIVO DEL AVISO: ${cleanContextText(reason, 400)}\n\n` : ''}CONVERSACIÓN (más reciente al final):\n${contextLines.join('\n')}`,
@@ -95,9 +113,13 @@ Reglas:
     const raw = response.content?.[0]?.text?.trim() || '';
     const parsed = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
     return {
+      requiresAction: parsed.requiresAction !== false,
+      category: cleanContextText(parsed.category, 60) || fallback.category,
+      urgency: ['baja', 'normal', 'alta'].includes(parsed.urgency) ? parsed.urgency : fallback.urgency,
       situation: cleanContextText(parsed.situation, 420) || fallback.situation,
       customerNeed: cleanContextText(parsed.customerNeed, 260) || fallback.customerNeed,
       recommendation: cleanContextText(parsed.recommendation, 300) || fallback.recommendation,
+      suggestedReply: cleanContextText(parsed.suggestedReply, 420),
       evidence: Array.isArray(parsed.evidence)
         ? parsed.evidence.map(item => cleanContextText(item, 220)).filter(Boolean).slice(0, 2)
         : fallback.evidence.slice(-2),
@@ -110,9 +132,11 @@ Reglas:
 
 function formatConversationBrief(brief) {
   return [
-    `🧭 *Qué pasó:* ${brief.situation}`,
-    `🎯 *Qué necesita ahora:* ${brief.customerNeed}`,
-    `💡 *Recomendación:* ${brief.recommendation}`,
+    `📌 *Caso:* ${brief.category || 'Revisión'} · prioridad ${brief.urgency || 'normal'}`,
+    `🧭 *Análisis:* ${brief.situation}`,
+    `🎯 *Necesidad:* ${brief.customerNeed}`,
+    `✅ *Acción sugerida:* ${brief.recommendation}`,
+    brief.suggestedReply ? `💬 *Respuesta sugerida:*\n“${brief.suggestedReply}”` : '',
     brief.evidence?.length ? `🔎 *Mensajes clave:*\n${brief.evidence.map(line => `• ${line}`).join('\n')}` : '',
   ].filter(Boolean).join('\n');
 }
@@ -181,7 +205,14 @@ async function notifyAgentsNewMessage(orgId, conversation, messageText) {
     const wc = await db.getWhatsappConfig(orgId);
     if (!wc || wc.provider !== 'kapso') return;
 
-    const agents = await db.getAgentsWithNotification(orgId, 'new_messages');
+    // Los modos humano/coordinando ya tienen un aviso analizado y accionable.
+    // Mandar además el texto crudo produce dos alertas por el mismo mensaje.
+    if (conversation?.agent_mode && conversation.agent_mode !== 'ai') return;
+
+    const adminPhone = await db.getSetting(orgId, 'admin_alert_phone').catch(() => null);
+    const digits = value => String(value || '').replace(/\D/g, '');
+    const agents = (await db.getAgentsWithNotification(orgId, 'new_messages'))
+      .filter(agent => !adminPhone || digits(agent.whatsapp_phone) !== digits(adminPhone));
     if (!agents.length) return;
 
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
@@ -217,7 +248,8 @@ async function notifyAgentsNewMessage(orgId, conversation, messageText) {
 async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
   try {
     if (!conversation?.id || conversation.agent_mode !== 'human') return { sent: false, reason: 'modo_inactivo' };
-    const claimed = await db.claimHumanPendingNotification(conversation.id, 5);
+    if (isClosingAcknowledgement(messageText)) return { sent: false, reason: 'sin_accion' };
+    const claimed = await db.claimHumanPendingNotification(conversation.id, 15);
     if (!claimed) return { sent: false, reason: 'aviso_reciente' };
 
     const clientName = conversation.contact_name || conversation.phone_number || 'Cliente';
@@ -227,6 +259,7 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
       conversation.id,
       `El chat está en modo humano y el cliente acaba de enviar: “${cleanContextText(text, 220)}”.`
     );
+    if (brief.requiresAction === false) return { sent: false, reason: 'sin_accion' };
     const briefText = formatConversationBrief(brief);
 
     await db.createAdminPendingReply(orgId, conversation.id, clientPhone, briefText);
@@ -352,4 +385,5 @@ module.exports = {
   getRecentConversationContext,
   getAdminConversationBrief,
   formatConversationBrief,
+  isClosingAcknowledgement,
 };

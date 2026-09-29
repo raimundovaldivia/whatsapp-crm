@@ -41,6 +41,19 @@ function parseOffers(body) {
   return offers;
 }
 
+function parseDiscountPct(body) {
+  const text = String(body || '');
+  const patterns = [
+    /(?:descuento|dcto\.?|rebaja)\s+(?:de\s+|del\s+)?(\d{1,3})\s*%/iu,
+    /(\d{1,3})\s*%\s+(?:de\s+)?(?:descuento|dcto\.?|off|menos)/iu,
+  ];
+  for (const pattern of patterns) {
+    const value = Number(text.match(pattern)?.[1]);
+    if (value > 0 && value <= 100) return value;
+  }
+  return 0;
+}
+
 function explicitUntil(body, sentDay) {
   const m = String(body || '').match(/(?:v[aá]lid[oa]|vigente).{0,30}?hasta(?:\s+el)?\s+(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?/iu);
   if (!m) return null;
@@ -55,7 +68,12 @@ function parseTemplate(message, products = [], now = new Date()) {
   if (!templateName) return null;
   const body = content.replace(/^\s*\[Template:[^\]]+\]\s*/i, '').trim();
   const offers = parseOffers(body);
-  const promotional = offers.length > 0 && (/promo|promoci[oó]n|oferta/i.test(`${templateName} ${body}`));
+  const parsedDiscountPct = parseDiscountPct(body);
+  // Un template con precios finales y porcentaje informativo no acumula ambos
+  // beneficios. Los precios explícitos mandan; el porcentaje se usa cuando la
+  // promoción realmente consiste en descontar el subtotal.
+  const discountPct = offers.length ? 0 : parsedDiscountPct;
+  const promotional = (offers.length > 0 || parsedDiscountPct > 0) && (/promo|promoci[oó]n|oferta|descuento|dcto|rebaja/i.test(`${templateName} ${body}`));
   if (!promotional) return null;
 
   const sentDay = chileDay(message.created_at || message.createdAt || now);
@@ -84,7 +102,7 @@ function parseTemplate(message, products = [], now = new Date()) {
   }
 
   return {
-    templateName, body, offers, specialPrices, sentDay, validUntil, validOnlyToday,
+    templateName, body, offers, discountPct, specialPrices, sentDay, validUntil, validOnlyToday,
     active, cutoff, sameDayConditional, stockConditional,
   };
 }
@@ -102,8 +120,8 @@ function fromHistory(history = [], products = [], now = new Date()) {
 
 function snapshot(promotion) {
   if (!promotion) return null;
-  const { templateName, offers, specialPrices, sentDay, validUntil, validOnlyToday, cutoff, sameDayConditional, stockConditional } = promotion;
-  return { templateName, offers, specialPrices, sentDay, validUntil, validOnlyToday, cutoff, sameDayConditional, stockConditional };
+  const { templateName, offers, discountPct, specialPrices, sentDay, validUntil, validOnlyToday, cutoff, sameDayConditional, stockConditional } = promotion;
+  return { templateName, offers, discountPct, specialPrices, sentDay, validUntil, validOnlyToday, cutoff, sameDayConditional, stockConditional };
 }
 
 function restore(saved, now = new Date()) {
@@ -125,11 +143,15 @@ function promptSection(promotion) {
   const deliveryRule = promotion.sameDayConditional
     ? `La entrega el mismo día${promotion.cutoff ? ` requiere confirmar antes de las ${promotion.cutoff}` : ''}${promotion.stockConditional ? ' y está sujeta a stock' : ''}. Esta condición es distinta de la vigencia del precio.`
     : '';
-  return `## Promoción activa recibida por este cliente (${promotion.templateName})\nPrecios exactos:\n${options}\nREGLAS OBLIGATORIAS:\n- Para estas presentaciones usa el precio promocional, nunca el precio normal del catálogo.\n- ${promotion.validOnlyToday ? 'La promoción aplica si el pedido queda confirmado hoy. Puede pedir hoy y solicitar entrega para otro día.' : `Vigencia: ${promotion.validUntil || 'sin fecha explícita en el template'}.`}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
+  const priceRule = promotion.discountPct
+    ? `Aplica exactamente ${promotion.discountPct}% de descuento al subtotal del pedido.`
+    : 'Para estas presentaciones usa el precio promocional, nunca el precio normal del catálogo.';
+  return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}\n- ${promotion.validOnlyToday ? 'La promoción aplica si el pedido queda confirmado hoy. Puede pedir hoy y solicitar entrega para otro día.' : `Vigencia: ${promotion.validUntil || 'sin fecha explícita en el template'}.`}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
 }
 
 function optionText(promotion) {
-  return promotion.offers.map(offer => `${offer.label} a $${offer.price.toLocaleString('es-CL')}`).join(', ');
+  const offers = promotion.offers.map(offer => `${offer.label} a $${offer.price.toLocaleString('es-CL')}`).join(', ');
+  return offers || (promotion.discountPct ? `${promotion.discountPct}% de descuento en tu pedido` : 'la promoción indicada');
 }
 
 function isFuturePromotionQuestion(message) {
@@ -148,9 +170,14 @@ function futureReply(promotion) {
     const delivery = promotion.sameDayConditional
       ? ` La entrega el mismo día${promotion.cutoff ? ` era confirmando antes de las ${promotion.cutoff}` : ''}${promotion.stockConditional ? ' y según stock' : ''}; para mañana podemos dejar el despacho programado.`
       : '';
-    return `Sí, si confirmas el pedido hoy se respeta el precio promocional aunque lo programemos para mañana.${delivery} ¿Cuál te guardo: ${choices}?`;
+    if (promotion.offers.length) {
+      return `Sí, si confirmas el pedido hoy se respeta el precio promocional aunque lo programemos para mañana.${delivery} ¿Cuál te guardo: ${choices}?`;
+    }
+    return `Sí, si confirmas el pedido hoy se respeta el ${choices} aunque lo programemos para mañana.${delivery} ¿Qué producto y cantidad necesitas?`;
   }
-  return `Sí, podemos programar la entrega para mañana manteniendo esta promoción. ¿Cuál te guardo: ${choices}?`;
+  return promotion.offers.length
+    ? `Sí, podemos programar la entrega para mañana manteniendo esta promoción. ¿Cuál te guardo: ${choices}?`
+    : `Sí, podemos programar la entrega para mañana manteniendo el ${choices}. ¿Qué producto y cantidad necesitas?`;
 }
 
-module.exports = { parseOffers, parseTemplate, fromHistory, snapshot, restore, promptSection, isFuturePromotionQuestion, futureReply, norm, chileDay };
+module.exports = { parseOffers, parseDiscountPct, parseTemplate, fromHistory, snapshot, restore, promptSection, isFuturePromotionQuestion, futureReply, norm, chileDay };
