@@ -281,8 +281,24 @@ test('dispatch excludes future bot and Shopify deliveries and rechecks stale rou
     assert.equal((await call('post','/routes/2/orders',{orders:future},{id:'2'})).code,400);
     assert.equal((await f.query('SELECT status FROM orders WHERE id=1')).rows[0].status,'sent');
     // It becomes eligible automatically on its scheduled day.
-    await f.query("UPDATE orders SET delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date WHERE id=1");
-    assert.ok((await call('get','/orders')).body.orders.some(o=>o.source==='bot' && String(o.id)==='1'));
+    await f.query("UPDATE orders SET delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date,customer_phone='56912345678' WHERE id=1");
+    // El mismo teléfono puede existir en formatos históricos distintos. El JOIN
+    // de contactos no debe multiplicar el pedido en la pantalla de reparto.
+    await f.engine.exec(`INSERT INTO contacts(organization_id,phone,name,address) VALUES
+      (1,'56912345678','Exacto','Calle 1'),
+      (1,'912345678','Formato antiguo','Calle 2'),
+      (1,'+56912345678','Con signo','Calle 3');`);
+    const todayList=(await call('get','/orders')).body.orders;
+    assert.equal(todayList.filter(o=>o.source==='bot' && String(o.id)==='1').length,1);
+
+    // Aunque un cliente viejo envíe el mismo pedido repetido, se guarda una
+    // sola parada en la ruta y con numeración estable.
+    const botOne=todayList.find(o=>o.source==='bot' && String(o.id)==='1');
+    await f.query("SELECT setval(pg_get_serial_sequence('delivery_routes','id'),(SELECT MAX(id) FROM delivery_routes))");
+    const draft=await call('post','/routes',{name:'Sin duplicados',orders:[botOne,botOne],optimizedRoute:[botOne,botOne],send:false});
+    assert.equal(draft.code,200);
+    assert.equal(draft.body.route.orders.length,1);
+    assert.equal(draft.body.route.optimized_route.length,1);
   } finally { await f.engine.close(); }
 });
 

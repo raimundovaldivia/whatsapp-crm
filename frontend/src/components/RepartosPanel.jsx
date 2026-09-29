@@ -10,6 +10,16 @@ import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone, Download } from 'lucide-react';
 
+function uniqueOrders(list) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).filter(order => {
+    const key = order?.source && order?.id != null ? `${order.source}_${order.id}` : null;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 // ─── Mapa (Leaflet + OpenStreetMap, cargado desde index.html vía window.L) ────
 //
 // Pinta los puntos de reparto. `ordered` dibuja además la línea de la ruta en
@@ -282,8 +292,9 @@ function NuevoReparto({ colors }) {
     setLoadingOrders(true);
     api.get('/delivery/orders')
       .then(r => {
-        setOrders(r.data.orders || []);
-        setSelected(new Set((r.data.orders || []).map(o => `${o.source}_${o.id}`)));
+        const clean = uniqueOrders(r.data.orders);
+        setOrders(clean);
+        setSelected(new Set(clean.map(o => `${o.source}_${o.id}`)));
       })
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoadingOrders(false));
@@ -318,7 +329,7 @@ function NuevoReparto({ colors }) {
   function reloadOrders() {
     setLoadingOrders(true);
     api.get('/delivery/orders')
-      .then(r => setOrders(r.data.orders || []))
+      .then(r => setOrders(uniqueOrders(r.data.orders)))
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoadingOrders(false));
   }
@@ -499,8 +510,9 @@ function NuevoReparto({ colors }) {
     setLoadingOrders(true);
     api.get('/delivery/orders')
       .then(r => {
-        setOrders(r.data.orders || []);
-        setSelected(new Set((r.data.orders || []).map(o => `${o.source}_${o.id}`)));
+        const clean = uniqueOrders(r.data.orders);
+        setOrders(clean);
+        setSelected(new Set(clean.map(o => `${o.source}_${o.id}`)));
       })
       .finally(() => setLoadingOrders(false));
   }

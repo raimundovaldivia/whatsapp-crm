@@ -150,6 +150,22 @@ function dateOnly(v) {
   return String(v).slice(0, 10);
 }
 
+function orderKey(order) {
+  if (!order || !order.source || order.id == null) return null;
+  return `${order.source}_${String(order.id)}`;
+}
+
+/** Conserva una sola aparición de cada pedido, respetando el primer orden. */
+function dedupeOrders(orders) {
+  const seen = new Set();
+  return (Array.isArray(orders) ? orders : []).filter(order => {
+    const key = orderKey(order);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function normalizeShopifyOrder(row) {
   // shipping_address viene de raw_json JSONB (puede ser objeto o null)
   let addr = {};
@@ -257,14 +273,21 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                so.raw_json->'shippingAddress'  AS shopify_shipping,
                so.shipping_city                AS shopify_city
         FROM orders o
-        LEFT JOIN contacts ct
-          ON ct.organization_id = o.organization_id
-         AND ct.phone = ANY(ARRAY[
-               o.customer_phone,
-               CASE WHEN o.customer_phone ~ '^569' THEN SUBSTRING(o.customer_phone FROM 3) END,
-               CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
-               CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
-             ])
+        LEFT JOIN LATERAL (
+          SELECT name, address, city
+          FROM contacts
+          WHERE organization_id = o.organization_id
+            AND phone = ANY(ARRAY[
+                  o.customer_phone,
+                  CASE WHEN o.customer_phone ~ '^569' THEN SUBSTRING(o.customer_phone FROM 3) END,
+                  CASE WHEN o.customer_phone ~ '^9'   THEN '56' || o.customer_phone END,
+                  CASE WHEN o.customer_phone ~ '^569' THEN '+' || o.customer_phone END
+                ])
+          ORDER BY CASE WHEN phone = o.customer_phone THEN 0 ELSE 1 END,
+                   updated_at DESC NULLS LAST,
+                   id DESC
+          LIMIT 1
+        ) ct ON true
         LEFT JOIN LATERAL (
           SELECT raw_json, shipping_city
           FROM shopify_orders
@@ -287,7 +310,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
     ]);
     const shopifyOrders = shopifyRes.rows.map(normalizeShopifyOrder);
     const botOrders     = botRes.rows.map(normalizeBotOrder);
-    const orders        = [...shopifyOrders, ...botOrders];
+    const orders        = dedupeOrders([...shopifyOrders, ...botOrders]);
 
     // Geocodificar direcciones para el mapa del panel (cacheado).
     // Si no hay GOOGLE_MAPS_API_KEY, cada pedido queda con lat/lng en null y el
@@ -934,7 +957,7 @@ router.delete('/expenses/:id', requireRole('owner', 'admin', 'supervisor', 'coor
  * entrega). Devuelve { keep, skip }.
  */
 async function partitionDispatchable(pool, orgId, orders) {
-  const list = Array.isArray(orders) ? orders : [];
+  const list = dedupeOrders(orders);
   const botIds  = list.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isFinite);
   const shopIds = list.filter(o => o.source === 'shopify').map(o => String(o.id));
   const done = new Set();
@@ -966,8 +989,14 @@ async function partitionDispatchable(pool, orgId, orders) {
 /** Deja solo las paradas cuyos pedidos siguen en `keep`, renumerando el orden. */
 function filterStops(stops, keepOrders) {
   const keepSet = new Set(keepOrders.map(o => `${o.source}_${o.id}`));
+  const seen = new Set();
   return (Array.isArray(stops) ? stops : [])
-    .filter(s => keepSet.has(`${s.source}_${s.id}`))
+    .filter(s => {
+      const key = orderKey(s);
+      if (!key || !keepSet.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map((s, i) => ({ ...s, stopNumber: i + 1 }));
 }
 
@@ -1006,7 +1035,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
 
     // Al ENVIAR, sacar los pedidos que ya no corresponde repartir (entregados,
     // pagados, cancelados). En borrador se guardan todos como se seleccionaron.
-    let finalOrders = orders;
+    let finalOrders = dedupeOrders(orders);
     let skipped = [];
     if (send) {
       const part = await partitionDispatchable(pool, req.orgId, orders);
@@ -1021,7 +1050,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
     const stopsBase = Array.isArray(optimizedRoute) && optimizedRoute.length > 0
       ? optimizedRoute
       : finalOrders.map((o, i) => ({ ...o, stopNumber: i + 1 }));
-    const stops = send ? filterStops(stopsBase, finalOrders) : stopsBase;
+    const stops = filterStops(stopsBase, finalOrders);
 
     const { rows: [route] } = await pool.query(`
       INSERT INTO delivery_routes
@@ -1247,7 +1276,7 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
     const cur      = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
     const curStops = Array.isArray(route.optimized_route) ? route.optimized_route : JSON.parse(route.optimized_route || '[]');
     const existing = new Set(cur.map(o => `${o.source}_${o.id}`));
-    const toAdd    = orders.filter(o => o && o.source && o.id != null && !existing.has(`${o.source}_${o.id}`));
+    const toAdd    = dedupeOrders(orders).filter(o => !existing.has(`${o.source}_${o.id}`));
     if (!toAdd.length) return res.json({ success: true, added: 0, route });
 
     const eligible = await partitionDispatchable(pool, req.orgId, toAdd);
