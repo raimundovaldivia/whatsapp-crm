@@ -316,6 +316,13 @@ router.post('/:id/orders', async (req, res) => {
       totalPrice,
     });
 
+    // Una orden manual reemplaza cualquier borrador que el bot estuviera
+    // recopilando. Si no se limpia, un mensaje posterior como "disculpa la
+    // demora" puede hacer que la IA reviva y confirme el pedido equivocado.
+    await db.updatePipelineState(convId, 'confirmed', {});
+    await db.setAgentMode(convId, 'human');
+    await db.clearLastEscalation?.(convId).catch(() => {});
+
     // Guardar mensaje de resumen en el chat y enviarlo al cliente
     if (sendSummary) {
       const lines = items.map(i => `• ${i.title} x${i.quantity || 1} — $${(parseFloat(i.price) * parseInt(i.quantity || 1)).toLocaleString('es-CL')}`);
@@ -350,6 +357,7 @@ router.post('/:id/orders', async (req, res) => {
       await db.updateConversationLastMessage(convId, summary);
       const updatedConv = await db.getConversationById(convId);
       const io = req.app.get('io');
+      io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: convId, mode: 'human' });
       io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
     }
 

@@ -189,7 +189,7 @@ function matchPromotionBundle(raw, catalog, offers = []) {
     if (!candidate?.units || !candidate?.descriptor || !candidate?.price) return false;
     if (!descriptorMatches({ title: name }, candidate.descriptor)) return false;
     return explicitUnits === Number(candidate.units)
-      || (!explicitUnits && rawQty === Number(candidate.units));
+      || rawQty === Number(candidate.units);
   });
   if (!offer) return null;
 
@@ -208,7 +208,13 @@ function matchPromotionBundle(raw, catalog, offers = []) {
   );
   if (candidates.length !== 1) return null;
 
-  const selections = explicitUnits ? rawQty : 1;
+  // El extractor puede convertir "40 Jumbo" en el SKU correcto de 20 huevos,
+  // pero conservar 40 como quantity. En contexto de una promo 40/60/100 esa
+  // cifra representa huevos, no bandejas. Si el nombre ya trae las unidades
+  // del envase (20) y quantity coincide con la oferta (40), es UN pack promo.
+  const quantityRepresentsEggs = rawQty === Number(offer.units)
+    && explicitUnits !== Number(offer.units);
+  const selections = quantityRepresentsEggs ? 1 : (explicitUnits ? rawQty : 1);
   const bundleQty = Number(offer.units) / baseUnits;
   return {
     candidate: candidates[0],
@@ -255,10 +261,11 @@ function priceItems(items = [], products = [], opts = {}) {
     const qty  = Math.max(1, parseInt(raw.quantity, 10) || 1);
     if (!name.trim()) continue;
 
-    let m = matchProduct(name, catalog);
-    const promoBundle = (!m || m.ambiguous)
-      ? matchPromotionBundle(raw, catalog, promotionOffers)
-      : null;
+    // Resolver primero la presentación promocional. El modelo puede entregar
+    // un producto de catálogo perfectamente válido (Bandeja 20) con quantity
+    // 40, aunque el cliente pidió 40 huevos. El match normal no debe convertir
+    // esa equivocación en 40 bandejas.
+    const promoBundle = matchPromotionBundle(raw, catalog, promotionOffers);
     if (promoBundle) {
       priced.push({
         product_name: promoBundle.candidate.title,
@@ -275,6 +282,7 @@ function priceItems(items = [], products = [], opts = {}) {
       });
       continue;
     }
+    let m = matchProduct(name, catalog);
     if (!m) {
       unmatched.push(name);
       priced.push({ product_name: name, name, title: name, quantity: qty, price: Number(raw.price) || 0, unit_source: 'desconocido', matched: false });
