@@ -151,6 +151,18 @@ test('un template automático reactiva a Diva para atender la respuesta', async 
   assert.deepEqual(changes, [{ id: 19, mode: 'ai' }, { cleared: 19 }]);
 });
 
+test('una respuesta humana conserva el hilo en modo humano para el siguiente mensaje', async () => {
+  const changes = [];
+  const database = {
+    setAgentMode: async (id, mode) => changes.push({ id, mode }),
+    clearLastEscalation: async id => changes.push({ cleared: id }),
+  };
+
+  await conversationMode.keepHumanAfterReply(23, database);
+
+  assert.deepEqual(changes, [{ id: 23, mode: 'human' }, { cleared: 23 }]);
+});
+
 test('Diva avisa una respuesta pendiente en modo humano sin duplicar mensajes seguidos', async () => {
   const pending = [];
   const alerts = [];

@@ -930,16 +930,21 @@ function NuevoReparto({ colors }) {
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 
-// Rellena el cuerpo (BODY) de un template de WhatsApp con los datos reales del
-// pedido, para la vista previa del cobro. Parámetros: {{1}} nombre, {{2}} pedido,
-// {{3}} total, {{4}} datos bancarios.
+const CHARGE_TEMPLATE_NAMES = new Set(['cobro_transferencia']);
+const deliveryDateLabel = row => row?.day
+  ? new Date(`${row.day}T12:00:00`).toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
+  : 'fecha no registrada';
+const chargeOrderReference = row => `${row?.order_label || `#${row?.order_id}`} (entregado el ${deliveryDateLabel(row)})`;
+
+// Rellena el cuerpo (BODY) del template de cobranza aprobado con los datos
+// reales. {{2}} lleva pedido + fecha, sin cambiar el template aprobado en Meta.
 function fillTemplateBody(tpl, row, bank) {
   const body = (tpl?.components || []).find(c => String(c.type || '').toUpperCase() === 'BODY');
   const text = body?.text || '';
   if (!text) return '(Este template no tiene texto de cuerpo para previsualizar.)';
   const rawFirst = String(row?.customer_name || '').trim().split(/\s+/)[0];
   const first = rawFirst ? (rawFirst.charAt(0).toUpperCase() + rawFirst.slice(1).toLowerCase()) : 'Hola';
-  const vals = { '1': first, '2': row?.order_label || `#${row?.order_id}`, '3': CLP(row?.total || 0), '4': bank || '-' };
+  const vals = { '1': first, '2': chargeOrderReference(row), '3': CLP(row?.total || 0), '4': bank || '-' };
   return text.replace(/\{\{(\d+)\}\}/g, (_, n) => (vals[n] != null ? vals[n] : `{{${n}}}`));
 }
 const isoDay = d => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
@@ -965,7 +970,7 @@ function chargeInfo(row) {
   if (state === 'failed') return { label: `Cobro no enviado${row.charge.error?.code ? ` (${row.charge.error.code})` : ''} — reintentar`, color: '#f87171', icon: '⚠️' };
   if (state === 'pending' || state === 'sent') return { label: 'Cobro pendiente de entrega', color: '#fbbf24', icon: '⏳' };
   if (state === 'unknown') return { label: 'Envío anterior sin verificar', color: '#fbbf24', icon: '⚠️' };
-  if (state === 'delivered' || state === 'read') return { label: 'Aviso de cobro entregado' + (row.charge.pending ? ' · sin comprobante' : ''), color: '#38bdf8', icon: '💬' };
+  if (state === 'delivered' || state === 'read') return { label: `Avisado ${row.charge?.count || 1} ${(row.charge?.count || 1) === 1 ? 'vez' : 'veces'} · pago sin confirmar`, color: '#38bdf8', icon: '💬' };
   if (row.charge?.pending) return { label: 'Cobro NO enviado — por cobrar', color: '#f87171', icon: '⚠️' };
   return { label: 'Transferencia', color: '#38bdf8', icon: '🏦' };
 }
@@ -1028,7 +1033,7 @@ function DespachosRepartos({ colors }) {
   async function openChargeModal(d, ev) {
     ev?.stopPropagation?.();
     const pend = (d.rows || []).filter(r =>
-      r.status === 'entregado' && r.payment_method === 'transferencia' && r.charge?.retryable
+      r.status === 'entregado' && r.payment_method === 'transferencia' && r.charge?.actionable
     );
     if (!pend.length) return;
     setChargeModal({ day: d.day, rows: pend });
@@ -1040,9 +1045,11 @@ function DespachosRepartos({ colors }) {
         api.get('/settings/charge-settings').catch(() => ({ data: {} })),
       ]);
       const all = tplRes.data?.data || tplRes.data || [];
-      const approved = all.filter(t => t.status === 'APPROVED');
+      // Otros templates aprobados (promos, reenganche, etc.) tienen variables
+      // incompatibles y no deben poder elegirse por accidente para cobranza.
+      const approved = all.filter(t => t.status === 'APPROVED' && CHARGE_TEMPLATE_NAMES.has(t.name));
       setChargeTpls(approved);
-      const cfg = cfgRes.data?.data || cfgRes.data || {};
+      const cfg = cfgRes.data?.settings || cfgRes.data?.data || cfgRes.data || {};
       setChargeBank(cfg.bankDetails || '');
       const def = cfg.waTemplate && approved.some(t => t.name === cfg.waTemplate)
         ? cfg.waTemplate : (approved[0]?.name || '');
@@ -1149,7 +1156,7 @@ function DespachosRepartos({ colors }) {
   const days = [];
   const byDay = {};
   for (const r of filtered) {
-    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0 }; days.push(byDay[r.day]); }
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, sinPagoConfirmado: 0, cobrosAccionables: 0, extras: 0 }; days.push(byDay[r.day]); }
     const d = byDay[r.day];
     d.rows.push(r);
     if (r.status === 'entregado') {
@@ -1159,6 +1166,8 @@ function DespachosRepartos({ colors }) {
       else if (r.payment_method === 'transferencia') d.transferencia += amount;
       else if (r.payment_method) d.otro += amount;
       if (r.payment_method === 'transferencia') {
+        if (r.charge?.pending) d.sinPagoConfirmado++;
+        if (r.charge?.actionable) d.cobrosAccionables++;
         if (['delivered', 'read'].includes(r.charge?.status)) d.cobrosEnviados++;
         else if (r.charge?.retryable) d.cobrosPendientes++;
         else if (['unknown','pending','sent'].includes(r.charge?.status)) d.cobrosSinConfirmar++;
@@ -1187,7 +1196,8 @@ function DespachosRepartos({ colors }) {
     entregados: t.entregados + d.entregados, cancelados: t.cancelados + d.cancelados, sinEntrega: t.sinEntrega + d.sinEntrega,
     efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia,
     cobrosEnviados: t.cobrosEnviados + d.cobrosEnviados, cobrosPendientes: t.cobrosPendientes + d.cobrosPendientes,
-  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0 });
+    sinPagoConfirmado: t.sinPagoConfirmado + d.sinPagoConfirmado,
+  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0, sinPagoConfirmado: 0 });
   totals.gastos = gastosTotal;
   totals.netoEfectivo = totals.efectivo - gastosTotal;   // efectivo recaudado menos lo que gastó el repartidor
 
@@ -1252,7 +1262,7 @@ function DespachosRepartos({ colors }) {
         {chip(`💵 ${CLP(totals.efectivo)} efectivo`, '#22c55e')}
         {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
         {chip(`💸 ${totals.cobrosEnviados} avisos de cobro entregados`, '#fbbf24')}
-        {totals.cobrosPendientes > 0 && chip(`⚠️ ${totals.cobrosPendientes} sin cobrar`, '#f87171')}
+        {totals.sinPagoConfirmado > 0 && chip(`⚠️ ${totals.sinPagoConfirmado} sin pago confirmado`, '#f87171')}
         {totals.gastos > 0 && chip(`🧾 ${CLP(totals.gastos)} gastos`, '#fb923c')}
         {totals.gastos > 0 && chip(`💰 ${CLP(totals.netoEfectivo)} neto efectivo`, totals.netoEfectivo >= 0 ? '#22c55e' : '#f87171')}
       </div>
@@ -1286,12 +1296,12 @@ function DespachosRepartos({ colors }) {
               {d.cobrosSinConfirmar > 0 && <button disabled={!!charging} onClick={ev => verifyCharges(d, ev)} style={{cursor:'pointer',borderRadius:'999px',padding:'4px 12px',border:`1px solid ${colors.border}`,background:colors.bgPanel,color:colors.textPrimary}}>{charging === d.day ? 'Verificando…' : 'Verificar envíos'}</button>}
               {d.extras > 0 && chip(`🥚 +${CLP(d.extras)} extras`, '#c4b5fd')}
               {d.gastos > 0 && chip(`🧾 ${CLP(d.gastos)} gastos`, '#fb923c')}
-              {d.cobrosPendientes > 0 && (
+              {d.cobrosAccionables > 0 && (
                 <button
                   onClick={(ev) => openChargeModal(d, ev)}
                   disabled={charging === d.day}
                   style={{ backgroundColor: '#fbbf24', color: '#231a02', border: 'none', borderRadius: '999px', padding: '4px 12px', fontSize: '11px', fontWeight: 800, cursor: 'pointer', opacity: charging === d.day ? 0.6 : 1 }}>
-                  {charging === d.day ? 'Enviando…' : `💸 Cobrar a ${d.cobrosPendientes} no cobrado${d.cobrosPendientes === 1 ? '' : 's'}`}
+                  {charging === d.day ? 'Enviando…' : `💸 Recordar pago a ${d.cobrosAccionables}`}
                 </button>
               )}
             </div>
@@ -1372,7 +1382,7 @@ function DespachosRepartos({ colors }) {
         const row = rowsM[idx];
         const tpl = chargeTpls.find(t => t.name === chargeTpl);
         const preview = chargeTpls.length === 0
-          ? '(No hay templates aprobados. Se enviará como texto normal a quienes escribieron hace menos de 24 h.)'
+          ? '(No está disponible el template cobro_transferencia. Solo se podrá enviar texto normal dentro de la ventana de 24 h.)'
           : (tpl ? fillTemplateBody(tpl, row, chargeBank) : 'Elige un template para ver la vista previa.');
         return (
           <div onClick={() => { if (!charging) setChargeModal(null); }}
@@ -1380,14 +1390,14 @@ function DespachosRepartos({ colors }) {
             <div onClick={e => e.stopPropagation()}
               style={{ background: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 18, width: 'min(560px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }}>
               <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: 16 }}>
-                Cobrar a {rowsM.length} no cobrado{rowsM.length === 1 ? '' : 's'}
+                Recordar pago de {rowsM.length} pedido{rowsM.length === 1 ? '' : 's'} sin pago confirmado
               </div>
               <div style={{ color: colors.textMuted, fontSize: 12, marginBottom: 14 }}>{dayLabel(chargeModal.day)}</div>
 
               <div style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Template a enviar</div>
               {chargeTpls.length === 0 ? (
                 <div style={{ color: colors.yellow, fontSize: 12, marginBottom: 12 }}>
-                  No hay templates aprobados en WhatsApp. Los que escribieron hace menos de 24 h reciben texto normal; el resto queda en “Por cobrar”.
+                  No está disponible el template de cobranza <b>cobro_transferencia</b>. Los clientes que escribieron hace menos de 24 h pueden recibir texto normal; el resto no se enviará.
                 </div>
               ) : (
                 <select value={chargeTpl} onChange={e => setChargeTpl(e.target.value)}
@@ -1414,7 +1424,8 @@ function DespachosRepartos({ colors }) {
                         style={{ cursor: 'pointer' }} />
                       <div onClick={() => setChargeIdx(i)} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
                         <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.customer_name || 'cliente'}</div>
-                        <div style={{ color: colors.textMuted, fontSize: 11 }}>{r.order_label} · {CLP(r.total || 0)}</div>
+                        <div style={{ color: colors.textMuted, fontSize: 11 }}>{r.order_label} · entregado el {deliveryDateLabel(r)} · {CLP(r.total || 0)}</div>
+                        {r.charge?.count > 0 && <div style={{ color: colors.yellow, fontSize: 10.5 }}>Ya avisado {r.charge.count} {r.charge.count === 1 ? 'vez' : 'veces'}; continúa sin pago confirmado</div>}
                       </div>
                       <button onClick={() => setChargeIdx(i)} title="Ver vista previa"
                         style={{ background: 'none', border: 'none', color: i === idx ? colors.green : colors.textMuted, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>ver</button>
@@ -1424,7 +1435,7 @@ function DespachosRepartos({ colors }) {
               </div>
 
               <div style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
-                Vista previa{rowsM.length > 1 ? ` (${idx + 1}/${rowsM.length})` : ''} · {row?.customer_name || 'cliente'} · {row?.order_label || ''}
+                Vista previa{rowsM.length > 1 ? ` (${idx + 1}/${rowsM.length})` : ''} · {row?.customer_name || 'cliente'} · {row?.order_label || ''} · entrega {deliveryDateLabel(row)}
               </div>
               <div style={{ whiteSpace: 'pre-wrap', background: colors.bgInput, border: `1px solid ${colors.border}`, borderRadius: 10, padding: 12, color: colors.textPrimary, fontSize: 13, minHeight: 60 }}>
                 {preview}

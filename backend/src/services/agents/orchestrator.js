@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { isBareLinkMessage } = require('../inbound-message-policy');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -7,6 +8,10 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
  * Usa claude-haiku (rápido y barato) para esta tarea simple
  */
 async function classifyIntent(userMessage, conversationHistory, pipelineState, opts = {}) {
+  if (isBareLinkMessage(userMessage)) {
+    return { intent: 'exploring', confidence: 1, reason: 'Enlace compartido sin solicitud explícita' };
+  }
+
   const { hasActiveOrder = false, activeOrderSummary = '' } = opts;
 
   const orderIntents = hasActiveOrder ? `
@@ -32,6 +37,7 @@ Tu ÚNICA tarea es clasificar el mensaje del cliente en UNA de estas categorías
 
 REGLAS:
 - Si el mensaje es MUY corto (1-3 palabras) y es el inicio, probablemente es "greeting"
+- Un enlace o URL enviado sin texto adicional NO es una solicitud de humano; clasifícalo como "exploring"
 - Si ya hay historial de conversación largo, no es "greeting"
 - "delivery_inquiry" es distinto de "support": delivery_inquiry es ANTES de comprar, support es DESPUÉS${orderRules}
 - Estado actual de la conversación: ${pipelineState}
@@ -72,6 +78,10 @@ Nada más. Solo el JSON.`;
  * @returns {{ escalate: boolean, reason: string, urgency: 'low'|'medium'|'high', loopDetected?: boolean }}
  */
 async function checkEscalation(userMessage, conversationHistory, pipelineState, orgId = null) {
+  if (isBareLinkMessage(userMessage)) {
+    return { escalate: false, reason: 'Enlace compartido sin solicitud explícita', urgency: 'low' };
+  }
+
   // ── 0. Romper bucle de escalación ────────────────────────────────
   const ESCALATION_PHRASES = [
     'voy a conectarte', 'te voy a conectar', 'ya te atienden',

@@ -625,6 +625,9 @@ router.post('/charge-settings', require('../middleware/commercial-access').requi
     if (waTemplate !== undefined && waTemplate !== null && !/^[a-z0-9_]*$/.test(String(waTemplate).trim())) {
       return res.status(400).json({ success: false, error: 'El nombre del template de Meta solo admite minúsculas, números y guion bajo' });
     }
+    if (waTemplate && String(waTemplate).trim() !== collection.CHARGE_TEMPLATE_NAME) {
+      return res.status(400).json({ success: false, error: `Ese template no identifica pedido, fecha y monto. Usa ${collection.CHARGE_TEMPLATE_NAME}.` });
+    }
     let settings = await collection.saveChargeSettings(req.orgId, {
       template,
       bankDetails,

@@ -2,6 +2,7 @@ const db = require('../db/database');
 const whatsappService = require('./whatsapp');
 const twilioService = require('./twilio-whatsapp');
 const kapsoService = require('./kapso-whatsapp');
+const templateAutomation = require('./template-automation');
 
 const CUSTOMER_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -55,6 +56,16 @@ function enRouteText({ customerName, orderName }) {
   return `${greeting} Tu pedido${order} ya va en camino 🚚. Por favor, mantente atento/a para recibirlo.`;
 }
 
+function enRouteTemplateComponents(stop) {
+  const name = String(stop.customerName || '').trim().split(/\s+/)[0] || 'Cliente';
+  const order = String(stop.orderName || stop.id || 'tu pedido').trim();
+  const address = String(stop.fullAddress || stop.address || 'la dirección registrada').trim();
+  return [{
+    type: 'body',
+    parameters: [name, order, address].map(text => ({ type: 'text', text })),
+  }];
+}
+
 async function sendProviderText(phone, text, config) {
   if (config.provider === 'twilio') return twilioService.sendTextMessage(phone, text, config);
   if (config.provider === 'kapso') return kapsoService.sendTextMessage(phone, text, config);
@@ -63,14 +74,6 @@ async function sendProviderText(phone, text, config) {
 
 async function sendEnRouteNotification(orgId, stop) {
   const window = await getCustomerServiceWindow(orgId, stop.phone);
-  if (!window.available) {
-    const error = new Error('La ventana de 24 horas está cerrada. Para avisar se necesita un template aprobado.');
-    error.status = 409;
-    error.code = window.reason || 'WINDOW_EXPIRED';
-    error.window = window;
-    throw error;
-  }
-
   const config = await db.getWhatsappConfig(orgId);
   if (!config) {
     const error = new Error('WhatsApp no está configurado para esta cuenta.');
@@ -81,15 +84,43 @@ async function sendEnRouteNotification(orgId, stop) {
 
   const text = enRouteText(stop);
   let sent;
-  try {
-    sent = await sendProviderText(stop.phone, text, config);
-  } catch (error) {
-    if (error.is24hWindow) {
+  let via = 'text';
+  let assignment = null;
+
+  const sendAssignedTemplate = async () => {
+    assignment = await templateAutomation.getAssignment(orgId, 'delivery_en_route');
+    if (!assignment) {
+      const error = new Error('La ventana de 24 horas está cerrada y no hay un template automático asignado para “Pedido en camino”.');
       error.status = 409;
-      error.code = 'WINDOW_EXPIRED';
-      error.message = 'La ventana de 24 horas se cerró. Para avisar se necesita un template aprobado.';
+      error.code = window.reason || 'WINDOW_EXPIRED';
+      error.window = window;
+      throw error;
     }
-    throw error;
+    if (!['kapso', 'meta'].includes(config.provider)) {
+      const error = new Error('El proveedor configurado no admite templates automáticos.');
+      error.status = 400;
+      error.code = 'TEMPLATES_NOT_SUPPORTED';
+      throw error;
+    }
+    via = 'template';
+    return kapsoService.sendTemplate(
+      stop.phone,
+      assignment.name,
+      assignment.language || 'es',
+      enRouteTemplateComponents(stop),
+      config
+    );
+  };
+
+  if (window.available) {
+    try {
+      sent = await sendProviderText(stop.phone, text, config);
+    } catch (error) {
+      if (!error.is24hWindow) throw error;
+      sent = await sendAssignedTemplate();
+    }
+  } else {
+    sent = await sendAssignedTemplate();
   }
 
   const messageId = sent?.messageId || sent?.messages?.[0]?.id || sent?.sid || null;
@@ -99,8 +130,8 @@ async function sendEnRouteNotification(orgId, stop) {
       conversationId: window.conversationId,
       whatsappMessageId: messageId,
       direction: 'outbound',
-      content: text,
-      status: 'sent',
+      content: via === 'template' ? `[Template: ${assignment.name}]\n\n${text}` : text,
+      status: via === 'template' ? 'pending' : 'sent',
       sentBy: 'ai',
       agentType: 'delivery',
     });
@@ -111,7 +142,7 @@ async function sendEnRouteNotification(orgId, stop) {
     console.error('[Delivery notification] Mensaje enviado pero no registrado:', error.message);
   }
 
-  return { sent: true, text, message, conversationId: window.conversationId, window };
+  return { sent: true, text, message, conversationId: window.conversationId, window, via, templateName: assignment?.name || null };
 }
 
 module.exports = {
@@ -120,5 +151,6 @@ module.exports = {
   windowInfoFromLastInbound,
   getCustomerServiceWindow,
   enRouteText,
+  enRouteTemplateComponents,
   sendEnRouteNotification,
 };

@@ -49,6 +49,18 @@ async function activateDivaForAutomatedMessage(conversationId, database) {
   }
 }
 
+/**
+ * Cuando una persona responde al cliente, conserva el hilo en modo humano.
+ * El cliente suele contestar con una aclaración inmediatamente después y Diva
+ * no debe interrumpir ni volver a escalar una conversación ya atendida.
+ */
+async function keepHumanAfterReply(conversationId, database) {
+  await database.setAgentMode(conversationId, 'human');
+  if (typeof database.clearLastEscalation === 'function') {
+    await database.clearLastEscalation(conversationId).catch(() => {});
+  }
+}
+
 module.exports = {
   HUMAN_IDLE_MINUTES,
   COORDINATION_IDLE_MINUTES,
@@ -56,4 +68,5 @@ module.exports = {
   shouldResumeDivaOnInbound,
   resumeDivaOnInbound,
   activateDivaForAutomatedMessage,
+  keepHumanAfterReply,
 };

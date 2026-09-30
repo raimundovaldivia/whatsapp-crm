@@ -12,6 +12,10 @@
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
+const whatsappService = require('./whatsapp');
+const twilioService = require('./twilio-whatsapp');
+const deliveryNotifications = require('./delivery-notifications');
+const templateAutomation = require('./template-automation');
 const { activateDivaForAutomatedMessage } = require('./conversation-mode');
 const { isCustomerMessagingHour } = require('./outbound-policy');
 
@@ -94,23 +98,22 @@ async function processScheduledOrder(order, io) {
     // No interrumpimos — seguimos con el template
   }
 
-  // ─── PASO B: Enviar template de despacho ────────────────────────────────
-  if (!wc || wc.provider !== 'kapso') {
-    console.warn(`[ScheduledFollowUp] Org ${orgId}: sin config Kapso — saltando envío de template #${id}`);
+  // ─── PASO B: Enviar aviso ────────────────────────────────────────────────
+  // Texto libre dentro de la ventana; template solo como respaldo cuando la
+  // ventana terminó. Así no se incurre en el costo de template innecesariamente.
+  if (!wc) {
+    console.warn(`[ScheduledFollowUp] Org ${orgId}: sin WhatsApp — saltando aviso #${id}`);
     await db.markScheduledOrderSent(id);
     return;
   }
 
-  // 2. Determinar qué template usar
-  const tplName = template_name
+  const assignment = await templateAutomation.getAssignment(orgId, 'scheduled_order');
+  const tplName = template_name || assignment?.name
     || (await db.getSetting(orgId, 'scheduled_dispatch_template'))
     || (await db.getSetting(orgId, 'scheduled_order_template'));
-
-  if (!tplName) {
-    console.warn(`[ScheduledFollowUp] Org ${orgId}: sin template de despacho configurado — la orden se creó pero no se enviará mensaje. Configura 'scheduled_dispatch_template' en Ajustes.`);
-    await db.markScheduledOrderSent(id);
-    return;
-  }
+  const tplLanguage = assignment?.language
+    || (await db.getSetting(orgId, 'scheduled_dispatch_template_language'))
+    || 'es';
 
   // 3. Construir los components del template
   //    El template debe tener {{1}} = nombre del cliente, {{2}} = producto
@@ -123,40 +126,57 @@ async function processScheduledOrder(order, io) {
     ],
   }];
 
-  // 4. Enviar template vía Kapso
-  console.log(`[ScheduledFollowUp] Enviando template de despacho '${tplName}' a ${phone} (scheduled_order #${id})`);
+  const window = await deliveryNotifications.getCustomerServiceWindow(orgId, phone);
+  const freeText = `Hola ${String(name).trim().split(/\s+/)[0] || 'Cliente'} 👋 Tu pedido agendado de ${product} ya está preparado para despacho. Te avisaremos cuando vaya en camino.`;
   let sentResult;
-  try {
-    sentResult = await kapsoService.sendTemplate(phone, tplName, 'es', components, wc);
-  } catch (sendErr) {
-    // Si el template tiene menos parámetros, reintentar con solo el nombre
-    const metaCode = sendErr.response?.data?.error?.code;
-    if (metaCode === 132000) {
-      console.warn(`[ScheduledFollowUp] Template con 1 parámetro — reintentando con solo nombre`);
-      sentResult = await kapsoService.sendTemplate(phone, tplName, 'es', [{
-        type: 'body',
-        parameters: [{ type: 'text', text: name }],
-      }], wc);
-    } else {
+  let via = 'text';
+  const sendTemplate = async () => {
+    if (!tplName) throw new Error('La ventana de 24 horas está cerrada y no hay template asignado para Pedido agendado.');
+    via = 'template';
+    console.log(`[ScheduledFollowUp] Ventana cerrada: usando template '${tplName}' para #${id}`);
+    try {
+      return await kapsoService.sendTemplate(phone, tplName, tplLanguage, components, wc);
+    } catch (sendErr) {
+      const metaCode = sendErr.response?.data?.error?.code;
+      if (metaCode === 132000 && template_name) {
+        return kapsoService.sendTemplate(phone, tplName, tplLanguage, [{
+          type: 'body', parameters: [{ type: 'text', text: name }],
+        }], wc);
+      }
       throw sendErr;
     }
+  };
+
+  if (window.available) {
+    try {
+      if (wc.provider === 'twilio') sentResult = await twilioService.sendTextMessage(phone, freeText, wc);
+      else if (wc.provider === 'kapso') sentResult = await kapsoService.sendTextMessage(phone, freeText, wc);
+      else sentResult = await whatsappService.sendTextMessage(phone, freeText, wc);
+    } catch (sendErr) {
+      if (!sendErr.is24hWindow) throw sendErr;
+      sentResult = await sendTemplate();
+    }
+  } else {
+    sentResult = await sendTemplate();
   }
 
-  // 5. Guardar mensaje en DB y actualizar pipeline_state → template_sent (warm lead)
-  const content = `[Template: ${tplName}]\n\n📅 Despacho de pedido agendado: ${product}`;
+  // 5. Guardar mensaje en DB y actualizar pipeline_state.
+  const content = via === 'template'
+    ? `[Template: ${tplName}]\n\n📅 Despacho de pedido agendado: ${product}`
+    : freeText;
   const savedMessage = await db.saveMessage({
     conversationId:    convId,
-    whatsappMessageId: sentResult?.messages?.[0]?.id || null,
+    whatsappMessageId: sentResult?.messageId || sentResult?.messages?.[0]?.id || sentResult?.sid || null,
     direction:         'outbound',
     content,
     sentBy:            'ai',
     agentType:         'system',
-    status:            'pending',
+    status:            via === 'template' ? 'pending' : 'sent',
   });
 
   await db.updateConversationLastMessage(convId, content);
   await activateDivaForAutomatedMessage(convId, db);
-  await db.updatePipelineState(convId, 'template_sent');  // el pipeline lo trata como warm lead
+  await db.updatePipelineState(convId, via === 'template' ? 'template_sent' : 'exploring');
 
   // 6. Marcar como enviado
   await db.markScheduledOrderSent(id);
@@ -170,7 +190,7 @@ async function processScheduledOrder(order, io) {
     });
   }
 
-  console.log(`[ScheduledFollowUp] ✅ Template de despacho enviado a ${phone} — scheduled_order #${id}`);
+  console.log(`[ScheduledFollowUp] ✅ Aviso de despacho enviado por ${via} a ${phone} — scheduled_order #${id}`);
 }
 
 /**

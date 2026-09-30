@@ -9,7 +9,7 @@ function loadRoute(calls) {
       getWhatsappConfig: async () => ({ kapso_api_key: 'key', business_account_id: 'waba' }),
     },
     '../services/kapso-whatsapp': {},
-    '../middleware/auth': { requireAuth: noop },
+    '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
     '../utils/template-renderer.mjs': templateRenderer,
     axios: {
       post: async (_url, payload) => {

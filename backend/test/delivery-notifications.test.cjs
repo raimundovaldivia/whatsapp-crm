@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load, handler, response, noop } = require('./helpers.cjs');
 
-function serviceWith({ lastInboundAt, providerResult = { messages: [{ id: 'wamid.1' }] }, providerError = null } = {}) {
+function serviceWith({ lastInboundAt, providerResult = { messages: [{ id: 'wamid.1' }] }, providerError = null, assignment = null } = {}) {
   const saved = [];
   const db = {
     getPool: () => ({ query: async () => ({ rows: [{ id: 41, last_inbound_at: lastInboundAt }] }) }),
@@ -11,20 +11,23 @@ function serviceWith({ lastInboundAt, providerResult = { messages: [{ id: 'wamid
     updateConversationLastMessage: async () => {},
   };
   let sends = 0;
+  let templateSends = 0;
   const kapso = {
     sendTextMessage: async () => {
       sends++;
       if (providerError) throw providerError;
       return providerResult;
     },
+    sendTemplate: async () => { templateSends++; return providerResult; },
   };
   const service = load('src/services/delivery-notifications.js', {
     '../db/database': db,
     './kapso-whatsapp': kapso,
     './whatsapp': { sendTextMessage: async () => {} },
     './twilio-whatsapp': { sendTextMessage: async () => {} },
+    './template-automation': { getAssignment: async () => assignment },
   });
-  return { service, saved, get sends() { return sends; } };
+  return { service, saved, get sends() { return sends; }, get templateSends() { return templateSends; } };
 }
 
 test('la ventana se mide desde el último mensaje entrante y vence exactamente a las 24 horas', () => {
@@ -59,17 +62,32 @@ test('con la ventana cerrada no intenta enviar texto libre', async () => {
   assert.equal(fixture.saved.length, 0);
 });
 
-test('si el proveedor informa que la ventana cerró, devuelve un error controlado y no finge envío', async () => {
+test('con la ventana cerrada usa el template automático asignado sin intentar texto libre', async () => {
+  const fixture = serviceWith({
+    lastInboundAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+    assignment: { name: 'aviso_pedido_en_camino', language: 'es_CL', category: 'UTILITY' },
+  });
+  const result = await fixture.service.sendEnRouteNotification(3, {
+    phone: '56911112222', customerName: 'Ana Díaz', orderName: '#43', fullAddress: 'Puerta del Mar 340',
+  });
+  assert.equal(result.via, 'template');
+  assert.equal(result.templateName, 'aviso_pedido_en_camino');
+  assert.equal(fixture.sends, 0);
+  assert.equal(fixture.templateSends, 1);
+  assert.match(fixture.saved[0].content, /Template: aviso_pedido_en_camino/);
+});
+
+test('si el proveedor informa que la ventana cerró, cambia al template asignado', async () => {
   const providerError = Object.assign(new Error('provider rejected'), { is24hWindow: true });
   const fixture = serviceWith({
     lastInboundAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     providerError,
+    assignment: { name: 'aviso_pedido_en_camino', language: 'es', category: 'UTILITY' },
   });
-  await assert.rejects(
-    () => fixture.service.sendEnRouteNotification(3, { phone: '56911112222', customerName: 'Ana' }),
-    error => error.status === 409 && error.code === 'WINDOW_EXPIRED'
-  );
-  assert.equal(fixture.saved.length, 0);
+  const result = await fixture.service.sendEnRouteNotification(3, { phone: '56911112222', customerName: 'Ana' });
+  assert.equal(result.via, 'template');
+  assert.equal(fixture.templateSends, 1);
+  assert.equal(fixture.saved.length, 1);
 });
 
 test('la API móvil valida ruta, asignación y pertenencia antes de consultar o enviar', async () => {
@@ -93,6 +111,7 @@ test('la API móvil valida ruta, asignación y pertenencia antes de consultar o 
   const router = load('src/routes/delivery.js', {
     '../db/database': { getPool: () => pool },
     '../services/delivery-notifications': notifications,
+    '../services/template-automation': { getAssignment: async () => null },
     '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
   });
 

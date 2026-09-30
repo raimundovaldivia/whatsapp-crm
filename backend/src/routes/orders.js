@@ -531,6 +531,9 @@ router.post('/verify-charges', async (req, res) => {
 
 router.post('/send-charge', async (req, res) => {
   const { orders: selection = [], force = false, template = null } = req.body;
+  if (template && template !== collection.CHARGE_TEMPLATE_NAME) {
+    return res.status(400).json({ success: false, error: `El template "${template}" no es compatible con cobranza. Usa ${collection.CHARGE_TEMPLATE_NAME}.` });
+  }
   if (!Array.isArray(selection) || selection.length === 0) {
     return res.status(400).json({ success: false, error: 'Selecciona al menos un pedido' });
   }

@@ -25,9 +25,9 @@ const metaService   = require('./whatsapp');
 const MIN_HOURS_BETWEEN_CHARGES = 6;
 
 const DEFAULT_TEMPLATE =
-  'Hola {nombre} 👋 Te dejamos el detalle de tu pedido {pedido} por {total}.\n\n' +
-  'Nos quedó pendiente el comprobante de la transferencia. Cuando puedas, ' +
-  'mándanos la captura por acá y lo damos por pagado. ¡Gracias!';
+  'Hola {nombre} 👋 Te escribimos por tu pedido {pedido}, por un total de {total}.\n\n' +
+  'En nuestros registros todavía aparece sin pago confirmado. Si pagaste por transferencia, ' +
+  'mándanos el comprobante por acá. Si ya pagaste por otro medio, avísanos para revisarlo. ¡Gracias!';
 
 // ─── Settings de cobranza ────────────────────────────────────────────────────
 
@@ -53,21 +53,24 @@ async function getChargeSettings(orgId) {
     // Template de Meta para cobrar cuando el cliente lleva más de 24 h sin
     // escribir (ahí WhatsApp no deja mandar texto libre). Lo crea el CRM
     // (submitChargeTemplate) y queda PENDING hasta que Meta lo apruebe.
-    // Parámetros del body, en orden: {{1}} nombre · {{2}} pedido · {{3}} total · {{4}} datos banco
+    // Parámetros del body, en orden: {{1}} nombre · {{2}} pedido con fecha
+    // de entrega · {{3}} total · {{4}} datos banco
     waTemplate:            (parsed.waTemplate || '').trim(),
+    waTemplateLanguage:    (parsed.waTemplateLanguage || 'es').trim(),
     waTemplateStatus:      parsed.waTemplateStatus || null,      // PENDING | APPROVED | REJECTED | null
     waTemplateReason:      parsed.waTemplateReason || null,
     waTemplateSubmittedAt: parsed.waTemplateSubmittedAt || null,
   };
 }
 
-async function saveChargeSettings(orgId, { template, bankDetails, autoSendOnTransfer, waTemplate, waTemplateStatus, waTemplateReason, waTemplateSubmittedAt } = {}) {
+async function saveChargeSettings(orgId, { template, bankDetails, autoSendOnTransfer, waTemplate, waTemplateLanguage, waTemplateStatus, waTemplateReason, waTemplateSubmittedAt } = {}) {
   const current = await getChargeSettings(orgId);
   const next = {
     template:              template              ?? current.template,
     bankDetails:           bankDetails           ?? current.bankDetails,
     autoSendOnTransfer:    autoSendOnTransfer    ?? current.autoSendOnTransfer,
     waTemplate:            waTemplate            ?? current.waTemplate,
+    waTemplateLanguage:    waTemplateLanguage    ?? current.waTemplateLanguage,
     waTemplateStatus:      waTemplateStatus      ?? current.waTemplateStatus,
     waTemplateReason:      waTemplateReason      ?? current.waTemplateReason,
     waTemplateSubmittedAt: waTemplateSubmittedAt ?? current.waTemplateSubmittedAt,
@@ -195,15 +198,34 @@ function firstName(name) {
   return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 }
 
+function formatDeliveryDate(order) {
+  const value = order?.delivered_at || order?.payment_marked_at || null;
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('es-CL', {
+    day: 'numeric', month: 'long', year: 'numeric', timeZone: 'America/Santiago',
+  });
+}
+
+function orderReference(order) {
+  const label = order?.order_label || `#${order?.id}`;
+  const delivered = formatDeliveryDate(order);
+  return delivered ? `${label} (entregado el ${delivered})` : label;
+}
+
 /**
  * Reemplaza los placeholders del template con los datos del pedido.
- * Placeholders soportados: {nombre} {pedido} {total} {datos_banco}
+ * Placeholders soportados: {nombre} {pedido} {fecha_entrega} {total} {datos_banco}
+ * {pedido} siempre incluye la fecha de entrega cuando está disponible, para
+ * que incluso los templates personalizados antiguos identifiquen la deuda.
  */
 function buildChargeMessage(order, settings) {
   const name = firstName(order.customer_name);
   let msg = settings.template
     .replace(/\{nombre\}/g,       name || 'Hola')
-    .replace(/\{pedido\}/g,       order.order_label || `#${order.id}`)
+    .replace(/\{pedido\}/g,       orderReference(order))
+    .replace(/\{fecha_entrega\}/g, formatDeliveryDate(order) || 'fecha no registrada')
     .replace(/\{total\}/g,        formatCLP(order.total_price))
     .replace(/\{datos_banco\}/g,  settings.bankDetails || '');
 
@@ -360,7 +382,7 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
 
 /**
  * Envía el cobro como template aprobado (cliente fuera de la ventana de 24 h).
- * Prueba con 4 parámetros (nombre, pedido, total, datos banco) y, si Meta
+ * Prueba con 4 parámetros (nombre, pedido con fecha de entrega, total, datos banco) y, si Meta
  * responde que el template tiene menos (código 132000), reintenta con 3 y
  * luego con 1, igual que el template de despacho.
  */
@@ -370,11 +392,11 @@ async function sendChargeTemplate(order, settings, wc) {
   const oneLine = v => String(v || '').replace(/\s+/g, ' ').trim();
   const params = [
     oneLine(firstName(order.customer_name) || 'Hola'),
-    oneLine(order.order_label || `#${order.id}`),
+    oneLine(orderReference(order)),
     oneLine(formatCLP(order.total_price)),
     oneLine(settings.bankDetails || '-'),
   ];
-  const attempt = n => kapso.sendTemplate(order.customer_phone, settings.waTemplate, 'es', [{
+  const attempt = n => kapso.sendTemplate(order.customer_phone, settings.waTemplate, settings.waTemplateLanguage || 'es', [{
     type: 'body',
     parameters: params.slice(0, n).map(text => ({ type: 'text', text })),
   }], wc);
@@ -408,6 +430,7 @@ async function getPendingCharges(orgId) {
             CONCAT('#', o.id::text)      AS order_label,
             o.status                     AS order_status,
             o.created_at                 AS created_at,
+            o.delivered_at               AS delivered_at,
             o.payment_marked_at          AS payment_marked_at,
             o.charge_requested_at        AS charge_requested_at,
             o.charge_message_id AS charge_message_id,
@@ -437,6 +460,7 @@ async function getPendingCharges(orgId) {
             COALESCE(NULLIF(s.shopify_name, ''), CONCAT('#', s.shopify_order_id)) AS order_label,
             s.crm_status                 AS order_status,
             s.shopify_created_at         AS created_at,
+            s.delivered_at               AS delivered_at,
             s.payment_marked_at          AS payment_marked_at,
             s.charge_requested_at        AS charge_requested_at,
             s.charge_message_id AS charge_message_id,
@@ -457,8 +481,8 @@ async function getPendingCharges(orgId) {
     ...r,
     total_price: parseFloat(r.total_price) || 0,
     // Horas desde que se marcó la entrega — para ordenar por antigüedad de la deuda
-    hours_owed: r.payment_marked_at
-      ? Math.round((Date.now() - new Date(r.payment_marked_at).getTime()) / 3600000)
+    hours_owed: (r.delivered_at || r.payment_marked_at)
+      ? Math.round((Date.now() - new Date(r.delivered_at || r.payment_marked_at).getTime()) / 3600000)
       : null,
   }));
 }
@@ -530,6 +554,8 @@ module.exports = {
   getChargeSettings,
   saveChargeSettings,
   buildChargeMessage,
+  formatDeliveryDate,
+  orderReference,
   sendChargeRequest,
   getPendingCharges,
   getOrderForCharge,
