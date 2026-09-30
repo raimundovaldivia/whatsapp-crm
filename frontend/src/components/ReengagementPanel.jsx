@@ -1580,7 +1580,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const someChecked = filtered.some(c => selected.has(c.phone));
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
       {/* Toast */}
       {toast && (
@@ -1760,6 +1760,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </div>
       )}
 
+      {/*
+        Todo el contenido de trabajo comparte un único scroll. Antes sólo podía
+        desplazarse la lista de contactos: si historial + variables + preview
+        superaban el alto de la ventana, la parte inferior quedaba inaccesible.
+      */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', scrollbarGutter: 'stable' }}>
       {/* Historial durable: muestra lo aceptado por WhatsApp y el motivo de cada rechazo. */}
       <div style={{ padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: campaigns.length ? 10 : 0 }}>
@@ -1971,7 +1977,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       )}
 
       {/* Lista de contactos */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div>
         {loading ? (
           <div style={{ padding: '60px', textAlign: 'center', color: colors.textMuted }}>Cargando contactos...</div>
         ) : filtered.length === 0 ? (
@@ -2009,6 +2015,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             </div>
           );
         })}
+      </div>
       </div>
 
       {/* Confirmación intermedia: esta instantánea es exactamente la que se enviará. */}
