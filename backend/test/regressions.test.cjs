@@ -53,7 +53,7 @@ test('delivery: member and assignment checks, missing/completed orders, rollback
     assert.equal((await f.query('SELECT financial_status FROM shopify_orders')).rows[0].financial_status,'paid');
   } finally {await f.engine.close();}
 });
-test('delivery outcomes cancel, reschedule or close a stop without changing the order',async()=>{
+test('delivery outcomes cancel, reschedule or mark a visible delivery incident',async()=>{
   const f=await fixture();
   try {
     const router=load('src/routes/delivery.js',{'../db/database':f.db,'../middleware/auth':{requireAuth:noop,requireRole:()=>noop}});
@@ -83,12 +83,30 @@ test('delivery outcomes cancel, reschedule or close a stop without changing the 
     await reset();
     assert.equal((await call({status:'not_delivered',note:'Cliente no responde'})).code,200);
     order=(await f.query('SELECT status,delivery_date,delivery_note,last_attempt_status FROM orders WHERE id=1')).rows[0];
-    assert.equal(order.status,'sent');
+    assert.equal(order.status,'no_entregado');
     assert.equal(order.delivery_date,null);
-    assert.equal(order.delivery_note,null);
-    assert.equal(order.last_attempt_status,null);
+    assert.equal(order.delivery_note,'Cliente no responde');
+    assert.equal(order.last_attempt_status,'no_entregado');
     assert.equal((await f.query('SELECT status FROM delivery_routes WHERE id=1')).rows[0].status,'completed');
     assert.equal((await f.query("SELECT stop_notes->>'bot_1' note FROM delivery_routes WHERE id=1")).rows[0].note,'Cliente no responde');
+  } finally {await f.engine.close();}
+});
+test('stale in-transit routes become auditable delivery incidents the next day',async()=>{
+  const f=await fixture();
+  try {
+    await f.query("UPDATE orders SET status='en_camino' WHERE id=1");
+    await f.query("UPDATE delivery_routes SET status='in_progress', started_at=TIMESTAMPTZ '2026-09-29 15:00:00-03', stop_statuses='{}', stop_notes='{}', stop_times='{}' WHERE id=1");
+    const recovery=load('src/services/delivery-recovery.js',{'../db/database':f.db});
+    const result=await recovery.reconcileStaleDeliveryRoutes(1,new Date('2026-09-30T13:00:00Z'));
+    assert.equal(result.recovered,1);
+    const order=(await f.query('SELECT status,last_attempt_status,delivery_note FROM orders WHERE id=1')).rows[0];
+    assert.equal(order.status,'no_entregado');
+    assert.equal(order.last_attempt_status,'sin_resolver');
+    assert.match(order.delivery_note,/sin que el repartidor registrara/);
+    const route=(await f.query("SELECT status,stop_statuses->>'bot_1' stop_status,stop_notes->>'bot_1' note FROM delivery_routes WHERE id=1")).rows[0];
+    assert.equal(route.status,'completed');
+    assert.equal(route.stop_status,'not_delivered');
+    assert.match(route.note,/sin que el repartidor registrara/);
   } finally {await f.engine.close();}
 });
 test('merge preserves linked business records, rejects another tenant and rolls back deletion failure',async()=>{

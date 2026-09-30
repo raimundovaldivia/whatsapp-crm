@@ -392,7 +392,7 @@ async function setupDatabase() {
       EXCEPTION WHEN undefined_object THEN NULL;
       END $$;
       ALTER TABLE orders ADD CONSTRAINT orders_status_check
-        CHECK(status IN ('draft','sent','payment_received','nuevo','por_despachar','en_camino','entregado','paid','cancelled'))
+        CHECK(status IN ('draft','sent','payment_received','nuevo','por_despachar','en_camino','no_entregado','entregado','paid','cancelled'))
         NOT VALID;
 
       -- Migración: estado CRM local para órdenes Shopify

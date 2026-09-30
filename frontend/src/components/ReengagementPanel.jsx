@@ -1207,6 +1207,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [prodTerm,  setProdTerm]  = useState('');    // texto del filtro por producto
   const [prodPhones, setProdPhones] = useState(null); // Set de teléfonos que compraron el producto (null = sin filtro)
   const [prodBusy,  setProdBusy]  = useState(false);
+  const [deliveryPhones, setDeliveryPhones] = useState(null); // no entregados en la ruta de ayer
+  const [deliveryCases, setDeliveryCases] = useState(new Map());
+  const [deliveryBusy, setDeliveryBusy] = useState(false);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -1341,6 +1344,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     if (mode === 'since_order') return 'un tiempo';
     if (mode === 'last_order_date') return 'hace un tiempo';
     if (mode === 'orders_count') return '0';
+    if (mode === 'delivery_reason') return 'no pudimos completar la entrega';
+    if (mode === 'delivery_order') return 'tu pedido';
     return '';
   }
   function varValue(i, contact) {
@@ -1354,6 +1359,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     else if (mode === 'orders_count') v = contact?.total_orders ?? '';
     else if (mode === 'city') v = contact?.city || '';
     else if (mode === 'phone') v = contact?.phone || '';
+    else if (mode === 'delivery_reason') v = deliveryCases.get(normPhone(contact?.phone))?.reason || '';
+    else if (mode === 'delivery_order') v = deliveryCases.get(normPhone(contact?.phone))?.orderLabels?.join(', ') || '';
     else if (mode === 'text') v = varText[i] || '';
     else v = '';
     v = String(v ?? '').trim();
@@ -1373,6 +1380,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     }
     if (excludeEmpresas && c.client_type === 'empresa') return false;
     if (prodPhones && !prodPhones.has(normPhone(c.phone))) return false;
+    if (deliveryPhones && !deliveryPhones.has(normPhone(c.phone))) return false;
     return true;
   });
 
@@ -1417,6 +1425,39 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } finally { setProdBusy(false); }
   }
   function clearProduct() { setProdTerm(''); setProdPhones(null); }
+
+  async function toggleDeliveryAudience() {
+    if (deliveryPhones) {
+      setDeliveryPhones(null);
+      setDeliveryCases(new Map());
+      setSelected(new Set(contacts.map(contact => contact.phone)));
+      return;
+    }
+    setDeliveryBusy(true);
+    try {
+      const { data } = await api.get('/contacts/delivery-audience?scope=yesterday');
+      const grouped = new Map();
+      for (const incident of data.incidents || []) {
+        const phone = normPhone(incident.phone);
+        if (!phone) continue;
+        const current = grouped.get(phone) || { reason: incident.reason, orderLabels: [], incidents: [] };
+        if (incident.order_label && !current.orderLabels.includes(incident.order_label)) current.orderLabels.push(incident.order_label);
+        current.incidents.push(incident);
+        grouped.set(phone, current);
+      }
+      const phones = new Set(grouped.keys());
+      setDeliveryCases(grouped);
+      setDeliveryPhones(phones);
+      setSelected(new Set(contacts.filter(contact => phones.has(normPhone(contact.phone))).map(contact => contact.phone)));
+      showToast(phones.size
+        ? `${phones.size} cliente${phones.size === 1 ? '' : 's'} con entrega no completada ayer`
+        : 'No hay entregas pendientes de ayer');
+    } catch (error) {
+      showToast(error.response?.data?.error || 'No se pudo cargar la lista de entregas pendientes', 'error');
+    } finally {
+      setDeliveryBusy(false);
+    }
+  }
 
   function prepareReview() {
     if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
@@ -1612,6 +1653,18 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           }}
         >
           {excludeRecent ? '✓ ' : ''}Sin compras esta semana
+        </button>
+
+        <button onClick={toggleDeliveryAudience} disabled={deliveryBusy}
+          title="Pedidos que salieron a ruta ayer y no quedaron entregados"
+          style={{
+            padding:'6px 11px', borderRadius:'7px', fontSize:'12px', fontWeight:700,
+            cursor:deliveryBusy ? 'wait' : 'pointer', whiteSpace:'nowrap', flexShrink:0,
+            border:`1px solid ${deliveryPhones ? '#fb923c' : colors.border}`,
+            backgroundColor:deliveryPhones ? '#fb923c22' : 'transparent',
+            color:deliveryPhones ? '#fb923c' : colors.textMuted,
+          }}>
+          {deliveryBusy ? 'Revisando ruta…' : `${deliveryPhones ? '✓ ' : ''}No entregados ayer${deliveryPhones ? ` (${deliveryPhones.size})` : ''}`}
         </button>
 
         {/* Filtro: excluir empresas */}
@@ -1830,6 +1883,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 <option value="orders_count">Cantidad de pedidos</option>
                 <option value="city">Ciudad</option>
                 <option value="phone">Teléfono</option>
+                <option value="delivery_order">Pedido no entregado</option>
+                <option value="delivery_reason">Motivo de no entrega</option>
                 <option value="text">Texto fijo</option>
               </select>
               {mode === 'text' ? (
@@ -1934,6 +1989,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px' }}>{toTitleCase(c.name) || 'Sin nombre'}</div>
                 <div style={{ color: colors.textMuted, fontSize: '12px' }}>{c.phone}</div>
+                {deliveryCases.has(normPhone(c.phone)) && (
+                  <div style={{ color:'#fb923c', fontSize:'11px', marginTop:'3px', fontWeight:650 }}>
+                    🚚 No entregado ayer · {deliveryCases.get(normPhone(c.phone)).orderLabels.join(', ') || 'Pedido'} · {deliveryCases.get(normPhone(c.phone)).reason}
+                  </div>
+                )}
               </div>
               {c.total_orders > 0 && (
                 <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: colors.radiusSm, padding: '2px 6px' }}>

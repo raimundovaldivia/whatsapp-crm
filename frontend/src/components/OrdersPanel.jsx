@@ -83,6 +83,7 @@ const CRM_STATUSES = [
   { key: 'nuevo',         label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
   { key: 'por_despachar', label: 'Por despachar',  color: '#fb923c', bg: '#2e1500' },
   { key: 'en_camino',     label: 'En camino',      color: '#38bdf8', bg: '#0c2030' },
+  { key: 'no_entregado',  label: 'No entregado',   color: '#fb923c', bg: '#321b0d' },
   { key: 'entregado',     label: 'Entregado',      color: '#2dd4bf', bg: '#07231f' },
   { key: 'paid',          label: 'Pagado',          color: '#22c55e', bg: '#052010' },
   { key: 'cancelled',     label: 'Cancelado',      color: '#f87171', bg: '#2d1a1a' },
@@ -103,6 +104,7 @@ function getBotStatusStyle(status, colors) {
     nuevo:            crm,
     por_despachar:    crm,
     en_camino:        crm,
+    no_entregado:     { label: 'No entregado', color: '#fb923c', bg: '#321b0d' },
     entregado:        crm,
     paid:             { label: 'Pagado',         color: colors.success, bg: '#052010' },
     cancelled:        { label: 'Cancelado',      color: colors.dangerSoft, bg: '#2d1a1a' },
@@ -1513,6 +1515,11 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
             {order.status === 'por_despachar' && (
               <button onClick={() => onStatusChange(order.id, 'en_camino')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#0c2030', color: colors.info, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid ' + colors.info + '33', cursor: 'pointer' }}>
                 <Truck size={12} /> Marcar enviado
+              </button>
+            )}
+            {order.status === 'no_entregado' && (
+              <button onClick={() => onStatusChange(order.id, 'por_despachar')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#321b0d', color: '#fb923c', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #fb923c55', cursor: 'pointer' }}>
+                <RotateCcw size={12} /> Volver a despacho
               </button>
             )}
             {order.status === 'en_camino' && (

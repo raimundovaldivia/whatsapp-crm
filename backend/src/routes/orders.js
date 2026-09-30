@@ -1054,7 +1054,7 @@ router.delete('/bulk', async (req, res) => {
  * Body: { status, botIds: [1,2,3], shopifyIds: ["gid://...","gid://..."] }
  */
 router.patch('/bulk-status', async (req, res) => {
-  const VALID = ['nuevo','por_despachar','en_camino','entregado','paid','cancelled','draft','sent','payment_received'];
+  const VALID = ['nuevo','por_despachar','en_camino','no_entregado','entregado','paid','cancelled','draft','sent','payment_received'];
   const { status, botIds = [], shopifyIds = [] } = req.body;
   if (!status || !VALID.includes(status)) {
     return res.status(400).json({ success: false, error: `Estado inválido. Opciones: ${VALID.join(', ')}` });

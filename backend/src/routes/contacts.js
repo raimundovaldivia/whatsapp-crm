@@ -353,6 +353,56 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
 });
 
 /**
+ * GET /api/contacts/delivery-audience?scope=yesterday
+ * Destinatarios cuyo último intento de despacho terminó sin entrega. Antes de
+ * consultar se reconcilian las rutas de días anteriores que el repartidor dejó
+ * abiertas, para que nunca permanezcan indefinidamente como "en camino".
+ */
+router.get('/delivery-audience', requireContactsAccess, async (req, res) => {
+  const { getPool } = require('../db/database');
+  const { reconcileStaleDeliveryRoutes } = require('../services/delivery-recovery');
+  try {
+    await reconcileStaleDeliveryRoutes(req.orgId);
+    const { rows } = await getPool().query(
+      `SELECT * FROM (
+         SELECT regexp_replace(COALESCE(o.customer_phone, c.phone_number, ''), '[^0-9]', '', 'g') AS phone,
+                COALESCE(NULLIF(o.customer_name, ''), c.contact_name, 'Cliente') AS customer_name,
+                CONCAT('#', o.id) AS order_label, o.delivery_note AS reason,
+                o.last_attempt_at AS attempted_at, 'bot' AS source
+           FROM orders o
+           LEFT JOIN conversations c ON c.id = o.conversation_id
+          WHERE o.organization_id = $1 AND o.status = 'no_entregado'
+            AND o.last_attempt_status IN ('no_entregado','sin_resolver')
+            AND (o.last_attempt_at AT TIME ZONE 'America/Santiago')::date =
+                (NOW() AT TIME ZONE 'America/Santiago')::date - 1
+         UNION ALL
+         SELECT regexp_replace(COALESCE(s.customer_phone, ''), '[^0-9]', '', 'g') AS phone,
+                COALESCE(NULLIF(s.customer_name, ''), 'Cliente') AS customer_name,
+                COALESCE(NULLIF(s.shopify_name, ''), CONCAT('#', s.shopify_order_id)) AS order_label,
+                s.delivery_note AS reason, s.last_attempt_at AS attempted_at, 'shopify' AS source
+           FROM shopify_orders s
+          WHERE s.organization_id = $1 AND s.crm_status = 'no_entregado'
+            AND s.last_attempt_status IN ('no_entregado','sin_resolver')
+            AND (s.last_attempt_at AT TIME ZONE 'America/Santiago')::date =
+                (NOW() AT TIME ZONE 'America/Santiago')::date - 1
+       ) incidents
+       WHERE phone <> ''
+       ORDER BY attempted_at DESC`,
+      [req.orgId]
+    );
+    const incidents = rows.map(row => ({
+      ...row,
+      phone: /^9\d{8}$/.test(row.phone) ? `56${row.phone}` : row.phone,
+      reason: row.reason || 'El pedido salió a reparto, pero no fue marcado como entregado',
+    }));
+    res.json({ success: true, scope: 'yesterday', incidents, count: incidents.length });
+  } catch (error) {
+    console.error('[Contacts/delivery-audience]', error.message);
+    res.status(500).json({ success: false, error: 'No se pudo preparar la lista de entregas pendientes' });
+  }
+});
+
+/**
  * POST /api/contacts/backfill-shopify
  * Rellena la tabla contacts con todos los clientes ya cacheados en shopify_orders.
  * Ahora también extrae address1 del raw_json de la orden más reciente.

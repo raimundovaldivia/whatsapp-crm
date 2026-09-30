@@ -1610,16 +1610,18 @@ async function applyStopUpdate(req, res, id, stopKey) {
     if (!route) throw new Error('Ruta no encontrada');
 
     // Actualizar el estado real del pedido en la tabla correspondiente.
-    // cancelled es una cancelación definitiva. postponed vuelve a por despachar
-    // con la nueva fecha. not_delivered solo cierra la parada y conserva intacto
-    // el pedido para que el equipo decida qué hacer después.
+    // cancelled es una cancelación definitiva. postponed vuelve a por despachar.
+    // not_delivered conserva el pedido, pero lo saca de "en camino" y deja una
+    // incidencia visible para que el equipo pueda avisar y reprogramar.
     const [source, orderId] = splitStopKey(stopKey);
     const newOrderStatus = status === 'entregado' ? 'entregado'
                          : status === 'cancelled'  ? 'cancelled'
                          : status === 'postponed'  ? 'por_despachar'
+                         : status === 'not_delivered' ? 'no_entregado'
                          : 'en_camino';
     const attemptStatus = status === 'cancelled' ? 'cancelado_definitivo'
                         : status === 'postponed' ? 'reprogramado'
+                        : status === 'not_delivered' ? 'no_entregado'
                         : null;
     const savePayment = status === 'entregado' && !!paymentMethod;
     const wasDelivered = status === 'entregado';   // señal de entrega, independiente del pago
@@ -1627,10 +1629,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     // (Transferencia queda "por cobrar" hasta que llegue el comprobante.)
     const paidByCash = status === 'entregado' && paymentMethod === 'efectivo';
 
-    if (status === 'not_delivered') {
-      // A propósito no se modifica la orden. El resultado y el motivo quedan
-      // guardados en la parada de la ruta.
-    } else if (source === 'shopify') {
+    if (source === 'shopify') {
       // Shopify marca "pagado" con financial_status = 'paid'.
       await pool.query(
         `UPDATE shopify_orders
@@ -1643,7 +1642,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 last_attempt_status = CASE WHEN $10::text IS NOT NULL THEN $10 ELSE last_attempt_status END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
                 delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8
-                                         WHEN $10::text = 'cancelado_definitivo' AND $11::text <> '' THEN $11
+                                         WHEN $10::text IN ('cancelado_definitivo','no_entregado') AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
         [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
@@ -1668,7 +1667,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
                 delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8
-                                         WHEN $10::text = 'cancelado_definitivo' AND $11::text <> '' THEN $11
+                                         WHEN $10::text IN ('cancelado_definitivo','no_entregado') AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE id = $2 AND organization_id = $3`,
         [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
