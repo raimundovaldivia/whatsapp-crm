@@ -110,6 +110,78 @@ test('una consulta por promo para mañana aclara condiciones y no agenda cantida
   assert.equal(savedDraft.promotion.templateName, 'promocion_general_entrega_mismo_dia');
 });
 
+test('la cantidad promocional elegida después conserva fecha y precio en vez de crear un agendado genérico', async () => {
+  let scheduledOrders = 0;
+  let savedDraft = null;
+  const promoText = '[Template: promocion_general_entrega_mismo_dia]\n\n🥚✨ ¡Tenemos promos Enrique! 40 Jumbo $16.000 | 60 Jumbo $23.500 | 100 Jumbo $35.000 | Válido solo para pedidos de hoy. Haz tu pedido antes de las 11:00 AM y, si tenemos stock disponible, te lo entregamos el mismo día.';
+  const previousDraft = {
+    delivery_date: '2026-09-30',
+    promotion: {
+      templateName: 'promocion_general_entrega_mismo_dia',
+      offers: [
+        { units: 40, descriptor: 'Jumbo', price: 16000, label: '40 Jumbo' },
+        { units: 60, descriptor: 'Jumbo', price: 23500, label: '60 Jumbo' },
+        { units: 100, descriptor: 'Jumbo', price: 35000, label: '100 Jumbo' },
+      ],
+      specialPrices: {}, sentDay: '2026-09-29', validUntil: '2026-09-29', validOnlyToday: true,
+    },
+  };
+  const db = {
+    getConversationById: async () => ({ id: 18, organization_id: 1, phone_number: '56918181818', contact_name: 'Enrique', pipeline_state: 'interested', agent_mode: 'ai' }),
+    getLastMessages: async () => [
+      { direction: 'outbound', content: promoText, created_at: new Date() },
+      { direction: 'inbound', content: 'Me gustaría pedir pero para mañana, ¿me respetan la oferta?' },
+      { direction: 'outbound', content: 'Sí. ¿Cuál te guardo: 40 Jumbo, 60 Jumbo o 100 Jumbo?' },
+    ],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Enrique Collao', address1: 'Dirección 123', city: 'Coquimbo', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => [],
+    getOrderDraft: async () => previousDraft,
+    getActiveOrderForBot: async () => null,
+    createScheduledOrder: async () => { scheduledOrders++; },
+    updatePipelineState: async (_id, state, draft) => { if (state === 'collecting_order') savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './agents/orchestrator': {
+      checkEscalation: async () => ({ shouldEscalate: false }),
+      classifyIntent: async () => ({ intent: 'unknown', confidence: 0.2 }),
+    },
+    './agents/orders': {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => draft,
+      generateOrderResponse: async () => '¡Listo! 60 Jumbo a $23.500 para mañana. ¿Todo correcto?',
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => true,
+      missingFields: () => [],
+    },
+    './order-pricing': require('../src/services/order-pricing'),
+    './order-quote': require('../src/services/order-quote'),
+    './scheduled-orders': {
+      isFutureOrderIntent: scheduled.isFutureOrderIntent,
+      isSoftFutureIntent: scheduled.isSoftFutureIntent,
+      extractScheduledOrderData: async () => ({ desiredDate: '2026-09-30', productNotes: '60 Jumbo' }),
+      formatDateEs: () => 'miércoles 30 de septiembre',
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 18, '60 huevos Jumbo $23.500 para el miércoles 30, por favor');
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(scheduledOrders, 0);
+  assert.equal(savedDraft.delivery_date, '2026-09-30');
+  assert.equal(savedDraft.items[0].name, '60 huevos Jumbo');
+  assert.equal(savedDraft.items[0].price, 23500);
+  assert.equal(savedDraft.total, 23500);
+  assert.equal(savedDraft.items[0].locked_quote, true);
+});
+
 test('pipeline agenda la fecha respondida tras decir que aún queda stock sin escalar a humano', async () => {
   let scheduledOrder = null;
   let state = null;

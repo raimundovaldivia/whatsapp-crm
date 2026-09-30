@@ -55,6 +55,29 @@ test('conserva la promoción durante la toma del pedido y la vence al cambiar de
   assert.equal(promotion.restore(saved, new Date('2026-09-30T14:00:00.000Z')).active, false);
 });
 
+test('reconoce la opción exacta elegida sin confundirla con otra promo', () => {
+  const promo = promotion.fromHistory([template], products, new Date('2026-09-29T14:00:00.000Z'));
+  const chosen = promotion.selectedOffer('60 huevos Jumbo $23.500 para el miércoles, por favor', promo);
+  assert.equal(chosen.units, 60);
+  assert.equal(chosen.price, 23500);
+  assert.deepEqual(promotion.offerOrderItem(chosen), {
+    product_name: '60 huevos Jumbo', quantity: 1, price: 23500,
+    locked_quote: true, promotion_offer: true,
+  });
+  assert.equal(promotion.selectedOffer('Me respetan la oferta para mañana', promo), null);
+  assert.equal(promotion.isFuturePromotionQuestion('Me gustaría pedir pero para mañana, ¿me respetan la oferta?'), true);
+});
+
+test('valoriza como cerrada una presentación promocional que no es SKU del catálogo', () => {
+  const result = pricing.priceItems([
+    { product_name: '60 huevos Jumbo (3 bandejas de 20)', quantity: 1, price: 23500, locked_quote: true, promotion_offer: true },
+  ], products);
+  assert.equal(result.items[0].name, '60 huevos Jumbo (3 bandejas de 20)');
+  assert.equal(result.items[0].price, 23500);
+  assert.equal(result.items[0].matched, true);
+  assert.equal(result.total, 23500);
+});
+
 test('extrae y aplica un porcentaje de descuento enviado en un template', () => {
   const percentageTemplate = {
     direction: 'outbound',

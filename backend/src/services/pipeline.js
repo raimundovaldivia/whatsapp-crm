@@ -1158,6 +1158,33 @@ REGLAS ABSOLUTAS:
     return { response: salesResponse, agentType: 'sales', newState: 'future_interest' };
   }
 
+  // Si el turno anterior ya guardó la fecha al responder una consulta sobre
+  // la vigencia de la promo, la selección posterior ("60 Jumbo") debe entrar
+  // al pedido real aunque el clasificador no repita la intención de compra.
+  const chosenFuturePromotion = promotions.selectedOffer(userMessage, promotionContext);
+  if (chosenFuturePromotion && (orderDraft?.delivery_date || isFutureOrderIntent(userMessage))) {
+    try {
+      let deliveryDate = orderDraft?.delivery_date;
+      if (!deliveryDate) {
+        const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+        const recentTexts = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
+        const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
+        deliveryDate = extracted.desiredDate;
+      }
+      const promoDraft = {
+        ...(orderDraft || {}),
+        items: [promotions.offerOrderItem(chosenFuturePromotion)],
+        delivery_date: String(deliveryDate).slice(0, 10),
+        promotion: promotions.snapshot(promotionContext),
+      };
+      L.step('future_promo_order', `${chosenFuturePromotion.label} $${chosenFuturePromotion.price}`);
+      L.agent('orders', 0);
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, promoDraft, productosTexto, orderCtx);
+    } catch (err) {
+      console.warn('[Pipeline] Error preparando pedido promocional futuro, continuando normalmente:', err.message);
+    }
+  }
+
   // ── Intención futura EXPLÍCITA: "para el viernes", "la próxima semana" ──
   if ((BUY_INTENTS.includes(intent) || isTemplateReply || currentState === 'future_interest') &&
       isFutureOrderIntent(userMessage)) {
@@ -1469,6 +1496,20 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const updatedDraft = await ordersAgent.extractOrderData(extractHistory, orderDraft);
   if (updatedDraft.delivery_date && !/^\d{4}-\d{2}-\d{2}$/.test(String(updatedDraft.delivery_date))) {
     delete updatedDraft.delivery_date;
+  }
+
+  // Si el cliente eligió una opción de un template promocional, esa línea
+  // es la fuente de verdad. La búsqueda recorre solo mensajes del cliente y
+  // conserva la elección en los turnos siguientes ("sí", "gracias", etc.).
+  if (promotionContext?.active) {
+    const inboundChoices = [
+      userMessage,
+      ...history.slice().reverse().filter(m => m.direction === 'inbound').map(m => m.content),
+    ];
+    const chosenPromotion = inboundChoices
+      .map(text => promotions.selectedOffer(text, promotionContext))
+      .find(Boolean);
+    if (chosenPromotion) updatedDraft.items = [promotions.offerOrderItem(chosenPromotion)];
   }
 
   // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a

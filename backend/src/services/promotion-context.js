@@ -154,6 +154,46 @@ function optionText(promotion) {
   return offers || (promotion.discountPct ? `${promotion.discountPct}% de descuento en tu pedido` : 'la promoción indicada');
 }
 
+/**
+ * Encuentra una presentación promocional elegida explícitamente por el cliente.
+ * Exige que aparezca la cantidad de huevos/unidades completa (40, 60, 100...)
+ * para no confundirla con un precio, una fecha o una cantidad de bandejas.
+ */
+function selectedOffer(message, promotion) {
+  if (!promotion?.active || !Array.isArray(promotion.offers)) return null;
+  const text = norm(message);
+  if (!text) return null;
+  const matches = promotion.offers.filter(offer => {
+    const units = String(Number(offer.units));
+    const hasUnits = new RegExp(`(^|\\s)${units}(?=\\s|$)`).test(text);
+    if (!hasUnits) return false;
+    const descriptorTokens = norm(offer.descriptor)
+      .split(' ')
+      .filter(token => token.length > 2 && !['huevo', 'huevos', 'unidad', 'unidades'].includes(token));
+    return descriptorTokens.length === 0 || descriptorTokens.some(token => text.includes(token));
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function offerOrderItem(offer) {
+  if (!offer) return null;
+  const descriptor = String(offer.descriptor || 'huevos').trim();
+  const packMatch = descriptor.match(/(?:bandeja|pack|caja)\s+(?:de\s+)?(\d{1,3})/iu);
+  const packs = packMatch && Number(packMatch[1]) > 0 && offer.units % Number(packMatch[1]) === 0
+    ? offer.units / Number(packMatch[1])
+    : null;
+  const name = packs && packs > 1
+    ? `${offer.units} huevos ${descriptor.replace(/(?:bandeja|pack|caja)\s+(?:de\s+)?\d{1,3}/iu, '').trim()} (${packs} bandejas de ${packMatch[1]})`.replace(/\s+/g, ' ').trim()
+    : `${offer.units} ${/huev/iu.test(descriptor) ? '' : 'huevos '}${descriptor}`.replace(/\s+/g, ' ').trim();
+  return {
+    product_name: name,
+    quantity: 1,
+    price: Number(offer.price),
+    locked_quote: true,
+    promotion_offer: true,
+  };
+}
+
 function isFuturePromotionQuestion(message) {
   const text = String(message || '');
   return /(promo|promoci[oó]n|oferta|precio|respetan?|aplica|vigente|vale)/iu.test(text)
@@ -180,4 +220,4 @@ function futureReply(promotion) {
     : `Sí, podemos programar la entrega para mañana manteniendo el ${choices}. ¿Qué producto y cantidad necesitas?`;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseTemplate, fromHistory, snapshot, restore, promptSection, isFuturePromotionQuestion, futureReply, norm, chileDay };
+module.exports = { parseOffers, parseDiscountPct, parseTemplate, fromHistory, snapshot, restore, promptSection, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, norm, chileDay };

@@ -185,6 +185,19 @@ function priceItems(items = [], products = [], opts = {}) {
     const qty  = Math.max(1, parseInt(raw.quantity, 10) || 1);
     if (!name.trim()) continue;
 
+    // Las promociones con presentaciones que no existen como SKU (por ejemplo
+    // "60 Jumbo $23.500") llegan como una cotización cerrada. Conservar esa
+    // línea exacta evita que el matcher la cambie por XL/100 unidades o que
+    // pierda el precio al no encontrarla en el catálogo.
+    if (raw.locked_quote && Number(raw.price) > 0) {
+      priced.push({
+        product_name: name, name, title: name, quantity: qty,
+        price: Number(raw.price), unit_source: 'promocion', matched: true,
+        locked_quote: true, promotion_offer: !!raw.promotion_offer,
+      });
+      continue;
+    }
+
     const m = matchProduct(name, catalog);
     if (!m) {
       unmatched.push(name);
