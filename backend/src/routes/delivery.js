@@ -47,9 +47,10 @@ function notifyAssignedDriver(orgId, route, message = null) {
     if (typeof orders === 'string') {
       try { orders = JSON.parse(orders); } catch { orders = []; }
     }
+    const retryCount = orders.filter(isRetryDelivery).length;
     const pending = push.pushUser(orgId, route.driver_user_id, {
       title: '🚚 Nueva ruta asignada',
-      body: message || `${route.name || 'Tienes una nueva ruta'} · ${orders.length} paradas`,
+      body: message || `${route.name || 'Tienes una nueva ruta'} · ${orders.length} paradas${retryCount ? ` · ⚠️ ${retryCount} reintento${retryCount === 1 ? '' : 's'} prioritario${retryCount === 1 ? '' : 's'}` : ''}`,
       data: { kind: 'delivery_route', routeId: String(route.id), routeName: route.name || 'Ruta' },
     });
     pending?.catch?.(() => {});
@@ -263,6 +264,50 @@ function dedupeOrders(orders) {
   });
 }
 
+/**
+ * Un pedido pendiente con intentos anteriores debe atenderse antes que uno
+ * nuevo. `dispatch_count` aumenta al iniciar una ruta, por lo que al volver a
+ * la bandeja identifica de forma confiable una entrega pendiente de reintento.
+ */
+function isRetryDelivery(order) {
+  const attempts = Number(order?.dispatchCount ?? order?.dispatch_count ?? 0) || 0;
+  const previousStatus = String(order?.lastAttemptStatus ?? order?.last_attempt_status ?? '').toLowerCase();
+  return attempts > 0 || ['no_entregado', 'sin_resolver', 'reprogramado'].includes(previousStatus);
+}
+
+function retryReason(order) {
+  if (order?.priorityReason) return order.priorityReason;
+  if (order?.deliveryNote || order?.delivery_note) return order.deliveryNote || order.delivery_note;
+  const status = String(order?.lastAttemptStatus ?? order?.last_attempt_status ?? '').toLowerCase();
+  if (status === 'reprogramado') return 'Entrega reprogramada por el cliente';
+  if (status === 'sin_resolver') return 'La ruta anterior terminó sin registrar la entrega';
+  if (status === 'no_entregado') return 'No se pudo completar la entrega anterior';
+  return 'Pedido pendiente de una ruta anterior';
+}
+
+function decorateDeliveryPriority(order) {
+  const retry = isRetryDelivery(order);
+  const attempts = Number(order?.dispatchCount ?? order?.dispatch_count ?? 0) || 0;
+  return {
+    ...order,
+    dispatchCount: attempts,
+    isRetry: retry,
+    deliveryPriority: retry ? 'retry' : 'normal',
+    priorityLabel: retry ? 'PRIORIDAD · REINTENTO DE ENTREGA' : null,
+    priorityReason: retry ? retryReason(order) : null,
+    previousAttempts: retry ? attempts : 0,
+  };
+}
+
+/** Partición estable: conserva el orden relativo, pero pone reintentos primero. */
+function prioritizeOrders(orders) {
+  const decorated = dedupeOrders(orders).map(decorateDeliveryPriority);
+  return [
+    ...decorated.filter(isRetryDelivery),
+    ...decorated.filter(order => !isRetryDelivery(order)),
+  ];
+}
+
 function normalizeShopifyOrder(row) {
   // shipping_address viene de raw_json JSONB (puede ser objeto o null)
   let addr = {};
@@ -407,7 +452,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
     ]);
     const shopifyOrders = shopifyRes.rows.map(normalizeShopifyOrder);
     const botOrders     = botRes.rows.map(normalizeBotOrder);
-    const orders        = dedupeOrders([...shopifyOrders, ...botOrders]);
+    const orders        = prioritizeOrders([...shopifyOrders, ...botOrders]);
 
     // Geocodificar direcciones para el mapa del panel (cacheado).
     // Si no hay GOOGLE_MAPS_API_KEY, cada pedido queda con lat/lng en null y el
@@ -511,49 +556,58 @@ function kmeansBalanced(points, k) {
   return groups.filter(g => g.length > 0);
 }
 
-/** Optimiza UNA ruta round-trip (bodega → paradas → bodega) con Directions. */
-async function optimizeOneRoute(stops, warehouse, apiKey) {
-  // stops: array de pedidos (con fullAddress y, ojalá, lat/lng)
+async function fetchDirections(stops, warehouse, apiKey, optimize) {
   const originStr = `${warehouse.lat},${warehouse.lng}`;
   const waypoints = stops.map(s =>
     (typeof s.lat === 'number' && typeof s.lng === 'number') ? `${s.lat},${s.lng}` : s.fullAddress
   );
-  const waypointsParam = `optimize:true|${waypoints.join('|')}`;
-
   const { data } = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
     params: {
       origin: originStr, destination: originStr,   // ida y vuelta a la bodega
-      waypoints: waypointsParam,
+      waypoints: `${optimize ? 'optimize:true|' : ''}${waypoints.join('|')}`,
       key: apiKey, language: 'es', region: 'cl', mode: 'driving',
     },
     timeout: 12000,
   });
   if (data.status !== 'OK') throw new Error(`Google Maps: ${data.status} — ${data.error_message || ''}`);
+  return data.routes[0];
+}
 
-  const routeData = data.routes[0];
-  const order     = routeData.waypoint_order;   // orden óptimo de los waypoints
-  const legs      = routeData.legs;
-  const ordered   = order.map(i => stops[i]);
-
+function buildOptimizedRoute(ordered, legs, warehouse) {
+  const originStr = `${warehouse.lat},${warehouse.lng}`;
   const routeStops = ordered.map((stop, idx) => ({
-    ...stop,
-    stopNumber:   idx + 1,
+    ...decorateDeliveryPriority(stop),
+    stopNumber: idx + 1,
     distanceText: legs[idx]?.distance?.text || '',
     durationText: legs[idx]?.duration?.text || '',
     lat: (typeof stop.lat === 'number' ? stop.lat : legs[idx]?.end_location?.lat) ?? null,
     lng: (typeof stop.lng === 'number' ? stop.lng : legs[idx]?.end_location?.lng) ?? null,
   }));
-
-  const distM = legs.reduce((s, l) => s + (l.distance?.value || 0), 0);
-  const durS  = legs.reduce((s, l) => s + (l.duration?.value  || 0), 0);
-  const mapsUrl = `https://www.google.com/maps/dir/${encodeURIComponent(originStr)}/${routeStops.map(s => encodeURIComponent(s.fullAddress)).join('/')}/${encodeURIComponent(originStr)}`;
-
+  const distM = legs.reduce((sum, leg) => sum + (leg.distance?.value || 0), 0);
+  const durS = legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
   return {
-    stops:         routeStops,
+    stops: routeStops,
     totalDistance: `${(distM / 1000).toFixed(1)} km`,
     totalDuration: `${Math.round(durS / 60)} min`,
-    mapsUrl,
+    mapsUrl: `https://www.google.com/maps/dir/${encodeURIComponent(originStr)}/${routeStops.map(s => encodeURIComponent(s.fullAddress)).join('/')}/${encodeURIComponent(originStr)}`,
   };
+}
+
+/** Optimiza una ruta, sin permitir que Maps deje un reintento tras pedidos nuevos. */
+async function optimizeOneRoute(stops, warehouse, apiKey) {
+  const first = await fetchDirections(stops, warehouse, apiKey, true);
+  const googleOrder = first.waypoint_order?.length ? first.waypoint_order : stops.map((_, index) => index);
+  const googleOptimized = googleOrder.map(index => stops[index]);
+  const prioritized = prioritizeOrders(googleOptimized);
+  const changed = prioritized.some((stop, index) => orderKey(stop) !== orderKey(googleOptimized[index]));
+
+  // Si Google mezcló pedidos nuevos delante de reintentos, recalcular la ruta
+  // en el orden prioritario exacto para que tiempos, tramos y mapa sean reales.
+  if (changed) {
+    const exact = await fetchDirections(prioritized, warehouse, apiKey, false);
+    return buildOptimizedRoute(prioritized, exact.legs, warehouse);
+  }
+  return buildOptimizedRoute(prioritized, first.legs, warehouse);
 }
 
 // ─── ADMIN: Optimizar ruta(s) con Google Maps ────────────────────────────────
@@ -563,7 +617,8 @@ async function optimizeOneRoute(stops, warehouse, apiKey) {
 // Devuelve `routes: [{ vehicle, stops, totalDistance, totalDuration, mapsUrl }]`.
 
 router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
-  const { orders, vehicles: vehiclesRaw } = req.body;
+  const { orders: rawOrders, vehicles: vehiclesRaw } = req.body;
+  const orders = prioritizeOrders(rawOrders);
   const vehicles = Math.max(1, Math.min(parseInt(vehiclesRaw) || 1, 10));
   if (!orders || orders.length === 0)
     return res.status(400).json({ success: false, error: 'No hay pedidos para optimizar' });
@@ -1121,43 +1176,70 @@ async function partitionDispatchable(pool, orgId, orders) {
   const botIds  = list.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isFinite);
   const shopIds = list.filter(o => o.source === 'shopify').map(o => String(o.id));
   const done = new Set();
+  const fresh = new Map();
   if (botIds.length) {
     const { rows } = await pool.query(
-      `SELECT id::text AS id FROM orders
-        WHERE organization_id = $1 AND id = ANY($2::int[])
-          AND (delivered_at IS NOT NULL OR status IN ('entregado', 'cancelled', 'paid')
-            OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)`,
+      `SELECT id::text AS id, status, dispatch_count, last_attempt_status, delivery_note,
+              (delivered_at IS NOT NULL OR status IN ('entregado', 'cancelled', 'paid')
+                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
+         FROM orders
+        WHERE organization_id = $1 AND id = ANY($2::int[])`,
       [orgId, botIds]
     );
-    rows.forEach(r => done.add('bot_' + r.id));
+    rows.forEach(row => {
+      const key = 'bot_' + row.id;
+      if (row.blocked) done.add(key);
+      fresh.set(key, {
+        status: row.status,
+        dispatchCount: parseInt(row.dispatch_count) || 0,
+        lastAttemptStatus: row.last_attempt_status || null,
+        deliveryNote: row.delivery_note || null,
+      });
+    });
   }
   if (shopIds.length) {
     const { rows } = await pool.query(
-      `SELECT shopify_order_id AS id FROM shopify_orders
-        WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])
-          AND (delivered_at IS NOT NULL OR crm_status IN ('entregado', 'cancelled')
-            OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)`,
+      `SELECT shopify_order_id AS id, crm_status AS status, dispatch_count,
+              last_attempt_status, delivery_note,
+              (delivered_at IS NOT NULL OR crm_status IN ('entregado', 'cancelled')
+                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
+         FROM shopify_orders
+        WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])`,
       [orgId, shopIds]
     );
-    rows.forEach(r => done.add('shopify_' + r.id));
+    rows.forEach(row => {
+      const key = 'shopify_' + row.id;
+      if (row.blocked) done.add(key);
+      fresh.set(key, {
+        status: row.status,
+        dispatchCount: parseInt(row.dispatch_count) || 0,
+        lastAttemptStatus: row.last_attempt_status || null,
+        deliveryNote: row.delivery_note || null,
+      });
+    });
   }
   const keep = [], skip = [];
-  for (const o of list) (done.has(`${o.source}_${o.id}`) ? skip : keep).push(o);
-  return { keep, skip };
+  for (const order of list) {
+    const key = `${order.source}_${order.id}`;
+    const hydrated = decorateDeliveryPriority({ ...order, ...(fresh.get(key) || {}) });
+    (done.has(key) ? skip : keep).push(hydrated);
+  }
+  return { keep: prioritizeOrders(keep), skip };
 }
 
 /** Deja solo las paradas cuyos pedidos siguen en `keep`, renumerando el orden. */
 function filterStops(stops, keepOrders) {
-  const keepSet = new Set(keepOrders.map(o => `${o.source}_${o.id}`));
+  const keepMap = new Map(keepOrders.map(order => [orderKey(order), order]));
   const seen = new Set();
-  return (Array.isArray(stops) ? stops : [])
+  const filtered = (Array.isArray(stops) ? stops : [])
     .filter(s => {
       const key = orderKey(s);
-      if (!key || !keepSet.has(key) || seen.has(key)) return false;
+      if (!key || !keepMap.has(key) || seen.has(key)) return false;
       seen.add(key);
       return true;
     })
-    .map((s, i) => ({ ...s, stopNumber: i + 1 }));
+    .map(stop => ({ ...stop, ...keepMap.get(orderKey(stop)) }));
+  return prioritizeOrders(filtered).map((stop, index) => ({ ...stop, stopNumber: index + 1 }));
 }
 
 /**
@@ -1195,7 +1277,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
 
     // Al ENVIAR, sacar los pedidos que ya no corresponde repartir (entregados,
     // pagados, cancelados). En borrador se guardan todos como se seleccionaron.
-    let finalOrders = dedupeOrders(orders);
+    let finalOrders = prioritizeOrders(orders);
     let skipped = [];
     if (send) {
       const part = await partitionDispatchable(pool, req.orgId, orders);
@@ -1260,13 +1342,13 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
         skipped = part.skip;
         if (part.keep.length === 0)
           return res.status(400).json({ success: false, error: 'No hay pedidos para despachar hoy: ya fueron entregados, cancelados o están programados para otro día.', skipped });
-        if (skipped.length) {
+        {
           const curStops = Array.isArray(cur.optimized_route) ? cur.optimized_route : JSON.parse(cur.optimized_route || '[]');
           await pool.query(
             `UPDATE delivery_routes SET orders = $3, optimized_route = $4 WHERE id = $1 AND organization_id = $2`,
             [parseInt(id), req.orgId, JSON.stringify(part.keep), JSON.stringify(filterStops(curStops, part.keep))]
           );
-          console.log(`[Delivery/routes PATCH] ⏭️ ${skipped.length} pedido(s) ya entregados omitidos al enviar ruta ${id}`);
+          if (skipped.length) console.log(`[Delivery/routes PATCH] ⏭️ ${skipped.length} pedido(s) ya entregados omitidos al enviar ruta ${id}`);
         }
       }
     }
@@ -1409,9 +1491,11 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
       return res.status(400).json({ success: false, error: 'Hay pedidos que no se pueden despachar hoy. Actualiza la lista de pedidos.', skipped: eligible.skip });
     }
 
-    const newOrders = [...cur, ...toAdd];
+    const hydratedToAdd = eligible.keep;
+    const newOrders = prioritizeOrders([...cur, ...hydratedToAdd]);
     const baseStops = curStops.length ? curStops : cur.map((o, i) => ({ ...o, stopNumber: i + 1 }));
-    const newStops  = [...baseStops, ...toAdd.map((o, i) => ({ ...o, stopNumber: baseStops.length + i + 1 }))];
+    const newStops = prioritizeOrders([...baseStops, ...hydratedToAdd])
+      .map((order, index) => ({ ...order, stopNumber: index + 1 }));
 
     await pool.query(
       `UPDATE delivery_routes SET orders = $3, optimized_route = $4, load_checklist = '{}'::jsonb WHERE id = $1 AND organization_id = $2`,

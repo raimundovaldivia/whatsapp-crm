@@ -359,3 +359,47 @@ test('dispatch excludes future bot and Shopify deliveries and rechecks stale rou
   } finally { await f.engine.close(); }
 });
 
+test('delivery retries are placed first and remain explicit in the saved route', async () => {
+  const f = await fixture();
+  try {
+    await f.query("UPDATE orders SET dispatch_count=2,last_attempt_status='no_entregado',delivery_note='Cliente no estaba' WHERE id=2");
+    const database = { ...f.db, getSetting: async () => null };
+    const router = load('src/routes/delivery.js', {
+      '../db/database': database,
+      '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+    });
+    const call = async (method, path, body = {}, params = {}) => {
+      const res = response();
+      await handler(router, method, path)({ orgId: 1, role: 'owner', body, params }, res);
+      return res;
+    };
+
+    const normal = { source: 'bot', id: 1, customerName: 'Nuevo', fullAddress: 'Calle 1' };
+    const retry = { source: 'bot', id: 2, customerName: 'Pendiente', fullAddress: 'Calle 2', dispatchCount: 2, lastAttemptStatus: 'no_entregado', deliveryNote: 'Cliente no estaba' };
+    const optimized = await call('post', '/optimize', { orders: [normal, retry], vehicles: 1 });
+    assert.equal(optimized.code, 200);
+    assert.deepEqual(Array.from(optimized.body.routes[0].stops, stop => stop.id), [2, 1]);
+    assert.equal(optimized.body.routes[0].stops[0].deliveryPriority, 'retry');
+    assert.equal(optimized.body.routes[0].stops[0].priorityReason, 'Cliente no estaba');
+
+    await f.query("SELECT setval(pg_get_serial_sequence('delivery_routes','id'),(SELECT MAX(id) FROM delivery_routes))");
+    const staleRetry = { source: 'bot', id: 2, customerName: 'Pendiente', fullAddress: 'Calle 2' };
+    const saved = await call('post', '/routes', {
+      name: 'Prioridad de reintentos',
+      orders: [normal, staleRetry],
+      optimizedRoute: [normal, staleRetry],
+      send: false,
+    });
+    assert.equal(saved.code, 200, JSON.stringify(saved.body));
+    assert.deepEqual(Array.from(saved.body.route.optimized_route, stop => stop.id), [1, 2]);
+
+    // Al enviarla, el servidor no confía en la copia antigua del navegador:
+    // vuelve a consultar el pedido y aplica la prioridad real de la base.
+    const sent = await call('patch', '/routes/:id', { status: 'sent' }, { id: String(saved.body.route.id) });
+    assert.equal(sent.code, 200, JSON.stringify(sent.body));
+    assert.deepEqual(Array.from(sent.body.route.optimized_route, stop => stop.id), [2, 1]);
+    assert.equal(sent.body.route.orders[0].isRetry, true);
+    assert.equal(sent.body.route.orders[0].previousAttempts, 2);
+  } finally { await f.engine.close(); }
+});
+

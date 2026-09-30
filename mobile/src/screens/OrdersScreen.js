@@ -54,6 +54,8 @@ function stopsOf(route) {
   return raw.map((o, i) => ({ ...o, stopNumber: i + 1 }));
 }
 
+const isPriorityRetry = stop => stop?.isRetry === true || stop?.deliveryPriority === 'retry' || Number(stop?.dispatchCount || 0) > 0;
+
 function summarize(route) {
   const stops    = stopsOf(route);
   const statuses = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
@@ -62,7 +64,8 @@ function summarize(route) {
   const postponed = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'postponed').length;
   const pend = stops.filter(s => !statuses[`${s.source}_${s.id}`] || statuses[`${s.source}_${s.id}`] === 'pending').length;
   const pct  = stops.length > 0 ? Math.round(((done + fail + postponed) / stops.length) * 100) : 0;
-  return { stops, statuses, done, fail, postponed, pend, pct };
+  const priorityCount = stops.filter(isPriorityRetry).length;
+  return { stops, statuses, done, fail, postponed, pend, pct, priorityCount };
 }
 
 export default function OrdersScreen({ navigation, user, onLogout }) {
@@ -170,7 +173,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
         )}
 
         {!loading && !error && routes.map(route => {
-          const { stops, statuses, done, fail, postponed, pend, pct } = summarize(route);
+          const { stops, statuses, done, fail, postponed, pend, pct, priorityCount } = summarize(route);
           const color = STATUS_COLOR[route.status] || C.muted;
           const isActive = route.status === 'sent' || route.status === 'in_progress';
           return (
@@ -181,6 +184,13 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                   <Text style={[s.statusText, { color }]}>{STATUS_LABEL[route.status] || route.status}</Text>
                 </View>
               </View>
+
+              {priorityCount > 0 && (
+                <View style={s.priorityBanner}>
+                  <Text style={s.priorityBannerTitle}>⚠️ {priorityCount} reintento{priorityCount === 1 ? '' : 's'} prioritario{priorityCount === 1 ? '' : 's'}</Text>
+                  <Text style={s.priorityBannerText}>Pedidos no entregados en rutas anteriores. Aparecen primero en el recorrido.</Text>
+                </View>
+              )}
 
               <View style={s.statsRow}>
                 <View style={s.statItem}>
@@ -224,7 +234,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                           <Text style={s.stopNumText}>{stop.stopNumber || idx + 1}</Text>
                         </View>
                         <Text style={[s.stopName, st !== 'pending' && s.textDim]} numberOfLines={1}>
-                          {stop.customerName}
+                          {isPriorityRetry(stop) ? '⚠ ' : ''}{stop.customerName}
                         </Text>
                         <Text style={[s.stopStatus, { color: c }]}>
                           {st === 'entregado' ? '✓' : st === 'cancelled' ? '✕' : st === 'not_delivered' ? '!' : '•'}
@@ -299,6 +309,10 @@ const s = StyleSheet.create({
   progressBar:  { height: 6, backgroundColor: C.border, borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: C.green, borderRadius: 3 },
   progressText: { color: C.muted, fontSize: 11, textAlign: 'right' },
+
+  priorityBanner:{ backgroundColor: '#3a2a10', borderWidth: 1, borderColor: '#f59e0b88', borderRadius: 10, padding: 10 },
+  priorityBannerTitle:{ color: '#fbbf24', fontSize: 13, fontWeight: '900' },
+  priorityBannerText:{ color: '#fde68a', fontSize: 11, lineHeight: 16, marginTop: 3 },
 
   stopsPreview: { gap: 8 },
   stopRow:      { flexDirection: 'row', alignItems: 'center', gap: 10 },

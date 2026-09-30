@@ -54,6 +54,12 @@ function stopsOf(route) {
 }
 
 const stopKeyOf = stop => `${stop.source}_${stop.id}`;
+const isPriorityRetry = stop => stop?.isRetry === true || stop?.deliveryPriority === 'retry' || Number(stop?.dispatchCount || 0) > 0;
+const retryDetail = stop => {
+  const attempts = Number(stop?.previousAttempts ?? stop?.dispatchCount ?? 0) || 0;
+  const reason = stop?.priorityReason || stop?.deliveryNote || 'Pendiente de una ruta anterior';
+  return `${attempts ? `${attempts} intento${attempts === 1 ? '' : 's'} anterior${attempts === 1 ? '' : 'es'} · ` : ''}${reason}`;
+};
 
 // Orden de despacho: suma cantidad por producto de las paradas de la ruta.
 // Devuelve [[nombre, cantidad], ...] de mayor a menor.
@@ -183,6 +189,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   }
 
   const stops      = stopsOf(route);
+  const priorityCount = stops.filter(isPriorityRetry).length;
   const manifest   = buildManifest(stops);
   const manifestUnits = manifest.reduce((acc, [, q]) => acc + q, 0);
   const statuses   = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
@@ -269,6 +276,13 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             <View style={s.preStartStat}><Text style={[s.preStartStatValue, loadComplete && { color: C.green }]}>{checkedLoad}/{manifest.length}</Text><Text style={s.preStartStatLabel}>Revisados</Text></View>
           </View>
 
+          {priorityCount > 0 && (
+            <View style={s.priorityNotice}>
+              <Text style={s.priorityNoticeTitle}>⚠️ {priorityCount} entrega{priorityCount === 1 ? '' : 's'} con prioridad</Text>
+              <Text style={s.priorityNoticeText}>Son pedidos pendientes de rutas anteriores. Deben realizarse antes que las entregas nuevas y ya aparecen al inicio del recorrido.</Text>
+            </View>
+          )}
+
           <View style={[s.manifestCard, { marginHorizontal: 0 }]}>
             <View style={s.manifestHead}>
               <View>
@@ -340,6 +354,12 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           onRefresh={load}
           ListHeaderComponent={(
             <>
+              {priorityCount > 0 && (
+                <View style={s.priorityNotice}>
+                  <Text style={s.priorityNoticeTitle}>⚠️ Primero: {priorityCount} reintento{priorityCount === 1 ? '' : 's'} prioritario{priorityCount === 1 ? '' : 's'}</Text>
+                  <Text style={s.priorityNoticeText}>Estas entregas vienen de rutas anteriores y están ubicadas al comienzo del recorrido.</Text>
+                </View>
+              )}
               <View style={s.moneyCard}>
                 <View style={s.moneyHead}><Text style={s.moneyTitle}>💰 Resumen del recorrido</Text><Text style={s.moneyValue}>{CLP(financial.routeValue)}</Text></View>
                 <View style={s.moneyGrid}>
@@ -391,6 +411,12 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                     {stop.customerName}
                   </Text>
                   <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || 'Sin dirección'}</Text>
+                  {isPriorityRetry(stop) && (
+                    <View style={s.retryChip}>
+                      <Text style={s.retryChipTitle}>⚠ PRIORIDAD · REINTENTO</Text>
+                      <Text style={s.retryChipText} numberOfLines={2}>{retryDetail(stop)}</Text>
+                    </View>
+                  )}
                   {stop.durationText ? (
                     <Text style={s.stopTime}>{stop.distanceText} · {stop.durationText}</Text>
                   ) : null}
@@ -497,6 +523,13 @@ const s = StyleSheet.create({
   startRouteBtn:{ minHeight: 54, borderRadius: 14, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
   startRouteBtnDisabled:{ backgroundColor: C.border },
   startRouteBtnText:{ color: '#052e16', fontSize: 16, fontWeight: '900' },
+
+  priorityNotice:{ backgroundColor: '#3a2a10', borderWidth: 1, borderColor: '#f59e0b88', borderRadius: 12, padding: 13, marginHorizontal: 12, marginBottom: 10 },
+  priorityNoticeTitle:{ color: '#fbbf24', fontSize: 14, fontWeight: '900' },
+  priorityNoticeText:{ color: '#fde68a', fontSize: 12, lineHeight: 18, marginTop: 4 },
+  retryChip:{ backgroundColor: '#3a2a10', borderRadius: 8, borderWidth: 1, borderColor: '#f59e0b66', paddingHorizontal: 8, paddingVertical: 6, marginTop: 7 },
+  retryChipTitle:{ color: '#fbbf24', fontSize: 10, fontWeight: '900' },
+  retryChipText:{ color: '#fde68a', fontSize: 11, lineHeight: 15, marginTop: 2 },
 
   moneyCard:    { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.green + '55', marginHorizontal: 12, marginTop: 10, padding: 14, gap: 10 },
   moneyHead:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

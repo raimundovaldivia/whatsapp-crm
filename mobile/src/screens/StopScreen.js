@@ -22,6 +22,8 @@ const C = {
   muted:  '#94a3b8',
 };
 
+const isPriorityRetry = stop => stop?.isRetry === true || stop?.deliveryPriority === 'retry' || Number(stop?.dispatchCount || 0) > 0;
+
 export default function StopScreen({ route: navRoute, navigation }) {
   // onComplete es opcional y legacy: RouteScreen se refresca sola al volver.
   const { stop, routeId, stopKey, stopNumber, stopLabel, totalStops, onComplete } = navRoute.params;
@@ -308,6 +310,17 @@ export default function StopScreen({ route: navRoute, navigation }) {
       <View style={s.badge}>
         <Text style={s.badgeText}>Parada {stopLabel || stopNumber} de {totalStops}</Text>
       </View>
+
+      {isPriorityRetry(stop) && (
+        <View style={s.priorityCard}>
+          <Text style={s.priorityTitle}>⚠️ PRIORIDAD · REINTENTO DE ENTREGA</Text>
+          <Text style={s.priorityText}>Este pedido quedó pendiente en una ruta anterior y debe atenderse antes que las entregas nuevas.</Text>
+          <Text style={s.priorityReason}>{stop.priorityReason || stop.deliveryNote || 'No se completó la entrega anterior'}</Text>
+          {Number(stop.previousAttempts ?? stop.dispatchCount ?? 0) > 0 && (
+            <Text style={s.priorityAttempts}>Intentos anteriores: {Number(stop.previousAttempts ?? stop.dispatchCount)}</Text>
+          )}
+        </View>
+      )}
 
       {/* Nombre */}
       <Text style={s.customerName}>{stop.customerName}</Text>
@@ -684,6 +697,12 @@ const s = StyleSheet.create({
 
   badge:        { backgroundColor: C.blue + '22', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, alignSelf: 'flex-start', borderWidth: 1, borderColor: C.blue + '55' },
   badgeText:    { color: C.blue, fontWeight: '700', fontSize: 13 },
+
+  priorityCard:{ backgroundColor: '#3a2a10', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#f59e0b88' },
+  priorityTitle:{ color: '#fbbf24', fontSize: 14, fontWeight: '900' },
+  priorityText:{ color: '#fde68a', fontSize: 13, lineHeight: 18, marginTop: 5 },
+  priorityReason:{ color: C.text, fontSize: 14, fontWeight: '700', lineHeight: 19, marginTop: 8 },
+  priorityAttempts:{ color: '#fbbf24', fontSize: 12, marginTop: 5 },
 
   customerName: { color: C.text, fontSize: 30, fontWeight: '900', letterSpacing: -0.5, marginTop: 4, marginBottom: 8 },
 
