@@ -15,6 +15,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [attachment, setAttachment] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
@@ -233,6 +234,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const dragDepthRef = useRef(0);
 
   const isHumanMode = conversation.agent_mode === 'human';
   const isCoordinating = conversation.agent_mode === 'coordinating';
@@ -521,32 +523,78 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
   };
 
-  const handleFileSelected = (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
+  const prepareAttachment = (file) => {
     if (!file) return;
     if (file.size > 6 * 1024 * 1024) {
       setError('El archivo supera el máximo de 6 MB.');
       return;
     }
+    const extension = String(file.name || '').toLowerCase().split('.').pop();
+    const mimeByExtension = {
+      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp',
+      pdf:'application/pdf', doc:'application/msword',
+      docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xls:'application/vnd.ms-excel',
+      xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      csv:'text/csv', txt:'text/plain',
+    };
+    const mimeType = file.type || mimeByExtension[extension] || '';
     const allowed = [
       'image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'text/csv', 'text/plain',
     ];
-    if (!allowed.includes(file.type)) {
+    if (!allowed.includes(mimeType)) {
       setError('Formato no permitido. Usa imágenes, PDF, Word, Excel, CSV o TXT.');
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
-      setAttachment({ data: reader.result, mimeType: file.type, fileName: file.name, size: file.size });
+      setAttachment({ data: reader.result, mimeType, fileName: file.name, size: file.size });
       setError(null);
       inputRef.current?.focus();
     };
     reader.onerror = () => setError('No se pudo leer el archivo.');
     reader.readAsDataURL(file);
+  };
+
+  const handleFileSelected = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    prepareAttachment(file);
+  };
+
+  const handleDragEnter = (event) => {
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  };
+
+  const handleDragOver = (event) => {
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDragLeave = (event) => {
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (files.length > 1) {
+      setError('Arrastra un archivo por vez para poder revisarlo antes de enviarlo.');
+      return;
+    }
+    prepareAttachment(files[0]);
   };
 
   const handleKeyDown = (e) => {
@@ -720,7 +768,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   };
 
   return (
-    <div style={{
+    <div
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{
       flex: 1,
       display: 'flex',
       flexDirection: 'column',
@@ -732,6 +785,21 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         ? `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='white' fill-opacity='0.03'/%3E%3C/svg%3E")`
         : `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cpath d='M30 5l5 10h10l-8 7 3 10-10-6-10 6 3-10-8-7h10z' fill='black' fill-opacity='0.035'/%3E%3C/svg%3E")`,
     }}>
+      {dragActive && (
+        <div style={{
+          position:'absolute', inset:'10px', zIndex:80, pointerEvents:'none',
+          display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:'10px',
+          border:`2px dashed ${colors.green}`, borderRadius:'14px',
+          backgroundColor:isDark ? 'rgba(8, 31, 30, 0.94)' : 'rgba(232, 250, 246, 0.96)',
+          color:colors.textPrimary, boxShadow:'0 10px 32px rgba(0,0,0,0.25)',
+        }}>
+          <div style={{ width:'58px', height:'58px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', backgroundColor:colors.green, color:'#fff' }}>
+            <Paperclip size={26} />
+          </div>
+          <div style={{ fontSize:'17px', fontWeight:700 }}>Suelta el archivo aquí</div>
+          <div style={{ fontSize:'12px', color:colors.textSecondary }}>Foto, PDF, Word, Excel, CSV o TXT · máximo 6 MB</div>
+        </div>
+      )}
       {/* Header */}
       <div style={{
         padding: isMobile ? '8px 10px' : '10px 16px',
