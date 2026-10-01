@@ -3,7 +3,7 @@ import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
   ShoppingBag, TrendingUp,
   CheckSquare, Square, AlertCircle, Loader, Brain, Zap,
-  FileText, Download, MoreVertical, X, Check,
+  FileText, Download, MoreVertical, X, Check, History,
 } from 'lucide-react';
 
 import { api, reengagementAPI } from '../utils/api.js';
@@ -1200,6 +1200,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const TEST_PHONE = testPhoneInput.trim();
   const [campaigns, setCampaigns] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [expandedCampaign, setExpandedCampaign] = useState(null);
   const [campaignRecipients, setCampaignRecipients] = useState([]);
   const [followUpPreview, setFollowUpPreview] = useState(null);
@@ -1225,6 +1226,15 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }, []);
 
   useEffect(() => { loadCampaigns(); }, [loadCampaigns]);
+
+  useEffect(() => {
+    if (!historyOpen) return undefined;
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setHistoryOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [historyOpen]);
 
   async function toggleCampaignDetails(campaignId) {
     if (String(expandedCampaign) === String(campaignId)) {
@@ -1711,6 +1721,28 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           </select>
         )}
 
+        <button
+          onClick={() => {
+            setHistoryOpen(true);
+            loadCampaigns();
+          }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+            borderRadius: 7, border: `1px solid ${colors.border}`,
+            backgroundColor: colors.bgCard, color: colors.textSecondary,
+            fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+          }}
+          title="Ver campañas anteriores y el estado de cada envío"
+        >
+          <History size={14} />
+          Historial
+          {campaigns.length > 0 && (
+            <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, backgroundColor: `${colors.blue}22`, color: colors.blue, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800 }}>
+              {campaigns.length}
+            </span>
+          )}
+        </button>
+
         {/* Test mode */}
         <button onClick={() => setTestMode(t => !t)} style={{
           padding: '6px 10px', borderRadius: '7px', border: `1px solid ${testMode ? colors.yellow + '66' : colors.border}`,
@@ -1760,25 +1792,39 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </div>
       )}
 
-      {/*
-        Todo el contenido de trabajo comparte un único scroll. Antes sólo podía
-        desplazarse la lista de contactos: si historial + variables + preview
-        superaban el alto de la ventana, la parte inferior quedaba inaccesible.
-      */}
+      {/* Variables, vista previa y destinatarios comparten un único scroll. */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', scrollbarGutter: 'stable' }}>
-      {/* Historial durable: muestra lo aceptado por WhatsApp y el motivo de cada rechazo. */}
-      <div style={{ padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: campaigns.length ? 10 : 0 }}>
-          <div>
-            <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 800 }}>Historial de envíos</div>
-            <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>“Aceptado” confirma que WhatsApp recibió el envío; entrega y lectura se actualizan después.</div>
-          </div>
-          <button onClick={loadCampaigns} disabled={campaignsLoading} style={{ border: `1px solid ${colors.border}`, borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textSecondary, padding: '5px 9px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <RefreshCw size={12} className={campaignsLoading ? 'spin' : ''} /> Actualizar
-          </button>
-        </div>
+      {/* El historial vive en un panel independiente para no desplazar el flujo de envío. */}
+      {historyOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Historial de envíos"
+          onMouseDown={event => { if (event.target === event.currentTarget) setHistoryOpen(false); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 10000, backgroundColor: 'rgba(3, 10, 15, 0.7)', display: 'flex', justifyContent: 'flex-end', backdropFilter: 'blur(2px)' }}
+        >
+          <aside style={{ width: 'min(720px, 100vw)', height: '100dvh', backgroundColor: colors.bgPanel, borderLeft: `1px solid ${colors.border}`, boxShadow: '-18px 0 55px rgba(0,0,0,0.38)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '18px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 12, backgroundColor: colors.bgPanel }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: `${colors.blue}18`, color: colors.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <History size={19} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: colors.textPrimary, fontSize: 16, fontWeight: 850 }}>Historial de envíos</div>
+                <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 3 }}>Consulta el avance, los errores y los destinatarios de cada campaña.</div>
+              </div>
+              <button onClick={loadCampaigns} disabled={campaignsLoading} style={{ border: `1px solid ${colors.border}`, borderRadius: 8, backgroundColor: colors.bgCard, color: colors.textSecondary, padding: '7px 10px', cursor: campaignsLoading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700 }}>
+                <RefreshCw size={13} className={campaignsLoading ? 'spin' : ''} /> <span className="hide-mobile">Actualizar</span>
+              </button>
+              <button onClick={() => setHistoryOpen(false)} aria-label="Cerrar historial" style={{ width: 34, height: 34, border: `1px solid ${colors.border}`, borderRadius: 8, backgroundColor: 'transparent', color: colors.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <X size={17} />
+              </button>
+            </div>
+            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textSecondary, fontSize: 11, lineHeight: 1.45 }}>
+              <strong style={{ color: colors.textPrimary }}>Cómo leer los estados:</strong> “Aceptado” confirma que WhatsApp recibió el envío; la entrega y lectura se actualizan después.
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 20px 24px', backgroundColor: colors.bgApp }}>
         {!campaignsLoading && campaigns.length === 0 && (
-          <div style={{ color: colors.textMuted, fontSize: 12, paddingTop: 8 }}>Las próximas campañas quedarán registradas aquí con su resultado completo.</div>
+          <div style={{ color: colors.textMuted, fontSize: 12, padding: '36px 20px', textAlign: 'center', border: `1px dashed ${colors.border}`, borderRadius: 10 }}>Las próximas campañas quedarán registradas aquí con su resultado completo.</div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {campaigns.map(campaign => {
@@ -1867,7 +1913,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             );
           })}
         </div>
-      </div>
+            </div>
+          </aside>
+        </div>
+      )}
 
       {/* Mapeo de variables del template */}
       {!loading && selTpl && tplVarCount > 0 && (
