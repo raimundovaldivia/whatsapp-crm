@@ -40,7 +40,12 @@ function buildPipeline(deliveryDate, status = 'draft') {
       isBareLinkMessage: () => false,
     },
     './shopify-api': { formatProductsForAI: () => '' },
-    './promotion-context': { fromHistory: () => null, restore: () => null, promptSection: () => '' },
+    './promotion-context': {
+      fromHistory: () => null,
+      restore: () => null,
+      promptSection: () => '',
+      selectedOffer: () => null,
+    },
     './payment-collection': { getPendingCharges: async () => [] },
     './scheduled-orders': {
       isFutureOrderIntent: () => false,

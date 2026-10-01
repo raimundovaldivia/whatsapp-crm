@@ -11,6 +11,7 @@ test('saludos simples y combinados nunca activan una escalación por el historia
   }
   const orchestrator = load('src/services/agents/orchestrator.js', {
     '@anthropic-ai/sdk': Anthropic,
+    '../inbound-message-policy': { isBareLinkMessage: () => false },
   });
   const oldBillingContext = [
     { direction: 'inbound', content: 'Hay una factura duplicada' },
