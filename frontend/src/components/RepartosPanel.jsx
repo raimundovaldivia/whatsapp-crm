@@ -1252,7 +1252,7 @@ function DespachosRepartos({ colors }) {
   const days = [];
   const byDay = {};
   for (const r of filtered) {
-    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0, deudaEmpresa: 0, deudaPersonal: 0, deudoresEmpresa: [], deudoresPersonal: [] }; days.push(byDay[r.day]); }
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, pagado: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0, deudaEmpresa: 0, deudaPersonal: 0, deudoresEmpresa: [], deudoresPersonal: [] }; days.push(byDay[r.day]); }
     const d = byDay[r.day];
     d.rows.push(r);
     if (r.status === 'entregado') {
@@ -1261,6 +1261,7 @@ function DespachosRepartos({ colors }) {
       if (r.payment_method === 'efectivo') d.efectivo += amount;
       else if (r.payment_method === 'transferencia') d.transferencia += amount;
       else if (r.payment_method) d.otro += amount;
+      if (r.paid) d.pagado += amount;
       if (r.payment_method === 'transferencia') {
         if (['delivered', 'read'].includes(r.charge?.status)) d.cobrosEnviados++;
         else if (r.charge?.retryable) d.cobrosPendientes++;
@@ -1305,7 +1306,7 @@ function DespachosRepartos({ colors }) {
       if (!byPeriod[identity.key]) {
         byPeriod[identity.key] = {
           ...identity, days: [], rows: 0, entregados: 0, cancelados: 0, sinEntrega: 0,
-          reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0,
+          reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, pagado: 0,
           cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0,
           extras: 0, gastos: 0,
         };
@@ -1314,7 +1315,7 @@ function DespachosRepartos({ colors }) {
       const p = byPeriod[identity.key];
       p.days.push(d);
       p.rows += d.rows.length;
-      for (const field of ['entregados','cancelados','sinEntrega','reprogramados','pendientes','efectivo','transferencia','cobrosEnviados','cobrosPendientes','deudaEmpresa','deudaPersonal','extras','gastos']) {
+      for (const field of ['entregados','cancelados','sinEntrega','reprogramados','pendientes','efectivo','transferencia','pagado','cobrosEnviados','cobrosPendientes','deudaEmpresa','deudaPersonal','extras','gastos']) {
         p[field] += Number(d[field]) || 0;
       }
     }
@@ -1322,10 +1323,10 @@ function DespachosRepartos({ colors }) {
 
   const totals = days.reduce((t, d) => ({
     entregados: t.entregados + d.entregados, cancelados: t.cancelados + d.cancelados, sinEntrega: t.sinEntrega + d.sinEntrega,
-    efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia,
+    efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia, pagado: t.pagado + d.pagado,
     cobrosEnviados: t.cobrosEnviados + d.cobrosEnviados, cobrosPendientes: t.cobrosPendientes + d.cobrosPendientes,
     deudaEmpresa: t.deudaEmpresa + d.deudaEmpresa, deudaPersonal: t.deudaPersonal + d.deudaPersonal,
-  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0 });
+  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, pagado: 0, cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0 });
   totals.gastos = gastosTotal;
   totals.netoEfectivo = totals.efectivo - gastosTotal;   // efectivo recaudado menos lo que gastó el repartidor
 
@@ -1350,6 +1351,16 @@ function DespachosRepartos({ colors }) {
   const chip = (text, color) => (
     <span style={ui.chip(colors, color)}>{text}</span>
   );
+  const debtAmount = (company, personal) => {
+    const total = company + personal;
+    const hasSplit = company > 0 && personal > 0;
+    return (
+      <span title={hasSplit ? `Empresas: ${CLP(company)}\nPersonas naturales: ${CLP(personal)}` : ''}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: hasSplit ? 'help' : 'default', borderBottom: hasSplit ? '1px dotted currentColor' : 'none' }}>
+        {CLP(total)}{hasSplit && <span style={{ fontSize: '9px', opacity: 0.75 }}>ⓘ</span>}
+      </span>
+    );
+  };
 
   return (
     <div style={{ flex: 1, minHeight: 0, height: '100%', overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -1411,6 +1422,7 @@ function DespachosRepartos({ colors }) {
         {totals.sinEntrega > 0 && chip(`${totals.sinEntrega} sin entrega`, '#38bdf8')}
         {chip(`💵 ${CLP(totals.efectivo)} efectivo`, '#22c55e')}
         {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
+        {chip(`✅ ${CLP(totals.pagado)} pagado`, '#2dd4bf')}
         {chip(`💸 ${totals.cobrosEnviados} avisos de cobro entregados`, '#fbbf24')}
         {totals.cobrosPendientes > 0 && chip(`⚠️ ${totals.cobrosPendientes} sin cobrar`, '#f87171')}
         {totals.deudaEmpresa > 0 && chip(`🏢 ${CLP(totals.deudaEmpresa)} deben empresas`, '#a78bfa')}
@@ -1428,10 +1440,15 @@ function DespachosRepartos({ colors }) {
       {/* Resumen semanal, mensual o anual en formato contable. */}
       {!loading && !error && viewMode !== 'day' && periods.length > 0 && (
         <div style={{ overflowX: 'auto', border: `1px solid ${colors.border}`, borderRadius: '10px', background: colors.bgCard }}>
-          <table style={{ width: '100%', minWidth: '1180px', borderCollapse: 'collapse', fontSize: '12px' }}>
+          <table style={{ width: '100%', minWidth: '1080px', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px' }}>
+            <colgroup>
+              <col style={{ width: '16%' }} /><col style={{ width: '13%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} />
+              <col style={{ width: '10%' }} /><col style={{ width: '11%' }} /><col style={{ width: '10%' }} /><col style={{ width: '11%' }} />
+              <col style={{ width: '7%' }} /><col style={{ width: '6%' }} />
+            </colgroup>
             <thead>
               <tr style={{ color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', fontSize: '10px', background: colors.bgPanel }}>
-                {['Período', 'Actividad', 'Entregados', 'Incidencias', 'Efectivo', 'Transferencias', 'Por cobrar', 'Empresas', 'Personas', 'Gastos', ''].map(label => (
+                {['Período', 'Actividad', 'Entregados', 'Incidencias', 'Efectivo', 'Transferencias', 'Pagado', 'Por cobrar', 'Gastos', 'Detalle'].map(label => (
                   <th key={label || 'actions'} style={{ padding: '10px 12px', textAlign: label === 'Período' ? 'left' : 'right', fontWeight: 700, borderBottom: `1px solid ${colors.border}`, whiteSpace: 'nowrap' }}>{label}</th>
                 ))}
               </tr>
@@ -1456,51 +1473,35 @@ function DespachosRepartos({ colors }) {
                     <td style={{ ...cell, color: incidents ? '#f87171' : colors.textMuted }}>{incidents || '—'}</td>
                     <td style={{ ...cell, color: '#22c55e', fontWeight: 700 }}>{CLP(period.efectivo)}</td>
                     <td style={{ ...cell, color: '#38bdf8', fontWeight: 700 }}>{CLP(period.transferencia)}</td>
-                    <td style={{ ...cell, color: receivable ? '#fbbf24' : colors.textMuted, fontWeight: 800 }}>{CLP(receivable)}</td>
-                    <td style={{ ...cell, color: period.deudaEmpresa ? '#a78bfa' : colors.textMuted }}>{CLP(period.deudaEmpresa)}</td>
-                    <td style={{ ...cell, color: period.deudaPersonal ? '#f59e0b' : colors.textMuted }}>{CLP(period.deudaPersonal)}</td>
+                    <td style={{ ...cell, color: period.pagado ? '#2dd4bf' : colors.textMuted, fontWeight: 800 }}>{CLP(period.pagado)}</td>
+                    <td style={{ ...cell, color: receivable ? '#fbbf24' : colors.textMuted, fontWeight: 800 }}>{debtAmount(period.deudaEmpresa, period.deudaPersonal)}</td>
                     <td style={{ ...cell, color: period.gastos ? '#fb923c' : colors.textMuted }}>{CLP(period.gastos)}</td>
                     <td style={cell}>{open ? 'Ocultar' : 'Ver días'}</td>
                   </tr>
                   {open && (
-                    <tr>
-                      <td colSpan={11} style={{ padding: 0, background: colors.bgPanel, borderBottom: `1px solid ${colors.border}` }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
-                          <thead>
-                            <tr style={{ color: colors.textMuted, background: colors.bgInput }}>
-                              {['Día', 'Paradas', 'Entregados', 'Sin entrega', 'Efectivo', 'Transferencias', 'Por cobrar', 'Empresas', 'Personas', 'Gastos', 'Detalle'].map(label => (
-                                <th key={label} style={{ padding: '7px 12px', textAlign: label === 'Día' ? 'left' : 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {period.days.map(d => {
-                              const dayReceivable = d.deudaEmpresa + d.deudaPersonal;
-                              return (
-                                <tr key={d.day} style={{ borderTop: `1px solid ${colors.border}` }}>
-                                  <td style={{ padding: '8px 12px', color: colors.textPrimary, fontWeight: 700, textTransform: 'capitalize', whiteSpace: 'nowrap' }}>{dayLabel(d.day)}</td>
-                                  <td style={{ padding: '8px 12px', color: colors.textSecondary, textAlign: 'right' }}>{d.rows.length}</td>
-                                  <td style={{ padding: '8px 12px', color: '#2dd4bf', textAlign: 'right', fontWeight: 700 }}>{d.entregados}</td>
-                                  <td style={{ padding: '8px 12px', color: d.sinEntrega ? '#38bdf8' : colors.textMuted, textAlign: 'right' }}>{d.sinEntrega || '—'}</td>
-                                  <td style={{ padding: '8px 12px', color: '#22c55e', textAlign: 'right' }}>{CLP(d.efectivo)}</td>
-                                  <td style={{ padding: '8px 12px', color: '#38bdf8', textAlign: 'right' }}>{CLP(d.transferencia)}</td>
-                                  <td style={{ padding: '8px 12px', color: dayReceivable ? '#fbbf24' : colors.textMuted, textAlign: 'right', fontWeight: 700 }}>{CLP(dayReceivable)}</td>
-                                  <td style={{ padding: '8px 12px', color: d.deudaEmpresa ? '#a78bfa' : colors.textMuted, textAlign: 'right' }}>{CLP(d.deudaEmpresa)}</td>
-                                  <td style={{ padding: '8px 12px', color: d.deudaPersonal ? '#f59e0b' : colors.textMuted, textAlign: 'right' }}>{CLP(d.deudaPersonal)}</td>
-                                  <td style={{ padding: '8px 12px', color: d.gastos ? '#fb923c' : colors.textMuted, textAlign: 'right' }}>{CLP(d.gastos)}</td>
-                                  <td style={{ padding: '8px 12px', textAlign: 'right' }}>
-                                    <button onClick={() => showDay(d.day)}
-                                      style={{ border: `1px solid ${colors.border}`, background: colors.bgCard, color: colors.green, borderRadius: '7px', padding: '5px 9px', fontSize: '11px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                      Ver detalle
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </td>
-                    </tr>
+                    period.days.map(d => {
+                      const dayReceivable = d.deudaEmpresa + d.deudaPersonal;
+                      const dayIncidents = d.cancelados + d.sinEntrega + d.reprogramados;
+                      return (
+                        <tr key={d.day} style={{ borderTop: `1px solid ${colors.border}`, background: colors.bgPanel, fontSize: '11px' }}>
+                          <td style={{ ...cell, textAlign: 'left', paddingLeft: '34px', color: colors.textPrimary, fontWeight: 700, textTransform: 'capitalize' }}>{dayLabel(d.day)}</td>
+                          <td style={{ ...cell, color: colors.textSecondary }}>{d.rows.length} paradas</td>
+                          <td style={{ ...cell, color: '#2dd4bf', fontWeight: 700 }}>{d.entregados}</td>
+                          <td style={{ ...cell, color: dayIncidents ? '#f87171' : colors.textMuted }}>{dayIncidents || '—'}</td>
+                          <td style={{ ...cell, color: '#22c55e' }}>{CLP(d.efectivo)}</td>
+                          <td style={{ ...cell, color: '#38bdf8' }}>{CLP(d.transferencia)}</td>
+                          <td style={{ ...cell, color: d.pagado ? '#2dd4bf' : colors.textMuted, fontWeight: 700 }}>{CLP(d.pagado)}</td>
+                          <td style={{ ...cell, color: dayReceivable ? '#fbbf24' : colors.textMuted, fontWeight: 700 }}>{debtAmount(d.deudaEmpresa, d.deudaPersonal)}</td>
+                          <td style={{ ...cell, color: d.gastos ? '#fb923c' : colors.textMuted }}>{CLP(d.gastos)}</td>
+                          <td style={cell}>
+                            <button onClick={() => showDay(d.day)}
+                              style={{ border: `1px solid ${colors.border}`, background: colors.bgCard, color: colors.green, borderRadius: '7px', padding: '5px 9px', fontSize: '11px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              Ver detalle
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               );
