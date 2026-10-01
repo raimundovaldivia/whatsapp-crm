@@ -1604,7 +1604,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       }
     } catch (err) {
       campaignStatus = 'interrupted';
-      showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
+      const reason = err.response?.data?.error || err.message || 'No se pudo confirmar el envío con WhatsApp';
+      setResults({ sent: 0, failed: 1, skipped: 0, reasons: [reason] });
+      showToast('Error: ' + reason, 'error');
     } finally {
       // Liberar la interfaz inmediatamente. El cierre auditable y la recarga
       // del historial pueden continuar sin dejar el botón girando.
