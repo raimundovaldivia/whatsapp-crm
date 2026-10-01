@@ -18,6 +18,34 @@ const STATUS_LABELS = {
   rejected:      { label: 'Rechazado',      color: '#ef4444', Icon: XCircle },
 };
 
+const ORDER_STATUS_LABELS = {
+  draft: 'Borrador', nuevo: 'Nuevo', sent: 'Confirmado', payment_received: 'Pago recibido',
+  por_despachar: 'Por despachar', en_camino: 'En camino', entregado: 'Entregado', paid: 'Pagado',
+  cancelado: 'Cancelado', cancelled: 'Cancelado',
+};
+
+function linkedOrderReference(proof) {
+  const id = proof?.linked_order_id || proof?.order_id;
+  return id ? `#BOT-${id}` : null;
+}
+
+function linkedOrderItems(proof) {
+  let items = proof?.linked_order_items;
+  if (typeof items === 'string') {
+    try { items = JSON.parse(items); } catch { items = []; }
+  }
+  return Array.isArray(items)
+    ? items.map(item => ({
+        name: String(item?.name || item?.title || item?.product_name || '').trim(),
+        quantity: Math.max(0, Number(item?.quantity) || 0),
+      })).filter(item => item.name && item.quantity > 0)
+    : [];
+}
+
+function money(value) {
+  return `$${Math.round(Number(value) || 0).toLocaleString('es-CL')}`;
+}
+
 export default function PaymentProofsPanel({ onOpenConversation, openProofId = null, onProofOpened, onProofUpdated }) {
   const { colors, isDark } = useTheme();
   const [proofs, setProofs]     = useState([]);
@@ -209,6 +237,7 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {proofs.map(proof => {
               const { label, color, Icon } = STATUS_LABELS[proof.status] || STATUS_LABELS.pending;
+              const orderReference = linkedOrderReference(proof);
               return (
                 <div key={proof.id}
                   onClick={() => openProof(proof)}
@@ -237,8 +266,10 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
                       {proof.customer_name || proof.customer_phone || 'Cliente desconocido'}
                     </div>
                     <div style={{ fontSize: '12px', color: colors.textSecondary, marginTop: '2px' }}>
-                      {proof.order_summary
-                        ? `Pedido: ${proof.order_summary}`
+                      {orderReference
+                        ? `Pedido asociado: ${orderReference}${proof.linked_order_total != null ? ` · ${money(proof.linked_order_total)}` : ''}`
+                        : proof.order_summary
+                          ? `Pedido asociado: ${proof.order_summary}`
                         : 'Sin pedido asociado'}
                     </div>
                     {proof.extracted_amount && (
@@ -318,9 +349,6 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
               {selected.customer_phone && selected.customer_name && (
                 <><b>Teléfono:</b> {selected.customer_phone}<br /></>
               )}
-              {selected.order_summary && (
-                <><b>Pedido:</b> {selected.order_summary}<br /></>
-              )}
               {selected.extracted_amount && (
                 <>
                   <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: `1px solid ${colors.border}` }}>
@@ -342,6 +370,43 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
                 </>
               )}
             </div>
+
+            {/* Pedido asociado */}
+            {(() => {
+              const reference = linkedOrderReference(selected);
+              const items = linkedOrderItems(selected);
+              if (!reference) {
+                return (
+                  <div style={{
+                    border: `1px solid ${colors.amberStrong}66`, backgroundColor: `${colors.amberStrong}12`,
+                    borderRadius: '8px', padding: '11px 13px', color: colors.textSecondary, fontSize: '12px',
+                  }}>
+                    <b style={{ color: colors.amberStrong }}>Sin pedido asociado.</b>{' '}
+                    Este comprobante debe revisarse manualmente antes de verificarlo.
+                  </div>
+                );
+              }
+              return (
+                <div style={{
+                  border: `1px solid ${colors.green}66`, backgroundColor: `${colors.green}10`,
+                  borderRadius: '8px', padding: '11px 13px', color: colors.textPrimary, fontSize: '12px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: items.length ? '7px' : 0 }}>
+                    <span><b>Pedido asociado:</b> <strong style={{ color: colors.green, fontSize: '14px' }}>{reference}</strong></span>
+                    {selected.linked_order_total != null && <strong>{money(selected.linked_order_total)}</strong>}
+                  </div>
+                  {items.length > 0 && (
+                    <div style={{ color: colors.textSecondary, marginBottom: '5px' }}>
+                      {items.map(item => `${item.quantity}x ${item.name}`).join(' · ')}
+                    </div>
+                  )}
+                  <div style={{ color: colors.textMuted, display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {selected.linked_order_status && <span>Estado: {ORDER_STATUS_LABELS[selected.linked_order_status] || selected.linked_order_status}</span>}
+                    {selected.linked_order_delivery_date && <span>Entrega: {new Date(selected.linked_order_delivery_date).toLocaleDateString('es-CL', { timeZone: 'UTC' })}</span>}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Imagen */}
             <div style={{

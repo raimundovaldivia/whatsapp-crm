@@ -992,9 +992,18 @@ async function getPaymentProofs(orgId, statusFilter = null) {
   const cond = statusFilter ? 'AND pp.status = $2' : '';
   const args = statusFilter ? [orgId, statusFilter] : [orgId];
   return query(
-    `SELECT pp.*, c.phone_number, c.contact_name
+    `SELECT pp.*, c.phone_number, c.contact_name,
+            o.id AS linked_order_id,
+            o.items AS linked_order_items,
+            o.total_price AS linked_order_total,
+            o.status AS linked_order_status,
+            o.delivery_date AS linked_order_delivery_date,
+            o.created_at AS linked_order_created_at
      FROM payment_proofs pp
      LEFT JOIN conversations c ON pp.conversation_id = c.id
+     LEFT JOIN orders o
+       ON o.id = pp.order_id
+      AND o.organization_id = pp.organization_id
      WHERE pp.organization_id = $1 ${cond}
      ORDER BY pp.created_at DESC`,
     args
