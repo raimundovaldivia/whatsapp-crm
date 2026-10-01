@@ -9,7 +9,7 @@
 const express       = require('express');
 const router        = express.Router();
 const db            = require('../db/database');
-const kapsoService  = require('../services/kapso-whatsapp');
+const { getPaymentProofMedia } = require('../services/payment-proof-media');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -25,8 +25,9 @@ router.get('/', async (req, res) => {
 });
 
 // ── GET /api/payment-proofs/:id/image ───────────────────────────────
-// Descarga y retransmite la imagen desde la API de WhatsApp/Kapso.
-// El media_id es permanente; la URL se regenera en cada llamada.
+// Descarga y retransmite la imagen desde WhatsApp/Kapso. Los comprobantes
+// nuevos guardan la URL directa firmada que llega en el webhook; los antiguos
+// pueden guardar un media ID. El proxy debe aceptar ambos formatos.
 router.get('/:id/image', async (req, res) => {
   try {
     const proofs = await db.getPaymentProofs(req.orgId);
@@ -38,15 +39,15 @@ router.get('/:id/image', async (req, res) => {
       return res.status(400).json({ error: 'Configuración de WhatsApp no disponible' });
     }
 
-    const mediaInfo = await kapsoService.getMediaUrl(proof.media_id, wc);
-    const { data, contentType } = await kapsoService.downloadMedia(mediaInfo.url, wc);
+    const { data, contentType } = await getPaymentProofMedia(req.orgId, proof.media_id, wc);
 
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'private, max-age=3600'); // caché 1h en el browser
     res.send(Buffer.from(data));
   } catch (err) {
-    console.error('[PaymentProofs] Error al obtener imagen:', err.message);
-    res.status(500).json({ error: 'No se pudo descargar la imagen' });
+    console.error('[PaymentProofs] Error al obtener imagen:', err.message, '| status:', err.response?.status);
+    res.status(404).json({ error: 'La imagen del comprobante no está disponible. Intenta nuevamente o revisa el mensaje original.' });
   }
 });
 

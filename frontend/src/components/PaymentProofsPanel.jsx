@@ -26,6 +26,7 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
   const [selected, setSelected] = useState(null); // proof con imagen abierta
   const [imageUrl, setImageUrl] = useState(null);
   const [imageLoading, setImageLoading] = useState(false);
+  const [imageError, setImageError] = useState('');
   const [notes, setNotes]       = useState('');
   const [saving, setSaving]     = useState(false);
 
@@ -47,17 +48,23 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
     setSelected(proof);
     setNotes(proof.notes || '');
     setImageUrl(null);
+    setImageError('');
     setImageLoading(true);
     try {
       // Obtener imagen con el token del usuario
       const token = localStorage.getItem('crm_token');
       const url = paymentProofsAPI.imageUrl(proof.id);
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!resp.ok) throw new Error('No se pudo cargar la imagen');
+      if (!resp.ok) {
+        const payload = await resp.json().catch(() => null);
+        throw new Error(payload?.error || 'No se pudo cargar la imagen');
+      }
       const blob = await resp.blob();
+      if (!blob.type.startsWith('image/')) throw new Error('El archivo recibido no es una imagen válida');
       setImageUrl(URL.createObjectURL(blob));
-    } catch {
+    } catch (err) {
       setImageUrl(null);
+      setImageError(err.message || 'No se pudo cargar la imagen');
     } finally {
       setImageLoading(false);
     }
@@ -75,6 +82,7 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     setSelected(null);
     setImageUrl(null);
+    setImageError('');
   };
 
   const updateStatus = async (status) => {
@@ -331,7 +339,11 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
               ) : (
                 <div style={{ color: colors.textSecondary, fontSize: '13px', padding: '40px', textAlign: 'center' }}>
                   <Image size={32} style={{ opacity: 0.3, marginBottom: '8px' }} />
-                  <br />No se pudo cargar la imagen
+                  <br />{imageError || 'No se pudo cargar la imagen'}
+                  <br />
+                  <button onClick={() => openProof(selected)} style={{ marginTop:'12px', padding:'6px 11px', borderRadius:'7px', border:`1px solid ${colors.border}`, backgroundColor:colors.bgPanel, color:colors.textPrimary, cursor:'pointer', display:'inline-flex', alignItems:'center', gap:'5px' }}>
+                    <RefreshCw size={12} /> Reintentar
+                  </button>
                 </div>
               )}
             </div>
@@ -354,12 +366,13 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 onClick={() => updateStatus('verified')}
-                disabled={saving}
+                disabled={saving || imageLoading || !imageUrl}
+                title={!imageUrl ? 'Primero debe cargar la imagen del comprobante' : 'Confirmar este pago'}
                 style={{
                   flex: 1, padding: '10px', borderRadius: '8px', border: 'none',
                   backgroundColor: colors.success, color: 'white',
-                  fontWeight: 700, fontSize: '14px', cursor: saving ? 'not-allowed' : 'pointer',
-                  opacity: saving ? 0.7 : 1,
+                  fontWeight: 700, fontSize: '14px', cursor: saving || imageLoading || !imageUrl ? 'not-allowed' : 'pointer',
+                  opacity: saving || imageLoading || !imageUrl ? 0.55 : 1,
                 }}
               >
                 ✓ Verificar pago
