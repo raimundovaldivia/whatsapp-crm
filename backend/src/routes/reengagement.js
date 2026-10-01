@@ -39,11 +39,21 @@ function setSocketIO(socketIO) {
            FROM webhook_inbox w
            LEFT JOIN messages m
              ON m.whatsapp_message_id = w.payload #>> '{message,id}'
+           LEFT JOIN broadcast_campaign_recipients r
+             ON r.whatsapp_message_id = w.payload #>> '{message,id}'
           WHERE w.provider = 'kapso'
             AND w.payload #>> '{message,type}' = 'template'
             AND w.payload #>> '{message,kapso,origin}' = 'cloud_api'
             AND w.created_at > NOW() - INTERVAL '30 days'
-            AND m.id IS NULL`
+            AND (
+              m.id IS NULL
+              OR (r.id IS NULL AND EXISTS (
+                SELECT 1 FROM broadcast_campaigns c
+                 WHERE c.organization_id = w.organization_id
+                   AND c.created_at <= w.created_at
+                   AND c.created_at > w.created_at - INTERVAL '5 minutes'
+              ))
+            )`
       );
       for (const row of rows) {
         await reconcileAcceptedBroadcastMessages(row.organization_id);
@@ -116,23 +126,32 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
   // conservan la confirmación real del proveedor y el contenido exacto, por lo
   // que primero reconstruimos esos chats sin volver a enviar nada.
   const providerRows = await getPool().query(
-    `SELECT DISTINCT ON (w.payload #>> '{message,id}')
-            w.payload #>> '{message,id}' AS whatsapp_message_id,
-            w.payload #>> '{message,to}' AS phone,
-            w.payload #>> '{message,kapso,content}' AS content,
-            w.payload #>> '{message,kapso,status}' AS status,
-            w.created_at
-       FROM webhook_inbox w
-       LEFT JOIN messages m
-         ON m.whatsapp_message_id = w.payload #>> '{message,id}'
-      WHERE w.organization_id = $1
-        AND w.provider = 'kapso'
-        AND w.payload #>> '{message,type}' = 'template'
-        AND w.payload #>> '{message,kapso,origin}' = 'cloud_api'
-        AND w.payload #>> '{message,kapso,status}' IN ('sent','delivered','read','failed')
-        AND w.created_at > NOW() - INTERVAL '30 days'
-        AND m.id IS NULL
-      ORDER BY w.payload #>> '{message,id}', w.created_at DESC
+    `WITH provider_events AS (
+       SELECT w.payload #>> '{message,id}' AS whatsapp_message_id,
+              w.payload #>> '{message,to}' AS phone,
+              w.payload #>> '{message,kapso,content}' AS content,
+              w.payload #>> '{message,kapso,status}' AS status,
+              MIN(w.created_at) OVER (
+                PARTITION BY w.payload #>> '{message,id}'
+              ) AS first_seen_at,
+              ROW_NUMBER() OVER (
+                PARTITION BY w.payload #>> '{message,id}' ORDER BY w.created_at DESC
+              ) AS latest_rank
+         FROM webhook_inbox w
+        WHERE w.organization_id = $1
+          AND w.provider = 'kapso'
+          AND w.payload #>> '{message,type}' = 'template'
+          AND w.payload #>> '{message,kapso,origin}' = 'cloud_api'
+          AND w.payload #>> '{message,kapso,status}' IN ('sent','delivered','read','failed')
+          AND w.created_at > NOW() - INTERVAL '30 days'
+     )
+     SELECT e.*, m.id AS local_message_id, r.id AS campaign_recipient_id
+       FROM provider_events e
+       LEFT JOIN messages m ON m.whatsapp_message_id = e.whatsapp_message_id
+       LEFT JOIN broadcast_campaign_recipients r ON r.whatsapp_message_id = e.whatsapp_message_id
+      WHERE e.latest_rank = 1
+        AND (m.id IS NULL OR r.id IS NULL)
+      ORDER BY e.first_seen_at
       LIMIT 500`,
     [orgId]
   );
@@ -152,7 +171,7 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
           AND created_at > $2 - INTERVAL '5 minutes'
         ORDER BY created_at DESC
         LIMIT 1`,
-      [orgId, providerMessage.created_at]
+      [orgId, providerMessage.first_seen_at]
     );
     const campaign = campaignResult.rows[0] || null;
     const contactResult = await getPool().query(
@@ -168,16 +187,15 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
       : prefix;
     const conversation = await db.upsertConversation(orgId, phone, contactName);
     if (!conversation?.id) continue;
-    const savedMessage = await db.saveMessage({
-      conversationId: conversation.id,
-      whatsappMessageId: providerMessage.whatsapp_message_id,
-      content: savedContent,
-      direction: 'outbound',
-      type: 'template',
-      status: providerMessage.status,
-      sentBy: 'ai',
-    });
-    if (!savedMessage) continue;
+    const savedMessage = providerMessage.local_message_id ? null : await db.saveMessage({
+        conversationId: conversation.id,
+        whatsappMessageId: providerMessage.whatsapp_message_id,
+        content: savedContent,
+        direction: 'outbound',
+        type: 'template',
+        status: providerMessage.status,
+        sentBy: 'ai',
+      });
 
     if (campaign) {
       await getPool().query(
@@ -195,13 +213,15 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
       );
     }
 
-    await db.updateConversationLastMessage(conversation.id, savedContent);
-    await activateDivaForAutomatedMessage(conversation.id, db);
-    await db.updatePipelineState(conversation.id, 'template_sent');
-    await markTemplateSent(orgId, phone);
-    const updated = await db.getConversationById(conversation.id);
-    io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMessage, conversation: updated });
-    recovered++;
+    if (savedMessage) {
+      await db.updateConversationLastMessage(conversation.id, savedContent);
+      await activateDivaForAutomatedMessage(conversation.id, db);
+      await db.updatePipelineState(conversation.id, 'template_sent');
+      await markTemplateSent(orgId, phone);
+      const updated = await db.getConversationById(conversation.id);
+      io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMessage, conversation: updated });
+      recovered++;
+    }
   }
 
   const { rows } = await getPool().query(
