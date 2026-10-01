@@ -813,7 +813,7 @@ REGLAS ABSOLUTAS:
       response,
       agentType: 'orchestrator',
       newState: currentState,
-      adminNotice: `💸 *${conversation.contact_name || chargeOrder.customer_name || conversation.phone_number}* dice que transfirió el pedido ${chargeOrder.order_label} (${total})${chargeOrder.proofs_pending > 0 ? ' — comprobante en revisión' : ' — sin comprobante aún'}.\nRevisa Pagos o cruza la cartola en Pedidos → Conciliación.`,
+      adminNotice: `💸 *${conversation.contact_name || chargeOrder.customer_name || conversation.phone_number}* dice que transfirió el pedido ${chargeOrder.order_label} (${total})${chargeOrder.proofs_pending > 0 ? ' — comprobante en revisión' : ' — sin comprobante aún'}.\nRevisa Pagos → Comprobantes o cruza la cartola en Pagos → Conciliación.`,
     };
   }
 

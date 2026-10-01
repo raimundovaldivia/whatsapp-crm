@@ -490,6 +490,31 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_bank_movements_org_status ON bank_movements(organization_id, status, date DESC);
 
+      -- Identidades de transferencia aprendidas al confirmar manualmente una
+      -- conciliación Santander. Se usa el teléfono normalizado del contacto
+      -- para no depender de que el nombre del pedido esté escrito igual.
+      CREATE TABLE IF NOT EXISTS bank_contact_identities (
+        id                 SERIAL PRIMARY KEY,
+        organization_id    INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        bank_name           TEXT NOT NULL DEFAULT 'santander',
+        payer_normalized    TEXT NOT NULL,
+        payer_display       TEXT,
+        contact_id          INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+        contact_phone       TEXT NOT NULL,
+        contact_name        TEXT,
+        confirmations       INTEGER NOT NULL DEFAULT 1,
+        active              BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by          INTEGER,
+        last_confirmed_at   TIMESTAMPTZ DEFAULT NOW(),
+        created_at          TIMESTAMPTZ DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (organization_id, bank_name, payer_normalized, contact_phone)
+      );
+      CREATE INDEX IF NOT EXISTS idx_bank_contact_identity_lookup
+        ON bank_contact_identities(organization_id, bank_name, payer_normalized, active);
+      ALTER TABLE bank_movements ADD COLUMN IF NOT EXISTS match_method TEXT;
+      ALTER TABLE bank_movements ADD COLUMN IF NOT EXISTS bank_identity_id INTEGER REFERENCES bank_contact_identities(id) ON DELETE SET NULL;
+
       -- El cliente pidió que se le entregue otro día (desde la app del repartidor)
       ALTER TABLE orders         ADD COLUMN IF NOT EXISTS delivery_date DATE;
       ALTER TABLE orders         ADD COLUMN IF NOT EXISTS delivery_note TEXT;

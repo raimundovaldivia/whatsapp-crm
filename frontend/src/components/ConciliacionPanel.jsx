@@ -4,8 +4,9 @@
  * 1. Subes el PDF de la cartola Santander (diario, se puede repetir: no duplica).
  * 2. Cada abono pendiente muestra los pedidos que calzan (monto exacto, fecha,
  *    parecido del nombre) con una confianza: alta / media / baja.
- * 3. Confirmas con un clic → el pedido queda pagado con la referencia del abono.
- *    Nada se marca sin tu confirmación. Se puede revertir.
+ * 3. La primera confirmación guarda la identidad Santander del contacto.
+ * 4. La próxima coincidencia inequívoca puede conciliarse automáticamente.
+ *    Todo cruce se puede revisar y revertir.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../utils/api.js';
@@ -66,7 +67,7 @@ export default function ConciliacionPanel({ colors }) {
       const base64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(f); });
       const r = await api.post('/reconciliation/upload', { filename: f.name, base64 });
       const p = r.data.parsed || {};
-      setNotice(`Cartola ${p.kind === 'provisoria' ? 'provisoria' : 'histórica'} #${p.statementNumber || '?'} (${fmtDate(p.from)} → ${fmtDate(p.to)}): ${r.data.total} abonos leídos, ${r.data.inserted} nuevos${r.data.duplicates ? `, ${r.data.duplicates} ya estaban` : ''}. Cuadra con el banco: ${CLP(p.totals?.abonos)} ✓`);
+      setNotice(`Cartola ${p.kind === 'provisoria' ? 'provisoria' : 'histórica'} #${p.statementNumber || '?'} (${fmtDate(p.from)} → ${fmtDate(p.to)}): ${r.data.total} abonos leídos, ${r.data.inserted} nuevos${r.data.duplicates ? `, ${r.data.duplicates} ya estaban` : ''}${r.data.autoMatched ? `, ${r.data.autoMatched} conciliados automáticamente por aprendizaje Santander` : ''}. Cuadra con el banco: ${CLP(p.totals?.abonos)} ✓`);
       setView('pending');
       await load();
     } catch (err) {
@@ -78,9 +79,14 @@ export default function ConciliacionPanel({ colors }) {
   async function confirm(movId, orders) {
     setBusyId(movId); setError('');
     try {
-      await api.post(`/reconciliation/movements/${movId}/confirm`, { orders: orders.map(o => ({ source: o.source, id: o.id })) });
+      const response = await api.post(`/reconciliation/movements/${movId}/confirm`, { orders: orders.map(o => ({ source: o.source, id: o.id })) });
       setRows(prev => prev.filter(m => m.id !== movId));
       setStats(s => s ? { ...s, pending: s.pending - 1, matched: s.matched + 1 } : s);
+      if (response.data.learnedIdentity) {
+        setNotice(`Pago confirmado. Santander quedó aprendido para ${response.data.learnedIdentity.contact_name || 'este contacto'} y podrá conciliar automáticamente sus próximas transferencias cuando el monto identifique un único pedido.`);
+      } else {
+        setNotice('Pago confirmado correctamente.');
+      }
       setManualFor(null);
     } catch (err) { setError(err.response?.data?.error || err.message); }
     finally { setBusyId(null); }
@@ -152,6 +158,8 @@ export default function ConciliacionPanel({ colors }) {
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {chip(`${stats.pending} abonos por conciliar · ${CLP(stats.pending_amount)}`, colors.amber)}
           {chip(`${stats.matched} conciliados`, colors.success)}
+          {stats.learned_identities > 0 && chip(`${stats.learned_identities} identidades Santander aprendidas`, '#a78bfa')}
+          {stats.automatic_matched > 0 && chip(`${stats.automatic_matched} automáticos por aprendizaje Santander`, '#60a5fa')}
         </div>
       )}
       {notice && <div style={{ fontSize: '12px', color: colors.green, backgroundColor: colors.green + '12', border: `1px solid ${colors.green}44`, borderRadius: '8px', padding: '8px 12px' }}>{notice}</div>}
@@ -190,6 +198,7 @@ export default function ConciliacionPanel({ colors }) {
               <span style={{ color: colors.textPrimary, fontWeight: 700, minWidth: '90px', fontVariantNumeric: 'tabular-nums' }}>{CLP(m.amount)}</span>
               <span style={{ color: colors.textPrimary, fontSize: '13px', flex: 1, minWidth: '160px' }}>{m.payer || m.description}</span>
               {view === 'matched' && (m.matched_orders || []).map(o => chip(`${o.source === 'bot' ? '#BOT-' + o.id : o.id} pagado`, colors.success))}
+              {view === 'matched' && m.match_method === 'automatic_identity' && chip('Automático · identidad Santander aprendida', '#60a5fa')}
               {view === 'ignored' && m.note && <span style={{ fontSize: '12px', color: colors.textMuted }}>📝 {m.note}</span>}
               <button onClick={() => unmatch(m.id)} disabled={busyId === m.id} style={btn({ color: colors.textSecondary })} title="Revertir"><Undo2 size={12} /> Revertir</button>
             </div>

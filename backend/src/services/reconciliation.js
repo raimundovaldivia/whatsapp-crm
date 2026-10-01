@@ -11,7 +11,9 @@
  *      quien transfiere se parece al del cliente, mejor. También combos de
  *      2-3 pedidos del mismo cliente que sumen el monto.
  *   3. confirm()          el usuario confirma → los pedidos pasan a PAGADO
- *      con referencia al movimiento. Nada se marca sin confirmación.
+ *      y Santander queda asociado al contacto para próximos cruces.
+ *   4. autoMatchPending() reutiliza esa asociación solo cuando identidad,
+ *      contacto, monto y una única combinación de pedidos coinciden.
  *
  * Diseño: no destructivo. unmatch() revierte un cruce (guarda el estado
  * previo de cada pedido para poder volver).
@@ -55,7 +57,11 @@ async function importStatement(orgId, buffer, filename, userId) {
   }
   await pool.query('UPDATE bank_statements SET new_movements = $1 WHERE id = $2', [inserted, st.id]);
 
-  return { ok: true, statementId: st.id, total: abonos.length, inserted, duplicates: abonos.length - inserted, parsed: summary(parsed) };
+  // Después de importar, reutilizar únicamente asociaciones Santander que ya
+  // fueron confirmadas manualmente. Los casos ambiguos permanecen pendientes.
+  const automatic = await autoMatchPending(orgId);
+
+  return { ok: true, statementId: st.id, total: abonos.length, inserted, duplicates: abonos.length - inserted, autoMatched: automatic.matched, parsed: summary(parsed) };
 }
 
 function summary(p) {
@@ -114,6 +120,11 @@ function nameSimilarity(payer, customer) {
     if (b.some(u => u === t || (t.length >= 3 && u.startsWith(t)) || (u.length >= 3 && t.startsWith(u)))) hits++;
   }
   return hits / Math.min(a.length, b.length);
+}
+
+function normalizedPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits ? digits.slice(-8) : '';
 }
 
 // ─── Sugerencias ────────────────────────────────────────────────────────────
@@ -191,7 +202,36 @@ async function suggest(orgId) {
 
 // ─── Confirmar / ignorar / revertir ─────────────────────────────────────────
 
-async function confirm(orgId, movementId, orders, userId, note = null) {
+async function learnSantanderIdentity(client, orgId, mov, contacts, userId) {
+  const phones = [...new Set(contacts.map(c => normalizedPhone(c.phone)).filter(Boolean))];
+  const payerNormalized = norm(mov.payer || mov.description);
+  if (phones.length !== 1 || payerNormalized.length < 3) return null;
+  const contact = contacts.find(c => normalizedPhone(c.phone) === phones[0]) || {};
+  const { rows: [savedContact] } = await client.query(
+    `SELECT id FROM contacts
+      WHERE organization_id = $1
+        AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 8) = $2
+      ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1`,
+    [orgId, phones[0]]
+  );
+  const { rows: [identity] } = await client.query(
+    `INSERT INTO bank_contact_identities
+       (organization_id, bank_name, payer_normalized, payer_display, contact_id, contact_phone, contact_name, created_by)
+     VALUES ($1, 'santander', $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (organization_id, bank_name, payer_normalized, contact_phone)
+     DO UPDATE SET payer_display = EXCLUDED.payer_display,
+                   contact_id = COALESCE(EXCLUDED.contact_id, bank_contact_identities.contact_id),
+                   contact_name = COALESCE(EXCLUDED.contact_name, bank_contact_identities.contact_name),
+                   confirmations = bank_contact_identities.confirmations + 1,
+                   active = TRUE,
+                   last_confirmed_at = NOW(), updated_at = NOW()
+     RETURNING id, contact_phone, contact_name, confirmations`,
+    [orgId, payerNormalized, mov.payer || mov.description, savedContact?.id || null, phones[0], contact.name || null, userId || null]
+  );
+  return identity || null;
+}
+
+async function confirm(orgId, movementId, orders, userId, note = null, options = {}) {
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -202,9 +242,10 @@ async function confirm(orgId, movementId, orders, userId, note = null) {
     if (mov.status === 'matched') throw Object.assign(new Error('Este abono ya está conciliado'), { status: 409 });
 
     const matched = [];
+    const contacts = [];
     for (const o of orders) {
       if (o.source === 'bot') {
-        const { rows: [prev] } = await client.query(`SELECT status, payment_method FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [parseInt(o.id), orgId]);
+        const { rows: [prev] } = await client.query(`SELECT status, payment_method, customer_phone, customer_name FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [parseInt(o.id), orgId]);
         if (!prev) throw Object.assign(new Error(`Pedido #BOT-${o.id} no encontrado`), { status: 404 });
         await client.query(
           `UPDATE orders SET status = 'paid', payment_method = 'transferencia', payment_marked_at = NOW(), updated_at = NOW(),
@@ -212,27 +253,96 @@ async function confirm(orgId, movementId, orders, userId, note = null) {
             WHERE id = $1 AND organization_id = $2`,
           [parseInt(o.id), orgId, `\n[conciliación] Pagado con transferencia ${mov.date.toISOString?.().slice(0, 10) || mov.date} $${mov.amount} (${mov.payer || mov.description})`]);
         matched.push({ source: 'bot', id: String(o.id), prev_status: prev.status, prev_payment_method: prev.payment_method });
+        contacts.push({ phone: prev.customer_phone, name: prev.customer_name });
       } else if (o.source === 'shopify') {
-        const { rows: [prev] } = await client.query(`SELECT financial_status, payment_method FROM shopify_orders WHERE shopify_order_id = $1 AND organization_id = $2 FOR UPDATE`, [String(o.id), orgId]);
+        const { rows: [prev] } = await client.query(`SELECT financial_status, payment_method, customer_phone, customer_name FROM shopify_orders WHERE shopify_order_id = $1 AND organization_id = $2 FOR UPDATE`, [String(o.id), orgId]);
         if (!prev) throw Object.assign(new Error(`Pedido Shopify ${o.id} no encontrado`), { status: 404 });
         await client.query(
           `UPDATE shopify_orders SET financial_status = 'paid', payment_method = 'transferencia', payment_marked_at = NOW()
             WHERE shopify_order_id = $1 AND organization_id = $2`, [String(o.id), orgId]);
         matched.push({ source: 'shopify', id: String(o.id), prev_status: prev.financial_status, prev_payment_method: prev.payment_method });
+        contacts.push({ phone: prev.customer_phone, name: prev.customer_name });
       }
     }
+    const learned = options.automatic
+      ? null
+      : await learnSantanderIdentity(client, orgId, mov, contacts, userId);
+    const identityId = options.bankIdentityId || learned?.id || null;
     await client.query(
-      `UPDATE bank_movements SET status = 'matched', matched_orders = $3, matched_at = NOW(), matched_by = $4, note = $5
+      `UPDATE bank_movements SET status = 'matched', matched_orders = $3, matched_at = NOW(), matched_by = $4, note = $5,
+                                 match_method = $6, bank_identity_id = $7
         WHERE id = $1 AND organization_id = $2`,
-      [movementId, orgId, JSON.stringify(matched), userId || null, note]);
+      [movementId, orgId, JSON.stringify(matched), userId || null, note,
+       options.automatic ? 'automatic_identity' : 'manual', identityId]);
     await client.query('COMMIT');
-    return { ok: true, matched };
+    return { ok: true, matched, learnedIdentity: learned, automatic: !!options.automatic };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
   } finally {
     client.release();
   }
+}
+
+function uniqueOrderCombination(mov, orders) {
+  const eligible = orders.filter(o => {
+    const d = daysBetween(mov.date, o.created_at);
+    return d >= -DAYS_AFTER && d <= DAYS_BEFORE;
+  });
+  const matches = [];
+  for (let i = 0; i < eligible.length; i++) {
+    if (Math.abs(eligible[i].total - Number(mov.amount)) <= AMOUNT_TOLERANCE) matches.push([eligible[i]]);
+    for (let j = i + 1; j < eligible.length; j++) {
+      if (Math.abs(eligible[i].total + eligible[j].total - Number(mov.amount)) <= AMOUNT_TOLERANCE) matches.push([eligible[i], eligible[j]]);
+      for (let k = j + 1; k < eligible.length; k++) {
+        if (Math.abs(eligible[i].total + eligible[j].total + eligible[k].total - Number(mov.amount)) <= AMOUNT_TOLERANCE) matches.push([eligible[i], eligible[j], eligible[k]]);
+      }
+    }
+  }
+  const unique = new Map(matches.map(set => [set.map(o => `${o.source}:${o.id}`).sort().join('|'), set]));
+  return unique.size === 1 ? [...unique.values()][0] : null;
+}
+
+async function autoMatchPending(orgId) {
+  const pool = getPool();
+  const { rows: movements } = await pool.query(
+    `SELECT id, date, amount, description, payer
+       FROM bank_movements
+      WHERE organization_id = $1 AND kind = 'abono' AND status = 'pending'
+      ORDER BY date, id`, [orgId]);
+  let unpaid = await getUnpaidOrders(orgId);
+  let matched = 0;
+  const details = [];
+
+  for (const mov of movements) {
+    const payerNormalized = norm(mov.payer || mov.description);
+    if (payerNormalized.length < 3) continue;
+    const { rows: identities } = await pool.query(
+      `SELECT id, contact_phone, contact_name, confirmations
+         FROM bank_contact_identities
+        WHERE organization_id = $1 AND bank_name = 'santander'
+          AND payer_normalized = $2 AND active = TRUE
+        ORDER BY confirmations DESC, last_confirmed_at DESC`,
+      [orgId, payerNormalized]);
+    const phones = [...new Set(identities.map(i => normalizedPhone(i.contact_phone)).filter(Boolean))];
+    if (phones.length !== 1) continue; // identidad bancaria conflictiva o incompleta
+    const contactOrders = unpaid.filter(o => normalizedPhone(o.phone) === phones[0]);
+    const selected = uniqueOrderCombination(mov, contactOrders);
+    if (!selected) continue; // monto sin pedido o más de una combinación posible
+    const identity = identities.find(i => normalizedPhone(i.contact_phone) === phones[0]);
+    try {
+      await confirm(orgId, mov.id, selected, null,
+        'Conciliado automáticamente con identidad Santander confirmada anteriormente',
+        { automatic: true, bankIdentityId: identity.id });
+      const used = new Set(selected.map(o => `${o.source}:${o.id}`));
+      unpaid = unpaid.filter(o => !used.has(`${o.source}:${o.id}`));
+      matched++;
+      details.push({ movementId: mov.id, identityId: identity.id, orders: selected.map(o => ({ source: o.source, id: o.id })) });
+    } catch (err) {
+      console.error(`[Conciliación] No se pudo aplicar identidad Santander al movimiento ${mov.id}:`, err.message);
+    }
+  }
+  return { matched, details };
 }
 
 async function ignore(orgId, movementId, note, userId) {
@@ -259,6 +369,9 @@ async function unmatch(orgId, movementId) {
           [String(m.id), orgId, m.prev_status || 'pending', m.prev_payment_method || null]);
       }
     }
+    if (mov.bank_identity_id) {
+      await client.query(`UPDATE bank_contact_identities SET active = FALSE, updated_at = NOW() WHERE id = $1 AND organization_id = $2`, [mov.bank_identity_id, orgId]);
+    }
     await client.query(`UPDATE bank_movements SET status = 'pending', matched_orders = NULL, matched_at = NULL, matched_by = NULL, note = NULL WHERE id = $1`, [movementId]);
     await client.query('COMMIT');
     return { ok: true, reverted: matched.length };
@@ -272,7 +385,8 @@ async function listMovements(orgId, { status = null, from = null, to = null, lim
   if (to)     { params.push(to);     conds.push(`date <= $${params.length}`); }
   params.push(limit);
   const { rows } = await getPool().query(
-    `SELECT id, date, amount, description, payer, doc_number, balance, status, matched_orders, matched_at, note, statement_id
+    `SELECT id, date, amount, description, payer, doc_number, balance, status, matched_orders, matched_at, note, statement_id,
+            match_method, bank_identity_id
        FROM bank_movements WHERE ${conds.join(' AND ')} ORDER BY date DESC, id DESC LIMIT $${params.length}`, params);
   return rows.map(r => ({ ...r, amount: Number(r.amount) }));
 }
@@ -289,9 +403,12 @@ async function stats(orgId) {
     `SELECT COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
             COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0)::bigint AS pending_amount,
             COUNT(*) FILTER (WHERE status = 'matched')::int AS matched,
-            COUNT(*) FILTER (WHERE status = 'ignored')::int AS ignored
+            COUNT(*) FILTER (WHERE status = 'matched' AND match_method = 'automatic_identity')::int AS automatic_matched,
+            COUNT(*) FILTER (WHERE status = 'ignored')::int AS ignored,
+            (SELECT COUNT(*)::int FROM bank_contact_identities bi
+              WHERE bi.organization_id = $1 AND bi.bank_name = 'santander' AND bi.active = TRUE) AS learned_identities
        FROM bank_movements WHERE organization_id = $1 AND kind = 'abono'`, [orgId]);
   return { ...r, pending_amount: Number(r.pending_amount) };
 }
 
-module.exports = { importStatement, suggest, confirm, ignore, unmatch, listMovements, listStatements, stats, getUnpaidOrders, nameSimilarity };
+module.exports = { importStatement, suggest, confirm, autoMatchPending, ignore, unmatch, listMovements, listStatements, stats, getUnpaidOrders, nameSimilarity, normalizedPhone, uniqueOrderCombination };
