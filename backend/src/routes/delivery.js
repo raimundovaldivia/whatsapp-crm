@@ -1968,6 +1968,9 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
       botIds.size ? pool.query(
         `SELECT id::text AS id, status, payment_method, charge_requested_at, charge_request_count, total_price, customer_phone,
                 delivery_modified, customer_modified,
+                 (SELECT pp.status FROM payment_proofs pp
+                   WHERE pp.order_id = orders.id AND pp.organization_id = orders.organization_id
+                   ORDER BY pp.created_at DESC LIMIT 1) AS proof_status,
                 (SELECT m.status FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=orders.charge_message_id AND c.organization_id=orders.organization_id) AS charge_status,
                 (SELECT m.delivery_error FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=orders.charge_message_id AND c.organization_id=orders.organization_id) AS charge_error
            FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])`,
@@ -1975,6 +1978,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
       shopIds.size ? pool.query(
         `SELECT shopify_order_id AS id, crm_status AS status, financial_status, payment_method, charge_requested_at,
                 charge_request_count, total_price, customer_phone, delivery_modified,
+                 NULL::text AS proof_status,
                 (SELECT m.status FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=shopify_orders.charge_message_id AND c.organization_id=shopify_orders.organization_id) AS charge_status,
                 (SELECT m.delivery_error FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=shopify_orders.charge_message_id AND c.organization_id=shopify_orders.organization_id) AS charge_error
            FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])`,
@@ -2052,6 +2056,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           status,                                   // entregado | cancelled | postponed | not_delivered | pending
           payment_method: paymentMethod,            // efectivo | transferencia | otro | null
           paid,
+          proof_status: ord?.proof_status || null,  // pending | pre_verified | verified | rejected
           charge: {
             sent_at: ['sent','delivered','read'].includes(ord?.charge_status) ? ord?.charge_requested_at : null,
             requested_at: ord?.charge_requested_at || null,

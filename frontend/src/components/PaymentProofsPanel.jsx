@@ -84,7 +84,7 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
     }
   };
 
-  const pendingCount = proofs.filter(p => p.status === 'pending').length;
+  const reviewCount = proofs.filter(p => ['pending', 'pre_verified'].includes(p.status)).length;
 
   return (
     <div style={{
@@ -106,18 +106,18 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
             Imágenes de transferencia recibidas por WhatsApp
           </p>
         </div>
-        {pendingCount > 0 && (
+        {reviewCount > 0 && (
           <div style={{
             marginLeft: 'auto',
             backgroundColor: colors.amberStrong, color: 'white',
             borderRadius: '12px', padding: '3px 10px',
             fontSize: '13px', fontWeight: 700,
           }}>
-            {pendingCount} pendiente{pendingCount > 1 ? 's' : ''}
+            {reviewCount} por revisar
           </div>
         )}
         <button onClick={load} title="Actualizar" style={{
-          marginLeft: pendingCount > 0 ? '0' : 'auto',
+          marginLeft: reviewCount > 0 ? '0' : 'auto',
           background: 'none', border: 'none', cursor: 'pointer',
           color: colors.textSecondary, padding: '6px',
         }}>
@@ -149,6 +149,12 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
           </button>
         ))}
       </div>
+
+      {reviewCount > 0 && (
+        <div style={{ margin: '12px 24px 0', padding: '9px 12px', borderRadius: '9px', border: `1px solid ${colors.blue}55`, background: `${colors.blue}12`, color: colors.textSecondary, fontSize: '12px' }}>
+          Los comprobantes pendientes y pre-verificados todavía cuentan como <strong style={{ color: colors.textPrimary }}>Por cobrar</strong>. Abre cada uno y pulsa <strong style={{ color: colors.success }}>Verificar pago</strong> después de comprobarlo para moverlo a Pagado.
+        </div>
+      )}
 
       {/* Lista */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
