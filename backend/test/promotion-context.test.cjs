@@ -168,3 +168,27 @@ test('una promoción sin vigencia explícita vence automáticamente en 24 horas'
   assert.match(promotion.promptSection(expired), /pasaron 24 horas/i);
   assert.equal(promotion.restore(promotion.snapshot(active), new Date('2026-10-02T10:01:00.000Z')).active, false);
 });
+
+test('la segunda aceituna al 50% cobra un envase completo y medio envase por cada par', () => {
+  const oliveTemplate = {
+    direction: 'outbound',
+    created_at: '2026-10-01T10:00:00.000Z',
+    content: '[Template: promo_hasta_sabado]\nAceitunas de 500 g: lleva 2 envases y obtén 50% de descuento en el segundo. Válida hasta el 03/10/2026.',
+  };
+  const oliveProducts = [{ id: 'olive', title: 'Aceitunas verdes 500 g', priceMin: 8000 }];
+  const promo = promotion.fromHistory([oliveTemplate], oliveProducts, new Date('2026-10-01T12:00:00.000Z'));
+  assert.equal(promo.validUntil, '2026-10-03');
+  assert.deepEqual(promo.categoryDiscounts, []);
+  assert.equal(promo.secondUnitDiscounts[0].pct, 50);
+  assert.equal(promo.secondUnitDiscounts[0].products[0].pairTotal, 12000);
+
+  const priced = pricing.priceItems(
+    [{ product_name: 'Aceitunas verdes 500 g', quantity: 2 }],
+    oliveProducts,
+    { secondUnitDiscounts: promo.secondUnitDiscounts }
+  );
+  assert.equal(priced.subtotal, 16000);
+  assert.equal(priced.discountAmount, 4000);
+  assert.equal(priced.total, 12000);
+  assert.match(promotion.promptSection(promo), /1 envase \$8\.000; 2 envases.*\$12\.000/i);
+});

@@ -73,13 +73,31 @@ function parseCategoryDiscounts(body) {
     for (const match of String(body || '').matchAll(pattern)) {
       const pct = Number(match[1]);
       const target = match[2]?.trim().replace(/^(?:todos?|todas?|los|las)\s+/iu, '');
-      const genericTarget = /^(?:tu\s+)?(?:pedido|compra|orden|subtotal|total)(?:\s+completo)?$/iu.test(target || '');
+      const genericTarget = /^(?:(?:el|la)\s+)?segund/iu.test(target || '')
+        || /^(?:tu\s+)?(?:pedido|compra|orden|subtotal|total)(?:\s+completo)?$/iu.test(target || '');
       if (pct > 0 && pct <= 100 && target && !genericTarget && !found.some(x => x.pct === pct && norm(x.target) === norm(target))) {
         found.push({ pct, target });
       }
     }
   }
   return found;
+}
+
+function parseSecondUnitDiscounts(body) {
+  const rules = [];
+  const pattern = /([a-záéíóúüñ][^|.\n:]{1,45}?)\s+(?:de\s+)?(\d{2,4})\s*(g|gr|gramos?|kg|kilos?)\s*:\s*lleva\s+2\s+(?:unidades?|envases?|potes?|frascos?)[^|.\n]{0,80}?(\d{1,3})\s*%\s+(?:de\s+)?(?:descuento|dcto\.?)\s+en\s+(?:el|la)\s+segund[oa]/giu;
+  for (const match of String(body || '').matchAll(pattern)) {
+    const pct = Number(match[4]);
+    if (!(pct > 0 && pct <= 100)) continue;
+    rules.push({
+      target: match[1].trim().replace(/^(?:en\s+)?/iu, ''),
+      packSize: `${Number(match[2])} ${match[3].toLowerCase()}`,
+      pct,
+      minQty: 2,
+      discountedUnitsPerPair: 1,
+    });
+  }
+  return rules;
 }
 
 function parseDiscountPct(body) {
@@ -144,11 +162,12 @@ function parseTemplate(message, products = [], now = new Date()) {
   const body = content.replace(/^\s*\[Template:[^\]]+\]\s*/i, '').trim();
   const offers = parseOffers(body);
   const categoryDiscounts = parseCategoryDiscounts(body);
+  const secondUnitDiscounts = parseSecondUnitDiscounts(body);
   const parsedDiscountPct = parseDiscountPct(body);
   // Un template con precios finales y porcentaje informativo no acumula ambos
   // beneficios. Los precios explícitos mandan; el porcentaje se usa cuando la
   // promoción realmente consiste en descontar el subtotal.
-  const discountPct = (offers.length || categoryDiscounts.length) ? 0 : parsedDiscountPct;
+  const discountPct = (offers.length || categoryDiscounts.length || secondUnitDiscounts.length) ? 0 : parsedDiscountPct;
   const promotional = (offers.length > 0 || parsedDiscountPct > 0) && (/promo|promoci[oó]n|oferta|descuento|dcto|rebaja/i.test(`${templateName} ${body}`));
   if (!promotional) return null;
 
@@ -184,9 +203,24 @@ function parseTemplate(message, products = [], now = new Date()) {
     specialPrices[norm(matched.candidate.product_title)] = offer.price;
     specialPrices[norm(matched.candidate.title)] = offer.price;
   }
+  for (const rule of secondUnitDiscounts) {
+    const targetTokens = norm(rule.target).split(' ').filter(token => token.length > 2);
+    const packTokens = norm(rule.packSize).split(' ');
+    rule.products = catalog
+      .filter(candidate => {
+        const title = norm(candidate.title);
+        return targetTokens.some(token => title.includes(token))
+          && packTokens.every(token => title.includes(token));
+      })
+      .map(candidate => ({
+        title: candidate.title,
+        price: Number(candidate.price),
+        pairTotal: Math.round(Number(candidate.price) * (2 - rule.pct / 100)),
+      }));
+  }
 
   return {
-    templateName, body, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday,
+    templateName, body, offers, discountPct, categoryDiscounts, secondUnitDiscounts, specialPrices, sentDay, validUntil, validOnlyToday,
     deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, active, cutoff, sameDayConditional, stockConditional,
   };
 }
@@ -204,8 +238,8 @@ function fromHistory(history = [], products = [], now = new Date()) {
 
 function snapshot(promotion) {
   if (!promotion) return null;
-  const { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional } = promotion;
-  return { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional };
+  const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional } = promotion;
+  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional };
 }
 
 function restore(saved, now = new Date()) {
@@ -236,6 +270,10 @@ function promptSection(promotion) {
     ? `Aplica exactamente ${promotion.discountPct}% de descuento al subtotal del pedido.`
     : 'Para estas presentaciones usa el precio promocional, nunca el precio normal del catálogo.';
   const categoryRules = (promotion.categoryDiscounts || []).map(rule => `Aplica ${rule.pct}% de descuento solamente a ${rule.target}.`).join(' ');
+  const secondUnitRules = (promotion.secondUnitDiscounts || []).map(rule => {
+    const values = (rule.products || []).map(product => `${product.title}: 1 envase $${product.price.toLocaleString('es-CL')}; 2 envases (${rule.packSize} cada uno) $${product.pairTotal.toLocaleString('es-CL')} en total`).join(' | ');
+    return `En ${rule.target}, cobra el primer envase completo y aplica ${rule.pct}% de descuento sólo al segundo por cada par. Dos envases completan 1 kg. Si preguntan valores, responde usando el catálogo: ${values || 'consulta el precio actual del producto y calcula 1,5 veces ese valor para dos envases'}.`;
+  }).join(' ');
   const validity = promotion.deliveryWeekOnly
     ? `Sólo aplica a pedidos cuya entrega sea hasta el ${promotion.validUntil}. Para una entrega posterior usa precios normales.`
     : (promotion.validOnlyToday
@@ -243,7 +281,7 @@ function promptSection(promotion) {
       : (promotion.usesDefaultValidity ? 'El template no indicó vigencia: por seguridad esta promoción vence 24 horas después de su envío.' : `Vigencia: ${promotion.validUntil}.`));
   const shipping = promotion.freeShippingMin ? `Despacho gratis si el total del pedido es igual o superior a $${promotion.freeShippingMin.toLocaleString('es-CL')}.` : '';
   const ordering = promotion.orderCutoffOnlyToday ? `El pedido debe confirmarse hoy antes de las ${promotion.cutoff}; la hora antigua indicada más abajo no se usa.` : '';
-  return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}${categoryRules ? ` ${categoryRules}` : ''}\n- ${validity}${ordering ? `\n- ${ordering}` : ''}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}${shipping ? `\n- ${shipping}` : ''}\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
+  return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}${categoryRules ? ` ${categoryRules}` : ''}${secondUnitRules ? ` ${secondUnitRules}` : ''}\n- ${validity}${ordering ? `\n- ${ordering}` : ''}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}${shipping ? `\n- ${shipping}` : ''}\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
 }
 
 function optionText(promotion) {
@@ -333,4 +371,4 @@ function appliesToDelivery(promotion, deliveryDate) {
   return String(deliveryDate).slice(0, 10) <= promotion.validUntil;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };
+module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };

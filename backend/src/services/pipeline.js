@@ -1540,6 +1540,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   let priced = pricing.priceItems(updatedDraft.items, products, {
     specialPrices: promotionApplies ? specialPrices : baseSpecialPrices,
     categoryDiscounts: promotionApplies ? promotionContext.categoryDiscounts : [],
+    secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
     discountPct: promotionApplies && promotionContext.discountPct
       ? promotionContext.discountPct
       : (isLead ? updatedDraft.discount_pct : 0),

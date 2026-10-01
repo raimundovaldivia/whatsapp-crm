@@ -236,6 +236,7 @@ function priceItems(items = [], products = [], opts = {}) {
 
   const subtotal = merged.reduce((s, it) => s + it.price * it.quantity, 0);
   const categoryDiscounts = Array.isArray(opts.categoryDiscounts) ? opts.categoryDiscounts : [];
+  const secondUnitDiscounts = Array.isArray(opts.secondUnitDiscounts) ? opts.secondUnitDiscounts : [];
   let categoryDiscountAmount = 0;
   for (const item of merged) {
     const itemName = norm(item.name);
@@ -249,12 +250,30 @@ function priceItems(items = [], products = [], opts = {}) {
     item.promotion_discount_amount = Math.round(item.price * item.quantity * pct / 100);
     categoryDiscountAmount += item.promotion_discount_amount;
   }
+  let secondUnitDiscountAmount = 0;
+  for (const item of merged) {
+    const itemName = norm(item.name);
+    const rule = secondUnitDiscounts.find(candidate => {
+      const targetTokens = tokens(candidate.target);
+      const packTokens = tokens(candidate.packSize);
+      return targetTokens.some(token => itemName.includes(token))
+        && (packTokens.length === 0 || packTokens.every(token => itemName.includes(token)));
+    });
+    if (!rule || item.quantity < (rule.minQty || 2)) continue;
+    const pairs = Math.floor(item.quantity / 2);
+    const pct = Math.min(100, Math.max(0, Number(rule.pct) || 0));
+    item.second_unit_discount_pct = pct;
+    item.second_unit_discount_count = pairs;
+    item.second_unit_discount_amount = Math.round(item.price * pairs * pct / 100);
+    secondUnitDiscountAmount += item.second_unit_discount_amount;
+  }
   const maxDiscountPct = Math.min(100, Math.max(0, Number(opts.maxDiscountPct ?? MAX_DISCOUNT_PCT) || 0));
   const discountPct = Math.min(maxDiscountPct, Math.max(0, Number(opts.discountPct) || 0));
-  const discountAmount = categoryDiscountAmount + Math.round((subtotal - categoryDiscountAmount) * discountPct / 100);
+  const itemDiscountAmount = categoryDiscountAmount + secondUnitDiscountAmount;
+  const discountAmount = itemDiscountAmount + Math.round((subtotal - itemDiscountAmount) * discountPct / 100);
   const total = subtotal - discountAmount;
 
-  return { items: merged, subtotal, discountPct, categoryDiscounts, discountAmount, total, unmatched };
+  return { items: merged, subtotal, discountPct, categoryDiscounts, secondUnitDiscounts, discountAmount, total, unmatched };
 }
 
 // ─── Presentación ────────────────────────────────────────────────────────────
