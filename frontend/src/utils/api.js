@@ -81,6 +81,8 @@ export const storeSettingsAPI = {
 
 export const templatesAPI = {
   getAll:    () => api.get('/templates').then(r => r.data),
+  getAutomation: () => api.get('/templates/automation').then(r => r.data),
+  saveAutomation: (assignments) => api.put('/templates/automation', { assignments }).then(r => r.data),
   create:    (data) => api.post('/templates', data).then(r => r.data),
   delete:    (name) => api.delete(`/templates/${encodeURIComponent(name)}`).then(r => r.data),
   generate:  (goal, category = 'MARKETING', language = 'es') =>

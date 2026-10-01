@@ -24,7 +24,7 @@ const mediaCache                = require('../services/media-cache');
 const { handleAgentCommand, hasActiveCampaign } = require('../services/agent-commands');
 const guardrail                 = require('../services/response-guardrail');
 const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
-const { resumeDivaOnInbound } = require('../services/conversation-mode');
+const { resumeDivaOnInbound, keepHumanAfterReply } = require('../services/conversation-mode');
 const { isDeliveredOrder, buildPaymentProofReply } = require('../services/payment-proof-reply');
 
 let io;
@@ -583,11 +583,12 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     });
     await db.updateConversationLastMessage(session.convId, customerMessage);
 
-    // Diva coordinó una respuesta puntual. Al enviarla, el hilo vuelve a quedar
-    // activo para que pueda atender el siguiente mensaje del cliente.
-    await db.setAgentMode(session.convId, 'ai');
-    await db.clearLastEscalation(session.convId).catch(() => {});
-    io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'ai' });
+    // Una persona ya intervino. Mantener el hilo en modo humano para que la
+    // respuesta inmediata del cliente vuelva a esa misma persona y Diva no
+    // interrumpa ni genere una segunda escalación. El modo vuelve a IA por el
+    // cierre explícito o por inactividad (conversation-mode-watch.js).
+    await keepHumanAfterReply(session.convId, db);
+    io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: session.convId, mode: 'human' });
     if (pending) await db.markAdminReplyHandled(pending.id);
     secretary.closeSession(org.id);
 
@@ -598,7 +599,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     const preview = customerMessage.slice(0, 100);
     await kapsoService.sendTextMessage(
       parsed.from,
-      `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nDiva envió tu respuesta a *${session.customerName}* y dejó el chat activo para continuar atendiendo.`,
+      `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nDiva envió tu respuesta a *${session.customerName}* y dejó el chat en atención humana para que puedas continuar el hilo.`,
       whatsappConfig
     ).catch(() => {});
 

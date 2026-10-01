@@ -1099,12 +1099,21 @@ router.get('/routes/:id/en-route-status', requireRole('owner', 'admin', 'supervi
     if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
     const window = await deliveryNotifications.getCustomerServiceWindow(req.orgId, stop.phone);
+    const template = window.available
+      ? null
+      : await require('../services/template-automation').getAssignment(req.orgId, 'delivery_en_route');
+    const canNotify = window.available || !!template;
     res.json({
       success: true,
       ...window,
+      available: canNotify,
+      mode: window.available ? 'text' : template ? 'template' : 'unavailable',
+      templateName: template?.name || null,
       message: window.available
         ? 'Puedes avisarle desde Diva sin usar un template.'
-        : 'La ventana de 24 horas está cerrada. Para avisar se necesita un template aprobado.',
+        : template
+          ? `La ventana está cerrada. Se usará el template ${template.name}.`
+          : 'La ventana de 24 horas está cerrada y falta asignar un template en Configuración → Templates.',
     });
   } catch (error) {
     res.status(error.status || 500).json({ success: false, error: error.message });
@@ -1124,7 +1133,7 @@ router.post('/routes/:id/notify-en-route', requireRole('owner', 'admin', 'superv
       const conversation = await db.getConversationById(result.conversationId, req.orgId).catch(() => null);
       io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: result.message, conversation });
     }
-    res.json({ success: true, sent: true, text: result.text });
+    res.json({ success: true, sent: true, text: result.text, via: result.via, templateName: result.templateName });
   } catch (error) {
     res.status(error.status || 500).json({
       success: false,
@@ -2181,6 +2190,14 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
             status: ord?.charge_status || (ord?.charge_requested_at ? 'unknown' : null),
             error: ord?.charge_error || null,
             retryable: pendingSet.has(key) && (!ord?.charge_requested_at || ord?.charge_status === 'failed'),
+            // Además de los nunca avisados/fallidos, permite recordar el pago
+            // a quien recibió un aviso hace al menos 6 h y todavía no figura
+            // pagado. Los envíos pending/sent/unknown deben verificarse antes.
+            actionable: pendingSet.has(key) && (
+              !ord?.charge_requested_at || ord?.charge_status === 'failed' ||
+              (['delivered','read'].includes(ord?.charge_status) &&
+                (Date.now() - new Date(ord.charge_requested_at).getTime()) >= collection.MIN_HOURS_BETWEEN_CHARGES * 3600000)
+            ),
             count:   Number(ord?.charge_request_count) || 0,
             pending: pendingSet.has(key),           // sigue en "Por cobrar"
           },

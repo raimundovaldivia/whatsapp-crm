@@ -8,6 +8,12 @@ Si no llegan recibos, la plantilla permanece pendiente; no se considera entregad
 
 La migración de inicio agrega `delivery_error` y habilita `pending` conservando los estados existentes. Los mensajes históricos no se reclasifican por suposición: el detalle descartado antes requiere consultar el historial del proveedor o eventos almacenados. No se enviaron mensajes reales para verificar el cambio.
 
+## Automatizaciones y ventana de 24 horas
+
+Configuración → Templates → Automatizaciones centraliza la selección del template aprobado para tres eventos: pedido en camino, cobro por transferencia y pedido agendado. Cada evento acepta únicamente templates aprobados de categoría `UTILITY`, con las variables exactas que requiere el flujo.
+
+La selección es un respaldo, no el canal principal: si el cliente escribió dentro de las últimas 24 horas, el CRM envía texto libre. Solo usa el template cuando la ventana ya está cerrada o cuando el proveedor rechaza el texto porque expiró mientras se intentaba enviar. Las campañas y promociones permanecen fuera de estas asignaciones porque corresponden a `MARKETING`.
+
 Validación: `node --test test/template-status.test.cjs`, suite backend y compilación frontend. Los tests cubren errores inmediatos, respuesta sin ID, recibos fallidos, persistencia, aislamiento por organización y eventos atrasados.
 
 ## Cobranza

@@ -10,10 +10,79 @@ const express      = require('express');
 const router       = express.Router();
 const db           = require('../db/database');
 const kapsoService = require('../services/kapso-whatsapp');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 const { getTemplateVariables, hasTemplateVariableValue } = require('../utils/template-renderer.mjs');
+const templateAutomation = require('../services/template-automation');
+const collection = require('../services/payment-collection');
 
 router.use(requireAuth);
+
+/* ─────────────────────────────────────────────────────────────────────
+   GET/PUT /api/templates/automation
+   Asigna templates aprobados a eventos automáticos. Los flujos consultan
+   estas asignaciones solo cuando la ventana de 24 horas está cerrada.
+───────────────────────────────────────────────────────────────────── */
+router.get('/automation', async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      cases: Object.values(templateAutomation.CASES),
+      assignments: await templateAutomation.getAssignments(req.orgId),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put('/automation', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const incoming = req.body?.assignments || {};
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    const approved = await kapsoService.getTemplates(wc);
+    const next = {};
+    for (const [key, definition] of Object.entries(templateAutomation.CASES)) {
+      const requested = incoming[key];
+      if (!requested?.name) { next[key] = null; continue; }
+      const template = approved.find(t => t.name === String(requested.name).trim()
+        && t.language === String(requested.language || t.language || 'es'));
+      if (!template) return res.status(400).json({ success: false, error: `El template de ${definition.label} no existe o todavía no está aprobado.` });
+      if (String(template.category || '').toUpperCase() !== definition.category) {
+        return res.status(400).json({ success: false, error: `${definition.label} requiere un template ${definition.category}.` });
+      }
+      const body = (template.components || []).find(c => String(c.type).toUpperCase() === 'BODY')?.text || '';
+      const variables = getTemplateVariables(body);
+      const expectedVariables = Array.from({ length: definition.parameterCount }, (_, index) => String(index + 1));
+      const otherVariables = (template.components || [])
+        .filter(c => String(c.type).toUpperCase() !== 'BODY')
+        .flatMap(c => getTemplateVariables(JSON.stringify(c)));
+      if (variables.join(',') !== expectedVariables.join(',') || otherVariables.length) {
+        return res.status(400).json({
+          success: false,
+          error: `${definition.label} requiere exactamente las variables ${expectedVariables.map(n => `{{${n}}}`).join(', ')} en el cuerpo y ninguna variable adicional.`,
+        });
+      }
+      next[key] = { name: template.name, language: template.language || 'es', category: template.category };
+    }
+
+    const saved = await templateAutomation.saveAssignments(req.orgId, next);
+
+    // Mantener compatibles las pantallas y servicios anteriores.
+    const charge = saved.payment_collection;
+    await collection.saveChargeSettings(req.orgId, {
+      waTemplate: charge?.name || '',
+      waTemplateLanguage: charge?.language || 'es',
+      waTemplateStatus: charge ? 'APPROVED' : '',
+    });
+    await db.setSetting(req.orgId, 'scheduled_dispatch_template', saved.scheduled_order?.name || '');
+    await db.setSetting(req.orgId, 'scheduled_dispatch_template_language', saved.scheduled_order?.language || 'es');
+
+    res.json({ success: true, cases: Object.values(templateAutomation.CASES), assignments: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.response?.data?.error?.message || err.message });
+  }
+});
 
 /* ─────────────────────────────────────────────────────────────────────
    GET /api/templates

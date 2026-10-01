@@ -17,7 +17,9 @@ const ordersAgent  = require('./agents/orders');
 const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
-const { isLikelyAutomaticReply, isGiftedStockReply } = require('./inbound-message-policy');
+const inboundPolicy = require('./inbound-message-policy');
+const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
+const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
 
 // Un pedido al que todavía tiene sentido anotarle una preferencia de entrega:
@@ -62,6 +64,21 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     L.step('automatic_reply', 'autorespuesta comercial ignorada después de template');
     console.log(`[Pipeline] 🤖 Autorespuesta comercial ignorada para conv ${conversationId}`);
     return { response: null, skipped: true, reason: 'AUTOMATIC_REPLY' };
+  }
+
+  // Un enlace solo es contenido ambiguo, no una solicitud de atención humana.
+  // Resolverlo antes de los clasificadores evita una derivación falsa y, por
+  // extensión, el recordatorio automático de una consulta que nunca existió.
+  // No se cambia el pipeline_state: si el contacto estaba dado de baja, sigue
+  // estándolo para campañas, aunque puede conversar normalmente por WhatsApp.
+  if (isBareLinkMessage(userMessage)) {
+    L.step('bare_link', 'enlace sin pregunta; se solicita contexto sin escalar');
+    return {
+      response: 'Recibí el enlace 😊 ¿Qué te gustaría que revise o en qué te puedo ayudar con él?',
+      agentType: 'orchestrator',
+      newState: conversation?.pipeline_state || 'exploring',
+      switchToHuman: false,
+    };
   }
   const history = await db.getLastMessages(conversationId, 16);
   const deliveryEnabled = await require('./commercial').permitted(orgId, 'delivery').catch(() => false);
@@ -937,28 +954,34 @@ REGLAS ABSOLUTAS:
     /\b(ya\s+)?(va\s+en\s+camino|est[aá]\s+en\s+camino|en\s+ruta|va\s+en\s+ruta|salió\s+(mi|el)|despacharon|lo\s+mandaron|lo\s+enviaron)\b/i,
     /\b(hoy|ma[ñn]ana)\b.{0,20}\b(llega|entregan?|reparten|despachan?|lo\s+traen)\b/i,
     /\b(mi|el)\s+pedido\b.{0,30}\b(llega|viene|hora|cu[aá]ndo|en\s+camino|ruta)\b/i,
+    /\b(mi|el)\s+pedido\b.{0,45}\b(hoy|ma[ñn]ana)\b.{0,25}\b(se\s+har[aá]|sale|reparto|despacho|entrega)\b/i,
     /\bpara\s+cu[aá]ndo\s+(lo\s+)?(tengo|llega|entregan)\b/i,
   ];
-  if (deliveryEnabled && activeOrder && userMessage.length <= 160
+  if (activeOrder && userMessage.length <= 160
       && intent !== 'modify_order' && intent !== 'cancel_order'
       && DELIVERY_STATUS_PATTERNS.some(p => p.test(userMessage))) {
     const first = (conversation.contact_name || activeOrder.customer_name || '').trim().split(/\s+/)[0] || '';
     const hi = first ? ` ${first}` : '';
     const win = deliverySchedule ? ` La entrega es ${deliverySchedule}.` : '';
     // Fecha programada (reprogramado / agendado a futuro)
-    let schedFuture = null;
+    let scheduledDate = null;
+    let scheduledRelation = null;
     try {
       if (activeOrder.delivery_date) {
-        const dd = new Date(activeOrder.delivery_date);
         const todayStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
-        const ddStr = new Date(activeOrder.delivery_date).toISOString().slice(0, 10);
-        if (ddStr > todayStr) schedFuture = formatDateEs(activeOrder.delivery_date);
+        const rawDate = String(activeOrder.delivery_date);
+        const ddStr = rawDate.match(/^\d{4}-\d{2}-\d{2}/)?.[0]
+          || new Date(activeOrder.delivery_date).toISOString().slice(0, 10);
+        scheduledDate = formatDateEs(ddStr);
+        scheduledRelation = ddStr > todayStr ? 'future' : ddStr < todayStr ? 'past' : 'today';
       }
     } catch (_) {}
 
     let response;
-    if (schedFuture) {
-      response = `Tu pedido quedó agendado para el ${schedFuture} 📅.${win} Ese día te avisamos cuando vaya saliendo. ¿Algo más?`;
+    let switchToHuman = false;
+    let escalationReason = null;
+    if (scheduledRelation === 'future') {
+      response = `Tu pedido quedó agendado para el ${scheduledDate} 📅.${win} Ese día te avisamos cuando vaya saliendo. ¿Algo más?`;
     } else if (activeDeliveryRoute) {
       let routeProgress = '';
       const optimized = Array.isArray(activeDeliveryRoute.optimized_route)
@@ -998,14 +1021,28 @@ REGLAS ABSOLUTAS:
       }
       response = `¡Tu pedido ya está en la ruta de hoy${hi}! 🚚${routeProgress}${win} Es una estimación y puede variar por tránsito o demoras; te avisamos cuando vaya acercándose. 😊`;
     } else if (activeOrder.status === 'por_despachar') {
-      response = `Tu pedido está listo para salir${hi} 📦.${win} Hoy te llega dentro de ese horario; cuando salga a la ruta te avisamos. 😊`;
+      response = `Tu pedido está listo para salir${hi} 📦.${win} Está considerado para el reparto de hoy; cuando salga a la ruta te avisamos. 😊`;
+    } else if (scheduledRelation === 'today') {
+      response = `Tu pedido está agendado para hoy${hi}, pero todavía figura en preparación y aún no aparece en ruta.${win} Para que puedas organizarte, le pido al equipo confirmar si sale hoy o si conviene pasarlo para mañana. Te responden por aquí 🙏`;
+      switchToHuman = true;
+      escalationReason = `Pedido #${activeOrder.id} agendado para hoy sigue en estado ${activeOrder.status}; cliente necesita confirmar si se reparte hoy`;
+    } else if (scheduledRelation === 'past') {
+      response = `Veo que tu pedido estaba agendado para el ${scheduledDate}, pero todavía figura pendiente. Para darte una respuesta correcta, le pido al equipo revisarlo y confirmarte por aquí 🙏`;
+      switchToHuman = true;
+      escalationReason = `Pedido #${activeOrder.id} mantiene fecha vencida (${scheduledDate}) y estado ${activeOrder.status}`;
     } else {
       // draft / nuevo / sent / payment_received → aún en preparación
       response = `Tu pedido está en preparación${hi} 😊.${win} Sale en el próximo reparto y te avisamos apenas vaya en camino.`;
     }
     L.agent('orchestrator', 0);
     L.step('delivery_status', `pedido #${activeOrder.id} estado ${activeOrder.status}`);
-    return { response, agentType: 'orchestrator', newState: currentState };
+    return {
+      response,
+      agentType: 'orchestrator',
+      newState: currentState,
+      switchToHuman,
+      ...(escalationReason ? { escalationReason } : {}),
+    };
   }
 
   // ── Preferencia / restricción de horario de entrega ────────────────────

@@ -10,6 +10,7 @@ import {
   FileText, Plus, Trash2, RefreshCw, CheckCircle,
   Clock, XCircle, Loader, AlertCircle, ChevronDown, ChevronUp,
   Info, Sparkles, Wand2,
+  Save, Zap,
 } from 'lucide-react';
 import { templatesAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -17,6 +18,7 @@ import { getTemplateVariables, renderTemplate } from '../utils/template-renderer
 
 const LANGUAGES = [
   { value: 'es',    label: 'Español (es)' },
+  { value: 'es_CL', label: 'Español Chile (es_CL)' },
   { value: 'es_MX', label: 'Español México (es_MX)' },
   { value: 'es_AR', label: 'Español Argentina (es_AR)' },
   { value: 'en_US', label: 'English US (en_US)' },
@@ -135,6 +137,112 @@ function TemplateCard({ template, onDelete, deleting, colors }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function AutomationAssignments({ templates, onCreate, colors }) {
+  const [cases, setCases] = useState([]);
+  const [assignments, setAssignments] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    templatesAPI.getAutomation()
+      .then(data => { setCases(data.cases || []); setAssignments(data.assignments || {}); })
+      .catch(err => setError(err.response?.data?.error || err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const eligible = definition => templates.filter(template => {
+    const body = template.components?.find(c => String(c.type).toUpperCase() === 'BODY')?.text || '';
+    const variables = getTemplateVariables(body);
+    const expected = Array.from({ length: definition.parameterCount }, (_, index) => String(index + 1));
+    const hasOtherVariables = (template.components || [])
+      .filter(c => String(c.type).toUpperCase() !== 'BODY')
+      .some(c => getTemplateVariables(JSON.stringify(c)).length > 0);
+    return template.status === 'APPROVED'
+      && String(template.category).toUpperCase() === definition.category
+      && variables.join(',') === expected.join(',')
+      && !hasOtherVariables;
+  });
+
+  const choose = (caseKey, value) => {
+    if (!value) return setAssignments(prev => ({ ...prev, [caseKey]: null }));
+    const [name, language] = value.split('|');
+    const template = templates.find(t => t.name === name && t.language === language);
+    setAssignments(prev => ({
+      ...prev,
+      [caseKey]: template ? { name: template.name, language: template.language, category: template.category } : null,
+    }));
+  };
+
+  const save = async () => {
+    setSaving(true); setError(''); setSuccess('');
+    try {
+      const data = await templatesAPI.saveAutomation(assignments);
+      setAssignments(data.assignments || {});
+      setSuccess('Asignaciones guardadas. Los templates solo se usarán cuando la ventana de 24 horas esté cerrada.');
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally { setSaving(false); }
+  };
+
+  if (loading) return <div style={{ padding: 36, textAlign: 'center', color: colors.textMuted }}><Loader size={22} style={{ animation: 'spin 1s linear infinite' }} /></div>;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ padding: '14px 16px', borderRadius: 10, backgroundColor: `${colors.green}12`, border: `1px solid ${colors.green}44` }}>
+        <div style={{ display: 'flex', gap: 9, alignItems: 'center', color: colors.greenLight, fontWeight: 700, fontSize: 13 }}>
+          <Zap size={15} /> Regla de ahorro activa
+        </div>
+        <div style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>
+          Si el cliente escribió durante las últimas 24 horas, el CRM envía un mensaje normal. El template asignado se usa únicamente cuando WhatsApp informa que la ventana terminó.
+        </div>
+      </div>
+
+      {error && <div style={{ color: colors.red, backgroundColor: '#3a1a1a', borderRadius: 8, padding: '10px 12px', fontSize: 12 }}>{error}</div>}
+      {success && <div style={{ color: colors.greenLight, backgroundColor: colors.greenTint, borderRadius: 8, padding: '10px 12px', fontSize: 12 }}>{success}</div>}
+
+      {cases.map(definition => {
+        const options = eligible(definition);
+        const current = assignments[definition.key];
+        const value = current?.name ? `${current.name}|${current.language || 'es'}` : '';
+        return (
+          <div key={definition.key} style={{ padding: '15px 16px', border: `1px solid ${colors.border}`, borderRadius: 10, backgroundColor: colors.bgSub }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 700 }}>{definition.label}</div>
+                <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3, lineHeight: 1.45 }}>{definition.description}</div>
+                <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
+                  Requiere {definition.category} · {definition.parameterCount} variables: {definition.parameters.join(' · ')}
+                </div>
+              </div>
+              <select value={value} onChange={event => choose(definition.key, event.target.value)}
+                style={{ width: 260, maxWidth: '44%', padding: '8px 10px', borderRadius: 7, border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: 12 }}>
+                <option value="">— Sin template automático —</option>
+                {options.map(template => (
+                  <option key={`${template.name}|${template.language}`} value={`${template.name}|${template.language}`}>
+                    {template.name} · {template.language}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {options.length === 0 && (
+              <div style={{ marginTop: 10, color: colors.yellow, fontSize: 11 }}>
+                No hay un template aprobado compatible. <button onClick={onCreate} style={{ border: 0, padding: 0, background: 'none', color: colors.greenLight, cursor: 'pointer', fontWeight: 700 }}>Crear uno</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <button onClick={save} disabled={saving}
+        style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 7, border: 0, borderRadius: 8, padding: '9px 16px', backgroundColor: colors.green, color: '#fff', fontWeight: 700, fontSize: 13, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+        <Save size={14} /> {saving ? 'Guardando…' : 'Guardar automatizaciones'}
+      </button>
     </div>
   );
 }
@@ -500,7 +608,7 @@ function CreateTemplateForm({ onCreated, colors }) {
 ───────────────────────────────────────────────────────────────────────── */
 export default function TemplateManager() {
   const { colors } = useTheme();
-  const [tab, setTab]             = useState('list');   // 'list' | 'create'
+  const [tab, setTab]             = useState('list');   // 'list' | 'automation' | 'create'
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState('');
@@ -519,7 +627,7 @@ export default function TemplateManager() {
   }, []);
 
   useEffect(() => {
-    if (tab === 'list') loadTemplates();
+    if (tab === 'list' || tab === 'automation') loadTemplates();
   }, [tab, loadTemplates]);
 
   const handleDelete = async (name) => {
@@ -541,6 +649,7 @@ export default function TemplateManager() {
 
   const tabs = [
     { key: 'list',   label: '📋 Mis Templates', count: templates.length },
+    { key: 'automation', label: '⚡ Automatizaciones' },
     { key: 'create', label: '+ Crear Template' },
   ];
 
@@ -614,11 +723,15 @@ export default function TemplateManager() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {templates.map(t => (
-                <TemplateCard key={t.name} template={t} onDelete={handleDelete} deleting={deleting} colors={colors} />
+                <TemplateCard key={`${t.name}-${t.language}`} template={t} onDelete={handleDelete} deleting={deleting} colors={colors} />
               ))}
             </div>
           )}
         </div>
+      )}
+
+      {tab === 'automation' && (
+        <AutomationAssignments templates={templates} onCreate={() => setTab('create')} colors={colors} />
       )}
 
       {/* Crear template manual */}

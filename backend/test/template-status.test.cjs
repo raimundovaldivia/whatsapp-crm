@@ -2,6 +2,15 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {PGlite}=require('@electric-sql/pglite');
 const {load}=require('./helpers.cjs');
+
+test('collection messages identify the order, delivery date and amount',()=>{
+ const collection=load('src/services/payment-collection.js');
+ const order={id:'1042',order_label:'#1042',customer_name:'MARÍA INÉS',total_price:40000,delivered_at:'2026-09-24T15:00:00.000Z'};
+ assert.equal(collection.orderReference(order),'#1042 (entregado el 24 de septiembre de 2026)');
+ const message=collection.buildChargeMessage(order,{template:'Hola {nombre}: pedido {pedido}, total {total}, entrega {fecha_entrega}.',bankDetails:''});
+ assert.equal(message,'Hola María: pedido #1042 (entregado el 24 de septiembre de 2026), total $40.000, entrega 24 de septiembre de 2026.');
+});
+
 test('template acceptance is pending, failure details survive reload and stale receipts cannot hide failure',async()=>{
  const engine=new PGlite();
  const query=async(sql,params)=>{const r=params?.length?await engine.query(sql,params):(await engine.exec(sql)).at(-1);return {...r,rowCount:r.affectedRows??r.rows?.length??0};};

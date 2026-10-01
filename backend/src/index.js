@@ -64,7 +64,13 @@ const server = http.createServer(app);
 const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',').map(s => s.trim()).filter(Boolean);
 const checkOrigin = (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin));
 app.disable('x-powered-by');
-if (process.env.TRUST_PROXY_HOPS) app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS));
+// Railway pone un proxy delante de Express. Sin esta configuración,
+// express-rate-limit rechaza X-Forwarded-For y registra una ValidationError en
+// la primera solicitud de cada despliegue. Localmente se mantiene desactivado.
+require('./services/proxy-config').configureTrustProxy(app, {
+  isProduction: isProd,
+  configuredHops: process.env.TRUST_PROXY_HOPS,
+});
 const io = new Server(server, { cors: { origin: checkOrigin, methods: ['GET', 'POST'] } });
 require('./services/socket-auth').configureSocketAuth(io);
 
