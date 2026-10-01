@@ -9,6 +9,43 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+function cleanText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 250) : null;
+}
+
+/**
+ * Una imagen sólo puede modificar pagos cuando la respuesta de Vision es
+ * explícita y además contiene evidencia financiera. Esto evita que valores
+ * como "false" (string), respuestas incompletas o fotos comunes se tomen
+ * como comprobantes.
+ */
+function normalizePaymentProofAnalysis(value) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const confidence = ['high', 'medium', 'low'].includes(raw.confidence) ? raw.confidence : 'low';
+  const parsedAmount = typeof raw.amount === 'number'
+    ? raw.amount
+    : Number(String(raw.amount ?? '').replace(/\D/g, ''));
+  const amount = Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount : null;
+  const bank = cleanText(raw.bank);
+  const reference = cleanText(raw.reference);
+  const date = cleanText(raw.date);
+  const currency = cleanText(raw.currency);
+  const hasFinancialEvidence = amount !== null || bank !== null || reference !== null;
+  const isPaymentProof = raw.is_payment_proof === true
+    && ['high', 'medium'].includes(confidence)
+    && hasFinancialEvidence;
+
+  return {
+    is_payment_proof: isPaymentProof,
+    amount: isPaymentProof ? amount : null,
+    currency: isPaymentProof ? currency : null,
+    date: isPaymentProof ? date : null,
+    bank: isPaymentProof ? bank : null,
+    reference: isPaymentProof ? reference : null,
+    confidence,
+  };
+}
+
 /**
  * @param {Buffer} imageBuffer - Binario de la imagen
  * @param {string} mimeType    - 'image/jpeg' | 'image/png' | 'image/webp'
@@ -52,6 +89,11 @@ Responde ÚNICAMENTE con JSON válido, sin texto extra:
   "confidence": "high" o "medium" o "low"
 }
 
+Sólo responde true si ves evidencia bancaria o financiera concreta, como monto,
+banco, número de operación o referencia. Fotos de productos, huevos, personas,
+domicilios, paquetes, boletas de compra sin pago bancario u objetos NO son
+comprobantes de transferencia. Si tienes dudas, responde false.
+
 Si NO es comprobante de pago, devuelve is_payment_proof: false y el resto null.`,
         },
       ],
@@ -62,16 +104,16 @@ Si NO es comprobante de pago, devuelve is_payment_proof: false y el resto null.`
 
   try {
     // Intentar parsear directo
-    return JSON.parse(raw.trim());
+    return normalizePaymentProofAnalysis(JSON.parse(raw.trim()));
   } catch {
     // Extraer JSON del texto por si hay texto adicional
     const match = raw.match(/\{[\s\S]*\}/);
     if (match) {
-      try { return JSON.parse(match[0]); } catch { /* ignorar */ }
+      try { return normalizePaymentProofAnalysis(JSON.parse(match[0])); } catch { /* ignorar */ }
     }
     console.warn('[AnalyzePayment] No se pudo parsear respuesta de Claude:', raw.slice(0, 200));
     return { is_payment_proof: false, confidence: 'low' };
   }
 }
 
-module.exports = { analyzePaymentProof };
+module.exports = { analyzePaymentProof, normalizePaymentProofAnalysis };

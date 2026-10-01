@@ -665,8 +665,10 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       }
     } catch (aiErr) {
       console.warn('[KapsoWebhook] Error descargando/analizando imagen:', aiErr.message);
-      // Si descarga o análisis falla, tratar como comprobante por seguridad
-      analysis = { is_payment_proof: true, confidence: 'low' };
+      // Nunca alterar pagos por una imagen que no se pudo verificar. Se guarda
+      // como foto normal y, si está disponible, Diva la interpreta por el flujo
+      // general sin afirmar que recibió dinero.
+      analysis = { is_payment_proof: false, confidence: 'low' };
     }
 
     // Referencia de media: usar la URL directa de Active Storage (app.kapso.ai).
