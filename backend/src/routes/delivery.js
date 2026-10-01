@@ -29,6 +29,7 @@ const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
 const deliveryNotifications = require('../services/delivery-notifications');
+const whatsappProvider = require('../services/whatsapp-provider');
 const push = require('../services/push');
 const { attachAttemptHistory } = require('../services/delivery-attempts');
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -972,6 +973,123 @@ async function getOwnedActiveStop(req, routeId, stopKey) {
   if (!stop) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
   return stop;
 }
+
+async function conversationForStop(orgId, stop, { create = false } = {}) {
+  const window = await deliveryNotifications.getCustomerServiceWindow(orgId, stop.phone);
+  let conversation = window.conversationId
+    ? await db.getConversationById(window.conversationId, orgId)
+    : null;
+
+  if (!conversation && create) {
+    const config = await whatsappProvider.configForConversation(orgId, null);
+    conversation = await db.upsertConversation(
+      orgId,
+      stop.phone,
+      stop.customerName || stop.customer_name || 'Cliente',
+      config?.id || null
+    );
+  }
+
+  return { window, conversation };
+}
+
+// Chat acotado a una parada de la ruta. El teléfono y la conversación siempre
+// se resuelven en el servidor para impedir que un repartidor consulte clientes
+// ajenos enviando un número o conversationId arbitrario.
+router.get('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  try {
+    const stopKey = String(req.query.stopKey || '');
+    if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
+    const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
+    if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
+    const { window, conversation } = await conversationForStop(req.orgId, stop);
+    const config = await whatsappProvider.configForConversation(req.orgId, conversation);
+    const messages = conversation ? await db.getMessagesByConversation(conversation.id, 60) : [];
+    res.json({
+      success: true,
+      data: {
+        conversation,
+        messages,
+        window: { ...window, available: !!window.available || config?.provider === 'evolution' },
+        customer: { name: stop.customerName || stop.customer_name || 'Cliente', phone: stop.phone },
+      },
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  try {
+    const stopKey = String(req.body?.stopKey || '');
+    const text = String(req.body?.text || '').trim();
+    if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
+    if (!text) return res.status(400).json({ success: false, error: 'Escribe un mensaje' });
+    if (text.length > 1000) return res.status(400).json({ success: false, error: 'El mensaje no puede superar 1.000 caracteres' });
+
+    const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
+    if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
+    const resolved = await conversationForStop(req.orgId, stop);
+    const { window } = resolved;
+    let { conversation } = resolved;
+    let config = await whatsappProvider.configForConversation(req.orgId, conversation);
+    if (!config) return res.status(400).json({ success: false, error: 'WhatsApp no está configurado para esta cuenta' });
+    if (!window.available && config.provider !== 'evolution') {
+      return res.status(409).json({
+        success: false,
+        error: 'WINDOW_EXPIRED',
+        message: 'La ventana de 24 horas está cerrada. El cliente debe escribir primero o debes usar un aviso aprobado.',
+        window,
+      });
+    }
+    if (!conversation) {
+      conversation = await db.upsertConversation(
+        req.orgId,
+        stop.phone,
+        stop.customerName || stop.customer_name || 'Cliente',
+        config.id || null
+      );
+      config = await whatsappProvider.configForConversation(req.orgId, conversation) || config;
+    }
+
+    let sent;
+    try {
+      sent = await whatsappProvider.sendTextMessage(conversation.phone_number, text, config);
+    } catch (sendError) {
+      if (sendError.is24hWindow) {
+        return res.status(409).json({
+          success: false,
+          error: 'WINDOW_EXPIRED',
+          message: 'La ventana de 24 horas se cerró. El cliente debe escribir primero o debes usar un aviso aprobado.',
+        });
+      }
+      throw sendError;
+    }
+
+    const driver = await db.getUserById(req.userId).catch(() => null);
+    const driverName = String(driver?.name || driver?.email || 'Repartidor').replace(/:/g, ' ').slice(0, 80);
+    const message = await db.saveMessage({
+      conversationId: conversation.id,
+      whatsappMessageId: whatsappProvider.messageId(sent),
+      direction: 'outbound',
+      content: text,
+      type: 'text',
+      status: 'sent',
+      sentBy: 'human',
+      agentType: `driver:${driverName}`,
+    });
+    await db.updateConversationLastMessage(conversation.id, text);
+    await db.setAgentMode(conversation.id, 'human');
+
+    const updatedConversation = await db.getConversationById(conversation.id, req.orgId);
+    io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conversation.id, mode: 'human' });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updatedConversation });
+    res.json({ success: true, data: { message, conversation: updatedConversation } });
+  } catch (error) {
+    console.error('[Delivery chat] Error enviando:', error);
+    res.status(error.status || 500).json({ success: false, error: error.code || error.message, message: error.message });
+  }
+});
 
 // La app consulta esta ruta al abrir una parada para habilitar el botón solo
 // cuando el cliente escribió durante las últimas 24 horas.

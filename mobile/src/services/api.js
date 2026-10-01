@@ -222,6 +222,20 @@ export async function sendEnRouteNotification(routeId, stopKey) {
   return res.data;
 }
 
+/** Chat central del cliente asociado a una parada de la ruta. */
+export async function getStopChat(routeId, stopKey) {
+  const client = await getClient();
+  const res = await client.get(`/api/delivery/routes/${routeId}/stops/chat`, { params: { stopKey } });
+  return res.data;
+}
+
+/** Envía un mensaje desde el número oficial del negocio, nunca desde el teléfono del repartidor. */
+export async function sendStopChatMessage(routeId, stopKey, text) {
+  const client = await getClient();
+  const res = await client.post(`/api/delivery/routes/${routeId}/stops/chat`, { stopKey, text });
+  return res.data;
+}
+
 // Catálogo para venta en ruta ("bandejas extras"). Devuelve { enabled, products }.
 export async function getSellCatalog() {
   const client = await getClient();

@@ -207,12 +207,9 @@ export default function StopScreen({ route: navRoute, navigation }) {
     Linking.openURL(`tel:${phoneDigits}`);
   }
 
-  function whatsappCustomer() {
+  function openCustomerChat() {
     if (!phoneDigits) return;
-    const text = encodeURIComponent(`Hola ${stop.customerName?.split(' ')[0] || ''}, soy el repartidor. Voy en camino con tu pedido ${stop.orderName || ''}.`);
-    Linking.openURL(`https://wa.me/${phoneDigits}?text=${text}`).catch(() =>
-      Alert.alert('WhatsApp', 'No se pudo abrir WhatsApp en este teléfono.')
-    );
+    navigation.navigate('CustomerChat', { routeId, stopKey, stop });
   }
 
   function confirmEnRouteNotification() {
@@ -563,8 +560,8 @@ export default function StopScreen({ route: navRoute, navigation }) {
               <TouchableOpacity style={[s.callBtn, { flex: 1 }]} onPress={callCustomer} activeOpacity={0.85}>
                 <Text style={s.callBtnText}>📞  Llamar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[s.callBtn, { flex: 1 }]} onPress={whatsappCustomer} activeOpacity={0.85}>
-                <Text style={s.callBtnText}>💬  WhatsApp</Text>
+              <TouchableOpacity style={[s.callBtn, { flex: 1 }]} onPress={openCustomerChat} activeOpacity={0.85}>
+                <Text style={s.callBtnText}>💬  Chat central</Text>
               </TouchableOpacity>
             </View>
           )}

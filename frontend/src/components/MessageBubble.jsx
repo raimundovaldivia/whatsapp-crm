@@ -28,6 +28,9 @@ export default function MessageBubble({ message }) {
   const { colors, isDark } = useTheme();
   const isOutbound = message.direction === 'outbound';
   const isAI = message.sent_by === 'ai';
+  const driverName = message.agent_type?.startsWith('driver:')
+    ? message.agent_type.slice('driver:'.length).trim()
+    : '';
 
   const time = message.created_at ? formatTime(message.created_at) : '';
 
@@ -63,6 +66,8 @@ export default function MessageBubble({ message }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '2px', paddingRight: '4px' }}>
             {isAI ? (
               <><Bot size={11} color={colors.green} /><span style={{ fontSize: '11px', color: colors.green }}>Agente IA</span></>
+            ) : driverName ? (
+              <><User size={11} color={colors.blue || '#38bdf8'} /><span style={{ fontSize: '11px', color: colors.blue || '#38bdf8' }}>Repartidor · {driverName}</span></>
             ) : (
               <><User size={11} color={colors.yellow} /><span style={{ fontSize: '11px', color: colors.yellow }}>Tú</span></>
             )}

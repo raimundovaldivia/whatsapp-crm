@@ -117,3 +117,62 @@ test('la API móvil valida ruta, asignación y pertenencia antes de consultar o 
   assert.equal(res.code, 404);
   assert.equal(sent, 1);
 });
+
+test('el chat del repartidor usa solo el cliente de su parada y registra quién respondió', async () => {
+  const route = {
+    id: 5,
+    status: 'in_progress',
+    orders: [{ source: 'bot', id: 17, phone: '56911112222', customerName: 'Katherine', orderName: '#BOT-17' }],
+  };
+  const pool = {
+    query: async (_sql, params) => {
+      if (params?.[0] === 5 && params?.[1] === 3 && params?.[2] === 9) return { rows: [route] };
+      return { rows: [] };
+    },
+  };
+  const conversation = { id: 41, phone_number: '56911112222', whatsapp_channel_id: 2 };
+  const saved = [];
+  let sentTo = null;
+  const database = {
+    getPool: () => pool,
+    getConversationById: async id => id === 41 ? conversation : null,
+    getMessagesByConversation: async () => [{ id: 1, direction: 'inbound', content: '¿A qué hora llega?' }],
+    upsertConversation: async () => conversation,
+    getUserById: async () => ({ id: 9, name: 'Pedro Ruta' }),
+    saveMessage: async value => { saved.push(value); return { id: 2, ...value }; },
+    updateConversationLastMessage: async () => {},
+    setAgentMode: async () => {},
+  };
+  const notifications = {
+    getCustomerServiceWindow: async () => ({ available: true, conversationId: 41 }),
+  };
+  const provider = {
+    configForConversation: async () => ({ id: 2, provider: 'kapso' }),
+    sendTextMessage: async (phone) => { sentTo = phone; return { messages: [{ id: 'wamid.driver' }] }; },
+    messageId: result => result.messages[0].id,
+  };
+  const router = load('src/routes/delivery.js', {
+    '../db/database': database,
+    '../services/delivery-notifications': notifications,
+    '../services/whatsapp-provider': provider,
+    '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+  });
+  const base = { orgId: 3, userId: 9, role: 'repartidor', params: { id: '5' } };
+
+  let res = response();
+  await handler(router, 'get', '/routes/5/stops/chat')({ ...base, query: { stopKey: 'bot_17' } }, res);
+  assert.equal(res.code, 200);
+  assert.equal(res.body.data.messages[0].content, '¿A qué hora llega?');
+
+  res = response();
+  await handler(router, 'post', '/routes/5/stops/chat')({ ...base, body: { stopKey: 'bot_17', text: 'Llego en 15 minutos.' } }, res);
+  assert.equal(res.code, 200);
+  assert.equal(sentTo, '56911112222');
+  assert.equal(saved[0].sentBy, 'human');
+  assert.equal(saved[0].agentType, 'driver:Pedro Ruta');
+
+  res = response();
+  await handler(router, 'post', '/routes/5/stops/chat')({ ...base, body: { stopKey: 'bot_99', text: 'No debe salir' } }, res);
+  assert.equal(res.code, 404);
+  assert.equal(saved.length, 1);
+});

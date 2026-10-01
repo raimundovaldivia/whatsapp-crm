@@ -23,6 +23,7 @@ import RouteMapScreen from './src/screens/RouteMapScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import ExpensesScreen from './src/screens/ExpensesScreen';
 import StopScreen    from './src/screens/StopScreen';
+import CustomerChatScreen from './src/screens/CustomerChatScreen';
 import { logout, getSavedSession, validateSession, onSessionExpired } from './src/services/api';
 import { registerForPush, unregisterForPush, listenForRouteNotifications } from './src/push';
 
@@ -164,6 +165,15 @@ export default function App() {
               options={({ route }) => ({
                 title: route.params?.stop?.customerName || 'Parada',
                 headerBackTitle: 'Ruta',
+              })}
+            />
+
+            <Stack.Screen
+              name="CustomerChat"
+              component={CustomerChatScreen}
+              options={({ route }) => ({
+                title: route.params?.stop?.customerName || 'Chat del cliente',
+                headerBackTitle: 'Parada',
               })}
             />
 
