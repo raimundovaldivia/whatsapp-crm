@@ -1071,6 +1071,7 @@ function DespachosRepartos({ colors }) {
   const [error,   setError]   = useState(null);
   const [openDays, setOpenDays] = useState({});
   const [openPeriods, setOpenPeriods] = useState({});
+  const [debtTooltip, setDebtTooltip] = useState(null);
   const [charging, setCharging] = useState('');   // día que está enviando cobros
   const [chargeMsg, setChargeMsg] = useState(null);
   const [chargeModal, setChargeModal] = useState(null);   // { day, rows } — modal de cobro
@@ -1261,7 +1262,9 @@ function DespachosRepartos({ colors }) {
       if (r.payment_method === 'efectivo') d.efectivo += amount;
       else if (r.payment_method === 'transferencia') d.transferencia += amount;
       else if (r.payment_method) d.otro += amount;
-      if (r.paid) d.pagado += amount;
+      // "Pagado" en este informe corresponde solo a transferencias ya
+      // confirmadas. El efectivo tiene su propia columna y no se mezcla aquí.
+      if (r.payment_method === 'transferencia' && r.paid) d.pagado += amount;
       if (r.payment_method === 'transferencia') {
         if (['delivered', 'read'].includes(r.charge?.status)) d.cobrosEnviados++;
         else if (r.charge?.retryable) d.cobrosPendientes++;
@@ -1351,13 +1354,23 @@ function DespachosRepartos({ colors }) {
   const chip = (text, color) => (
     <span style={ui.chip(colors, color)}>{text}</span>
   );
-  const debtAmount = (company, personal) => {
-    const total = company + personal;
-    const hasSplit = company > 0 && personal > 0;
+  const debtAmount = (total, company, personal) => {
+    const hasDebt = total > 0;
     return (
-      <span title={hasSplit ? `Empresas: ${CLP(company)}\nPersonas naturales: ${CLP(personal)}` : ''}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: hasSplit ? 'help' : 'default', borderBottom: hasSplit ? '1px dotted currentColor' : 'none' }}>
-        {CLP(total)}{hasSplit && <span style={{ fontSize: '9px', opacity: 0.75 }}>ⓘ</span>}
+      <span
+        onMouseEnter={event => {
+          if (!hasDebt) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const above = rect.bottom + 92 > window.innerHeight;
+          setDebtTooltip({
+            company, personal,
+            left: Math.max(10, Math.min(rect.right - 210, window.innerWidth - 220)),
+            top: above ? Math.max(10, rect.top - 82) : rect.bottom + 7,
+          });
+        }}
+        onMouseLeave={() => setDebtTooltip(null)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: hasDebt ? 'help' : 'default', borderBottom: hasDebt ? '1px dotted currentColor' : 'none' }}>
+        {CLP(total)}{hasDebt && <span style={{ fontSize: '9px', opacity: 0.75 }}>ⓘ</span>}
       </span>
     );
   };
@@ -1422,7 +1435,8 @@ function DespachosRepartos({ colors }) {
         {totals.sinEntrega > 0 && chip(`${totals.sinEntrega} sin entrega`, '#38bdf8')}
         {chip(`💵 ${CLP(totals.efectivo)} efectivo`, '#22c55e')}
         {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
-        {chip(`✅ ${CLP(totals.pagado)} pagado`, '#2dd4bf')}
+        {chip(`✅ ${CLP(totals.pagado)} transferencias pagadas`, '#2dd4bf')}
+        {chip(`💸 ${CLP(Math.max(0, totals.transferencia - totals.pagado))} por cobrar`, '#fbbf24')}
         {chip(`💸 ${totals.cobrosEnviados} avisos de cobro entregados`, '#fbbf24')}
         {totals.cobrosPendientes > 0 && chip(`⚠️ ${totals.cobrosPendientes} sin cobrar`, '#f87171')}
         {totals.deudaEmpresa > 0 && chip(`🏢 ${CLP(totals.deudaEmpresa)} deben empresas`, '#a78bfa')}
@@ -1455,7 +1469,7 @@ function DespachosRepartos({ colors }) {
             </thead>
             {periods.map((period, index) => {
               const open = openPeriods[period.key] ?? index === 0;
-              const receivable = period.deudaEmpresa + period.deudaPersonal;
+              const receivable = Math.max(0, period.transferencia - period.pagado);
               const incidents = period.cancelados + period.sinEntrega + period.reprogramados;
               const cell = { padding: '11px 12px', textAlign: 'right', borderBottom: `1px solid ${colors.border}`, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' };
               return (
@@ -1474,13 +1488,13 @@ function DespachosRepartos({ colors }) {
                     <td style={{ ...cell, color: '#22c55e', fontWeight: 700 }}>{CLP(period.efectivo)}</td>
                     <td style={{ ...cell, color: '#38bdf8', fontWeight: 700 }}>{CLP(period.transferencia)}</td>
                     <td style={{ ...cell, color: period.pagado ? '#2dd4bf' : colors.textMuted, fontWeight: 800 }}>{CLP(period.pagado)}</td>
-                    <td style={{ ...cell, color: receivable ? '#fbbf24' : colors.textMuted, fontWeight: 800 }}>{debtAmount(period.deudaEmpresa, period.deudaPersonal)}</td>
+                    <td style={{ ...cell, color: receivable ? '#fbbf24' : colors.textMuted, fontWeight: 800 }}>{debtAmount(receivable, period.deudaEmpresa, period.deudaPersonal)}</td>
                     <td style={{ ...cell, color: period.gastos ? '#fb923c' : colors.textMuted }}>{CLP(period.gastos)}</td>
                     <td style={cell}>{open ? 'Ocultar' : 'Ver días'}</td>
                   </tr>
                   {open && (
                     period.days.map(d => {
-                      const dayReceivable = d.deudaEmpresa + d.deudaPersonal;
+                      const dayReceivable = Math.max(0, d.transferencia - d.pagado);
                       const dayIncidents = d.cancelados + d.sinEntrega + d.reprogramados;
                       return (
                         <tr key={d.day} style={{ borderTop: `1px solid ${colors.border}`, background: colors.bgPanel, fontSize: '11px' }}>
@@ -1491,7 +1505,7 @@ function DespachosRepartos({ colors }) {
                           <td style={{ ...cell, color: '#22c55e' }}>{CLP(d.efectivo)}</td>
                           <td style={{ ...cell, color: '#38bdf8' }}>{CLP(d.transferencia)}</td>
                           <td style={{ ...cell, color: d.pagado ? '#2dd4bf' : colors.textMuted, fontWeight: 700 }}>{CLP(d.pagado)}</td>
-                          <td style={{ ...cell, color: dayReceivable ? '#fbbf24' : colors.textMuted, fontWeight: 700 }}>{debtAmount(d.deudaEmpresa, d.deudaPersonal)}</td>
+                          <td style={{ ...cell, color: dayReceivable ? '#fbbf24' : colors.textMuted, fontWeight: 700 }}>{debtAmount(dayReceivable, d.deudaEmpresa, d.deudaPersonal)}</td>
                           <td style={{ ...cell, color: d.gastos ? '#fb923c' : colors.textMuted }}>{CLP(d.gastos)}</td>
                           <td style={cell}>
                             <button onClick={() => showDay(d.day)}
@@ -1634,6 +1648,14 @@ function DespachosRepartos({ colors }) {
           </div>
         );
       })}
+
+      {debtTooltip && (
+        <div style={{ position: 'fixed', zIndex: 2500, left: debtTooltip.left, top: debtTooltip.top, width: '210px', padding: '9px 11px', borderRadius: '8px', border: `1px solid ${colors.border}`, background: colors.bgInput, color: colors.textPrimary, boxShadow: '0 8px 24px rgba(0,0,0,.45)', fontSize: '11px', lineHeight: 1.7, pointerEvents: 'none' }}>
+          <div style={{ color: colors.textMuted, fontWeight: 700, marginBottom: '2px' }}>Por cobrar</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px' }}><span>🏢 Empresas</span><strong style={{ color: '#a78bfa' }}>{CLP(debtTooltip.company)}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px' }}><span>👤 Personas naturales</span><strong style={{ color: '#f59e0b' }}>{CLP(debtTooltip.personal)}</strong></div>
+        </div>
+      )}
 
       {chargeModal && (() => {
         const rowsM = chargeModal.rows || [];
