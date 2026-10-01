@@ -152,7 +152,9 @@ function parseTemplate(message, products = [], now = new Date()) {
   const promotional = (offers.length > 0 || parsedDiscountPct > 0) && (/promo|promoci[oó]n|oferta|descuento|dcto|rebaja/i.test(`${templateName} ${body}`));
   if (!promotional) return null;
 
-  const sentDay = chileDay(message.created_at || message.createdAt || now);
+  const sentAtCandidate = new Date(message.created_at || message.createdAt || now);
+  const sentAt = Number.isNaN(sentAtCandidate.getTime()) ? new Date(now) : sentAtCandidate;
+  const sentDay = chileDay(sentAt);
   const today = chileDay(now);
   const validOnlyToday = /v[aá]lid[oa].{0,45}(solo|s[oó]lo).{0,35}(pedidos?\s+(de|realizados?)\s+)?hoy/iu.test(body)
     || /(oferta|promo(?:ci[oó]n)?).{0,30}(solo|s[oó]lo)\s+por\s+hoy/iu.test(body);
@@ -161,8 +163,11 @@ function parseTemplate(message, products = [], now = new Date()) {
   const validUntil = explicitUntil(body, sentDay) || (validOnlyToday ? sentDay : (deliveryWeekOnly ? endOfWeek(sentDay) : null));
   const cutoff = parseCutoff(body);
   const orderCutoffOnlyToday = /(?:extendimos|ampliamos|extendido|nuevo\s+horario)[^.!?\n]{0,90}?pedidos?\s+de\s+hoy[^.!?\n]{0,60}?(?:hasta|a)\s+las?/iu.test(body);
+  const usesDefaultValidity = !validUntil && !orderCutoffOnlyToday;
+  const expiresAt = usesDefaultValidity ? new Date(sentAt.getTime() + 24 * 60 * 60 * 1000).toISOString() : null;
   const activeByDate = !validUntil || (!!today && today <= validUntil);
-  const active = activeByDate && (!orderCutoffOnlyToday || beforeChileCutoff(now, sentDay, cutoff));
+  const activeByDefault = !expiresAt || new Date(now).getTime() <= new Date(expiresAt).getTime();
+  const active = activeByDate && activeByDefault && (!orderCutoffOnlyToday || beforeChileCutoff(now, sentDay, cutoff));
   const sameDayConditional = /(mismo\s+d[ií]a|durante\s+el\s+d[ií]a)/iu.test(body);
   const stockConditional = /(si\s+(tenemos|hay)\s+stock|sujeto\s+a\s+stock)/iu.test(body);
   const freeShippingMatch = body.match(/(?:despachos?|env[ií]os?)\s+gratis[^$\d]{0,35}(?:sobre|desde|superiores?\s+a)\s*\$?\s*([\d.]+)/iu);
@@ -182,7 +187,7 @@ function parseTemplate(message, products = [], now = new Date()) {
 
   return {
     templateName, body, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday,
-    deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, active, cutoff, sameDayConditional, stockConditional,
+    deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, active, cutoff, sameDayConditional, stockConditional,
   };
 }
 
@@ -199,8 +204,8 @@ function fromHistory(history = [], products = [], now = new Date()) {
 
 function snapshot(promotion) {
   if (!promotion) return null;
-  const { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, cutoff, sameDayConditional, stockConditional } = promotion;
-  return { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, cutoff, sameDayConditional, stockConditional };
+  const { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional } = promotion;
+  return { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional };
 }
 
 function restore(saved, now = new Date()) {
@@ -210,6 +215,7 @@ function restore(saved, now = new Date()) {
     ...saved,
     specialPrices: saved.specialPrices && typeof saved.specialPrices === 'object' ? saved.specialPrices : {},
     active: (!saved.validUntil || (!!today && today <= saved.validUntil))
+      && (!saved.expiresAt || new Date(now).getTime() <= new Date(saved.expiresAt).getTime())
       && (!saved.orderCutoffOnlyToday || beforeChileCutoff(now, saved.sentDay, saved.cutoff)),
   };
 }
@@ -220,7 +226,7 @@ function promptSection(promotion) {
   if (!promotion.active) {
     const reason = promotion.orderCutoffOnlyToday
       ? `el horario para pedir terminó a las ${promotion.cutoff}`
-      : `su vigencia terminó el ${promotion.validUntil}`;
+      : (promotion.usesDefaultValidity ? 'pasaron 24 horas desde su envío' : `su vigencia terminó el ${promotion.validUntil}`);
     return `## Promoción vencida\nEl cliente recibió el template ${promotion.templateName}, pero ${reason}. NO uses esos precios. Si pregunta por la oferta, explica brevemente que venció y ofrece revisar los precios actuales.`;
   }
   const deliveryRule = promotion.sameDayConditional
@@ -232,7 +238,9 @@ function promptSection(promotion) {
   const categoryRules = (promotion.categoryDiscounts || []).map(rule => `Aplica ${rule.pct}% de descuento solamente a ${rule.target}.`).join(' ');
   const validity = promotion.deliveryWeekOnly
     ? `Sólo aplica a pedidos cuya entrega sea hasta el ${promotion.validUntil}. Para una entrega posterior usa precios normales.`
-    : (promotion.validOnlyToday ? 'La promoción aplica si el pedido queda confirmado hoy. Puede pedir hoy y solicitar entrega para otro día.' : `Vigencia: ${promotion.validUntil || 'sin fecha explícita en el template'}.`);
+    : (promotion.validOnlyToday
+      ? 'La promoción aplica si el pedido queda confirmado hoy. Puede pedir hoy y solicitar entrega para otro día.'
+      : (promotion.usesDefaultValidity ? 'El template no indicó vigencia: por seguridad esta promoción vence 24 horas después de su envío.' : `Vigencia: ${promotion.validUntil}.`));
   const shipping = promotion.freeShippingMin ? `Despacho gratis si el total del pedido es igual o superior a $${promotion.freeShippingMin.toLocaleString('es-CL')}.` : '';
   const ordering = promotion.orderCutoffOnlyToday ? `El pedido debe confirmarse hoy antes de las ${promotion.cutoff}; la hora antigua indicada más abajo no se usa.` : '';
   return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}${categoryRules ? ` ${categoryRules}` : ''}\n- ${validity}${ordering ? `\n- ${ordering}` : ''}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}${shipping ? `\n- ${shipping}` : ''}\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
@@ -299,7 +307,9 @@ function isFuturePromotionQuestion(message) {
 function futureReply(promotion) {
   if (!promotion) return null;
   if (!promotion.active) {
-    const reason = promotion.orderCutoffOnlyToday ? `hasta las ${promotion.cutoff}` : `hasta el ${promotion.validUntil || promotion.sentDay}`;
+    const reason = promotion.orderCutoffOnlyToday
+      ? `hasta las ${promotion.cutoff}`
+      : (promotion.usesDefaultValidity ? 'durante 24 horas desde su envío' : `hasta el ${promotion.validUntil || promotion.sentDay}`);
     return `Esa promoción era válida ${reason} y ya venció. Puedo ayudarte con los precios disponibles de hoy, ¿qué cantidad necesitas?`;
   }
   const choices = optionText(promotion);

@@ -150,3 +150,21 @@ test('interpreta una promoción mixta aunque sus reglas no estén en la ficha de
   assert.match(promotion.promptSection(promo), /Despacho gratis.*10\.000/i);
   assert.equal(promotion.fromHistory([mixedTemplate], mixedProducts, new Date('2026-10-01T15:00:00.000Z')).active, false);
 });
+
+test('una promoción sin vigencia explícita vence automáticamente en 24 horas', () => {
+  const withoutValidity = {
+    direction: 'outbound',
+    created_at: '2026-10-01T10:00:00.000Z',
+    content: '[Template: promo_sin_fecha]\n100 Jumbo $37.000. ¿Te guardamos una?',
+  };
+  const active = promotion.fromHistory([withoutValidity], products, new Date('2026-10-02T09:59:00.000Z'));
+  assert.equal(active.usesDefaultValidity, true);
+  assert.equal(active.active, true);
+  assert.equal(active.expiresAt, '2026-10-02T10:00:00.000Z');
+  assert.match(promotion.promptSection(active), /vence 24 horas/i);
+
+  const expired = promotion.fromHistory([withoutValidity], products, new Date('2026-10-02T10:01:00.000Z'));
+  assert.equal(expired.active, false);
+  assert.match(promotion.promptSection(expired), /pasaron 24 horas/i);
+  assert.equal(promotion.restore(promotion.snapshot(active), new Date('2026-10-02T10:01:00.000Z')).active, false);
+});
