@@ -29,16 +29,28 @@ function parseOffers(body) {
   const offers = [];
   const seen = new Set();
   const re = /\b(\d{1,4})\s+([a-záéíóúüñ][^|$\n]{0,45}?)\s*\$\s*([\d.]+)/giu;
-  for (const match of String(body || '').matchAll(re)) {
-    const units = Number(match[1]);
-    const descriptor = match[2].replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '').trim();
-    const price = money(match[3]);
-    // "Queso 900 g $15.000": 900 g es el tamaño, no una oferta llamada "900 g".
-    if (/^(?:g|gr|gramos?|kg|kilos?|ml|litros?)$/iu.test(descriptor)) continue;
-    const key = `${units}_${norm(descriptor)}_${price}`;
-    if (!units || !descriptor || !price || seen.has(key)) continue;
-    seen.add(key);
-    offers.push({ units, descriptor, price, label: `${units} ${descriptor}` });
+  // Algunos templates declaran la variedad una vez y después enumeran bloques:
+  // "Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | XL: 30 unidades...".
+  // El encabezado se hereda hasta que aparece otro; sin esto, "60 Jumbo" y
+  // "60 XL" quedaban como dos ofertas indistinguibles llamadas "60 unidades".
+  let groupedDescriptor = '';
+  const blocks = String(body || '').split('|');
+  for (const block of blocks) {
+    const headings = [...block.matchAll(/\b(jumbo|extra\s+large|xl|large|mediano|mediana|medium)\s*:\s*(?=\d)/giu)];
+    if (headings.length) groupedDescriptor = headings.at(-1)[1].replace(/\s+/g, ' ').trim();
+
+    for (const match of block.matchAll(re)) {
+      const units = Number(match[1]);
+      let descriptor = match[2].replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '').trim();
+      const price = money(match[3]);
+      // "Queso 900 g $15.000": 900 g es el tamaño, no una oferta llamada "900 g".
+      if (/^(?:g|gr|gramos?|kg|kilos?|ml|litros?)$/iu.test(descriptor)) continue;
+      if (groupedDescriptor && /^(?:huevos?|unidades?)$/iu.test(descriptor)) descriptor = groupedDescriptor;
+      const key = `${units}_${norm(descriptor)}_${price}`;
+      if (!units || !descriptor || !price || seen.has(key)) continue;
+      seen.add(key);
+      offers.push({ units, descriptor, price, label: `${units} ${descriptor}` });
+    }
   }
   // Productos cuyo nombre va antes del tamaño, por ejemplo
   // "Queso de cabra 900 g $15.000". Se revisan por bloque para no absorber
@@ -306,10 +318,12 @@ function selectedOffer(message, promotion) {
     const units = String(Number(offer.units));
     const hasUnits = new RegExp(`(^|\\s)${units}(?=\\s|$)`).test(text);
     if (!hasUnits) return false;
+    const textTokens = new Set(text.split(' '));
     const descriptorTokens = norm(offer.descriptor)
       .split(' ')
-      .filter(token => token.length > 2 && !['huevo', 'huevos', 'unidad', 'unidades'].includes(token));
-    return descriptorTokens.length === 0 || descriptorTokens.some(token => text.includes(token));
+      .filter(token => (token.length > 2 || ['xl', 'l', 'm', 's'].includes(token))
+        && !['huevo', 'huevos', 'unidad', 'unidades'].includes(token));
+    return descriptorTokens.length === 0 || descriptorTokens.some(token => token.length <= 2 ? textTokens.has(token) : text.includes(token));
   });
   return matches.length === 1 ? matches[0] : null;
 }
