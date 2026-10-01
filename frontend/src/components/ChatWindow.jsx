@@ -6,6 +6,7 @@ import ClientAddressFields from './ClientAddressFields.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { buildBodyTemplateComponent, getBodyComponent, getTemplateVariables, renderTemplate } from '../utils/template-renderer.js';
+import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
@@ -172,7 +173,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setHistoryEditSaving(true);
     setHistoryEditError('');
     try {
-      await api.patch('/orders/history-edit', {
+      const { data } = await api.patch('/orders/history-edit', {
         source: historyEdit.source,
         id: historyEdit.id,
         items: cleanItems,
@@ -180,6 +181,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         city: historyEdit.city.trim(),
         updateContact: historyEdit.updateContact,
       });
+      alertOrderEditNotification(data.notification);
       await reloadHistory();
       setHistoryEdit(null);
     } catch (err) {

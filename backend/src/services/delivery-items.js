@@ -1,4 +1,16 @@
 const db = require('../db/database');
+const deliveryNotifications = require('./delivery-notifications');
+
+async function sendOrderEditNotification(...args) {
+  if (typeof deliveryNotifications.sendOrderEditNotification !== 'function') {
+    return { sent: false, skipped: true, reason: 'NOTIFICATION_UNAVAILABLE' };
+  }
+  try {
+    return await deliveryNotifications.sendOrderEditNotification(...args);
+  } catch (error) {
+    return { sent: false, skipped: true, reason: 'SEND_FAILED', error: error.message };
+  }
+}
 async function routeItems(req, res) {
   let client;
   try {
@@ -17,7 +29,7 @@ async function routeItems(req, res) {
     if (!['sent','in_progress','completed'].includes(route.status)) throw Object.assign(new Error('Ruta no disponible'), { status: 409 });
     const table = source === 'bot' ? 'orders' : 'shopify_orders', column = source === 'bot' ? 'id' : 'shopify_order_id';
     const key = source === 'bot' ? Number(id) : String(id);
-    const { rows: [order] } = await client.query(`SELECT items,total_price FROM ${table} WHERE ${column}=$1 AND organization_id=$2 FOR UPDATE`, [key,req.orgId]);
+    const { rows: [order] } = await client.query(`SELECT * FROM ${table} WHERE ${column}=$1 AND organization_id=$2 FOR UPDATE`, [key,req.orgId]);
     if (!order) throw Object.assign(new Error('Pedido no encontrado'), { status: 404 });
     let result;
     if (req.method === 'GET') {
@@ -50,6 +62,14 @@ async function routeItems(req, res) {
       result = {items:clean,total};
     }
     await client.query('COMMIT');
+    if (req.method !== 'GET') {
+      result.notification = await sendOrderEditNotification(req.orgId, {
+        source,
+        id,
+        before: order,
+        after: { ...order, items: result.items, total_price: String(result.total) },
+      });
+    }
     res.json({success:true,...result});
   } catch (err) {
     if(client) await client.query('ROLLBACK');

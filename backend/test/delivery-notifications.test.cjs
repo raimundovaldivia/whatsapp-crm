@@ -7,6 +7,8 @@ function serviceWith({ lastInboundAt, providerResult = { messages: [{ id: 'wamid
   const db = {
     getPool: () => ({ query: async () => ({ rows: [{ id: 41, last_inbound_at: lastInboundAt }] }) }),
     getWhatsappConfig: async () => ({ provider: 'kapso', phone_number_id: 'phone-1', kapso_api_key: 'secret' }),
+    getConversationById: async id => ({ id, phone_number: '56911112222', whatsapp_channel_id: null }),
+    upsertConversation: async (_orgId, phone) => ({ id: 41, phone_number: phone, whatsapp_channel_id: null }),
     saveMessage: async value => { saved.push(value); return { id: 88, ...value }; },
     updateConversationLastMessage: async () => {},
   };
@@ -23,6 +25,11 @@ function serviceWith({ lastInboundAt, providerResult = { messages: [{ id: 'wamid
     './kapso-whatsapp': kapso,
     './whatsapp': { sendTextMessage: async () => {} },
     './twilio-whatsapp': { sendTextMessage: async () => {} },
+    './evolution-whatsapp': { sendTextMessage: async () => {} },
+    './whatsapp-provider': {
+      configForConversation: async () => ({ provider: 'kapso', phone_number_id: 'phone-1', kapso_api_key: 'secret' }),
+      messageId: result => result?.messages?.[0]?.id || null,
+    },
   });
   return { service, saved, get sends() { return sends; } };
 }
@@ -70,6 +77,47 @@ test('si el proveedor informa que la ventana cerró, devuelve un error controlad
     error => error.status === 409 && error.code === 'WINDOW_EXPIRED'
   );
   assert.equal(fixture.saved.length, 0);
+});
+
+test('al editar un pedido avisa únicamente los datos que realmente cambiaron', async () => {
+  const fixture = serviceWith({ lastInboundAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+  const result = await fixture.service.sendOrderEditNotification(3, {
+    source: 'bot',
+    id: 17,
+    before: {
+      customer_name: 'Katherine Bravo', customer_phone: '56911112222',
+      items: JSON.stringify([{ name: '40 Jumbo', quantity: 1, price: 18000 }]),
+      total_price: '18000', shipping_address: JSON.stringify({ address: 'Calle 1', city: 'Coquimbo' }),
+    },
+    after: {
+      customer_name: 'Katherine Bravo', customer_phone: '56911112222',
+      items: JSON.stringify([{ name: '100 Jumbo', quantity: 1, price: 37000 }]),
+      total_price: '37000', shipping_address: JSON.stringify({ address: 'Calle 1', city: 'Coquimbo' }),
+    },
+  });
+  assert.equal(result.sent, true);
+  assert.equal(fixture.sends, 1);
+  assert.match(result.text, /Katherine.*#BOT-17/s);
+  assert.match(result.text, /1x 100 Jumbo/);
+  assert.match(result.text, /Nuevo total: \$37\.000/);
+  assert.doesNotMatch(result.text, /Dirección:/);
+  assert.equal(fixture.saved[0].agentType, 'order_edit');
+});
+
+test('una edición sin cambios no envía y una ventana cerrada queda informada', async () => {
+  const closed = serviceWith({ lastInboundAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() });
+  const order = {
+    customer_name: 'Ana', customer_phone: '56911112222',
+    items: [{ name: '30 XL', quantity: 1, price: 12000 }], total_price: '12000',
+  };
+  const unchanged = await closed.service.sendOrderEditNotification(3, { source: 'bot', id: 4, before: order, after: { ...order } });
+  assert.equal(unchanged.reason, 'NO_CHANGES');
+  const changed = await closed.service.sendOrderEditNotification(3, {
+    source: 'bot', id: 4, before: order, after: { ...order, total_price: '13000' },
+  });
+  assert.equal(changed.sent, false);
+  assert.equal(changed.reason, 'WINDOW_EXPIRED');
+  assert.equal(closed.sends, 0);
 });
 
 test('la API móvil valida ruta, asignación y pertenencia antes de consultar o enviar', async () => {

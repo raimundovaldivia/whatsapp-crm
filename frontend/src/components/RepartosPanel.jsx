@@ -9,6 +9,7 @@ import { api, API_BASE } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone, Download } from 'lucide-react';
+import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
 
 function uniqueOrders(list) {
   const seen = new Set();
@@ -356,7 +357,8 @@ function NuevoReparto({ colors }) {
   async function saveReschedule(o) {
     if (!reschedDate) return;
     try {
-      await api.patch('/orders/reschedule', { source: o.source, id: o.id, date: reschedDate });
+      const { data } = await api.patch('/orders/reschedule', { source: o.source, id: o.id, date: reschedDate });
+      alertOrderEditNotification(data.notification);
       setReschedId(null); setReschedDate('');
       reloadOrders();
     } catch (e) { alert(e.response?.data?.error || e.message); }
@@ -439,7 +441,8 @@ function NuevoReparto({ colors }) {
   async function saveAddress(order) {
     if (!addrDraft.trim()) return;
     try {
-      await api.patch(`/orders/${order.id}/address`, { address: addrDraft.trim() });
+      const { data } = await api.patch(`/orders/${order.id}/address`, { address: addrDraft.trim() });
+      alertOrderEditNotification(data.notification);
       // Actualizar localmente
       setOrders(prev => prev.map(o =>
         o.source === 'bot' && String(o.id) === String(order.id)
@@ -1181,7 +1184,8 @@ function DespachosRepartos({ colors }) {
     setEditTot(null);
     if (!Number.isFinite(v) || v < 0 || v === Math.round(r.total || 0)) return;
     try {
-      await api.patch('/orders/adjust-total', { source: r.source, id: r.order_id, total: v });
+      const { data } = await api.patch('/orders/adjust-total', { source: r.source, id: r.order_id, total: v });
+      alertOrderEditNotification(data.notification);
       load();
     } catch (e) {
       alert(e.response?.data?.error || 'No se pudo corregir el monto');
@@ -1204,7 +1208,8 @@ function DespachosRepartos({ colors }) {
     if (!itemsModal || !itemRows) return;
     setItemsBusy(true);
     try {
-      await api.patch('/orders/set-items', { source: itemsModal.source, id: itemsModal.id, items: itemRows });
+      const { data } = await api.patch('/orders/set-items', { source: itemsModal.source, id: itemsModal.id, items: itemRows });
+      alertOrderEditNotification(data.notification);
       setItemsModal(null); setItemRows(null); load();
     } catch (e) { alert(e.response?.data?.error || 'No se pudo guardar'); }
     finally { setItemsBusy(false); }

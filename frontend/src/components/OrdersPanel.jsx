@@ -12,6 +12,7 @@ import PaymentProofsPanel from './PaymentProofsPanel.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
+import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
 
 // ─── Normalización ────────────────────────────────────────────────
 function normalizeBotOrder(o) {
@@ -1302,7 +1303,8 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
     if (!addrStreet.trim()) { setAddrErr('Ingresa la dirección'); return; }
     setAddrSaving(true); setAddrErr('');
     try {
-      await api.patch(`/orders/${order.id}/address`, { address: addrStreet.trim(), city: addrCity.trim() });
+      const { data } = await api.patch(`/orders/${order.id}/address`, { address: addrStreet.trim(), city: addrCity.trim() });
+      alertOrderEditNotification(data.notification);
       setAddrEdit(false);
       onItemsUpdated?.();
     } catch (err) {
@@ -1336,7 +1338,8 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
     if (editItems.some(i => !i.name.trim())) { setEditErr('Completa el nombre de todos los items'); return; }
     setSaving(true); setEditErr('');
     try {
-      await api.patch(`/orders/${order.id}/items`, { items: editItems });
+      const { data } = await api.patch(`/orders/${order.id}/items`, { items: editItems });
+      alertOrderEditNotification(data.notification);
       setEditMode(false);
       onItemsUpdated?.();
     } catch (err) {
@@ -1603,7 +1606,8 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
     if (!addrStreet.trim()) return;
     setSavingAddr(true);
     try {
-      await api.patch(`/orders/shopify/${order.dbId}/address`, { address1: addrStreet.trim(), city: addrCity.trim() });
+      const { data } = await api.patch(`/orders/shopify/${order.dbId}/address`, { address1: addrStreet.trim(), city: addrCity.trim() });
+      alertOrderEditNotification(data.notification);
       setEditingAddr(false);
       onAddressUpdated?.();
     } catch (e) {

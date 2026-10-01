@@ -15,7 +15,20 @@ const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
 const collection  = require('../services/payment-collection');
 const { recordRouteOutcome } = require('../services/delivery-attempts');
+const deliveryNotifications = require('../services/delivery-notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
+
+async function sendOrderEditNotification(...args) {
+  if (typeof deliveryNotifications.sendOrderEditNotification !== 'function') {
+    return { sent: false, skipped: true, reason: 'NOTIFICATION_UNAVAILABLE' };
+  }
+  try {
+    return await deliveryNotifications.sendOrderEditNotification(...args);
+  } catch (error) {
+    console.error('[Orders] Pedido editado, pero falló el aviso:', error.message);
+    return { sent: false, skipped: true, reason: 'SEND_FAILED', error: error.message };
+  }
+}
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -335,7 +348,13 @@ router.patch('/shopify/:id/address', async (req, res) => {
     const { address1, city, province, updateContact = false } = req.body;
     if (!address1?.trim()) return res.status(400).json({ error: 'address1 es requerido' });
 
-    const { rows } = await getPool().query(
+    const pool = getPool();
+    const { rows: [before] } = await pool.query(
+      'SELECT * FROM shopify_orders WHERE id = $1 AND organization_id = $2',
+      [parseInt(req.params.id), req.orgId]
+    );
+    if (!before) return res.status(404).json({ error: 'Orden no encontrada' });
+    const { rows } = await pool.query(
       `UPDATE shopify_orders
          SET shipping_city       = COALESCE($3, shipping_city),
              shipping_address1   = $2,
@@ -361,7 +380,10 @@ router.patch('/shopify/:id/address', async (req, res) => {
       );
     }
 
-    res.json({ success: true, data: rows[0] });
+    const notification = await sendOrderEditNotification(req.orgId, {
+      source: 'shopify', id: rows[0].shopify_order_id, before, after: rows[0],
+    });
+    res.json({ success: true, data: rows[0], notification });
   } catch (err) {
     console.error('[Orders/Shopify PATCH address]', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -407,12 +429,22 @@ router.patch('/:id/items', async (req, res) => {
     const { items } = req.body;
     if (!Array.isArray(items)) return res.status(400).json({ error: 'items debe ser un array' });
     const total = items.reduce((s, i) => s + (Number(i.price) * Number(i.quantity)), 0);
-    const updated = await db.updateOrder(parseInt(req.params.id), {
-      items:       JSON.stringify(items),
-      total_price: String(total),
+    const pool = getPool();
+    const orderId = parseInt(req.params.id);
+    const { rows: [before] } = await pool.query(
+      'SELECT * FROM orders WHERE id = $1 AND organization_id = $2',
+      [orderId, req.orgId]
+    );
+    if (!before) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const { rows: [updated] } = await pool.query(
+      `UPDATE orders SET items = $1, total_price = $2, updated_at = NOW()
+        WHERE id = $3 AND organization_id = $4 RETURNING *`,
+      [JSON.stringify(items), String(total), orderId, req.orgId]
+    );
+    const notification = await sendOrderEditNotification(req.orgId, {
+      source: 'bot', id: orderId, before, after: updated,
     });
-    if (!updated) return res.status(404).json({ error: 'Pedido no encontrado' });
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: updated, notification });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -427,13 +459,19 @@ router.patch('/:id/address', async (req, res) => {
     const { address, city, updateContact = false } = req.body;
     if (!address) return res.status(400).json({ error: 'address es requerido' });
     const addrJson = JSON.stringify({ address, city: city || '' });
-    const { rows: [order] } = await getPool().query(
-      `UPDATE orders SET shipping_address = $1 WHERE id = $2 AND organization_id = $3 RETURNING *`,
-      [addrJson, parseInt(req.params.id), req.orgId]
+    const pool = getPool();
+    const orderId = parseInt(req.params.id);
+    const { rows: [before] } = await pool.query(
+      'SELECT * FROM orders WHERE id = $1 AND organization_id = $2',
+      [orderId, req.orgId]
     );
-    if (!order) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!before) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const { rows: [order] } = await pool.query(
+      `UPDATE orders SET shipping_address = $1 WHERE id = $2 AND organization_id = $3 RETURNING *`,
+      [addrJson, orderId, req.orgId]
+    );
     if (updateContact && order.customer_phone) {
-      await getPool().query(
+      await pool.query(
         `UPDATE contacts SET
            address1 = $2,
            address = $2,
@@ -443,7 +481,10 @@ router.patch('/:id/address', async (req, res) => {
         [req.orgId, address.trim(), city?.trim() || null, order.customer_phone]
       );
     }
-    res.json({ success: true, order });
+    const notification = await sendOrderEditNotification(req.orgId, {
+      source: 'bot', id: orderId, before, after: order,
+    });
+    res.json({ success: true, order, notification });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -728,23 +769,33 @@ router.patch('/adjust-total', async (req, res) => {
   try {
     const pool = getPool();
     const cleanNote = (note || '').toString().slice(0, 300);
-    const { rowCount } = source === 'shopify'
+    const table = source === 'shopify' ? 'shopify_orders' : 'orders';
+    const idColumn = source === 'shopify' ? 'shopify_order_id' : 'id';
+    const key = source === 'shopify' ? String(id) : parseInt(id);
+    const { rows: [before] } = await pool.query(
+      `SELECT * FROM ${table} WHERE ${idColumn} = $1 AND organization_id = $2`,
+      [key, req.orgId]
+    );
+    if (!before) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    const result = source === 'shopify'
       ? await pool.query(
           `UPDATE shopify_orders
               SET total_price = $1, delivery_modified = TRUE,
                   delivery_note = COALESCE(NULLIF($4, ''), delivery_note)
-            WHERE shopify_order_id = $2 AND organization_id = $3`,
+            WHERE shopify_order_id = $2 AND organization_id = $3 RETURNING *`,
           [String(amount), String(id), req.orgId, cleanNote]
         )
       : await pool.query(
           `UPDATE orders
               SET total_price = $1, delivery_modified = TRUE, updated_at = NOW(),
                   delivery_note = COALESCE(NULLIF($4, ''), delivery_note)
-            WHERE id = $2 AND organization_id = $3`,
+            WHERE id = $2 AND organization_id = $3 RETURNING *`,
           [String(amount), parseInt(id), req.orgId, cleanNote]
         );
-    if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
-    res.json({ success: true, total: amount });
+    const notification = await sendOrderEditNotification(req.orgId, {
+      source, id, before, after: result.rows[0],
+    });
+    res.json({ success: true, total: amount, notification });
   } catch (err) {
     console.error('[Orders/adjust-total]', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -773,7 +824,19 @@ router.patch('/reschedule', async (req, res) => {
     const reason = (note || '').toString().slice(0, 200);
     const noteText = `[reprogramado ${stamp}] para ${date}${reason ? ` — ${reason}` : ''}`;
     await client.query('BEGIN');
-    const { rowCount } = source === 'shopify'
+    const table = source === 'shopify' ? 'shopify_orders' : 'orders';
+    const idColumn = source === 'shopify' ? 'shopify_order_id' : 'id';
+    const key = source === 'shopify' ? String(id) : parseInt(id);
+    const { rows: [before] } = await client.query(
+      `SELECT * FROM ${table} WHERE ${idColumn} = $1 AND organization_id = $2 FOR UPDATE`,
+      [key, req.orgId]
+    );
+    if (!before) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    }
+    const result = source === 'shopify'
       ? await client.query(
           `UPDATE shopify_orders
               SET delivery_date = $1::date,
@@ -782,7 +845,7 @@ router.patch('/reschedule', async (req, res) => {
                   last_attempt_status = 'reprogramado',
                   last_attempt_at = NOW(),
                   synced_at     = NOW()
-            WHERE shopify_order_id = $2 AND organization_id = $3`,
+            WHERE shopify_order_id = $2 AND organization_id = $3 RETURNING *`,
           [date, String(id), req.orgId, noteText]
         )
       : await client.query(
@@ -793,20 +856,18 @@ router.patch('/reschedule', async (req, res) => {
                   last_attempt_at = NOW(),
                   notes         = COALESCE(notes, '') || $4,
                   updated_at    = NOW()
-            WHERE id = $2 AND organization_id = $3`,
+            WHERE id = $2 AND organization_id = $3 RETURNING *`,
           [date, parseInt(id), req.orgId, `\n[admin] ${noteText}`]
         );
-    if (!rowCount) {
-      await client.query('ROLLBACK');
-      client.release();
-      return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
-    }
     const routeIds = await recordRouteOutcome(client, req.orgId, source, id, 'postponed', noteText);
     await client.query('COMMIT');
     committed = true;
     client.release();
     client = null;
-    res.json({ success: true, date, historicalRoutes: routeIds });
+    const notification = await sendOrderEditNotification(req.orgId, {
+      source, id, before, after: result.rows[0],
+    });
+    res.json({ success: true, date, historicalRoutes: routeIds, notification });
   } catch (err) {
     if (client && !committed) await client.query('ROLLBACK').catch(() => {});
     client?.release?.();
@@ -864,19 +925,28 @@ router.patch('/set-items', async (req, res) => {
     const total = clean.reduce((s, i) => s + i.price * i.quantity, 0);
     const itemsJson = JSON.stringify(clean);
     const pool = getPool();
-    const { rowCount } = source === 'shopify'
+    const table = source === 'shopify' ? 'shopify_orders' : 'orders';
+    const idColumn = source === 'shopify' ? 'shopify_order_id' : 'id';
+    const key = source === 'shopify' ? String(id) : parseInt(id);
+    const { rows: [before] } = await pool.query(
+      `SELECT * FROM ${table} WHERE ${idColumn} = $1 AND organization_id = $2`,
+      [key, req.orgId]
+    );
+    if (!before) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    const result = source === 'shopify'
       ? await pool.query(
           `UPDATE shopify_orders SET items = $1::jsonb, total_price = $2, delivery_modified = TRUE
-            WHERE shopify_order_id = $3 AND organization_id = $4`,
+            WHERE shopify_order_id = $3 AND organization_id = $4 RETURNING *`,
           [itemsJson, total, String(id), req.orgId]
         )
       : await pool.query(
           `UPDATE orders SET items = $1, total_price = $2, delivery_modified = TRUE, updated_at = NOW()
-            WHERE id = $3 AND organization_id = $4`,
+            WHERE id = $3 AND organization_id = $4 RETURNING *`,
           [itemsJson, String(total), parseInt(id), req.orgId]
         );
-    if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
-    res.json({ success: true, total, items: clean });
+    const after = result.rows[0];
+    const notification = await sendOrderEditNotification(req.orgId, { source, id, before, after });
+    res.json({ success: true, total, items: clean, notification });
   } catch (err) {
     console.error('[Orders/set-items]', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -909,6 +979,17 @@ router.patch('/history-edit', async (req, res) => {
     await client.query('BEGIN');
     const total = clean.reduce((sum, item) => sum + item.price * item.quantity, 0);
     let order;
+    const table = source === 'shopify' ? 'shopify_orders' : 'orders';
+    const idColumn = source === 'shopify' ? 'shopify_order_id' : 'id';
+    const key = source === 'shopify' ? String(id) : parseInt(id);
+    const { rows: [before] } = await client.query(
+      `SELECT * FROM ${table} WHERE ${idColumn} = $1 AND organization_id = $2 FOR UPDATE`,
+      [key, req.orgId]
+    );
+    if (!before) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    }
     if (source === 'shopify') {
       const { rows } = await client.query(
         `UPDATE shopify_orders
@@ -959,7 +1040,8 @@ router.patch('/history-edit', async (req, res) => {
     }
 
     await client.query('COMMIT');
-    res.json({ success: true, total, items: clean, order });
+    const notification = await sendOrderEditNotification(req.orgId, { source, id, before, after: order });
+    res.json({ success: true, total, items: clean, order, notification });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('[Orders/history-edit]', err.message);

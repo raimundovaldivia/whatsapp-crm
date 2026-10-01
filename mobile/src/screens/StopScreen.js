@@ -169,9 +169,15 @@ export default function StopScreen({ route: navRoute, navigation }) {
       setShowItemsEditor(false);
       setEditItems([]);
       if (typeof newTotal === 'number') setOrderTotal(newTotal);
-      Alert.alert('Productos actualizados', typeof newTotal === 'number'
+      let confirmation = typeof newTotal === 'number'
         ? `Nuevo total: ${CLP(newTotal)}`
-        : 'Los cambios se guardaron.');
+        : 'Los cambios se guardaron.';
+      if (resp?.notification && !resp.notification.sent && resp.notification.reason !== 'NO_CHANGES') {
+        confirmation += resp.notification.reason === 'WINDOW_EXPIRED' || resp.notification.reason === 'NO_INBOUND'
+          ? '\n\nNo se avisó al cliente porque la ventana de WhatsApp está cerrada.'
+          : '\n\nEl aviso al cliente no pudo enviarse.';
+      }
+      Alert.alert('Productos actualizados', confirmation);
     } catch (err) {
       if (err.response?.status === 401) return; // la app vuelve al login sola
       const msg = err.response?.data?.error
