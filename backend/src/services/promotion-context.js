@@ -33,12 +33,53 @@ function parseOffers(body) {
     const units = Number(match[1]);
     const descriptor = match[2].replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '').trim();
     const price = money(match[3]);
+    // "Queso 900 g $15.000": 900 g es el tamaño, no una oferta llamada "900 g".
+    if (/^(?:g|gr|gramos?|kg|kilos?|ml|litros?)$/iu.test(descriptor)) continue;
     const key = `${units}_${norm(descriptor)}_${price}`;
     if (!units || !descriptor || !price || seen.has(key)) continue;
     seen.add(key);
     offers.push({ units, descriptor, price, label: `${units} ${descriptor}` });
   }
+  // Productos cuyo nombre va antes del tamaño, por ejemplo
+  // "Queso de cabra 900 g $15.000". Se revisan por bloque para no absorber
+  // el texto introductorio del template ni duplicar las ofertas anteriores.
+  for (const block of String(body || '').split('|')) {
+    if (!block.includes('$') || /(?:despachos?|env[ií]os?)\s+gratis/iu.test(block)) continue;
+    const hasRegularOffer = [...block.matchAll(re)].some(match => {
+      const descriptor = match[2].replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '').trim();
+      return !/^(?:g|gr|gramos?|kg|kilos?|ml|litros?)$/iu.test(descriptor);
+    });
+    if (hasRegularOffer) continue;
+    const match = block.match(/(?:^|[.!?]\s+)([a-záéíóúüñ][^|$\n]{2,70}?)\s*\$\s*([\d.]+)/iu)
+      || block.trim().match(/^([a-záéíóúüñ][^|$\n]{2,70}?)\s*\$\s*([\d.]+)/iu);
+    if (!match) continue;
+    const label = match[1].replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '').trim();
+    const price = money(match[2]);
+    const key = `named_${norm(label)}_${price}`;
+    if (!label || !price || seen.has(key)) continue;
+    seen.add(key);
+    offers.push({ units: null, descriptor: label, price, label, named: true });
+  }
   return offers;
+}
+
+function parseCategoryDiscounts(body) {
+  const found = [];
+  const patterns = [
+    /(\d{1,3})\s*%\s*(?:de\s+)?(?:descuento|dcto\.?|off|menos)\s+(?:en|para|sobre|a)\s+(?:todos?|todas?|los|las)?\s*([^|.\n]+)/giu,
+    /(?:descuento|dcto\.?|rebaja)\s+(?:de\s+|del\s+)?(\d{1,3})\s*%\s+(?:en|para|sobre|a)\s+(?:todos?|todas?|los|las)?\s*([^|.\n]+)/giu,
+  ];
+  for (const pattern of patterns) {
+    for (const match of String(body || '').matchAll(pattern)) {
+      const pct = Number(match[1]);
+      const target = match[2]?.trim().replace(/^(?:todos?|todas?|los|las)\s+/iu, '');
+      const genericTarget = /^(?:tu\s+)?(?:pedido|compra|orden|subtotal|total)(?:\s+completo)?$/iu.test(target || '');
+      if (pct > 0 && pct <= 100 && target && !genericTarget && !found.some(x => x.pct === pct && norm(x.target) === norm(target))) {
+        found.push({ pct, target });
+      }
+    }
+  }
+  return found;
 }
 
 function parseDiscountPct(body) {
@@ -62,17 +103,52 @@ function explicitUntil(body, sentDay) {
   return `${year}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[1])).padStart(2, '0')}`;
 }
 
+function endOfWeek(sentDay) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sentDay || ''))) return null;
+  const date = new Date(`${sentDay}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + ((7 - date.getUTCDay()) % 7));
+  return date.toISOString().slice(0, 10);
+}
+
+function parseCutoff(body) {
+  const text = String(body || '');
+  const extended = text.match(/(?:extendimos|ampliamos|extendido|nuevo\s+horario)[^.!?\n]{0,90}?(?:hasta|a)\s+las?\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?/iu);
+  const regular = text.match(/antes\s+de\s+las?\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?/iu);
+  const match = extended || regular;
+  return match
+    ? `${String(Number(match[1])).padStart(2, '0')}:${match[2] || '00'}${match[3] ? ` ${match[3].replace(/\s|\./g, '').toUpperCase()}` : ''}`
+    : null;
+}
+
+function beforeChileCutoff(now, day, cutoff) {
+  if (!day || !cutoff || chileDay(now) !== day) return false;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now instanceof Date ? now : new Date(now));
+  const hour = Number(parts.find(part => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find(part => part.type === 'minute')?.value || 0);
+  const match = cutoff.match(/^(\d{2}):(\d{2})(?:\s+(AM|PM))?$/i);
+  if (!match) return false;
+  let cutoffHour = Number(match[1]);
+  if (match[3]) {
+    if (match[3].toUpperCase() === 'PM' && cutoffHour < 12) cutoffHour += 12;
+    if (match[3].toUpperCase() === 'AM' && cutoffHour === 12) cutoffHour = 0;
+  }
+  return hour * 60 + minute <= cutoffHour * 60 + Number(match[2]);
+}
+
 function parseTemplate(message, products = [], now = new Date()) {
   const content = String(message?.content || '');
   const templateName = content.match(/\[Template:\s*([^\]]+)\]/i)?.[1]?.trim() || '';
   if (!templateName) return null;
   const body = content.replace(/^\s*\[Template:[^\]]+\]\s*/i, '').trim();
   const offers = parseOffers(body);
+  const categoryDiscounts = parseCategoryDiscounts(body);
   const parsedDiscountPct = parseDiscountPct(body);
   // Un template con precios finales y porcentaje informativo no acumula ambos
   // beneficios. Los precios explícitos mandan; el porcentaje se usa cuando la
   // promoción realmente consiste en descontar el subtotal.
-  const discountPct = offers.length ? 0 : parsedDiscountPct;
+  const discountPct = (offers.length || categoryDiscounts.length) ? 0 : parsedDiscountPct;
   const promotional = (offers.length > 0 || parsedDiscountPct > 0) && (/promo|promoci[oó]n|oferta|descuento|dcto|rebaja/i.test(`${templateName} ${body}`));
   if (!promotional) return null;
 
@@ -80,19 +156,22 @@ function parseTemplate(message, products = [], now = new Date()) {
   const today = chileDay(now);
   const validOnlyToday = /v[aá]lid[oa].{0,45}(solo|s[oó]lo).{0,35}(pedidos?\s+(de|realizados?)\s+)?hoy/iu.test(body)
     || /(oferta|promo(?:ci[oó]n)?).{0,30}(solo|s[oó]lo)\s+por\s+hoy/iu.test(body);
-  const validUntil = explicitUntil(body, sentDay) || (validOnlyToday ? sentDay : null);
-  const active = !validUntil || (!!today && today <= validUntil);
-  const cutoffMatch = body.match(/antes\s+de\s+las?\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?/iu);
-  const cutoff = cutoffMatch
-    ? `${String(Number(cutoffMatch[1])).padStart(2, '0')}:${cutoffMatch[2] || '00'}${cutoffMatch[3] ? ` ${cutoffMatch[3].replace(/\s|\./g, '').toUpperCase()}` : ''}`
-    : null;
+  const deliveryWeekOnly = /(?:entrega|despacho)[^.!?\n]{0,35}(?:durante|dentro\s+de)\s+esta\s+semana/iu.test(body)
+    || /v[aá]lid[oa][^.!?\n]{0,55}esta\s+semana/iu.test(body);
+  const validUntil = explicitUntil(body, sentDay) || (validOnlyToday ? sentDay : (deliveryWeekOnly ? endOfWeek(sentDay) : null));
+  const cutoff = parseCutoff(body);
+  const orderCutoffOnlyToday = /(?:extendimos|ampliamos|extendido|nuevo\s+horario)[^.!?\n]{0,90}?pedidos?\s+de\s+hoy[^.!?\n]{0,60}?(?:hasta|a)\s+las?/iu.test(body);
+  const activeByDate = !validUntil || (!!today && today <= validUntil);
+  const active = activeByDate && (!orderCutoffOnlyToday || beforeChileCutoff(now, sentDay, cutoff));
   const sameDayConditional = /(mismo\s+d[ií]a|durante\s+el\s+d[ií]a)/iu.test(body);
   const stockConditional = /(si\s+(tenemos|hay)\s+stock|sujeto\s+a\s+stock)/iu.test(body);
+  const freeShippingMatch = body.match(/(?:despachos?|env[ií]os?)\s+gratis[^$\d]{0,35}(?:sobre|desde|superiores?\s+a)\s*\$?\s*([\d.]+)/iu);
+  const freeShippingMin = freeShippingMatch ? money(freeShippingMatch[1]) : 0;
 
   const catalog = pricing.flattenCatalog(products);
   const specialPrices = {};
   for (const offer of offers) {
-    const matched = pricing.matchProduct(`${offer.units} ${offer.descriptor}`, catalog);
+    const matched = pricing.matchProduct(offer.named ? offer.label : `${offer.units} ${offer.descriptor}`, catalog);
     if (!matched || matched.ambiguous) continue;
     offer.productId = matched.candidate.product_id;
     offer.productTitle = matched.candidate.title;
@@ -102,8 +181,8 @@ function parseTemplate(message, products = [], now = new Date()) {
   }
 
   return {
-    templateName, body, offers, discountPct, specialPrices, sentDay, validUntil, validOnlyToday,
-    active, cutoff, sameDayConditional, stockConditional,
+    templateName, body, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday,
+    deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, active, cutoff, sameDayConditional, stockConditional,
   };
 }
 
@@ -120,8 +199,8 @@ function fromHistory(history = [], products = [], now = new Date()) {
 
 function snapshot(promotion) {
   if (!promotion) return null;
-  const { templateName, offers, discountPct, specialPrices, sentDay, validUntil, validOnlyToday, cutoff, sameDayConditional, stockConditional } = promotion;
-  return { templateName, offers, discountPct, specialPrices, sentDay, validUntil, validOnlyToday, cutoff, sameDayConditional, stockConditional };
+  const { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, cutoff, sameDayConditional, stockConditional } = promotion;
+  return { templateName, offers, discountPct, categoryDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, cutoff, sameDayConditional, stockConditional };
 }
 
 function restore(saved, now = new Date()) {
@@ -130,7 +209,8 @@ function restore(saved, now = new Date()) {
   return {
     ...saved,
     specialPrices: saved.specialPrices && typeof saved.specialPrices === 'object' ? saved.specialPrices : {},
-    active: !saved.validUntil || (!!today && today <= saved.validUntil),
+    active: (!saved.validUntil || (!!today && today <= saved.validUntil))
+      && (!saved.orderCutoffOnlyToday || beforeChileCutoff(now, saved.sentDay, saved.cutoff)),
   };
 }
 
@@ -138,7 +218,10 @@ function promptSection(promotion) {
   if (!promotion) return '';
   const options = promotion.offers.map(offer => `- ${offer.label}: $${offer.price.toLocaleString('es-CL')}`).join('\n');
   if (!promotion.active) {
-    return `## Promoción vencida\nEl cliente recibió el template ${promotion.templateName}, pero su vigencia terminó el ${promotion.validUntil}. NO uses esos precios. Si pregunta por la oferta, explica brevemente que venció y ofrece revisar los precios actuales.`;
+    const reason = promotion.orderCutoffOnlyToday
+      ? `el horario para pedir terminó a las ${promotion.cutoff}`
+      : `su vigencia terminó el ${promotion.validUntil}`;
+    return `## Promoción vencida\nEl cliente recibió el template ${promotion.templateName}, pero ${reason}. NO uses esos precios. Si pregunta por la oferta, explica brevemente que venció y ofrece revisar los precios actuales.`;
   }
   const deliveryRule = promotion.sameDayConditional
     ? `La entrega el mismo día${promotion.cutoff ? ` requiere confirmar antes de las ${promotion.cutoff}` : ''}${promotion.stockConditional ? ' y está sujeta a stock' : ''}. Esta condición es distinta de la vigencia del precio.`
@@ -146,7 +229,13 @@ function promptSection(promotion) {
   const priceRule = promotion.discountPct
     ? `Aplica exactamente ${promotion.discountPct}% de descuento al subtotal del pedido.`
     : 'Para estas presentaciones usa el precio promocional, nunca el precio normal del catálogo.';
-  return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}\n- ${promotion.validOnlyToday ? 'La promoción aplica si el pedido queda confirmado hoy. Puede pedir hoy y solicitar entrega para otro día.' : `Vigencia: ${promotion.validUntil || 'sin fecha explícita en el template'}.`}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
+  const categoryRules = (promotion.categoryDiscounts || []).map(rule => `Aplica ${rule.pct}% de descuento solamente a ${rule.target}.`).join(' ');
+  const validity = promotion.deliveryWeekOnly
+    ? `Sólo aplica a pedidos cuya entrega sea hasta el ${promotion.validUntil}. Para una entrega posterior usa precios normales.`
+    : (promotion.validOnlyToday ? 'La promoción aplica si el pedido queda confirmado hoy. Puede pedir hoy y solicitar entrega para otro día.' : `Vigencia: ${promotion.validUntil || 'sin fecha explícita en el template'}.`);
+  const shipping = promotion.freeShippingMin ? `Despacho gratis si el total del pedido es igual o superior a $${promotion.freeShippingMin.toLocaleString('es-CL')}.` : '';
+  const ordering = promotion.orderCutoffOnlyToday ? `El pedido debe confirmarse hoy antes de las ${promotion.cutoff}; la hora antigua indicada más abajo no se usa.` : '';
+  return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}${categoryRules ? ` ${categoryRules}` : ''}\n- ${validity}${ordering ? `\n- ${ordering}` : ''}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}${shipping ? `\n- ${shipping}` : ''}\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
 }
 
 function optionText(promotion) {
@@ -164,6 +253,10 @@ function selectedOffer(message, promotion) {
   const text = norm(message);
   if (!text) return null;
   const matches = promotion.offers.filter(offer => {
+    if (offer.named) {
+      const meaningful = norm(offer.label).split(' ').filter(token => token.length > 3 && !/^\d+$/.test(token));
+      return meaningful.some(token => text.includes(token));
+    }
     const units = String(Number(offer.units));
     const hasUnits = new RegExp(`(^|\\s)${units}(?=\\s|$)`).test(text);
     if (!hasUnits) return false;
@@ -178,6 +271,9 @@ function selectedOffer(message, promotion) {
 function offerOrderItem(offer) {
   if (!offer) return null;
   const descriptor = String(offer.descriptor || 'huevos').trim();
+  if (offer.named) {
+    return { product_name: offer.label, quantity: 1, price: Number(offer.price), locked_quote: true, promotion_offer: true };
+  }
   const packMatch = descriptor.match(/(?:bandeja|pack|caja)\s+(?:de\s+)?(\d{1,3})/iu);
   const packs = packMatch && Number(packMatch[1]) > 0 && offer.units % Number(packMatch[1]) === 0
     ? offer.units / Number(packMatch[1])
@@ -203,7 +299,8 @@ function isFuturePromotionQuestion(message) {
 function futureReply(promotion) {
   if (!promotion) return null;
   if (!promotion.active) {
-    return `Esa promoción era válida hasta el ${promotion.validUntil || promotion.sentDay} y ya venció. Puedo ayudarte con los precios disponibles de hoy, ¿qué cantidad necesitas?`;
+    const reason = promotion.orderCutoffOnlyToday ? `hasta las ${promotion.cutoff}` : `hasta el ${promotion.validUntil || promotion.sentDay}`;
+    return `Esa promoción era válida ${reason} y ya venció. Puedo ayudarte con los precios disponibles de hoy, ¿qué cantidad necesitas?`;
   }
   const choices = optionText(promotion);
   if (promotion.validOnlyToday) {
@@ -220,4 +317,10 @@ function futureReply(promotion) {
     : `Sí, podemos programar la entrega para mañana manteniendo el ${choices}. ¿Qué producto y cantidad necesitas?`;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseTemplate, fromHistory, snapshot, restore, promptSection, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, norm, chileDay };
+function appliesToDelivery(promotion, deliveryDate) {
+  if (!promotion?.active) return false;
+  if (!promotion.deliveryWeekOnly || !deliveryDate) return true;
+  return String(deliveryDate).slice(0, 10) <= promotion.validUntil;
+}
+
+module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };

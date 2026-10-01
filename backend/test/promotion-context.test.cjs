@@ -112,3 +112,41 @@ test('no acumula porcentaje sobre precios finales ya indicados en la promo', () 
   );
   assert.equal(result.total, 70000);
 });
+
+test('interpreta una promoción mixta aunque sus reglas no estén en la ficha del producto', () => {
+  const mixedTemplate = {
+    direction: 'outbound',
+    created_at: '2026-10-01T13:00:00.000Z',
+    content: `[Template: promo_semana]
+🥚✨ ¡Tenemos promos Cecilia! ⏰ ¡Extendimos el horario de pedidos de hoy hasta las 11:30 AM! La hora indicada más abajo en este mensaje no tiene validez para esta promoción. Promoción válida solo para pedidos con entrega durante esta semana. | 40 Jumbo $18.000 | 60 Jumbo $25.500 | 100 Jumbo $37.000 | 30 XL $12.000 | 60 XL $23.000 | 90 XL $34.000 | 30% dcto. en todas las aceitunas | Queso de cabra 900 g $15.000 | DESPACHOS GRATIS POR COMPRAS SOBRE $10.000 Haz tu pedido antes de las 11:00 AM y, si tenemos stock disponible, te lo entregamos el mismo día.`,
+  };
+  const mixedProducts = [
+    ...products,
+    { id: 'xl30', title: 'Huevos XL Bandeja 30', priceMin: 14000 },
+    { id: 'olives', title: 'Aceitunas verdes 500 g', priceMin: 10000 },
+    { id: 'cheese', title: 'Queso de cabra 900 g', priceMin: 18000 },
+  ];
+  const promo = promotion.fromHistory([mixedTemplate], mixedProducts, new Date('2026-10-01T14:00:00.000Z'));
+  assert.equal(promo.cutoff, '11:30 AM');
+  assert.equal(promo.orderCutoffOnlyToday, true);
+  assert.equal(promo.deliveryWeekOnly, true);
+  assert.equal(promo.validUntil, '2026-10-04');
+  assert.equal(promo.freeShippingMin, 10000);
+  assert.deepEqual(promo.categoryDiscounts, [{ pct: 30, target: 'aceitunas' }]);
+  assert.equal(promo.offers.find(o => o.named)?.label, 'Queso de cabra 900 g');
+  assert.equal(promotion.selectedOffer('Quiero un queso de cabra, por favor', promo).price, 15000);
+  assert.equal(promotion.appliesToDelivery(promo, '2026-10-04'), true);
+  assert.equal(promotion.appliesToDelivery(promo, '2026-10-05'), false);
+
+  const olives = pricing.priceItems(
+    [{ product_name: 'Aceitunas verdes 500 g', quantity: 1 }],
+    mixedProducts,
+    { categoryDiscounts: promo.categoryDiscounts }
+  );
+  assert.equal(olives.subtotal, 10000);
+  assert.equal(olives.discountAmount, 3000);
+  assert.equal(olives.total, 7000);
+  assert.match(pricing.summaryBlock(olives), /Descuento promocional/);
+  assert.match(promotion.promptSection(promo), /Despacho gratis.*10\.000/i);
+  assert.equal(promotion.fromHistory([mixedTemplate], mixedProducts, new Date('2026-10-01T15:00:00.000Z')).active, false);
+});

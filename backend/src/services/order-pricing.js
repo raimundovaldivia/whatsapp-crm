@@ -235,12 +235,26 @@ function priceItems(items = [], products = [], opts = {}) {
   merged.forEach(x => delete x._k);
 
   const subtotal = merged.reduce((s, it) => s + it.price * it.quantity, 0);
+  const categoryDiscounts = Array.isArray(opts.categoryDiscounts) ? opts.categoryDiscounts : [];
+  let categoryDiscountAmount = 0;
+  for (const item of merged) {
+    const itemName = norm(item.name);
+    const rule = categoryDiscounts.find(candidate => {
+      const targetTokens = tokens(candidate.target);
+      return targetTokens.length > 0 && targetTokens.some(token => itemName.includes(token));
+    });
+    if (!rule) continue;
+    const pct = Math.min(100, Math.max(0, Number(rule.pct) || 0));
+    item.promotion_discount_pct = pct;
+    item.promotion_discount_amount = Math.round(item.price * item.quantity * pct / 100);
+    categoryDiscountAmount += item.promotion_discount_amount;
+  }
   const maxDiscountPct = Math.min(100, Math.max(0, Number(opts.maxDiscountPct ?? MAX_DISCOUNT_PCT) || 0));
   const discountPct = Math.min(maxDiscountPct, Math.max(0, Number(opts.discountPct) || 0));
-  const discountAmount = Math.round(subtotal * discountPct / 100);
+  const discountAmount = categoryDiscountAmount + Math.round((subtotal - categoryDiscountAmount) * discountPct / 100);
   const total = subtotal - discountAmount;
 
-  return { items: merged, subtotal, discountPct, discountAmount, total, unmatched };
+  return { items: merged, subtotal, discountPct, categoryDiscounts, discountAmount, total, unmatched };
 }
 
 // ─── Presentación ────────────────────────────────────────────────────────────
@@ -261,7 +275,9 @@ function pricingContext(pricing) {
     return `- ${it.quantity}x ${it.name} @ ${fmt(it.price)} c/u = ${fmt(it.price * it.quantity)}`;
   });
   const out = [`Subtotal: ${fmt(pricing.subtotal)}`];
-  if (pricing.discountPct) out.push(`Descuento acordado: ${pricing.discountPct}% (−${fmt(pricing.discountAmount)})`);
+  if (pricing.discountAmount) out.push(pricing.discountPct
+    ? `Descuento acordado: ${pricing.discountPct}% (−${fmt(pricing.discountAmount)})`
+    : `Descuento promocional por producto: −${fmt(pricing.discountAmount)}`);
   out.push(`TOTAL: ${fmt(pricing.total)}`);
   return `${lines.join('\n')}\n${out.join('\n')}`;
 }
@@ -269,7 +285,9 @@ function pricingContext(pricing) {
 /** Bloque que se manda al cliente al confirmar. */
 function summaryBlock(pricing) {
   const lines = [itemLines(pricing.items)];
-  if (pricing.discountPct) lines.push(`🏷️ Descuento ${pricing.discountPct}%: −${fmt(pricing.discountAmount)}`);
+  if (pricing.discountAmount) lines.push(pricing.discountPct
+    ? `🏷️ Descuento ${pricing.discountPct}%: −${fmt(pricing.discountAmount)}`
+    : `🏷️ Descuento promocional: −${fmt(pricing.discountAmount)}`);
   lines.push(`💰 Total: ${fmt(pricing.total)}`);
   return lines.join('\n');
 }

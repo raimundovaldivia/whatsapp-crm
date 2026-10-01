@@ -183,11 +183,12 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   // se extraen del mensaje efectivamente enviado, no se dejan a interpretación
   // del modelo. La promoción activa prevalece sobre el precio de catálogo.
   const promotionContext = promotions.fromHistory(history, products) || promotions.restore(orderDraft?.promotion);
+  const baseSpecialPrices = { ...specialPrices };
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
   const promotionSection = promotions.promptSection(promotionContext);
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
-  const orderCtx = { products, specialPrices, isLead, promotionContext };
+  const orderCtx = { products, specialPrices, baseSpecialPrices, isLead, promotionContext };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
@@ -1467,7 +1468,7 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
  * @param {object} orderCtx — { products, specialPrices, isLead }
  */
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx = {}) {
-  const { products = [], specialPrices = {}, isLead = false, promotionContext = null } = orderCtx;
+  const { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null } = orderCtx;
   orderDraft = pricing.normalizeDraft(orderDraft || {});
   if (promotionContext) orderDraft.promotion = promotions.snapshot(promotionContext);
 
@@ -1516,7 +1517,13 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   // Si el cliente eligió una opción de un template promocional, esa línea
   // es la fuente de verdad. La búsqueda recorre solo mensajes del cliente y
   // conserva la elección en los turnos siguientes ("sí", "gracias", etc.).
-  if (promotionContext?.active) {
+  const promotionApplies = promotions.appliesToDelivery(promotionContext, updatedDraft.delivery_date);
+  if (!promotionApplies && updatedDraft.items?.some(item => item.promotion_offer)) {
+    updatedDraft.items = updatedDraft.items.map(item => item.promotion_offer
+      ? { product_name: item.product_name || item.name, quantity: item.quantity || 1 }
+      : item);
+  }
+  if (promotionApplies) {
     const inboundChoices = [
       userMessage,
       ...history.slice().reverse().filter(m => m.direction === 'inbound').map(m => m.content),
@@ -1531,11 +1538,12 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   //     leads (es la escalera de bienvenida del prompt de ventas); para
   //     clientes existentes cualquier descuento lo maneja el equipo.
   let priced = pricing.priceItems(updatedDraft.items, products, {
-    specialPrices,
-    discountPct: promotionContext?.active && promotionContext.discountPct
+    specialPrices: promotionApplies ? specialPrices : baseSpecialPrices,
+    categoryDiscounts: promotionApplies ? promotionContext.categoryDiscounts : [],
+    discountPct: promotionApplies && promotionContext.discountPct
       ? promotionContext.discountPct
       : (isLead ? updatedDraft.discount_pct : 0),
-    maxDiscountPct: promotionContext?.active && promotionContext.discountPct ? 100 : undefined,
+    maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
   });
   // Si el cliente está confirmando un resumen que ya mostró un precio total,
   // conservar esa cotización. Evita cambiar una promoción entre "¿Todo correcto?"
@@ -1562,7 +1570,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   }
 
   // 2. Respuesta del agente de órdenes (con el carrito valorizado en el prompt)
-  const promoPricing = promotionContext?.active
+  const promoPricing = promotionApplies
     ? `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal.\n`
     : '';
   const pricingText   = promoPricing + pricing.pricingContext(priced);
