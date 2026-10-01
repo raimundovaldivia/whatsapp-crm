@@ -97,6 +97,7 @@ function ShopifyTab() {
   const [success, setSuccess]     = useState('');
   const [syncing, setSyncing]     = useState(false);
   const [historySyncing, setHistorySyncing] = useState(false);
+  const [shopifyAuthUrl, setShopifyAuthUrl] = useState('');
 
   const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', padding: undefined });
   const inp = {
@@ -131,19 +132,39 @@ function ShopifyTab() {
 
   const connectOAuth = async (historical = false) => {
     if (!shopInput.trim()) { setError('Ingresa el dominio de tu tienda'); return; }
-    setLoading(true); setError('');
+    // Abrir la pestaña antes de la llamada HTTP mantiene el gesto directo del
+    // usuario. Safari, Chrome móvil y algunos navegadores integrados bloquean
+    // window.open/location.href cuando se ejecuta después de un await.
+    const authWindow = window.open('', 'shopify_oauth');
+    if (authWindow) {
+      try {
+        authWindow.opener = null;
+        authWindow.document.title = 'Conectando con Shopify…';
+        authWindow.document.body.innerHTML = '<div style="font-family:system-ui;padding:32px;color:#24313a">Abriendo Shopify…</div>';
+      } catch { /* La pestaña igualmente puede continuar al OAuth. */ }
+    }
+
+    setLoading(true); setError(''); setSuccess(''); setShopifyAuthUrl('');
     try {
       const { api } = await import('../utils/api.js');
       const shop = shopInput.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
       const { data } = await api.get('/shopify-oauth/auth-url', { params: { shop, historical: historical ? 1 : undefined } });
       if (data.url) {
-        window.location.href = data.url;
+        setShopifyAuthUrl(data.url);
+        if (authWindow && !authWindow.closed) {
+          authWindow.location.replace(data.url);
+          setSuccess('Shopify se abrió en una pestaña nueva. Completa allí la autorización y luego volverás automáticamente al CRM.');
+        } else {
+          setError('El navegador bloqueó la ventana de Shopify. Usa el botón “Abrir Shopify” que aparece abajo.');
+        }
       } else {
+        if (authWindow && !authWindow.closed) authWindow.close();
         setError(data.error || 'No se pudo generar la URL de Shopify');
-        setLoading(false);
       }
     } catch (err) {
+      if (authWindow && !authWindow.closed) authWindow.close();
       setError(err.response?.data?.error || 'Error al conectar con Shopify');
+    } finally {
       setLoading(false);
     }
   };
@@ -275,6 +296,20 @@ function ShopifyTab() {
 
           {error   && <Alert type="error"   msg={error}   colors={colors} />}
           {success && <Alert type="success" msg={success} colors={colors} />}
+          {shopifyAuthUrl && (
+            <a
+              href={shopifyAuthUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                padding: '11px 14px', borderRadius: 8, backgroundColor: colors.green,
+                color: '#fff', textDecoration: 'none', fontSize: 13, fontWeight: 750,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              }}>
+              <ExternalLink size={15} />
+              Abrir Shopify para autorizar
+            </a>
+          )}
         </div>
       </div>
     </div>
