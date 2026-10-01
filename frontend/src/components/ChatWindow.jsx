@@ -73,6 +73,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [historyEdit, setHistoryEdit]       = useState(null);
   const [historyEditSaving, setHistoryEditSaving] = useState(false);
   const [historyEditError, setHistoryEditError] = useState('');
+  const [historyProducts, setHistoryProducts] = useState([]);
+  const [historyProductsLoading, setHistoryProductsLoading] = useState(false);
 
   const openHistory = useCallback(async () => {
     const phone = conversation.phone_number;
@@ -127,6 +129,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       })),
     });
     setHistoryEditError('');
+    setHistoryProductsLoading(true);
+    api.get('/products')
+      .then(response => {
+        const catalog = response.data?.products || response.data?.data || [];
+        setHistoryProducts(catalog.filter(product => product.active !== false));
+      })
+      .catch(() => setHistoryProducts([]))
+      .finally(() => setHistoryProductsLoading(false));
   }, []);
 
   const updateHistoryItem = useCallback((key, field, value) => {
@@ -135,6 +145,19 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       items: current.items.map(item => item.key === key ? { ...item, [field]: value } : item),
     } : current);
   }, []);
+
+  const selectHistoryProduct = useCallback((key, productId) => {
+    const product = historyProducts.find(item => String(item.id) === String(productId));
+    if (!product) return;
+    setHistoryEdit(current => current ? {
+      ...current,
+      items: current.items.map(item => item.key === key ? {
+        ...item,
+        name: product.title || item.name,
+        price: Math.max(0, Number(product.price) || 0),
+      } : item),
+    } : current);
+  }, [historyProducts]);
 
   const saveHistoryEdit = useCallback(async () => {
     if (!historyEdit) return;
@@ -1340,8 +1363,22 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
                       {historyEdit.items.map((item, index) => (
                         <div key={item.key} style={{ display:'grid', gridTemplateColumns:'minmax(0,1fr) 76px 105px 34px', gap:'7px', alignItems:'center' }}>
-                          <input value={item.name} onChange={e => updateHistoryItem(item.key, 'name', e.target.value)} placeholder="Producto"
-                            style={{ minWidth:0, padding:'9px 10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
+                          <select
+                            value={historyProducts.find(product => product.title === item.name)?.id || (item.name ? `custom_${item.key}` : '')}
+                            onChange={e => selectHistoryProduct(item.key, e.target.value)}
+                            disabled={historyProductsLoading}
+                            aria-label={`Producto ${index + 1}`}
+                            style={{ minWidth:0, width:'100%', padding:'9px 10px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:item.name ? colors.textPrimary : colors.textSecondary, cursor:historyProductsLoading?'wait':'pointer' }}>
+                            <option value="">{historyProductsLoading ? 'Cargando productos…' : 'Seleccionar producto…'}</option>
+                            {item.name && !historyProducts.some(product => product.title === item.name) && (
+                              <option value={`custom_${item.key}`}>{item.name} (fuera del catálogo)</option>
+                            )}
+                            {historyProducts.map(product => (
+                              <option key={product.id} value={product.id}>
+                                {product.title} · ${Number(product.price || 0).toLocaleString('es-CL')}
+                              </option>
+                            ))}
+                          </select>
                           <input type="number" min="1" value={item.quantity} onChange={e => updateHistoryItem(item.key, 'quantity', e.target.value)} aria-label={`Cantidad producto ${index + 1}`}
                             style={{ minWidth:0, padding:'9px 8px', borderRadius:'8px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary }} />
                           <input type="number" min="0" value={item.price} onChange={e => updateHistoryItem(item.key, 'price', e.target.value)} aria-label={`Precio producto ${index + 1}`}
