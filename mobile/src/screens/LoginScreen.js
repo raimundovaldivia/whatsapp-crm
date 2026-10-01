@@ -10,19 +10,11 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { login, getSavedSession } from '../services/api';
 import { DEFAULT_API_URL, APP_NAME } from '../config';
 import UpdateStatus from '../components/UpdateStatus';
-
-const C = {
-  bg:      '#0f172a',
-  card:    '#1e293b',
-  border:  '#334155',
-  green:   '#22c55e',
-  text:    '#f1f5f9',
-  muted:   '#94a3b8',
-  error:   '#f87171',
-};
+import { C, R, shadow } from '../theme';
 
 export default function LoginScreen({ onLogin }) {
   const [url,       setUrl]       = useState(DEFAULT_API_URL);
@@ -76,41 +68,53 @@ export default function LoginScreen({ onLogin }) {
 
         {/* Logo / Título */}
         <View style={s.logoBox}>
-          <Text style={s.logoIcon}>🚚</Text>
+          <View style={s.brandMark}>
+            <MaterialCommunityIcons name="truck-fast-outline" size={38} color={C.green} />
+          </View>
           <Text style={s.title}>{APP_NAME}</Text>
-          <Text style={s.subtitle}>App del repartidor</Text>
+          <Text style={s.subtitle}>Operación de última milla</Text>
         </View>
 
         {/* Formulario */}
         <View style={s.card}>
+          <View style={s.cardHead}>
+            <Text style={s.cardEyebrow}>ACCESO SEGURO</Text>
+            <Text style={s.cardTitle}>Ingresa a tu jornada</Text>
+          </View>
           <Text style={s.label}>Usuario o correo</Text>
-          <TextInput
-            style={s.input}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="usuario o repartidor@mitienda.cl"
-            placeholderTextColor={C.muted}
-            autoCapitalize="none"
-            keyboardType="default"
-            autoCorrect={false}
-            autoComplete="username"
-            textContentType="username"
-            returnKeyType="next"
-          />
+          <View style={s.inputShell}>
+            <MaterialCommunityIcons name="account-outline" size={20} color={C.muted} />
+            <TextInput
+              style={s.input}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="usuario o correo"
+              placeholderTextColor={C.dim}
+              autoCapitalize="none"
+              keyboardType="default"
+              autoCorrect={false}
+              autoComplete="username"
+              textContentType="username"
+              returnKeyType="next"
+            />
+          </View>
 
           <Text style={s.label}>Contraseña</Text>
-          <TextInput
-            style={s.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="••••••••"
-            placeholderTextColor={C.muted}
-            secureTextEntry
-            autoComplete="password"
-            textContentType="password"
-            returnKeyType="go"
-            onSubmitEditing={handleLogin}
-          />
+          <View style={s.inputShell}>
+            <MaterialCommunityIcons name="lock-outline" size={20} color={C.muted} />
+            <TextInput
+              style={s.input}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="••••••••"
+              placeholderTextColor={C.dim}
+              secureTextEntry
+              autoComplete="password"
+              textContentType="password"
+              returnKeyType="go"
+              onSubmitEditing={handleLogin}
+            />
+          </View>
 
           <TouchableOpacity
             style={[s.btn, loading && s.btnDisabled]}
@@ -119,7 +123,7 @@ export default function LoginScreen({ onLogin }) {
             activeOpacity={0.8}>
             {loading
               ? <ActivityIndicator color="#fff" />
-              : <Text style={s.btnText}>Iniciar sesión</Text>}
+              : <View style={s.btnContent}><Text style={s.btnText}>Iniciar jornada</Text><MaterialCommunityIcons name="arrow-right" size={20} color={C.inkOnAccent} /></View>}
           </TouchableOpacity>
 
           {/* Servidor (avanzado) */}
@@ -132,7 +136,7 @@ export default function LoginScreen({ onLogin }) {
             <>
               <Text style={s.label}>URL del servidor</Text>
               <TextInput
-                style={s.input}
+                style={s.serverInput}
                 value={url}
                 onChangeText={setUrl}
                 placeholder={DEFAULT_API_URL}
@@ -154,24 +158,27 @@ export default function LoginScreen({ onLogin }) {
 
 const s = StyleSheet.create({
   flex:       { flex: 1, backgroundColor: C.bg },
-  container:  { flexGrow: 1, justifyContent: 'center', padding: 24 },
-  logoBox:    { alignItems: 'center', marginBottom: 32 },
-  logoIcon:   { fontSize: 56, marginBottom: 12 },
-  title:      { fontSize: 28, fontWeight: '800', color: C.text, letterSpacing: -0.5 },
-  subtitle:   { fontSize: 14, color: C.muted, marginTop: 4 },
-  card:       { backgroundColor: C.card, borderRadius: 16, padding: 24, gap: 4 },
-  label:      { fontSize: 13, color: C.muted, fontWeight: '600', marginTop: 14, marginBottom: 6 },
-  input:      {
-    backgroundColor: '#0f172a', borderWidth: 1, borderColor: C.border,
-    borderRadius: 10, padding: 14, color: C.text, fontSize: 16,
-  },
+  container:  { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 22, paddingVertical: 36 },
+  logoBox:    { alignItems: 'center', marginBottom: 30 },
+  brandMark:  { width: 78, height: 78, borderRadius: 26, backgroundColor: '#0A2B31', borderWidth: 1, borderColor: '#1B6B69', alignItems: 'center', justifyContent: 'center', marginBottom: 16, ...shadow },
+  title:      { fontSize: 31, fontWeight: '900', color: C.text, letterSpacing: -1 },
+  subtitle:   { fontSize: 13, color: C.muted, marginTop: 5, letterSpacing: 0.4 },
+  card:       { backgroundColor: C.card, borderRadius: R.xl, padding: 22, borderWidth: 1, borderColor: C.borderSoft, ...shadow },
+  cardHead:   { marginBottom: 9 },
+  cardEyebrow:{ color: C.green, fontSize: 10, fontWeight: '900', letterSpacing: 1.5 },
+  cardTitle:  { color: C.text, fontSize: 21, fontWeight: '800', marginTop: 5, letterSpacing: -0.3 },
+  label:      { fontSize: 12, color: C.textSoft, fontWeight: '700', marginTop: 16, marginBottom: 7 },
+  inputShell: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: R.md, paddingHorizontal: 15 },
+  input:      { flex: 1, color: C.text, fontSize: 16, paddingVertical: 13 },
+  serverInput:{ backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: R.md, padding: 14, color: C.text, fontSize: 14 },
   hint:       { fontSize: 12, color: C.muted, marginTop: 6 },
   btn:        {
-    backgroundColor: C.green, borderRadius: 12, padding: 16,
-    alignItems: 'center', marginTop: 24,
+    minHeight: 55, backgroundColor: C.green, borderRadius: R.md,
+    alignItems: 'center', justifyContent: 'center', marginTop: 24,
   },
   btnDisabled:{ opacity: 0.6 },
-  btnText:    { color: '#fff', fontWeight: '700', fontSize: 16 },
+  btnContent: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  btnText:    { color: C.inkOnAccent, fontWeight: '900', fontSize: 16 },
   advancedToggle: { alignItems: 'center', paddingVertical: 12, marginTop: 6 },
   advancedText:   { color: C.muted, fontSize: 13 },
   version:    { color: C.border, fontSize: 12, textAlign: 'center', marginTop: 20 },

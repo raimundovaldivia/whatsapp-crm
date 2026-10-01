@@ -20,21 +20,10 @@ import * as ImagePicker from 'expo-image-picker';
 import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute } from '../services/api';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
+import { C, R, shadowSoft } from '../theme';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const EXPENSE_CATS = ['Combustible', 'Peaje', 'Comida', 'Mantención', 'Otro'];
-
-const C = {
-  bg:     '#0f172a',
-  card:   '#1e293b',
-  border: '#334155',
-  green:  '#22c55e',
-  orange: '#fb923c',
-  blue:   '#38bdf8',
-  red:    '#f87171',
-  text:   '#f1f5f9',
-  muted:  '#94a3b8',
-};
 
 const STOP_COLORS = {
   pending:   C.orange,
@@ -499,7 +488,7 @@ const s = StyleSheet.create({
   retryBtn:     { backgroundColor: C.card, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10, borderWidth: 1, borderColor: C.border },
   retryText:    { color: C.text, fontWeight: '600' },
 
-  manifestCard: { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, marginHorizontal: 12, marginTop: 10, marginBottom: 10, overflow: 'hidden' },
+  manifestCard: { backgroundColor: C.card, borderRadius: R.lg, borderWidth: 1, borderColor: C.borderSoft, marginHorizontal: 12, marginTop: 10, marginBottom: 10, overflow: 'hidden', ...shadowSoft },
   manifestHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 11 },
   manifestTitle:{ color: C.text, fontWeight: '700', fontSize: 14 },
   manifestProgress:{ color: C.muted, fontSize: 11, marginTop: 3 },
@@ -514,38 +503,38 @@ const s = StyleSheet.create({
   quantityBadge:{ minWidth: 42, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: C.bg, alignItems: 'center' },
   quantityBadgeText:{ color: C.text, fontWeight: '900', fontSize: 16 },
   preStartContent:{ padding: 16, paddingBottom: 28 },
-  preStartHero:{ alignItems: 'center', paddingVertical: 18, paddingHorizontal: 18 },
+  preStartHero:{ alignItems: 'center', paddingVertical: 22, paddingHorizontal: 18, backgroundColor: C.bgSoft, borderRadius: R.xl, borderWidth: 1, borderColor: C.borderSoft, marginBottom: 14 },
   preStartIcon:{ fontSize: 42, marginBottom: 8 },
   preStartTitle:{ color: C.text, fontSize: 23, fontWeight: '900', textAlign: 'center' },
   preStartText:{ color: C.muted, fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 7 },
   preStartStats:{ flexDirection: 'row', gap: 8, marginBottom: 6 },
-  preStartStat:{ flex: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  preStartStat:{ flex: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.md, paddingVertical: 13, alignItems: 'center', ...shadowSoft },
   preStartStatValue:{ color: C.text, fontSize: 19, fontWeight: '900' },
   preStartStatLabel:{ color: C.muted, fontSize: 11, marginTop: 2 },
   preStartHint:{ color: C.muted, fontSize: 12, lineHeight: 18, textAlign: 'center', paddingHorizontal: 10, marginTop: 6 },
-  preStartFooter:{ padding: 14, borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg },
-  startRouteBtn:{ minHeight: 54, borderRadius: 14, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
+  preStartFooter:{ padding: 14, borderTopWidth: 1, borderTopColor: C.borderSoft, backgroundColor: C.card },
+  startRouteBtn:{ minHeight: 56, borderRadius: R.md, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
   startRouteBtnDisabled:{ backgroundColor: C.border },
-  startRouteBtnText:{ color: '#052e16', fontSize: 16, fontWeight: '900' },
+  startRouteBtnText:{ color: C.inkOnAccent, fontSize: 16, fontWeight: '900' },
 
-  priorityNotice:{ backgroundColor: '#3a2a10', borderWidth: 1, borderColor: '#f59e0b88', borderRadius: 12, padding: 13, marginHorizontal: 12, marginBottom: 10 },
+  priorityNotice:{ backgroundColor: '#2A210D', borderWidth: 1, borderColor: '#8A6113', borderRadius: R.md, padding: 13, marginHorizontal: 12, marginBottom: 10 },
   priorityNoticeTitle:{ color: '#fbbf24', fontSize: 14, fontWeight: '900' },
   priorityNoticeText:{ color: '#fde68a', fontSize: 12, lineHeight: 18, marginTop: 4 },
   retryChip:{ backgroundColor: '#3a2a10', borderRadius: 8, borderWidth: 1, borderColor: '#f59e0b66', paddingHorizontal: 8, paddingVertical: 6, marginTop: 7 },
   retryChipTitle:{ color: '#fbbf24', fontSize: 10, fontWeight: '900' },
   retryChipText:{ color: '#fde68a', fontSize: 11, lineHeight: 15, marginTop: 2 },
 
-  moneyCard:    { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.green + '55', marginHorizontal: 12, marginTop: 10, padding: 14, gap: 10 },
+  moneyCard:    { backgroundColor: C.card, borderRadius: R.lg, borderWidth: 1, borderColor: C.green + '55', marginHorizontal: 12, marginTop: 10, padding: 15, gap: 11, ...shadowSoft },
   moneyHead:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   moneyTitle:   { color: C.text, fontSize: 14, fontWeight: '800' },
   moneyValue:   { color: C.text, fontSize: 16, fontWeight: '900' },
   moneyGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  moneyItem:    { width: '48%', flexGrow: 1, backgroundColor: C.bg, borderRadius: 9, padding: 10 },
+  moneyItem:    { width: '48%', flexGrow: 1, backgroundColor: C.bgSoft, borderRadius: R.sm, padding: 11, borderWidth: 1, borderColor: C.borderSoft },
   moneyLabel:   { color: C.muted, fontSize: 10 },
   moneyNumber:  { color: C.text, fontSize: 15, fontWeight: '800', marginTop: 3 },
 
   listContainer:{ flex: 1 },
-  listHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.border },
+  listHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.borderSoft, backgroundColor: C.bgSoft },
   listTitle:    { color: C.text, fontWeight: '700', fontSize: 15 },
   mapsBtn:      { backgroundColor: C.blue + '22', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: C.blue + '44' },
   mapsBtnText:  { color: C.blue, fontSize: 12, fontWeight: '600' },
@@ -559,10 +548,10 @@ const s = StyleSheet.create({
   gastoBtnText: { color: C.orange, fontSize: 12, fontWeight: '700' },
 
   modalWrap:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  modalCard:    { backgroundColor: C.bg, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 20, maxHeight: '90%', borderTopWidth: 1, borderColor: C.border },
+  modalCard:    { backgroundColor: C.card, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20, maxHeight: '90%', borderTopWidth: 1, borderColor: C.border },
   modalTitle:   { color: C.text, fontSize: 18, fontWeight: '800', marginBottom: 14 },
   fieldLabel:   { color: C.muted, fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 10 },
-  input:        { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 12, color: C.text, fontSize: 16 },
+  input:        { backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: R.md, padding: 13, color: C.text, fontSize: 16 },
   catRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   catChip:      { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
   catChipOn:    { backgroundColor: C.orange + '22', borderColor: C.orange },
@@ -577,9 +566,9 @@ const s = StyleSheet.create({
   saveBtn:      { flex: 2, padding: 14, borderRadius: 12, backgroundColor: C.green, alignItems: 'center' },
   saveTxt:      { color: '#04210f', fontWeight: '800', fontSize: 15 },
 
-  stopCard:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border, gap: 12 },
+  stopCard:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, marginHorizontal: 12, marginTop: 9, backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.md, gap: 12, ...shadowSoft },
   stopDone:     { opacity: 0.55 },
-  stopNext:     { backgroundColor: C.orange + '12', borderLeftWidth: 3, borderLeftColor: C.orange },
+  stopNext:     { backgroundColor: '#202010', borderLeftWidth: 3, borderLeftColor: C.orange, borderColor: C.orange + '55' },
   stopNum:      { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   stopNumText:  { color: '#fff', fontWeight: '800', fontSize: 14 },
   stopBody:     { flex: 1, gap: 2 },

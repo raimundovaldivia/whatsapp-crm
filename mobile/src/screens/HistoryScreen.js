@@ -13,20 +13,9 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getRouteHistory } from '../services/api';
+import { C, R, shadowSoft } from '../theme';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
-
-const C = {
-  bg:     '#0f172a',
-  card:   '#1e293b',
-  border: '#334155',
-  green:  '#22c55e',
-  orange: '#fb923c',
-  blue:   '#38bdf8',
-  red:    '#f87171',
-  text:   '#f1f5f9',
-  muted:  '#94a3b8',
-};
 
 const STATUS_LABEL = { completed: 'Completada', cancelled: 'Cancelada' };
 const STATUS_COLOR = { completed: C.green, cancelled: C.red };
@@ -184,10 +173,10 @@ const s = StyleSheet.create({
   emptyIcon: { fontSize: 48 },
   emptyTitle:{ color: C.text, fontSize: 17, fontWeight: '700', marginTop: 10 },
   emptyText: { color: C.muted, textAlign: 'center', marginTop: 6, fontSize: 13, lineHeight: 19 },
-  refreshBtn:{ marginTop: 16, backgroundColor: C.green, borderRadius: 10, paddingHorizontal: 22, paddingVertical: 11 },
-  refreshText:{ color: '#04210f', fontWeight: '800' },
+  refreshBtn:{ marginTop: 16, backgroundColor: C.green, borderRadius: R.md, paddingHorizontal: 22, paddingVertical: 12 },
+  refreshText:{ color: C.inkOnAccent, fontWeight: '900' },
   hint:      { color: C.muted, fontSize: 12, marginBottom: 12, lineHeight: 17 },
-  card:      { backgroundColor: C.card, borderColor: C.border, borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 12 },
+  card:      { backgroundColor: C.card, borderColor: C.borderSoft, borderWidth: 1, borderRadius: R.lg, padding: 15, marginBottom: 12, ...shadowSoft },
   cardHead:  { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   routeName: { flex: 1, color: C.text, fontSize: 15, fontWeight: '700' },
   badge:     { borderWidth: 1, borderRadius: 7, paddingHorizontal: 8, paddingVertical: 2 },
@@ -198,7 +187,7 @@ const s = StyleSheet.create({
   statNum:   { color: C.text, fontSize: 18, fontWeight: '800' },
   statLabel: { color: C.muted, fontSize: 11, marginTop: 2 },
   cardActions:{ flexDirection: 'row', gap: 8, marginTop: 12 },
-  ordersBtn: { flex: 1, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 9, padding: 9, alignItems: 'center' },
+  ordersBtn: { flex: 1, backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: R.sm, padding: 10, alignItems: 'center' },
   ordersBtnText:{ color: C.text, fontSize: 11, fontWeight: '700' },
   reviewBtn: { paddingHorizontal: 11, paddingVertical: 9, justifyContent: 'center' },
   reviewText:{ color: C.blue, fontSize: 11, fontWeight: '700' },

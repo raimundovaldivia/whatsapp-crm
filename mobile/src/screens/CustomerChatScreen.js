@@ -4,12 +4,9 @@ import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getStopChat, sendStopChatMessage } from '../services/api';
-
-const C = {
-  bg: '#0f172a', card: '#1e293b', border: '#334155', green: '#22c55e',
-  blue: '#38bdf8', red: '#f87171', text: '#f1f5f9', muted: '#94a3b8',
-};
+import { C, R, shadowSoft } from '../theme';
 
 function formatTime(value) {
   if (!value) return '';
@@ -98,14 +95,19 @@ export default function CustomerChatScreen({ route }) {
       </View>
 
       <View style={[s.channelBanner, canWrite ? s.channelOpen : s.channelClosed]}>
-        <Text style={[s.channelTitle, { color: canWrite ? C.green : '#fbbf24' }]}>
-          {canWrite ? '● Canal oficial disponible' : '● Ventana de respuesta cerrada'}
-        </Text>
-        <Text style={s.channelText}>
-          {canWrite
-            ? 'Lo que escribas saldrá desde el WhatsApp del negocio y quedará visible en el CRM.'
-            : 'El cliente debe escribir primero. Desde la parada aún puedes usar el aviso operativo aprobado.'}
-        </Text>
+        <View style={[s.channelIcon, { backgroundColor: (canWrite ? C.green : C.orange) + '1F' }]}>
+          <MaterialCommunityIcons name={canWrite ? 'message-check-outline' : 'clock-alert-outline'} size={20} color={canWrite ? C.green : C.orange} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[s.channelTitle, { color: canWrite ? C.green : C.orange }]}>
+            {canWrite ? 'Canal oficial disponible' : 'Ventana de respuesta cerrada'}
+          </Text>
+          <Text style={s.channelText}>
+            {canWrite
+              ? 'El mensaje saldrá desde el WhatsApp del negocio y quedará registrado.'
+              : 'El cliente debe escribir primero. Usa el aviso operativo desde la parada.'}
+          </Text>
+        </View>
       </View>
 
       {loading ? (
@@ -148,7 +150,7 @@ export default function CustomerChatScreen({ route }) {
           maxLength={1000}
         />
         <TouchableOpacity style={[s.send, (!canWrite || !text.trim() || sending) && s.sendDisabled]} onPress={send} disabled={!canWrite || !text.trim() || sending} activeOpacity={0.8}>
-          {sending ? <ActivityIndicator color="#fff" /> : <Text style={s.sendText}>➤</Text>}
+          {sending ? <ActivityIndicator color={C.inkOnAccent} /> : <MaterialCommunityIcons name="send" size={20} color={C.inkOnAccent} />}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -157,25 +159,26 @@ export default function CustomerChatScreen({ route }) {
 
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
-  identity: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.card },
-  avatar: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0f766e' },
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: C.borderSoft, backgroundColor: C.card },
+  avatar: { width: 44, height: 44, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0A3D3A', borderWidth: 1, borderColor: '#147A72' },
   avatarText: { color: '#fff', fontSize: 18, fontWeight: '800' },
   customer: { color: C.text, fontSize: 16, fontWeight: '800' },
   phone: { color: C.muted, fontSize: 12, marginTop: 3 },
-  channelBanner: { margin: 12, marginBottom: 0, padding: 11, borderRadius: 12, borderWidth: 1 },
-  channelOpen: { backgroundColor: '#052e2b', borderColor: '#166534' },
-  channelClosed: { backgroundColor: '#31270d', borderColor: '#854d0e' },
+  channelBanner: { flexDirection: 'row', alignItems: 'center', gap: 11, margin: 12, marginBottom: 0, padding: 12, borderRadius: R.md, borderWidth: 1, ...shadowSoft },
+  channelIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  channelOpen: { backgroundColor: '#082A2B', borderColor: '#155E5B' },
+  channelClosed: { backgroundColor: '#2A210D', borderColor: '#714F0C' },
   channelTitle: { fontWeight: '800', fontSize: 13 },
   channelText: { color: C.text, fontSize: 12, lineHeight: 17, marginTop: 4 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { color: C.muted },
   messages: { flex: 1 },
-  messagesContent: { flexGrow: 1, padding: 12, paddingTop: 16 },
+  messagesContent: { flexGrow: 1, paddingHorizontal: 13, paddingVertical: 18 },
   row: { width: '100%', marginBottom: 8 },
   rowOut: { alignItems: 'flex-end' },
   rowIn: { alignItems: 'flex-start' },
-  bubble: { maxWidth: '84%', minWidth: 110, borderRadius: 14, padding: 10, borderWidth: 1 },
-  bubbleOut: { backgroundColor: '#075e54', borderColor: '#0f766e', borderBottomRightRadius: 3 },
+  bubble: { maxWidth: '84%', minWidth: 110, borderRadius: 17, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, ...shadowSoft },
+  bubbleOut: { backgroundColor: '#0B544F', borderColor: '#147A72', borderBottomRightRadius: 5 },
   bubbleIn: { backgroundColor: C.card, borderColor: C.border, borderBottomLeftRadius: 3 },
   sender: { color: C.blue, fontSize: 11, fontWeight: '800', marginBottom: 4 },
   messageText: { color: C.text, fontSize: 15, lineHeight: 20 },
@@ -186,10 +189,9 @@ const s = StyleSheet.create({
   empty: { flex: 1, minHeight: 190, alignItems: 'center', justifyContent: 'center', padding: 30 },
   emptyTitle: { color: C.text, fontWeight: '800', fontSize: 16 },
   emptyText: { color: C.muted, textAlign: 'center', marginTop: 6, lineHeight: 18 },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 9, padding: 10, paddingBottom: Platform.OS === 'ios' ? 16 : 10, borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.card },
-  input: { flex: 1, maxHeight: 110, minHeight: 46, color: C.text, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 14, paddingHorizontal: 13, paddingVertical: 11 },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 9, padding: 11, paddingBottom: Platform.OS === 'ios' ? 17 : 11, borderTopWidth: 1, borderTopColor: C.borderSoft, backgroundColor: C.card },
+  input: { flex: 1, maxHeight: 110, minHeight: 48, color: C.text, backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12 },
   inputDisabled: { opacity: 0.55 },
-  send: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#0f766e', alignItems: 'center', justifyContent: 'center' },
+  send: { width: 48, height: 48, borderRadius: 16, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
   sendDisabled: { opacity: 0.35 },
-  sendText: { color: '#fff', fontSize: 22, marginLeft: 2 },
 });

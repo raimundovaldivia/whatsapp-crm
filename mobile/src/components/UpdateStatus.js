@@ -11,8 +11,7 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import * as Updates from 'expo-updates';
 import Constants from 'expo-constants';
-
-const C = { text: '#cbd5e1', dim: '#94a3b8', green: '#22c55e', card: '#1e293b', border: '#475569' };
+import { C, R } from '../theme';
 
 function installedVersion() {
   return Constants.expoConfig?.version || Constants.manifest2?.extra?.expoClient?.version || 'desconocida';
@@ -70,10 +69,10 @@ export default function UpdateStatus({ style }) {
 }
 
 const s = StyleSheet.create({
-  wrap:    { alignItems: 'center', marginTop: 20, gap: 6, paddingHorizontal: 8 },
+  wrap:    { alignItems: 'center', marginTop: 22, gap: 6, paddingHorizontal: 14, paddingVertical: 14, borderRadius: R.md, backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.borderSoft },
   version: { color: C.text, fontSize: 13, fontWeight: '700' },
   line:    { color: C.dim, fontSize: 12, lineHeight: 17, textAlign: 'center' },
   warn:    { color: '#fb923c' },
-  btn:     { marginTop: 8, paddingHorizontal: 16, paddingVertical: 9, borderRadius: 9, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
+  btn:     { marginTop: 8, paddingHorizontal: 16, paddingVertical: 9, borderRadius: R.sm, borderWidth: 1, borderColor: C.border, backgroundColor: C.cardHigh },
   btnText: { color: C.text, fontSize: 13, fontWeight: '700' },
 });

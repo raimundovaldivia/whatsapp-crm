@@ -7,20 +7,9 @@ import {
   updateStopStatus, getSellCatalog, getModules, getOrderItems, setOrderItems,
   getEnRouteNotificationStatus, sendEnRouteNotification,
 } from '../services/api';
+import { C, R, shadowSoft } from '../theme';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
-
-const C = {
-  bg:     '#0f172a',
-  card:   '#1e293b',
-  border: '#334155',
-  green:  '#22c55e',
-  orange: '#fb923c',
-  red:    '#f87171',
-  blue:   '#38bdf8',
-  text:   '#f1f5f9',
-  muted:  '#94a3b8',
-};
 
 const isPriorityRetry = stop => stop?.isRetry === true || stop?.deliveryPriority === 'retry' || Number(stop?.dispatchCount || 0) > 0;
 const ATTEMPT_LABEL = {
@@ -697,7 +686,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
 
 const s = StyleSheet.create({
   container:    { flex: 1, backgroundColor: C.bg },
-  content:      { padding: 20, paddingBottom: 48, gap: 12 },
+  content:      { padding: 16, paddingBottom: 48, gap: 12 },
 
   noteBox:      { marginTop: 4 },
   noteLabel:    { color: C.muted, fontSize: 13, fontWeight: '600', marginBottom: 6 },
@@ -726,9 +715,9 @@ const s = StyleSheet.create({
   priorityReason:{ color: C.text, fontSize: 14, fontWeight: '700', lineHeight: 19, marginTop: 8 },
   priorityAttempts:{ color: '#fbbf24', fontSize: 12, marginTop: 5 },
 
-  customerName: { color: C.text, fontSize: 30, fontWeight: '900', letterSpacing: -0.5, marginTop: 4, marginBottom: 8 },
+  customerName: { color: C.text, fontSize: 29, fontWeight: '900', letterSpacing: -0.8, marginTop: 4, marginBottom: 8 },
 
-  infoCard:     { backgroundColor: C.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.border },
+  infoCard:     { backgroundColor: C.card, borderRadius: R.lg, padding: 16, borderWidth: 1, borderColor: C.borderSoft, ...shadowSoft },
   infoLabel:    { color: C.muted, fontSize: 12, fontWeight: '600', marginBottom: 6 },
   infoValue:    { color: C.text, fontSize: 17, fontWeight: '600', lineHeight: 24 },
   historyCard:  { borderColor: '#a78bfa88', backgroundColor: '#211b36' },
@@ -738,17 +727,17 @@ const s = StyleSheet.create({
   historyHint:  { color: C.muted, fontSize: 11, lineHeight: 16, marginTop: 5 },
   infoCity:     { color: C.muted, fontSize: 14, marginTop: 2 },
 
-  navBtn:       { backgroundColor: C.blue, borderRadius: 14, padding: 18, alignItems: 'center', marginTop: 8 },
-  navBtnText:   { color: '#fff', fontWeight: '800', fontSize: 16 },
+  navBtn:       { backgroundColor: C.blue, borderRadius: R.md, padding: 18, alignItems: 'center', marginTop: 8, ...shadowSoft },
+  navBtnText:   { color: '#062B3B', fontWeight: '900', fontSize: 16 },
 
   contactRow:   { flexDirection: 'row', gap: 10 },
-  callBtn:      { backgroundColor: C.card, borderRadius: 14, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: C.border },
+  callBtn:      { backgroundColor: C.cardHigh, borderRadius: R.md, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: C.border, ...shadowSoft },
   callBtnText:  { color: C.text, fontWeight: '700', fontSize: 15 },
 
   enRouteBox:         { gap: 6 },
-  enRouteBtn:         { backgroundColor: C.green, borderRadius: 14, padding: 17, alignItems: 'center', minHeight: 56, justifyContent: 'center' },
+  enRouteBtn:         { backgroundColor: C.green, borderRadius: R.md, padding: 17, alignItems: 'center', minHeight: 56, justifyContent: 'center', ...shadowSoft },
   enRouteBtnDisabled: { backgroundColor: C.border, opacity: 0.7 },
-  enRouteBtnText:     { color: '#fff', fontWeight: '800', fontSize: 16, textAlign: 'center' },
+  enRouteBtnText:     { color: C.inkOnAccent, fontWeight: '900', fontSize: 16, textAlign: 'center' },
   enRouteHint:        { color: C.muted, fontSize: 12, lineHeight: 17, textAlign: 'center', paddingHorizontal: 8 },
 
   statusRow:    { flexDirection: 'row', gap: 12, marginTop: 4 },
@@ -762,7 +751,7 @@ const s = StyleSheet.create({
   postponeHint:    { color: C.muted, fontSize: 12, marginBottom: 12, lineHeight: 17 },
   postponeBtn:     { backgroundColor: C.orange },
   outcomeHelp:     { color: C.muted, fontSize: 14, lineHeight: 20, textAlign: 'center', marginBottom: 4 },
-  outcomeBtn:      { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.card, borderWidth: 1, borderRadius: 14, padding: 16 },
+  outcomeBtn:      { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.card, borderWidth: 1, borderRadius: R.md, padding: 16, ...shadowSoft },
   cancelOutcomeBtn:{ borderColor: C.red + '88' },
   postponeOutcomeBtn:{ borderColor: C.orange + '88' },
   noResponseOutcomeBtn:{ borderColor: C.blue + '88' },
@@ -774,7 +763,7 @@ const s = StyleSheet.create({
   reasonInput:     { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, color: C.text, fontSize: 15, minHeight: 100, textAlignVertical: 'top' },
   cancelOrderBtn:  { backgroundColor: C.red },
   noDeliveryBtn:   { backgroundColor: C.blue },
-  statusBtn:    { flex: 1, borderRadius: 14, padding: 18, alignItems: 'center', gap: 6 },
+  statusBtn:    { flex: 1, borderRadius: R.md, padding: 18, alignItems: 'center', gap: 6, ...shadowSoft },
   btnDisabled:  { opacity: 0.5 },
   deliveredBtn: { backgroundColor: C.green },
   failedBtn:    { backgroundColor: C.card, borderWidth: 2, borderColor: C.red },
@@ -789,7 +778,7 @@ const s = StyleSheet.create({
 
   payBox:       { gap: 12, marginTop: 8 },
   payTitle:     { color: C.text, fontSize: 19, fontWeight: '800', textAlign: 'center', marginBottom: 4 },
-  payBtn:       { borderRadius: 14, padding: 20, alignItems: 'center', gap: 4 },
+  payBtn:       { borderRadius: R.lg, padding: 20, alignItems: 'center', gap: 4, ...shadowSoft },
   payCash:      { backgroundColor: C.green },
   payTransfer:  { backgroundColor: C.blue },
   payOther:     { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, padding: 14 },
@@ -797,7 +786,7 @@ const s = StyleSheet.create({
   payBtnText:   { color: '#fff', fontWeight: '800', fontSize: 17 },
   payCancel:    { color: C.muted, fontSize: 15, textAlign: 'center', padding: 12 },
 
-  editBox:       { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 12, gap: 10 },
+  editBox:       { backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.lg, padding: 13, gap: 10, ...shadowSoft },
   editOpenBtn:   { alignItems: 'center', paddingVertical: 4 },
   editOpenText:  { color: C.blue, fontSize: 15, fontWeight: '700' },
   editTitle:     { color: C.text, fontSize: 15, fontWeight: '800' },

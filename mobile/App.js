@@ -26,17 +26,15 @@ import StopScreen    from './src/screens/StopScreen';
 import CustomerChatScreen from './src/screens/CustomerChatScreen';
 import { logout, getSavedSession, validateSession, onSessionExpired } from './src/services/api';
 import { registerForPush, unregisterForPush, listenForRouteNotifications } from './src/push';
+import { C } from './src/theme';
 
 const Stack = createNativeStackNavigator();
 const navigationRef = createNavigationContainerRef();
 
-const BG    = '#0f172a';
-const GREEN = '#22c55e';
-
 const navTheme = {
   ...DefaultTheme,
   dark: true,
-  colors: { ...DefaultTheme.colors, background: BG, card: '#1e293b', text: '#f1f5f9', border: '#334155', primary: GREEN },
+  colors: { ...DefaultTheme.colors, background: C.bg, card: C.card, text: C.text, border: C.borderSoft, primary: C.green },
 };
 
 export default function App() {
@@ -107,7 +105,7 @@ export default function App() {
   if (loading) {
     return (
       <View style={s.splash}>
-        <ActivityIndicator size="large" color={GREEN} />
+        <ActivityIndicator size="large" color={C.green} />
         <StatusBar style="light" />
       </View>
     );
@@ -127,10 +125,12 @@ export default function App() {
         }}>
           <Stack.Navigator
             screenOptions={{
-              headerStyle:      { backgroundColor: '#1e293b' },
-              headerTintColor:  '#f1f5f9',
-              headerTitleStyle: { fontWeight: '700' },
-              contentStyle:     { backgroundColor: BG },
+              headerStyle:      { backgroundColor: C.card },
+              headerShadowVisible: false,
+              headerTintColor:  C.text,
+              headerTitleStyle: { fontWeight: '800', fontSize: 17 },
+              headerBackButtonDisplayMode: 'minimal',
+              contentStyle:     { backgroundColor: C.bg },
               animation:        'slide_from_right',
             }}>
 
@@ -191,5 +191,5 @@ export default function App() {
 }
 
 const s = StyleSheet.create({
-  splash: { flex: 1, backgroundColor: BG, alignItems: 'center', justifyContent: 'center' },
+  splash: { flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center' },
 });

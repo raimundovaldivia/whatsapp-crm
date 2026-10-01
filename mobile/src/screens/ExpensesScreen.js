@@ -7,11 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getExpenses } from '../services/api';
 import { flushExpenses } from '../utils/expenseQueue';
-
-const C = {
-  bg: '#0f172a', card: '#1e293b', border: '#334155', green: '#22c55e',
-  orange: '#fb923c', blue: '#38bdf8', red: '#f87171', text: '#f1f5f9', muted: '#94a3b8',
-};
+import { C, R, shadowSoft } from '../theme';
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const MODES = [
   { key: 'day', label: 'Día' },
@@ -185,22 +181,22 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   content: { padding: 16, gap: 12 },
   modeRow: { flexDirection: 'row', gap: 7 },
-  modeChip: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
+  modeChip: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: R.sm, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
   modeChipOn: { backgroundColor: C.green, borderColor: C.green },
   modeText: { color: C.muted, fontSize: 12, fontWeight: '700' },
-  modeTextOn: { color: '#052e16' },
-  periodRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, padding: 8 },
+  modeTextOn: { color: C.inkOnAccent },
+  periodRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.card, borderRadius: R.md, borderWidth: 1, borderColor: C.borderSoft, padding: 8, ...shadowSoft },
   arrowBtn: { width: 42, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: C.border },
   arrowText: { color: C.text, fontSize: 30, lineHeight: 32 },
   periodText: { flex: 1, textAlign: 'center', color: C.text, fontSize: 14, fontWeight: '700', textTransform: 'capitalize' },
-  customBox: { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 12, gap: 10 },
+  customBox: { backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.md, padding: 13, gap: 10, ...shadowSoft },
   dateRow: { flexDirection: 'row', gap: 10 },
   dateField: { flex: 1 },
   fieldLabel: { color: C.muted, fontSize: 11, marginBottom: 5 },
   input: { color: C.text, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 10, fontSize: 13 },
   applyBtn: { backgroundColor: C.blue, borderRadius: 9, padding: 11, alignItems: 'center' },
   applyText: { color: '#082f49', fontWeight: '800' },
-  totalCard: { backgroundColor: C.card, borderWidth: 1, borderColor: C.green + '66', borderRadius: 16, padding: 20, alignItems: 'center' },
+  totalCard: { backgroundColor: '#0A2A2D', borderWidth: 1, borderColor: C.green + '66', borderRadius: R.xl, padding: 22, alignItems: 'center', ...shadowSoft },
   totalLabel: { color: C.muted, fontSize: 13 },
   totalValue: { color: C.green, fontSize: 34, fontWeight: '900', marginVertical: 3 },
   totalCount: { color: C.text, fontSize: 12 },
@@ -213,15 +209,15 @@ const s = StyleSheet.create({
   emptyIcon: { fontSize: 45 },
   emptyTitle: { color: C.text, fontSize: 17, fontWeight: '800' },
   sectionTitle: { color: C.text, fontSize: 16, fontWeight: '800', marginTop: 6 },
-  dayRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14 },
+  dayRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.md, padding: 14, ...shadowSoft },
   dayName: { color: C.text, fontSize: 14, fontWeight: '700', textTransform: 'capitalize' },
   dayCount: { color: C.muted, fontSize: 11, marginTop: 2 },
   dayTotal: { color: C.green, fontSize: 17, fontWeight: '800' },
   categoryWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  categoryChip: { minWidth: '47%', flexGrow: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 11, padding: 12 },
+  categoryChip: { minWidth: '47%', flexGrow: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.md, padding: 13 },
   categoryName: { color: C.muted, fontSize: 11 },
   categoryTotal: { color: C.text, fontSize: 15, fontWeight: '800', marginTop: 3 },
-  expenseCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 13 },
+  expenseCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.md, padding: 14, ...shadowSoft },
   expenseTitle: { color: C.text, fontSize: 14, fontWeight: '700' },
   expenseDate: { color: C.muted, fontSize: 11, marginTop: 3 },
   expenseNote: { color: C.muted, fontSize: 12, lineHeight: 17, marginTop: 5 },

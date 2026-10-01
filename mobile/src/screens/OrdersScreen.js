@@ -13,21 +13,11 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getActiveRoutes } from '../services/api';
 import UpdateStatus from '../components/UpdateStatus';
 import { flushExpenses } from '../utils/expenseQueue';
-
-const C = {
-  bg:     '#0f172a',
-  card:   '#1e293b',
-  border: '#334155',
-  green:  '#22c55e',
-  orange: '#fb923c',
-  blue:   '#38bdf8',
-  red:    '#f87171',
-  text:   '#f1f5f9',
-  muted:  '#94a3b8',
-};
+import { C, R, shadow, shadowSoft } from '../theme';
 
 const STATUS_LABEL = {
   draft:       'Borrador',
@@ -120,20 +110,28 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
     <View style={[s.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={s.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={s.headerTitle}>🚚 Mis rutas</Text>
-          <Text style={s.headerSub}>{firstName ? `Hola ${firstName}` : 'Rutas asignadas'}</Text>
+        <View style={s.headerBrand}>
+          <View style={s.headerMark}><MaterialCommunityIcons name="truck-fast-outline" size={22} color={C.green} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.headerKicker}>CENTRO DE OPERACIONES</Text>
+            <Text style={s.headerTitle}>{firstName ? `Hola, ${firstName}` : 'Mis rutas'}</Text>
+            <Text style={s.headerSub}>Revisa tu jornada y continúa donde quedaste</Text>
+          </View>
         </View>
         <TouchableOpacity onPress={handleLogout} style={s.logoutBtn}>
-          <Text style={s.logoutText}>Salir</Text>
+          <MaterialCommunityIcons name="logout" size={19} color={C.muted} />
         </TouchableOpacity>
       </View>
       <View style={s.shortcutRow}>
         <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={s.shortcutBtn}>
-          <Text style={s.shortcutText}>💸 Mis gastos</Text>
+          <View style={[s.shortcutIcon, { backgroundColor: C.orange + '1F' }]}><MaterialCommunityIcons name="receipt-text-outline" size={19} color={C.orange} /></View>
+          <View style={{ flex: 1 }}><Text style={s.shortcutText}>Mis gastos</Text><Text style={s.shortcutSub}>Rendiciones</Text></View>
+          <MaterialCommunityIcons name="chevron-right" size={20} color={C.dim} />
         </TouchableOpacity>
         <TouchableOpacity onPress={() => navigation.navigate('History')} style={s.shortcutBtn}>
-          <Text style={s.shortcutText}>🗂️ Historial de rutas</Text>
+          <View style={[s.shortcutIcon, { backgroundColor: C.blue + '1F' }]}><MaterialCommunityIcons name="history" size={20} color={C.blue} /></View>
+          <View style={{ flex: 1 }}><Text style={s.shortcutText}>Historial</Text><Text style={s.shortcutSub}>Rutas anteriores</Text></View>
+          <MaterialCommunityIcons name="chevron-right" size={20} color={C.dim} />
         </TouchableOpacity>
       </View>
 
@@ -250,9 +248,9 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
 
               {isActive && (
                 <View style={s.startBtn}>
-                  <Text style={s.startBtnText}>
-                    {route.status === 'in_progress' ? '▶  Continuar reparto' : '📦  Consolidar carga'}
-                  </Text>
+                  <MaterialCommunityIcons name={route.status === 'in_progress' ? 'navigation-variant-outline' : 'package-variant-closed-check'} size={19} color={C.inkOnAccent} />
+                  <Text style={s.startBtnText}>{route.status === 'in_progress' ? 'Continuar reparto' : 'Consolidar carga'}</Text>
+                  <MaterialCommunityIcons name="arrow-right" size={18} color={C.inkOnAccent} />
                 </View>
               )}
             </TouchableOpacity>
@@ -266,17 +264,21 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
 
 const s = StyleSheet.create({
   container:    { flex: 1, backgroundColor: C.bg },
-  header:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, paddingBottom: 14, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: C.border },
-  headerTitle:  { color: C.text, fontSize: 22, fontWeight: '800' },
-  headerSub:    { color: C.muted, fontSize: 13, marginTop: 2 },
-  logoutBtn:    { backgroundColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
-  logoutText:   { color: C.muted, fontSize: 13, fontWeight: '600' },
-  shortcutRow:  { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.border },
-  shortcutBtn:  { flex: 1, backgroundColor: C.card, borderRadius: 10, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: C.border },
-  shortcutText: { color: C.text, fontSize: 13, fontWeight: '700' },
+  header:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 16, paddingBottom: 18, paddingHorizontal: 18, backgroundColor: C.bgSoft },
+  headerBrand:  { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerMark:   { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0A2B31', borderWidth: 1, borderColor: '#1B6B69' },
+  headerKicker: { color: C.green, fontSize: 9, fontWeight: '900', letterSpacing: 1.25 },
+  headerTitle:  { color: C.text, fontSize: 23, fontWeight: '900', letterSpacing: -0.5, marginTop: 2 },
+  headerSub:    { color: C.muted, fontSize: 11, marginTop: 2 },
+  logoutBtn:    { width: 42, height: 42, backgroundColor: C.card, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.border },
+  shortcutRow:  { flexDirection: 'row', gap: 10, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: C.bgSoft, borderBottomWidth: 1, borderBottomColor: C.borderSoft },
+  shortcutBtn:  { flex: 1, minHeight: 64, flexDirection: 'row', gap: 8, backgroundColor: C.card, borderRadius: R.md, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: C.borderSoft, ...shadowSoft },
+  shortcutIcon: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  shortcutText: { color: C.text, fontSize: 13, fontWeight: '800' },
+  shortcutSub:  { color: C.muted, fontSize: 9, marginTop: 1 },
 
   scroll:       { flex: 1 },
-  scrollContent:{ padding: 16, gap: 14, paddingBottom: 40 },
+  scrollContent:{ padding: 14, gap: 14, paddingBottom: 40 },
 
   center:       { paddingVertical: 80, alignItems: 'center', gap: 12 },
   centerText:   { color: C.muted, fontSize: 14 },
@@ -294,14 +296,14 @@ const s = StyleSheet.create({
   refreshBtn:   { backgroundColor: C.green, borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
   refreshText:  { color: '#fff', fontWeight: '700', fontSize: 15 },
 
-  routeCard:    { backgroundColor: C.card, borderRadius: 16, padding: 18, borderWidth: 1, borderColor: C.border, gap: 12 },
+  routeCard:    { backgroundColor: C.card, borderRadius: R.lg, padding: 17, borderWidth: 1, borderColor: C.borderSoft, gap: 13, ...shadowSoft },
   routeHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
   routeName:    { color: C.text, fontSize: 18, fontWeight: '800', flex: 1 },
   statusBadge:  { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1 },
   statusText:   { fontSize: 12, fontWeight: '700' },
 
-  statsRow:     { flexDirection: 'row', gap: 10 },
-  statItem:     { flex: 1, backgroundColor: C.bg, borderRadius: 10, padding: 10, alignItems: 'center' },
+  statsRow:     { flexDirection: 'row', gap: 9 },
+  statItem:     { flex: 1, backgroundColor: C.bgSoft, borderRadius: R.sm, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: C.borderSoft },
   statNum:      { color: C.text, fontSize: 16, fontWeight: '800' },
   statLabel:    { color: C.muted, fontSize: 11, marginTop: 2 },
 
@@ -323,6 +325,6 @@ const s = StyleSheet.create({
   stopStatus:   { fontSize: 16, fontWeight: '800' },
   moreStops:    { color: C.muted, fontSize: 12, paddingLeft: 34 },
 
-  startBtn:     { backgroundColor: C.green, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 2 },
-  startBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  startBtn:     { backgroundColor: C.green, borderRadius: R.md, paddingHorizontal: 14, minHeight: 50, flexDirection: 'row', justifyContent: 'center', gap: 9, alignItems: 'center', marginTop: 2 },
+  startBtnText: { color: C.inkOnAccent, fontWeight: '900', fontSize: 15, flex: 1, textAlign: 'center' },
 });

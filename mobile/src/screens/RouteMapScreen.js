@@ -5,8 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { getRoute } from '../services/api';
 import { stopLabel } from '../utils/stopLabel';
-
-const C = { bg: '#0f172a', card: '#1e293b', border: '#334155', green: '#22c55e', orange: '#fb923c', blue: '#38bdf8', text: '#f1f5f9', muted: '#94a3b8' };
+import { C, R, shadowSoft } from '../theme';
 
 function stopsOf(route) {
   const optimized = Array.isArray(route?.optimized_route) ? route.optimized_route : [];
@@ -130,18 +129,18 @@ const s = StyleSheet.create({
   error: { color: '#f87171', textAlign: 'center' },
   retry: { borderWidth: 1, borderColor: C.border, borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10 },
   retryText: { color: C.text, fontWeight: '700' },
-  summary: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 15, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.card },
+  summary: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: C.borderSoft, backgroundColor: C.card },
   summaryTitle: { color: C.text, fontSize: 15, fontWeight: '800' },
   summaryText: { color: C.muted, fontSize: 11, marginTop: 3 },
-  centerBtn: { borderWidth: 1, borderColor: C.blue + '66', backgroundColor: C.blue + '1f', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 9 },
+  centerBtn: { borderWidth: 1, borderColor: C.blue + '66', backgroundColor: C.blue + '1f', paddingHorizontal: 13, paddingVertical: 8, borderRadius: R.sm },
   centerBtnText: { color: C.blue, fontSize: 12, fontWeight: '700' },
   map: { flex: 1, backgroundColor: C.bg },
   mapLoading: { ...StyleSheet.absoluteFillObject, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { color: C.muted, fontSize: 12 },
-  footer: { minHeight: 82, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 15, paddingVertical: 10, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.border },
+  footer: { minHeight: 88, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 15, paddingVertical: 12, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.borderSoft, ...shadowSoft },
   nextLabel: { color: C.muted, fontSize: 10, fontWeight: '700', letterSpacing: .7 },
   nextName: { color: C.text, fontSize: 14, fontWeight: '800', marginTop: 3 },
   nextAddress: { color: C.muted, fontSize: 11, marginTop: 3 },
-  navigateBtn: { backgroundColor: C.blue, borderRadius: 11, paddingHorizontal: 17, paddingVertical: 11 },
+  navigateBtn: { backgroundColor: C.blue, borderRadius: R.md, paddingHorizontal: 17, paddingVertical: 12 },
   navigateText: { color: '#082f49', fontSize: 13, fontWeight: '900' },
 });
