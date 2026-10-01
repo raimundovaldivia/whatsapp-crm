@@ -1570,22 +1570,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       let sent = 0, failed = 0, skipped = 0, pending = 0;
       const failureReasons = [];
       setSendProgress({ done: 0, total: items.length });
-      if (!reviewPlan.testMode) {
-        const response = await api.post('/reengagement/send-broadcast', { items, campaignId }, { timeout: 60000 });
-        const providerResults = response.data.results || [];
-        sent = providerResults.filter(result => result.success).length;
-        skipped = providerResults.filter(result => result.skipped).length;
-        pending = providerResults.filter(result => result.pending).length;
-        failed = providerResults.filter(result => !result.success && !result.skipped && !result.pending).length;
-        providerResults.filter(result => !result.success).forEach(result => {
-          const reason = result.error || (result.skipped ? 'Envío omitido' : 'WhatsApp rechazó el mensaje');
-          if (!failureReasons.includes(reason)) failureReasons.push(reason);
-        });
-        setSendProgress({ done: items.length, total: items.length });
-      } else {
-      // La prueba continúa usando el endpoint individual para confirmar de
-      // inmediato el contenido en el número indicado.
-      const concurrency = reviewPlan.testMode ? 1 : Math.min(8, items.length);
+      // Tanto la prueba como el envío real usan la ruta individual que ya
+      // confirma correctamente con Meta. En campañas se ejecutan varios
+      // destinatarios en paralelo, cada uno con auditoría independiente.
+      const concurrency = reviewPlan.testMode ? 1 : Math.min(6, items.length);
       let nextIndex = 0;
       let completed = 0;
       const workers = Array.from({ length: concurrency }, async () => {
@@ -1620,7 +1608,6 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         }
       });
       await Promise.all(workers);
-      }
       setResults({ sent, failed, skipped, pending, reasons: failureReasons });
       if (pending > 0) {
         campaignStatus = 'interrupted';
