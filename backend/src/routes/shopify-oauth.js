@@ -208,6 +208,12 @@ router.get('/callback', async (req, res) => {
 
   console.log(`[ShopifyOAuth] ✅ Tienda ${shop} conectada para org ${orgId}`);
 
+  // Shopify puede completar el OAuth sin conceder un scope protegido que la
+  // aplicación todavía no tiene aprobado. No presentar ese retorno como un
+  // éxito histórico: la conexión sigue sirviendo para los pedidos recientes,
+  // pero no para órdenes de más de 60 días.
+  const historicalGranted = grantedScopes.includes('read_all_orders');
+
   // ── Sincronizar clientes en background (sin bloquear el redirect) ─
   syncShopifyCustomers(orgId).catch(err =>
     console.warn('[ShopifyOAuth] Sync clientes background error:', err.message)
@@ -215,6 +221,11 @@ router.get('/callback', async (req, res) => {
   syncShopifyOrders(orgId).catch(err =>
     console.warn('[ShopifyOAuth] Sync órdenes background error:', err.message)
   );
+
+  if (historical && !historicalGranted) {
+    console.warn(`[ShopifyOAuth] Shopify no concedió read_all_orders para org ${orgId}`);
+    return res.redirect(`${FRONTEND}?shopify_error=historical_scope_not_granted`);
+  }
 
   // ── Redirigir al frontend con éxito ─────────────────────────────
   res.redirect(`${FRONTEND}?shopify_success=1&shop=${encodeURIComponent(shop)}${historical ? '&historical=1' : ''}`);
