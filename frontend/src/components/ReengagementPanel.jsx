@@ -1189,6 +1189,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [varFallback, setVarFallback] = useState([]); // valor si el contacto no tiene el dato
   const [sendProgress, setSendProgress] = useState({ done: 0, total: 0 });
   const [sending,        setSending]        = useState(false);
+  const sendingRef = useRef(false);
   const [reviewPlan,     setReviewPlan]     = useState(null);
   const [reviewIdx,      setReviewIdx]      = useState(0);
   const [guidedReview,   setGuidedReview]   = useState(false);
@@ -1546,7 +1547,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   async function confirmSend() {
-    if (!reviewPlan?.entries?.length || sending) return;
+    if (!reviewPlan?.entries?.length || sendingRef.current) return;
+    sendingRef.current = true;
     const items = reviewPlan.entries.map(entry => entry.item);
     let campaignId = null;
     let campaignStatus = 'completed';
@@ -1560,20 +1562,25 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         testPhone: reviewPlan.testPhone || null,
       });
       campaignId = created.data.campaign.id;
-      // Enviar por lotes para mostrar progreso en vivo (contador X/total).
-      const CHUNK = 8;
+      // Procesar de uno en uno: el contador refleja aceptaciones reales y una
+      // interrupción no oculta varios resultados dentro de un lote pendiente.
+      const CHUNK = 1;
       let sent = 0, failed = 0, skipped = 0;
       setSendProgress({ done: 0, total: items.length });
       for (let i = 0; i < items.length; i += CHUNK) {
         const part = items.slice(i, i + CHUNK);
         try {
-          const res = await api.post('/reengagement/send-bulk', { items: part, campaignId }, { timeout: 600000 });
+          const res = await api.post('/reengagement/send-bulk', { items: part, campaignId }, { timeout: 45000 });
           const r = res.data.results || [];
           sent    += r.filter(x => x.success).length;
           skipped += r.filter(x => x.skipped).length;
           failed  += r.filter(x => !x.success && !x.skipped).length;
         } catch (e) {
-          failed += part.length;
+          campaignStatus = 'interrupted';
+          const reason = e.response?.data?.error || (e.code === 'ECONNABORTED'
+            ? 'WhatsApp no respondió dentro del tiempo esperado'
+            : e.message);
+          throw new Error(`El envío se detuvo en ${i}/${items.length} para evitar duplicados. ${reason}`);
         }
         setSendProgress({ done: Math.min(i + CHUNK, items.length), total: items.length });
       }
@@ -1589,6 +1596,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       }
       await loadCampaigns();
       setSending(false);
+      sendingRef.current = false;
       setSendProgress({ done: 0, total: 0 });
     }
   }

@@ -23,6 +23,9 @@ const crypto = require('crypto');
 
 const BASE_URL = 'https://api.kapso.ai/meta/whatsapp';
 const API_VER  = 'v24.0';
+// Evita que una campaña quede esperando indefinidamente cuando Kapso o Meta
+// no responden. El flujo masivo se detiene y conserva el avance auditable.
+const KAPSO_REQUEST_TIMEOUT_MS = 20000;
 
 /**
  * Envía un mensaje de texto por WhatsApp via Kapso.
@@ -347,7 +350,7 @@ async function getTemplates(config) {
   try {
     const response = await axios.get(
       `${BASE_URL}/${API_VER}/${wabaId}/message_templates?limit=100&status=APPROVED`,
-      { headers: { 'X-API-Key': apiKey } }
+      { headers: { 'X-API-Key': apiKey }, timeout: KAPSO_REQUEST_TIMEOUT_MS }
     );
     return response.data?.data || response.data || [];
   } catch (err) {
@@ -397,6 +400,7 @@ async function sendTemplate(to, templateName, languageCode = 'es', components = 
           'X-API-Key':    apiKey,
           'Content-Type': 'application/json',
         },
+        timeout: KAPSO_REQUEST_TIMEOUT_MS,
       }
     );
     if (response.data?.error) {

@@ -1444,6 +1444,21 @@ router.post('/campaigns/:id/finish', async (req, res) => {
 router.get('/campaigns', async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    // Si el proceso fue reiniciado durante un envío, cerrar campañas sin
+    // actividad reciente para que nunca queden en "procesando" eternamente.
+    await getPool().query(
+      `UPDATE broadcast_campaigns c
+          SET status = 'interrupted', completed_at = COALESCE(completed_at, NOW())
+        WHERE c.organization_id = $1
+          AND c.status = 'processing'
+          AND c.created_at < NOW() - INTERVAL '10 minutes'
+          AND NOT EXISTS (
+            SELECT 1 FROM broadcast_campaign_recipients r
+             WHERE r.campaign_id = c.id
+               AND r.created_at > NOW() - INTERVAL '5 minutes'
+          )`,
+      [req.orgId]
+    );
     const { rows } = await getPool().query(
       `SELECT c.*,
          COUNT(r.id)::int AS processed_count,
