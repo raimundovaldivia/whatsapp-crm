@@ -85,6 +85,99 @@ async function recordBroadcastRecipient(orgId, campaignId, item, result) {
  * después de la aceptación). No vuelve a enviar nada al cliente.
  */
 async function reconcileAcceptedBroadcastMessages(orgId) {
+  // Versiones anteriores podían perder el registro local si el proceso se
+  // reiniciaba después de que Meta aceptara el mensaje. Los webhooks durables
+  // conservan la confirmación real del proveedor y el contenido exacto, por lo
+  // que primero reconstruimos esos chats sin volver a enviar nada.
+  const providerRows = await getPool().query(
+    `SELECT DISTINCT ON (w.payload #>> '{message,id}')
+            w.payload #>> '{message,id}' AS whatsapp_message_id,
+            w.payload #>> '{message,to}' AS phone,
+            w.payload #>> '{message,kapso,content}' AS content,
+            w.payload #>> '{message,kapso,status}' AS status,
+            w.created_at
+       FROM webhook_inbox w
+       LEFT JOIN messages m
+         ON m.whatsapp_message_id = w.payload #>> '{message,id}'
+      WHERE w.organization_id = $1
+        AND w.provider = 'kapso'
+        AND w.payload #>> '{message,type}' = 'template'
+        AND w.payload #>> '{message,kapso,origin}' = 'cloud_api'
+        AND w.payload #>> '{message,kapso,status}' IN ('sent','delivered','read','failed')
+        AND w.created_at > NOW() - INTERVAL '30 days'
+        AND m.id IS NULL
+      ORDER BY w.payload #>> '{message,id}', w.created_at DESC
+      LIMIT 500`,
+    [orgId]
+  );
+
+  let recovered = 0;
+  for (const providerMessage of providerRows.rows) {
+    const phone = db.normalizePhone(providerMessage.phone);
+    if (!phone || !providerMessage.whatsapp_message_id) continue;
+
+    // Asociar sólo cuando existe una campaña iniciada pocos minutos antes.
+    // Esto recupera el contador histórico sin atribuir envíos manuales lejanos.
+    const campaignResult = await getPool().query(
+      `SELECT id, template_name
+         FROM broadcast_campaigns
+        WHERE organization_id = $1
+          AND created_at <= $2
+          AND created_at > $2 - INTERVAL '5 minutes'
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [orgId, providerMessage.created_at]
+    );
+    const campaign = campaignResult.rows[0] || null;
+    const contactResult = await getPool().query(
+      'SELECT name FROM contacts WHERE organization_id = $1 AND phone = $2 LIMIT 1',
+      [orgId, phone]
+    );
+    const contactName = contactResult.rows[0]?.name || 'Cliente';
+    const prefix = campaign?.template_name
+      ? `[Template: ${campaign.template_name}]`
+      : '[Template recuperado]';
+    const savedContent = providerMessage.content
+      ? `${prefix}\n\n${providerMessage.content}`
+      : prefix;
+    const conversation = await db.upsertConversation(orgId, phone, contactName);
+    if (!conversation?.id) continue;
+    const savedMessage = await db.saveMessage({
+      conversationId: conversation.id,
+      whatsappMessageId: providerMessage.whatsapp_message_id,
+      content: savedContent,
+      direction: 'outbound',
+      type: 'template',
+      status: providerMessage.status,
+      sentBy: 'ai',
+    });
+    if (!savedMessage) continue;
+
+    if (campaign) {
+      await getPool().query(
+        `INSERT INTO broadcast_campaign_recipients
+           (campaign_id, organization_id, destination_phone, original_phone,
+            contact_name, template_name, language_code, result_status,
+            whatsapp_message_id)
+         SELECT $1,$2,$3,$3,$4,$5,'es','accepted',$6
+          WHERE NOT EXISTS (
+            SELECT 1 FROM broadcast_campaign_recipients
+             WHERE organization_id = $2 AND whatsapp_message_id = $6
+          )`,
+        [campaign.id, orgId, phone, contactName, campaign.template_name,
+          providerMessage.whatsapp_message_id]
+      );
+    }
+
+    await db.updateConversationLastMessage(conversation.id, savedContent);
+    await activateDivaForAutomatedMessage(conversation.id, db);
+    await db.updatePipelineState(conversation.id, 'template_sent');
+    await markTemplateSent(orgId, phone);
+    const updated = await db.getConversationById(conversation.id);
+    io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMessage, conversation: updated });
+    recovered++;
+  }
+
   const { rows } = await getPool().query(
     `SELECT r.*
        FROM broadcast_campaign_recipients r
@@ -98,7 +191,7 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
       LIMIT 500`,
     [orgId]
   );
-  if (!rows.length) return 0;
+  if (!rows.length) return recovered;
 
   let templatesByName = new Map();
   try {
@@ -111,7 +204,6 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
     console.warn('[SendBulk] No se pudo recuperar el cuerpo de los templates:', error.message);
   }
 
-  let recovered = 0;
   for (const recipient of rows) {
     const phone = db.normalizePhone(recipient.destination_phone || recipient.original_phone);
     if (!phone) continue;
