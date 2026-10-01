@@ -962,6 +962,72 @@ function fillTemplateBody(tpl, row, bank) {
   return text.replace(/\{\{(\d+)\}\}/g, (_, n) => (vals[n] != null ? vals[n] : `{{${n}}}`));
 }
 const isoDay = d => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+const PERIOD_VIEWS = [
+  { key: 'day', label: 'Día' },
+  { key: 'week', label: 'Semana' },
+  { key: 'month', label: 'Mes' },
+  { key: 'year', label: 'Año' },
+];
+
+function localDate(day) {
+  return new Date(`${day}T12:00:00`);
+}
+
+function dateISO(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function weekStart(date) {
+  const result = new Date(date);
+  const weekday = result.getDay() || 7;
+  result.setDate(result.getDate() - weekday + 1);
+  return result;
+}
+
+function rangeForView(view, now = new Date()) {
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  const start = new Date(end);
+  if (view === 'day') start.setDate(start.getDate() - 6);
+  if (view === 'week') {
+    start.setTime(weekStart(end).getTime());
+    start.setDate(start.getDate() - 11 * 7);
+  }
+  if (view === 'month') start.setFullYear(start.getFullYear() - 1, start.getMonth() + 1, 1);
+  if (view === 'year') start.setFullYear(start.getFullYear() - 4, 0, 1);
+  return { from: dateISO(start), to: dateISO(end) };
+}
+
+function periodForDay(day, view) {
+  const date = localDate(day);
+  if (view === 'week') {
+    const start = weekStart(date);
+    const end = new Date(start); end.setDate(end.getDate() + 6);
+    return { key: dateISO(start), start: dateISO(start), end: dateISO(end) };
+  }
+  if (view === 'month') {
+    const start = new Date(date.getFullYear(), date.getMonth(), 1, 12);
+    const end = new Date(date.getFullYear(), date.getMonth() + 1, 0, 12);
+    return { key: dateISO(start).slice(0, 7), start: dateISO(start), end: dateISO(end) };
+  }
+  const start = new Date(date.getFullYear(), 0, 1, 12);
+  const end = new Date(date.getFullYear(), 11, 31, 12);
+  return { key: String(date.getFullYear()), start: dateISO(start), end: dateISO(end) };
+}
+
+function periodLabel(period, view) {
+  const start = localDate(period.start);
+  if (view === 'week') {
+    const end = localDate(period.end);
+    const left = start.toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+    const right = end.toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' });
+    return `Semana ${left} – ${right}`;
+  }
+  if (view === 'month') return start.toLocaleDateString('es-CL', { month: 'long', year: 'numeric' });
+  return `Año ${start.getFullYear()}`;
+}
 const PAY_META = {
   efectivo:      { label: 'Efectivo',      icon: '💵', color: '#22c55e' },
   transferencia: { label: 'Transferencia', icon: '🏦', color: '#38bdf8' },
@@ -992,6 +1058,7 @@ function chargeInfo(row) {
 function DespachosRepartos({ colors }) {
   const today = isoDay(new Date());
   const weekAgo = isoDay(Date.now() - 6 * 86400000);
+  const [viewMode, setViewMode] = useState('day');
   const [from,    setFrom]    = useState(weekAgo);
   const [to,      setTo]      = useState(today);
   const [driver,  setDriver]  = useState('');
@@ -1003,6 +1070,7 @@ function DespachosRepartos({ colors }) {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [openDays, setOpenDays] = useState({});
+  const [openPeriods, setOpenPeriods] = useState({});
   const [charging, setCharging] = useState('');   // día que está enviando cobros
   const [chargeMsg, setChargeMsg] = useState(null);
   const [chargeModal, setChargeModal] = useState(null);   // { day, rows } — modal de cobro
@@ -1159,6 +1227,22 @@ function DespachosRepartos({ colors }) {
 
   useEffect(() => { load(); }, [load]);
 
+  function changeViewMode(next) {
+    const range = rangeForView(next);
+    setViewMode(next);
+    setFrom(range.from);
+    setTo(range.to);
+    setOpenPeriods({});
+    setOpenDays({});
+  }
+
+  function showDay(day) {
+    setViewMode('day');
+    setFrom(day);
+    setTo(day);
+    setOpenDays({ [day]: true });
+  }
+
   const filtered = rows.filter(r =>
     (!pay    || r.payment_method === pay) &&
     (!status || r.status === status)
@@ -1213,6 +1297,29 @@ function DespachosRepartos({ colors }) {
   }
   for (const d of days) d.gastos = gastosByDay[d.day] || 0;
 
+  const periods = [];
+  if (viewMode !== 'day') {
+    const byPeriod = {};
+    for (const d of days) {
+      const identity = periodForDay(d.day, viewMode);
+      if (!byPeriod[identity.key]) {
+        byPeriod[identity.key] = {
+          ...identity, days: [], rows: 0, entregados: 0, cancelados: 0, sinEntrega: 0,
+          reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0,
+          cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0,
+          extras: 0, gastos: 0,
+        };
+        periods.push(byPeriod[identity.key]);
+      }
+      const p = byPeriod[identity.key];
+      p.days.push(d);
+      p.rows += d.rows.length;
+      for (const field of ['entregados','cancelados','sinEntrega','reprogramados','pendientes','efectivo','transferencia','cobrosEnviados','cobrosPendientes','deudaEmpresa','deudaPersonal','extras','gastos']) {
+        p[field] += Number(d[field]) || 0;
+      }
+    }
+  }
+
   const totals = days.reduce((t, d) => ({
     entregados: t.entregados + d.entregados, cancelados: t.cancelados + d.cancelados, sinEntrega: t.sinEntrega + d.sinEntrega,
     efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia,
@@ -1246,6 +1353,28 @@ function DespachosRepartos({ colors }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, height: '100%', overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/* Vista y período sugerido */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '12px', color: colors.textSecondary, fontWeight: 700 }}>Ver por</span>
+        <div style={{ display: 'inline-flex', padding: '3px', border: `1px solid ${colors.border}`, borderRadius: '9px', background: colors.bgCard }}>
+          {PERIOD_VIEWS.map(option => {
+            const active = viewMode === option.key;
+            return (
+              <button key={option.key} onClick={() => changeViewMode(option.key)}
+                style={{ border: 'none', borderRadius: '7px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px', fontWeight: active ? 800 : 600, background: active ? colors.green : 'transparent', color: active ? '#06281f' : colors.textSecondary }}>
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+        <span style={{ color: colors.textMuted, fontSize: '11px' }}>
+          {viewMode === 'day' && 'Últimos 7 días'}
+          {viewMode === 'week' && 'Últimas 12 semanas'}
+          {viewMode === 'month' && 'Últimos 12 meses'}
+          {viewMode === 'year' && 'Últimos 5 años'}
+        </span>
+      </div>
+
       {/* Filtros */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
         <label style={{ fontSize: '11px', color: colors.textMuted }}>Desde</label>
@@ -1296,8 +1425,54 @@ function DespachosRepartos({ colors }) {
         <div style={{ color: colors.textMuted, fontSize: '13px', padding: '30px 0', textAlign: 'center' }}>Sin despachos en este período.</div>
       )}
 
+      {/* Resumen semanal, mensual o anual. Cada día permite volver al detalle operativo. */}
+      {!loading && !error && viewMode !== 'day' && periods.map((period, index) => {
+        const open = openPeriods[period.key] ?? index === 0;
+        const receivable = period.deudaEmpresa + period.deudaPersonal;
+        return (
+          <div key={period.key} style={{ border: `1px solid ${colors.border}`, borderRadius: '10px', overflow: 'hidden', flexShrink: 0 }}>
+            <div onClick={() => setOpenPeriods(current => ({ ...current, [period.key]: !open }))}
+              style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 14px', backgroundColor: colors.bgCard, cursor: 'pointer', flexWrap: 'wrap' }}>
+              {open ? <ChevronDown size={14} color={colors.textMuted} /> : <ChevronRight size={14} color={colors.textMuted} />}
+              <span style={{ fontWeight: 800, fontSize: '13px', color: colors.textPrimary, textTransform: 'capitalize' }}>{periodLabel(period, viewMode)}</span>
+              <span style={{ fontSize: '11px', color: colors.textMuted }}>{period.days.length} días · {period.rows} paradas</span>
+              <div style={{ flex: 1 }} />
+              {chip(`${period.entregados} entregados`, '#2dd4bf')}
+              {period.cancelados > 0 && chip(`${period.cancelados} cancelados`, '#f87171')}
+              {period.sinEntrega > 0 && chip(`${period.sinEntrega} sin entrega`, '#38bdf8')}
+              {chip(`💵 ${CLP(period.efectivo)}`, '#22c55e')}
+              {chip(`🏦 ${CLP(period.transferencia)}`, '#38bdf8')}
+              {receivable > 0 && chip(`💸 ${CLP(receivable)} por cobrar`, '#fbbf24')}
+              {period.deudaEmpresa > 0 && chip(`🏢 ${CLP(period.deudaEmpresa)}`, '#a78bfa')}
+              {period.deudaPersonal > 0 && chip(`👤 ${CLP(period.deudaPersonal)}`, '#f59e0b')}
+              {period.gastos > 0 && chip(`🧾 ${CLP(period.gastos)}`, '#fb923c')}
+            </div>
+            {open && (
+              <div style={{ background: colors.bgPanel, borderTop: `1px solid ${colors.border}` }}>
+                {period.days.map(d => (
+                  <div key={d.day} style={{ display: 'flex', alignItems: 'center', gap: '9px', flexWrap: 'wrap', padding: '9px 14px', borderBottom: `1px solid ${colors.border}` }}>
+                    <span style={{ color: colors.textPrimary, fontSize: '12px', fontWeight: 700, textTransform: 'capitalize', minWidth: '190px' }}>{dayLabel(d.day)}</span>
+                    <span style={{ color: colors.textMuted, fontSize: '11px' }}>{d.rows.length} paradas</span>
+                    <div style={{ flex: 1 }} />
+                    {chip(`${d.entregados} ✓`, '#2dd4bf')}
+                    {d.sinEntrega > 0 && chip(`${d.sinEntrega} sin entrega`, '#38bdf8')}
+                    {chip(`💵 ${CLP(d.efectivo)}`, '#22c55e')}
+                    {chip(`🏦 ${CLP(d.transferencia)}`, '#38bdf8')}
+                    {(d.deudaEmpresa + d.deudaPersonal) > 0 && chip(`💸 ${CLP(d.deudaEmpresa + d.deudaPersonal)} por cobrar`, '#fbbf24')}
+                    <button onClick={() => showDay(d.day)}
+                      style={{ border: `1px solid ${colors.border}`, background: colors.bgCard, color: colors.green, borderRadius: '7px', padding: '5px 9px', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}>
+                      Ver detalle
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
       {/* Por día */}
-      {days.map(d => {
+      {viewMode === 'day' && days.map(d => {
         const open = openDays[d.day] !== false; // abiertos por defecto
         return (
           <div key={d.day} style={{ border: `1px solid ${colors.border}`, borderRadius: '10px', overflow: 'hidden', flexShrink: 0 }}>
