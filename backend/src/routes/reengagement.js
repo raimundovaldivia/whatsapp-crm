@@ -79,6 +79,77 @@ async function recordBroadcastRecipient(orgId, campaignId, item, result) {
   );
 }
 
+/**
+ * Reconstruye en el chat los templates que Meta aceptó pero que no alcanzaron
+ * a guardarse localmente (por ejemplo, si Railway reinició el proceso justo
+ * después de la aceptación). No vuelve a enviar nada al cliente.
+ */
+async function reconcileAcceptedBroadcastMessages(orgId) {
+  const { rows } = await getPool().query(
+    `SELECT r.*
+       FROM broadcast_campaign_recipients r
+       LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
+      WHERE r.organization_id = $1
+        AND r.result_status = 'accepted'
+        AND r.whatsapp_message_id IS NOT NULL
+        AND m.id IS NULL
+        AND r.created_at > NOW() - INTERVAL '30 days'
+      ORDER BY r.id
+      LIMIT 500`,
+    [orgId]
+  );
+  if (!rows.length) return 0;
+
+  let templatesByName = new Map();
+  try {
+    const wc = await db.getWhatsappConfig(orgId);
+    if (wc) {
+      const templates = await require('../services/kapso-whatsapp').getTemplates(wc);
+      templatesByName = new Map(templates.map(template => [template.name, template]));
+    }
+  } catch (error) {
+    console.warn('[SendBulk] No se pudo recuperar el cuerpo de los templates:', error.message);
+  }
+
+  let recovered = 0;
+  for (const recipient of rows) {
+    const phone = db.normalizePhone(recipient.destination_phone || recipient.original_phone);
+    if (!phone) continue;
+    const template = templatesByName.get(recipient.template_name);
+    const body = getBodyComponent(template)?.text || '';
+    const rendered = body
+      ? renderTemplateFromComponents(body, recipient.template_components || [])
+      : '';
+    const savedContent = rendered
+      ? `[Template: ${recipient.template_name}]\n\n${rendered}`
+      : `[Template: ${recipient.template_name}]`;
+    const conversation = await db.upsertConversation(
+      orgId,
+      phone,
+      recipient.contact_name || 'Cliente'
+    );
+    if (!conversation?.id) continue;
+    const savedMessage = await db.saveMessage({
+      conversationId: conversation.id,
+      whatsappMessageId: recipient.whatsapp_message_id,
+      content: savedContent,
+      direction: 'outbound',
+      type: 'template',
+      sentBy: 'ai',
+    });
+    if (!savedMessage) continue;
+    await db.updateConversationLastMessage(conversation.id, savedContent);
+    await activateDivaForAutomatedMessage(conversation.id, db);
+    await db.updatePipelineState(conversation.id, 'template_sent');
+    await markTemplateSent(orgId, phone);
+    const updated = await db.getConversationById(conversation.id);
+    io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMessage, conversation: updated });
+    recovered++;
+  }
+  if (recovered) console.log(`[SendBulk] ${recovered} mensajes aceptados reconstruidos en los chats de org ${orgId}`);
+  return recovered;
+}
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Cache en memoria: sesión actual (respaldo al cache de DB)
@@ -1459,6 +1530,7 @@ router.get('/campaigns', async (req, res) => {
           )`,
       [req.orgId]
     );
+    const recoveredChats = await reconcileAcceptedBroadcastMessages(req.orgId);
     const { rows } = await getPool().query(
       `SELECT c.*,
          COUNT(r.id)::int AS processed_count,
@@ -1488,7 +1560,7 @@ router.get('/campaigns', async (req, res) => {
       );
       reasons = result.rows;
     }
-    res.json({ success: true, campaigns: rows.map(row => ({
+    res.json({ success: true, recoveredChats, campaigns: rows.map(row => ({
       ...row,
       reasons: reasons.filter(reason => String(reason.campaign_id) === String(row.id)),
     })) });
