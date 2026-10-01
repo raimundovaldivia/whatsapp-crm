@@ -72,6 +72,36 @@ test('Kapso and Meta preserve provider errors; templates reject missing acceptan
  const denied=load('src/services/kapso-whatsapp.js',{axios:{post:async()=>{const e=new Error('HTTP 400');e.response={data:{error:{code:131042,message:'Business eligibility payment issue'}}};throw e;}}});
  await assert.rejects(()=>denied.sendTemplate('111','test','es',[],config),/131042.*facturación/);
 });
+test('Kapso webhook registration includes every delivery state',async()=>{
+ let request;
+ const platform=load('src/services/kapso-platform.js',{axios:{create:()=>({post:async(url,body)=>{request={url,body};return {data:{data:{id:'hook'}}}}})}},{process:{env:{KAPSO_API_KEY:'test'}}});
+ await platform.registerNumberWebhook('phone-1','https://example.test/kapso-webhook','secret');
+ assert.equal(request.url,'/whatsapp/phone_numbers/phone-1/webhooks');
+ assert.deepEqual(Array.from(request.body.whatsapp_webhook.events),[
+  'whatsapp.message.received','whatsapp.message.sent','whatsapp.message.delivered','whatsapp.message.read','whatsapp.message.failed'
+ ]);
+});
+test('pending Kapso templates recover their provider status without guessing failures',async()=>{
+ const updates=[];let reads=0;
+ const recovery=load('src/services/message-status-recovery.js',{
+  '../db/database':{updateMessageStatus:async(...args)=>{updates.push(args);return {whatsapp_message_id:args[0],status:args[1]}}},
+  './kapso-whatsapp':{getMessageStatus:async id=>{reads++;return id.endsWith('failed')?{status:'failed',error:[{code:131042}]}:null}},
+ });
+ const old=new Date(Date.now()-60000).toISOString();
+ const messages=[
+  {direction:'outbound',status:'pending',whatsapp_message_id:'wamid.failed',created_at:old},
+  {direction:'outbound',status:'pending',whatsapp_message_id:'reeng_local',created_at:old},
+  {direction:'outbound',status:'pending',whatsapp_message_id:'wamid.unknown',created_at:old},
+  {direction:'outbound',status:'pending',whatsapp_message_id:'wamid.too-new',created_at:new Date().toISOString()},
+ ];
+ const recovered=await recovery.reconcilePendingMessages(7,messages,{provider:'kapso'});
+ assert.equal(reads,2);
+ assert.equal(updates.length,1);
+ assert.deepEqual(Array.from(updates[0]).slice(0,2),['wamid.failed','failed']);
+ assert.equal(updates[0][3],7);
+ assert.equal(recovered[0].status,'failed');
+ assert.equal(await recovery.reconcilePendingMessages(7,messages,{provider:'meta'}).then(x=>x.length),0);
+});
 test('collection retries confirmed failures and blocks pending, unknown and concurrent sends',async()=>{
  let current={source:'bot',id:'1',customer_phone:'111',total_price:100,order_label:'#1',charge_requested_at:new Date(),charge_status:'pending'};
  let sends=0,saved,registered,locked=true;

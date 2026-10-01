@@ -10,6 +10,7 @@ const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
 const { isCustomerMessagingHour, shouldSkipAutomatedFollowUp } = require('../services/outbound-policy');
+const { reconcilePendingMessages } = require('../services/message-status-recovery');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -51,7 +52,22 @@ router.get('/:id/messages', async (req, res) => {
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
-    const messages = await db.getMessagesByConversation(conv.id, parseInt(req.query.limit) || 50);
+    let messages = await db.getMessagesByConversation(conv.id, parseInt(req.query.limit) || 50);
+    const wc = await outboundConfig(req.orgId, conv);
+    const recovered = await reconcilePendingMessages(req.orgId, messages, wc).catch(err => {
+      console.warn(`[Conv] No se pudieron verificar estados pendientes del chat ${conv.id}:`, err.message);
+      return [];
+    });
+    if (recovered.length) {
+      messages = await db.getMessagesByConversation(conv.id, parseInt(req.query.limit) || 50);
+      for (const message of recovered) {
+        io?.to(`org_${req.orgId}`).emit(`status_update_${req.orgId}`, {
+          messageId: message.whatsapp_message_id,
+          status: message.status,
+          error: message.delivery_error || null,
+        });
+      }
+    }
     await db.markConversationAsRead(conv.id);
     res.json({ success: true, data: { conversation: conv, messages } });
   } catch (err) {

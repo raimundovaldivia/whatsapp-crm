@@ -120,7 +120,13 @@ async function registerNumberWebhook(phoneNumberId, webhookUrl, secretKey = null
       whatsapp_webhook: {
         url:             webhookUrl,
         secret_key:      secret,
-        events:          ['whatsapp.message.received', 'whatsapp.message.delivered', 'whatsapp.message.read'],
+        events:          [
+          'whatsapp.message.received',
+          'whatsapp.message.sent',
+          'whatsapp.message.delivered',
+          'whatsapp.message.read',
+          'whatsapp.message.failed',
+        ],
         active:          true,
         payload_version: 'v2',  // evento en header X-Webhook-Event, no en body
       },
