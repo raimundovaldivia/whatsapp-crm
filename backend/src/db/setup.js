@@ -426,7 +426,7 @@ async function setupDatabase() {
       EXCEPTION WHEN undefined_object THEN NULL;
       END $$;
       ALTER TABLE orders ADD CONSTRAINT orders_status_check
-        CHECK(status IN ('draft','sent','payment_received','nuevo','por_despachar','en_camino','no_entregado','entregado','paid','cancelled'))
+        CHECK(status IN ('draft','sent','payment_received','nuevo','por_despachar','asignado_ruta','en_camino','no_entregado','entregado','paid','cancelled'))
         NOT VALID;
 
       -- Migración: estado CRM local para órdenes Shopify
@@ -1028,6 +1028,38 @@ async function setupDatabase() {
        WHERE status = 'in_progress'
          AND started_at IS NULL
          AND completed_at IS NULL;
+
+      -- Una ruta enviada reserva sus pedidos durante la consolidación. Así no
+      -- vuelven a aparecer en "Nuevo reparto" antes de que el chofer la inicie.
+      WITH sent_shopify AS (
+        SELECT DISTINCT r.organization_id, item->>'id' AS order_id
+          FROM delivery_routes r
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.orders::jsonb, '[]'::jsonb)) item
+         WHERE r.status = 'sent' AND item->>'source' = 'shopify'
+      )
+      UPDATE shopify_orders so
+         SET crm_status = 'asignado_ruta'
+        FROM sent_shopify sr
+       WHERE so.organization_id = sr.organization_id
+         AND so.shopify_order_id::text = sr.order_id
+         AND so.delivered_at IS NULL
+         AND COALESCE(so.crm_status, '') NOT IN ('en_camino','entregado','cancelled');
+
+      WITH sent_bot AS (
+        SELECT DISTINCT r.organization_id, (item->>'id')::integer AS order_id
+          FROM delivery_routes r
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.orders::jsonb, '[]'::jsonb)) item
+         WHERE r.status = 'sent'
+           AND item->>'source' = 'bot'
+           AND item->>'id' ~ '^\d+$'
+      )
+      UPDATE orders o
+         SET status = 'asignado_ruta', updated_at = NOW()
+        FROM sent_bot sr
+       WHERE o.organization_id = sr.organization_id
+         AND o.id = sr.order_id
+         AND o.delivered_at IS NULL
+         AND o.status NOT IN ('en_camino','entregado','paid','cancelled');
     `);
 
     // ─── DESPACHOS: gastos rendidos por el repartidor (petróleo, peaje, etc.) ──

@@ -395,6 +395,50 @@ test('dispatch excludes future bot and Shopify deliveries and rechecks stale rou
   } finally { await f.engine.close(); }
 });
 
+test('sending a route reserves its orders and cancelling releases them', async () => {
+  const f = await fixture();
+  try {
+    await f.engine.exec(`
+      INSERT INTO orders(id,organization_id,items,total_price,status)
+      VALUES(5,1,'[{"name":"Producto","quantity":1}]',100,'por_despachar');
+      INSERT INTO shopify_orders(organization_id,shopify_order_id,items,crm_status)
+      VALUES(1,'reserve-shopify','[{"name":"Producto","quantity":1}]','por_despachar');
+      SELECT setval(pg_get_serial_sequence('delivery_routes','id'),(SELECT MAX(id) FROM delivery_routes));
+    `);
+    const router = load('src/routes/delivery.js', {
+      '../db/database': f.db,
+      '../middleware/auth': {requireAuth: noop, requireRole: () => noop},
+      '../services/push': {pushUser: async () => {}},
+    });
+    const call = async (method, path, body = {}, params = {}) => {
+      const res = response();
+      await handler(router, method, path)({orgId: 1, role: 'owner', body, params}, res);
+      return res;
+    };
+    const orders = [
+      {source:'bot', id:5, customerName:'Bot'},
+      {source:'shopify', id:'reserve-shopify', customerName:'Shopify'},
+    ];
+    const sent = await call('post', '/routes', {name:'Ruta reservada', orders, optimizedRoute:orders, send:true});
+    assert.equal(sent.code, 200, JSON.stringify(sent.body));
+    assert.equal((await f.query('SELECT status FROM orders WHERE id=5')).rows[0].status, 'asignado_ruta');
+    assert.equal((await f.query("SELECT crm_status FROM shopify_orders WHERE shopify_order_id='reserve-shopify'")).rows[0].crm_status, 'asignado_ruta');
+
+    const selectable = await call('get', '/orders');
+    const keys = new Set(selectable.body.orders.map(order => `${order.source}_${order.id}`));
+    assert.equal(keys.has('bot_5'), false);
+    assert.equal(keys.has('shopify_reserve-shopify'), false);
+
+    const duplicate = await call('post', '/routes', {name:'Duplicada', orders, optimizedRoute:orders, send:true});
+    assert.equal(duplicate.code, 400);
+
+    const cancelled = await call('patch', '/routes/:id', {status:'cancelled'}, {id:String(sent.body.route.id)});
+    assert.equal(cancelled.code, 200, JSON.stringify(cancelled.body));
+    assert.equal((await f.query('SELECT status FROM orders WHERE id=5')).rows[0].status, 'por_despachar');
+    assert.equal((await f.query("SELECT crm_status FROM shopify_orders WHERE shopify_order_id='reserve-shopify'")).rows[0].crm_status, 'por_despachar');
+  } finally { await f.engine.close(); }
+});
+
 test('delivery retries are placed first and remain explicit in the saved route', async () => {
   const f = await fixture();
   try {

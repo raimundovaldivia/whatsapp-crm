@@ -84,6 +84,7 @@ function filterBySource(orders, sourceFilter) {
 const CRM_STATUSES = [
   { key: 'nuevo',         label: 'Nuevo',          color: '#a78bfa', bg: '#1e1030' },
   { key: 'por_despachar', label: 'Por despachar',  color: '#fb923c', bg: '#2e1500' },
+  { key: 'asignado_ruta',label: 'Asignado a ruta', color: '#a78bfa', bg: '#211b36' },
   { key: 'en_camino',     label: 'En camino',      color: '#38bdf8', bg: '#0c2030' },
   { key: 'no_entregado',  label: 'No entregado',   color: '#fb923c', bg: '#321b0d' },
   { key: 'entregado',     label: 'Entregado',      color: '#2dd4bf', bg: '#07231f' },
@@ -105,6 +106,7 @@ function getBotStatusStyle(status, colors) {
     payment_received: { label: 'Pago recibido',  color: colors.info, bg: '#0c2030' },
     nuevo:            crm,
     por_despachar:    crm,
+    asignado_ruta:    crm,
     en_camino:        crm,
     no_entregado:     { label: 'No entregado', color: '#fb923c', bg: '#321b0d' },
     entregado:        crm,
@@ -549,7 +551,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
       : o.financialStatus === 'PAID')
     .reduce((s, o) => s + o.total, 0);
 
-  const DONE_STATES = ['en_camino', 'entregado', 'paid', 'cancelled'];
+  const DONE_STATES = ['asignado_ruta', 'en_camino', 'entregado', 'paid', 'cancelled'];
   // Sin despachar = solo nuevo y por_despachar
   const totalUnfulfilled = filtered.filter(o => {
     const crmKey  = o.source === 'bot' ? o.botStatus : o.crmStatus;
