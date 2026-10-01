@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-crm-despachos",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "main": "expo/AppEntry.js",
   "scripts": {
@@ -21,6 +21,7 @@
     "expo": "^57.0.0",
     "expo-constants": "~57.0.19",
     "expo-device": "~57.0.2",
+    "expo-document-picker": "~57.0.3",
     "expo-image-picker": "~57.0.19",
     "expo-linking": "~57.0.10",
     "expo-location": "~57.0.19",

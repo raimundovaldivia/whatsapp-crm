@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
-  ActivityIndicator, KeyboardAvoidingView, Platform, Alert,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Image, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { getStopChat, sendStopChatMessage } from '../services/api';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { getStopChat, sendStopChatMessage, sendStopChatMedia } from '../services/api';
 import { C, R, shadowSoft } from '../theme';
 
 function formatTime(value) {
@@ -30,6 +32,8 @@ export default function CustomerChatScreen({ route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [text, setText] = useState('');
+  const [attachment, setAttachment] = useState(null);
+  const [selecting, setSelecting] = useState(false);
   const [error, setError] = useState('');
   const scrollRef = useRef(null);
 
@@ -63,11 +67,15 @@ export default function CustomerChatScreen({ route }) {
 
   async function send() {
     const clean = text.trim();
-    if (!clean || sending) return;
+    if ((!clean && !attachment) || sending) return;
+    const pendingAttachment = attachment;
     setSending(true);
     try {
-      const response = await sendStopChatMessage(routeId, stopKey, clean);
+      const response = pendingAttachment
+        ? await sendStopChatMedia(routeId, stopKey, { ...pendingAttachment, caption: clean })
+        : await sendStopChatMessage(routeId, stopKey, clean);
       setText('');
+      setAttachment(null);
       if (response?.data?.message) setMessages(prev => [...prev, response.data.message]);
       setError('');
     } catch (err) {
@@ -79,6 +87,73 @@ export default function CustomerChatScreen({ route }) {
     } finally {
       setSending(false);
     }
+  }
+
+  function ensureSize(size) {
+    if (Number(size || 0) > 6 * 1024 * 1024) {
+      Alert.alert('Archivo demasiado grande', 'El máximo permitido es 6 MB.');
+      return false;
+    }
+    return true;
+  }
+
+  function mimeFromName(name = '') {
+    const ext = name.toLowerCase().split('.').pop();
+    return ({ pdf:'application/pdf', doc:'application/msword', docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls:'application/vnd.ms-excel', xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', csv:'text/csv', txt:'text/plain' })[ext] || 'application/octet-stream';
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function pickPhoto() {
+    setSelecting(true);
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) return Alert.alert('Permiso necesario', 'Permite el acceso a las fotos para adjuntar una imagen.');
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.72, base64: true });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      if (!ensureSize(asset.fileSize)) return;
+      if (!asset.base64) throw new Error('No se pudo leer la foto');
+      const mimeType = asset.mimeType || 'image/jpeg';
+      setAttachment({ data: `data:${mimeType};base64,${asset.base64}`, mimeType, fileName: asset.fileName || `foto-${Date.now()}.jpg`, size: asset.fileSize || 0 });
+    } catch (err) {
+      Alert.alert('No se pudo adjuntar', err.message || 'Intenta nuevamente.');
+    } finally { setSelecting(false); }
+  }
+
+  async function pickDocument() {
+    setSelecting(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv', 'text/plain'],
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      if (!ensureSize(asset.size)) return;
+      const mimeType = asset.mimeType || mimeFromName(asset.name);
+      if (mimeType === 'application/octet-stream') return Alert.alert('Formato no permitido', 'Usa PDF, Word, Excel, CSV o TXT.');
+      const response = await fetch(asset.uri);
+      const data = await blobToDataUrl(await response.blob());
+      setAttachment({ data, mimeType, fileName: asset.name || 'archivo', size: asset.size || 0 });
+    } catch (err) {
+      Alert.alert('No se pudo adjuntar', err.message || 'Intenta nuevamente.');
+    } finally { setSelecting(false); }
+  }
+
+  function chooseAttachment() {
+    Alert.alert('Adjuntar', '¿Qué quieres enviar?', [
+      { text: 'Foto', onPress: pickPhoto },
+      { text: 'Documento', onPress: pickDocument },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
   }
 
   const canWrite = !!windowInfo.available;
@@ -129,7 +204,16 @@ export default function CustomerChatScreen({ route }) {
               <View key={message.id || `${message.created_at}-${index}`} style={[s.row, outbound ? s.rowOut : s.rowIn]}>
                 <View style={[s.bubble, outbound ? s.bubbleOut : s.bubbleIn]}>
                   <Text style={s.sender}>{outbound ? (ownDriverMessage ? 'Repartidor' : 'Equipo / Diva') : (stop?.customerName || 'Cliente')}</Text>
-                  <Text style={s.messageText}>{message.content || ''}</Text>
+                  {message.type === 'image' && String(message.media_id || '').startsWith('https://') && (
+                    <Image source={{ uri: message.media_id }} style={s.messageImage} resizeMode="cover" />
+                  )}
+                  {message.type === 'document' && String(message.media_id || '').startsWith('https://') ? (
+                    <TouchableOpacity style={s.document} onPress={() => Linking.openURL(message.media_id)} activeOpacity={0.75}>
+                      <Text style={s.documentIcon}>📎</Text><Text style={s.documentName}>{String(message.content || 'Archivo').split('\n')[0].replace(/^📎\s*/, '')}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={s.messageText}>{message.content || ''}</Text>
+                  )}
                   <View style={s.meta}><Text style={s.time}>{formatTime(message.created_at)}</Text>{outbound && <Text style={[s.time, message.status === 'failed' && { color: C.red }]}>{statusLabel(message.status)}</Text>}</View>
                 </View>
               </View>
@@ -139,6 +223,19 @@ export default function CustomerChatScreen({ route }) {
       )}
 
       <View style={s.composer}>
+        {attachment && (
+          <View style={s.attachmentPreview}>
+            {String(attachment.mimeType).startsWith('image/') && String(attachment.data).startsWith('data:')
+              ? <Image source={{ uri: attachment.data }} style={s.attachmentImage} />
+              : <Text style={s.attachmentIcon}>📎</Text>}
+            <View style={{ flex:1 }}><Text style={s.attachmentName} numberOfLines={1}>{attachment.fileName}</Text><Text style={s.attachmentSize}>{attachment.size ? `${Math.round(attachment.size / 1024)} KB` : 'Listo para enviar'}</Text></View>
+            <TouchableOpacity onPress={() => setAttachment(null)}><Text style={s.removeAttachment}>✕</Text></TouchableOpacity>
+          </View>
+        )}
+        <View style={s.composerRow}>
+        <TouchableOpacity style={[s.attach, (!canWrite || sending || selecting) && s.sendDisabled]} onPress={chooseAttachment} disabled={!canWrite || sending || selecting} activeOpacity={0.8}>
+          {selecting ? <ActivityIndicator color={C.text} size="small" /> : <Text style={s.attachText}>📎</Text>}
+        </TouchableOpacity>
         <TextInput
           style={[s.input, !canWrite && s.inputDisabled]}
           value={text}
@@ -149,9 +246,10 @@ export default function CustomerChatScreen({ route }) {
           multiline
           maxLength={1000}
         />
-        <TouchableOpacity style={[s.send, (!canWrite || !text.trim() || sending) && s.sendDisabled]} onPress={send} disabled={!canWrite || !text.trim() || sending} activeOpacity={0.8}>
-          {sending ? <ActivityIndicator color={C.inkOnAccent} /> : <MaterialCommunityIcons name="send" size={20} color={C.inkOnAccent} />}
+        <TouchableOpacity style={[s.send, (!canWrite || (!text.trim() && !attachment) || sending) && s.sendDisabled]} onPress={send} disabled={!canWrite || (!text.trim() && !attachment) || sending} activeOpacity={0.8}>
+          {sending ? <ActivityIndicator color={C.inkOnAccent} /> : <MaterialCommunityIcons name={attachment ? 'upload' : 'send'} size={20} color={C.inkOnAccent} />}
         </TouchableOpacity>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -182,6 +280,10 @@ const s = StyleSheet.create({
   bubbleIn: { backgroundColor: C.card, borderColor: C.border, borderBottomLeftRadius: 3 },
   sender: { color: C.blue, fontSize: 11, fontWeight: '800', marginBottom: 4 },
   messageText: { color: C.text, fontSize: 15, lineHeight: 20 },
+  messageImage: { width: 220, height: 170, maxWidth: '100%', borderRadius: 9, marginBottom: 6, backgroundColor: C.border },
+  document: { flexDirection:'row', alignItems:'center', gap:8, backgroundColor:'#0f172a99', borderRadius:9, padding:10, minWidth:210 },
+  documentIcon: { fontSize:22 },
+  documentName: { color:C.text, fontSize:13, fontWeight:'700', flex:1 },
   meta: { flexDirection: 'row', gap: 7, justifyContent: 'flex-end', marginTop: 5 },
   time: { color: '#cbd5e1', fontSize: 10 },
   errorBox: { backgroundColor: '#3f1d25', borderColor: '#7f1d1d', borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 12 },
@@ -189,7 +291,16 @@ const s = StyleSheet.create({
   empty: { flex: 1, minHeight: 190, alignItems: 'center', justifyContent: 'center', padding: 30 },
   emptyTitle: { color: C.text, fontWeight: '800', fontSize: 16 },
   emptyText: { color: C.muted, textAlign: 'center', marginTop: 6, lineHeight: 18 },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 9, padding: 11, paddingBottom: Platform.OS === 'ios' ? 17 : 11, borderTopWidth: 1, borderTopColor: C.borderSoft, backgroundColor: C.card },
+  composer: { padding: 11, paddingBottom: Platform.OS === 'ios' ? 17 : 11, borderTopWidth: 1, borderTopColor: C.borderSoft, backgroundColor: C.card },
+  composerRow: { flexDirection:'row', alignItems:'flex-end', gap:9 },
+  attachmentPreview: { flexDirection:'row', alignItems:'center', gap:9, marginBottom:8, padding:8, backgroundColor:C.bgSoft, borderRadius:R.md, borderWidth:1, borderColor:C.border },
+  attachmentImage: { width:42, height:42, borderRadius:7 },
+  attachmentIcon: { fontSize:24 },
+  attachmentName: { color:C.text, fontSize:12, fontWeight:'700' },
+  attachmentSize: { color:C.muted, fontSize:10, marginTop:2 },
+  removeAttachment: { color:C.muted, fontSize:18, padding:6 },
+  attach: { width:48, height:48, borderRadius:16, backgroundColor:C.bgSoft, borderWidth:1, borderColor:C.border, alignItems:'center', justifyContent:'center' },
+  attachText: { fontSize:21 },
   input: { flex: 1, maxHeight: 110, minHeight: 48, color: C.text, backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12 },
   inputDisabled: { opacity: 0.55 },
   send: { width: 48, height: 48, borderRadius: 16, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },

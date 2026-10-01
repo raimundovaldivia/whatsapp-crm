@@ -15,6 +15,12 @@ async function sendTextMessage(to, text, config) {
   return serviceFor(config).sendTextMessage(to, text, config);
 }
 
+async function sendMediaMessage(to, media, config) {
+  const service = serviceFor(config);
+  if (typeof service.sendMediaMessage !== 'function') throw new Error('El proveedor de WhatsApp no admite archivos');
+  return service.sendMediaMessage(to, media, config);
+}
+
 function messageId(result) {
   return result?.messageId || result?.key?.id || result?.message?.key?.id || result?.messages?.[0]?.id || null;
 }
@@ -32,4 +38,4 @@ async function configForConversation(orgId, conversation = null) {
   return legacyConfig;
 }
 
-module.exports = { serviceFor, sendTextMessage, messageId, configForConversation };
+module.exports = { serviceFor, sendTextMessage, sendMediaMessage, messageId, configForConversation };

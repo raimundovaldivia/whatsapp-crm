@@ -236,6 +236,13 @@ export async function sendStopChatMessage(routeId, stopKey, text) {
   return res.data;
 }
 
+/** Envía una foto o documento por el chat oficial de una parada. */
+export async function sendStopChatMedia(routeId, stopKey, media) {
+  const client = await getClient();
+  const res = await client.post(`/api/delivery/routes/${routeId}/stops/chat/media`, { stopKey, ...media }, { timeout: 120000 });
+  return res.data;
+}
+
 // Catálogo para venta en ruta ("bandejas extras"). Devuelve { enabled, products }.
 export async function getSellCatalog() {
   const client = await getClient();

@@ -30,6 +30,7 @@ const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
 const deliveryNotifications = require('../services/delivery-notifications');
 const whatsappProvider = require('../services/whatsapp-provider');
+const outboundMedia = require('../services/outbound-media');
 const push = require('../services/push');
 const { attachAttemptHistory } = require('../services/delivery-attempts');
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -1144,6 +1145,58 @@ router.post('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor'
     res.json({ success: true, data: { message, conversation: updatedConversation } });
   } catch (error) {
     console.error('[Delivery chat] Error enviando:', error);
+    res.status(error.status || 500).json({ success: false, error: error.code || error.message, message: error.message });
+  }
+});
+
+router.post('/routes/:id/stops/chat/media', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  try {
+    const stopKey = String(req.body?.stopKey || '');
+    if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
+    const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
+    if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
+
+    const resolved = await conversationForStop(req.orgId, stop);
+    const { window } = resolved;
+    let { conversation } = resolved;
+    let config = await whatsappProvider.configForConversation(req.orgId, conversation);
+    if (!config) return res.status(400).json({ success: false, error: 'WhatsApp no está configurado para esta cuenta' });
+    if (!window.available && config.provider !== 'evolution') {
+      return res.status(409).json({
+        success: false,
+        error: 'WINDOW_EXPIRED',
+        message: 'La ventana de 24 horas está cerrada. El cliente debe escribir primero para recibir archivos.',
+      });
+    }
+    if (!conversation) {
+      conversation = await db.upsertConversation(req.orgId, stop.phone, stop.customerName || stop.customer_name || 'Cliente', config.id || null);
+      config = await whatsappProvider.configForConversation(req.orgId, conversation) || config;
+    }
+
+    const driver = await db.getUserById(req.userId).catch(() => null);
+    const driverName = String(driver?.name || driver?.email || 'Repartidor').replace(/:/g, ' ').slice(0, 80);
+    let sent;
+    try {
+      sent = await outboundMedia.send({
+        orgId: req.orgId,
+        conversation,
+        payload: req.body,
+        config,
+        agentType: `driver:${driverName}`,
+      });
+    } catch (sendErr) {
+      if (sendErr.is24hWindow) {
+        return res.status(409).json({ success: false, error: 'WINDOW_EXPIRED', message: 'La ventana de 24 horas se cerró. El cliente debe escribir primero para recibir archivos.' });
+      }
+      throw sendErr;
+    }
+    await db.setAgentMode(conversation.id, 'human');
+    const updated = await db.getConversationById(conversation.id, req.orgId);
+    io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conversation.id, mode: 'human' });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: sent.message, conversation: updated });
+    res.json({ success: true, data: { message: sent.message, conversation: updated } });
+  } catch (error) {
+    console.error('[Delivery chat] Error enviando archivo:', error.message);
     res.status(error.status || 500).json({ success: false, error: error.code || error.message, message: error.message });
   }
 });

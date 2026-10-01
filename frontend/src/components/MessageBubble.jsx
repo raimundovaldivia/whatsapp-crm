@@ -110,9 +110,22 @@ export default function MessageBubble({ message }) {
                 onClick={() => window.open(mediaUrl(message.media_id), '_blank')}
                 onError={e => { e.target.style.display='none'; }}
               />
+              {message.content && !['📷 [Imagen]', '📷 Imagen', '📷 Foto'].includes(message.content) && (
+                <p style={{ fontSize:'13px', lineHeight:1.4, margin:'6px 7px 2px', color:colors.textPrimary, whiteSpace:'pre-wrap' }}>{message.content}</p>
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 4px 4px' }}>
                 <span style={{ fontSize: '11px', color: colors.textSecondary }}>{time}</span>
               </div>
+            </div>
+          ) : message.type === 'document' && message.media_id ? (
+            <div style={{ padding:'8px 10px 6px', minWidth:'220px' }}>
+              <a href={mediaUrl(message.media_id)} target="_blank" rel="noreferrer" download
+                style={{ display:'flex', alignItems:'center', gap:'9px', color:colors.textPrimary, textDecoration:'none', padding:'8px', borderRadius:'7px', backgroundColor:colors.bgHover }}>
+                <FileText size={22} color={colors.purple} />
+                <span style={{ fontSize:'13px', fontWeight:600, overflowWrap:'anywhere' }}>{String(message.content || '📎 Archivo').split('\n')[0].replace(/^📎\s*/, '')}</span>
+              </a>
+              {String(message.content || '').includes('\n') && <p style={{ margin:'6px 3px 0', fontSize:'12px', color:colors.textSecondary, whiteSpace:'pre-wrap' }}>{String(message.content).split('\n').slice(1).join('\n')}</p>}
+              <div style={{ display:'flex', alignItems:'center', gap:'3px', justifyContent:'flex-end', marginTop:'5px' }}><span style={{ fontSize:'11px', color:colors.textSecondary }}>{time}</span>{isOutbound && <StatusIcon status={message.status} />}</div>
             </div>
           ) : message.type === 'audio' && message.media_id ? (
             /* ── Audio con player ── */

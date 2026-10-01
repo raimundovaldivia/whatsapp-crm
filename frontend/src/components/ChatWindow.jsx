@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
@@ -14,6 +14,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
+  const [attachment, setAttachment] = useState(null);
   const [error, setError] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
@@ -21,6 +22,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   useEffect(() => {
     setMobileActionsOpen(false);
+    setAttachment(null);
   }, [conversation.id]);
 
   // ── Editar contacto ──────────────────────────────────────────────
@@ -230,6 +232,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [sendingTemplate, setSendingTemplate] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const isHumanMode = conversation.agent_mode === 'human';
   const isCoordinating = conversation.agent_mode === 'coordinating';
@@ -486,12 +489,23 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   const handleSend = async () => {
     const text = inputText.trim();
-    if (!text || sending) return;
+    if ((!text && !attachment) || sending) return;
+    const pendingAttachment = attachment;
     setInputText('');
+    setAttachment(null);
     setSending(true);
     setError(null);
     try {
-      await onSendMessage(conversation.id, text);
+      if (pendingAttachment) {
+        await conversationsAPI.sendMedia(conversation.id, {
+          data: pendingAttachment.data,
+          mimeType: pendingAttachment.mimeType,
+          fileName: pendingAttachment.fileName,
+          caption: text,
+        });
+      } else {
+        await onSendMessage(conversation.id, text);
+      }
     } catch (err) {
       const is24h = err.response?.data?.error === 'WINDOW_EXPIRED';
       if (is24h) {
@@ -500,10 +514,39 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         setError('Error enviando el mensaje. Intenta de nuevo.');
       }
       setInputText(text);
+      setAttachment(pendingAttachment);
     } finally {
       setSending(false);
       inputRef.current?.focus();
     }
+  };
+
+  const handleFileSelected = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 6 * 1024 * 1024) {
+      setError('El archivo supera el máximo de 6 MB.');
+      return;
+    }
+    const allowed = [
+      'image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/csv', 'text/plain',
+    ];
+    if (!allowed.includes(file.type)) {
+      setError('Formato no permitido. Usa imágenes, PDF, Word, Excel, CSV o TXT.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAttachment({ data: reader.result, mimeType: file.type, fileName: file.name, size: file.size });
+      setError(null);
+      inputRef.current?.focus();
+    };
+    reader.onerror = () => setError('No se pudo leer el archivo.');
+    reader.readAsDataURL(file);
   };
 
   const handleKeyDown = (e) => {
@@ -1781,14 +1824,39 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
       {/* Input */}
       <div style={{
-        padding: '10px 16px',
+        padding: '8px 16px 10px',
         backgroundColor: colors.bgPanel,
-        display: 'flex',
-        alignItems: 'flex-end',
-        gap: '10px',
         borderTop: `1px solid ${colors.border}`,
       }}>
-        <textarea
+        {attachment && (
+          <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'7px 9px', marginBottom:'8px', borderRadius:'9px', backgroundColor:colors.bgInput, border:`1px solid ${colors.border}` }}>
+            {attachment.mimeType.startsWith('image/')
+              ? <img src={attachment.data} alt="Vista previa" style={{ width:'44px', height:'44px', borderRadius:'7px', objectFit:'cover' }} />
+              : <FileText size={25} color={colors.infoSoft || colors.green} />}
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ color:colors.textPrimary, fontSize:'12px', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{attachment.fileName}</div>
+              <div style={{ color:colors.textMuted, fontSize:'10px', marginTop:'2px' }}>{(attachment.size / 1024).toFixed(0)} KB · agrega una descripción si quieres</div>
+            </div>
+            <button onClick={() => setAttachment(null)} aria-label="Quitar archivo" style={{ border:'none', background:'transparent', color:colors.textMuted, cursor:'pointer', padding:'5px', display:'flex' }}><X size={17} /></button>
+          </div>
+        )}
+        <div style={{ display:'flex', alignItems:'flex-end', gap:'9px' }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
+            onChange={handleFileSelected}
+            style={{ display:'none' }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending}
+            aria-label="Adjuntar foto o archivo"
+            title="Adjuntar foto o archivo (máx. 6 MB)"
+            style={{ width:'42px', height:'42px', borderRadius:'50%', border:`1px solid ${colors.border}`, backgroundColor:colors.bgInput, color:colors.textSecondary, cursor:sending?'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            <Paperclip size={18} />
+          </button>
+          <textarea
           ref={inputRef}
           value={inputText}
           onChange={e => setInputText(e.target.value)}
@@ -1813,7 +1881,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             e.target.style.height = 'auto';
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
-        />
+          />
         <style>{`
           @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
           @keyframes typing-dot {
@@ -1823,9 +1891,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         `}</style>
         <button
           onClick={handleSend}
-          disabled={!inputText.trim() || sending}
+          disabled={(!inputText.trim() && !attachment) || sending}
           style={{
-            backgroundColor: inputText.trim() ? colors.green : colors.bgHover,
+            backgroundColor: (inputText.trim() || attachment) ? colors.green : colors.bgHover,
             color: 'white',
             width: '42px',
             height: '42px',
@@ -1836,11 +1904,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             transition: 'background 0.2s',
             flexShrink: 0,
             border: 'none',
-            cursor: inputText.trim() ? 'pointer' : 'default',
+            cursor: (inputText.trim() || attachment) ? 'pointer' : 'default',
           }}
         >
-          <Send size={18} />
+          {sending ? <Loader size={18} style={{ animation:'spin 1s linear infinite' }} /> : attachment ? <ImageIcon size={18} /> : <Send size={18} />}
         </button>
+        </div>
       </div>
 
       {/* ── Modal Análisis de conversación ── */}

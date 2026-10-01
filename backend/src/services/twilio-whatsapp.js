@@ -33,6 +33,20 @@ async function sendTextMessage(to, text, config) {
   return { messageId: message.sid, status: message.status };
 }
 
+async function sendMediaMessage(to, media, config) {
+  if (!media.mediaUrl) {
+    throw new Error('Twilio requiere almacenamiento público para enviar archivos');
+  }
+  const client = twilio(config.twilio_account_sid, config.twilio_auth_token);
+  const message = await client.messages.create({
+    from: `whatsapp:${config.twilio_phone_number}`,
+    to: `whatsapp:${String(to).startsWith('+') ? to : '+' + to}`,
+    ...(media.caption ? { body: media.caption } : {}),
+    mediaUrl: [media.mediaUrl],
+  });
+  return { messageId: message.sid, status: message.status };
+}
+
 /**
  * Parsea el body de un webhook de Twilio (application/x-www-form-urlencoded).
  * @param {object} body - req.body ya parseado por express.urlencoded
@@ -63,4 +77,4 @@ function validateSignature(req, authToken) {
   } catch { return false; }
 }
 
-module.exports = { sendTextMessage, parseWebhookMessage, validateSignature };
+module.exports = { sendTextMessage, sendMediaMessage, parseWebhookMessage, validateSignature };

@@ -218,10 +218,18 @@ test('el chat del repartidor usa solo el cliente de su parada y registra quién 
     sendTextMessage: async (phone) => { sentTo = phone; return { messages: [{ id: 'wamid.driver' }] }; },
     messageId: result => result.messages[0].id,
   };
+  const mediaSends = [];
+  const outboundMedia = {
+    send: async value => {
+      mediaSends.push(value);
+      return { message: { id: 3, direction: 'outbound', type: 'image', agent_type: value.agentType } };
+    },
+  };
   const router = load('src/routes/delivery.js', {
     '../db/database': database,
     '../services/delivery-notifications': notifications,
     '../services/whatsapp-provider': provider,
+    '../services/outbound-media': outboundMedia,
     '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
   });
   const base = { orgId: 3, userId: 9, role: 'repartidor', params: { id: '5' } };
@@ -242,4 +250,16 @@ test('el chat del repartidor usa solo el cliente de su parada y registra quién 
   await handler(router, 'post', '/routes/5/stops/chat')({ ...base, body: { stopKey: 'bot_99', text: 'No debe salir' } }, res);
   assert.equal(res.code, 404);
   assert.equal(saved.length, 1);
+
+  res = response();
+  await handler(router, 'post', '/routes/5/stops/chat/media')({ ...base, body: { stopKey: 'bot_17', data: 'Zm90bw==', mimeType: 'image/jpeg', fileName: 'foto.jpg' } }, res);
+  assert.equal(res.code, 200);
+  assert.equal(mediaSends.length, 1);
+  assert.equal(mediaSends[0].conversation.phone_number, '56911112222');
+  assert.equal(mediaSends[0].agentType, 'driver:Pedro Ruta');
+
+  res = response();
+  await handler(router, 'post', '/routes/5/stops/chat/media')({ ...base, body: { stopKey: 'bot_99', data: 'Zm90bw==', mimeType: 'image/jpeg', fileName: 'foto.jpg' } }, res);
+  assert.equal(res.code, 404);
+  assert.equal(mediaSends.length, 1);
 });

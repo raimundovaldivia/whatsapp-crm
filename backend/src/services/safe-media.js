@@ -40,7 +40,7 @@ async function downloadMedia(value, config = {}) {
       continue;
     }
     const contentType = resp.headers['content-type'] || 'application/octet-stream';
-    if (!/^(image\/(jpeg|png|gif|webp)|audio\/|video\/|application\/pdf)/i.test(contentType)) {
+    if (!/^(image\/(jpeg|png|gif|webp)|audio\/|video\/|application\/(pdf|msword|vnd\.ms-excel|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|spreadsheetml\.sheet))|text\/(plain|csv))/i.test(contentType)) {
       throw new Error('Formato multimedia no permitido');
     }
     return { data: resp.data, contentType };

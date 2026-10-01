@@ -94,6 +94,42 @@ async function sendTextMessage(to, text, config) {
   }
 }
 
+async function sendMediaMessage(to, media, config) {
+  const { phone_number_id } = config;
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey) throw new Error('No hay Kapso API Key disponible');
+  const type = media.type === 'image' ? 'image' : 'document';
+  let uploadedMediaId = null;
+  if (!media.mediaUrl) {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('file', new Blob([media.buffer], { type: media.mimeType }), media.fileName);
+    const upload = await axios.post(`${BASE_URL}/${API_VER}/${phone_number_id}/media`, form, {
+      headers: { 'X-API-Key': apiKey },
+    });
+    uploadedMediaId = upload.data?.id;
+    if (!uploadedMediaId) throw new Error('WhatsApp no devolvió el identificador del archivo');
+  }
+  const content = media.mediaUrl ? { link: media.mediaUrl } : { id: uploadedMediaId };
+  if (media.caption) content.caption = media.caption;
+  if (type === 'document' && media.fileName) content.filename = media.fileName;
+  try {
+    const response = await axios.post(
+      `${BASE_URL}/${API_VER}/${phone_number_id}/messages`,
+      { messaging_product: 'whatsapp', recipient_type: 'individual', to, type, [type]: content },
+      { headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } }
+    );
+    return { ...response.data, uploadedMediaId };
+  } catch (err) {
+    if (is24hWindowError(err)) {
+      const windowErr = new Error('WINDOW_EXPIRED: ventana de 24 horas expirada');
+      windowErr.is24hWindow = true;
+      throw windowErr;
+    }
+    throw err;
+  }
+}
+
 /**
  * Marca un mensaje como leído via Kapso.
  * @param {string} messageId - WAMID del mensaje
@@ -530,4 +566,4 @@ async function getMessageStatus(messageId, config) {
   return parseStatusUpdate({ message: data }, `whatsapp.message.${status}`);
 }
 
-module.exports = { getMessageStatus, sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createBroadcast, addBroadcastRecipients, startBroadcast, createTemplate, getMediaUrl, downloadMedia };
+module.exports = { getMessageStatus, sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createBroadcast, addBroadcastRecipients, startBroadcast, createTemplate, getMediaUrl, downloadMedia };

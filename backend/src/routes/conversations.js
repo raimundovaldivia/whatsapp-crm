@@ -6,6 +6,7 @@ const whatsappService = require('../services/whatsapp');
 const twilioService   = require('../services/twilio-whatsapp');
 const kapsoService    = require('../services/kapso-whatsapp');
 const whatsappProvider = require('../services/whatsapp-provider');
+const outboundMedia = require('../services/outbound-media');
 const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
@@ -123,6 +124,37 @@ router.post('/:id/messages', async (req, res) => {
   } catch (err) {
     console.error('[Conv] Error enviando:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** POST /api/conversations/:id/media — foto o documento desde el CRM. */
+router.post('/:id/media', async (req, res) => {
+  try {
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    const wc = await whatsappProvider.configForConversation(req.orgId, conv);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+    let sent;
+    try {
+      sent = await outboundMedia.send({ orgId: req.orgId, conversation: conv, payload: req.body, config: wc });
+    } catch (sendErr) {
+      if (sendErr.is24hWindow) {
+        return res.status(409).json({
+          success: false,
+          error: 'WINDOW_EXPIRED',
+          message: 'La ventana de 24 horas expiró. El cliente debe escribir primero para recibir archivos.',
+        });
+      }
+      throw sendErr;
+    }
+    await db.setAgentMode(conv.id, 'human');
+    const updated = await db.getConversationById(conv.id, req.orgId);
+    io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode: 'human' });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: sent.message, conversation: updated });
+    res.json({ success: true, data: sent.message });
+  } catch (err) {
+    console.error('[Conv] Error enviando archivo:', err.message);
+    res.status(err.status || 500).json({ success: false, error: err.code || err.message, message: err.message });
   }
 });
 
@@ -1094,8 +1126,6 @@ router.get('/media/:mediaRef', async (req, res) => {
     const mediaCache = require('../services/media-cache');
     const axios = require('axios');
     const whatsappConfig = await db.getWhatsappConfig(req.orgId);
-    const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
 
     // El valor guardado en media_id puede ser una URL directa de Kapso
     // o un WhatsApp media ID. Descodificar base64url si aplica.
@@ -1109,9 +1139,11 @@ router.get('/media/:mediaRef', async (req, res) => {
     } catch (_) {}
 
     const { rows } = await getPool().query(
-      'SELECT 1 FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.organization_id = $1 AND m.media_id = $2 LIMIT 1',
+      'SELECT m.type, m.content FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.organization_id = $1 AND m.media_id = $2 LIMIT 1',
       [req.orgId, ref]);
     if (!rows.length) return res.status(404).json({ error: 'Media no disponible' });
+    const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
+    if (!ref.startsWith('https://') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
     const cacheKey = req.orgId + ':' + ref;
     const cached = mediaCache.get(cacheKey);
     let data, contentType;
@@ -1124,6 +1156,10 @@ router.get('/media/:mediaRef', async (req, res) => {
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'private, max-age=3600');
+    if (rows[0].type === 'document') {
+      const filename = String(rows[0].content || 'archivo').split('\n')[0].replace(/^📎\s*/, '').replace(/["\r\n]/g, '').slice(0, 120) || 'archivo';
+      res.set('Content-Disposition', `inline; filename="${filename}"`);
+    }
     res.send(Buffer.from(data));
   } catch (err) {
     console.error('[Media proxy] Error:', err.message, '| status:', err.response?.status, '| ref:', err.config?.url?.slice(0,80));

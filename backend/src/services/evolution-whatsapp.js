@@ -31,6 +31,20 @@ async function sendTextMessage(to, text, config) {
   return { ...response.data, messageId };
 }
 
+async function sendMediaMessage(to, media, config) {
+  const { instance } = credentials(config);
+  const response = await client(config).post(`/message/sendMedia/${encodeURIComponent(instance)}`, {
+    number: String(to).replace(/\D/g, ''),
+    mediatype: media.type === 'image' ? 'image' : 'document',
+    mimetype: media.mimeType,
+    caption: media.caption || '',
+    media: media.mediaUrl || media.buffer?.toString('base64'),
+    fileName: media.fileName,
+  });
+  const messageId = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id || null;
+  return { ...response.data, messageId };
+}
+
 async function markAsRead(messageId, remoteJid, config) {
   if (!messageId || !remoteJid) return;
   const { instance } = credentials(config);
@@ -136,6 +150,6 @@ async function configureWebhook(config, webhookUrl) {
 }
 
 module.exports = {
-  sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
+  sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
   getConnectionState, createInstance, getConnectQr, configureWebhook,
 };

@@ -49,6 +49,7 @@ export const conversationsAPI = {
   getAll: () => api.get('/conversations').then(r => r.data.data),
   getMessages: (id) => api.get(`/conversations/${id}/messages`).then(r => r.data.data),
   sendMessage: (id, text) => api.post(`/conversations/${id}/messages`, { text }).then(r => r.data.data),
+  sendMedia: (id, data) => api.post(`/conversations/${id}/media`, data, { timeout: 120000 }).then(r => r.data.data),
   setAgentMode: (id, mode) => api.patch(`/conversations/${id}/agent-mode`, { mode }).then(r => r.data.data),
   markAsRead: (id) => api.patch(`/conversations/${id}/read`),
   getOrders: (id) => api.get(`/conversations/${id}/orders`).then(r => r.data.data),
