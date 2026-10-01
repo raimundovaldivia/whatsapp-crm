@@ -1485,7 +1485,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     const bodyComp = getBodyComponent(selTpl);
     const variableNumbers = getTemplateVariables(bodyComp?.text || '');
 
-    const entries = Array.from(selected).map(phone => {
+    // El modo prueba valida UN mensaje. Antes se conservaba toda la audiencia
+    // seleccionada y cada variante se redirigía al mismo teléfono de prueba,
+    // provocando cientos de copias y una pantalla cargando durante minutos.
+    const selectedPhones = Array.from(selected);
+    const phonesToPrepare = testMode ? selectedPhones.slice(0, 1) : selectedPhones;
+    const entries = phonesToPrepare.map(phone => {
       const contact = contacts.find(c => c.phone === phone);
       const nombre = toTitleCase((contact?.name || 'Cliente').split(' ')[0]); // primer nombre, formateado
 
@@ -1566,6 +1571,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       // interrupción no oculta varios resultados dentro de un lote pendiente.
       const CHUNK = 1;
       let sent = 0, failed = 0, skipped = 0;
+      const failureReasons = [];
       setSendProgress({ done: 0, total: items.length });
       for (let i = 0; i < items.length; i += CHUNK) {
         const part = items.slice(i, i + CHUNK);
@@ -1575,6 +1581,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           sent    += r.filter(x => x.success).length;
           skipped += r.filter(x => x.skipped).length;
           failed  += r.filter(x => !x.success && !x.skipped).length;
+          r.filter(x => !x.success).forEach(result => {
+            const reason = result.error || (result.skipped ? 'Envío omitido' : 'WhatsApp rechazó el mensaje');
+            if (!failureReasons.includes(reason)) failureReasons.push(reason);
+          });
         } catch (e) {
           campaignStatus = 'interrupted';
           const reason = e.response?.data?.error || (e.code === 'ECONNABORTED'
@@ -1584,20 +1594,27 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         }
         setSendProgress({ done: Math.min(i + CHUNK, items.length), total: items.length });
       }
-      setResults({ sent, failed, skipped });
-      showToast(`✅ ${sent} aceptados por WhatsApp${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
-      setReviewPlan(null);
+      setResults({ sent, failed, skipped, reasons: failureReasons });
+      if (sent === 0) {
+        campaignStatus = 'interrupted';
+        showToast(`No se envió ningún mensaje: ${failureReasons[0] || 'WhatsApp no confirmó el envío'}`, 'error');
+      } else {
+        showToast(`✅ ${sent} aceptados por WhatsApp${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
+        setReviewPlan(null);
+      }
     } catch (err) {
       campaignStatus = 'interrupted';
       showToast('Error: ' + (err.response?.data?.error || err.message), 'error');
     } finally {
+      // Liberar la interfaz inmediatamente. El cierre auditable y la recarga
+      // del historial pueden continuar sin dejar el botón girando.
+      setSending(false);
+      sendingRef.current = false;
+      setSendProgress({ done: 0, total: 0 });
       if (campaignId) {
         await api.post(`/reengagement/campaigns/${campaignId}/finish`, { status: campaignStatus }).catch(() => {});
       }
       await loadCampaigns();
-      setSending(false);
-      sendingRef.current = false;
-      setSendProgress({ done: 0, total: 0 });
     }
   }
 
@@ -1778,7 +1795,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           opacity: sending ? 0.7 : 1,
         }}>
           <Send size={14} />
-          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : `Revisar envío a ${selected.size}`}
+          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : (testMode ? 'Revisar 1 mensaje de prueba' : `Revisar envío a ${selected.size}`)}
         </button>
       </div>
 
@@ -1793,7 +1810,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             style={{ padding: '4px 10px', borderRadius: colors.radiusSm, border: `1px solid ${colors.yellow}66`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '12px', width: '160px', outline: 'none' }}
           />
           {TEST_PHONE
-            ? <span style={{ fontSize: '12px', color: colors.yellow }}>Todos los mensajes irán a <strong>{TEST_PHONE}</strong></span>
+            ? <span style={{ fontSize: '12px', color: colors.yellow }}>Se enviará una sola muestra a <strong>{TEST_PHONE}</strong></span>
             : <span style={{ fontSize: '12px', color: colors.red, fontWeight: 600 }}>⚠️ Ingresa un número para activar el modo prueba</span>
           }
         </div>
@@ -1801,9 +1818,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
       {/* Resultado */}
       {results && (
-        <div style={{ padding: '10px 20px', backgroundColor: `${colors.green}18`, borderBottom: `1px solid ${colors.green}33`, display: 'flex', gap: '16px', alignItems: 'center' }}>
-          <span style={{ color: colors.green, fontWeight: 700, fontSize: '13px' }}>✅ {results.sent} aceptados por WhatsApp</span>
+        <div style={{ padding: '10px 20px', backgroundColor: results.sent ? `${colors.green}18` : `${colors.red}14`, borderBottom: `1px solid ${results.sent ? colors.green : colors.red}33`, display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '✅' : '⚠️'} {results.sent} aceptados por WhatsApp</span>
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
+          {results.skipped > 0 && <span style={{ color: colors.yellow, fontWeight: 600, fontSize: '13px' }}>⏭ {results.skipped} omitidos</span>}
+          {results.reasons?.length > 0 && <span style={{ color: colors.textSecondary, fontSize: '12px' }}>{results.reasons.join(' · ')}</span>}
         </div>
       )}
 
@@ -2012,7 +2031,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             </div>
             <div style={{ whiteSpace: 'pre-wrap', background: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '10px 12px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.5 }}>{text}</div>
             <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
-              Así llega el mensaje; todas las variables cambian según cada cliente.{testMode && TEST_PHONE ? ` En modo prueba todos van a ${TEST_PHONE}.` : ''}
+              Así llega el mensaje; todas las variables cambian según cada cliente.{testMode && TEST_PHONE ? ` En modo prueba se enviará una sola muestra a ${TEST_PHONE}.` : ''}
             </div>
           </div>
         );
