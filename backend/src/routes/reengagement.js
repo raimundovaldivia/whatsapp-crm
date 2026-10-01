@@ -1908,32 +1908,17 @@ router.post('/send-bulk', async (req, res) => {
     return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
   }
 
-  const templateItems = items.filter(item => item.templateName);
-  let templatesByName = new Map();
-  if (templateItems.length) {
-    try {
-      const kapsoService = require('../services/kapso-whatsapp');
-      const templates = await kapsoService.getTemplates(wc);
-      templatesByName = new Map(templates.map(template => [template.name, template]));
-    } catch (err) {
-      const failure = describeBroadcastError(err);
-      await Promise.all(items.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
-        status: 'failed', errorCode: failure.code, errorMessage: failure.message, errorDetail: failure.detail,
-      })));
-      return res.status(502).json({ success: false, error: `No se pudieron validar los templates: ${err.message}` });
-    }
+  const marketingPermitted = await require('../services/commercial').permitted(req.orgId, 'marketing');
+  if (!marketingPermitted) {
+    const results = items.map(item => ({ phone: item.phone, success: false, error: 'Contrato no disponible' }));
+    await Promise.all(items.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
+      status: 'failed', errorMessage: 'Contrato no disponible',
+    })));
+    return res.json({ success: true, sent: 0, skipped: 0, failed: results.length, results });
   }
 
   const results = [];
   for (const item of items) {
-    if (!await require('../services/commercial').permitted(req.orgId,'marketing')) {
-      const result = { phone: item.phone, success: false, error: 'Contrato no disponible' };
-      await recordBroadcastRecipient(req.orgId, campaignId, item, {
-        status: 'failed', errorMessage: result.error,
-      });
-      results.push(result);
-      continue;
-    }
     // Normalizar teléfono: con código de país, sin "+"
     item.phone = db.normalizePhone(item.phone);
     let acceptedByProvider = false;
@@ -1971,12 +1956,10 @@ router.post('/send-bulk', async (req, res) => {
 
       if (isTemplate) {
         const kapsoService = require('../services/kapso-whatsapp');
-        const template = templatesByName.get(item.templateName);
-        if (!template) throw new Error(`Template ${item.templateName} no encontrado`);
-        const body = getBodyComponent(template)?.text || '';
-        const missing = getMissingBodyParameters(body, item.components || []);
-        if (missing.length) throw new Error(`Faltan valores para ${missing.map(number => `{{${number}}}`).join(', ')}`);
-        const rendered = renderTemplateFromComponents(body, item.components || []);
+        // La interfaz ya obtuvo el template aprobado para construir components.
+        // Consultarlo otra vez antes de cada envío duplicaba una llamada externa
+        // lenta. Meta valida nombre, idioma y variables al aceptar el mensaje.
+        const rendered = String(item.previewText || '').trim();
         sentResult = await kapsoService.sendTemplate(
           item.phone, item.templateName, item.languageCode || 'es', item.components || [], wc
         );

@@ -1567,16 +1567,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         testPhone: reviewPlan.testPhone || null,
       });
       campaignId = created.data.campaign.id;
-      // Procesar de uno en uno: el contador refleja aceptaciones reales y una
-      // interrupción no oculta varios resultados dentro de un lote pendiente.
-      const CHUNK = 1;
+      // Lotes pequeños reducen las consultas repetidas al proveedor y mantienen
+      // un avance frecuente sin arriesgar toda la campaña en una sola petición.
+      const CHUNK = reviewPlan.testMode ? 1 : 3;
       let sent = 0, failed = 0, skipped = 0;
       const failureReasons = [];
       setSendProgress({ done: 0, total: items.length });
       for (let i = 0; i < items.length; i += CHUNK) {
         const part = items.slice(i, i + CHUNK);
         try {
-          const res = await api.post('/reengagement/send-bulk', { items: part, campaignId }, { timeout: 45000 });
+          const res = await api.post('/reengagement/send-bulk', { items: part, campaignId }, { timeout: 90000 });
           const r = res.data.results || [];
           sent    += r.filter(x => x.success).length;
           skipped += r.filter(x => x.skipped).length;
@@ -1587,10 +1587,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           });
         } catch (e) {
           campaignStatus = 'interrupted';
-          const reason = e.response?.data?.error || (e.code === 'ECONNABORTED'
-            ? 'WhatsApp no respondió dentro del tiempo esperado'
+          const timedOut = e.code === 'ECONNABORTED';
+          const reason = e.response?.data?.error || (timedOut
+            ? 'La app dejó de esperar, pero WhatsApp todavía puede haber aceptado el mensaje. Revisa el historial antes de reenviar.'
             : e.message);
-          throw new Error(`El envío se detuvo en ${i}/${items.length} para evitar duplicados. ${reason}`);
+          const sendError = new Error(`El envío se detuvo en ${i}/${items.length} para evitar duplicados. ${reason}`);
+          sendError.deliveryUnconfirmed = timedOut;
+          sendError.pendingCount = part.length;
+          throw sendError;
         }
         setSendProgress({ done: Math.min(i + CHUNK, items.length), total: items.length });
       }
@@ -1605,7 +1609,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } catch (err) {
       campaignStatus = 'interrupted';
       const reason = err.response?.data?.error || err.message || 'No se pudo confirmar el envío con WhatsApp';
-      setResults({ sent: 0, failed: 1, skipped: 0, reasons: [reason] });
+      setResults({
+        sent: 0,
+        failed: err.deliveryUnconfirmed ? 0 : 1,
+        skipped: 0,
+        pending: err.deliveryUnconfirmed ? (err.pendingCount || 1) : 0,
+        reasons: [reason],
+      });
       showToast('Error: ' + reason, 'error');
     } finally {
       // Liberar la interfaz inmediatamente. El cierre auditable y la recarga
@@ -1824,6 +1834,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '✅' : '⚠️'} {results.sent} aceptados por WhatsApp</span>
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
           {results.skipped > 0 && <span style={{ color: colors.yellow, fontWeight: 600, fontSize: '13px' }}>⏭ {results.skipped} omitidos</span>}
+          {results.pending > 0 && <span style={{ color: colors.yellow, fontWeight: 700, fontSize: '13px' }}>⏳ {results.pending} por confirmar</span>}
           {results.reasons?.length > 0 && <span style={{ color: colors.textSecondary, fontSize: '12px' }}>{results.reasons.join(' · ')}</span>}
         </div>
       )}
