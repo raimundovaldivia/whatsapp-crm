@@ -182,6 +182,118 @@ test('la cantidad promocional elegida después conserva fecha y precio en vez de
   assert.equal(savedDraft.items[0].locked_quote, true);
 });
 
+test('una opción promocional exacta entra al pedido sin escalar a humano', async () => {
+  let escalationChecks = 0;
+  let savedDraft = null;
+  const promoText = `[Template: promocion_general_entrega_mismo_dia]
+
+🥚✨ ¡Tenemos promos Oscar! | ⏰ ¡Hoy extendimos el plazo para realizar pedidos hasta las 14:30 AM! para recibir hoy | 📅 Promoción válida hasta el sábado 03/10/2026, inclusive, para pedidos con entrega hasta ese día. | 🥚 Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | 100 unidades $37.000 | 🥚 XL: 30 unidades $12.000 | 60 unidades $23.000 | 90 unidades $34.000 | 🫒 Aceitunas de 500 g: lleva 2 envases, paga el primero a precio normal y recibe 50% de descuento en el segundo. | 🧀 Queso de cabra 900 g $15.000 | 🚚 Despacho gratis en compras desde $10.000 | Promoción sujeta a disponibilidad de stock.`;
+  const db = {
+    getConversationById: async () => ({ id: 19, organization_id: 1, phone_number: '56919191919', contact_name: 'Oscar', pipeline_state: 'template_sent', agent_mode: 'ai' }),
+    getLastMessages: async () => [{ direction: 'outbound', content: promoText, created_at: '2026-10-01T13:05:00-03:00' }],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Oscar', address1: 'Dirección 123', city: 'Coquimbo', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => [{ id: 3, title: 'Caja 100 Huevos Jumbo', price: 45000, active: true }],
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    updatePipelineState: async (_id, state, draft) => { if (state === 'collecting_order') savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './agents/orchestrator': {
+      checkEscalation: async () => { escalationChecks++; return { escalate: true, urgency: 'medium', reason: 'incorrecto' }; },
+      classifyIntent: async () => ({ intent: 'unknown', confidence: 0.1 }),
+    },
+    './agents/orders': {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => draft,
+      generateOrderResponse: async () => '¡Listo! 100 Jumbo a $37.000. ¿Todo correcto?',
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => true,
+      missingFields: () => [],
+    },
+    './order-pricing': require('../src/services/order-pricing'),
+    './order-quote': require('../src/services/order-quote'),
+    './scheduled-orders': {
+      isFutureOrderIntent: scheduled.isFutureOrderIntent,
+      isSoftFutureIntent: scheduled.isSoftFutureIntent,
+      extractScheduledOrderData: async () => null,
+      formatDateEs: value => value,
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 19, 'Quiero 100 jumbo');
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(escalationChecks, 0);
+  assert.equal(savedDraft.items[0].price, 37000);
+  assert.equal(savedDraft.items[0].locked_quote, true);
+  assert.equal(savedDraft.total, 37000);
+  assert.match(result.response, /100 Jumbo.*37\.000/i);
+});
+
+test('una preferencia de frescura se conserva como nota del pedido promocional', async () => {
+  let savedDraft = null;
+  const existingDraft = {
+    customer_name: 'Oscar',
+    address: 'Dirección 123',
+    city: 'Coquimbo',
+    items: [{ product_name: '100 Jumbo', quantity: 1, price: 37000, locked_quote: true, promotion_offer: true }],
+    promotion: { active: true },
+  };
+  const db = {
+    getConversationById: async () => ({ id: 20, organization_id: 1, phone_number: '56920202020', contact_name: 'Oscar', pipeline_state: 'collecting_order', agent_mode: 'ai' }),
+    getLastMessages: async () => [],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Oscar', address1: 'Dirección 123', city: 'Coquimbo', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => [{ id: 3, title: 'Caja 100 Huevos Jumbo', price: 45000, active: true }],
+    getOrderDraft: async () => existingDraft,
+    getActiveOrderForBot: async () => null,
+    updatePipelineState: async (_id, state, draft) => { if (state === 'collecting_order') savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './agents/orchestrator': {
+      checkEscalation: async () => ({ escalate: false }),
+      classifyIntent: async () => ({ intent: 'order', confidence: 1 }),
+    },
+    './agents/orders': {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => ({ ...draft }),
+      generateOrderResponse: async () => 'Claro, anoté que los quieres bien frescos. ¿Todo correcto?',
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => true,
+      missingFields: () => [],
+    },
+    './order-pricing': require('../src/services/order-pricing'),
+    './order-quote': require('../src/services/order-quote'),
+    './scheduled-orders': {
+      isFutureOrderIntent: scheduled.isFutureOrderIntent,
+      isSoftFutureIntent: scheduled.isSoftFutureIntent,
+      extractScheduledOrderData: async () => null,
+      formatDateEs: value => value,
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 20, 'Pero que estén bien frescos por fa');
+  assert.equal(result.newState, 'collecting_order');
+  assert.match(savedDraft.notes, /productos bien frescos/i);
+  assert.match(result.response, /bien frescos/i);
+});
+
 test('pipeline agenda la fecha respondida tras decir que aún queda stock sin escalar a humano', async () => {
   let scheduledOrder = null;
   let state = null;

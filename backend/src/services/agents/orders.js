@@ -140,7 +140,7 @@ Campos posibles:
 - city: ciudad de envío
 - region: región o provincia si la menciona
 - customer_phone: teléfono si el cliente lo menciona explícitamente
-- notes: instrucciones especiales de entrega si las hay (ej: "dejar en conserjería", "tocar timbre 2")
+- notes: instrucciones especiales de entrega o preferencias del producto si las hay (ej: "dejar en conserjería", "tocar timbre 2", "que los huevos estén bien frescos")
 - delivery_date: fecha solicitada para la entrega en formato YYYY-MM-DD. Hoy es ${new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' })}; convierte "mañana", días de la semana y fechas relativas. Omítelo si no pidió una fecha.
 - discount_pct: porcentaje de descuento SOLO si el Agente lo ofreció explícitamente Y el cliente lo aceptó (ej: 5, 7 o 10). Si no hubo descuento, omite el campo.
 

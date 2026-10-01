@@ -27,6 +27,20 @@ function EDITABLE_OR_ACTIVE(status) {
   return ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar', 'en_camino'].includes(status);
 }
 
+function preserveFreshnessPreference(draft, message) {
+  const text = String(message || '');
+  const asksForFreshness = /\b(?:que\s+)?(?:est[eé]n|sean|vengan)\s+(?:(?:bien|muy)\s+)?fresc[oa]s?\b/i.test(text)
+    || /\b(?:bien|muy)\s+fresc[oa]s?\b/i.test(text);
+  if (!asksForFreshness) return draft;
+
+  const note = 'Cliente solicita productos bien frescos.';
+  const current = String(draft?.notes || '').trim();
+  if (!current.toLocaleLowerCase('es-CL').includes('productos bien frescos')) {
+    draft.notes = [current, note].filter(Boolean).join(' ');
+  }
+  return draft;
+}
+
 /**
  * Procesa un mensaje entrante y genera la respuesta adecuada
  * @returns {{ response: string, agentType: string, newState: string }}
@@ -691,6 +705,25 @@ REGLAS ABSOLUTAS:
     L.agent('sales', 0);
     L.step('promotion_schedule_question', `${promotionContext.templateName} active=${promotionContext.active}`);
     return { response, agentType: 'sales', newState: promotionContext.active ? 'interested' : 'exploring' };
+  }
+
+  // Una presentación exacta de una promoción activa es una intención de
+  // compra inequívoca. Resolverla antes del clasificador y del agente de
+  // escalación evita que respuestas breves como "Quiero 100 jumbo" terminen
+  // derivadas a una persona aunque el template ya contiene producto y precio.
+  const chosenImmediatePromotion = promotions.selectedOffer(userMessage, promotionContext);
+  if (chosenImmediatePromotion && !isFutureOrderIntent(userMessage)) {
+    const promoDraft = {
+      ...(orderDraft || {}),
+      items: [promotions.offerOrderItem(chosenImmediatePromotion)],
+      promotion: promotions.snapshot(promotionContext),
+    };
+    L.step('immediate_promo_order', `${chosenImmediatePromotion.label} $${chosenImmediatePromotion.price}`);
+    L.agent('orders', 0);
+    return handleOrderCollection(
+      orgId, conversationId, conversation, userMessage, history,
+      promoDraft, productosTexto, orderCtx
+    );
   }
 
   // Ya tiene producto porque se lo regalaron: cerrar sin presión y persistir
@@ -1509,7 +1542,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       ...history,
     ];
   }
-  const updatedDraft = await ordersAgent.extractOrderData(extractHistory, orderDraft);
+  const updatedDraft = preserveFreshnessPreference(
+    await ordersAgent.extractOrderData(extractHistory, orderDraft),
+    userMessage
+  );
   if (updatedDraft.delivery_date && !/^\d{4}-\d{2}-\d{2}$/.test(String(updatedDraft.delivery_date))) {
     delete updatedDraft.delivery_date;
   }
