@@ -1570,7 +1570,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       // Lotes pequeños reducen las consultas repetidas al proveedor y mantienen
       // un avance frecuente sin arriesgar toda la campaña en una sola petición.
       const CHUNK = reviewPlan.testMode ? 1 : 3;
-      let sent = 0, failed = 0, skipped = 0;
+      let sent = 0, failed = 0, skipped = 0, pending = 0;
       const failureReasons = [];
       setSendProgress({ done: 0, total: items.length });
       for (let i = 0; i < items.length; i += CHUNK) {
@@ -1580,7 +1580,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           const r = res.data.results || [];
           sent    += r.filter(x => x.success).length;
           skipped += r.filter(x => x.skipped).length;
-          failed  += r.filter(x => !x.success && !x.skipped).length;
+          pending += r.filter(x => x.pending).length;
+          failed  += r.filter(x => !x.success && !x.skipped && !x.pending).length;
           r.filter(x => !x.success).forEach(result => {
             const reason = result.error || (result.skipped ? 'Envío omitido' : 'WhatsApp rechazó el mensaje');
             if (!failureReasons.includes(reason)) failureReasons.push(reason);
@@ -1598,8 +1599,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         }
         setSendProgress({ done: Math.min(i + CHUNK, items.length), total: items.length });
       }
-      setResults({ sent, failed, skipped, reasons: failureReasons });
-      if (sent === 0) {
+      setResults({ sent, failed, skipped, pending, reasons: failureReasons });
+      if (pending > 0) {
+        campaignStatus = 'interrupted';
+        showToast(`⏳ ${pending} mensaje${pending === 1 ? '' : 's'} por confirmar. No reenvíes; revisaremos el estado automáticamente.`);
+        setReviewPlan(null);
+      } else if (sent === 0) {
         campaignStatus = 'interrupted';
         showToast(`No se envió ningún mensaje: ${failureReasons[0] || 'WhatsApp no confirmó el envío'}`, 'error');
       } else {

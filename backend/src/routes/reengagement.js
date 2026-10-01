@@ -115,6 +115,45 @@ async function recordBroadcastRecipient(orgId, campaignId, item, result) {
   );
 }
 
+async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, savedContent, isTemplate }) {
+  const whatsappMessageId = sentResult?.messages?.[0]?.id || null;
+
+  // Estas escrituras no deben mantener la pantalla esperando después de que
+  // WhatsApp ya aceptó el mensaje. El webhook durable también puede reconstruir
+  // el chat si el proceso se reinicia durante esta fase.
+  const auditTasks = [recordBroadcastRecipient(orgId, campaignId, item, {
+    status: 'accepted', whatsappMessageId,
+  })];
+  if (isTemplate) auditTasks.push(markTemplateSent(orgId, item.phone));
+  const auditResults = await Promise.allSettled(auditTasks);
+  auditResults.filter(result => result.status === 'rejected').forEach(result => {
+    console.error('[SendBulk] No se pudo completar la auditoría posterior:', result.reason?.message || result.reason);
+  });
+
+  const bulkCached = analysisCache.get(orgId);
+  const bulkClientData = bulkCached?.data?.find(entry => entry.phone === item.phone);
+  const bulkContactName = bulkClientData?.name ? toTitleCase(bulkClientData.name) : 'Cliente';
+  const bulkConv = await db.upsertConversation(orgId, item.phone, bulkContactName);
+  const convId = bulkConv?.id;
+  if (!convId) return;
+
+  const savedMsg = await db.saveMessage({
+    conversationId: convId,
+    whatsappMessageId: whatsappMessageId || `reeng_${Date.now()}`,
+    content: savedContent,
+    direction: 'outbound',
+    type: isTemplate ? 'template' : 'text',
+    sentBy: 'ai',
+  });
+  await db.updateConversationLastMessage(convId, savedContent);
+  if (isTemplate) {
+    await activateDivaForAutomatedMessage(convId, db);
+    await db.updatePipelineState(convId, 'template_sent');
+  }
+  const updated = await db.getConversationById(convId);
+  if (savedMsg) io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMsg, conversation: updated });
+}
+
 /**
  * Reconstruye en el chat los templates que Meta aceptó pero que no alcanzaron
  * a guardarse localmente (por ejemplo, si Railway reinició el proceso justo
@@ -1978,46 +2017,40 @@ router.post('/send-bulk', async (req, res) => {
         savedContent = item.message;
       }
 
-      // Registrar la aceptación antes de guardar la conversación. Así, si el
-      // guardado visual falla después, la campaña sigue mostrando que Meta sí aceptó.
       acceptedMessageId = sentResult?.messages?.[0]?.id || null;
-      await recordBroadcastRecipient(req.orgId, campaignId, item, {
-        status: 'accepted', whatsappMessageId: acceptedMessageId,
-      });
       acceptedByProvider = true;
-
-      const bulkCached = analysisCache.get(req.orgId);
-      const bulkClientData = bulkCached?.data?.find(x => x.phone === item.phone);
-      const bulkContactName = bulkClientData?.name ? toTitleCase(bulkClientData.name) : 'Cliente';
-      const bulkConv = await db.upsertConversation(req.orgId, item.phone, bulkContactName);
-      const convId = bulkConv?.id;
-
-      if (convId) {
-        const savedMsg = await db.saveMessage({
-          conversationId:    convId,
-          whatsappMessageId: sentResult?.messages?.[0]?.id || `reeng_${Date.now()}`,
-          content:           savedContent,
-          direction:         'outbound',
-          type:              isTemplate ? 'template' : 'text',
-          sentBy:            'ai',
-        });
-        await db.updateConversationLastMessage(convId, savedContent);
-        if (isTemplate) {
-          await activateDivaForAutomatedMessage(convId, db);
-          await db.updatePipelineState(convId, 'template_sent');
-        }
-        const updated = await db.getConversationById(convId);
-        io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updated });
-      }
-
-      // Registrar envío para prevenir duplicados el mismo día
-      if (isTemplate) await markTemplateSent(req.orgId, item.phone);
-
       results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId });
+      setImmediate(() => {
+        finalizeAcceptedBroadcast({
+          orgId: req.orgId,
+          campaignId,
+          item: { ...item },
+          sentResult,
+          savedContent,
+          isTemplate,
+        }).catch(error => {
+          console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado posterior:`, error.message);
+        });
+      });
     } catch (err) {
       if (acceptedByProvider) {
         console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado local:`, err.message);
         results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId, warning: 'Aceptado por WhatsApp; falló el guardado en la conversación' });
+        continue;
+      }
+      const providerTimedOut = err?.code === 'ECONNABORTED'
+        || err?.code === 'ETIMEDOUT'
+        || /timeout/i.test(String(err?.message || ''));
+      if (providerTimedOut) {
+        // Kapso puede aceptar el mensaje y demorar o perder la respuesta HTTP.
+        // El webhook durable confirmará después el estado real. Marcarlo como
+        // fallido induciría al administrador a reenviarlo y duplicarlo.
+        results.push({
+          phone: item.phone,
+          success: false,
+          pending: true,
+          error: 'WhatsApp aún no confirmó el resultado. No reenvíes; el historial se actualizará automáticamente.',
+        });
         continue;
       }
       const failure = describeBroadcastError(err);
@@ -2035,8 +2068,9 @@ router.post('/send-bulk', async (req, res) => {
 
   const sent    = results.filter(r => r.success).length;
   const skipped = results.filter(r => r.skipped).length;
-  const failed  = results.filter(r => !r.success && !r.skipped).length;
-  res.json({ success: true, sent, skipped, failed, results });
+  const pending = results.filter(r => r.pending).length;
+  const failed  = results.filter(r => !r.success && !r.skipped && !r.pending).length;
+  res.json({ success: true, sent, skipped, pending, failed, results });
 });
 
 /* ─────────────────────────────────────────────────────────────────────
