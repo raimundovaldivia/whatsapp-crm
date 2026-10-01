@@ -27,7 +27,33 @@ const {
 router.use(requireAuth, requireRole('owner', 'admin', 'supervisor'));
 
 let io;
-function setSocketIO(socketIO) { io = socketIO; }
+let broadcastRecoveryStarted = false;
+function setSocketIO(socketIO) {
+  io = socketIO;
+  if (broadcastRecoveryStarted) return;
+  broadcastRecoveryStarted = true;
+  const timer = setTimeout(async () => {
+    try {
+      const { rows } = await getPool().query(
+        `SELECT DISTINCT w.organization_id
+           FROM webhook_inbox w
+           LEFT JOIN messages m
+             ON m.whatsapp_message_id = w.payload #>> '{message,id}'
+          WHERE w.provider = 'kapso'
+            AND w.payload #>> '{message,type}' = 'template'
+            AND w.payload #>> '{message,kapso,origin}' = 'cloud_api'
+            AND w.created_at > NOW() - INTERVAL '30 days'
+            AND m.id IS NULL`
+      );
+      for (const row of rows) {
+        await reconcileAcceptedBroadcastMessages(row.organization_id);
+      }
+    } catch (error) {
+      console.warn('[SendBulk] No se pudo ejecutar la recuperación inicial:', error.message);
+    }
+  }, 3000);
+  timer.unref?.();
+}
 
 function describeBroadcastError(err) {
   const data = err?.response?.data;
