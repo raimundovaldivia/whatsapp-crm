@@ -241,14 +241,23 @@ async function notifyAgentsNewMessage(orgId, conversation, messageText) {
 }
 
 /**
- * Avisa que llegó una respuesta mientras una persona conserva el control.
+ * Avisa que llegó una respuesta mientras una persona conserva el control o
+ * mientras Diva está esperando que el equipo resuelva una coordinación.
  * El primer mensaje avisa de inmediato; mensajes consecutivos se agrupan
  * durante unos minutos para no bombardear al administrador.
  */
 async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
   try {
-    if (!conversation?.id || conversation.agent_mode !== 'human') return { sent: false, reason: 'modo_inactivo' };
-    if (isClosingAcknowledgement(messageText)) return { sent: false, reason: 'sin_accion' };
+    const mode = conversation?.agent_mode;
+    if (!conversation?.id || !['human', 'coordinating'].includes(mode)) {
+      return { sent: false, reason: 'modo_inactivo' };
+    }
+    // En modo humano, un agradecimiento simple no requiere interrumpir al
+    // ejecutivo. En coordinación sí se avisa: ese mensaje puede confirmar que
+    // el caso terminó y permite al equipo cerrar la espera pendiente.
+    if (mode === 'human' && isClosingAcknowledgement(messageText)) {
+      return { sent: false, reason: 'sin_accion' };
+    }
     const claimed = await db.claimHumanPendingNotification(conversation.id, 15);
     if (!claimed) return { sent: false, reason: 'aviso_reciente' };
 
@@ -257,9 +266,11 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
     const text = String(messageText || '').slice(0, 300);
     const brief = await getAdminConversationBrief(
       conversation.id,
-      `El chat está en modo humano y el cliente acaba de enviar: “${cleanContextText(text, 220)}”.`
+      mode === 'coordinating'
+        ? `Diva está esperando una gestión del equipo y el cliente acaba de enviar: “${cleanContextText(text, 220)}”. Revisa si el mensaje resuelve el caso o requiere una respuesta.`
+        : `El chat está en modo humano y el cliente acaba de enviar: “${cleanContextText(text, 220)}”.`
     );
-    if (brief.requiresAction === false) return { sent: false, reason: 'sin_accion' };
+    if (mode === 'human' && brief.requiresAction === false) return { sent: false, reason: 'sin_accion' };
     const briefText = formatConversationBrief(brief);
 
     await db.createAdminPendingReply(orgId, conversation.id, clientPhone, briefText);
@@ -267,7 +278,9 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
       '🔔 *Hay una conversación esperando por ti*',
       '',
       `👤 *${clientName}*${clientPhone && clientPhone !== clientName ? ` (+${clientPhone})` : ''}`,
-      '🟡 *Estado:* el chat está en modo humano; Diva no responderá mientras lo atiendes.',
+      mode === 'coordinating'
+        ? '🟣 *Estado:* Diva está esperando al equipo y no responderá hasta que se cierre la coordinación.'
+        : '🟡 *Estado:* el chat está en modo humano; Diva no responderá mientras lo atiendes.',
       '',
       briefText,
       '',

@@ -359,6 +359,42 @@ test('Diva no molesta al administrador por agradecimientos o cierres en modo hum
   assert.equal(alerts, 0);
 });
 
+test('Diva avisa al administrador incluso por un agradecimiento mientras coordina', async () => {
+  const pending = [];
+  const alerts = [];
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      claimHumanPendingNotification: async () => true,
+      getLastMessages: async () => [
+        { direction: 'outbound', sent_by: 'human', content: 'No se preocupe, coordinamos la entrega.' },
+        { direction: 'inbound', content: 'Muchas gracias por gestionar ayer la entrega.' },
+      ],
+      createAdminPendingReply: async (...args) => pending.push(args),
+    },
+    './kapso-whatsapp': {},
+    './admin-notify': {
+      notifyAdmin: async (_orgId, options) => {
+        alerts.push(options);
+        return { sent: true };
+      },
+    },
+  });
+
+  const result = await notifications.notifyAdminHumanPendingReply(1, {
+    id: 89,
+    agent_mode: 'coordinating',
+    contact_name: 'Katherine',
+    phone_number: '56948800345',
+  }, 'Muchas gracias por gestionar ayer la entrega de mis huevitos mil mil gracias');
+
+  assert.equal(result.sent, true);
+  assert.equal(pending.length, 1);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].body, /Katherine/);
+  assert.match(alerts[0].body, /esperando al equipo/i);
+  assert.match(alerts[0].body, /Muchas gracias por gestionar ayer la entrega/);
+});
+
 test('el aviso general no duplica el caso que ya está en coordinación humana', async () => {
   let lookups = 0;
   let sends = 0;

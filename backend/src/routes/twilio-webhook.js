@@ -67,7 +67,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
     if (updatedConv.agent_mode !== 'ai') {
       const resumed = await resumeDivaOnInbound(conversation, db);
       if (!resumed) {
-        if (updatedConv.agent_mode === 'human') await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
+        await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
         return;
       }
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });

@@ -1322,6 +1322,15 @@ REGLAS ABSOLUTAS:
   }
 
   // Lead caliente (respuesta a template) o cliente quiere ordenar → Agente de ventas en modo warm
+  // Una intención de compra explícita ya no vuelve a pasar por ventas. Ese
+  // desvío podía quitar productos del pedido (por ejemplo, declarar agotado un
+  // queso que acabábamos de ofrecer en la campaña). Pedidos toma la lista
+  // completa, la valoriza y muestra el resumen antes de confirmar.
+  if (intent === 'wants_to_order') {
+    L.agent('orders', 0);
+    return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft || {}, productosTexto, orderCtx);
+  }
+
   if (isTemplateReply || intent === 'wants_to_order' || (intent === 'interested' && confidence > 0.85)) {
     const tWarm = Date.now();
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, salesOpts);
@@ -1645,7 +1654,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // 2. Respuesta del agente de órdenes (con el carrito valorizado en el prompt)
   const promoPricing = promotionApplies
-    ? `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal.\n`
+    ? `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal. Conserva TODOS los productos promocionados que pidió el cliente; no elimines ninguno por una marca de stock del catálogo.\n`
     : '';
   const pricingText   = promoPricing + pricing.pricingContext(priced);
   const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);

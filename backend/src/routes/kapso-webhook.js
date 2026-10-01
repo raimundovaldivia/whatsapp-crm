@@ -181,7 +181,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       if (!resumed) {
         const updatedConv = await db.getConversationById(conversation.id);
         io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { conversationId: conversation.id, direction: 'inbound', content: label, type: parsed.type, media_id: mediaRef }, conversation: updatedConv });
-        if (updatedConv.agent_mode === 'human') await notifyAdminHumanPendingReply(org.id, updatedConv, label);
+        await notifyAdminHumanPendingReply(org.id, updatedConv, label);
         return;
       }
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
@@ -250,7 +250,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     if (updatedConv.agent_mode !== 'ai') {
       const resumed = await resumeDivaOnInbound(conversation, db);
       if (!resumed) {
-        if (updatedConv.agent_mode === 'human') await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
+        await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
         return;
       }
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });

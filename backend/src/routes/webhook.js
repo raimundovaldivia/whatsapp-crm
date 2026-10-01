@@ -109,7 +109,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
     if (updatedConv.agent_mode !== 'ai') {
       const resumed = await resumeDivaOnInbound(conversation, db);
       if (!resumed) {
-        if (updatedConv.agent_mode === 'human') await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
+        await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
         return;
       }
       console.log(`[Webhook] Conv ${conversation.id} inicia un hilo nuevo y vuelve a Diva`);

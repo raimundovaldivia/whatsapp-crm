@@ -10,7 +10,7 @@ import {
   FileText, Plus, Trash2, RefreshCw, CheckCircle,
   Clock, XCircle, Loader, AlertCircle, ChevronDown, ChevronUp,
   Info, Sparkles, Wand2,
-  Save, Zap,
+  Save, Zap, Search, Library, SlidersHorizontal,
 } from 'lucide-react';
 import { templatesAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -31,6 +31,24 @@ const CATEGORIES = [
   { value: 'UTILITY',         label: 'Utilidad',        desc: 'Confirmaciones de pedido, actualizaciones de estado' },
   { value: 'AUTHENTICATION',  label: 'Autenticación',   desc: 'Códigos de verificación, contraseñas' },
 ];
+
+const CATEGORY_META = {
+  UTILITY: {
+    label: 'Utilidad',
+    description: 'Pedidos, pagos, entregas y avisos operativos',
+    color: '#38bdf8',
+  },
+  MARKETING: {
+    label: 'Marketing',
+    description: 'Promociones, recordatorios y reactivación de clientes',
+    color: '#b8a9ff',
+  },
+  AUTHENTICATION: {
+    label: 'Autenticación',
+    description: 'Códigos y validaciones de seguridad',
+    color: '#f0b429',
+  },
+};
 
 function getStatusConfig(colors) {
   return {
@@ -608,11 +626,14 @@ function CreateTemplateForm({ onCreated, colors }) {
 ───────────────────────────────────────────────────────────────────────── */
 export default function TemplateManager() {
   const { colors } = useTheme();
-  const [tab, setTab]             = useState('list');   // 'list' | 'automation' | 'create'
+  const [tab, setTab]             = useState('automation');   // 'list' | 'automation' | 'create'
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState('');
   const [deleting, setDeleting]   = useState(null);
+  const [query, setQuery]         = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [categoryFilter, setCategoryFilter] = useState('ALL');
 
   const loadTemplates = useCallback(async () => {
     setLoading(true); setError('');
@@ -647,20 +668,44 @@ export default function TemplateManager() {
   const pending  = templates.filter(t => t.status === 'PENDING');
   const rejected = templates.filter(t => t.status === 'REJECTED');
 
+  const filteredTemplates = templates
+    .filter(template => {
+      const searchable = [
+        template.name,
+        template.category,
+        template.language,
+        ...(template.components || []).map(component => component.text || ''),
+      ].join(' ').toLowerCase();
+      return (!query.trim() || searchable.includes(query.trim().toLowerCase()))
+        && (statusFilter === 'ALL' || template.status === statusFilter)
+        && (categoryFilter === 'ALL' || template.category === categoryFilter);
+    })
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), 'es'));
+
+  const groupedTemplates = ['UTILITY', 'MARKETING', 'AUTHENTICATION']
+    .map(category => ({
+      category,
+      templates: filteredTemplates.filter(template => template.category === category),
+    }))
+    .filter(group => group.templates.length > 0);
+
+  const uncategorized = filteredTemplates.filter(template => !CATEGORY_META[template.category]);
+  if (uncategorized.length) groupedTemplates.push({ category: 'OTHER', templates: uncategorized });
+
   const tabs = [
-    { key: 'list',   label: '📋 Mis Templates', count: templates.length },
-    { key: 'automation', label: '⚡ Automatizaciones' },
-    { key: 'create', label: '+ Crear Template' },
+    { key: 'automation', label: 'Automatizaciones', Icon: Zap },
+    { key: 'list', label: 'Biblioteca', Icon: Library, count: templates.length },
+    { key: 'create', label: 'Crear nuevo', Icon: Plus },
   ];
 
   return (
     <div style={{ color: colors.textPrimary }}>
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0', marginBottom: '16px', backgroundColor: colors.bgApp, borderRadius: '9px', padding: '3px' }}>
+      <div className="template-tabs" style={{ display: 'flex', gap: '4px', marginBottom: '20px', backgroundColor: colors.bgApp, borderRadius: '10px', padding: '4px', border: `1px solid ${colors.border}` }}>
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             style={{
-              flex: 1, padding: '8px 10px', border: 'none',
+              flex: 1, padding: '9px 12px', border: 'none',
               backgroundColor: tab === t.key
                 ? (t.highlight ? `${colors.purple}22` : colors.bgPanel)
                 : 'transparent',
@@ -673,6 +718,7 @@ export default function TemplateManager() {
               outline: tab === t.key && t.highlight ? `1px solid ${colors.purple}44` : 'none',
               transition: 'all 0.15s',
             }}>
+            <t.Icon size={14} />
             {t.label}
             {t.count != null && t.count > 0 && (
               <span style={{ backgroundColor: `${colors.green}33`, color: colors.green, borderRadius: '8px', padding: '1px 6px', fontSize: '11px', fontWeight: 700 }}>
@@ -686,18 +732,65 @@ export default function TemplateManager() {
       {/* Lista de templates */}
       {tab === 'list' && (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div style={{ color: colors.textSecondary, fontSize: '12px' }}>
-              {approved.length > 0 && <span style={{ color: colors.greenLight }}>{approved.length} aprobado{approved.length !== 1 ? 's' : ''}</span>}
-              {pending.length > 0  && <><span style={{ color: colors.textMuted }}> · </span><span style={{ color: colors.yellow }}>{pending.length} pendiente{pending.length !== 1 ? 's' : ''}</span></>}
-              {rejected.length > 0 && <><span style={{ color: colors.textMuted }}> · </span><span style={{ color: colors.red }}>{rejected.length} rechazado{rejected.length !== 1 ? 's' : ''}</span></>}
-              {templates.length === 0 && !loading && 'Sin templates creados aún'}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ color: colors.textPrimary, fontSize: 15, fontWeight: 700 }}>Biblioteca de templates</div>
+            <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3 }}>Busca y administra los mensajes aprobados por Meta.</div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
+            {[
+              { label: 'Aprobados', value: approved.length, color: colors.greenLight },
+              { label: 'En revisión', value: pending.length, color: colors.yellow },
+              { label: 'Rechazados', value: rejected.length, color: colors.red },
+            ].map(item => (
+              <div key={item.label} style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.bgSub, borderRadius: 10, padding: '11px 13px' }}>
+                <div style={{ color: item.color, fontSize: 19, fontWeight: 800 }}>{item.value}</div>
+                <div style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>{item.label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="template-toolbar" style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) 150px 150px auto', gap: 8, alignItems: 'center', padding: 10, marginBottom: 12, border: `1px solid ${colors.border}`, borderRadius: 10, backgroundColor: colors.bgSub }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={14} color={colors.textMuted} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+              <input
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="Buscar por nombre o contenido…"
+                style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px 8px 31px', borderRadius: 7, border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: 12, outline: 'none' }}
+              />
             </div>
-            <button onClick={loadTemplates} disabled={loading}
-              style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, fontSize: '12px' }}>
-              <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-              Recargar
+            <select value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}
+              aria-label="Filtrar por categoría"
+              style={{ padding: '8px 9px', borderRadius: 7, border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: 12 }}>
+              <option value="ALL">Todas las categorías</option>
+              <option value="UTILITY">Utilidad</option>
+              <option value="MARKETING">Marketing</option>
+              <option value="AUTHENTICATION">Autenticación</option>
+            </select>
+            <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}
+              aria-label="Filtrar por estado"
+              style={{ padding: '8px 9px', borderRadius: 7, border: `1px solid ${colors.borderStrong}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: 12 }}>
+              <option value="ALL">Todos los estados</option>
+              <option value="APPROVED">Aprobados</option>
+              <option value="PENDING">En revisión</option>
+              <option value="REJECTED">Rechazados</option>
+            </select>
+            <button onClick={loadTemplates} disabled={loading} title="Recargar templates"
+              style={{ height: 34, width: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', background: colors.bgApp, border: `1px solid ${colors.borderStrong}`, borderRadius: 7, cursor: 'pointer', color: colors.textSecondary }}>
+              <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
             </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: colors.textSecondary, fontSize: 11, marginBottom: 12 }}>
+            <SlidersHorizontal size={12} />
+            {filteredTemplates.length} de {templates.length} template{templates.length !== 1 ? 's' : ''}
+            {(query || categoryFilter !== 'ALL' || statusFilter !== 'ALL') && (
+              <button onClick={() => { setQuery(''); setCategoryFilter('ALL'); setStatusFilter('ALL'); }}
+                style={{ marginLeft: 4, padding: 0, border: 0, background: 'none', color: colors.greenLight, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>
+                Limpiar filtros
+              </button>
+            )}
           </div>
 
           {loading ? (
@@ -720,11 +813,39 @@ export default function TemplateManager() {
                 </button>
               </div>
             </div>
+          ) : filteredTemplates.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '36px 20px', color: colors.textSecondary, border: `1px dashed ${colors.borderStrong}`, borderRadius: 10 }}>
+              <Search size={28} style={{ opacity: 0.35, marginBottom: 8 }} />
+              <div style={{ fontSize: 13, fontWeight: 600 }}>No encontramos templates con esos filtros</div>
+              <button onClick={() => { setQuery(''); setCategoryFilter('ALL'); setStatusFilter('ALL'); }}
+                style={{ marginTop: 8, border: 0, background: 'none', color: colors.greenLight, cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+                Ver todos
+              </button>
+            </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {templates.map(t => (
-                <TemplateCard key={`${t.name}-${t.language}`} template={t} onDelete={handleDelete} deleting={deleting} colors={colors} />
-              ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              {groupedTemplates.map(group => {
+                const meta = CATEGORY_META[group.category] || { label: 'Otros', description: 'Templates sin categoría reconocida', color: colors.textSecondary };
+                return (
+                  <section key={group.category}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, padding: '0 2px' }}>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                          <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: meta.color }} />
+                          <span style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 800 }}>{meta.label}</span>
+                          <span style={{ color: colors.textMuted, fontSize: 11 }}>{group.templates.length}</span>
+                        </div>
+                        <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 2, marginLeft: 14 }}>{meta.description}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                      {group.templates.map(template => (
+                        <TemplateCard key={`${template.name}-${template.language}`} template={template} onDelete={handleDelete} deleting={deleting} colors={colors} />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
           )}
         </div>
@@ -739,7 +860,14 @@ export default function TemplateManager() {
         <CreateTemplateForm onCreated={() => { setTab('list'); loadTemplates(); }} colors={colors} />
       )}
 
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @media (max-width: 720px) {
+          .template-toolbar { grid-template-columns: 1fr 1fr !important; }
+          .template-toolbar > div:first-child { grid-column: 1 / -1; }
+          .template-tabs button { padding-left: 7px !important; padding-right: 7px !important; }
+        }
+      `}</style>
     </div>
   );
 }
