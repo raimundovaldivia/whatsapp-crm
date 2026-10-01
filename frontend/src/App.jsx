@@ -12,7 +12,6 @@ const DashboardPanel = lazy(() => import('./components/DashboardPanel.jsx'));
 const StatsPanel = lazy(() => import('./components/StatsPanel.jsx'));
 const ClientesPanel = lazy(() => import('./components/ClientesPanel.jsx'));
 const SettingsPanel = lazy(() => import('./components/SettingsPanel.jsx'));
-const PaymentProofsPanel = lazy(() => import('./components/PaymentProofsPanel.jsx'));
 const ProductsPanel = lazy(() => import('./components/ProductsPanel.jsx'));
 const RepartosPanel = lazy(() => import('./components/RepartosPanel.jsx'));
 const EvaluacionPanel = lazy(() => import('./components/EvaluacionPanel.jsx'));
@@ -512,8 +511,10 @@ export default function App() {
 
       {/* Vista Comprobantes de pago */}
       {view === 'pagos' && (
-        <PaymentProofsPanel
-          onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
+        <OrdersPanel
+          paymentsMode
+          onSelectConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
+          onOrderPaid={() => setPendingOrders(n => Math.max(0, n - 1))}
         />
       )}
 

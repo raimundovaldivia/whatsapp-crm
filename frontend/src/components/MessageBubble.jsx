@@ -147,7 +147,7 @@ export default function MessageBubble({ message }) {
                 <Image size={16} color={colors.yellow} />
                 <div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: colors.textPrimary }}>Comprobante de pago</div>
-                  <div style={{ fontSize: '10px', color: colors.textSecondary }}>Ver en Pedidos → Comprobantes</div>
+                  <div style={{ fontSize: '10px', color: colors.textSecondary }}>Ver en Pagos → Comprobantes</div>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 4px 4px' }}>

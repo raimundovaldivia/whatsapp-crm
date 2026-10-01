@@ -18,7 +18,7 @@ const STATUS_LABELS = {
   rejected:      { label: 'Rechazado',      color: '#ef4444', Icon: XCircle },
 };
 
-export default function PaymentProofsPanel({ onOpenConversation }) {
+export default function PaymentProofsPanel({ onOpenConversation, openProofId = null, onProofOpened, onProofUpdated }) {
   const { colors, isDark } = useTheme();
   const [proofs, setProofs]     = useState([]);
   const [loading, setLoading]   = useState(true);
@@ -63,6 +63,14 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
     }
   };
 
+  useEffect(() => {
+    if (!openProofId || selected || !proofs.length) return;
+    const proof = proofs.find(item => String(item.id) === String(openProofId));
+    if (!proof) return;
+    openProof(proof);
+    onProofOpened?.();
+  }, [openProofId, proofs, selected]);
+
   const closeProof = () => {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     setSelected(null);
@@ -75,6 +83,7 @@ export default function PaymentProofsPanel({ onOpenConversation }) {
     try {
       await paymentProofsAPI.update(selected.id, { status, notes });
       setProofs(prev => prev.map(p => p.id === selected.id ? { ...p, status, notes } : p));
+      await onProofUpdated?.();
       closeProof();
       load();
     } catch (err) {

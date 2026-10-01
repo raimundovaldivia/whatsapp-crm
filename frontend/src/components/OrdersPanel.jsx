@@ -8,6 +8,7 @@ import {
 
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
 import ConciliacionPanel from './ConciliacionPanel.jsx';
+import PaymentProofsPanel from './PaymentProofsPanel.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
@@ -134,7 +135,7 @@ function getShopifyFulfillmentStyle(status, colors) {
 }
 
 // ─── Componente principal ─────────────────────────────────────────
-export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
+export default function OrdersPanel({ onSelectConversation, onOrderPaid, paymentsMode = false }) {
   const { colors } = useTheme();
   const [botOrders,        setBotOrders]        = useState([]);
   const [shopifyOrders,    setShopifyOrders]    = useState([]);
@@ -143,7 +144,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const [stats,            setStats]            = useState(null);
   const [toast,            setToast]            = useState(null);
   const [syncing,          setSyncing]          = useState(null);
-  const [activeTab,        setActiveTab]        = useState('orders'); // 'orders' | 'scheduled' | 'charge'
+  const [activeTab,        setActiveTab]        = useState(paymentsMode ? 'proofs' : 'orders');
+  const [proofToOpen,      setProofToOpen]      = useState(null);
   const [syncingAll,    setSyncingAll]    = useState(false);
   const [lastSync,      setLastSync]      = useState(null);
 
@@ -227,6 +229,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   }, []);
 
   // ─── Cobranza ───────────────────────────────────────────────────
+  const hasReviewableProof = o => ['pending', 'pre_verified'].includes(o?.proof_status);
+
   const loadCharges = useCallback(async () => {
     try {
       const res = await api.get('/orders/pending-charge');
@@ -234,7 +238,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
       setChargeSettings(res.data?.settings || null);
       // Limpiar de la selección lo que ya no está por cobrar
       setChargeSel(prev => {
-        const validKeys = new Set((res.data?.orders || []).map(o => `${o.source}:${o.id}`));
+        const validKeys = new Set((res.data?.orders || []).filter(o => !hasReviewableProof(o)).map(o => `${o.source}:${o.id}`));
         return new Set([...prev].filter(k => validKeys.has(k)));
       });
     } catch {
@@ -247,6 +251,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   const chargeKey = (o) => `${o.source}:${o.id}`;
 
   const toggleCharge = (o) => {
+    if (hasReviewableProof(o)) return;
     setChargeSel(prev => {
       const next = new Set(prev);
       const k = chargeKey(o);
@@ -256,14 +261,15 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
   };
 
   const toggleAllCharges = () => {
+    const chargeable = charges.filter(o => !hasReviewableProof(o));
     setChargeSel(prev =>
-      prev.size === charges.length ? new Set() : new Set(charges.map(chargeKey))
+      prev.size === chargeable.length ? new Set() : new Set(chargeable.map(chargeKey))
     );
   };
 
   const sendCharges = async () => {
     const selection = charges
-      .filter(o => chargeSel.has(chargeKey(o)))
+      .filter(o => chargeSel.has(chargeKey(o)) && !hasReviewableProof(o))
       .map(o => ({ source: o.source, id: o.id }));
     if (selection.length === 0) return;
 
@@ -564,16 +570,18 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
 
       {/* Header */}
       <div style={{ padding: '14px clamp(12px, 3vw, 24px)', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '12px', flexWrap:'wrap' }}>
-        <ShoppingBag size={20} color={colors.green} />
-        <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600 }}>Pedidos</h1>
+        {paymentsMode ? <DollarSign size={20} color={colors.green} /> : <ShoppingBag size={20} color={colors.green} />}
+        <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600 }}>{paymentsMode ? 'Pagos' : 'Pedidos'}</h1>
         {/* Tabs */}
         <div style={{ display:'flex', gap:'4px', backgroundColor: colors.bgSecondary, borderRadius:'8px', padding:'3px', overflowX:'auto', maxWidth:'100%' }}>
-          {[
-            { key: 'orders',    label: 'Todos' },
+          {(paymentsMode ? [
+            { key: 'proofs', label: '📎 Comprobantes' },
+            { key: 'charge', label: `💸 Por cobrar${charges.length ? ` (${charges.length})` : ''}` },
+            { key: 'recon',  label: '🏦 Conciliación' },
+          ] : [
+            { key: 'orders', label: 'Todos' },
             { key: 'scheduled', label: `📅 Agendados${scheduledOrders.filter(o=>o.status==='pending').length ? ` (${scheduledOrders.filter(o=>o.status==='pending').length})` : ''}` },
-            { key: 'charge',    label: `💸 Por cobrar${charges.length ? ` (${charges.length})` : ''}` },
-            { key: 'recon',     label: '🏦 Conciliación' },
-          ].map(({ key, label }) => (
+          ]).map(({ key, label }) => (
             <button key={key} onClick={() => setActiveTab(key)} style={{
               padding: '4px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer',
               backgroundColor: activeTab === key ? colors.bgPanel : 'transparent',
@@ -583,24 +591,26 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           ))}
         </div>
         <div style={{ flex: 1 }} />
-        <button onClick={() => setShowNewOrder(true)}
+        {!paymentsMode && <button onClick={() => setShowNewOrder(true)}
           style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: colors.green, color: 'white', padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer' }}>
           <Plus size={13} /> Nuevo pedido
-        </button>
-        {lastSync && (
+        </button>}
+        {!paymentsMode && lastSync && (
           <span style={{ fontSize: '11px', color: colors.textSecondary }}>
             Shopify: {lastSync.toLocaleString('es-CL', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}
           </span>
         )}
-        <button onClick={handleSyncAll} disabled={syncingAll}
+        {!paymentsMode && <button onClick={handleSyncAll} disabled={syncingAll}
           style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: syncingAll ? colors.bgHover : '#0d2929', color: colors.tealSoft, padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 500, border: '1px solid #1a4040', cursor: syncingAll ? 'not-allowed' : 'pointer', opacity: syncingAll ? 0.7 : 1 }}>
           <RefreshCw size={12} style={{ animation: syncingAll ? 'spin 1s linear infinite' : 'none' }} />
           {syncingAll ? 'Sincronizando...' : 'Sync Shopify'}
-        </button>
-        <button onClick={load} style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', border: 'none', cursor: 'pointer' }}>
+        </button>}
+        {!paymentsMode && <button onClick={load} style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', border: 'none', cursor: 'pointer' }}>
           <RefreshCw size={15} />
-        </button>
+        </button>}
       </div>
+
+      {activeTab === 'proofs' && <PaymentProofsPanel onOpenConversation={onSelectConversation} openProofId={proofToOpen} onProofOpened={() => setProofToOpen(null)} onProofUpdated={loadCharges} />}
 
       {/* ── Vista Agendados ── */}
       {activeTab === 'recon' && <ConciliacionPanel colors={colors} />}
@@ -716,8 +726,9 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
           return true;
         });
         const visibleCharges = visibleGroups.flatMap(group => group.orders);
+        const visibleChargeable = visibleCharges.filter(o => !hasReviewableProof(o));
         const urgentGroups = allGroups.filter(group => group.oldestHours >= 48).length;
-        const proofGroups = allGroups.filter(group => group.proofsPending > 0 || group.proofsRejected > 0).length;
+        const proofGroups = allGroups.filter(group => group.proofsPending > 0).length;
         const uncontactedGroups = allGroups.filter(group => group.orders.some(o => !o.charge_requested_at)).length;
         const companyGroups = allGroups.filter(group => group.clientType === 'empresa');
         const personalGroups = allGroups.filter(group => group.clientType !== 'empresa');
@@ -823,6 +834,13 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               </div>
             )}
 
+            {proofGroups > 0 && (
+              <div style={{ fontSize:'12px', color:'#bfdbfe', backgroundColor:'#172554', border:'1px solid #3b82f680', borderRadius:'8px', padding:'10px 13px' }}>
+                <strong>{proofGroups} cliente{proofGroups === 1 ? '' : 's'} enviaron un voucher.</strong>{' '}
+                Esos pedidos siguen en Por cobrar hasta que revises y apruebes el comprobante. Mientras esté pendiente no se enviará otro aviso de cobro.
+              </div>
+            )}
+
             {/* Resultado del último envío */}
             {chargeResults?.some(r => !r.ok) && (
               <div style={{ fontSize:'12px', backgroundColor:'#3f1d1d', border:'1px solid #7f1d1d', borderRadius:'8px', padding:'10px 13px', color:'#fca5a5' }}>
@@ -833,6 +851,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                       r.reason === 'ventana_24h'     ? 'pasaron más de 24h desde su último mensaje: hay que usar un template aprobado'
                       : r.reason === 'sin_telefono'  ? 'el pedido no tiene teléfono'
                       : r.reason === 'cobrado_recien'? `ya se le cobró hace ${r.hoursAgo}h`
+                      : r.reason === 'voucher_por_revisar' ? 'tiene un voucher pendiente de revisión'
                       : r.reason === 'no_por_cobrar' ? 'ya no está por cobrar'
                       : r.error || r.reason
                     }
@@ -858,29 +877,31 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
               <>
                 <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'12px', color: colors.textSecondary, cursor:'pointer', paddingLeft:'4px' }}>
                   <input type="checkbox"
-                    checked={visibleCharges.length > 0 && visibleCharges.every(o => chargeSel.has(chargeKey(o)))}
+                    checked={visibleChargeable.length > 0 && visibleChargeable.every(o => chargeSel.has(chargeKey(o)))}
+                    disabled={visibleChargeable.length === 0}
                     onChange={() => setChargeSel(prev => {
                       const next = new Set(prev);
-                      const allSelected = visibleCharges.every(o => next.has(chargeKey(o)));
-                      visibleCharges.forEach(o => allSelected ? next.delete(chargeKey(o)) : next.add(chargeKey(o)));
+                      const allSelected = visibleChargeable.every(o => next.has(chargeKey(o)));
+                      visibleChargeable.forEach(o => allSelected ? next.delete(chargeKey(o)) : next.add(chargeKey(o)));
                       return next;
                     })}
-                    style={{ cursor:'pointer' }} />
-                  Seleccionar los {visibleCharges.length} pedidos visibles
+                    style={{ cursor:visibleChargeable.length ? 'pointer' : 'not-allowed' }} />
+                  Seleccionar los {visibleChargeable.length} pedidos cobrables visibles
                 </label>
 
                 <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
                   {visibleGroups.map(group => {
-                    const groupSelected = group.orders.every(o => chargeSel.has(chargeKey(o)));
+                    const chargeableOrders = group.orders.filter(o => !hasReviewableProof(o));
+                    const groupSelected = chargeableOrders.length > 0 && chargeableOrders.every(o => chargeSel.has(chargeKey(o)));
                     const days = Math.floor(group.oldestHours / 24);
                     return (
                       <div key={group.key} style={{ backgroundColor:colors.bgPanel, border:`1px solid ${group.oldestHours >= 48 ? colors.amberStrong + '70' : colors.border}`, borderRadius:'12px', overflow:'hidden' }}>
                         <div style={{ padding:'12px 15px', display:'flex', alignItems:'center', gap:'11px', backgroundColor:groupSelected ? colors.bgHover : colors.bgSecondary, flexWrap:'wrap' }}>
-                          <input type="checkbox" checked={groupSelected} onChange={() => setChargeSel(prev => {
+                          <input type="checkbox" checked={groupSelected} disabled={chargeableOrders.length === 0} onChange={() => setChargeSel(prev => {
                             const next = new Set(prev);
-                            group.orders.forEach(o => groupSelected ? next.delete(chargeKey(o)) : next.add(chargeKey(o)));
+                            chargeableOrders.forEach(o => groupSelected ? next.delete(chargeKey(o)) : next.add(chargeKey(o)));
                             return next;
-                          })} style={{ cursor:'pointer' }} />
+                          })} style={{ cursor:chargeableOrders.length ? 'pointer' : 'not-allowed' }} />
                           <div style={{ flex:'1 1 220px', minWidth:0 }}>
                             <div style={{ display:'flex', alignItems:'center', gap:'7px', flexWrap:'wrap' }}>
                               <span style={{ color:colors.textPrimary, fontWeight:800, fontSize:'14px' }}>{group.name}</span>
@@ -907,6 +928,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                           {group.orders.map(o => {
                             const k = chargeKey(o);
                             const isSel = chargeSel.has(k);
+                            const reviewProof = hasReviewableProof(o);
                             const productText = (o.items || []).map(i => `${i.quantity || 1}x ${i.name || i.title || i.product_name || 'Producto'}`).join(', ');
                             const chargeLabel = !o.charge_requested_at ? 'Sin aviso de cobro'
                               : o.charge_status === 'failed' ? 'Cobro falló · reintentar'
@@ -914,21 +936,29 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid }) {
                               : ['pending','sent'].includes(o.charge_status) ? 'Aviso enviado · pendiente de entrega'
                               : 'Aviso enviado · estado sin confirmar';
                             return (
-                              <div key={k} onClick={() => toggleCharge(o)} style={{ padding:'10px 15px 10px 42px', display:'flex', alignItems:'center', gap:'10px', borderTop:`1px solid ${colors.border}`, backgroundColor:isSel ? colors.bgHover : 'transparent', cursor:'pointer', flexWrap:'wrap' }}>
-                                <input type="checkbox" checked={isSel} onChange={() => toggleCharge(o)} onClick={e => e.stopPropagation()} style={{ cursor:'pointer' }} />
+                              <div key={k} onClick={() => { if (!reviewProof) toggleCharge(o); }} style={{ padding:'10px 15px 10px 42px', display:'flex', alignItems:'center', gap:'10px', borderTop:`1px solid ${colors.border}`, backgroundColor:isSel ? colors.bgHover : reviewProof ? '#17255455' : 'transparent', cursor:reviewProof ? 'default' : 'pointer', flexWrap:'wrap' }}>
+                                <input type="checkbox" checked={isSel} disabled={reviewProof} onChange={() => toggleCharge(o)} onClick={e => e.stopPropagation()} style={{ cursor:reviewProof ? 'not-allowed' : 'pointer' }} />
                                 <div style={{ flex:'1 1 260px', minWidth:0 }}>
                                   <div style={{ display:'flex', gap:'7px', alignItems:'center', flexWrap:'wrap' }}>
                                     <strong style={{ color:colors.textPrimary, fontSize:'12px' }}>{o.order_label}</strong>
                                     <span style={{ color:o.charge_status === 'failed' || !o.charge_requested_at ? colors.amber : colors.textMuted, fontSize:'10px' }}>{chargeLabel}</span>
-                                    {o.proofs_pending > 0 && <span style={{ color:'#60a5fa', fontSize:'10px' }}>📎 Comprobante por revisar</span>}
+                                    {reviewProof && <span style={{ color:'#60a5fa', fontSize:'10px', fontWeight:700 }}>📎 {o.proof_status === 'pre_verified' ? 'Voucher pre-verificado: falta aprobar' : 'Voucher recibido: revisar'}</span>}
                                     {o.proofs_rejected > 0 && <span style={{ color:colors.dangerSoft, fontSize:'10px' }}>Comprobante rechazado</span>}
                                   </div>
                                   {productText && <div style={{ color:colors.textMuted, fontSize:'11px', marginTop:'3px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productText}</div>}
                                 </div>
                                 <strong style={{ color:colors.amber, fontSize:'13px' }}>{fmt(o.total_price)}</strong>
-                                <button onClick={e => { e.stopPropagation(); setChargePreview(o); }}
-                                  style={{ padding:'5px 8px', borderRadius:'6px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, fontSize:'10px', cursor:'pointer' }}>
-                                  Ver cobro
+                                <button onClick={e => {
+                                  e.stopPropagation();
+                                  if (reviewProof) {
+                                    setProofToOpen(o.proof_id);
+                                    setActiveTab('proofs');
+                                  } else {
+                                    setChargePreview(o);
+                                  }
+                                }}
+                                  style={{ padding:'5px 8px', borderRadius:'6px', border:`1px solid ${reviewProof ? '#3b82f6' : colors.border}`, background:reviewProof ? '#1d4ed622' : 'none', color:reviewProof ? '#93c5fd' : colors.textSecondary, fontSize:'10px', cursor:'pointer', fontWeight:reviewProof ? 700 : 400 }}>
+                                  {reviewProof ? 'Revisar voucher' : 'Ver cobro'}
                                 </button>
                               </div>
                             );

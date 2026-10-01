@@ -564,6 +564,10 @@ router.post('/send-charge', async (req, res) => {
         results.push({ ...sel, ok: false, reason: 'no_por_cobrar' });
         continue;
       }
+      if (['pending', 'pre_verified'].includes(order.proof_status)) {
+        results.push({ ...sel, ok: false, reason: 'voucher_por_revisar', proofId: order.proof_id });
+        continue;
+      }
       const r = await collection.sendChargeRequest(req.orgId, order, { force, io, templateOverride: template });
       results.push({
         source: order.source,

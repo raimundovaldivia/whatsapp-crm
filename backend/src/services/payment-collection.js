@@ -3,7 +3,9 @@
  *
  * Un pedido queda "por cobrar" cuando el repartidor lo marcó como entregado
  * con medio de pago = transferencia, y el cliente todavía no mandó el
- * comprobante (no hay payment_proof verificado ni pre-verificado).
+ * comprobante aprobado (no hay payment_proof verificado). Si existe un
+ * voucher pendiente o pre-verificado, la deuda sigue visible pero se bloquea
+ * un nuevo cobro hasta que el equipo lo revise.
  *
  * Este servicio arma y envía el mensaje de cobro. Lo usan dos caminos:
  *   1. Envío manual desde el tab "Por cobrar" del CRM (selección múltiple).
@@ -412,8 +414,9 @@ async function sendChargeTemplate(order, settings, wc) {
  * Pedidos entregados, marcados como transferencia, sin comprobante válido.
  *
  * Une pedidos del bot (orders) y de Shopify (shopify_orders) en una sola lista.
- * Un comprobante cuenta como válido si está 'verified' o 'pre_verified'.
- * Los 'pending' y 'rejected' NO cuentan: el pedido sigue por cobrar.
+ * Solo un comprobante 'verified' cierra la deuda. Los 'pending' y
+ * 'pre_verified' siguen por cobrar, pero se exponen para que el equipo revise
+ * el voucher en vez de volver a enviarle un cobro al cliente.
  */
 async function getPendingCharges(orgId) {
   const pool = getPool();
@@ -438,11 +441,25 @@ async function getPendingCharges(orgId) {
             o.charge_message_id AS charge_message_id,
             (SELECT m.status FROM messages m JOIN conversations mc ON mc.id=m.conversation_id WHERE m.whatsapp_message_id=o.charge_message_id AND mc.organization_id=o.organization_id) AS charge_status,
             COALESCE(o.charge_request_count, 0) AS charge_request_count,
+            (SELECT pp.id FROM payment_proofs pp
+              WHERE pp.organization_id = o.organization_id
+                AND pp.order_id = o.id AND pp.status IN ('pending', 'pre_verified')
+              ORDER BY pp.created_at DESC LIMIT 1) AS proof_id,
+            (SELECT pp.status FROM payment_proofs pp
+              WHERE pp.organization_id = o.organization_id
+                AND pp.order_id = o.id AND pp.status IN ('pending', 'pre_verified')
+              ORDER BY pp.created_at DESC LIMIT 1) AS proof_status,
             (SELECT COUNT(*) FROM payment_proofs pp
-              WHERE pp.order_id = o.id
-                AND pp.status = 'pending')::int AS proofs_pending
+              WHERE pp.organization_id = o.organization_id
+                AND pp.order_id = o.id
+                AND pp.status IN ('pending', 'pre_verified'))::int AS proofs_pending,
+            (SELECT COUNT(*) FROM payment_proofs pp
+              WHERE pp.organization_id = o.organization_id
+                AND pp.order_id = o.id
+                AND pp.status = 'pre_verified')::int AS proofs_pre_verified
             ,(SELECT COUNT(*) FROM payment_proofs pp
-              WHERE pp.order_id = o.id
+              WHERE pp.organization_id = o.organization_id
+                AND pp.order_id = o.id
                 AND pp.status = 'rejected')::int AS proofs_rejected
        FROM orders o
        LEFT JOIN conversations c ON c.id = o.conversation_id
@@ -460,8 +477,9 @@ async function getPendingCharges(orgId) {
         AND COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric > 0
         AND NOT EXISTS (
           SELECT 1 FROM payment_proofs pp
-           WHERE pp.order_id = o.id
-             AND pp.status IN ('verified', 'pre_verified')
+           WHERE pp.organization_id = o.organization_id
+             AND pp.order_id = o.id
+             AND pp.status = 'verified'
         )
 
       UNION ALL
@@ -489,7 +507,10 @@ async function getPendingCharges(orgId) {
             s.charge_message_id AS charge_message_id,
             (SELECT m.status FROM messages m JOIN conversations mc ON mc.id=m.conversation_id WHERE m.whatsapp_message_id=s.charge_message_id AND mc.organization_id=s.organization_id) AS charge_status,
             COALESCE(s.charge_request_count, 0) AS charge_request_count,
+            NULL::int                       AS proof_id,
+            NULL::text                      AS proof_status,
             0                            AS proofs_pending,
+            0                            AS proofs_pre_verified,
             0                            AS proofs_rejected
        FROM shopify_orders s
        LEFT JOIN LATERAL (
@@ -530,7 +551,8 @@ async function getPendingCharges(orgId) {
  */
 async function getOrderForCharge(orgId, source, orderId) {
   const all = await getPendingCharges(orgId);
-  return all.find(o => o.source === source && String(o.id) === String(orderId)) || null;
+  return all.find(o => o.source === source && String(o.id) === String(orderId)
+    && !['pending', 'pre_verified'].includes(o.proof_status)) || null;
 }
 
 // Read-only provider reconciliation: never sends a message.
