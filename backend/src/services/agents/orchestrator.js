@@ -2,6 +2,41 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+const SIMPLE_MESSAGE_PARTS = [
+  'buenos dias', 'buenas tardes', 'buenas noches', 'buen dia',
+  'muchas gracias', 'como estas', 'que tal',
+  'hola', 'holis', 'hi', 'hello', 'hey', 'buenas', 'saludos',
+  'bien', 'gracias', 'ok', 'okay', 'si', 'no', 'claro', 'dale',
+  'perfecto', 'listo', 'entendido', 'ya', 'oka', 'okey',
+];
+
+/**
+ * Reconoce saludos y cierres aunque WhatsApp los agrupe en varias líneas.
+ * Ejemplos válidos: "Buen día", "Hola\nBuen día", "Hola, buenos días 👋".
+ */
+function isSimpleMessage(value) {
+  let remaining = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[¡!¿?.,;:()\[\]{}"']/g, ' ')
+    .replace(/[👍😊🙏👋]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!remaining) return false;
+
+  for (let count = 0; count < 4 && remaining; count++) {
+    const part = SIMPLE_MESSAGE_PARTS.find(candidate =>
+      remaining === candidate || remaining.startsWith(`${candidate} `)
+    );
+    if (!part) return false;
+    remaining = remaining.slice(part.length).trim();
+  }
+
+  return remaining.length === 0;
+}
+
 /**
  * Agente Orquestador — Clasifica la intención del cliente
  * Usa claude-haiku (rápido y barato) para esta tarea simple
@@ -87,8 +122,7 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
   }
 
   // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────
-  const simpleMsg = /^(hola|hi|hello|hey|buenas?|buen[oa]s? (días?|tardes?|noches?)|como estas?|qué tal|cómo estás?|saludos?|holis?|que tal|ke tal|bien|gracias?|ok|okay|si|no|claro|dale|perfecto|listo|entendido|ya|oka|okey|👍|😊|🙏)\s*[!?\.]*$/i;
-  if (simpleMsg.test(userMessage.trim())) {
+  if (isSimpleMessage(userMessage)) {
     return { escalate: false, reason: 'Mensaje simple', urgency: 'low' };
   }
 
@@ -207,4 +241,4 @@ Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgenc
   }
 }
 
-module.exports = { classifyIntent, checkEscalation };
+module.exports = { classifyIntent, checkEscalation, isSimpleMessage };

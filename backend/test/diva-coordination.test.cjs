@@ -3,6 +3,33 @@ const assert = require('node:assert/strict');
 const { load } = require('./helpers.cjs');
 const conversationMode = require('../src/services/conversation-mode');
 
+test('saludos simples y combinados nunca activan una escalación por el historial anterior', async () => {
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async () => { throw new Error('no debe consultar IA para un saludo'); } };
+    }
+  }
+  const orchestrator = load('src/services/agents/orchestrator.js', {
+    '@anthropic-ai/sdk': Anthropic,
+  });
+  const oldBillingContext = [
+    { direction: 'inbound', content: 'Hay una factura duplicada' },
+    { direction: 'outbound', content: 'Lo revisa el equipo' },
+    { direction: 'inbound', content: 'Gracias' },
+    { direction: 'outbound', content: 'Que tengas buen día' },
+    { direction: 'inbound', content: 'Envié los respaldos' },
+    { direction: 'outbound', content: 'Los revisaremos' },
+    { direction: 'inbound', content: 'Ok' },
+    { direction: 'outbound', content: 'Quedó pendiente' },
+  ];
+
+  for (const greeting of ['Buen dia', 'Buen día', 'Buenos días', 'Hola\nBuen dia', 'Hola, buenos días 👋']) {
+    const result = await orchestrator.checkEscalation(greeting, oldBillingContext, 'idle', 1);
+    assert.equal(result.escalate, false, greeting);
+    assert.equal(result.reason, 'Mensaje simple', greeting);
+  }
+});
+
 test('Diva coordinates safely and never sends an ambiguous admin instruction', async () => {
   let systemPrompt = '';
   class Anthropic {
