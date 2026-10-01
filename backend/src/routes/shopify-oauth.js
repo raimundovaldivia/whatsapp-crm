@@ -19,6 +19,7 @@
 const express    = require('express');
 const router     = express.Router();
 const crypto     = require('crypto');
+const { URLSearchParams } = require('url');
 const axios      = require('axios');
 const db         = require('../db/database');
 const { getPool } = require('../db/database');
@@ -29,6 +30,7 @@ const API_KEY    = process.env.SHOPIFY_API_KEY    || '';
 const API_SECRET = process.env.SHOPIFY_API_SECRET || '';
 const SCOPES     = process.env.SHOPIFY_SCOPES
   || 'read_products,write_draft_orders,read_draft_orders,read_orders,write_orders,read_customers';
+const HISTORICAL_SCOPES = [...new Set(`${SCOPES},read_all_orders`.split(',').map(s => s.trim()).filter(Boolean))].join(',');
 const CRM_URL    = process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL || 'http://localhost:3001';
 const FRONTEND   = process.env.FRONTEND_URL   || 'http://localhost:5173';
 
@@ -85,15 +87,17 @@ router.get('/auth-url', requireAuth, requireRole('owner', 'admin'), (req, res) =
   }
 
   const state = crypto.randomBytes(16).toString('hex');
+  const historical = String(req.query.historical || '') === '1';
   pendingStates.set(state, {
     shop,
     orgId: req.orgId,
+    historical,
     expiresAt: Date.now() + 10 * 60 * 1000,
   });
 
   const authUrl = `https://${shop}/admin/oauth/authorize?` + new URLSearchParams({
     client_id:           API_KEY,
-    scope:               SCOPES,
+    scope:               historical ? HISTORICAL_SCOPES : SCOPES,
     redirect_uri:        REDIRECT_URI,
     state,
     'grant_options[]':   'offline',
@@ -120,15 +124,17 @@ router.get('/connect', requireAuth, requireRole('owner', 'admin'), (req, res) =>
 
   // Generar nonce único para CSRF protection
   const state = crypto.randomBytes(16).toString('hex');
+  const historical = String(req.query.historical || '') === '1';
   pendingStates.set(state, {
     shop,
     orgId: req.orgId,
+    historical,
     expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutos
   });
 
   const authUrl = `https://${shop}/admin/oauth/authorize?` + new URLSearchParams({
     client_id:    API_KEY,
-    scope:        SCOPES,
+    scope:        historical ? HISTORICAL_SCOPES : SCOPES,
     redirect_uri: REDIRECT_URI,
     state,
     'grant_options[]': 'offline', // token permanente que no expira
@@ -173,10 +179,11 @@ router.get('/callback', async (req, res) => {
     return res.redirect(`${FRONTEND}?shopify_error=invalid_state`);
   }
   pendingStates.delete(state);
-  const { orgId } = pending;
+  const { orgId, historical = false } = pending;
 
   // ── Intercambiar código por access_token ────────────────────────
   let accessToken;
+  let grantedScopes = [];
   try {
     const { data } = await axios.post(
       `https://${shop}/admin/oauth/access_token`,
@@ -184,6 +191,7 @@ router.get('/callback', async (req, res) => {
       { timeout: 15000 }
     );
     accessToken = data.access_token;
+    grantedScopes = String(data.scope || '').split(',').map(scope => scope.trim()).filter(Boolean);
     if (!accessToken) throw new Error('Shopify no devolvió access_token');
   } catch (err) {
     console.error('[ShopifyOAuth] Error intercambiando token:', err.message);
@@ -192,7 +200,7 @@ router.get('/callback', async (req, res) => {
 
   // ── Guardar en data_sources ──────────────────────────────────────
   try {
-    await upsertShopifyDataSource(orgId, shop, accessToken);
+    await upsertShopifyDataSource(orgId, shop, accessToken, grantedScopes);
   } catch (err) {
     console.error('[ShopifyOAuth] Error guardando en DB:', err.message);
     return res.redirect(`${FRONTEND}?shopify_error=${encodeURIComponent('Token obtenido pero error guardando en DB')}`);
@@ -204,9 +212,12 @@ router.get('/callback', async (req, res) => {
   syncShopifyCustomers(orgId).catch(err =>
     console.warn('[ShopifyOAuth] Sync clientes background error:', err.message)
   );
+  syncShopifyOrders(orgId).catch(err =>
+    console.warn('[ShopifyOAuth] Sync órdenes background error:', err.message)
+  );
 
   // ── Redirigir al frontend con éxito ─────────────────────────────
-  res.redirect(`${FRONTEND}?shopify_success=1&shop=${encodeURIComponent(shop)}`);
+  res.redirect(`${FRONTEND}?shopify_success=1&shop=${encodeURIComponent(shop)}${historical ? '&historical=1' : ''}`);
 });
 
 /**
@@ -217,10 +228,14 @@ router.get('/status', requireAuth, requireRole('owner', 'admin'), async (req, re
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ connected: false });
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const scopes = await shopifyApi.getAccessScopes(shop, token).catch(() => ds.config?.scopes || []);
     res.json({
       connected: true,
       shop: ds.config?.storeUrl || ds.name,
       connectedAt: ds.created_at,
+      scopes,
+      historicalOrders: scopes.includes('read_all_orders'),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -256,6 +271,29 @@ router.post('/sync-customers', requireAuth, requireRole('owner', 'admin'), async
     res.json({ success: true, ...stats });
   } catch (err) {
     console.error('[ShopifyOAuth] sync-customers error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST /api/shopify-oauth/sync-history ─────────────────────────
+// Importa todas las órdenes disponibles. Shopify sólo entrega pedidos de más
+// de 60 días cuando el token tiene el permiso protegido read_all_orders.
+router.post('/sync-history', requireAuth, requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const ds = await db.getPrimaryDataSource(req.orgId);
+    if (!ds?.config?.accessToken) return res.status(400).json({ error: 'No hay conexión con Shopify configurada' });
+    const { shop, token } = shopifyApi.credentialsFrom(ds);
+    const scopes = await shopifyApi.getAccessScopes(shop, token);
+    if (!scopes.includes('read_all_orders')) {
+      return res.status(409).json({
+        error: 'Shopify todavía no autorizó el acceso al historial completo.',
+        code: 'HISTORICAL_ACCESS_REQUIRED',
+      });
+    }
+    const stats = await syncShopifyOrders(req.orgId);
+    res.json({ success: true, ...stats });
+  } catch (err) {
+    console.error('[ShopifyOAuth] sync-history error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -305,11 +343,26 @@ async function syncShopifyCustomers(orgId) {
   return { synced, skipped, total: customers.length };
 }
 
+async function syncShopifyOrders(orgId) {
+  const ds = await db.getPrimaryDataSource(orgId);
+  if (!ds?.config?.accessToken) throw new Error('No hay conexión con Shopify configurada');
+  const { shop, token } = shopifyApi.credentialsFrom(ds);
+  const orders = await shopifyApi.getAllOrders(shop, token, { status: 'any' });
+  await db.upsertShopifyOrders(orgId, orders);
+
+  const dates = orders.map(order => order.createdAt).filter(Boolean).sort();
+  return {
+    synced: orders.length,
+    oldestOrderAt: dates[0] || null,
+    newestOrderAt: dates[dates.length - 1] || null,
+  };
+}
+
 // ─── Helper: upsert del data source Shopify ──────────────────────
 
-async function upsertShopifyDataSource(orgId, shop, accessToken) {
+async function upsertShopifyDataSource(orgId, shop, accessToken, scopes = []) {
   const pool  = getPool();
-  const config = JSON.stringify({ storeUrl: shop, accessToken });
+  const config = JSON.stringify({ storeUrl: shop, accessToken, scopes });
 
   // Verificar si ya existe un data source de Shopify para esta org
   const { rows } = await pool.query(

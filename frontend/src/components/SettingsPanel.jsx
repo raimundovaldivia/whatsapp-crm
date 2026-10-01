@@ -96,6 +96,7 @@ function ShopifyTab() {
   const [error, setError]         = useState('');
   const [success, setSuccess]     = useState('');
   const [syncing, setSyncing]     = useState(false);
+  const [historySyncing, setHistorySyncing] = useState(false);
 
   const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', padding: undefined });
   const inp = {
@@ -107,15 +108,19 @@ function ShopifyTab() {
   useEffect(() => {
     setupAPI.shopifyStatus().then(r => {
       setStatus(r);
-      if (r.shop) setShopInput(r.shop.replace('.myshopify.com', ''));
+      const connectedShop = r.shop || r.storeUrl || '';
+      if (connectedShop) setShopInput(connectedShop.replace('.myshopify.com', ''));
     }).catch(() => {}).finally(() => setStatusLoading(false));
 
     // Detectar retorno del OAuth de Shopify
     const params = new URLSearchParams(window.location.search);
     if (params.get('shopify_success') === '1') {
       const shop = params.get('shop') || '';
+      const historical = params.get('historical') === '1';
       window.history.replaceState({}, '', window.location.pathname);
-      setSuccess(`✅ Shopify conectado: ${shop}`);
+      setSuccess(historical
+        ? '✅ Shopify autorizó la reconexión. Estamos importando el historial completo de pedidos.'
+        : `✅ Shopify conectado: ${shop}`);
       setupAPI.shopifyStatus().then(setStatus).catch(() => {});
     }
     if (params.get('shopify_error')) {
@@ -124,13 +129,13 @@ function ShopifyTab() {
     }
   }, []);
 
-  const connectOAuth = async () => {
+  const connectOAuth = async (historical = false) => {
     if (!shopInput.trim()) { setError('Ingresa el dominio de tu tienda'); return; }
     setLoading(true); setError('');
     try {
       const { api } = await import('../utils/api.js');
       const shop = shopInput.trim().replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*/, '').replace(/\/$/, '');
-      const { data } = await api.get('/shopify-oauth/auth-url', { params: { shop } });
+      const { data } = await api.get('/shopify-oauth/auth-url', { params: { shop, historical: historical ? 1 : undefined } });
       if (data.url) {
         window.location.href = data.url;
       } else {
@@ -178,7 +183,7 @@ function ShopifyTab() {
                   <CheckCircle size={16} color={colors.green} />
                   <div>
                     <div style={{ color: colors.green, fontSize: '13px', fontWeight: 600 }}>Shopify conectado</div>
-                    <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '1px' }}>{status.shop}</div>
+                    <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '1px' }}>{status.shop || status.storeUrl}</div>
                   </div>
                 </div>
                 <button
@@ -208,6 +213,34 @@ function ShopifyTab() {
               <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.7 }}>
                 Esto importa todos los clientes de Shopify a tu CRM para que el bot los reconozca automáticamente. También se hace en automático al conectar Shopify.
               </div>
+
+              <div style={{ border: `1px solid ${status.historicalOrders ? colors.green + '66' : colors.yellow + '66'}`, backgroundColor: status.historicalOrders ? `${colors.green}10` : `${colors.yellow}10`, borderRadius: 10, padding: '14px 16px' }}>
+                <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 750 }}>
+                  {status.historicalOrders ? '✓ Historial completo habilitado' : 'Historial antiguo pendiente'}
+                </div>
+                <div style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 1.55, marginTop: 4 }}>
+                  {status.historicalOrders
+                    ? `Shopify permite importar pedidos antiguos. Actualmente hay ${status.orderCoverage?.count || 0} pedidos sincronizados${status.orderCoverage?.oldestOrderAt ? ` desde ${new Date(status.orderCoverage.oldestOrderAt).toLocaleDateString('es-CL')}` : ''}.`
+                    : 'La conexión actual sólo permite consultar el período reciente de Shopify. Activa el permiso histórico para recuperar compradores antiguos y segmentarlos por producto.'}
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!status.historicalOrders) return connectOAuth(true);
+                    setHistorySyncing(true); setError(''); setSuccess('');
+                    try {
+                      const { data } = await api.post('/shopify-oauth/sync-history', {}, { timeout: 600000 });
+                      const refreshed = await setupAPI.shopifyStatus();
+                      setStatus(refreshed);
+                      setSuccess(`✅ ${data.synced} pedidos históricos importados desde Shopify.`);
+                    } catch (err) {
+                      setError(err.response?.data?.error || 'No se pudo importar el historial de pedidos');
+                    } finally { setHistorySyncing(false); }
+                  }}
+                  disabled={loading || historySyncing}
+                  style={{ marginTop: 10, padding: '9px 13px', borderRadius: 8, border: 'none', backgroundColor: status.historicalOrders ? colors.green : colors.yellow, color: '#fff', fontSize: 12, fontWeight: 750, cursor: loading || historySyncing ? 'not-allowed' : 'pointer', opacity: loading || historySyncing ? 0.65 : 1 }}>
+                  {historySyncing ? 'Importando historial…' : status.historicalOrders ? 'Importar historial completo ahora' : 'Habilitar historial completo'}
+                </button>
+              </div>
             </>
           ) : (
             /* No conectado — flujo OAuth */
@@ -225,13 +258,13 @@ function ShopifyTab() {
                     value={shopInput}
                     onChange={e => setShopInput(e.target.value)}
                     placeholder="mi-tienda"
-                    onKeyDown={e => e.key === 'Enter' && connectOAuth()}
+                    onKeyDown={e => e.key === 'Enter' && connectOAuth(false)}
                   />
                   <span style={{ color: colors.textMuted, fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>.myshopify.com</span>
                 </div>
               </div>
               <button
-                onClick={connectOAuth}
+                onClick={() => connectOAuth(false)}
                 disabled={loading || !shopInput.trim()}
                 style={{ padding: '12px', borderRadius: '9px', fontSize: '14px', fontWeight: 600, backgroundColor: (!shopInput.trim() || loading) ? colors.borderStrong : colors.green, color: 'white', cursor: (!shopInput.trim() || loading) ? 'not-allowed' : 'pointer', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                 🛍️ Conectar con Shopify

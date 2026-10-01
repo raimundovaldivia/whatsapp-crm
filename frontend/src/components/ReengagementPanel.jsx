@@ -1429,7 +1429,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       setProdPhones(set);
       // Auto-seleccionar los contactos que quedan tras el filtro
       setSelected(new Set(contacts.filter(c => set.has(normPhone(c.phone))).map(c => c.phone)));
-      showToast(`${set.size} cliente(s) compraron "${term}"`);
+      if (!data.historyComplete) {
+        const since = data.orderCoverage?.oldestOrderAt
+          ? ` desde ${new Date(data.orderCoverage.oldestOrderAt).toLocaleDateString('es-CL')}`
+          : '';
+        showToast(`${set.size} coincidencias en el historial disponible${since}. Falta habilitar el historial completo de Shopify.`, 'error');
+      } else {
+        showToast(`${set.size} cliente(s) compraron "${term}"`);
+      }
     } catch (e) {
       showToast('No se pudo filtrar por producto: ' + (e.response?.data?.error || e.message), 'error');
     } finally { setProdBusy(false); }

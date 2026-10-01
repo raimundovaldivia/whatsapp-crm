@@ -99,6 +99,20 @@ test('malformed OAuth HMAC returns a controlled redirect',async()=>{
   await handler(router,'get','/callback')({query:{code:'fake',shop:'audit.myshopify.com',hmac:'x',state:'fake'}},res);
   assert.match(res.location,/invalid_hmac/);
 });
+test('historical Shopify reconnect requests read_all_orders only when explicitly selected',async()=>{
+  const router=load('src/routes/shopify-oauth.js',{
+    '../middleware/auth':authStub,
+    '../db/database':{},
+    'url':require('node:url'),
+  }, {process:{env:{SHOPIFY_API_KEY:'key',SHOPIFY_API_SECRET:'secret'}}});
+  const authUrl=handler(router,'get','/auth-url');
+  const recent=response();
+  await authUrl({orgId:1,query:{shop:'demo'}},recent);
+  assert.doesNotMatch(recent.body.url,/read_all_orders/);
+  const historical=response();
+  await authUrl({orgId:1,query:{shop:'demo',historical:'1'}},historical);
+  assert.match(decodeURIComponent(historical.body.url),/read_all_orders/);
+});
 
 test('durable inbox rejects delivery when PostgreSQL persistence fails',async()=>{
   const inbox=load('src/services/webhook-inbox.js',{'../db/database':{getPool:()=>({query:async()=>{throw Error('offline')}})}});

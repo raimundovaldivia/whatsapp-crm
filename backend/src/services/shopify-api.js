@@ -41,6 +41,18 @@ function credentialsFrom(ds) {
   return { shop, token };
 }
 
+/**
+ * Devuelve los permisos que Shopify realmente concedió al token actual.
+ * Se consulta a Shopify porque las conexiones antiguas no guardaban scopes.
+ */
+async function getAccessScopes(shop, token) {
+  const { data } = await axios.get(`https://${shop}/admin/oauth/access_scopes.json`, {
+    headers: { 'X-Shopify-Access-Token': token },
+    timeout: 15000,
+  });
+  return (data?.access_scopes || []).map(scope => scope.handle).filter(Boolean);
+}
+
 // ─── Productos ──────────────────────────────────────────────────
 
 const PRODUCTS_QUERY = `
@@ -810,7 +822,7 @@ async function buildFullStoreContext(shop, token, orgName = '') {
 }
 
 module.exports = {
-  credentialsFrom,
+  credentialsFrom, getAccessScopes,
   getProducts,
   getAllProducts,
   getCustomers,

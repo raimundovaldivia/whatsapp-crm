@@ -298,7 +298,24 @@ router.get('/by-product', requireContactsAccess, async (req, res) => {
       return n;
     };
     const phones = [...new Set(rows.map(r => norm(r.customer_phone)).filter(Boolean))];
-    res.json({ success: true, phones, count: phones.length, term: q });
+    const ds = await db.getPrimaryDataSource(req.orgId);
+    const scopes = ds?.config?.scopes || [];
+    const { rows: coverageRows } = await pool.query(
+      `SELECT COUNT(*)::int AS count, MIN(shopify_created_at) AS oldest_order_at
+         FROM shopify_orders WHERE organization_id = $1`,
+      [req.orgId]
+    );
+    res.json({
+      success: true,
+      phones,
+      count: phones.length,
+      term: q,
+      historyComplete: scopes.includes('read_all_orders'),
+      orderCoverage: {
+        count: coverageRows[0]?.count || 0,
+        oldestOrderAt: coverageRows[0]?.oldest_order_at || null,
+      },
+    });
   } catch (err) {
     console.error('[Contacts/by-product]', err.message);
     res.status(500).json({ success: false, error: err.message });

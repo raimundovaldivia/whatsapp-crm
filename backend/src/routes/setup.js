@@ -179,11 +179,35 @@ router.post('/shopify', requireAuth, async (req, res) => {
 router.get('/shopify-status', requireAuth, async (req, res) => {
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
+    const connected = !!ds?.config?.accessToken;
+    let scopes = ds?.config?.scopes || [];
+    let coverage = { order_count: 0, oldest_order_at: null, newest_order_at: null };
+
+    if (connected) {
+      const { shop, token } = shopifyApi.credentialsFrom(ds);
+      scopes = await shopifyApi.getAccessScopes(shop, token).catch(() => scopes);
+      const { rows } = await getPool().query(
+        `SELECT COUNT(*)::int AS order_count,
+                MIN(shopify_created_at) AS oldest_order_at,
+                MAX(shopify_created_at) AS newest_order_at
+           FROM shopify_orders WHERE organization_id = $1`,
+        [req.orgId]
+      );
+      coverage = rows[0] || coverage;
+    }
+
     res.json({
       success:   true,
-      connected: !!ds,
+      connected,
       storeName: ds?.name || null,
       storeUrl:  ds?.config?.storeUrl || null,
+      historicalOrders: scopes.includes('read_all_orders'),
+      scopes,
+      orderCoverage: {
+        count: coverage.order_count,
+        oldestOrderAt: coverage.oldest_order_at,
+        newestOrderAt: coverage.newest_order_at,
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
