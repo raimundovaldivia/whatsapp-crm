@@ -22,6 +22,7 @@ const axios  = require('axios');
 const crypto = require('crypto');
 
 const BASE_URL = 'https://api.kapso.ai/meta/whatsapp';
+const PLATFORM_URL = 'https://api.kapso.ai/platform/v1/whatsapp';
 const API_VER  = 'v24.0';
 // Evita que una campaña quede esperando indefinidamente cuando Kapso o Meta
 // no responden. El flujo masivo se detiene y conserva el avance auditable.
@@ -422,6 +423,49 @@ async function sendTemplate(to, templateName, languageCode = 'es', components = 
 }
 
 /**
+ * Las campañas deben usar la API asíncrona de Broadcasts de Kapso. Así el
+ * servidor no mantiene cientos de solicitudes individuales abiertas mientras
+ * Meta procesa cada destinatario.
+ */
+async function createBroadcast(name, whatsappTemplateId, config) {
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey) throw new Error('No hay Kapso API Key disponible');
+  const response = await axios.post(`${PLATFORM_URL}/broadcasts`, {
+    whatsapp_broadcast: {
+      name,
+      phone_number_id: config.phone_number_id,
+      whatsapp_template_id: whatsappTemplateId,
+    },
+  }, {
+    headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+    timeout: KAPSO_REQUEST_TIMEOUT_MS,
+  });
+  return response.data?.data || response.data;
+}
+
+async function addBroadcastRecipients(broadcastId, recipients, config) {
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey) throw new Error('No hay Kapso API Key disponible');
+  const response = await axios.post(`${PLATFORM_URL}/broadcasts/${broadcastId}/recipients`, {
+    whatsapp_broadcast: { recipients },
+  }, {
+    headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+    timeout: KAPSO_REQUEST_TIMEOUT_MS,
+  });
+  return response.data?.data || response.data;
+}
+
+async function startBroadcast(broadcastId, config) {
+  const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
+  if (!apiKey) throw new Error('No hay Kapso API Key disponible');
+  const response = await axios.post(`${PLATFORM_URL}/broadcasts/${broadcastId}/send`, null, {
+    headers: { 'X-API-Key': apiKey },
+    timeout: KAPSO_REQUEST_TIMEOUT_MS,
+  });
+  return response.data?.data || response.data;
+}
+
+/**
  * Crea un template de WhatsApp en Meta Business Manager via Kapso.
  * El template queda en estado PENDING hasta que Meta lo aprueba (1-3 días).
  * @param {Object} templateData - { name, language, category, components }
@@ -486,4 +530,4 @@ async function getMessageStatus(messageId, config) {
   return parseStatusUpdate({ message: data }, `whatsapp.message.${status}`);
 }
 
-module.exports = { getMessageStatus, sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createTemplate, getMediaUrl, downloadMedia };
+module.exports = { getMessageStatus, sendTextMessage, markAsRead, parseWebhookMessage, parseStatusUpdate, verifySignature, is24hWindowError, getTemplates, sendTemplate, createBroadcast, addBroadcastRecipients, startBroadcast, createTemplate, getMediaUrl, downloadMedia };

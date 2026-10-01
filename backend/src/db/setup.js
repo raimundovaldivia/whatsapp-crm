@@ -858,6 +858,15 @@ async function setupDatabase() {
       ALTER TABLE broadcast_campaign_recipients
         ADD COLUMN IF NOT EXISTS template_components JSONB;
 
+      ALTER TABLE broadcast_campaign_recipients
+        DROP CONSTRAINT IF EXISTS broadcast_campaign_recipients_result_status_check;
+      ALTER TABLE broadcast_campaign_recipients
+        ADD CONSTRAINT broadcast_campaign_recipients_result_status_check
+        CHECK(result_status IN ('accepted','skipped','failed','unknown'));
+
+      ALTER TABLE broadcast_campaigns
+        ADD COLUMN IF NOT EXISTS provider_broadcast_id TEXT;
+
       CREATE TABLE IF NOT EXISTS broadcast_followup_jobs (
         id                 BIGSERIAL PRIMARY KEY,
         organization_id    INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,

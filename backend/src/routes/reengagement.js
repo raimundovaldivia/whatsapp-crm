@@ -203,14 +203,19 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
     // Asociar sólo cuando existe una campaña iniciada pocos minutos antes.
     // Esto recupera el contador histórico sin atribuir envíos manuales lejanos.
     const campaignResult = await getPool().query(
-      `SELECT id, template_name
-         FROM broadcast_campaigns
-        WHERE organization_id = $1
-          AND created_at <= $2
-          AND created_at > $2 - INTERVAL '5 minutes'
-        ORDER BY created_at DESC
+      `SELECT c.id, c.template_name
+         FROM broadcast_campaigns c
+         LEFT JOIN broadcast_campaign_recipients r
+           ON r.campaign_id = c.id
+          AND r.destination_phone = $3
+          AND r.result_status = 'unknown'
+        WHERE c.organization_id = $1
+          AND c.created_at <= $2
+          AND c.created_at > $2 - INTERVAL '24 hours'
+          AND (r.id IS NOT NULL OR c.created_at > $2 - INTERVAL '5 minutes')
+        ORDER BY (r.id IS NOT NULL) DESC, c.created_at DESC
         LIMIT 1`,
-      [orgId, providerMessage.first_seen_at]
+      [orgId, providerMessage.first_seen_at, phone]
     );
     const campaign = campaignResult.rows[0] || null;
     const contactResult = await getPool().query(
@@ -237,6 +242,21 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
       });
 
     if (campaign) {
+      // Si la llamada HTTP quedó incierta, el webhook es la confirmación
+      // definitiva. Actualizamos ese mismo registro en vez de duplicarlo.
+      const recoveredRecipient = await getPool().query(
+        `UPDATE broadcast_campaign_recipients
+            SET result_status = 'accepted', whatsapp_message_id = $1,
+                error_code = NULL, error_message = NULL, error_detail = NULL
+          WHERE id = (
+            SELECT id FROM broadcast_campaign_recipients
+             WHERE campaign_id = $2 AND organization_id = $3
+               AND destination_phone = $4 AND result_status = 'unknown'
+             ORDER BY id DESC LIMIT 1
+          )
+        RETURNING id`,
+        [providerMessage.whatsapp_message_id, campaign.id, orgId, phone]
+      );
       await getPool().query(
         `INSERT INTO broadcast_campaign_recipients
            (campaign_id, organization_id, destination_phone, original_phone,
@@ -246,9 +266,9 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
           WHERE NOT EXISTS (
             SELECT 1 FROM broadcast_campaign_recipients
              WHERE organization_id = $2 AND whatsapp_message_id = $6
-          )`,
+          ) AND $7::boolean = FALSE`,
         [campaign.id, orgId, phone, contactName, campaign.template_name,
-          providerMessage.whatsapp_message_id]
+          providerMessage.whatsapp_message_id, recoveredRecipient.rowCount > 0]
       );
     }
 
@@ -1714,6 +1734,7 @@ router.get('/campaigns', async (req, res) => {
          GREATEST(c.total_count - COUNT(r.id), 0)::int AS pending_count,
          COUNT(*) FILTER (WHERE r.result_status = 'skipped')::int AS skipped_count,
          COUNT(*) FILTER (WHERE r.result_status = 'failed' OR m.status = 'failed')::int AS failed_count,
+         COUNT(*) FILTER (WHERE r.result_status = 'unknown')::int AS unknown_count,
          COUNT(*) FILTER (WHERE r.result_status = 'accepted' AND m.status = 'read')::int AS read_count,
          COUNT(*) FILTER (WHERE r.result_status = 'accepted' AND m.status = 'delivered')::int AS delivered_count,
          COUNT(*) FILTER (WHERE r.result_status = 'accepted' AND COALESCE(m.status, 'sent') IN ('pending','sent'))::int AS accepted_count
@@ -1730,7 +1751,7 @@ router.get('/campaigns', async (req, res) => {
       const result = await getPool().query(
         `SELECT campaign_id, result_status, error_code, error_message, COUNT(*)::int AS total
          FROM broadcast_campaign_recipients
-         WHERE campaign_id = ANY($1::bigint[]) AND result_status IN ('failed','skipped')
+         WHERE campaign_id = ANY($1::bigint[]) AND result_status IN ('failed','skipped','unknown')
          GROUP BY campaign_id, result_status, error_code, error_message
          ORDER BY total DESC`,
         [ids]
@@ -1924,6 +1945,139 @@ router.post('/send', async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────────────────────────────
+   POST /api/reengagement/send-broadcast
+   Crea una campaña asíncrona nativa en Kapso para uno o más clientes.
+   Kapso conserva la cola aunque el navegador se cierre.
+──────────────────────────────────────────────────────────────────── */
+router.post('/send-broadcast', async (req, res) => {
+  const { items, campaignId = null } = req.body;
+  if (!Array.isArray(items) || !items.length) {
+    return res.status(400).json({ success: false, error: 'items[] requerido' });
+  }
+  const campaign = campaignId ? await getBroadcastCampaign(req.orgId, campaignId) : null;
+  if (campaignId && !campaign) {
+    return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+  }
+  const templateNames = [...new Set(items.map(item => item.templateName).filter(Boolean))];
+  if (templateNames.length !== 1 || items.some(item => !item.templateName)) {
+    return res.status(400).json({ success: false, error: 'La campaña debe usar un único template aprobado' });
+  }
+
+  const wc = await db.getWhatsappConfig(req.orgId);
+  if (!wc || wc.provider !== 'kapso') {
+    return res.status(400).json({ success: false, error: 'Broadcast requiere una conexión activa con Kapso' });
+  }
+  const marketingPermitted = await require('../services/commercial').permitted(req.orgId, 'marketing');
+  if (!marketingPermitted) {
+    return res.status(403).json({ success: false, error: 'Contrato no disponible' });
+  }
+
+  const results = [];
+  const eligible = [];
+  for (const rawItem of items) {
+    const item = { ...rawItem, phone: db.normalizePhone(rawItem.phone) };
+    if (!item.phone) {
+      await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'failed', errorMessage: 'Número inválido' });
+      results.push({ phone: rawItem.phone, success: false, error: 'Número inválido' });
+      continue;
+    }
+    if (await templateSentToday(req.orgId, item.phone)) {
+      await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: 'Ya recibió un template hoy' });
+      results.push({ phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' });
+      continue;
+    }
+    if (await customerRecentlyDeclined(req.orgId, item.phone)) {
+      await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: 'Cliente declinó recientemente' });
+      results.push({ phone: item.phone, success: false, skipped: true, error: 'Cliente declinó recientemente' });
+      continue;
+    }
+    eligible.push(item);
+  }
+
+  if (!eligible.length) {
+    return res.json({ success: true, sent: 0, skipped: results.length, pending: 0, failed: 0, results });
+  }
+
+  const kapso = require('../services/kapso-whatsapp');
+  let providerBroadcastId = null;
+  try {
+    const templates = await kapso.getTemplates(wc);
+    const language = eligible[0].languageCode || 'es';
+    const template = templates.find(candidate => candidate.name === templateNames[0]
+      && (!candidate.language || candidate.language === language || candidate.language_code === language));
+    const templateId = template?.meta_template_id || template?.id;
+    if (!templateId) throw new Error(`No se encontró el template aprobado ${templateNames[0]} (${language})`);
+
+    const label = `${templateNames[0]} ${new Date().toISOString()} CRM-${campaignId || 'manual'}`;
+    const providerBroadcast = await kapso.createBroadcast(label, templateId, wc);
+    providerBroadcastId = providerBroadcast?.id;
+    if (!providerBroadcastId) throw new Error('Kapso no devolvió el identificador del broadcast');
+
+    const providerRecipients = eligible.map(item => ({
+      phone_number: `+${item.phone}`,
+      components: item.components || [],
+    }));
+    const added = await kapso.addBroadcastRecipients(providerBroadcastId, providerRecipients, wc);
+    if (Number(added?.added || 0) < 1) {
+      throw new Error(added?.errors?.join(' · ') || 'Kapso no aceptó ningún destinatario');
+    }
+    const rejectedIndexes = new Set((added?.errors || []).flatMap(message => {
+      const match = String(message).match(/Recipient\s+(\d+)/i);
+      return match ? [Math.max(Number(match[1]) - 1, 0)] : [];
+    }));
+    const queued = eligible.filter((item, index) => !rejectedIndexes.has(index));
+    const rejected = eligible.filter((item, index) => rejectedIndexes.has(index));
+    await kapso.startBroadcast(providerBroadcastId, wc);
+
+    if (campaignId) {
+      await getPool().query(
+        'UPDATE broadcast_campaigns SET provider_broadcast_id = $1 WHERE id = $2 AND organization_id = $3',
+        [providerBroadcastId, campaignId, req.orgId]
+      );
+    }
+    await Promise.all(queued.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
+      status: 'unknown',
+      errorMessage: 'Broadcast iniciado; esperando confirmación individual de WhatsApp',
+      errorDetail: { providerBroadcastId },
+    })));
+    await Promise.all(rejected.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
+      status: 'failed', errorMessage: 'Kapso rechazó los datos de este destinatario',
+      errorDetail: { providerBroadcastId, errors: added?.errors || [] },
+    })));
+    queued.forEach(item => results.push({
+      phone: item.phone, success: false, pending: true,
+      error: 'Broadcast iniciado; esperando confirmación individual de WhatsApp',
+    }));
+    rejected.forEach(item => results.push({
+      phone: item.phone, success: false, error: 'Kapso rechazó los datos de este destinatario',
+    }));
+    return res.status(202).json({
+      success: true, providerBroadcastId, sent: 0,
+      skipped: results.filter(result => result.skipped).length,
+      pending: queued.length, failed: rejected.length, results,
+    });
+  } catch (err) {
+    const timedOut = err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT' || /timeout/i.test(String(err?.message || ''));
+    const failure = describeBroadcastError(err);
+    const status = timedOut && providerBroadcastId ? 'unknown' : 'failed';
+    await Promise.all(eligible.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
+      status,
+      errorCode: failure.code,
+      errorMessage: timedOut && providerBroadcastId
+        ? 'Kapso recibió la campaña, pero aún no confirmó su inicio. No la reenvíes.'
+        : failure.message,
+      errorDetail: { providerBroadcastId, provider: failure.detail },
+    })));
+    if (timedOut && providerBroadcastId) {
+      eligible.forEach(item => results.push({ phone: item.phone, success: false, pending: true, error: 'Resultado por confirmar' }));
+      return res.status(202).json({ success: true, providerBroadcastId, sent: 0, skipped: 0, pending: eligible.length, failed: 0, results });
+    }
+    eligible.forEach(item => results.push({ phone: item.phone, success: false, error: failure.message, errorCode: failure.code }));
+    return res.status(502).json({ success: false, error: failure.message, providerBroadcastId, results });
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────────
    POST /api/reengagement/send-bulk
    Soporta dos modos por ítem:
      A) Texto libre:  { phone, message }
@@ -2045,12 +2199,17 @@ router.post('/send-bulk', async (req, res) => {
         // Kapso puede aceptar el mensaje y demorar o perder la respuesta HTTP.
         // El webhook durable confirmará después el estado real. Marcarlo como
         // fallido induciría al administrador a reenviarlo y duplicarlo.
-        results.push({
+        const pendingResult = {
           phone: item.phone,
           success: false,
           pending: true,
           error: 'WhatsApp aún no confirmó el resultado. No reenvíes; el historial se actualizará automáticamente.',
+        };
+        await recordBroadcastRecipient(req.orgId, campaignId, item, {
+          status: 'unknown', errorMessage: pendingResult.error,
+          errorDetail: { code: err?.code || null, message: err?.message || null },
         });
+        results.push(pendingResult);
         continue;
       }
       const failure = describeBroadcastError(err);

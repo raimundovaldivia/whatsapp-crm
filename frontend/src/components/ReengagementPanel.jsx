@@ -1567,37 +1567,59 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         testPhone: reviewPlan.testPhone || null,
       });
       campaignId = created.data.campaign.id;
-      // Lotes pequeños reducen las consultas repetidas al proveedor y mantienen
-      // un avance frecuente sin arriesgar toda la campaña en una sola petición.
-      const CHUNK = reviewPlan.testMode ? 1 : 3;
       let sent = 0, failed = 0, skipped = 0, pending = 0;
       const failureReasons = [];
       setSendProgress({ done: 0, total: items.length });
-      for (let i = 0; i < items.length; i += CHUNK) {
-        const part = items.slice(i, i + CHUNK);
-        try {
-          const res = await api.post('/reengagement/send-bulk', { items: part, campaignId }, { timeout: 90000 });
-          const r = res.data.results || [];
-          sent    += r.filter(x => x.success).length;
-          skipped += r.filter(x => x.skipped).length;
-          pending += r.filter(x => x.pending).length;
-          failed  += r.filter(x => !x.success && !x.skipped && !x.pending).length;
-          r.filter(x => !x.success).forEach(result => {
-            const reason = result.error || (result.skipped ? 'Envío omitido' : 'WhatsApp rechazó el mensaje');
+      if (!reviewPlan.testMode) {
+        const response = await api.post('/reengagement/send-broadcast', { items, campaignId }, { timeout: 60000 });
+        const providerResults = response.data.results || [];
+        sent = providerResults.filter(result => result.success).length;
+        skipped = providerResults.filter(result => result.skipped).length;
+        pending = providerResults.filter(result => result.pending).length;
+        failed = providerResults.filter(result => !result.success && !result.skipped && !result.pending).length;
+        providerResults.filter(result => !result.success).forEach(result => {
+          const reason = result.error || (result.skipped ? 'Envío omitido' : 'WhatsApp rechazó el mensaje');
+          if (!failureReasons.includes(reason)) failureReasons.push(reason);
+        });
+        setSendProgress({ done: items.length, total: items.length });
+      } else {
+      // La prueba continúa usando el endpoint individual para confirmar de
+      // inmediato el contenido en el número indicado.
+      const concurrency = reviewPlan.testMode ? 1 : Math.min(8, items.length);
+      let nextIndex = 0;
+      let completed = 0;
+      const workers = Array.from({ length: concurrency }, async () => {
+        while (true) {
+          const index = nextIndex++;
+          if (index >= items.length) return;
+          const item = items[index];
+          try {
+            const res = await api.post('/reengagement/send-bulk', { items: [item], campaignId }, { timeout: 45000 });
+            const result = (res.data.results || [])[0];
+            if (result?.success) sent++;
+            else if (result?.skipped) skipped++;
+            else if (result?.pending) pending++;
+            else failed++;
+            if (result && !result.success) {
+              const reason = result.error || (result.skipped ? 'Envío omitido' : 'WhatsApp rechazó el mensaje');
+              if (!failureReasons.includes(reason)) failureReasons.push(reason);
+            }
+          } catch (error) {
+            campaignStatus = 'interrupted';
+            const timedOut = error.code === 'ECONNABORTED';
+            if (timedOut) pending++;
+            else failed++;
+            const reason = error.response?.data?.error || (timedOut
+              ? 'La confirmación demoró demasiado. No reenvíes: el historial verificará el resultado.'
+              : error.message || 'No se pudo procesar este destinatario');
             if (!failureReasons.includes(reason)) failureReasons.push(reason);
-          });
-        } catch (e) {
-          campaignStatus = 'interrupted';
-          const timedOut = e.code === 'ECONNABORTED';
-          const reason = e.response?.data?.error || (timedOut
-            ? 'La app dejó de esperar, pero WhatsApp todavía puede haber aceptado el mensaje. Revisa el historial antes de reenviar.'
-            : e.message);
-          const sendError = new Error(`El envío se detuvo en ${i}/${items.length} para evitar duplicados. ${reason}`);
-          sendError.deliveryUnconfirmed = timedOut;
-          sendError.pendingCount = part.length;
-          throw sendError;
+          } finally {
+            completed++;
+            setSendProgress({ done: completed, total: items.length });
+          }
         }
-        setSendProgress({ done: Math.min(i + CHUNK, items.length), total: items.length });
+      });
+      await Promise.all(workers);
       }
       setResults({ sent, failed, skipped, pending, reasons: failureReasons });
       if (pending > 0) {
@@ -1886,6 +1908,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             const failed = Number(campaign.failed_count || 0);
             const skipped = Number(campaign.skipped_count || 0);
             const pending = Number(campaign.pending_count || 0);
+            const uncertain = Number(campaign.unknown_count || 0);
             const isOpen = String(expandedCampaign) === String(campaign.id);
             return (
               <div key={campaign.id} style={{ border: `1px solid ${failed ? colors.red + '55' : colors.border}`, borderRadius: 9, backgroundColor: colors.bgCard, overflow: 'hidden' }}>
@@ -1899,14 +1922,15 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                       {read > 0 && <span style={{ color: colors.green }}>👁 {read} leídos</span>}
                       {delivered > 0 && <span style={{ color: colors.green }}>✓ {delivered} entregados</span>}
                       {accepted > 0 && <span style={{ color: colors.blue }}>↗ {accepted} aceptados</span>}
+                      {uncertain > 0 && <span style={{ color: colors.yellow }}>⏳ {uncertain} por confirmar</span>}
                       {pending > 0 && <span style={{ color: colors.yellow }}>◷ {pending} sin procesar</span>}
                       {skipped > 0 && <span style={{ color: colors.textMuted }}>⊘ {skipped} omitidos</span>}
                       {failed > 0 && <span style={{ color: colors.red }}>✕ {failed} fallidos</span>}
                     </div>
                   </div>
                   {(campaign.reasons || []).slice(0, 2).map((reason, idx) => (
-                    <div key={`${reason.error_code || 'reason'}-${idx}`} style={{ color: reason.result_status === 'failed' ? colors.red : colors.textSecondary, fontSize: 11, marginTop: 6 }}>
-                      {reason.total} {reason.result_status === 'failed' ? 'fallidos' : 'omitidos'}: {reason.error_message || 'Sin detalle'}{reason.error_code ? ` (código ${reason.error_code})` : ''}
+                    <div key={`${reason.error_code || 'reason'}-${idx}`} style={{ color: reason.result_status === 'failed' ? colors.red : (reason.result_status === 'unknown' ? colors.yellow : colors.textSecondary), fontSize: 11, marginTop: 6 }}>
+                      {reason.total} {reason.result_status === 'failed' ? 'fallidos' : (reason.result_status === 'unknown' ? 'por confirmar' : 'omitidos')}: {reason.error_message || 'Sin detalle'}{reason.error_code ? ` (código ${reason.error_code})` : ''}
                     </div>
                   ))}
                 </button>
