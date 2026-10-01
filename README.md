@@ -1,6 +1,6 @@
-# 🤖 WhatsApp CRM con Agente IA para Shopify
+# 🤖 Aplicación comercial con WhatsApp y agentes de IA
 
-Un CRM completo de WhatsApp con agente de inteligencia artificial que responde automáticamente a tus clientes usando el catálogo de tu tienda Shopify. Construido con **Claude (Anthropic)**, **Node.js**, **React** y la **API de WhatsApp Business de Meta**.
+Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de inteligencia artificial, ventas y pedidos. Puede usar Shopify como conexión de catálogo y operaciones, y admite Meta, Kapso, Twilio y varios números mediante Evolution API.
 
 ---
 
@@ -9,7 +9,7 @@ Un CRM completo de WhatsApp con agente de inteligencia artificial que responde a
 - 💬 **UI tipo WhatsApp** — interfaz familiar para gestionar todas las conversaciones
 - 🤖 **Agente IA con Claude** — responde preguntas sobre productos, precios y disponibilidad
 - ⏸️ **Toggle IA/Humano por conversación** — pausa el bot y toma control cuando quieras
-- 🛍️ **Integración Shopify** — el agente conoce tu catálogo completo en tiempo real
+- 🛍️ **Conexión Shopify** — aporta catálogo, clientes y pedidos cuando está habilitada
 - 🔔 **Tiempo real** — los mensajes aparecen instantáneamente con Socket.io
 - 📦 **Cache de productos** — evita llamadas excesivas a la API de Shopify
 - 📊 **Contador de no leídos** — igual que WhatsApp

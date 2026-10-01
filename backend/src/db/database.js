@@ -153,9 +153,10 @@ async function upsertWhatsappConfig(orgId, config) {
       phone_number_id, business_account_id, access_token, webhook_verify_token,
       twilio_account_sid, twilio_auth_token, twilio_phone_number,
       kapso_api_key, webhook_secret, kapso_customer_id,
+      evolution_api_url, evolution_api_key, evolution_instance, evolution_webhook_token,
       status
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'connected')
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'connected')
     ON CONFLICT(organization_id) DO UPDATE SET
       provider              = EXCLUDED.provider,
       phone_number_id       = EXCLUDED.phone_number_id,
@@ -168,6 +169,10 @@ async function upsertWhatsappConfig(orgId, config) {
       kapso_api_key         = EXCLUDED.kapso_api_key,
       webhook_secret        = EXCLUDED.webhook_secret,
       kapso_customer_id     = EXCLUDED.kapso_customer_id,
+      evolution_api_url       = EXCLUDED.evolution_api_url,
+      evolution_api_key       = EXCLUDED.evolution_api_key,
+      evolution_instance      = EXCLUDED.evolution_instance,
+      evolution_webhook_token = EXCLUDED.evolution_webhook_token,
       status                = 'connected'`,
     [
       orgId,
@@ -182,6 +187,10 @@ async function upsertWhatsappConfig(orgId, config) {
       config.kapsoApiKey         || null,
       config.webhookSecret       || null,
       config.kapsoCustomerId     || null,
+      config.evolutionApiUrl       || null,
+      config.evolutionApiKey       || null,
+      config.evolutionInstance     || null,
+      config.evolutionWebhookToken || null,
     ]
   );
 }
@@ -209,6 +218,95 @@ async function getOrgByTwilioNumber(twilioPhoneNumber) {
   if (!wc) return null;
   const org = await getOrgById(wc.organization_id);
   return { org, whatsappConfig: wc };
+}
+
+async function createWhatsappChannel(orgId, channel) {
+  return getPool().connect().then(async client => {
+    try {
+      await client.query('BEGIN');
+      const existingDefault = await client.query(
+        'SELECT 1 FROM whatsapp_channels WHERE organization_id = $1 AND is_default = TRUE LIMIT 1',
+        [orgId]
+      );
+      const makeDefault = channel.isDefault === true || existingDefault.rowCount === 0;
+      if (makeDefault) {
+        await client.query('UPDATE whatsapp_channels SET is_default = FALSE, updated_at = NOW() WHERE organization_id = $1', [orgId]);
+      }
+      const { rows: [saved] } = await client.query(
+        `INSERT INTO whatsapp_channels (
+           organization_id, provider, name, phone_number, evolution_api_url,
+           evolution_api_key, evolution_instance, webhook_token, status, is_default
+         ) VALUES ($1, 'evolution', $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (organization_id, provider, evolution_instance) DO UPDATE SET
+           name = EXCLUDED.name,
+           phone_number = COALESCE(EXCLUDED.phone_number, whatsapp_channels.phone_number),
+           evolution_api_url = EXCLUDED.evolution_api_url,
+           evolution_api_key = EXCLUDED.evolution_api_key,
+           webhook_token = EXCLUDED.webhook_token,
+           status = EXCLUDED.status,
+           is_default = CASE WHEN EXCLUDED.is_default THEN TRUE ELSE whatsapp_channels.is_default END,
+           updated_at = NOW()
+         RETURNING *`,
+        [orgId, channel.name, channel.phoneNumber || null, channel.evolutionApiUrl,
+          channel.evolutionApiKey, channel.evolutionInstance, channel.webhookToken,
+          channel.status || 'pending', makeDefault]
+      );
+      await client.query('COMMIT');
+      return saved;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally { client.release(); }
+  });
+}
+
+async function listWhatsappChannels(orgId) {
+  return query(
+    `SELECT id, organization_id, provider, name, phone_number, evolution_api_url,
+            evolution_instance, status, is_default, created_at, updated_at
+       FROM whatsapp_channels WHERE organization_id = $1
+      ORDER BY is_default DESC, id ASC`,
+    [orgId]
+  );
+}
+
+async function getWhatsappChannel(orgId, channelId) {
+  return queryOne('SELECT * FROM whatsapp_channels WHERE id = $1 AND organization_id = $2', [channelId, orgId]);
+}
+
+async function getDefaultWhatsappChannel(orgId) {
+  return queryOne(
+    'SELECT * FROM whatsapp_channels WHERE organization_id = $1 ORDER BY is_default DESC, id ASC LIMIT 1',
+    [orgId]
+  );
+}
+
+async function setDefaultWhatsappChannel(orgId, channelId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT id FROM whatsapp_channels WHERE id = $1 AND organization_id = $2 FOR UPDATE', [channelId, orgId]);
+    if (!found.rowCount) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    await client.query('UPDATE whatsapp_channels SET is_default = FALSE, updated_at = NOW() WHERE organization_id = $1', [orgId]);
+    const { rows: [updated] } = await client.query('UPDATE whatsapp_channels SET is_default = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *', [channelId]);
+    await client.query('COMMIT');
+    return updated;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally { client.release(); }
+}
+
+async function updateWhatsappChannelStatus(orgId, channelId, status, phoneNumber = null) {
+  return queryOne(
+    `UPDATE whatsapp_channels SET status = $1,
+       phone_number = COALESCE($2, phone_number), updated_at = NOW()
+     WHERE id = $3 AND organization_id = $4 RETURNING *`,
+    [status, phoneNumber, channelId, orgId]
+  );
 }
 
 // ─── DATA SOURCES ─────────────────────────────────────────────────
@@ -324,13 +422,13 @@ function normalizeName(name) {
 
 // ─── CONVERSATIONS ────────────────────────────────────────────────
 
-async function upsertConversation(orgId, phoneNumber, contactName = null) {
+async function upsertConversation(orgId, phoneNumber, contactName = null, whatsappChannelId = null) {
   // Normalizar: siempre con código de país, sin "+"
   const phone = normalizePhone(phoneNumber);
 
   const existing = await queryOne(
-    'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2',
-    [orgId, phone]
+    'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2 AND whatsapp_channel_id IS NOT DISTINCT FROM $3',
+    [orgId, phone, whatsappChannelId]
   );
 
   const isGenericName = n => !n || n === 'Cliente' || /^\d+$/.test(n);
@@ -346,8 +444,8 @@ async function upsertConversation(orgId, phoneNumber, contactName = null) {
     }
   } else {
     await queryOne(
-      `INSERT INTO conversations (organization_id, phone_number, contact_name) VALUES ($1, $2, $3) RETURNING *`,
-      [orgId, phone, resolvedName || phone]
+      `INSERT INTO conversations (organization_id, phone_number, contact_name, whatsapp_channel_id) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [orgId, phone, resolvedName || phone, whatsappChannelId]
     );
   }
 
@@ -364,8 +462,8 @@ async function upsertConversation(orgId, phoneNumber, contactName = null) {
   } catch (_) {}
 
   return queryOne(
-    'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2',
-    [orgId, phone]
+    'SELECT * FROM conversations WHERE organization_id = $1 AND phone_number = $2 AND whatsapp_channel_id IS NOT DISTINCT FROM $3',
+    [orgId, phone, whatsappChannelId]
   );
 }
 
@@ -393,8 +491,11 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
            ELSE c.contact_name
          END AS contact_name,
          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
-         co.client_type
+         co.client_type,
+         wc.name AS whatsapp_channel_name,
+         wc.phone_number AS whatsapp_channel_phone
        FROM conversations c
+       LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
        LEFT JOIN contacts co ON co.organization_id = c.organization_id
                              AND co.phone = ANY(ARRAY[
                                    c.phone_number,
@@ -1530,6 +1631,8 @@ module.exports = {
   createUser, getUserByEmail, getUserById,
   // WhatsApp
   upsertWhatsappConfig, getWhatsappConfig, getOrgByWebhookToken, getOrgByPhoneNumberId, getOrgByTwilioNumber,
+  createWhatsappChannel, listWhatsappChannels, getWhatsappChannel, getDefaultWhatsappChannel,
+  setDefaultWhatsappChannel, updateWhatsappChannelStatus,
   // Data sources
   createDataSource, getDataSources, getDataSource, updateDataSourceStatus, getPrimaryDataSource,
   // Agents

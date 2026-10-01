@@ -14,6 +14,7 @@ const crypto  = require('crypto');
 const db      = require('../db/database');
 const { getPool, normalizePhone } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
+const whatsappProvider = require('../services/whatsapp-provider');
 // Invalida el caché de reenganche en DB cuando llega un pedido nuevo
 function clearReengagementCache(orgId) {
   const { getPool } = require('../db/database');
@@ -118,7 +119,7 @@ async function handleOrderPaid(orgId, shopifyOrder) {
   });
 
   const conv = await db.getConversationById(localOrder.conversation_id);
-  const wc   = await db.getWhatsappConfig(orgId);
+  const wc   = conv ? await whatsappProvider.configForConversation(orgId, conv) : null;
 
   if (conv && wc) {
     const customerName = shopifyOrder.customer?.first_name || conv.contact_name || 'cliente';
@@ -133,7 +134,7 @@ async function handleOrderPaid(orgId, shopifyOrder) {
       `Te avisaremos cuando tu pedido esté en camino 🚚\n` +
       `¡Gracias por tu compra!`;
 
-    await whatsappService.sendTextMessage(conv.phone_number, confirmMsg, wc);
+    await whatsappProvider.sendTextMessage(conv.phone_number, confirmMsg, wc);
 
     await db.saveMessage({
       conversationId: conv.id,
@@ -209,10 +210,10 @@ async function handleOrderCancelled(orgId, shopifyOrder) {
     io?.to(`org_${orgId}`).emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: 'cancelled' });
 
     const conv = await db.getConversationById(localOrder.conversation_id);
-    const wc   = await db.getWhatsappConfig(orgId);
+    const wc   = conv ? await whatsappProvider.configForConversation(orgId, conv) : null;
     if (conv && wc) {
       const msg = `Tu pedido #${shopifyOrder.order_number} ha sido cancelado. Si tienes alguna pregunta, con gusto te ayudamos 😊`;
-      await whatsappService.sendTextMessage(conv.phone_number, msg, wc);
+      await whatsappProvider.sendTextMessage(conv.phone_number, msg, wc);
       await db.saveMessage({ conversationId: conv.id, direction: 'outbound', content: msg, sentBy: 'ai', agentType: 'orders' });
     }
   }

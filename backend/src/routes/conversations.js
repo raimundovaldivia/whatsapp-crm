@@ -5,6 +5,7 @@ const { getPool } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 const twilioService   = require('../services/twilio-whatsapp');
 const kapsoService    = require('../services/kapso-whatsapp');
+const whatsappProvider = require('../services/whatsapp-provider');
 const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
@@ -12,6 +13,19 @@ const { isCustomerMessagingHour, shouldSkipAutomatedFollowUp } = require('../ser
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
+
+async function outboundConfig(orgId, conversation = null, requestedChannelId = null) {
+  const channelId = requestedChannelId || conversation?.whatsapp_channel_id;
+  if (channelId) {
+    const channel = await db.getWhatsappChannel(orgId, Number(channelId));
+    if (channel) return channel;
+  }
+  const legacyConfig = await db.getWhatsappConfig(orgId);
+  if (conversation && legacyConfig) return legacyConfig;
+  const defaultChannel = await db.getDefaultWhatsappChannel(orgId);
+  if (defaultChannel) return defaultChannel;
+  return legacyConfig;
+}
 
 // Todas las rutas requieren auth
 router.use(requireAuth);
@@ -56,19 +70,13 @@ router.post('/:id/messages', async (req, res) => {
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
-    const wc = await db.getWhatsappConfig(req.orgId);
+    const wc = await outboundConfig(req.orgId, conv);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
     // Enviar por el proveedor correcto según configuración
     let sentResult;
     try {
-      if (wc.provider === 'twilio') {
-        sentResult = await twilioService.sendTextMessage(conv.phone_number, text.trim(), wc);
-      } else if (wc.provider === 'kapso') {
-        sentResult = await kapsoService.sendTextMessage(conv.phone_number, text.trim(), wc);
-      } else {
-        sentResult = await whatsappService.sendTextMessage(conv.phone_number, text.trim(), wc);
-      }
+      sentResult = await whatsappProvider.sendTextMessage(conv.phone_number, text.trim(), wc);
     } catch (sendErr) {
       if (sendErr.is24hWindow) {
         return res.status(400).json({
@@ -82,7 +90,7 @@ router.post('/:id/messages', async (req, res) => {
 
     const message = await db.saveMessage({
       conversationId: conv.id,
-      whatsappMessageId: sentResult?.messageId || sentResult?.messages?.[0]?.id || null,
+      whatsappMessageId: whatsappProvider.messageId(sentResult),
       direction: 'outbound',
       content: text.trim(),
       sentBy: 'human',
@@ -147,48 +155,27 @@ router.patch('/:id/read', async (req, res) => {
  */
 router.post('/start', async (req, res) => {
   try {
-    const { phone, name, text } = req.body;
+    const { phone, name, text, channelId } = req.body;
     if (!phone?.trim()) return res.status(400).json({ success: false, error: 'Número de teléfono requerido' });
     if (!text?.trim())  return res.status(400).json({ success: false, error: 'Mensaje requerido' });
 
     // Normalizar el teléfono: con código de país, sin +
     const phoneNorm = db.normalizePhone(phone.trim());
 
-    const wc = await db.getWhatsappConfig(req.orgId);
+    const wc = await outboundConfig(req.orgId, null, channelId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
-    // Buscar conversación existente con ese número
-    const { rows: existing } = await getPool().query(
-      `SELECT id FROM conversations WHERE organization_id = $1 AND phone_number = $2 LIMIT 1`,
-      [req.orgId, phoneNorm]
-    );
-
-    let convId;
-    if (existing.length > 0) {
-      convId = existing[0].id;
-    } else {
-      // Crear nueva conversación
-      const { rows: created } = await getPool().query(
-        `INSERT INTO conversations (organization_id, phone_number, contact_name, last_message, agent_mode, pipeline_state)
-         VALUES ($1, $2, $3, $4, 'human', 'exploring') RETURNING id`,
-        [req.orgId, phoneNorm, name?.trim() || phoneNorm, text.trim()]
-      );
-      convId = created[0].id;
-    }
+    const selectedChannelId = wc.provider === 'evolution' ? wc.id : null;
+    const existingConversation = await db.upsertConversation(req.orgId, phoneNorm, name?.trim() || null, selectedChannelId);
+    const convId = existingConversation.id;
 
     // Enviar por el proveedor correcto
     let sentResult;
-    if (wc.provider === 'twilio') {
-      sentResult = await twilioService.sendTextMessage(phoneNorm, text.trim(), wc);
-    } else if (wc.provider === 'kapso') {
-      sentResult = await kapsoService.sendTextMessage(phoneNorm, text.trim(), wc);
-    } else {
-      sentResult = await whatsappService.sendTextMessage(phoneNorm, text.trim(), wc);
-    }
+    sentResult = await whatsappProvider.sendTextMessage(phoneNorm, text.trim(), wc);
 
     const message = await db.saveMessage({
       conversationId: convId,
-      whatsappMessageId: sentResult?.messages?.[0]?.id || null,
+      whatsappMessageId: whatsappProvider.messageId(sentResult),
       direction: 'outbound',
       content: text.trim(),
       sentBy: 'human',
@@ -536,6 +523,7 @@ router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), as
        FROM conversations c_keep
        JOIN conversations c_dupe
          ON c_dupe.organization_id = c_keep.organization_id
+        AND c_dupe.whatsapp_channel_id IS NOT DISTINCT FROM c_keep.whatsapp_channel_id
         AND c_dupe.phone_number = '+' || c_keep.phone_number
        WHERE c_keep.organization_id = $1
          AND c_keep.phone_number NOT LIKE '+%'`,
@@ -557,6 +545,7 @@ router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), as
        FROM conversations c_long
        JOIN conversations c_short
          ON c_short.organization_id = c_long.organization_id
+        AND c_short.whatsapp_channel_id IS NOT DISTINCT FROM c_long.whatsapp_channel_id
         AND c_long.phone_number = '56' || c_short.phone_number
        WHERE c_long.organization_id = $1
          AND c_short.phone_number ~ '^9[0-9]{8}$'`,
@@ -577,6 +566,7 @@ router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), as
        FROM conversations c_long
        JOIN conversations c_short
          ON c_short.organization_id = c_long.organization_id
+        AND c_short.whatsapp_channel_id IS NOT DISTINCT FROM c_long.whatsapp_channel_id
         AND c_long.phone_number = '56' || c_short.phone_number
        WHERE c_long.organization_id = $1
          AND c_short.phone_number ~ '^9[0-9]{8}$'
@@ -592,6 +582,7 @@ router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), as
        FROM conversations c_full
        JOIN conversations c_short
          ON c_short.organization_id = c_full.organization_id
+        AND c_short.whatsapp_channel_id IS NOT DISTINCT FROM c_full.whatsapp_channel_id
         AND c_full.phone_number = '+56' || c_short.phone_number
        WHERE c_full.organization_id = $1
          AND c_short.phone_number ~ '^9[0-9]{8}$'`,
@@ -632,6 +623,7 @@ router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), as
          AND NOT EXISTS (
            SELECT 1 FROM conversations c2
            WHERE c2.organization_id = $1
+             AND c2.whatsapp_channel_id IS NOT DISTINCT FROM conversations.whatsapp_channel_id
              AND c2.phone_number = '56' || conversations.phone_number
          )`,
       [req.orgId]
@@ -644,6 +636,7 @@ router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), as
          AND NOT EXISTS (
            SELECT 1 FROM conversations c2
            WHERE c2.organization_id = $1
+             AND c2.whatsapp_channel_id IS NOT DISTINCT FROM conversations.whatsapp_channel_id
              AND c2.phone_number = SUBSTRING(conversations.phone_number FROM 2)
          )`,
       [req.orgId]

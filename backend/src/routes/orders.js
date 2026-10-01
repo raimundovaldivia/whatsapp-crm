@@ -14,6 +14,7 @@ const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
 const collection  = require('../services/payment-collection');
+const { recordRouteOutcome } = require('../services/delivery-attempts');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 let io;
@@ -760,35 +761,51 @@ router.patch('/reschedule', async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
     return res.status(400).json({ success: false, error: 'date debe ser YYYY-MM-DD' });
   }
+  let client;
+  let committed = false;
   try {
-    const pool = getPool();
+    client = await getPool().connect();
     const stamp = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' });
     const reason = (note || '').toString().slice(0, 200);
     const noteText = `[reprogramado ${stamp}] para ${date}${reason ? ` — ${reason}` : ''}`;
+    await client.query('BEGIN');
     const { rowCount } = source === 'shopify'
-      ? await pool.query(
+      ? await client.query(
           `UPDATE shopify_orders
               SET delivery_date = $1::date,
-                  crm_status    = CASE WHEN crm_status = 'cancelled' THEN 'por_despachar' ELSE crm_status END,
+                  crm_status    = 'por_despachar',
                   delivery_note = $4,
                   last_attempt_status = 'reprogramado',
+                  last_attempt_at = NOW(),
                   synced_at     = NOW()
             WHERE shopify_order_id = $2 AND organization_id = $3`,
           [date, String(id), req.orgId, noteText]
         )
-      : await pool.query(
+      : await client.query(
           `UPDATE orders
               SET delivery_date = $1::date,
-                  status        = CASE WHEN status = 'cancelled' THEN 'por_despachar' ELSE status END,
+                  status        = 'por_despachar',
                   last_attempt_status = 'reprogramado',
+                  last_attempt_at = NOW(),
                   notes         = COALESCE(notes, '') || $4,
                   updated_at    = NOW()
             WHERE id = $2 AND organization_id = $3`,
           [date, parseInt(id), req.orgId, `\n[admin] ${noteText}`]
         );
-    if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
-    res.json({ success: true, date });
+    if (!rowCount) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    }
+    const routeIds = await recordRouteOutcome(client, req.orgId, source, id, 'postponed', noteText);
+    await client.query('COMMIT');
+    committed = true;
+    client.release();
+    client = null;
+    res.json({ success: true, date, historicalRoutes: routeIds });
   } catch (err) {
+    if (client && !committed) await client.query('ROLLBACK').catch(() => {});
+    client?.release?.();
     console.error('[Orders/reschedule]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
@@ -989,12 +1006,13 @@ router.post('/:id/resend-link', async (req, res) => {
     if (!order) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
     if (!order.invoice_url) return res.status(400).json({ success: false, error: 'Sin link de pago disponible' });
 
-    const whatsappService = require('../services/whatsapp');
-    const wc = await db.getWhatsappConfig(req.orgId);
+    const whatsappProvider = require('../services/whatsapp-provider');
+    const conv = await db.getConversationById(order.conversation_id, req.orgId);
+    const wc = await whatsappProvider.configForConversation(req.orgId, conv);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
     const msg = `🔔 Recordatorio de tu pedido:\n\n💳 Completa tu pago aquí:\n${order.invoice_url}\n\n¡Te esperamos! 😊`;
-    await whatsappService.sendTextMessage(order.phone_number, msg, wc);
+    await whatsappProvider.sendTextMessage(order.phone_number, msg, wc);
 
     res.json({ success: true, message: 'Link reenviado correctamente' });
   } catch (err) {

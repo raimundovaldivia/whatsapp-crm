@@ -10,6 +10,7 @@ import {
   Eye, EyeOff, Save, Zap, FileText, ChevronRight,
   Sparkles, ArrowRight, Clock, MapPin, DollarSign, CreditCard,
   Bot, X, Send, RotateCcw, FlaskConical, Store, LayoutGrid,
+  QrCode, Plus, Radio,
 } from 'lucide-react';
 import { setupAPI, api, storeSettingsAPI, settingsAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
@@ -350,6 +351,110 @@ function KapsoReconnectPanel({ colors }) {
 /* ══════════════════════════════════════════════
    TAB WHATSAPP
 ══════════════════════════════════════════════ */
+function EvolutionChannelsPanel({ colors }) {
+  const [channels, setChannels] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [qr, setQr] = useState(null);
+  const [form, setForm] = useState({
+    name: '', phoneNumber: '', evolutionApiUrl: '', evolutionApiKey: '', evolutionInstance: '', isDefault: false,
+  });
+
+  const load = async () => {
+    try {
+      const r = await api.get('/settings/whatsapp/channels');
+      setChannels(r.data?.data || []);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudieron cargar los números');
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const qrImage = (value) => {
+    const raw = value?.base64 || value?.qrcode?.base64 || value?.code || null;
+    if (!raw || typeof raw !== 'string') return null;
+    return raw.startsWith('data:image/') ? raw : `data:image/png;base64,${raw}`;
+  };
+
+  const add = async () => {
+    setSaving(true); setError(''); setSuccess(''); setQr(null);
+    try {
+      const r = await api.post('/settings/whatsapp/channels', form, { timeout: 30000 });
+      setQr(r.data?.data?.qr || null);
+      setSuccess(r.data?.warning || 'Número agregado. Escanea el QR si todavía no está conectado.');
+      setForm({ name: '', phoneNumber: '', evolutionApiUrl: form.evolutionApiUrl, evolutionApiKey: form.evolutionApiKey, evolutionInstance: '', isDefault: false });
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo agregar el número');
+    } finally { setSaving(false); }
+  };
+
+  const requestQr = async (id) => {
+    setError(''); setQr(null);
+    try {
+      const r = await api.get(`/settings/whatsapp/channels/${id}/qr`, { timeout: 20000 });
+      setQr(r.data?.data?.qr || null);
+      if (r.data?.data?.state === 'open' || r.data?.data?.state === 'connected') setSuccess('El número ya está conectado.');
+      await load();
+    } catch (err) { setError(err.response?.data?.error || 'No se pudo obtener el QR'); }
+  };
+
+  const makeDefault = async (id) => {
+    try {
+      await api.patch(`/settings/whatsapp/channels/${id}/default`);
+      setSuccess('Número predeterminado actualizado.');
+      await load();
+    } catch (err) { setError(err.response?.data?.error || 'No se pudo cambiar el número predeterminado'); }
+  };
+
+  const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', padding: undefined });
+  return (
+    <div style={card}>
+      <div style={{ padding: '16px 22px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <Radio size={17} color={colors.green} />
+        <span style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 600 }}>Números libres · Evolution API</span>
+        <span style={{ color: colors.textMuted, fontSize: '11px', marginLeft: 'auto' }}>Varios números</span>
+      </div>
+      <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <p style={{ color: colors.textSecondary, fontSize: '12px', lineHeight: 1.6, margin: 0 }}>
+          Cada número es un canal independiente. Las respuestas salen siempre por el mismo número que recibió la conversación. El predeterminado se usa al iniciar chats nuevos.
+        </p>
+
+        {!loading && channels.map(ch => (
+          <div key={ch.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: colors.bgApp, border: `1px solid ${ch.is_default ? colors.green : colors.border}`, borderRadius: '9px', padding: '11px 13px' }}>
+            <MessageCircle size={17} color={ch.status === 'connected' ? colors.green : colors.yellow} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 600 }}>{ch.name}{ch.is_default ? ' · Predeterminado' : ''}</div>
+              <div style={{ color: colors.textMuted, fontSize: '11px' }}>{ch.phone_number || ch.evolution_instance} · {ch.status}</div>
+            </div>
+            {!ch.is_default && <button onClick={() => makeDefault(ch.id)} style={{ background: 'none', color: colors.green, border: `1px solid ${colors.green}55`, borderRadius: '6px', padding: '6px 8px', cursor: 'pointer', fontSize: '11px' }}>Usar por defecto</button>}
+            <button onClick={() => requestQr(ch.id)} title="Conectar o revisar estado" style={{ background: colors.bgSub, color: colors.textSecondary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '6px', cursor: 'pointer' }}><QrCode size={15} /></button>
+          </div>
+        ))}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', paddingTop: '6px' }}>
+          <Field label="Nombre del número *" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Ventas" colors={colors} />
+          <Field label="Número (opcional)" value={form.phoneNumber} onChange={v => setForm(f => ({ ...f, phoneNumber: v }))} placeholder="56912345678" colors={colors} />
+          <Field label="URL de Evolution *" value={form.evolutionApiUrl} onChange={v => setForm(f => ({ ...f, evolutionApiUrl: v }))} placeholder="https://evolution.midominio.com" colors={colors} />
+          <Field label="Nombre de instancia *" value={form.evolutionInstance} onChange={v => setForm(f => ({ ...f, evolutionInstance: v }))} placeholder="ventas-principal" colors={colors} />
+          <div style={{ gridColumn: '1 / -1' }}><Field label="API Key *" value={form.evolutionApiKey} onChange={v => setForm(f => ({ ...f, evolutionApiKey: v }))} placeholder="API key de Evolution" password colors={colors} /></div>
+        </div>
+        <label style={{ display: 'flex', gap: '8px', alignItems: 'center', color: colors.textSecondary, fontSize: '12px' }}>
+          <input type="checkbox" checked={form.isDefault} onChange={e => setForm(f => ({ ...f, isDefault: e.target.checked }))} /> Usar como número predeterminado
+        </label>
+        <button onClick={add} disabled={saving} style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '7px', border: 'none', borderRadius: '8px', padding: '9px 14px', backgroundColor: colors.green, color: 'white', cursor: saving ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
+          {saving ? <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Plus size={15} />} Agregar número
+        </button>
+        {qrImage(qr) && <div style={{ textAlign: 'center' }}><img src={qrImage(qr)} alt="QR para vincular WhatsApp" style={{ width: '240px', maxWidth: '100%', background: 'white', padding: '10px', borderRadius: '10px' }} /><p style={{ color: colors.textSecondary, fontSize: '12px' }}>Escanéalo desde WhatsApp → Dispositivos vinculados.</p></div>}
+        {error && <Alert type="error" msg={error} colors={colors} />}
+        {success && <Alert type="success" msg={success} colors={colors} />}
+      </div>
+    </div>
+  );
+}
+
 function WhatsAppTab() {
   const { colors } = useTheme();
   const [provider,     setProvider]     = useState('meta');
@@ -480,6 +585,8 @@ function WhatsAppTab() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+      <EvolutionChannelsPanel colors={colors} />
 
       {/* Estado actual */}
       {savedProvider && (

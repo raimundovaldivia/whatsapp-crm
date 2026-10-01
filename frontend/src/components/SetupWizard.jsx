@@ -342,7 +342,7 @@ export default function SetupWizard({ org, onComplete }) {
         <div style={{ textAlign: 'center', marginBottom: '28px' }}>
           <div style={{ fontSize: '40px', marginBottom: '10px' }}>🤖</div>
           <h1 style={{ color: colors.textPrimary, fontSize: '22px', fontWeight: 700, margin: 0 }}>
-            Conecta tu WhatsApp a Shopify
+            Configura las conexiones de tu aplicación
           </h1>
           <p style={{ color: colors.textSecondary, fontSize: '14px', marginTop: '8px' }}>
             Bienvenido, <strong style={{ color: colors.textPrimary }}>{org?.name}</strong>

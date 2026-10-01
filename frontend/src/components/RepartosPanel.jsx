@@ -1168,7 +1168,7 @@ function DespachosRepartos({ colors }) {
   const days = [];
   const byDay = {};
   for (const r of filtered) {
-    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0 }; days.push(byDay[r.day]); }
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, extras: 0, deudaEmpresa: 0, deudaPersonal: 0, deudoresEmpresa: [], deudoresPersonal: [] }; days.push(byDay[r.day]); }
     const d = byDay[r.day];
     d.rows.push(r);
     if (r.status === 'entregado') {
@@ -1181,6 +1181,17 @@ function DespachosRepartos({ colors }) {
         if (['delivered', 'read'].includes(r.charge?.status)) d.cobrosEnviados++;
         else if (r.charge?.retryable) d.cobrosPendientes++;
         else if (['unknown','pending','sent'].includes(r.charge?.status)) d.cobrosSinConfirmar++;
+        if (!r.paid) {
+          const debt = (r.total || 0) + (r.extra_total || 0);
+          const debtor = { name: r.customer_name || 'Sin nombre', order: r.order_label, amount: debt, phone: r.phone || '' };
+          if (r.client_type === 'empresa') {
+            d.deudaEmpresa += debt;
+            d.deudoresEmpresa.push(debtor);
+          } else {
+            d.deudaPersonal += debt;
+            d.deudoresPersonal.push(debtor);
+          }
+        }
       }
       d.extras += r.extra_total || 0;
     } else if (r.status === 'cancelled') d.cancelados++;
@@ -1206,7 +1217,8 @@ function DespachosRepartos({ colors }) {
     entregados: t.entregados + d.entregados, cancelados: t.cancelados + d.cancelados, sinEntrega: t.sinEntrega + d.sinEntrega,
     efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia,
     cobrosEnviados: t.cobrosEnviados + d.cobrosEnviados, cobrosPendientes: t.cobrosPendientes + d.cobrosPendientes,
-  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0 });
+    deudaEmpresa: t.deudaEmpresa + d.deudaEmpresa, deudaPersonal: t.deudaPersonal + d.deudaPersonal,
+  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0 });
   totals.gastos = gastosTotal;
   totals.netoEfectivo = totals.efectivo - gastosTotal;   // efectivo recaudado menos lo que gastó el repartidor
 
@@ -1214,9 +1226,9 @@ function DespachosRepartos({ colors }) {
   const timeOf = r => new Date(r.at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
 
   function exportCSV() {
-    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Teléfono', 'Dirección', 'Productos', 'Estado', 'Medio de pago', 'Total', 'Extras', 'Cobro', 'Nota'];
+    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Tipo de cliente', 'Teléfono', 'Dirección', 'Productos', 'Estado', 'Medio de pago', 'Total', 'Extras', 'Cobro', 'Nota'];
     const lines = filtered.map(r => [
-      r.day, r.time_is_exact ? timeOf(r) : '', r.driver_name || '', r.route_name, r.order_label, r.customer_name || '', r.phone || '',
+      r.day, r.time_is_exact ? timeOf(r) : '', r.driver_name || '', r.route_name, r.order_label, r.customer_name || '', r.client_type === 'empresa' ? 'Empresa' : 'Persona natural', r.phone || '',
       r.address || '', (r.items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '),
       STOP_META[r.status]?.label || r.status, PAY_META[r.payment_method]?.label || '',
       Math.round(r.total || 0), Math.round(r.extra_total || 0), chargeInfo(r)?.label || '', r.note || '',
@@ -1272,6 +1284,8 @@ function DespachosRepartos({ colors }) {
         {chip(`🏦 ${CLP(totals.transferencia)} transferencia`, '#38bdf8')}
         {chip(`💸 ${totals.cobrosEnviados} avisos de cobro entregados`, '#fbbf24')}
         {totals.cobrosPendientes > 0 && chip(`⚠️ ${totals.cobrosPendientes} sin cobrar`, '#f87171')}
+        {totals.deudaEmpresa > 0 && chip(`🏢 ${CLP(totals.deudaEmpresa)} deben empresas`, '#a78bfa')}
+        {totals.deudaPersonal > 0 && chip(`👤 ${CLP(totals.deudaPersonal)} deben personas`, '#f59e0b')}
         {totals.gastos > 0 && chip(`🧾 ${CLP(totals.gastos)} gastos`, '#fb923c')}
         {totals.gastos > 0 && chip(`💰 ${CLP(totals.netoEfectivo)} neto efectivo`, totals.netoEfectivo >= 0 ? '#22c55e' : '#f87171')}
       </div>
@@ -1302,6 +1316,8 @@ function DespachosRepartos({ colors }) {
               {chip(`🏦 ${CLP(d.transferencia)}`, '#38bdf8')}
               {d.transferencia > 0 && chip(`💬 ${d.cobrosEnviados} avisos entregados`, '#38bdf8')}
               {d.cobrosSinConfirmar > 0 && chip(`⚠️ ${d.cobrosSinConfirmar} sin confirmar`, '#fbbf24')}
+              {d.deudaEmpresa > 0 && chip(`🏢 Deben ${CLP(d.deudaEmpresa)}`, '#a78bfa')}
+              {d.deudaPersonal > 0 && chip(`👤 Deben ${CLP(d.deudaPersonal)}`, '#f59e0b')}
               {d.cobrosSinConfirmar > 0 && <button disabled={!!charging} onClick={ev => verifyCharges(d, ev)} style={{cursor:'pointer',borderRadius:'999px',padding:'4px 12px',border:`1px solid ${colors.border}`,background:colors.bgPanel,color:colors.textPrimary}}>{charging === d.day ? 'Verificando…' : 'Verificar envíos'}</button>}
               {d.extras > 0 && chip(`🥚 +${CLP(d.extras)} extras`, '#c4b5fd')}
               {d.gastos > 0 && chip(`🧾 ${CLP(d.gastos)} gastos`, '#fb923c')}
@@ -1320,7 +1336,28 @@ function DespachosRepartos({ colors }) {
               </div>
             )}
             {open && (
-              <div style={{ overflowX: 'auto' }}>
+              <div>
+                {(d.deudoresEmpresa.length > 0 || d.deudoresPersonal.length > 0) && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '10px', padding: '12px 14px', background: colors.bgPanel, borderTop: `1px solid ${colors.border}` }}>
+                    {[
+                      { title: '🏢 Empresas', total: d.deudaEmpresa, rows: d.deudoresEmpresa, color: '#a78bfa' },
+                      { title: '👤 Personas naturales', total: d.deudaPersonal, rows: d.deudoresPersonal, color: '#f59e0b' },
+                    ].filter(group => group.rows.length > 0).map(group => (
+                      <div key={group.title} style={{ border: `1px solid ${group.color}55`, borderRadius: '9px', overflow: 'hidden', background: colors.bgCard }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 11px', color: group.color, fontWeight: 800, fontSize: '12px' }}>
+                          <span>{group.title}</span><span>{CLP(group.total)}</span>
+                        </div>
+                        {group.rows.map(debtor => (
+                          <div key={`${debtor.order}_${debtor.phone}`} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '7px 11px', borderTop: `1px solid ${colors.border}`, fontSize: '11px' }}>
+                            <span style={{ color: colors.textPrimary }}>{debtor.name} <span style={{ color: colors.textMuted }}>{debtor.order}</span></span>
+                            <span style={{ color: group.color, fontWeight: 800, whiteSpace: 'nowrap' }}>{CLP(debtor.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '860px' }}>
                   <thead>
                     <tr style={{ color: colors.textMuted, fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1377,6 +1414,7 @@ function DespachosRepartos({ colors }) {
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>

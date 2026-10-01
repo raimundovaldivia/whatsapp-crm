@@ -11,7 +11,7 @@
 
 const Anthropic        = require('@anthropic-ai/sdk');
 const db               = require('../db/database');
-const kapsoService     = require('./kapso-whatsapp');
+const whatsappProvider = require('./whatsapp-provider');
 const {
   isCustomerMessagingHour,
   shouldSkipAutomatedFollowUp,
@@ -116,19 +116,19 @@ async function runFollowUp(io = null, now = new Date()) {
         }
 
         // Obtener config de WhatsApp de la org
-        const whatsappConfig = await db.getWhatsappConfig(conv.organization_id);
+        const whatsappConfig = await whatsappProvider.configForConversation(conv.organization_id, conv);
         if (!whatsappConfig) {
           console.warn(`[FollowUp] Sin WhatsApp config para org ${conv.organization_id}`);
           continue;
         }
 
         // Enviar el mensaje
-        await kapsoService.sendTextMessage(conv.phone_number, message, whatsappConfig);
+        const sent = await whatsappProvider.sendTextMessage(conv.phone_number, message, whatsappConfig);
 
         // Guardar en DB y marcar follow-up enviado
         await db.saveMessage({
           conversationId:    conv.id,
-          whatsappMessageId: null,
+          whatsappMessageId: whatsappProvider.messageId(sent),
           direction:         'outbound',
           content:           message,
           sentBy:            'ai',

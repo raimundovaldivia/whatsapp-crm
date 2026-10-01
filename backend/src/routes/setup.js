@@ -197,11 +197,13 @@ router.get('/shopify-status', requireAuth, async (req, res) => {
 router.get('/whatsapp-status', requireAuth, async (req, res) => {
   try {
     const wc = await db.getWhatsappConfig(req.orgId);
+    const channels = await db.listWhatsappChannels(req.orgId);
     res.json({
       success:       true,
-      connected:     !!wc,
-      provider:      wc?.provider || null,
+      connected:     !!wc || channels.some(channel => channel.status === 'connected'),
+      provider:      channels.length ? 'evolution' : wc?.provider || null,
       phoneNumberId: wc?.phone_number_id || null,
+      channels,
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -220,12 +222,13 @@ router.post('/complete', requireAuth, async (req, res) => {
   try {
     await db.markSetupDone(req.orgId);
     const wc = await db.getWhatsappConfig(req.orgId);
+    const channels = await db.listWhatsappChannels(req.orgId);
     const ds = await db.getPrimaryDataSource(req.orgId);
     res.json({
       success: true,
       message: '¡Setup completado!',
       warnings: [
-        ...(!wc ? ['WhatsApp no configurado — conéctalo desde Ajustes'] : []),
+        ...(!wc && !channels.length ? ['WhatsApp no configurado — conéctalo desde Ajustes'] : []),
         ...(!ds  ? ['Shopify no conectado — conéctalo desde Ajustes'] : []),
       ],
     });
@@ -242,6 +245,7 @@ router.get('/status', requireAuth, async (req, res) => {
   try {
     const org    = await db.getOrgById(req.orgId);
     const wc     = await db.getWhatsappConfig(req.orgId);
+    const channels = await db.listWhatsappChannels(req.orgId);
     const ds     = await db.getPrimaryDataSource(req.orgId);
     const agents = await db.getAgents(req.orgId);
 
@@ -250,7 +254,7 @@ router.get('/status', requireAuth, async (req, res) => {
       data: {
         setupDone: !!org.setup_done,
         steps: {
-          whatsapp: { done: !!(wc?.status === 'connected'), phoneNumberId: wc?.phone_number_id },
+          whatsapp: { done: !!(wc?.status === 'connected') || channels.some(channel => channel.status === 'connected'), phoneNumberId: wc?.phone_number_id, channels: channels.length },
           shopify:  { done: !!(ds?.status === 'connected'), storeName: ds?.name },
           agents:   { done: agents.length >= 3, count: agents.length },
         },

@@ -120,7 +120,7 @@ export default function AuthPage({ onAuth }) {
           <span style={{ color: colors.green }}>con soluciones conectadas</span>
         </h2>
         <p style={{ color: colors.textSecondary, fontSize: '15px', lineHeight: 1.6, marginBottom: '40px' }}>
-          Conecta WhatsApp y Shopify. Elige los módulos de ventas, marketing, pagos y logística que necesita tu negocio.
+          Centraliza tus canales y conecta Shopify cuando necesites catálogo, clientes o pedidos. Elige los módulos de ventas, marketing, pagos y logística para tu negocio.
         </p>
 
         {/* Features */}
@@ -181,7 +181,7 @@ export default function AuthPage({ onAuth }) {
               Resel
             </h1>
             <p style={{ color: colors.textSecondary, fontSize: '13px', margin: 0 }}>
-              Agente IA para tu tienda Shopify
+              Agentes IA para ventas y atención
             </p>
           </div>
 

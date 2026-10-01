@@ -19,6 +19,7 @@ const { getPool }   = require('../db/database');
 const kapsoService  = require('./kapso-whatsapp');
 const twilioService = require('./twilio-whatsapp');
 const metaService   = require('./whatsapp');
+const evolutionService = require('./evolution-whatsapp');
 
 // Espera mínima entre dos cobros al mismo pedido (evita spam por doble click
 // o por reintentos de la app del repartidor).
@@ -220,7 +221,8 @@ function buildChargeMessage(order, settings) {
 
 async function sendByProvider(phone, text, wc) {
   if (wc.provider === 'twilio') return twilioService.sendTextMessage(phone, text, wc);
-  if (wc.provider === 'kapso')  return kapsoService.sendTextMessage(phone, text, wc);
+  if (wc.provider === 'kapso') return kapsoService.sendTextMessage(phone, text, wc);
+  if (wc.provider === 'evolution') return evolutionService.sendTextMessage(phone, text, wc);
   return metaService.sendTextMessage(phone, text, wc);
 }
 
@@ -295,7 +297,20 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
     }
   }
 
-  const wc = await db.getWhatsappConfig(orgId);
+  let conversation = null;
+  let wc = null;
+  if (db.getDefaultWhatsappChannel) {
+    ({ rows: [conversation] } = await getPool().query(
+      `SELECT * FROM conversations WHERE organization_id=$1
+        AND regexp_replace(phone_number, '[^0-9]', '', 'g')=regexp_replace($2, '[^0-9]', '', 'g')
+        ORDER BY last_message_at DESC LIMIT 1`,
+      [orgId, order.customer_phone]
+    ));
+    if (conversation?.whatsapp_channel_id) wc = await db.getWhatsappChannel(orgId, conversation.whatsapp_channel_id);
+    if (!wc && conversation) wc = await db.getWhatsappConfig(orgId);
+    if (!wc) wc = await db.getDefaultWhatsappChannel(orgId);
+  }
+  if (!wc) wc = await db.getWhatsappConfig(orgId);
   if (!wc) return { ok: false, reason: 'whatsapp_no_configurado' };
 
   const settings = await getChargeSettings(orgId);
@@ -331,7 +346,10 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
   // Dejar el mensaje en el hilo de la conversación, para que quede trazabilidad
   // en el CRM y el bot vea el contexto.
   try {
-    const conv = await db.upsertConversation(orgId, order.customer_phone, order.customer_name);
+    const conv = await db.upsertConversation(
+      orgId, order.customer_phone, order.customer_name,
+      wc.provider === 'evolution' ? wc.id : null
+    );
     if (conv?.id) {
       const outMsg = await db.saveMessage({
         conversationId:    conv.id,

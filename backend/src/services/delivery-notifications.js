@@ -2,6 +2,7 @@ const db = require('../db/database');
 const whatsappService = require('./whatsapp');
 const twilioService = require('./twilio-whatsapp');
 const kapsoService = require('./kapso-whatsapp');
+const evolutionService = require('./evolution-whatsapp');
 
 const CUSTOMER_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -31,7 +32,7 @@ async function getCustomerServiceWindow(orgId, phone, now = new Date()) {
   if (!normalized) return { available: false, reason: 'NO_PHONE', conversationId: null, lastInboundAt: null, expiresAt: null };
 
   const { rows: [conversation] } = await db.getPool().query(`
-    SELECT c.id,
+    SELECT c.id, c.whatsapp_channel_id,
            (SELECT MAX(m.created_at)
               FROM messages m
              WHERE m.conversation_id = c.id
@@ -45,7 +46,7 @@ async function getCustomerServiceWindow(orgId, phone, now = new Date()) {
   if (!conversation) {
     return { available: false, reason: 'NO_CONVERSATION', conversationId: null, lastInboundAt: null, expiresAt: null };
   }
-  return { conversationId: conversation.id, ...windowInfoFromLastInbound(conversation.last_inbound_at, now) };
+  return { conversationId: conversation.id, whatsappChannelId: conversation.whatsapp_channel_id || null, ...windowInfoFromLastInbound(conversation.last_inbound_at, now) };
 }
 
 function enRouteText({ customerName, orderName }) {
@@ -58,12 +59,19 @@ function enRouteText({ customerName, orderName }) {
 async function sendProviderText(phone, text, config) {
   if (config.provider === 'twilio') return twilioService.sendTextMessage(phone, text, config);
   if (config.provider === 'kapso') return kapsoService.sendTextMessage(phone, text, config);
+  if (config.provider === 'evolution') return evolutionService.sendTextMessage(phone, text, config);
   return whatsappService.sendTextMessage(phone, text, config);
 }
 
 async function sendEnRouteNotification(orgId, stop) {
   const window = await getCustomerServiceWindow(orgId, stop.phone);
-  if (!window.available) {
+  let config = null;
+  if (window.whatsappChannelId && db.getWhatsappChannel) {
+    config = await db.getWhatsappChannel(orgId, window.whatsappChannelId);
+  }
+  if (!config) config = await db.getWhatsappConfig(orgId);
+  if (!config && db.getDefaultWhatsappChannel) config = await db.getDefaultWhatsappChannel(orgId);
+  if (!window.available && config?.provider !== 'evolution') {
     const error = new Error('La ventana de 24 horas está cerrada. Para avisar se necesita un template aprobado.');
     error.status = 409;
     error.code = window.reason || 'WINDOW_EXPIRED';
@@ -71,7 +79,6 @@ async function sendEnRouteNotification(orgId, stop) {
     throw error;
   }
 
-  const config = await db.getWhatsappConfig(orgId);
   if (!config) {
     const error = new Error('WhatsApp no está configurado para esta cuenta.');
     error.status = 400;

@@ -63,9 +63,10 @@ const retryDetail = stop => {
 
 // Orden de despacho: suma cantidad por producto de las paradas de la ruta.
 // Devuelve [[nombre, cantidad], ...] de mayor a menor.
-function buildManifest(stops) {
+function buildManifest(stops, statuses = {}) {
   const totals = {};
   for (const st of (stops || [])) {
+    if ((statuses[stopKeyOf(st)] || 'pending') !== 'pending') continue;
     for (const it of (st.items || [])) {
       const name = (it.name || it.title || it.product_name || 'Sin nombre').toString().trim() || 'Sin nombre';
       const qty  = Number(it.quantity) || 0;
@@ -190,9 +191,9 @@ export default function RouteScreen({ route: navRoute, navigation }) {
 
   const stops      = stopsOf(route);
   const priorityCount = stops.filter(isPriorityRetry).length;
-  const manifest   = buildManifest(stops);
-  const manifestUnits = manifest.reduce((acc, [, q]) => acc + q, 0);
   const statuses   = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
+  const manifest   = buildManifest(stops, statuses);
+  const manifestUnits = manifest.reduce((acc, [, q]) => acc + q, 0);
   const payments   = route?.stop_payments && typeof route.stop_payments === 'object' ? route.stop_payments : {};
   const loadChecklist = route?.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
   const financial = route?.financial_summary || {};
@@ -417,6 +418,9 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                       <Text style={s.retryChipText} numberOfLines={2}>{retryDetail(stop)}</Text>
                     </View>
                   )}
+                  {Array.isArray(stop.attemptHistory) && stop.attemptHistory.length > 0 ? (
+                    <Text style={s.stopHistory} numberOfLines={1}>↩️ {stop.attemptHistory.length} intento{stop.attemptHistory.length === 1 ? '' : 's'} anterior{stop.attemptHistory.length === 1 ? '' : 'es'} · revisar motivo</Text>
+                  ) : null}
                   {stop.durationText ? (
                     <Text style={s.stopTime}>{stop.distanceText} · {stop.durationText}</Text>
                   ) : null}
@@ -582,6 +586,7 @@ const s = StyleSheet.create({
   stopName:     { color: C.text, fontWeight: '700', fontSize: 15 },
   textDone:     { textDecorationLine: 'line-through', color: C.muted },
   stopAddr:     { color: C.muted, fontSize: 12 },
+  stopHistory:  { color: '#c4b5fd', fontSize: 11, fontWeight: '700', marginTop: 2 },
   stopTime:     { color: C.blue, fontSize: 11 },
   stopPay:      { color: C.muted, fontSize: 11, marginTop: 2 },
   badge:        { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1 },

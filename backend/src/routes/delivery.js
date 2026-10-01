@@ -30,6 +30,7 @@ const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
 const deliveryNotifications = require('../services/delivery-notifications');
 const push = require('../services/push');
+const { attachAttemptHistory } = require('../services/delivery-attempts');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 let io;
@@ -122,6 +123,8 @@ async function hydrateRouteItems(pool, route, orgId) {
 function buildLoadManifest(route) {
   const totals = new Map();
   for (const stop of routeStops(route)) {
+    const status = (route.stop_statuses || {})[orderKey(stop)] || 'pending';
+    if (status !== 'pending') continue;
     for (const item of (stop.items || [])) {
       const name = String(item.name || item.title || item.product_name || '').trim();
       const quantity = Number(item.quantity) || 0;
@@ -855,7 +858,8 @@ router.get('/routes/:id', async (req, res) => {
          AND ($3::int IS NULL OR r.driver_user_id = $3 OR r.driver_user_id IS NULL)
     `, [parseInt(req.params.id), req.orgId, driverScope]);
     if (!route) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
-    const hydratedRoute = await hydrateRouteItems(pool, route, req.orgId);
+    let hydratedRoute = await hydrateRouteItems(pool, route, req.orgId);
+    hydratedRoute = await attachAttemptHistory(pool, hydratedRoute, req.orgId);
     hydratedRoute.financial_summary = await routeFinancialSummary(pool, hydratedRoute, req.orgId);
     res.json({ success: true, route: hydratedRoute });
   } catch (err) {
@@ -917,7 +921,9 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
     }
     if (route.status !== 'sent') throw Object.assign(new Error('La ruta no está lista para comenzar'), { status: 409 });
 
-    const eligible = await partitionDispatchable(client, req.orgId, route.orders);
+    const statuses = route.stop_statuses || {};
+    const pendingOrders = jsonList(route.orders).filter(order => !['entregado', 'cancelled', 'postponed', 'not_delivered'].includes(statuses[orderKey(order)]));
+    const eligible = await partitionDispatchable(client, req.orgId, pendingOrders);
     if (eligible.skip.length) {
       throw Object.assign(new Error('La ruta cambió: contiene pedidos entregados, cancelados, pagados o programados para otro día. Pide al administrador que la actualice.'), { status: 409, skipped: eligible.skip });
     }
@@ -935,7 +941,7 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
         RETURNING *`,
       [route.id, req.orgId]
     );
-    await markOrdersEnRoute(client, req.orgId, route.orders);
+    await markOrdersEnRoute(client, req.orgId, pendingOrders);
     await client.query('COMMIT');
     res.json({ success: true, route: started });
   } catch (err) {
@@ -1978,6 +1984,18 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     const botMap  = new Map(botRows.map(r => [r.id, r]));
     const shopMap = new Map(shopRows.map(r => [String(r.id), r]));
     const pendingSet = new Set(pending.map(p => `${p.source}_${p.id}`));
+    const normalizePhone = value => String(value || '').replace(/\D/g, '');
+    const phones = [...new Set([...botRows, ...shopRows].map(row => normalizePhone(row.customer_phone)).filter(Boolean))];
+    const contactRows = phones.length
+      ? (await pool.query(
+          `SELECT regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') AS phone, client_type
+             FROM contacts
+            WHERE organization_id = $1
+              AND regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = ANY($2::text[])`,
+          [req.orgId, phones]
+        )).rows
+      : [];
+    const clientTypeByPhone = new Map(contactRows.map(row => [row.phone, row.client_type === 'empresa' ? 'empresa' : 'personal']));
 
     // Rutas canceladas: solo las paradas que alcanzaron a marcarse.
     const { rows: cancelledRoutes } = await pool.query(`
@@ -2025,6 +2043,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           stop_key: key, stop_number: st.stopNumber || null,
           source: st.source, order_id: String(st.id), order_label: st.orderName || `#${st.id}`,
           customer_name: st.customerName || null, phone: st.phone || ord?.customer_phone || null,
+          client_type: clientTypeByPhone.get(normalizePhone(st.phone || ord?.customer_phone)) || 'personal',
           address: st.fullAddress || null,
           items: Array.isArray(st.items) ? st.items.map(i => ({ name: i.name || i.title, quantity: i.quantity })) : [],
           total: Number(ord?.total_price ?? st.totalPrice) || 0,

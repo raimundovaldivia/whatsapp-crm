@@ -76,6 +76,10 @@ async function setupDatabase() {
         twilio_phone_number        TEXT,
         kapso_api_key              TEXT,
         webhook_secret             TEXT,
+        evolution_api_url          TEXT,
+        evolution_api_key          TEXT,
+        evolution_instance         TEXT,
+        evolution_webhook_token    TEXT,
         status                     TEXT DEFAULT 'pending',
         created_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
@@ -85,12 +89,37 @@ async function setupDatabase() {
       ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS kapso_api_key      TEXT;
       ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS webhook_secret     TEXT;
       ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS kapso_customer_id  TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS evolution_api_url       TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS evolution_api_key       TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS evolution_instance      TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS evolution_webhook_token TEXT;
+
+      -- ─── CANALES DE WHATSAPP (varios números por organización) ───
+      CREATE TABLE IF NOT EXISTS whatsapp_channels (
+        id                      SERIAL PRIMARY KEY,
+        organization_id         INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        provider                TEXT NOT NULL DEFAULT 'evolution',
+        name                    TEXT NOT NULL,
+        phone_number            TEXT,
+        evolution_api_url       TEXT NOT NULL,
+        evolution_api_key       TEXT NOT NULL,
+        evolution_instance      TEXT NOT NULL,
+        webhook_token           TEXT NOT NULL,
+        status                  TEXT NOT NULL DEFAULT 'pending',
+        is_default              BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(organization_id, provider, evolution_instance)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_channels_one_default
+        ON whatsapp_channels(organization_id) WHERE is_default;
 
       -- ─── CONVERSACIONES ─────────────────────────────────────────
 
       CREATE TABLE IF NOT EXISTS conversations (
         id              SERIAL PRIMARY KEY,
         organization_id INTEGER NOT NULL,
+        whatsapp_channel_id INTEGER REFERENCES whatsapp_channels(id) ON DELETE SET NULL,
         phone_number    TEXT NOT NULL,
         contact_name    TEXT DEFAULT 'Cliente',
         last_message    TEXT,
@@ -105,6 +134,11 @@ async function setupDatabase() {
         UNIQUE(organization_id, phone_number),
         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
       );
+
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS whatsapp_channel_id INTEGER REFERENCES whatsapp_channels(id) ON DELETE SET NULL;
+      ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_organization_id_phone_number_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_org_channel_phone
+        ON conversations(organization_id, COALESCE(whatsapp_channel_id, 0), phone_number);
 
       -- ─── MENSAJES ────────────────────────────────────────────────
 

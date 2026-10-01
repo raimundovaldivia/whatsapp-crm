@@ -91,9 +91,9 @@ export default function ConversationItem({ conversation, selected, onClick }) {
             }}>
               {displayName}
             </span>
-            {displayPhone && (
+            {(displayPhone || conversation.whatsapp_channel_name) && (
               <span style={{ fontSize: '11px', color: colors.textSecondary, display: 'block' }}>
-                {displayPhone}
+                {[displayPhone, conversation.whatsapp_channel_name ? `vía ${conversation.whatsapp_channel_name}` : null].filter(Boolean).join(' · ')}
               </span>
             )}
           </div>

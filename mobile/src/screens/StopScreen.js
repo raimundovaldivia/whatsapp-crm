@@ -23,6 +23,12 @@ const C = {
 };
 
 const isPriorityRetry = stop => stop?.isRetry === true || stop?.deliveryPriority === 'retry' || Number(stop?.dispatchCount || 0) > 0;
+const ATTEMPT_LABEL = {
+  postponed: 'Reprogramado',
+  not_delivered: 'Sin entrega',
+  cancelled: 'Cancelado',
+  entregado: 'Entregado',
+};
 
 export default function StopScreen({ route: navRoute, navigation }) {
   // onComplete es opcional y legacy: RouteScreen se refresca sola al volver.
@@ -369,6 +375,19 @@ export default function StopScreen({ route: navRoute, navigation }) {
         <Text style={s.infoValue}>{stop.orderName}</Text>
       </View>
 
+      {Array.isArray(stop.attemptHistory) && stop.attemptHistory.length > 0 && (
+        <View style={[s.infoCard, s.historyCard]}>
+          <Text style={s.infoLabel}>↩️ Historial de intentos</Text>
+          {stop.attemptHistory.map((attempt, index) => (
+            <View key={`${attempt.routeId}_${index}`} style={s.historyRow}>
+              <Text style={s.historyTitle}>{ATTEMPT_LABEL[attempt.status] || attempt.status} · {attempt.routeName || 'Ruta anterior'}</Text>
+              {attempt.note ? <Text style={s.historyNote}>{attempt.note}</Text> : null}
+            </View>
+          ))}
+          <Text style={s.historyHint}>Este pedido ya salió antes. Revisa el motivo antes de visitar al cliente.</Text>
+        </View>
+      )}
+
       {/* ─── Acciones ─── */}
       {done ? (
         <View style={s.doneBox}>
@@ -709,6 +728,11 @@ const s = StyleSheet.create({
   infoCard:     { backgroundColor: C.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.border },
   infoLabel:    { color: C.muted, fontSize: 12, fontWeight: '600', marginBottom: 6 },
   infoValue:    { color: C.text, fontSize: 17, fontWeight: '600', lineHeight: 24 },
+  historyCard:  { borderColor: '#a78bfa88', backgroundColor: '#211b36' },
+  historyRow:   { paddingVertical: 7, borderTopWidth: 1, borderTopColor: '#a78bfa33' },
+  historyTitle: { color: '#c4b5fd', fontSize: 13, fontWeight: '800' },
+  historyNote:  { color: C.text, fontSize: 12, lineHeight: 18, marginTop: 3 },
+  historyHint:  { color: C.muted, fontSize: 11, lineHeight: 16, marginTop: 5 },
   infoCity:     { color: C.muted, fontSize: 14, marginTop: 2 },
 
   navBtn:       { backgroundColor: C.blue, borderRadius: 14, padding: 18, alignItems: 'center', marginTop: 8 },

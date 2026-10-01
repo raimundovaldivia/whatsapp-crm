@@ -12,6 +12,7 @@
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
+const whatsappProvider = require('./whatsapp-provider');
 const { activateDivaForAutomatedMessage } = require('./conversation-mode');
 const { isCustomerMessagingHour } = require('./outbound-policy');
 
@@ -61,7 +62,8 @@ async function processScheduledOrder(order, io) {
   const product = product_notes || 'tu pedido';
 
   // 1. Obtener config de WhatsApp de la org
-  const wc = await db.getWhatsappConfig(orgId);
+  const conversation = await db.getConversationById(convId, orgId);
+  const wc = await whatsappProvider.configForConversation(orgId, conversation);
 
   // ─── PASO A: Crear pedido real en la tabla orders ───────────────────────
   // Siempre hacemos esto cuando llega el día, independientemente del template.
@@ -95,6 +97,22 @@ async function processScheduledOrder(order, io) {
   }
 
   // ─── PASO B: Enviar template de despacho ────────────────────────────────
+  if (wc?.provider === 'evolution') {
+    const content = `Hola ${name} 👋 Ya llegó la fecha que coordinamos para ${product}. ¿Confirmamos el pedido?`;
+    const sent = await whatsappProvider.sendTextMessage(phone, content, wc);
+    const savedMessage = await db.saveMessage({
+      conversationId: convId,
+      whatsappMessageId: whatsappProvider.messageId(sent),
+      direction: 'outbound', content, sentBy: 'ai', agentType: 'scheduled_follow_up', status: 'sent',
+    });
+    await db.updateConversationLastMessage(convId, content);
+    await activateDivaForAutomatedMessage(convId, db);
+    await db.updatePipelineState(convId, 'interested');
+    await db.markScheduledOrderSent(id);
+    if (savedMessage) io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMessage, conversation: await db.getConversationById(convId) });
+    return;
+  }
+
   if (!wc || wc.provider !== 'kapso') {
     console.warn(`[ScheduledFollowUp] Org ${orgId}: sin config Kapso — saltando envío de template #${id}`);
     await db.markScheduledOrderSent(id);

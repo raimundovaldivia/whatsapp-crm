@@ -18,6 +18,7 @@ const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 const { isLikelyAutomaticReply, isGiftedStockReply } = require('./inbound-message-policy');
+const { recordRouteOutcome } = require('./delivery-attempts');
 
 // Un pedido al que todavía tiene sentido anotarle una preferencia de entrega:
 // registrado y no cancelado/entregado. Incluye los que ya salieron a reparto
@@ -1071,16 +1072,30 @@ REGLAS ABSOLUTAS:
       if (reprogramDate) {
         const stamp  = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' });
         const cuando = formatDateEs(reprogramDate);
+        let routeClient;
         try {
-          await getPool().query(
+          routeClient = await getPool().connect();
+          await routeClient.query('BEGIN');
+          await routeClient.query(
             `UPDATE orders
                 SET delivery_date = $1::date,
+                    status = 'por_despachar',
+                    last_attempt_at = NOW(),
+                    last_attempt_status = 'reprogramado',
                     notes = COALESCE(notes, '') || $2,
                     updated_at = NOW()
               WHERE id = $3 AND organization_id = $4`,
             [reprogramDate, `\n[bot] Reprogramado por el cliente (${stamp}) para ${reprogramDate}`, activeOrder.id, orgId]
           );
-        } catch (e) { console.warn('[Pipeline] no se pudo reprogramar el pedido:', e.message); }
+          await recordRouteOutcome(routeClient, orgId, 'bot', activeOrder.id, 'postponed', `Reprogramado por el cliente para ${reprogramDate}`);
+          await routeClient.query('COMMIT');
+          routeClient.release();
+          routeClient = null;
+        } catch (e) {
+          if (routeClient) await routeClient.query('ROLLBACK').catch(() => {});
+          routeClient?.release?.();
+          console.warn('[Pipeline] no se pudo reprogramar el pedido:', e.message);
+        }
         L.step('reschedule_order', `pedido ${activeOrder.id} reprogramado a ${reprogramDate} (en vez de cancelar)`);
         L.agent('orders', 0);
         return {

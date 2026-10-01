@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-crm-backend",
   "version": "1.0.0",
-  "description": "WhatsApp CRM con agente IA para Shopify",
+  "description": "Aplicación comercial multicanal con WhatsApp y agentes de IA",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

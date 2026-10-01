@@ -37,6 +37,18 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [sending, setSending]     = useState(false);
   const [error, setError]         = useState('');
   const [scanning, setScanning]   = useState(false);
+  const [channels, setChannels]   = useState([]);
+  const [channelId, setChannelId] = useState('');
+
+  useEffect(() => {
+    if (!showModal) return;
+    api.get('/settings/whatsapp/channels').then(r => {
+      const list = r.data?.data || [];
+      setChannels(list);
+      const preferred = list.find(c => c.is_default) || list[0];
+      setChannelId(preferred ? String(preferred.id) : '');
+    }).catch(() => setChannels([]));
+  }, [showModal]);
 
   // Diagnóstico de número
   const [showDiagModal, setShowDiagModal]   = useState(false);
@@ -125,7 +137,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     if (!phone.trim() || !text.trim()) { setError('Número y mensaje son requeridos'); return; }
     setSending(true); setError('');
     try {
-      const result = await conversationsAPI.startConversation({ phone: phone.trim(), name: name.trim(), text: text.trim() });
+      const result = await conversationsAPI.startConversation({ phone: phone.trim(), name: name.trim(), text: text.trim(), channelId: channelId || null });
       if (result.success) { setShowModal(false); onRefresh(); onSelect(result.data.conversationId); }
     } catch (err) {
       setError(err.response?.data?.error || err.message);
@@ -312,6 +324,14 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
             </button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div>
+              {channels.length > 0 && <>
+                <label style={{ fontSize: '12px', color: colors.textSecondary, marginBottom: '6px', display: 'block' }}>Enviar desde *</label>
+                <select value={channelId} onChange={e => setChannelId(e.target.value)} style={inp}>
+                  {channels.map(ch => <option key={ch.id} value={ch.id}>{ch.name}{ch.phone_number ? ` · ${ch.phone_number}` : ''}{ch.is_default ? ' · predeterminado' : ''}</option>)}
+                </select>
+              </>}
+            </div>
             <div>
               <label style={{ fontSize: '12px', color: colors.textSecondary, marginBottom: '6px', display: 'block' }}>Número de teléfono *</label>
               <input type="tel" placeholder="56912345678" value={phone} onChange={e => setPhone(e.target.value)} style={inp} autoFocus />

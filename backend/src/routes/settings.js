@@ -17,6 +17,8 @@ const salesAgent      = require('../services/agents/sales');
 const ordersAgent     = require('../services/agents/orders');
 const kapsoPlatform   = require('../services/kapso-platform');
 const collection      = require('../services/payment-collection');
+const evolution       = require('../services/evolution-whatsapp');
+const crypto          = require('node:crypto');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -275,6 +277,109 @@ router.get('/whatsapp', async (req, res) => {
         status:             wc.status || 'pending',
       },
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Canales de WhatsApp: cada número Evolution es una instancia independiente. */
+router.get('/whatsapp/channels', async (req, res) => {
+  try {
+    const channels = await db.listWhatsappChannels(req.orgId);
+    res.json({ success: true, data: channels });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/whatsapp/channels', async (req, res) => {
+  try {
+    const {
+      name, phoneNumber, evolutionApiUrl, evolutionApiKey,
+      evolutionInstance, isDefault = false,
+    } = req.body;
+    if (!name?.trim() || !evolutionApiUrl?.trim() || !evolutionApiKey?.trim() || !evolutionInstance?.trim()) {
+      return res.status(400).json({ success: false, error: 'Nombre, URL, API Key e instancia son obligatorios' });
+    }
+    let parsedUrl;
+    try { parsedUrl = new URL(evolutionApiUrl); } catch { return res.status(400).json({ success: false, error: 'La URL de Evolution no es válida' }); }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      return res.status(400).json({ success: false, error: 'Evolution debe usar una URL HTTP o HTTPS' });
+    }
+
+    const webhookToken = crypto.randomBytes(24).toString('hex');
+    const config = {
+      provider: 'evolution',
+      evolution_api_url: parsedUrl.toString().replace(/\/$/, ''),
+      evolution_api_key: evolutionApiKey.trim(),
+      evolution_instance: evolutionInstance.trim(),
+    };
+    let connection = null;
+    let qr = null;
+    try {
+      connection = await evolution.getConnectionState(config);
+    } catch (stateError) {
+      if (stateError.response?.status === 404) {
+        const created = await evolution.createInstance(config);
+        qr = created?.qrcode || created;
+      } else {
+        throw stateError;
+      }
+    }
+
+    const state = connection?.instance?.state || connection?.state || 'pending';
+    const channel = await db.createWhatsappChannel(req.orgId, {
+      name: name.trim(),
+      phoneNumber: phoneNumber ? db.normalizePhone(phoneNumber) : null,
+      evolutionApiUrl: config.evolution_api_url,
+      evolutionApiKey: config.evolution_api_key,
+      evolutionInstance: config.evolution_instance,
+      webhookToken,
+      status: state === 'open' ? 'connected' : state,
+      isDefault,
+    });
+
+    const publicUrl = process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL;
+    let webhookWarning = null;
+    if (publicUrl) {
+      const webhookUrl = `${publicUrl.replace(/\/$/, '')}/evolution-webhook/${req.orgId}/${channel.id}/${webhookToken}`;
+      try { await evolution.configureWebhook(config, webhookUrl); }
+      catch (err) { webhookWarning = `Canal guardado, pero no se pudo registrar el webhook: ${err.response?.data?.message || err.message}`; }
+    } else {
+      webhookWarning = 'Canal guardado, pero falta CRM_PUBLIC_URL para registrar el webhook.';
+    }
+
+    if (!qr && state !== 'open') {
+      try { qr = await evolution.getConnectQr(config); } catch { /* se puede solicitar luego */ }
+    }
+    res.json({ success: true, data: { channel, qr }, warning: webhookWarning });
+  } catch (err) {
+    const detail = err.response?.data?.response?.message || err.response?.data?.message || err.message;
+    res.status(502).json({ success: false, error: detail });
+  }
+});
+
+router.get('/whatsapp/channels/:id/qr', async (req, res) => {
+  try {
+    const channel = await db.getWhatsappChannel(req.orgId, Number(req.params.id));
+    if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
+    const [connection, qr] = await Promise.all([
+      evolution.getConnectionState(channel).catch(() => null),
+      evolution.getConnectQr(channel).catch(() => null),
+    ]);
+    const state = connection?.instance?.state || connection?.state || 'pending';
+    await db.updateWhatsappChannelStatus(req.orgId, channel.id, state === 'open' ? 'connected' : state);
+    res.json({ success: true, data: { state, qr } });
+  } catch (err) {
+    res.status(502).json({ success: false, error: err.response?.data?.message || err.message });
+  }
+});
+
+router.patch('/whatsapp/channels/:id/default', async (req, res) => {
+  try {
+    const channel = await db.setDefaultWhatsappChannel(req.orgId, Number(req.params.id));
+    if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
+    res.json({ success: true, data: channel });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

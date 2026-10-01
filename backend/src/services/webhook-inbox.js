@@ -17,11 +17,16 @@ function defer(key, fn) {
 }
 function streamInfo(provider, body, event) {
   const value = body?.entry?.[0]?.changes?.[0]?.value;
+  const evolutionData = Array.isArray(body?.data) ? body.data[0] : body?.data;
   const sender = provider === 'kapso' ? (body.conversation?.phone_number || body.message?.from)
-    : provider === 'twilio' ? body.From : value?.messages?.[0]?.from || value?.statuses?.[0]?.recipient_id;
+    : provider === 'twilio' ? body.From
+    : provider === 'evolution' ? (evolutionData?.key?.senderPn || evolutionData?.key?.remoteJid)
+    : value?.messages?.[0]?.from || value?.statuses?.[0]?.recipient_id;
   const key = sender ? String(sender).replace(/[^0-9]/g, '') : 'organization';
-  const incoming = provider === 'kapso' && event === 'whatsapp.message.received';
-  const opener = /^(hola+|holi+|buenas+(\s+(tardes|d[ií]as|noches))?|buen\s+d[ií]a|buenos\s+d[ií]as|hey)[\s!.,?¡¿]*$/iu.test(body.message?.text?.body || '');
+  const incoming = (provider === 'kapso' && event === 'whatsapp.message.received')
+    || (provider === 'evolution' && String(event).toLowerCase().replace(/_/g, '.') === 'messages.upsert');
+  const evolutionText = evolutionData?.message?.conversation || evolutionData?.message?.extendedTextMessage?.text;
+  const opener = /^(hola+|holi+|buenas+(\s+(tardes|d[ií]as|noches))?|buen\s+d[ií]a|buenos\s+d[ií]as|hey)[\s!.,?¡¿]*$/iu.test(body.message?.text?.body || evolutionText || '');
   return { key: key || 'organization', delay: incoming ? (opener ? 12 : 3) : 0 };
 }
 function durableWebhook(provider, handler) {

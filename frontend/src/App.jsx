@@ -346,7 +346,7 @@ export default function App() {
             WhatsApp CRM
           </div>
           <div style={{ color: colors.textMuted, fontSize: '12px', marginTop: '4px' }}>
-            Agente IA para tu tienda Shopify
+            Agentes IA para ventas y atención
           </div>
         </div>
 

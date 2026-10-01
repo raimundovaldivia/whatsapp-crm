@@ -11,6 +11,9 @@ async function mergeConversations(orgId, targetId, sourceId) {
       'SELECT * FROM conversations WHERE organization_id = $1 AND id = ANY($2::int[]) ORDER BY id FOR UPDATE',
       [orgId, [targetId, sourceId]]);
     if (rows.length !== 2) throw Object.assign(new Error('Conversación no encontrada'), { status: 404 });
+    if ((rows[0].whatsapp_channel_id || null) !== (rows[1].whatsapp_channel_id || null)) {
+      throw Object.assign(new Error('No se pueden fusionar conversaciones de números de WhatsApp distintos'), { status: 409 });
+    }
     // Transfer every FK dependency before deleting the source. Failures roll back.
     for (const table of ['messages', 'orders', 'payment_proofs', 'scheduled_orders', 'escalation_feedback', 'admin_pending_replies', 'admin_outbox']) {
       await client.query(`UPDATE ${table} SET conversation_id = $1 WHERE conversation_id = $2`, [targetId, sourceId]);

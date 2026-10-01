@@ -109,6 +109,41 @@ test('stale in-transit routes become auditable delivery incidents the next day',
     assert.match(route.note,/sin que el repartidor registrara/);
   } finally {await f.engine.close();}
 });
+test('admin reschedule keeps the old route as history and exposes it to the next route',async()=>{
+  const f=await fixture();
+  try {
+    await f.query("UPDATE orders SET status='en_camino' WHERE id=1");
+    const ordersRouter=load('src/routes/orders.js',{
+      '../db/database':f.db,
+      '../middleware/auth':{requireAuth:noop,requireRole:()=>noop},
+      '../services/shopify-api':{},
+      '../services/payment-collection':{},
+    });
+    const changed=response();
+    await handler(ordersRouter,'patch','/reschedule')({orgId:1,role:'owner',body:{source:'bot',id:1,date:'2030-02-03',note:'Cliente pidió otro día'}},changed);
+    assert.equal(changed.code,200);
+    assert.equal(changed.body.historicalRoutes.length,1);
+    assert.equal(changed.body.historicalRoutes[0],1);
+    const old=(await f.query("SELECT status,orders,stop_statuses,stop_notes FROM delivery_routes WHERE id=1")).rows[0];
+    assert.equal(old.status,'completed');
+    assert.equal(old.orders[0].id,1);
+    assert.equal(old.stop_statuses.bot_1,'postponed');
+    assert.match(old.stop_notes.bot_1,/Cliente pidió otro día/);
+    const order=(await f.query("SELECT status,to_char(delivery_date,'YYYY-MM-DD') delivery_date,last_attempt_status FROM orders WHERE id=1")).rows[0];
+    assert.equal(order.status,'por_despachar');
+    assert.equal(order.delivery_date,'2030-02-03');
+    assert.equal(order.last_attempt_status,'reprogramado');
+
+    await f.query(`INSERT INTO delivery_routes(id,organization_id,name,status,driver_user_id,orders,optimized_route,created_at)
+      VALUES(4,1,'Ruta nueva','draft',10,'[{"source":"bot","id":1,"customerName":"Cliente prueba"}]','[{"source":"bot","id":1,"customerName":"Cliente prueba","stopNumber":1}]',NOW()+INTERVAL '1 second')`);
+    const deliveryRouter=load('src/routes/delivery.js',{'../db/database':f.db,'../middleware/auth':{requireAuth:noop,requireRole:()=>noop}});
+    const detail=response();
+    await handler(deliveryRouter,'get','/routes/4')({orgId:1,userId:10,role:'repartidor',params:{id:'4'}},detail);
+    assert.equal(detail.code,200);
+    assert.equal(detail.body.route.optimized_route[0].attemptHistory[0].routeName,'Own');
+    assert.equal(detail.body.route.optimized_route[0].attemptHistory[0].status,'postponed');
+  } finally {await f.engine.close();}
+});
 test('merge preserves linked business records, rejects another tenant and rolls back deletion failure',async()=>{
   const f=await fixture();
   try {
@@ -197,6 +232,7 @@ test('driver route shows cash balance, persists load checklist and keeps order h
     const blockedStop=response();
     await handler(router,'patch','/routes/1/stops')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKey:'bot_1',status:'pending'}},blockedStop);
     assert.equal(blockedStop.code,409);
+    await f.query("UPDATE delivery_routes SET stop_statuses='{}' WHERE id=1");
     const incompleteStart=response();
     await handler(router,'patch','/routes/1/start')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{}},incompleteStart);
     assert.equal(incompleteStart.code,409);

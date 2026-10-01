@@ -25,6 +25,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const webhookRouter        = require('./routes/webhook');         // WhatsApp (Meta)
 const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Twilio)
 const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
+const evolutionWebhookRouter = require('./routes/evolution-webhook'); // WhatsApp (Evolution API)
 const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follow-up
 const { startScheduledFollowUpJob } = require('./services/scheduled-follow-up'); // Job pedidos agendados
 const { startCampaignFollowUpJob } = require('./services/campaign-follow-up');
@@ -71,6 +72,7 @@ require('./services/socket-auth').configureSocketAuth(io);
 webhookRouter.setSocketIO(io);
 twilioWebhookRouter.setSocketIO(io);
 kapsoWebhookRouter.setSocketIO(io);
+evolutionWebhookRouter.setSocketIO(io);
 shopifyWebhookRouter.setSocketIO(io);
 conversationsRouter.setSocketIO(io);
 ordersRouter.setSocketIO(io);
@@ -104,6 +106,7 @@ app.use('/api', require('./middleware/commercial-access').commercialAccess);
 app.use('/webhook',           webhookRouter);        // POST — Meta webhook
 app.use('/twilio-webhook',    twilioWebhookRouter);  // POST — Twilio webhook
 app.use('/kapso-webhook',     kapsoWebhookRouter);   // POST — Kapso webhook
+app.use('/evolution-webhook', evolutionWebhookRouter); // POST — Evolution API webhook
 app.use('/shopify-webhook',   shopifyWebhookRouter); // POST — Shopify eventos
 app.use('/shopify-oauth',     shopifyOAuthRouter);   // GET  — Shopify OAuth /connect y /callback (sin /api/ — redirect de Shopify)
 app.use('/api/shopify-oauth', shopifyOAuthRouter);  // API  — /status y /disconnect (con /api/ — llamadas del frontend)
@@ -156,6 +159,7 @@ setupDatabase().then(() => {
     console.log(`   WhatsApp Meta   : POST /webhook`);
     console.log(`   WhatsApp Twilio : POST /twilio-webhook`);
     console.log(`   WhatsApp Kapso  : POST /kapso-webhook`);
+    console.log(`   WhatsApp Evolution: POST /evolution-webhook/:orgId/:channelId/:token`);
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
     require('./services/webhook-inbox').startWebhookWorker();
