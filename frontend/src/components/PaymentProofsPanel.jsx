@@ -5,7 +5,7 @@
  * como verificados o rechazados.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle, XCircle, Clock, RefreshCw, ExternalLink, X, Image, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, RefreshCw, ExternalLink, X, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 import { paymentProofsAPI } from '../utils/api.js';
@@ -27,8 +27,7 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
   const [imageUrl, setImageUrl] = useState(null);
   const [imageLoading, setImageLoading] = useState(false);
   const [imageError, setImageError] = useState('');
-  const [imageViewerOpen, setImageViewerOpen] = useState(false);
-  const [imageZoom, setImageZoom] = useState(1);
+  const [magnifier, setMagnifier] = useState(null);
   const [notes, setNotes]       = useState('');
   const [saving, setSaving]     = useState(false);
 
@@ -82,31 +81,30 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
 
   const closeProof = () => {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
-    setImageViewerOpen(false);
-    setImageZoom(1);
+    setMagnifier(null);
     setSelected(null);
     setImageUrl(null);
     setImageError('');
   };
 
-  const changeZoom = delta => setImageZoom(current => Math.min(4, Math.max(0.5, Math.round((current + delta) * 100) / 100)));
-  const openImageViewer = () => {
-    if (!imageUrl) return;
-    setImageZoom(1);
-    setImageViewerOpen(true);
+  const updateMagnifier = event => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.min(rect.width, Math.max(0, event.clientX - rect.left));
+    const y = Math.min(rect.height, Math.max(0, event.clientY - rect.top));
+    const size = 190;
+    const zoom = 3.2;
+    const backgroundWidth = rect.width * zoom;
+    const backgroundHeight = rect.height * zoom;
+    const backgroundX = Math.max(Math.min(0, size - backgroundWidth), Math.min(0, size / 2 - x * zoom));
+    const backgroundY = Math.max(Math.min(0, size - backgroundHeight), Math.min(0, size / 2 - y * zoom));
+    setMagnifier({
+      size,
+      left: x - size / 2,
+      top: y - size / 2,
+      backgroundSize: `${backgroundWidth}px ${backgroundHeight}px`,
+      backgroundPosition: `${backgroundX}px ${backgroundY}px`,
+    });
   };
-
-  useEffect(() => {
-    if (!imageViewerOpen) return undefined;
-    const onKeyDown = event => {
-      if (event.key === 'Escape') setImageViewerOpen(false);
-      if (event.key === '+' || event.key === '=') changeZoom(0.25);
-      if (event.key === '-') changeZoom(-0.25);
-      if (event.key === '0') setImageZoom(1);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [imageViewerOpen]);
 
   const updateStatus = async (status) => {
     if (!selected) return;
@@ -348,22 +346,35 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
             {/* Imagen */}
             <div style={{
               backgroundColor: colors.bgApp, borderRadius: '10px',
-              overflow: 'hidden', minHeight: '200px',
+              overflow: 'visible', minHeight: '200px', position:'relative',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
               {imageLoading ? (
                 <div style={{ color: colors.textSecondary, fontSize: '14px' }}>Cargando imagen...</div>
               ) : imageUrl ? (
-                <button onClick={openImageViewer} title="Ampliar comprobante" style={{ position:'relative', padding:0, border:'none', background:'transparent', cursor:'zoom-in', display:'flex', alignItems:'center', justifyContent:'center', width:'100%' }}>
+                <div
+                  onMouseEnter={updateMagnifier}
+                  onMouseMove={updateMagnifier}
+                  onMouseLeave={() => setMagnifier(null)}
+                  style={{ position:'relative', display:'inline-flex', lineHeight:0, cursor:'zoom-in' }}
+                >
                   <img
                     src={imageUrl}
                     alt="Comprobante de pago"
                     style={{ maxWidth: '100%', maxHeight: '340px', borderRadius: '8px', objectFit: 'contain' }}
                   />
-                  <span style={{ position:'absolute', right:'10px', bottom:'10px', display:'inline-flex', alignItems:'center', gap:'5px', padding:'6px 9px', borderRadius:'999px', backgroundColor:'rgba(0,0,0,0.72)', color:'#fff', fontSize:'11px', fontWeight:700 }}>
-                    <ZoomIn size={14} /> Ampliar
-                  </span>
-                </button>
+                  {magnifier && (
+                    <span style={{
+                      position:'absolute', pointerEvents:'none', zIndex:5,
+                      width:`${magnifier.size}px`, height:`${magnifier.size}px`,
+                      left:`${magnifier.left}px`, top:`${magnifier.top}px`,
+                      borderRadius:'50%', border:'3px solid #fff',
+                      backgroundImage:`url(${imageUrl})`, backgroundRepeat:'no-repeat',
+                      backgroundSize:magnifier.backgroundSize, backgroundPosition:magnifier.backgroundPosition,
+                      boxShadow:'0 10px 30px rgba(0,0,0,0.58), inset 0 0 0 1px rgba(0,0,0,0.18)',
+                    }} />
+                  )}
+                </div>
               ) : (
                 <div style={{ color: colors.textSecondary, fontSize: '13px', padding: '40px', textAlign: 'center' }}>
                   <Image size={32} style={{ opacity: 0.3, marginBottom: '8px' }} />
@@ -436,36 +447,6 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
         </div>
       )}
 
-      {/* Visor ampliado del voucher */}
-      {imageViewerOpen && imageUrl && (
-        <div
-          onClick={() => setImageViewerOpen(false)}
-          onWheel={event => { event.preventDefault(); changeZoom(event.deltaY < 0 ? 0.25 : -0.25); }}
-          style={{ position:'fixed', inset:0, zIndex:1300, backgroundColor:'rgba(2,6,23,0.96)', display:'flex', flexDirection:'column' }}
-        >
-          <div onClick={event => event.stopPropagation()} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', padding:'12px', backgroundColor:'rgba(15,23,42,0.96)', borderBottom:'1px solid rgba(255,255,255,0.12)', color:'#fff', flexShrink:0 }}>
-            <button onClick={() => changeZoom(-0.25)} disabled={imageZoom <= 0.5} title="Alejar" style={{ padding:'8px', borderRadius:'8px', border:'1px solid rgba(255,255,255,0.18)', background:'transparent', color:'#fff', cursor:imageZoom <= 0.5 ? 'not-allowed' : 'pointer', display:'flex' }}><ZoomOut size={17} /></button>
-            <span style={{ minWidth:'58px', textAlign:'center', fontSize:'13px', fontWeight:700 }}>{Math.round(imageZoom * 100)}%</span>
-            <button onClick={() => changeZoom(0.25)} disabled={imageZoom >= 4} title="Acercar" style={{ padding:'8px', borderRadius:'8px', border:'1px solid rgba(255,255,255,0.18)', background:'transparent', color:'#fff', cursor:imageZoom >= 4 ? 'not-allowed' : 'pointer', display:'flex' }}><ZoomIn size={17} /></button>
-            <button onClick={() => setImageZoom(1)} title="Tamaño normal" style={{ padding:'8px 11px', borderRadius:'8px', border:'1px solid rgba(255,255,255,0.18)', background:'transparent', color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', gap:'5px', fontSize:'12px' }}><Maximize2 size={15} /> Ajustar</button>
-            <div style={{ flex:1 }} />
-            <span style={{ fontSize:'11px', color:'#94a3b8' }}>Rueda del mouse para ampliar</span>
-            <button onClick={() => setImageViewerOpen(false)} title="Cerrar" style={{ padding:'8px', borderRadius:'8px', border:'1px solid rgba(255,255,255,0.18)', background:'transparent', color:'#fff', cursor:'pointer', display:'flex' }}><X size={18} /></button>
-          </div>
-          <div style={{ flex:1, overflow:'auto', display:'flex', alignItems:imageZoom === 1 ? 'center' : 'flex-start', justifyContent:imageZoom === 1 ? 'center' : 'flex-start', padding:'24px' }}>
-            <div onClick={event => event.stopPropagation()} style={{ minWidth:imageZoom === 1 ? '100%' : `${imageZoom * 70}vw`, minHeight:imageZoom === 1 ? '100%' : `${imageZoom * 70}vh`, display:'flex', alignItems:'center', justifyContent:'center' }}>
-              <img
-                src={imageUrl}
-                alt="Comprobante de pago ampliado"
-                onClick={() => changeZoom(0.25)}
-                style={imageZoom === 1
-                  ? { maxWidth:'92vw', maxHeight:'calc(100vh - 110px)', objectFit:'contain', cursor:'zoom-in', boxShadow:'0 12px 40px rgba(0,0,0,0.45)' }
-                  : { width:`${imageZoom * 55}vw`, maxWidth:'none', height:'auto', cursor:imageZoom < 4 ? 'zoom-in' : 'default', boxShadow:'0 12px 40px rgba(0,0,0,0.45)' }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
