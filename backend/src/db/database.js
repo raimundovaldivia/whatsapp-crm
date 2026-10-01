@@ -876,18 +876,18 @@ async function getLatestPendingOrderByConversation(conversationId) {
 async function getOrdersAwaitingPayment(conversationId) {
   return query(
     `SELECT o.*,
-            (o.status = 'entregado') AS is_delivered,
+            (o.status IN ('entregado', 'paid') OR o.delivered_at IS NOT NULL) AS is_delivered,
             (SELECT COUNT(*) FROM payment_proofs pp WHERE pp.order_id = o.id AND pp.status = 'pending')::int AS proofs_pending
        FROM orders o
       WHERE o.conversation_id = $1
         AND (
-          (o.status = 'entregado' AND o.payment_method = 'transferencia'
+          ((o.status IN ('entregado', 'paid') OR o.delivered_at IS NOT NULL) AND o.payment_method = 'transferencia'
              AND NOT EXISTS (SELECT 1 FROM payment_proofs pp
                               WHERE pp.order_id = o.id AND pp.status IN ('verified','pre_verified'))
              AND COALESCE(o.payment_marked_at, o.updated_at, o.created_at) > NOW() - INTERVAL '60 days')
           OR o.status IN ('sent','draft','payment_received','nuevo','por_despachar','en_camino')
         )
-      ORDER BY (o.status = 'entregado') DESC, o.created_at DESC
+      ORDER BY (o.status IN ('entregado', 'paid') OR o.delivered_at IS NOT NULL) DESC, o.created_at DESC
       LIMIT 5`,
     [conversationId]
   );

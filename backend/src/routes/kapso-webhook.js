@@ -25,6 +25,7 @@ const { handleAgentCommand, hasActiveCampaign } = require('../services/agent-com
 const guardrail                 = require('../services/response-guardrail');
 const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
 const { resumeDivaOnInbound } = require('../services/conversation-mode');
+const { isDeliveredOrder, buildPaymentProofReply } = require('../services/payment-proof-reply');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -784,7 +785,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       pendingOrder = candidates.find(o => Math.abs(toNum(o.total_price) - paidAmt) <= 1) || null;
     }
     if (!pendingOrder) pendingOrder = candidates[0] || null;
-    const wasDelivered = !!pendingOrder && pendingOrder.status === 'entregado';
+    const wasDelivered = isDeliveredOrder(pendingOrder);
 
     let amountMatches  = null;
     let proofStatus    = 'pending';
@@ -825,27 +826,13 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
     // ── 6. Responder al cliente ──────────────────────────────────────
     const firstName = (conversation.contact_name || parsed.contactName || '').trim().split(/\s+/)[0] || '';
-    const hi = firstName ? ` ${firstName}` : '';
     const amountTxt = analysis.amount ? `$${Number(analysis.amount).toLocaleString('es-CL')}` : '';
-    let reply;
-    if (wasDelivered) {
-      // Cobranza post-entrega: el pedido ya está en manos del cliente. Nada de
-      // "pronto despacharemos" — solo dar por recibido el pago.
-      const ref = `tu pedido #${pendingOrder.id}`;
-      if (amountMatches === true) {
-        reply = `✅ ¡Comprobante recibido${hi}! El pago de ${amountTxt} por ${ref} quedó registrado. ¡Muchas gracias! 🙌`;
-      } else if (amountMatches === false) {
-        reply = `✅ Recibimos tu comprobante${hi}. El monto (${amountTxt}) no coincide con ${ref} ($${Number(pendingOrder.total_price).toLocaleString('es-CL')}), así que el equipo lo revisa y te confirma por acá 🔍`;
-      } else {
-        reply = `✅ ¡Recibimos tu comprobante${hi}! Lo dejamos registrado para ${ref} y te confirmamos en cuanto lo verifiquemos. ¡Gracias! 🙌`;
-      }
-    } else if (amountMatches === true) {
-      reply = `✅ ¡Comprobante recibido y verificado automáticamente! Tu pago de ${amountTxt} fue confirmado. Pronto despacharemos tu pedido 🚀`;
-    } else if (amountMatches === false) {
-      reply = `✅ Recibimos tu comprobante. Nuestro equipo lo revisará porque detectamos una diferencia en el monto — te confirmaremos pronto 🔍`;
-    } else {
-      reply = `✅ ¡Recibimos tu comprobante de pago! Lo verificaremos a la brevedad y te avisaremos cuando tu pedido esté listo para despacho 🚀`;
-    }
+    const reply = buildPaymentProofReply({
+      order: pendingOrder,
+      amountMatches,
+      amountText: amountTxt,
+      firstName,
+    });
 
     const sentMsg = await kapsoService.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
     await db.saveMessage({
