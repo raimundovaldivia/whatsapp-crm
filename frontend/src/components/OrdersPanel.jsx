@@ -9,6 +9,7 @@ import {
 import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
 import ConciliacionPanel from './ConciliacionPanel.jsx';
 import PaymentProofsPanel from './PaymentProofsPanel.jsx';
+import PaymentAccountsPanel from './PaymentAccountsPanel.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
@@ -147,7 +148,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
   const [stats,            setStats]            = useState(null);
   const [toast,            setToast]            = useState(null);
   const [syncing,          setSyncing]          = useState(null);
-  const [activeTab,        setActiveTab]        = useState(paymentsMode ? 'proofs' : 'orders');
+  const [activeTab,        setActiveTab]        = useState(paymentsMode ? 'accounts' : 'orders');
   const [proofToOpen,      setProofToOpen]      = useState(null);
   const [syncingAll,    setSyncingAll]    = useState(false);
   const [lastSync,      setLastSync]      = useState(null);
@@ -578,9 +579,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
         {/* Tabs */}
         <div style={{ display:'flex', gap:'4px', backgroundColor: colors.bgSecondary, borderRadius:'8px', padding:'3px', overflowX:'auto', maxWidth:'100%' }}>
           {(paymentsMode ? [
-            { key: 'proofs', label: '📎 Comprobantes' },
+            { key: 'accounts', label: '📒 Cuentas y pedidos' },
             { key: 'charge', label: `💸 Por cobrar${charges.length ? ` (${charges.length})` : ''}` },
             { key: 'recon',  label: '🏦 Conciliación' },
+            { key: 'proofs', label: '📎 Evidencias / vouchers' },
           ] : [
             { key: 'orders', label: 'Todos' },
             { key: 'scheduled', label: `📅 Agendados${scheduledOrders.filter(o=>o.status==='pending').length ? ` (${scheduledOrders.filter(o=>o.status==='pending').length})` : ''}` },
@@ -614,6 +616,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
       </div>
 
       {activeTab === 'proofs' && <PaymentProofsPanel onOpenConversation={onSelectConversation} openProofId={proofToOpen} onProofOpened={() => setProofToOpen(null)} onProofUpdated={loadCharges} />}
+      {activeTab === 'accounts' && <PaymentAccountsPanel onOpenProof={id => { setProofToOpen(id); setActiveTab('proofs'); }} />}
 
       {/* ── Vista Agendados ── */}
       {activeTab === 'recon' && <ConciliacionPanel colors={colors} />}

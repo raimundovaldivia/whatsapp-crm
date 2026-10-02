@@ -82,7 +82,11 @@ export default function ConciliacionPanel({ colors }) {
       const response = await api.post(`/reconciliation/movements/${movId}/confirm`, { orders: orders.map(o => ({ source: o.source, id: o.id })) });
       setRows(prev => prev.filter(m => m.id !== movId));
       setStats(s => s ? { ...s, pending: s.pending - 1, matched: s.matched + 1 } : s);
-      if (response.data.learnedIdentity) {
+      if (response.data.proofVerification?.verified) {
+        setNotice(`Pago y voucher verificados con la cartola (${response.data.proofVerification.evidence?.score || '—'}/100). El pedido salió automáticamente de las cuentas por cobrar.`);
+      } else if (response.data.proofVerification?.candidates > 1) {
+        setNotice('Pago conciliado, pero hay más de un voucher compatible. Los comprobantes quedaron pendientes para revisión manual y evitar una verificación duplicada.');
+      } else if (response.data.learnedIdentity) {
         setNotice(`Pago confirmado. Santander quedó aprendido para ${response.data.learnedIdentity.contact_name || 'este contacto'} y podrá conciliar automáticamente sus próximas transferencias cuando el monto identifique un único pedido.`);
       } else {
         setNotice('Pago confirmado correctamente.');
@@ -199,6 +203,7 @@ export default function ConciliacionPanel({ colors }) {
               <span style={{ color: colors.textPrimary, fontSize: '13px', flex: 1, minWidth: '160px' }}>{m.payer || m.description}</span>
               {view === 'matched' && (m.matched_orders || []).map(o => chip(`${o.source === 'bot' ? '#BOT-' + o.id : o.id} pagado`, colors.success))}
               {view === 'matched' && m.match_method === 'automatic_identity' && chip('Automático · identidad Santander aprendida', '#60a5fa')}
+              {view === 'matched' && m.verified_proof_id && chip(`Voucher #${m.verified_proof_id} verificado · ${m.reconciliation_score || '—'}/100`, colors.success)}
               {view === 'ignored' && m.note && <span style={{ fontSize: '12px', color: colors.textMuted }}>📝 {m.note}</span>}
               <button onClick={() => unmatch(m.id)} disabled={busyId === m.id} style={btn({ color: colors.textSecondary })} title="Revertir"><Undo2 size={12} /> Revertir</button>
             </div>
@@ -241,6 +246,9 @@ export default function ConciliacionPanel({ colors }) {
                             <span key={k}>{k > 0 ? ' + ' : ''}<b>{o.label}</b> {o.customer_name} · {CLP(o.total)} · {fmtDate(o.created_at)} · <span style={{ color: colors.textMuted }}>{o.status}</span></span>
                           ))}
                           {c.similarity > 0 && <span style={{ color: colors.textMuted, fontSize: '11px', marginLeft: '8px' }}>nombre {c.similarity}%</span>}
+                          {c.proofEvidence && <span style={{ display:'block', color:colors.success, fontSize:'11px', marginTop:'4px' }}>
+                            📎 Voucher #{c.proofEvidence.proofId} también coincide · grado {c.proofEvidence.score}/100 · {c.proofEvidence.reasons.map(r => r.label).join(' · ')}
+                          </span>}
                           {c.reused && <span style={{ color: colors.amber, fontSize: '11px', marginLeft: '8px' }}>ya sugerido para otro abono</span>}
                         </span>
                         <button onClick={() => confirm(m.id, c.orders)} disabled={busyId === m.id} style={btn({ backgroundColor: colors.green, color: '#fff', border: 'none', fontWeight: 600 })}>

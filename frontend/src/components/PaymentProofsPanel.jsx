@@ -46,6 +46,11 @@ function money(value) {
   return `$${Math.round(Number(value) || 0).toLocaleString('es-CL')}`;
 }
 
+function reconciliationReasons(proof) {
+  if (Array.isArray(proof?.reconciliation_reasons)) return proof.reconciliation_reasons;
+  try { return JSON.parse(proof?.reconciliation_reasons || '[]'); } catch { return []; }
+}
+
 export default function PaymentProofsPanel({ onOpenConversation, openProofId = null, onProofOpened, onProofUpdated }) {
   const { colors, isDark } = useTheme();
   const [proofs, setProofs]     = useState([]);
@@ -287,6 +292,11 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
                         {proof.notes}
                       </div>
                     )}
+                    {proof.bank_movement_id && (
+                      <div style={{ fontSize:'11px', color:colors.success, marginTop:'4px', fontWeight:700 }}>
+                        🏦 Verificado en cartola · coincidencia {proof.reconciliation_score ?? '—'}/100
+                      </div>
+                    )}
                   </div>
 
                   {/* Fecha + estado */}
@@ -339,6 +349,22 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
                 <X size={18} />
               </button>
             </div>
+
+            {selected.bank_movement_id && (
+              <div style={{ border:`1px solid ${colors.success}66`, backgroundColor:`${colors.success}10`, borderRadius:'9px', padding:'11px 13px', fontSize:'12px', color:colors.textPrimary }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'8px' }}>
+                  <strong style={{ color:colors.success }}>🏦 Confirmado por conciliación bancaria</strong>
+                  <strong>{selected.reconciliation_score ?? '—'}/100</strong>
+                </div>
+                <div style={{ color:colors.textSecondary, marginTop:'5px' }}>
+                  Abono #{selected.bank_movement_id} · {selected.bank_movement_payer || 'Ordenante no informado'} · {money(selected.bank_movement_amount)}
+                  {selected.bank_movement_date ? ` · ${new Date(selected.bank_movement_date).toLocaleDateString('es-CL', { timeZone:'UTC' })}` : ''}
+                </div>
+                {reconciliationReasons(selected).length > 0 && <div style={{ marginTop:'7px', display:'flex', flexWrap:'wrap', gap:'5px' }}>
+                  {reconciliationReasons(selected).map((reason, index) => <span key={`${reason.key}-${index}`} style={{ color:colors.textSecondary, border:`1px solid ${colors.border}`, borderRadius:'999px', padding:'2px 7px' }}>✓ {reason.label} (+{reason.points})</span>)}
+                </div>}
+              </div>
+            )}
 
             {/* Info cliente + datos extraídos */}
             <div style={{

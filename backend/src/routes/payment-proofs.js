@@ -10,6 +10,7 @@ const express       = require('express');
 const router        = express.Router();
 const db            = require('../db/database');
 const { getPaymentProofMedia } = require('../services/payment-proof-media');
+const paymentAccounts = require('../services/payment-accounts');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -21,6 +22,15 @@ router.get('/', async (req, res) => {
     res.json({ proofs });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Vista principal de Pagos: cuenta corriente mensual por cliente/empresa.
+router.get('/accounts', async (req, res) => {
+  try {
+    res.json({ success: true, ...(await paymentAccounts.getAccounts(req.orgId, req.query.month)) });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 

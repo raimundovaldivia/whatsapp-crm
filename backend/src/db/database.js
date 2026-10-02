@@ -998,12 +998,20 @@ async function getPaymentProofs(orgId, statusFilter = null) {
             o.total_price AS linked_order_total,
             o.status AS linked_order_status,
             o.delivery_date AS linked_order_delivery_date,
-            o.created_at AS linked_order_created_at
+            o.created_at AS linked_order_created_at,
+            bm.date AS bank_movement_date,
+            bm.amount AS bank_movement_amount,
+            bm.payer AS bank_movement_payer,
+            bm.doc_number AS bank_movement_reference,
+            bm.match_method AS bank_match_method
      FROM payment_proofs pp
      LEFT JOIN conversations c ON pp.conversation_id = c.id
      LEFT JOIN orders o
        ON o.id = pp.order_id
       AND o.organization_id = pp.organization_id
+     LEFT JOIN bank_movements bm
+       ON bm.id = pp.bank_movement_id
+      AND bm.organization_id = pp.organization_id
      WHERE pp.organization_id = $1 ${cond}
      ORDER BY pp.created_at DESC`,
     args
@@ -1016,10 +1024,13 @@ async function updatePaymentProof(id, { status, notes }, orgId) {
   try {
     await client.query('BEGIN');
     const { rows: [proof] } = await client.query(
-      'UPDATE payment_proofs SET status = $1, notes = $2 WHERE id = $3 AND organization_id = $4 RETURNING *',
+      `UPDATE payment_proofs
+          SET status = $1, notes = $2,
+              verification_method = CASE WHEN $1 = 'verified' AND bank_movement_id IS NULL THEN 'manual' ELSE verification_method END
+        WHERE id = $3 AND organization_id = $4 RETURNING *`,
       [status, notes || null, id, orgId]);
     if (proof && status === 'verified' && proof.order_id) {
-      const result = await client.query("UPDATE orders SET status = 'paid', updated_at = NOW() WHERE id = $1 AND organization_id = $2 RETURNING id", [proof.order_id, orgId]);
+      const result = await client.query("UPDATE orders SET status = 'paid', payment_method = COALESCE(payment_method, 'transferencia'), payment_marked_at = COALESCE(payment_marked_at, NOW()), updated_at = NOW() WHERE id = $1 AND organization_id = $2 RETURNING id", [proof.order_id, orgId]);
       if (!result.rowCount) throw new Error('Pedido del comprobante no encontrado');
     }
     await client.query('COMMIT');

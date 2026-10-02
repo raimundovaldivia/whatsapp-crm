@@ -1,0 +1,32 @@
+.payment-account__summary::-webkit-details-marker { display: none; }
+
+@media (max-width: 760px) {
+  .payment-accounts {
+    padding: 12px !important;
+  }
+
+  .payment-accounts__toolbar > * {
+    margin-left: 0 !important;
+  }
+
+  .payment-accounts__search {
+    box-sizing: border-box;
+    flex-basis: 100% !important;
+    min-width: 0 !important;
+    width: 100%;
+  }
+
+  .payment-account__summary {
+    grid-template-columns: minmax(0, 1fr) minmax(105px, auto) 18px !important;
+    gap: 8px !important;
+  }
+
+  .payment-account__metric {
+    display: none;
+  }
+
+  .payment-account__metric:nth-of-type(5) {
+    display: block;
+    text-align: right;
+  }
+}

@@ -642,6 +642,18 @@ async function setupDatabase() {
       ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS extracted_reference TEXT;
       ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS ai_confidence       TEXT;
       ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS amount_matches      BOOLEAN;
+      -- Evidencia bancaria que confirma que el comprobante realmente aparece
+      -- en la cartola. Se mantiene separada del análisis visual para que toda
+      -- verificación sea explicable y reversible.
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS bank_movement_id         INTEGER REFERENCES bank_movements(id) ON DELETE SET NULL;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS reconciliation_score     INTEGER;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS reconciliation_confidence TEXT;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS reconciliation_reasons   JSONB;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS bank_verified_at          TIMESTAMPTZ;
+      ALTER TABLE payment_proofs ADD COLUMN IF NOT EXISTS verification_method       TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_proofs_bank_movement
+        ON payment_proofs(organization_id, bank_movement_id)
+        WHERE bank_movement_id IS NOT NULL;
 
       -- Migración: status pre_verified para comprobantes auto-validados
       DO $$

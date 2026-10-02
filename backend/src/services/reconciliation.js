@@ -131,6 +131,82 @@ function normalizedPhone(value) {
 
 function daysBetween(a, b) { return (new Date(a) - new Date(b)) / 86400000; }
 
+function parsePaymentDate(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  let match = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (match) return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  match = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (match) return new Date(Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1])));
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function confidenceForScore(score) {
+  if (score >= 90) return 'muy_alta';
+  if (score >= 75) return 'alta';
+  if (score >= 60) return 'media';
+  return 'baja';
+}
+
+/**
+ * Puntaje explicable 0..100 para la relación voucher ↔ abono ↔ pedido.
+ * Es un grado de coincidencia, no una probabilidad estadística calibrada.
+ */
+function scoreProofEvidence(mov, orders, proof) {
+  if (!proof) return null;
+  let score = 0;
+  const reasons = [];
+  const add = (key, label, points, detail = null) => {
+    score += points;
+    reasons.push({ key, label, points, detail });
+  };
+  const extractedAmount = Number(proof.extracted_amount);
+  const amountExact = Number.isFinite(extractedAmount) && Math.abs(extractedAmount - Number(mov.amount)) <= AMOUNT_TOLERANCE;
+  if (amountExact) add('amount', 'Monto del voucher coincide con el abono', 40, `$${Math.round(extractedAmount)}`);
+  else if (Number.isFinite(extractedAmount)) reasons.push({ key: 'amount_mismatch', label: 'El monto del voucher no coincide con el abono', points: 0, detail: `$${Math.round(extractedAmount)} vs $${Math.round(Number(mov.amount))}` });
+
+  const botOrderIds = new Set(orders.filter(o => o.source === 'bot').map(o => String(o.id)));
+  const orderLinked = proof.order_id != null && botOrderIds.has(String(proof.order_id));
+  if (orderLinked) add('order', 'Voucher asociado al mismo pedido', 25, `#BOT-${proof.order_id}`);
+
+  const proofPhone = normalizedPhone(proof.customer_phone);
+  const orderPhoneMatch = !!proofPhone && orders.some(o => normalizedPhone(o.phone) === proofPhone);
+  if (orderPhoneMatch) add('phone', 'Teléfono del voucher coincide con el pedido', 10);
+
+  const paymentDate = parsePaymentDate(proof.extracted_date);
+  if (paymentDate) {
+    const delta = Math.abs(daysBetween(mov.date, paymentDate));
+    if (delta < 0.5) add('date', 'Fecha del voucher coincide con la cartola', 15, proof.extracted_date);
+    else if (delta <= 1.5) add('date', 'Fecha del voucher está a un día del abono', 10, proof.extracted_date);
+    else if (delta <= 3.5) add('date', 'Fecha del voucher está dentro de tres días', 5, proof.extracted_date);
+  }
+
+  const refA = norm(proof.extracted_reference).replace(/\s/g, '');
+  const refB = norm(mov.doc_number || mov.description).replace(/\s/g, '');
+  if (refA.length >= 4 && refB.length >= 4 && (refA.includes(refB) || refB.includes(refA))) {
+    add('reference', 'Referencia del voucher coincide con la cartola', 15, proof.extracted_reference);
+  }
+
+  const personSimilarity = Math.max(0, ...orders.map(o => nameSimilarity(mov.payer, proof.customer_name || o.customer_name)));
+  if (personSimilarity >= 0.5) add('name', 'Nombre del ordenante coincide con el cliente', 10, `${Math.round(personSimilarity * 100)}%`);
+  else if (personSimilarity > 0) add('name', 'Coincidencia parcial del nombre', 5, `${Math.round(personSimilarity * 100)}%`);
+
+  if (proof.ai_confidence === 'high') add('ai', 'Lectura del voucher con alta confianza', 5);
+  else if (proof.ai_confidence === 'medium') add('ai', 'Lectura del voucher con confianza media', 2);
+
+  score = Math.min(100, score);
+  return {
+    proofId: proof.id,
+    score,
+    confidence: confidenceForScore(score),
+    reasons,
+    amountExact,
+    orderLinked,
+    qualifies: amountExact && orderLinked,
+  };
+}
+
 function scoreCandidate(mov, orders) {
   // orders: 1..3 pedidos que juntos calzan el monto
   const total = orders.reduce((s, o) => s + o.total, 0);
@@ -150,10 +226,15 @@ function scoreCandidate(mov, orders) {
 
 async function suggest(orgId) {
   const pool = getPool();
-  const { rows: movements } = await pool.query(
+  const [{ rows: movements }, { rows: proofs }] = await Promise.all([pool.query(
     `SELECT id, date, amount, description, payer, doc_number, balance, status
        FROM bank_movements WHERE organization_id = $1 AND kind = 'abono' AND status = 'pending'
-      ORDER BY date DESC, id DESC`, [orgId]);
+      ORDER BY date DESC, id DESC`, [orgId]), pool.query(
+    `SELECT id, order_id, customer_phone, customer_name, extracted_amount, extracted_date,
+            extracted_reference, ai_confidence, amount_matches, status, created_at
+       FROM payment_proofs
+      WHERE organization_id = $1 AND status IN ('pending','pre_verified')
+        AND created_at > NOW() - INTERVAL '120 days'`, [orgId])]);
   const unpaid = await getUnpaidOrders(orgId);
 
   // agrupar pedidos por cliente (teléfono normalizado) para combos
@@ -186,11 +267,18 @@ async function suggest(orgId) {
     // Un pedido ya reclamado con confianza alta por otro abono no puede ser "alta" de nuevo
     for (const c of cands) {
       if (c.orders.every(o => usedOrders.has(`${o.source}_${o.id}`))) { c.score = Math.max(0, c.score - 35); c.confidence = 'baja'; c.reused = true; }
+      const evidence = proofs.map(p => scoreProofEvidence(mov, c.orders, p)).filter(e => e?.qualifies).sort((a, b) => b.score - a.score)[0] || null;
+      if (evidence) {
+        c.proofEvidence = evidence;
+        c.score = Math.max(c.score, evidence.score);
+        if (evidence.score >= 75) c.confidence = 'alta';
+      }
     }
     cands.sort((a, b) => b.score - a.score);
     const top = cands.slice(0, 4).map(c => ({
       reused: !!c.reused,
       score: c.score, similarity: c.similarity, confidence: c.confidence,
+      proofEvidence: c.proofEvidence || null,
       orders: c.orders.map(o => ({ source: o.source, id: o.id, label: o.label, customer_name: o.customer_name, phone: o.phone, total: o.total, status: o.status, created_at: o.created_at, payment_method: o.payment_method,
         already_suggested: usedOrders.has(`${o.source}_${o.id}`) })),
     }));
@@ -231,6 +319,43 @@ async function learnSantanderIdentity(client, orgId, mov, contacts, userId) {
   return identity || null;
 }
 
+async function verifyUniqueProofForMovement(client, orgId, mov, selectedOrders, automatic) {
+  const botIds = selectedOrders.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isInteger);
+  if (!botIds.length) return { verified: null, candidates: 0 };
+  const { rows: proofs } = await client.query(
+    `SELECT id, order_id, customer_phone, customer_name, extracted_amount, extracted_date,
+            extracted_reference, ai_confidence, amount_matches, status, created_at
+       FROM payment_proofs
+      WHERE organization_id = $1 AND order_id = ANY($2::int[])
+        AND status IN ('pending','pre_verified')
+        AND bank_movement_id IS NULL
+      ORDER BY created_at DESC FOR UPDATE`,
+    [orgId, botIds]
+  );
+  const eligible = proofs
+    .map(proof => ({ proof, evidence: scoreProofEvidence(mov, selectedOrders, proof) }))
+    .filter(item => item.evidence?.qualifies && item.evidence.score >= 60)
+    .sort((a, b) => b.evidence.score - a.evidence.score);
+  // Dos vouchers compatibles para el mismo abono pueden ser un duplicado o
+  // dos pagos distintos. Nunca elegir uno silenciosamente.
+  if (eligible.length !== 1) return { verified: null, candidates: eligible.length };
+  const { proof, evidence } = eligible[0];
+  const method = automatic ? 'bank_reconciliation_automatic' : 'bank_reconciliation_manual';
+  const { rows: [verified] } = await client.query(
+    `UPDATE payment_proofs
+        SET status = 'verified', bank_movement_id = $1, reconciliation_score = $2,
+            reconciliation_confidence = $3, reconciliation_reasons = $4::jsonb,
+            bank_verified_at = NOW(), verification_method = $5,
+            notes = CONCAT_WS(E'\n', NULLIF(notes, ''), $6::text)
+      WHERE id = $7 AND organization_id = $8
+      RETURNING id, order_id, status, reconciliation_score, reconciliation_confidence, bank_movement_id`,
+    [mov.id, evidence.score, evidence.confidence, JSON.stringify(evidence.reasons), method,
+     `Verificado con cartola Santander: abono #${mov.id} por $${Number(mov.amount).toLocaleString('es-CL')}`,
+     proof.id, orgId]
+  );
+  return { verified: verified || null, candidates: 1, evidence };
+}
+
 async function confirm(orgId, movementId, orders, userId, note = null, options = {}) {
   const pool = getPool();
   const client = await pool.connect();
@@ -243,9 +368,10 @@ async function confirm(orgId, movementId, orders, userId, note = null, options =
 
     const matched = [];
     const contacts = [];
+    const selectedOrderRecords = [];
     for (const o of orders) {
       if (o.source === 'bot') {
-        const { rows: [prev] } = await client.query(`SELECT status, payment_method, customer_phone, customer_name FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [parseInt(o.id), orgId]);
+        const { rows: [prev] } = await client.query(`SELECT status, payment_method, customer_phone, customer_name, total_price, created_at FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [parseInt(o.id), orgId]);
         if (!prev) throw Object.assign(new Error(`Pedido #BOT-${o.id} no encontrado`), { status: 404 });
         await client.query(
           `UPDATE orders SET status = 'paid', payment_method = 'transferencia', payment_marked_at = NOW(), updated_at = NOW(),
@@ -254,14 +380,16 @@ async function confirm(orgId, movementId, orders, userId, note = null, options =
           [parseInt(o.id), orgId, `\n[conciliación] Pagado con transferencia ${mov.date.toISOString?.().slice(0, 10) || mov.date} $${mov.amount} (${mov.payer || mov.description})`]);
         matched.push({ source: 'bot', id: String(o.id), prev_status: prev.status, prev_payment_method: prev.payment_method });
         contacts.push({ phone: prev.customer_phone, name: prev.customer_name });
+        selectedOrderRecords.push({ source: 'bot', id: String(o.id), phone: prev.customer_phone, customer_name: prev.customer_name, total: Math.round(Number(prev.total_price) || 0), created_at: prev.created_at });
       } else if (o.source === 'shopify') {
-        const { rows: [prev] } = await client.query(`SELECT financial_status, payment_method, customer_phone, customer_name FROM shopify_orders WHERE shopify_order_id = $1 AND organization_id = $2 FOR UPDATE`, [String(o.id), orgId]);
+        const { rows: [prev] } = await client.query(`SELECT financial_status, payment_method, customer_phone, customer_name, total_price, COALESCE(shopify_created_at, synced_at) AS created_at FROM shopify_orders WHERE shopify_order_id = $1 AND organization_id = $2 FOR UPDATE`, [String(o.id), orgId]);
         if (!prev) throw Object.assign(new Error(`Pedido Shopify ${o.id} no encontrado`), { status: 404 });
         await client.query(
           `UPDATE shopify_orders SET financial_status = 'paid', payment_method = 'transferencia', payment_marked_at = NOW()
             WHERE shopify_order_id = $1 AND organization_id = $2`, [String(o.id), orgId]);
         matched.push({ source: 'shopify', id: String(o.id), prev_status: prev.financial_status, prev_payment_method: prev.payment_method });
         contacts.push({ phone: prev.customer_phone, name: prev.customer_name });
+        selectedOrderRecords.push({ source: 'shopify', id: String(o.id), phone: prev.customer_phone, customer_name: prev.customer_name, total: Math.round(Number(prev.total_price) || 0), created_at: prev.created_at });
       }
     }
     const learned = options.automatic
@@ -274,8 +402,9 @@ async function confirm(orgId, movementId, orders, userId, note = null, options =
         WHERE id = $1 AND organization_id = $2`,
       [movementId, orgId, JSON.stringify(matched), userId || null, note,
        options.automatic ? 'automatic_identity' : 'manual', identityId]);
+    const proofVerification = await verifyUniqueProofForMovement(client, orgId, mov, selectedOrderRecords, !!options.automatic);
     await client.query('COMMIT');
-    return { ok: true, matched, learnedIdentity: learned, automatic: !!options.automatic };
+    return { ok: true, matched, learnedIdentity: learned, automatic: !!options.automatic, proofVerification };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -372,7 +501,17 @@ async function unmatch(orgId, movementId) {
     if (mov.bank_identity_id) {
       await client.query(`UPDATE bank_contact_identities SET active = FALSE, updated_at = NOW() WHERE id = $1 AND organization_id = $2`, [mov.bank_identity_id, orgId]);
     }
-    await client.query(`UPDATE bank_movements SET status = 'pending', matched_orders = NULL, matched_at = NULL, matched_by = NULL, note = NULL WHERE id = $1`, [movementId]);
+    await client.query(
+      `UPDATE payment_proofs
+          SET status = CASE WHEN amount_matches IS TRUE THEN 'pre_verified' ELSE 'pending' END,
+              bank_movement_id = NULL, reconciliation_score = NULL, reconciliation_confidence = NULL,
+              reconciliation_reasons = NULL, bank_verified_at = NULL, verification_method = NULL,
+              notes = CONCAT_WS(E'\n', NULLIF(notes, ''), 'Conciliación bancaria revertida; requiere revisión nuevamente')
+        WHERE organization_id = $1 AND bank_movement_id = $2
+          AND verification_method LIKE 'bank_reconciliation_%'`,
+      [orgId, movementId]
+    );
+    await client.query(`UPDATE bank_movements SET status = 'pending', matched_orders = NULL, matched_at = NULL, matched_by = NULL, note = NULL, match_method = NULL, bank_identity_id = NULL WHERE id = $1 AND organization_id = $2`, [movementId, orgId]);
     await client.query('COMMIT');
     return { ok: true, reverted: matched.length };
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
@@ -385,9 +524,13 @@ async function listMovements(orgId, { status = null, from = null, to = null, lim
   if (to)     { params.push(to);     conds.push(`date <= $${params.length}`); }
   params.push(limit);
   const { rows } = await getPool().query(
-    `SELECT id, date, amount, description, payer, doc_number, balance, status, matched_orders, matched_at, note, statement_id,
-            match_method, bank_identity_id
-       FROM bank_movements WHERE ${conds.join(' AND ')} ORDER BY date DESC, id DESC LIMIT $${params.length}`, params);
+    `SELECT bm.id, bm.date, bm.amount, bm.description, bm.payer, bm.doc_number, bm.balance, bm.status,
+            bm.matched_orders, bm.matched_at, bm.note, bm.statement_id, bm.match_method, bm.bank_identity_id,
+            pp.id AS verified_proof_id, pp.reconciliation_score, pp.reconciliation_confidence
+       FROM bank_movements bm
+       LEFT JOIN payment_proofs pp ON pp.organization_id=bm.organization_id AND pp.bank_movement_id=bm.id
+      WHERE ${conds.map(c => c.replace(/^organization_id/, 'bm.organization_id').replace(/^kind/, 'bm.kind').replace(/^status/, 'bm.status').replace(/^date/, 'bm.date')).join(' AND ')}
+      ORDER BY bm.date DESC, bm.id DESC LIMIT $${params.length}`, params);
   return rows.map(r => ({ ...r, amount: Number(r.amount) }));
 }
 
@@ -404,6 +547,8 @@ async function stats(orgId) {
             COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0)::bigint AS pending_amount,
             COUNT(*) FILTER (WHERE status = 'matched')::int AS matched,
             COUNT(*) FILTER (WHERE status = 'matched' AND match_method = 'automatic_identity')::int AS automatic_matched,
+            (SELECT COUNT(*)::int FROM payment_proofs pp
+              WHERE pp.organization_id = $1 AND pp.bank_movement_id IS NOT NULL AND pp.status='verified') AS bank_verified_proofs,
             COUNT(*) FILTER (WHERE status = 'ignored')::int AS ignored,
             (SELECT COUNT(*)::int FROM bank_contact_identities bi
               WHERE bi.organization_id = $1 AND bi.bank_name = 'santander' AND bi.active = TRUE) AS learned_identities
@@ -411,4 +556,4 @@ async function stats(orgId) {
   return { ...r, pending_amount: Number(r.pending_amount) };
 }
 
-module.exports = { importStatement, suggest, confirm, autoMatchPending, ignore, unmatch, listMovements, listStatements, stats, getUnpaidOrders, nameSimilarity, normalizedPhone, uniqueOrderCombination };
+module.exports = { importStatement, suggest, confirm, autoMatchPending, ignore, unmatch, listMovements, listStatements, stats, getUnpaidOrders, nameSimilarity, normalizedPhone, uniqueOrderCombination, scoreProofEvidence, confidenceForScore };

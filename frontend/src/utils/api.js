@@ -110,6 +110,7 @@ export const dashboardAPI = {
 
 export const paymentProofsAPI = {
   getAll:  (status) => api.get('/payment-proofs', { params: status ? { status } : {} }).then(r => r.data.proofs),
+  getAccounts: (month) => api.get('/payment-proofs/accounts', { params: month ? { month } : {} }).then(r => r.data),
   imageUrl: (id)   => `${BASE_URL}/api/payment-proofs/${id}/image`,
   update:  (id, data) => api.patch(`/payment-proofs/${id}`, data).then(r => r.data.proof),
 };
