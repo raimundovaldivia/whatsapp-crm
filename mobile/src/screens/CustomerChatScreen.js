@@ -4,6 +4,7 @@ import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Image, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -26,6 +27,7 @@ function statusLabel(status) {
 
 export default function CustomerChatScreen({ route }) {
   const { routeId, stopKey, stop } = route.params;
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState([]);
   const [windowInfo, setWindowInfo] = useState({ available: false, reason: null });
   const [loading, setLoading] = useState(true);
@@ -159,7 +161,10 @@ export default function CustomerChatScreen({ route }) {
   const canWrite = !!windowInfo.available;
 
   return (
-    <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+    <KeyboardAvoidingView
+      style={s.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
       <View style={s.identity}>
         <View style={s.avatar}><Text style={s.avatarText}>{String(stop?.customerName || 'C').trim().charAt(0).toUpperCase()}</Text></View>
         <View style={{ flex: 1 }}>
@@ -222,7 +227,7 @@ export default function CustomerChatScreen({ route }) {
         </ScrollView>
       )}
 
-      <View style={s.composer}>
+      <View style={[s.composer, { paddingBottom: Math.max(11, insets.bottom + 6) }]}>
         {attachment && (
           <View style={s.attachmentPreview}>
             {String(attachment.mimeType).startsWith('image/') && String(attachment.data).startsWith('data:')
@@ -242,6 +247,8 @@ export default function CustomerChatScreen({ route }) {
           onChangeText={setText}
           placeholder={canWrite ? 'Escribe para coordinar la entrega…' : 'Espera un mensaje del cliente'}
           placeholderTextColor={C.muted}
+          selectionColor={C.green}
+          cursorColor={C.green}
           editable={canWrite && !sending}
           multiline
           maxLength={1000}
@@ -301,7 +308,7 @@ const s = StyleSheet.create({
   removeAttachment: { color:C.muted, fontSize:18, padding:6 },
   attach: { width:48, height:48, borderRadius:16, backgroundColor:C.bgSoft, borderWidth:1, borderColor:C.border, alignItems:'center', justifyContent:'center' },
   attachText: { fontSize:21 },
-  input: { flex: 1, maxHeight: 110, minHeight: 48, color: C.text, backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12 },
+  input: { flex: 1, maxHeight: 110, minHeight: 48, color: C.text, backgroundColor: C.bgSoft, borderWidth: 1, borderColor: C.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, lineHeight: 20, textAlignVertical: 'top', includeFontPadding: false },
   inputDisabled: { opacity: 0.55 },
   send: { width: 48, height: 48, borderRadius: 16, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
   sendDisabled: { opacity: 0.35 },
