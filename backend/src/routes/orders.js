@@ -14,6 +14,7 @@ const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
 const collection  = require('../services/payment-collection');
+const { paymentBreakdown } = require('../utils/payment-breakdown');
 const { recordRouteOutcome } = require('../services/delivery-attempts');
 const deliveryNotifications = require('../services/delivery-notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -133,7 +134,7 @@ router.get('/', async (req, res) => {
 
     res.json({ success: true, data: parsed });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 
@@ -633,11 +634,11 @@ router.post('/send-charge', async (req, res) => {
 /**
  * PATCH /api/orders/payment-method
  * Corregir a mano el medio de pago de un pedido (si el repartidor se equivocó).
- * Body: { source: 'bot'|'shopify', id, paymentMethod: 'efectivo'|'transferencia'|'otro'|null }
+ * Body: { source: 'bot'|'shopify', id, paymentMethod, paymentCashAmount?, paymentTransferAmount? }
  */
 router.patch('/payment-method', async (req, res) => {
-  const { source, id, paymentMethod } = req.body;
-  const VALID = ['efectivo', 'transferencia', 'otro', null];
+  const { source, id, paymentMethod, paymentCashAmount, paymentTransferAmount } = req.body;
+  const VALID = ['efectivo', 'transferencia', 'mixto', 'otro', null];
   if (!['bot', 'shopify'].includes(source)) {
     return res.status(400).json({ success: false, error: "source debe ser 'bot' o 'shopify'" });
   }
@@ -648,16 +649,27 @@ router.patch('/payment-method', async (req, res) => {
   try {
     const pool = getPool();
     const method = paymentMethod ?? null;
+    const table = source === 'shopify' ? 'shopify_orders' : 'orders';
+    const idCol = source === 'shopify' ? 'shopify_order_id' : 'id';
+    const { rows: [existing] } = await pool.query(
+      `SELECT total_price FROM ${table} WHERE ${idCol} = $1 AND organization_id = $2`,
+      [source === 'shopify' ? String(id) : parseInt(id), req.orgId]
+    );
+    if (!existing) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    const total = Math.round(Number(existing.total_price) || 0);
+    const { cash: cashAmount, transfer: transferAmount } = paymentBreakdown(method, total, paymentCashAmount, paymentTransferAmount);
     // Al cambiar el medio de pago reconciliamos el estado de pago:
     //  • A transferencia/otro/—: si estaba "pagado" SOLO por efectivo/marca manual
     //    (sin comprobante verificado), vuelve a "entregado" → reaparece en Por cobrar.
     //    No toca los pagados con comprobante real ni (en Shopify) los pagados online.
     //  • A efectivo: si ya se entregó, queda pagado (efectivo al entregar).
-    const nonCash = method === null || method === 'transferencia' || method === 'otro';
+    const nonCash = method === null || method === 'transferencia' || method === 'mixto' || method === 'otro';
     const { rowCount } = source === 'shopify'
       ? await pool.query(
           `UPDATE shopify_orders
               SET payment_method = $1,
+                  payment_cash_amount = $5,
+                  payment_transfer_amount = $6,
                   financial_status = CASE
                     WHEN $4::boolean AND LOWER(COALESCE(financial_status,'')) = 'paid'
                          AND payment_marked_at IS NOT NULL
@@ -671,11 +683,13 @@ router.patch('/payment-method', async (req, res) => {
                          AND payment_marked_at IS NOT NULL THEN NULL
                     ELSE payment_marked_at END
             WHERE shopify_order_id = $2 AND organization_id = $3`,
-          [method, String(id), req.orgId, nonCash]
+          [method, String(id), req.orgId, nonCash, cashAmount, transferAmount]
         )
       : await pool.query(
           `UPDATE orders o
               SET payment_method = $1,
+                  payment_cash_amount = $5,
+                  payment_transfer_amount = $6,
                   status = CASE
                     WHEN $4::boolean AND o.status = 'paid'
                          AND NOT EXISTS (SELECT 1 FROM payment_proofs pp
@@ -695,7 +709,7 @@ router.patch('/payment-method', async (req, res) => {
                     ELSE payment_marked_at END,
                   updated_at = NOW()
             WHERE o.id = $2 AND o.organization_id = $3`,
-          [method, parseInt(id), req.orgId, nonCash]
+          [method, parseInt(id), req.orgId, nonCash, cashAmount, transferAmount]
         );
 
     if (!rowCount) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
@@ -704,7 +718,7 @@ router.patch('/payment-method', async (req, res) => {
     // Si la org activó autoSendOnTransfer y el pedido ya está entregado (y
     // sin comprobante), el mensaje de cobro sale al marcar "transferencia".
     let autoCharge = null;
-    if (method === 'transferencia') {
+    if (['transferencia', 'mixto'].includes(method)) {
       try {
         const settings = await collection.getChargeSettings(req.orgId);
         if (settings.autoSendOnTransfer) {
@@ -725,7 +739,7 @@ router.patch('/payment-method', async (req, res) => {
 
     res.json({ success: true, autoCharge });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 

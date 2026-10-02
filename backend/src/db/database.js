@@ -876,12 +876,13 @@ async function getLatestPendingOrderByConversation(conversationId) {
 async function getOrdersAwaitingPayment(conversationId) {
   return query(
     `SELECT o.*,
+            CASE WHEN o.payment_method = 'mixto' THEN o.payment_transfer_amount ELSE o.total_price::numeric END AS payment_due_amount,
             (o.status IN ('entregado', 'paid') OR o.delivered_at IS NOT NULL) AS is_delivered,
             (SELECT COUNT(*) FROM payment_proofs pp WHERE pp.order_id = o.id AND pp.status = 'pending')::int AS proofs_pending
        FROM orders o
       WHERE o.conversation_id = $1
         AND (
-          ((o.status IN ('entregado', 'paid') OR o.delivered_at IS NOT NULL) AND o.payment_method = 'transferencia'
+          ((o.status IN ('entregado', 'paid') OR o.delivered_at IS NOT NULL) AND o.payment_method IN ('transferencia', 'mixto')
              AND NOT EXISTS (SELECT 1 FROM payment_proofs pp
                               WHERE pp.order_id = o.id AND pp.status IN ('verified','pre_verified'))
              AND COALESCE(o.payment_marked_at, o.updated_at, o.created_at) > NOW() - INTERVAL '60 days')

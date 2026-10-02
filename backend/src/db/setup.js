@@ -595,18 +595,18 @@ async function setupDatabase() {
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS delivery_modified BOOLEAN DEFAULT FALSE;
 
-      DO $$
-      BEGIN
-        ALTER TABLE orders ADD CONSTRAINT orders_payment_method_check
-          CHECK(payment_method IS NULL OR payment_method IN ('efectivo','transferencia','otro')) NOT VALID;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$;
-      DO $$
-      BEGIN
-        ALTER TABLE shopify_orders ADD CONSTRAINT shopify_orders_payment_method_check
-          CHECK(payment_method IS NULL OR payment_method IN ('efectivo','transferencia','otro')) NOT VALID;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$;
+      ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS payment_cash_amount NUMERIC(12,2),
+        ADD COLUMN IF NOT EXISTS payment_transfer_amount NUMERIC(12,2);
+      ALTER TABLE shopify_orders
+        ADD COLUMN IF NOT EXISTS payment_cash_amount NUMERIC(12,2),
+        ADD COLUMN IF NOT EXISTS payment_transfer_amount NUMERIC(12,2);
+      ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_method_check;
+      ALTER TABLE orders ADD CONSTRAINT orders_payment_method_check
+        CHECK(payment_method IS NULL OR payment_method IN ('efectivo','transferencia','mixto','otro')) NOT VALID;
+      ALTER TABLE shopify_orders DROP CONSTRAINT IF EXISTS shopify_orders_payment_method_check;
+      ALTER TABLE shopify_orders ADD CONSTRAINT shopify_orders_payment_method_check
+        CHECK(payment_method IS NULL OR payment_method IN ('efectivo','transferencia','mixto','otro')) NOT VALID;
 
       CREATE INDEX IF NOT EXISTS idx_orders_por_cobrar
         ON orders(organization_id, payment_method, status);
@@ -979,6 +979,7 @@ async function setupDatabase() {
       ALTER TABLE delivery_routes
         ADD COLUMN IF NOT EXISTS driver_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_payment_amounts JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_notes     JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_times     JSONB DEFAULT '{}',

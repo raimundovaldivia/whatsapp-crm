@@ -28,6 +28,7 @@ const axios   = require('axios');
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
+const { paymentBreakdown } = require('../utils/payment-breakdown');
 const deliveryNotifications = require('../services/delivery-notifications');
 const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
@@ -769,7 +770,7 @@ router.get('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                         created_at, sent_at, started_at, completed_at,
                         jsonb_array_length(orders) AS order_count,
                         orders, optimized_route, load_checklist,
-                        stop_statuses, stop_payments
+                        stop_statuses, stop_payments, stop_payment_amounts
                  FROM delivery_routes
                  WHERE organization_id = $1`;
     const params = [req.orgId];
@@ -836,7 +837,7 @@ router.get('/routes/history', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT r.id, r.name, r.status, r.driver_name, r.driver_user_id,
              r.orders, r.optimized_route, r.stop_statuses,
-             r.stop_payments, r.stop_notes, r.stop_extras, r.stop_times,
+             r.stop_payments, r.stop_payment_amounts, r.stop_notes, r.stop_extras, r.stop_times,
              r.total_distance, r.total_duration, r.created_at, r.sent_at, r.started_at, r.completed_at,
              u.name AS driver_user_name
         FROM delivery_routes r
@@ -862,10 +863,10 @@ async function routeFinancialSummary(pool, route, orgId) {
   const shopIds = orders.filter(order => order.source === 'shopify').map(order => String(order.id));
   const [botResult, shopResult, expenseResult] = await Promise.all([
     botIds.length
-      ? pool.query('SELECT id::text AS id, total_price FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
+      ? pool.query('SELECT id::text AS id, total_price, payment_method, payment_cash_amount, payment_transfer_amount FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
       : { rows: [] },
     shopIds.length
-      ? pool.query('SELECT shopify_order_id AS id, total_price FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopIds])
+      ? pool.query('SELECT shopify_order_id AS id, total_price, payment_method, payment_cash_amount, payment_transfer_amount FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopIds])
       : { rows: [] },
     pool.query(
       'SELECT COUNT(*)::int AS count, COALESCE(SUM(amount), 0)::int AS total FROM delivery_expenses WHERE organization_id = $1 AND route_id = $2',
@@ -873,10 +874,12 @@ async function routeFinancialSummary(pool, route, orgId) {
     ),
   ]);
   const totals = new Map();
-  botResult.rows.forEach(row => totals.set(`bot_${row.id}`, Number(row.total_price) || 0));
-  shopResult.rows.forEach(row => totals.set(`shopify_${row.id}`, Number(row.total_price) || 0));
+  const orderPayments = new Map();
+  botResult.rows.forEach(row => { totals.set(`bot_${row.id}`, Number(row.total_price) || 0); orderPayments.set(`bot_${row.id}`, row); });
+  shopResult.rows.forEach(row => { totals.set(`shopify_${row.id}`, Number(row.total_price) || 0); orderPayments.set(`shopify_${row.id}`, row); });
   const statuses = route.stop_statuses || {};
   const payments = route.stop_payments || {};
+  const paymentAmounts = route.stop_payment_amounts || {};
   let routeValue = 0, deliveredValue = 0, cashCollected = 0, transferCollected = 0, otherCollected = 0;
   for (const stop of stops) {
     const key = `${stop.source}_${stop.id}`;
@@ -884,8 +887,15 @@ async function routeFinancialSummary(pool, route, orgId) {
     routeValue += amount;
     if (statuses[key] !== 'entregado') continue;
     deliveredValue += amount;
-    if (payments[key] === 'efectivo') cashCollected += amount;
-    else if (payments[key] === 'transferencia') transferCollected += amount;
+    const method = payments[key] || orderPayments.get(key)?.payment_method;
+    const saved = paymentAmounts[key] || orderPayments.get(key) || {};
+    const cash = Number(saved.cash ?? saved.payment_cash_amount);
+    const transfer = Number(saved.transfer ?? saved.payment_transfer_amount);
+    if (method === 'mixto') {
+      cashCollected += Number.isFinite(cash) ? cash : 0;
+      transferCollected += Number.isFinite(transfer) ? transfer : 0;
+    } else if (method === 'efectivo') cashCollected += Number.isFinite(cash) && cash > 0 ? cash : amount;
+    else if (method === 'transferencia') transferCollected += Number.isFinite(transfer) && transfer > 0 ? transfer : amount;
     else otherCollected += amount;
   }
   const expense = expenseResult.rows[0] || { count: 0, total: 0 };
@@ -1858,7 +1868,7 @@ async function applyExtraToOrder(pool, source, orderId, orgId, extras) {
 }
 
 async function applyStopUpdate(req, res, id, stopKey) {
-  const { status, paymentMethod, note, extras, deliverAfter } = req.body;  // status: 'entregado' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
+  const { status, paymentMethod, paymentCashAmount, paymentTransferAmount, note, extras, deliverAfter } = req.body;  // status: 'entregado' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
   let cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
   // Reprogramado: el cliente pidió que se le entregue otro día.
   const deliverDate = status === 'postponed' && /^\d{4}-\d{2}-\d{2}$/.test(String(deliverAfter || '')) ? deliverAfter : null;
@@ -1886,7 +1896,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
   if (['cancelled', 'not_delivered'].includes(status) && !cleanNote)
     return res.status(400).json({ success: false, error: 'Indica el motivo para cerrar esta parada' });
 
-  const VALID_PAYMENT = ['efectivo', 'transferencia', 'otro'];
+  const VALID_PAYMENT = ['efectivo', 'transferencia', 'mixto', 'otro'];
   if (paymentMethod && !VALID_PAYMENT.includes(paymentMethod))
     return res.status(400).json({ success: false, error: `Medio de pago inválido. Opciones: ${VALID_PAYMENT.join(', ')}` });
 
@@ -1908,11 +1918,20 @@ async function applyStopUpdate(req, res, id, stopKey) {
     if (!['bot', 'shopify'].includes(kind)) throw Object.assign(new Error('Pedido inválido'), { status: 400 });
     const table = kind === 'bot' ? 'orders' : 'shopify_orders';
     const column = kind === 'bot' ? 'id' : 'shopify_order_id';
-    const order = await pool.query('SELECT 1 FROM ' + table + ' WHERE ' + column + ' = $1 AND organization_id = $2 FOR UPDATE', [kind === 'bot' ? Number(orderKey) : orderKey, req.orgId]);
+    const order = await pool.query('SELECT total_price FROM ' + table + ' WHERE ' + column + ' = $1 AND organization_id = $2 FOR UPDATE', [kind === 'bot' ? Number(orderKey) : orderKey, req.orgId]);
     if (!order.rows.length) throw Object.assign(new Error('Pedido no encontrado'), { status: 404 });
+    const deliveryTotal = Math.round((Number(order.rows[0].total_price) || 0) + cleanExtras.reduce((sum, e) => sum + e.price * e.quantity, 0));
+    const breakdown = status === 'entregado'
+      ? paymentBreakdown(paymentMethod, deliveryTotal, paymentCashAmount, paymentTransferAmount)
+      : { cash: 0, transfer: 0 };
+    const cashAmount = breakdown.cash || 0;
+    const transferAmount = breakdown.transfer || 0;
     // Actualizar stop_statuses (y el medio de pago, si se entregó) en la ruta
     const paymentJson = status === 'entregado' && paymentMethod
       ? JSON.stringify({ [stopKey]: paymentMethod })
+      : '{}';
+    const paymentAmountsJson = status === 'entregado' && paymentMethod
+      ? JSON.stringify({ [stopKey]: { cash: cashAmount, transfer: transferAmount } })
       : '{}';
     // Nota del repartidor por parada (se guarda si viene; si va vacía no borra la anterior)
     const noteJson = cleanNote ? JSON.stringify({ [stopKey]: cleanNote }) : '{}';
@@ -1924,11 +1943,12 @@ async function applyStopUpdate(req, res, id, stopKey) {
               stop_payments = COALESCE(stop_payments, '{}'::jsonb) || $6::jsonb,
               stop_notes    = COALESCE(stop_notes, '{}'::jsonb) || $7::jsonb,
               stop_extras   = COALESCE(stop_extras, '{}'::jsonb) || $8::jsonb,
+              stop_payment_amounts = COALESCE(stop_payment_amounts, '{}'::jsonb) || $9::jsonb,
               stop_times    = COALESCE(stop_times, '{}'::jsonb) || jsonb_build_object($1::text, to_jsonb(NOW()))
         WHERE id = $3 AND organization_id = $4
           AND ($5::int IS NULL OR driver_user_id = $5 OR driver_user_id IS NULL)
-        RETURNING stop_statuses, stop_payments, stop_notes, stop_extras, orders`,
-      [stopKey, status, parseInt(id), req.orgId, driverScope, paymentJson, noteJson, extrasJson]
+        RETURNING stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, orders`,
+      [stopKey, status, parseInt(id), req.orgId, driverScope, paymentJson, noteJson, extrasJson, paymentAmountsJson]
     );
     if (!route) throw new Error('Ruta no encontrada');
 
@@ -1958,6 +1978,8 @@ async function applyStopUpdate(req, res, id, stopKey) {
         `UPDATE shopify_orders
             SET crm_status = $1,
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
+                payment_cash_amount = CASE WHEN $4::boolean THEN $12 ELSE payment_cash_amount END,
+                payment_transfer_amount = CASE WHEN $4::boolean THEN $13 ELSE payment_transfer_amount END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 financial_status  = CASE WHEN $6::boolean THEN 'paid' ELSE financial_status END,
                 delivered_at      = CASE WHEN $9::boolean THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
@@ -1968,7 +1990,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                                          WHEN $10::text IN ('cancelado_definitivo','no_entregado') AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
-        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
+        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote, cashAmount, transferAmount]
       );
     } else if (source === 'bot') {
       // Pedidos del bot marcan "pagado" con status = 'paid' (igual que al
@@ -1987,13 +2009,15 @@ async function applyStopUpdate(req, res, id, stopKey) {
                 last_attempt_at     = CASE WHEN $10::text IS NOT NULL THEN NOW() ELSE last_attempt_at END,
                 last_attempt_status = CASE WHEN $10::text IS NOT NULL THEN $10 ELSE last_attempt_status END,
                 payment_method    = CASE WHEN $4::boolean THEN $5 ELSE payment_method END,
+                payment_cash_amount = CASE WHEN $4::boolean THEN $12 ELSE payment_cash_amount END,
+                payment_transfer_amount = CASE WHEN $4::boolean THEN $13 ELSE payment_transfer_amount END,
                 payment_marked_at = CASE WHEN $4::boolean THEN NOW() ELSE payment_marked_at END,
                 delivery_date     = CASE WHEN $7::date IS NOT NULL THEN $7::date ELSE delivery_date END,
                 delivery_note     = CASE WHEN $7::date IS NOT NULL THEN $8
                                          WHEN $10::text IN ('cancelado_definitivo','no_entregado') AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE id = $2 AND organization_id = $3`,
-        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote]
+        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote, cashAmount, transferAmount]
       );
     }
 
@@ -2080,7 +2104,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     // tab "Por cobrar" del CRM. No bloquea la respuesta al repartidor — si el
     // envío falla, el pedido queda igual listado en el tab.
     let autoCharge = null;
-    if (savePayment && paymentMethod === 'transferencia') {
+    if (savePayment && ['transferencia', 'mixto'].includes(paymentMethod)) {
       try {
         const settings = await collection.getChargeSettings(req.orgId);
         if (settings.autoSendOnTransfer) {
@@ -2102,6 +2126,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
       success:       true,
       stopStatuses:  route.stop_statuses,
       stopPayments:  route.stop_payments || {},
+      stopPaymentAmounts: route.stop_payment_amounts || {},
       routeStatus:   allDone && orders.length > 0 ? 'completed' : 'in_progress',
       autoCharge,
     });
@@ -2138,8 +2163,8 @@ router.get('/summary', async (req, res) => {
 // no de la tabla orders; por eso hay que escribirlo aquí para que el cambio se
 // vea. La reconciliación de pago/cobranza del pedido la hace /orders/payment-method.
 router.patch('/routes/:id/stop-payment', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
-  const { stopKey, paymentMethod } = req.body;
-  const VALID = ['efectivo', 'transferencia', 'otro', null];
+  const { stopKey, paymentMethod, paymentCashAmount, paymentTransferAmount } = req.body;
+  const VALID = ['efectivo', 'transferencia', 'mixto', 'otro', null];
   if (!stopKey || typeof stopKey !== 'string') {
     return res.status(400).json({ success: false, error: 'stopKey requerido' });
   }
@@ -2149,11 +2174,13 @@ router.patch('/routes/:id/stop-payment', requireRole('owner', 'admin', 'supervis
   try {
     const pool = getPool();
     const method = paymentMethod ?? null;
+    const amounts = method ? { cash: Math.max(0, Math.round(Number(paymentCashAmount) || 0)), transfer: Math.max(0, Math.round(Number(paymentTransferAmount) || 0)) } : null;
     const { rowCount } = await pool.query(
       `UPDATE delivery_routes
-          SET stop_payments = COALESCE(stop_payments, '{}'::jsonb) || jsonb_build_object($1::text, $2::jsonb)
+          SET stop_payments = COALESCE(stop_payments, '{}'::jsonb) || jsonb_build_object($1::text, $2::jsonb),
+              stop_payment_amounts = COALESCE(stop_payment_amounts, '{}'::jsonb) || jsonb_build_object($1::text, $5::jsonb)
         WHERE id = $3 AND organization_id = $4`,
-      [stopKey, JSON.stringify(method), parseInt(req.params.id), req.orgId]
+      [stopKey, JSON.stringify(method), parseInt(req.params.id), req.orgId, JSON.stringify(amounts)]
     );
     if (!rowCount) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
     res.json({ success: true });
@@ -2182,7 +2209,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     // Rutas que pueden tener paradas en el rango (margen de 3 días por rutas largas)
     const { rows: routes } = await pool.query(`
       SELECT id, name, status, driver_name, driver_user_id, orders, optimized_route,
-             stop_statuses, stop_payments, stop_notes, stop_extras, stop_times,
+             stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, stop_times,
              created_at, sent_at, completed_at
         FROM delivery_routes
        WHERE organization_id = $1
@@ -2199,7 +2226,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     for (const r of routes) for (const o of (r.orders || [])) (o.source === 'shopify' ? shopIds : botIds).add(String(o.id));
     const [botRows, shopRows, pending] = await Promise.all([
       botIds.size ? pool.query(
-        `SELECT id::text AS id, status, payment_method, charge_requested_at, charge_request_count, total_price, customer_phone,
+        `SELECT id::text AS id, status, payment_method, payment_cash_amount, payment_transfer_amount, charge_requested_at, charge_request_count, total_price, customer_phone,
                 delivery_modified, customer_modified,
                  (SELECT pp.status FROM payment_proofs pp
                    WHERE pp.order_id = orders.id AND pp.organization_id = orders.organization_id
@@ -2209,7 +2236,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
            FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])`,
         [req.orgId, [...botIds].map(Number)]).then(r => r.rows) : [],
       shopIds.size ? pool.query(
-        `SELECT shopify_order_id AS id, crm_status AS status, financial_status, payment_method, charge_requested_at,
+        `SELECT shopify_order_id AS id, crm_status AS status, financial_status, payment_method, payment_cash_amount, payment_transfer_amount, charge_requested_at,
                 charge_request_count, total_price, customer_phone, delivery_modified,
                  NULL::text AS proof_status,
                 (SELECT m.status FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.whatsapp_message_id=shopify_orders.charge_message_id AND c.organization_id=shopify_orders.organization_id) AS charge_status,
@@ -2237,7 +2264,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     // Rutas canceladas: solo las paradas que alcanzaron a marcarse.
     const { rows: cancelledRoutes } = await pool.query(`
       SELECT id, name, status, driver_name, driver_user_id, orders, optimized_route,
-             stop_statuses, stop_payments, stop_notes, stop_extras, stop_times,
+             stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, stop_times,
              created_at, sent_at, completed_at
         FROM delivery_routes
        WHERE organization_id = $1 AND status = 'cancelled'
@@ -2253,7 +2280,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     const rows = [];
     for (const r of routes) {
       const stops = Array.isArray(r.optimized_route) && r.optimized_route.length ? r.optimized_route : (r.orders || []);
-      const statuses = r.stop_statuses || {}, pays = r.stop_payments || {}, notes = r.stop_notes || {};
+      const statuses = r.stop_statuses || {}, pays = r.stop_payments || {}, payAmounts = r.stop_payment_amounts || {}, notes = r.stop_notes || {};
       const extras = r.stop_extras || {}, times = r.stop_times || {};
       const routeFallbackTime = r.completed_at || r.sent_at || r.created_at;
 
@@ -2272,6 +2299,12 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
         const paymentMethod = pays[key] || ord?.payment_method || null;
         const extraList = Array.isArray(extras[key]) ? extras[key] : [];
         const extraTotal = extraList.reduce((s, e) => s + (Number(e.price) || 0) * (Number(e.quantity) || 0), 0);
+        const deliveredTotal = ord
+          ? (Number(ord.total_price) || 0)
+          : (Number(st.totalPrice) || 0) + extraTotal;
+        const savedAmounts = payAmounts[key] || {};
+        const paymentCash = Number(savedAmounts.cash ?? ord?.payment_cash_amount) || (paymentMethod === 'efectivo' ? deliveredTotal : 0);
+        const paymentTransfer = Number(savedAmounts.transfer ?? ord?.payment_transfer_amount) || (paymentMethod === 'transferencia' ? deliveredTotal : 0);
 
         rows.push({
           day, at,
@@ -2288,6 +2321,8 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           note: notes[key] || null,
           status,                                   // entregado | cancelled | postponed | not_delivered | pending
           payment_method: paymentMethod,            // efectivo | transferencia | otro | null
+          payment_cash_amount: paymentCash,
+          payment_transfer_amount: paymentTransfer,
           paid,
           proof_status: ord?.proof_status || null,  // pending | pre_verified | verified | rejected
           charge: {

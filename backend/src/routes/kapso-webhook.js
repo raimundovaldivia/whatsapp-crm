@@ -785,7 +785,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     const paidAmt = analysis.amount ? toNum(analysis.amount) : NaN;
     let pendingOrder = null;
     if (!isNaN(paidAmt)) {
-      pendingOrder = candidates.find(o => Math.abs(toNum(o.total_price) - paidAmt) <= 1) || null;
+      pendingOrder = candidates.find(o => Math.abs(toNum(o.payment_due_amount ?? o.total_price) - paidAmt) <= 1) || null;
     }
     if (!pendingOrder) pendingOrder = candidates[0] || null;
     const wasDelivered = isDeliveredOrder(pendingOrder);
@@ -793,8 +793,8 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     let amountMatches  = null;
     let proofStatus    = 'pending';
 
-    if (!isNaN(paidAmt) && pendingOrder?.total_price) {
-      const orderAmt = toNum(pendingOrder.total_price);
+    if (!isNaN(paidAmt) && (pendingOrder?.payment_due_amount || pendingOrder?.total_price)) {
+      const orderAmt = toNum(pendingOrder.payment_due_amount ?? pendingOrder.total_price);
       if (!isNaN(orderAmt)) {
         amountMatches = Math.abs(orderAmt - paidAmt) <= 1; // tolerancia $1
         proofStatus   = amountMatches ? 'pre_verified' : 'pending';

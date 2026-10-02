@@ -1039,6 +1039,7 @@ function periodLabel(period, view) {
 const PAY_META = {
   efectivo:      { label: 'Efectivo',      icon: '💵', color: '#22c55e' },
   transferencia: { label: 'Transferencia', icon: '🏦', color: '#38bdf8' },
+  mixto:         { label: 'Efectivo + transferencia', icon: '💵🏦', color: '#a78bfa' },
   otro:          { label: 'Otro',          icon: '💳', color: '#a78bfa' },
 };
 const STOP_META = {
@@ -1053,7 +1054,7 @@ function chargeInfo(row) {
   if (row.status !== 'entregado') return null;
   if (row.paid) return { label: 'Pagado', color: '#22c55e', icon: '✅' };
   if (row.payment_method === 'efectivo') return { label: 'Efectivo al entregar', color: '#22c55e', icon: '💵' };
-  if (row.payment_method !== 'transferencia') return null;
+  if (!['transferencia', 'mixto'].includes(row.payment_method)) return null;
   const state = row.charge?.status;
   if (state === 'failed') return { label: `Cobro no enviado${row.charge.error?.code ? ` (${row.charge.error.code})` : ''} — reintentar`, color: '#f87171', icon: '⚠️' };
   if (state === 'pending' || state === 'sent') return { label: 'Cobro pendiente de entrega', color: '#fbbf24', icon: '⏳' };
@@ -1124,7 +1125,7 @@ function DespachosRepartos({ colors }) {
   async function openChargeModal(d, ev) {
     ev?.stopPropagation?.();
     const pend = (d.rows || []).filter(r =>
-      r.status === 'entregado' && r.payment_method === 'transferencia' && r.charge?.actionable
+      r.status === 'entregado' && ['transferencia', 'mixto'].includes(r.payment_method) && r.charge?.actionable
     );
     if (!pend.length) return;
     setChargeModal({ day: d.day, rows: pend });
@@ -1170,15 +1171,29 @@ function DespachosRepartos({ colors }) {
   // Cambiar a mano el medio de pago de un pedido desde la tabla (corrige si el
   // repartidor se equivocó). Refresca para recalcular pagos y cobranza.
   async function changePay(r, method) {
+    const total = Math.round(Number(r.total) || 0);
+    let paymentCashAmount = method === 'efectivo' ? total : 0;
+    let paymentTransferAmount = method === 'transferencia' ? total : 0;
+    if (method === 'mixto') {
+      const entered = window.prompt(`Total ${CLP(total)}. ¿Cuánto pagó en efectivo? La diferencia quedará como transferencia.`, String(r.payment_cash_amount || ''));
+      if (entered === null) return;
+      paymentCashAmount = Math.round(Number(String(entered).replace(/[^0-9]/g, '')));
+      paymentTransferAmount = total - paymentCashAmount;
+      if (paymentCashAmount <= 0 || paymentTransferAmount <= 0) {
+        alert('El monto en efectivo debe ser mayor a $0 y menor que el total del pedido.');
+        return;
+      }
+    }
     setPayBusy(r.stop_key);
     try {
       // El pago que se ve en Despachos viene de la ruta (stop_payments), no de
       // la tabla orders. Hay que actualizar la parada de la ruta y además
       // reconciliar el pedido (estado de pago / cobranza).
+      const payload = { paymentMethod: method, paymentCashAmount, paymentTransferAmount };
+      await api.patch('/orders/payment-method', { source: r.source, id: r.order_id, ...payload });
       if (r.route_id) {
-        await api.patch(`/delivery/routes/${r.route_id}/stop-payment`, { stopKey: r.stop_key, paymentMethod: method });
+        await api.patch(`/delivery/routes/${r.route_id}/stop-payment`, { stopKey: r.stop_key, ...payload });
       }
-      await api.patch('/orders/payment-method', { source: r.source, id: r.order_id, paymentMethod: method });
       load();
     } catch (e) {
       alert(e.response?.data?.error || 'No se pudo cambiar el medio de pago');
@@ -1270,22 +1285,25 @@ function DespachosRepartos({ colors }) {
     d.rows.push(r);
     if (r.status === 'entregado') {
       d.entregados++;
-      const amount = (r.total || 0) + (r.extra_total || 0);
-      if (r.payment_method === 'efectivo') d.efectivo += amount;
-      else if (r.payment_method === 'transferencia') d.transferencia += amount;
-      else if (r.payment_method) d.otro += amount;
+      // El total del pedido ya incorpora las ventas extra guardadas en reparto.
+      const amount = Number(r.total) || 0;
+      const cashAmount = Number(r.payment_cash_amount) || (r.payment_method === 'efectivo' ? amount : 0);
+      const transferAmount = Number(r.payment_transfer_amount) || (r.payment_method === 'transferencia' ? amount : 0);
+      if (r.payment_method === 'efectivo' || r.payment_method === 'mixto') d.efectivo += cashAmount;
+      if (r.payment_method === 'transferencia' || r.payment_method === 'mixto') d.transferencia += transferAmount;
+      if (r.payment_method === 'otro') d.otro += amount;
       // "Pagado" en este informe corresponde solo a transferencias ya
       // confirmadas. El efectivo tiene su propia columna y no se mezcla aquí.
-      if (r.payment_method === 'transferencia' && r.paid) d.pagado += amount;
-      if (r.payment_method === 'transferencia' && !r.paid && ['pending', 'pre_verified'].includes(r.proof_status)) d.porVerificar += amount;
-      if (r.payment_method === 'transferencia') {
+      if (['transferencia', 'mixto'].includes(r.payment_method) && r.paid) d.pagado += transferAmount;
+      if (['transferencia', 'mixto'].includes(r.payment_method) && !r.paid && ['pending', 'pre_verified'].includes(r.proof_status)) d.porVerificar += transferAmount;
+      if (['transferencia', 'mixto'].includes(r.payment_method)) {
         if (r.charge?.pending) d.sinPagoConfirmado++;
         if (r.charge?.actionable) d.cobrosAccionables++;
         if (['delivered', 'read'].includes(r.charge?.status)) d.cobrosEnviados++;
         else if (r.charge?.retryable) d.cobrosPendientes++;
         else if (['unknown','pending','sent'].includes(r.charge?.status)) d.cobrosSinConfirmar++;
         if (!r.paid) {
-          const debt = (r.total || 0) + (r.extra_total || 0);
+          const debt = transferAmount;
           const debtor = { name: r.customer_name || 'Sin nombre', order: r.order_label, amount: debt, phone: r.phone || '' };
           if (r.client_type === 'empresa') {
             d.deudaEmpresa += debt;
@@ -1353,11 +1371,12 @@ function DespachosRepartos({ colors }) {
   const timeOf = r => new Date(r.at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
 
   function exportCSV() {
-    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Tipo de cliente', 'Teléfono', 'Dirección', 'Productos', 'Estado', 'Medio de pago', 'Total', 'Extras', 'Cobro', 'Nota'];
+    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Tipo de cliente', 'Teléfono', 'Dirección', 'Productos', 'Estado', 'Medio de pago', 'Efectivo', 'Transferencia', 'Total', 'Extras', 'Cobro', 'Nota'];
     const lines = filtered.map(r => [
       r.day, r.time_is_exact ? timeOf(r) : '', r.driver_name || '', r.route_name, r.order_label, r.customer_name || '', r.client_type === 'empresa' ? 'Empresa' : 'Persona natural', r.phone || '',
       r.address || '', (r.items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '),
       STOP_META[r.status]?.label || r.status, PAY_META[r.payment_method]?.label || '',
+      Math.round(r.payment_cash_amount || 0), Math.round(r.payment_transfer_amount || 0),
       Math.round(r.total || 0), Math.round(r.extra_total || 0), chargeInfo(r)?.label || '', r.note || '',
     ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(';'));
     const blob = new Blob(['﻿' + [head.join(';'), ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -1429,6 +1448,7 @@ function DespachosRepartos({ colors }) {
           <option value="">Todo medio de pago</option>
           <option value="efectivo">💵 Efectivo</option>
           <option value="transferencia">🏦 Transferencia</option>
+          <option value="mixto">💵🏦 Efectivo + transferencia</option>
           <option value="otro">Otro</option>
         </select>
         <select value={status} onChange={e => setStatus(e.target.value)} style={inp}>
@@ -1643,16 +1663,22 @@ function DespachosRepartos({ colors }) {
                               <option value="">—</option>
                               <option value="efectivo">💵 Efectivo</option>
                               <option value="transferencia">🏦 Transferencia</option>
+                              <option value="mixto">💵🏦 Efectivo + transferencia</option>
                               <option value="otro">Otro</option>
                             </select>
+                            {r.payment_method === 'mixto' && (
+                              <div style={{ marginTop: 4, fontSize: 10, color: colors.textMuted }}>
+                                💵 {CLP(r.payment_cash_amount)} · 🏦 {CLP(r.payment_transfer_amount)}
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '8px 12px', color: colors.textPrimary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
                             {!canEditItems ? (
-                              r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>
+                              r.status === 'entregado' ? CLP(r.total || 0) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>
                             ) : (
                               <span onClick={() => openItems(r)} title="Editar productos y monto"
                                 style={{ cursor: 'pointer', borderBottom: `1px dashed ${colors.blue}` }}>
-                                {r.status === 'entregado' ? CLP((r.total || 0) + (r.extra_total || 0)) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>} <span style={{ color: colors.blue, fontSize: '11px' }}>✎</span>
+                                {r.status === 'entregado' ? CLP(r.total || 0) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>} <span style={{ color: colors.blue, fontSize: '11px' }}>✎</span>
                               </span>
                             )}
                           </td>

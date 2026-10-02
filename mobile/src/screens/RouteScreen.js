@@ -33,7 +33,7 @@ const STOP_COLORS = {
   not_delivered: C.blue,   // visita cerrada sin modificar el pedido
 };
 
-const PAY_LABEL = { efectivo: '💵 Efectivo', transferencia: '🏦 Transferencia', otro: 'Otro' };
+const PAY_LABEL = { efectivo: '💵 Efectivo', transferencia: '🏦 Transferencia', mixto: '💵🏦 Mixto', otro: 'Otro' };
 
 function stopsOf(route) {
   const opt = Array.isArray(route?.optimized_route) ? route.optimized_route : [];

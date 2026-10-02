@@ -197,10 +197,14 @@ export async function unregisterPushToken(expoToken) {
  *        Si es transferencia, el pedido queda en "Por cobrar" en el CRM
  *        hasta que llegue el comprobante.
  */
-export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras, deliverAfter) {
+export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras, deliverAfter, paymentBreakdown) {
   const client = await getClient();
   const body = { stopKey, status };
   if (paymentMethod) body.paymentMethod = paymentMethod;
+  if (paymentBreakdown) {
+    body.paymentCashAmount = paymentBreakdown.cash;
+    body.paymentTransferAmount = paymentBreakdown.transfer;
+  }
   if (note && note.trim()) body.note = note.trim();
   if (Array.isArray(extras) && extras.length) body.extras = extras;
   if (deliverAfter) body.deliverAfter = deliverAfter;   // 'postponed': YYYY-MM-DD

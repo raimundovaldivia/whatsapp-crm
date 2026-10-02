@@ -75,7 +75,8 @@ async function getUnpaidOrders(orgId) {
   const [bot, shop] = await Promise.all([
     pool.query(
       `SELECT o.id::text AS id, 'bot' AS source, '#BOT-' || o.id AS label, o.status, o.customer_name, o.customer_phone AS phone,
-              o.total_price, o.created_at, COALESCE(o.updated_at, o.created_at) AS touched_at, o.payment_method, c.contact_name
+              CASE WHEN o.payment_method = 'mixto' THEN o.payment_transfer_amount ELSE o.total_price::numeric END AS total_price,
+              o.created_at, COALESCE(o.updated_at, o.created_at) AS touched_at, o.payment_method, c.contact_name
          FROM orders o LEFT JOIN conversations c ON c.id = o.conversation_id
         WHERE o.organization_id = $1 AND o.status NOT IN ('paid', 'cancelled')
           AND COALESCE(o.total_price::numeric, 0) > 0
@@ -83,7 +84,8 @@ async function getUnpaidOrders(orgId) {
       [orgId]),
     pool.query(
       `SELECT shopify_order_id AS id, 'shopify' AS source, COALESCE(shopify_name, '#' || shopify_order_id) AS label,
-              crm_status AS status, customer_name, customer_phone AS phone, total_price,
+              crm_status AS status, customer_name, customer_phone AS phone,
+              CASE WHEN payment_method = 'mixto' THEN payment_transfer_amount ELSE total_price::numeric END AS total_price,
               COALESCE(shopify_created_at, synced_at) AS created_at, COALESCE(shopify_created_at, synced_at) AS touched_at,
               payment_method, NULL AS contact_name
          FROM shopify_orders
@@ -219,7 +221,7 @@ function scoreCandidate(mov, orders) {
   if (d < -DAYS_AFTER || d > DAYS_BEFORE) return null;
   score += d <= 7 ? 10 : d <= 20 ? 6 : 2;
   if (orders.length > 1) score -= 8;                       // combos: un poco menos seguros
-  if (orders.every(o => o.payment_method === 'transferencia')) score += 3;
+  if (orders.every(o => ['transferencia', 'mixto'].includes(o.payment_method))) score += 3;
   const confidence = sim >= 0.5 && orders.length === 1 ? 'alta' : orders.length === 1 ? 'media' : sim >= 0.5 ? 'media' : 'baja';
   return { score: Math.min(100, score), similarity: Math.round(sim * 100), confidence, orders };
 }
@@ -374,7 +376,7 @@ async function confirm(orgId, movementId, orders, userId, note = null, options =
         const { rows: [prev] } = await client.query(`SELECT status, payment_method, customer_phone, customer_name, total_price, created_at FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [parseInt(o.id), orgId]);
         if (!prev) throw Object.assign(new Error(`Pedido #BOT-${o.id} no encontrado`), { status: 404 });
         await client.query(
-          `UPDATE orders SET status = 'paid', payment_method = 'transferencia', payment_marked_at = NOW(), updated_at = NOW(),
+          `UPDATE orders SET status = 'paid', payment_method = CASE WHEN payment_method = 'mixto' THEN 'mixto' ELSE 'transferencia' END, payment_marked_at = NOW(), updated_at = NOW(),
                   notes = COALESCE(notes, '') || $3
             WHERE id = $1 AND organization_id = $2`,
           [parseInt(o.id), orgId, `\n[conciliación] Pagado con transferencia ${mov.date.toISOString?.().slice(0, 10) || mov.date} $${mov.amount} (${mov.payer || mov.description})`]);
@@ -385,7 +387,7 @@ async function confirm(orgId, movementId, orders, userId, note = null, options =
         const { rows: [prev] } = await client.query(`SELECT financial_status, payment_method, customer_phone, customer_name, total_price, COALESCE(shopify_created_at, synced_at) AS created_at FROM shopify_orders WHERE shopify_order_id = $1 AND organization_id = $2 FOR UPDATE`, [String(o.id), orgId]);
         if (!prev) throw Object.assign(new Error(`Pedido Shopify ${o.id} no encontrado`), { status: 404 });
         await client.query(
-          `UPDATE shopify_orders SET financial_status = 'paid', payment_method = 'transferencia', payment_marked_at = NOW()
+          `UPDATE shopify_orders SET financial_status = 'paid', payment_method = CASE WHEN payment_method = 'mixto' THEN 'mixto' ELSE 'transferencia' END, payment_marked_at = NOW()
             WHERE shopify_order_id = $1 AND organization_id = $2`, [String(o.id), orgId]);
         matched.push({ source: 'shopify', id: String(o.id), prev_status: prev.financial_status, prev_payment_method: prev.payment_method });
         contacts.push({ phone: prev.customer_phone, name: prev.customer_name });

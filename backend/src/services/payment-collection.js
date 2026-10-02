@@ -452,7 +452,7 @@ async function getPendingCharges(orgId) {
             CASE WHEN COALESCE(customer_contact.client_type, 'personal') = 'empresa'
                  THEN 'factura' ELSE 'boleta' END AS tax_document_type,
             'not_issued'                  AS tax_document_status,
-            o.total_price::text          AS total_price,
+            (CASE WHEN o.payment_method = 'mixto' THEN o.payment_transfer_amount ELSE o.total_price::numeric END)::text AS total_price,
             CONCAT('#', o.id::text)      AS order_label,
             o.status                     AS order_status,
             o.created_at                 AS created_at,
@@ -494,7 +494,7 @@ async function getPendingCharges(orgId) {
           LIMIT 1
        ) customer_contact ON TRUE
       WHERE o.organization_id = $1
-        AND o.payment_method = 'transferencia'
+        AND o.payment_method IN ('transferencia', 'mixto')
         AND o.status = 'entregado'
         AND COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric > 0
         AND NOT EXISTS (
@@ -518,7 +518,7 @@ async function getPendingCharges(orgId) {
             CASE WHEN COALESCE(customer_contact.client_type, 'personal') = 'empresa'
                  THEN 'factura' ELSE 'boleta' END AS tax_document_type,
             'not_issued'                  AS tax_document_status,
-            s.total_price::text          AS total_price,
+            (CASE WHEN s.payment_method = 'mixto' THEN s.payment_transfer_amount ELSE s.total_price::numeric END)::text AS total_price,
             COALESCE(NULLIF(s.shopify_name, ''), CONCAT('#', s.shopify_order_id)) AS order_label,
             s.crm_status                 AS order_status,
             s.shopify_created_at         AS created_at,
@@ -544,7 +544,7 @@ async function getPendingCharges(orgId) {
           LIMIT 1
        ) customer_contact ON TRUE
       WHERE s.organization_id = $1
-        AND s.payment_method = 'transferencia'
+        AND s.payment_method IN ('transferencia', 'mixto')
         AND s.crm_status = 'entregado'
         AND s.financial_status IS DISTINCT FROM 'paid'
         AND COALESCE(NULLIF(s.total_price::text, ''), '0')::numeric > 0

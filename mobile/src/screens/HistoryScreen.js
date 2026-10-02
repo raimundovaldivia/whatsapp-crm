@@ -20,7 +20,7 @@ const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const STATUS_LABEL = { completed: 'Completada', cancelled: 'Cancelada' };
 const STATUS_COLOR = { completed: C.green, cancelled: C.red };
 const STOP_LABEL = { entregado: 'Entregado', cancelled: 'Cancelado', postponed: 'Reprogramado', not_delivered: 'Sin entrega', pending: 'Pendiente' };
-const PAY_LABEL = { efectivo: 'Efectivo', transferencia: 'Transferencia', otro: 'Otro' };
+const PAY_LABEL = { efectivo: 'Efectivo', transferencia: 'Transferencia', mixto: 'Mixto', otro: 'Otro' };
 
 function stopsOf(route) {
   const opt = Array.isArray(route?.optimized_route) ? route.optimized_route : [];

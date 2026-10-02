@@ -33,6 +33,8 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const [outcomeReason, setOutcomeReason] = useState('');
   const [postponeDate,   setPostponeDate]   = useState(null); // YYYY-MM-DD
   const [paidWith,      setPaidWith]      = useState(null);
+  const [splitPayment,  setSplitPayment]  = useState(false);
+  const [splitCash,     setSplitCash]     = useState('');
   // Nota que el repartidor puede dejar en la parada (ej: "dejé con conserje").
   const [note, setNote] = useState(navRoute.params?.stop?.note || '');
   // Total mostrado en pantalla; puede cambiar si el repartidor edita los productos.
@@ -236,11 +238,11 @@ export default function StopScreen({ route: navRoute, navigation }) {
   }
 
   /** Envía el estado al backend y cierra la parada. */
-  async function submit(newStatus, paymentMethod, deliverAfter, overrideNote) {
+  async function submit(newStatus, paymentMethod, deliverAfter, overrideNote, paymentBreakdown) {
     setLoading(true);
     try {
       const finalNote = overrideNote === undefined ? note : overrideNote;
-      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, finalNote, extrasArray, deliverAfter);
+      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, finalNote, extrasArray, deliverAfter, paymentBreakdown);
       setStatus(newStatus);
       setPaidWith(paymentMethod || null);
       setDone(true);
@@ -248,7 +250,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
       if (typeof onComplete === 'function') onComplete(newStatus);
       // Transferencia: avisar al repartidor si el cobro salió solo o quedó pendiente
       const ac = resp?.autoCharge;
-      if (paymentMethod === 'transferencia' && ac?.attempted) {
+      if (['transferencia', 'mixto'].includes(paymentMethod) && ac?.attempted) {
         const detail = ac.ok
           ? '💸 Se le envió al cliente el mensaje de cobro por WhatsApp.'
           : ac.reason === 'ventana_24h' ? '⏳ El cliente no ha escrito en 24 h: el cobro quedó en "Por cobrar" para mandarlo desde el CRM.'
@@ -392,6 +394,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
           {status === 'not_delivered' && <Text style={s.donePay}>El pedido no fue modificado</Text>}
           {paidWith === 'efectivo'     && <Text style={s.donePay}>💵 Pagado en efectivo</Text>}
           {paidWith === 'transferencia' && <Text style={s.donePay}>🏦 Por transferencia — queda pendiente el comprobante</Text>}
+          {paidWith === 'mixto' && <Text style={s.donePay}>💵🏦 Pago mixto registrado — la transferencia queda pendiente de conciliación</Text>}
           <Text style={s.doneSub}>Volviendo a la ruta...</Text>
         </View>
       ) : outcomeMode === 'postpone' ? (
@@ -527,6 +530,50 @@ export default function StopScreen({ route: navRoute, navigation }) {
               </>
             )}
           </TouchableOpacity>
+
+          {!splitPayment ? (
+            <TouchableOpacity
+              style={[s.payBtn, s.payMixed, loading && s.btnDisabled]}
+              onPress={() => { setSplitPayment(true); setSplitCash(''); }}
+              disabled={loading}
+              activeOpacity={0.85}>
+              <Text style={s.payIcon}>💵 + 🏦</Text>
+              <Text style={s.payBtnText}>Efectivo + transferencia</Text>
+            </TouchableOpacity>
+          ) : (() => {
+            const total = Math.round(orderTotal + extrasTotal);
+            const cash = Math.round(Number(splitCash) || 0);
+            const transfer = Math.max(0, total - cash);
+            const valid = cash > 0 && transfer > 0;
+            return (
+              <View style={s.splitBox}>
+                <Text style={s.splitTitle}>Divide el total de {CLP(total)}</Text>
+                <Text style={s.splitLabel}>Monto recibido en efectivo</Text>
+                <TextInput
+                  style={s.splitInput}
+                  value={splitCash}
+                  onChangeText={value => setSplitCash(value.replace(/\D/g, ''))}
+                  keyboardType="number-pad"
+                  placeholder="Ej: 10000"
+                  placeholderTextColor={C.muted}
+                />
+                <View style={s.splitSummary}>
+                  <Text style={s.splitSummaryText}>💵 Efectivo: {CLP(cash)}</Text>
+                  <Text style={s.splitSummaryText}>🏦 Transferencia: {CLP(transfer)}</Text>
+                </View>
+                {!valid && <Text style={s.splitError}>Ambos montos deben ser mayores a $0.</Text>}
+                <TouchableOpacity
+                  style={[s.payBtn, s.payMixed, (!valid || loading) && s.btnDisabled]}
+                  onPress={() => submit('entregado', 'mixto', null, undefined, { cash, transfer })}
+                  disabled={!valid || loading}>
+                  {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.payBtnText}>Confirmar pago mixto</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setSplitPayment(false)} disabled={loading}>
+                  <Text style={s.payCancel}>Cancelar división</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })()}
 
           <TouchableOpacity
             style={[s.payBtn, s.payOther, loading && s.btnDisabled]}
@@ -781,10 +828,18 @@ const s = StyleSheet.create({
   payBtn:       { borderRadius: R.lg, padding: 20, alignItems: 'center', gap: 4, ...shadowSoft },
   payCash:      { backgroundColor: C.green },
   payTransfer:  { backgroundColor: C.blue },
+  payMixed:     { backgroundColor: '#7c3aed' },
   payOther:     { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, padding: 14 },
   payIcon:      { fontSize: 30 },
   payBtnText:   { color: '#fff', fontWeight: '800', fontSize: 17 },
   payCancel:    { color: C.muted, fontSize: 15, textAlign: 'center', padding: 12 },
+  splitBox:     { backgroundColor: C.card, borderWidth: 1, borderColor: '#8b5cf688', borderRadius: R.lg, padding: 14, gap: 9 },
+  splitTitle:   { color: C.text, fontSize: 16, fontWeight: '800', textAlign: 'center' },
+  splitLabel:   { color: C.muted, fontSize: 13, fontWeight: '600' },
+  splitInput:   { backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 13, color: C.text, fontSize: 18, fontWeight: '800' },
+  splitSummary: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  splitSummaryText: { color: C.text, fontSize: 13, fontWeight: '700', flex: 1 },
+  splitError:   { color: C.orange, fontSize: 12, textAlign: 'center' },
 
   editBox:       { backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.lg, padding: 13, gap: 10, ...shadowSoft },
   editOpenBtn:   { alignItems: 'center', paddingVertical: 4 },
