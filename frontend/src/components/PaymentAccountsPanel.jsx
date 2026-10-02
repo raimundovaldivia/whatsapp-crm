@@ -8,7 +8,12 @@ const CLP = value => `$${Math.round(Number(value) || 0).toLocaleString('es-CL')}
 const todayMonth = () => new Date().toLocaleDateString('en-CA', { year:'numeric', month:'2-digit', timeZone:'America/Santiago' }).slice(0, 7);
 const fmtDate = value => value ? new Date(value).toLocaleDateString('es-CL', { day:'2-digit', month:'short', year:'numeric', timeZone:'America/Santiago' }) : '—';
 
-function evidenceLabel(evidence) {
+function evidenceLabel(order) {
+  const evidence = order?.evidence;
+  if (order?.payment_method === 'efectivo') return { text:'Efectivo registrado', color:'#22c55e' };
+  if (order?.payment_method === 'mixto' && !evidence?.bank_movement_id && evidence?.voucher_status !== 'verified') {
+    return { text:'Mixto · transferencia pendiente', color:'#f59e0b' };
+  }
   if (evidence?.bank_movement_id && evidence?.voucher_id) return { text:'Voucher + cartola', color:'#22c55e' };
   if (evidence?.bank_movement_id) return { text:'Verificado en cartola', color:'#38bdf8' };
   if (evidence?.voucher_status === 'verified') return { text:'Voucher verificado', color:'#22c55e' };
@@ -69,13 +74,14 @@ export default function PaymentAccountsPanel({ onOpenProof }) {
       {data?.summary && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:'9px', marginBottom:'15px' }}>
         {card('Total pedidos del mes', CLP(data.summary.order_total), colors.info, `${data.summary.orders} pedidos creados`) }
         {card('Por cobrar al cierre', CLP(data.summary.receivable), colors.amber, `${data.summary.debtors} cuentas con deuda`)}
-        {card('Cargos por transferencia', CLP(data.summary.charges), colors.textPrimary, `${data.summary.transfer_orders} pedidos entregados`) }
-        {card('Pagos respaldados', CLP(data.summary.payments), colors.success, 'Voucher, cartola o ambos')}
-        {card('Cuentas con transferencia', data.summary.customers, colors.infoSoft || '#60a5fa', 'Personas y empresas')}
+        {card('Pedidos entregados', CLP(data.summary.charges), colors.textPrimary, `${data.summary.charged_orders} pedidos cargados`) }
+        {card('Efectivo recibido', CLP(data.summary.cash_payments), colors.success, 'Registrado al entregar')}
+        {card('Transferencias respaldadas', CLP(data.summary.transfer_payments), colors.teal, 'Voucher, cartola o ambos')}
+        {card('Cuentas activas', data.summary.customers, colors.infoSoft || '#60a5fa', 'Personas y empresas')}
       </div>}
 
       {data?.summary && <div style={{ fontSize:'10px', color:colors.textMuted, margin:'-7px 0 13px' }}>
-        Total pedidos usa la fecha de creación. La cuenta corriente incluye solo pedidos entregados por transferencia; por eso ambos montos cumplen funciones distintas.
+        Total pedidos usa la fecha de creación. La cuenta corriente registra el cargo completo de cada entrega y separa el pago en efectivo de la transferencia.
       </div>}
 
       {error && <div style={{ color:colors.dangerSoft, padding:'10px', border:`1px solid ${colors.dangerSoft}55`, borderRadius:'8px' }}>{error}</div>}
@@ -98,13 +104,13 @@ export default function PaymentAccountsPanel({ onOpenProof }) {
             </summary>
             <div style={{ borderTop:`1px solid ${colors.border}` }}>
               {account.orders.map(order => {
-                const ev = evidenceLabel(order.evidence);
+                const ev = evidenceLabel(order);
                 return <div key={`${order.source}:${order.id}`} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 14px', borderBottom:`1px solid ${colors.border}`, flexWrap:'wrap' }}>
                   <CircleDollarSign size={16} color={order.paid ? colors.success : colors.amber} />
-                  <div style={{ flex:'1 1 240px' }}><strong style={{ color:colors.textPrimary, fontSize:'12px' }}>{order.label}</strong><div style={{ color:colors.textMuted, fontSize:'10px' }}>Cargo {fmtDate(order.charge_date)}{order.payment_date ? ` · pago ${fmtDate(order.payment_date)}` : ''}</div></div>
+                  <div style={{ flex:'1 1 240px' }}><strong style={{ color:colors.textPrimary, fontSize:'12px' }}>{order.label}</strong><div style={{ color:colors.textMuted, fontSize:'10px' }}>Cargo {fmtDate(order.charge_date)}{order.payment_date ? ` · pago ${fmtDate(order.payment_date)}` : ''}{order.cash_amount > 0 ? ` · efectivo ${CLP(order.cash_amount)}` : ''}{order.transfer_amount > 0 ? ` · transferencia ${CLP(order.transfer_amount)}` : ''}</div></div>
                   <span style={{ fontSize:'10px', color:ev.color, border:`1px solid ${ev.color}55`, borderRadius:'999px', padding:'3px 7px', display:'flex', gap:'4px', alignItems:'center' }}>{order.paid && <CheckCircle2 size={11} />}{ev.text}{order.evidence?.score != null ? ` · ${order.evidence.score}/100` : ''}</span>
                   {order.evidence?.voucher_id && onOpenProof && <button onClick={() => onOpenProof(order.evidence.voucher_id)} style={{ border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, borderRadius:'6px', padding:'4px 7px', cursor:'pointer', fontSize:'10px' }}>Ver voucher</button>}
-                  <strong style={{ color:order.paid ? colors.success : colors.amber, minWidth:'88px', textAlign:'right' }}>{order.paid ? 'Pagado' : 'Debe'} {CLP(order.amount)}</strong>
+                  <strong style={{ color:order.balance > 0 ? colors.amber : colors.success, minWidth:'105px', textAlign:'right' }}>{order.balance > 0 ? 'Saldo' : 'Pagado'} {CLP(order.balance > 0 ? order.balance : order.amount)}</strong>
                 </div>;
               })}
             </div>

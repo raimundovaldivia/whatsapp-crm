@@ -102,11 +102,15 @@ test('monthly account starts at zero in September and carries debt into October'
     assert.equal(september.accounts.length, 1);
     assert.equal(september.accounts[0].client_type, 'empresa');
     assert.equal(september.accounts[0].opening_balance, 0, 'August is outside the declared baseline');
-    assert.equal(september.accounts[0].charges, 52000, 'mixed orders charge only their transfer portion');
+    assert.equal(september.accounts[0].charges, 72000, 'the account charges the complete delivered orders');
+    assert.equal(september.accounts[0].cash_payments, 20000, 'cash and the cash portion of mixed payments are recorded');
+    assert.equal(september.accounts[0].transfer_payments, 0);
     assert.equal(september.accounts[0].closing_balance, 52000);
     assert.equal(september.summary.orders, 3);
     assert.equal(september.summary.order_total, 72000, 'monthly order total includes full cash and mixed orders');
-    assert.equal(september.summary.transfer_orders, 2);
+    assert.equal(september.summary.charged_orders, 3);
+    assert.equal(september.summary.cash_payments, 20000);
+    assert.equal(september.summary.transfer_payments, 0);
 
     const october = await accounts.getAccounts(1, '2026-10');
     assert.equal(october.accounts[0].opening_balance, 52000);

@@ -27,8 +27,13 @@ async function getAccounts(orgId, month) {
               COALESCE(NULLIF(o.customer_name,''), c.contact_name, 'Cliente') AS customer_name,
               COALESCE(NULLIF(o.customer_phone,''), c.phone_number) AS phone,
               COALESCE(ct.client_type, 'personal') AS client_type,
-              CASE WHEN o.payment_method='mixto' THEN COALESCE(o.payment_transfer_amount,0)
-                   ELSE o.total_price::numeric END AS total,
+              o.total_price::numeric AS total,
+              CASE WHEN o.payment_method='efectivo' THEN o.total_price::numeric
+                   WHEN o.payment_method='mixto' THEN COALESCE(o.payment_cash_amount,0)
+                   ELSE 0 END AS cash_amount,
+              CASE WHEN o.payment_method='transferencia' THEN o.total_price::numeric
+                   WHEN o.payment_method='mixto' THEN COALESCE(o.payment_transfer_amount,0)
+                   ELSE 0 END AS transfer_amount,
               o.status, o.payment_method,
               COALESCE(o.delivered_at, o.created_at) AS charge_date,
               o.payment_marked_at AS payment_date
@@ -41,17 +46,21 @@ async function getAccounts(orgId, month) {
             ORDER BY co.updated_at DESC NULLS LAST LIMIT 1
          ) ct ON TRUE
         WHERE o.organization_id=$1 AND o.status NOT IN ('cancelled','cancelado')
-          AND o.payment_method IN ('transferencia','mixto')
-          AND CASE WHEN o.payment_method='mixto' THEN COALESCE(o.payment_transfer_amount,0)
-                   ELSE o.total_price::numeric END > 0
+          AND o.payment_method IN ('efectivo','transferencia','mixto')
+          AND o.total_price::numeric > 0
           AND (o.delivered_at IS NOT NULL OR o.status IN ('entregado','paid'))
-          AND COALESCE(o.delivered_at,o.created_at) >= $2::date
+          AND o.created_at >= $2::date
        UNION ALL
        SELECT 'shopify', s.shopify_order_id, COALESCE(NULLIF(s.shopify_name,''), '#' || s.shopify_order_id),
               COALESCE(NULLIF(s.customer_name,''), 'Cliente'), s.customer_phone,
               COALESCE(ct.client_type, 'personal'),
-              CASE WHEN s.payment_method='mixto' THEN COALESCE(s.payment_transfer_amount,0)
-                   ELSE s.total_price::numeric END,
+              s.total_price::numeric,
+              CASE WHEN s.payment_method='efectivo' THEN s.total_price::numeric
+                   WHEN s.payment_method='mixto' THEN COALESCE(s.payment_cash_amount,0)
+                   ELSE 0 END,
+              CASE WHEN s.payment_method='transferencia' THEN s.total_price::numeric
+                   WHEN s.payment_method='mixto' THEN COALESCE(s.payment_transfer_amount,0)
+                   ELSE 0 END,
               s.financial_status,
               s.payment_method, COALESCE(s.delivered_at,s.shopify_created_at,s.synced_at), s.payment_marked_at
          FROM shopify_orders s
@@ -62,11 +71,10 @@ async function getAccounts(orgId, month) {
             ORDER BY co.updated_at DESC NULLS LAST LIMIT 1
          ) ct ON TRUE
         WHERE s.organization_id=$1 AND COALESCE(s.crm_status,'') <> 'cancelled'
-          AND s.payment_method IN ('transferencia','mixto')
-          AND CASE WHEN s.payment_method='mixto' THEN COALESCE(s.payment_transfer_amount,0)
-                   ELSE s.total_price::numeric END > 0
+          AND s.payment_method IN ('efectivo','transferencia','mixto')
+          AND s.total_price::numeric > 0
           AND (s.delivered_at IS NOT NULL OR s.crm_status='entregado' OR UPPER(COALESCE(s.financial_status,''))='PAID')
-          AND COALESCE(s.delivered_at,s.shopify_created_at,s.synced_at) >= $2::date`,
+          AND s.shopify_created_at >= $2::date`,
       [orgId, OPENING_DATE]
     ),
     pool.query(
@@ -122,11 +130,18 @@ async function getAccounts(orgId, month) {
     if (!chargeDate || chargeDate < baseline || chargeDate >= bounds.end) continue;
     const proof = row.source === 'bot' ? proofByOrder.get(String(row.id)) : null;
     const bank = bankByOrder.get(`${row.source}:${row.id}`) || (proof?.bank_movement_id ? movementsResult.rows.find(m => Number(m.id) === Number(proof.bank_movement_id)) : null);
-    const paid = row.source === 'bot'
+    const transferPaid = row.source === 'bot'
       ? String(row.status).toLowerCase() === 'paid' || proof?.status === 'verified' || !!bank
       : String(row.status).toUpperCase() === 'PAID' || !!bank;
-    const paymentDate = paid ? (asDate(bank?.matched_at) || asDate(proof?.bank_verified_at) || asDate(row.payment_date) || asDate(proof?.created_at) || chargeDate) : null;
+    const transferPaymentDate = transferPaid
+      ? (asDate(bank?.matched_at) || asDate(proof?.bank_verified_at) || asDate(row.payment_date) || asDate(proof?.created_at) || chargeDate)
+      : null;
+    const cashPaymentDate = Number(row.cash_amount) > 0 ? (asDate(row.payment_date) || chargeDate) : null;
     const amount = Math.round(Number(row.total) || 0);
+    const cashAmount = Math.min(amount, Math.max(0, Math.round(Number(row.cash_amount) || 0)));
+    const transferAmount = Math.min(amount - cashAmount, Math.max(0, Math.round(Number(row.transfer_amount) || 0)));
+    const paidAmount = cashAmount + (transferPaid ? transferAmount : 0);
+    const balance = Math.max(0, amount - paidAmount);
     const phone = digits(row.phone);
     const normalizedName = String(row.customer_name || '').toLowerCase().trim();
     // Sin teléfono, un nombre genérico no identifica a una cuenta real. Mantener
@@ -140,7 +155,10 @@ async function getAccounts(orgId, month) {
     });
     accounts.get(key).orders.push({
       source: row.source, id: row.id, label: row.label, amount, status: row.status,
-      charge_date: chargeDate, payment_date: paymentDate, paid,
+      payment_method: row.payment_method, cash_amount: cashAmount, transfer_amount: transferAmount,
+      paid_amount: paidAmount, balance, charge_date: chargeDate,
+      cash_payment_date: cashPaymentDate, transfer_payment_date: transferPaymentDate,
+      payment_date: transferPaymentDate || cashPaymentDate, paid: balance === 0,
       evidence: {
         voucher_id: proof?.id || null, voucher_status: proof?.status || null,
         bank_movement_id: bank?.id || null, bank_payer: bank?.payer || null,
@@ -154,7 +172,7 @@ async function getAccounts(orgId, month) {
 
   const result = [];
   for (const account of accounts.values()) {
-    let opening = 0, charges = 0, payments = 0;
+    let opening = 0, charges = 0, payments = 0, cashPayments = 0, transferPayments = 0;
     const entries = [];
     for (const order of account.orders) {
       if (order.charge_date < bounds.start) opening += order.amount;
@@ -162,20 +180,32 @@ async function getAccounts(orgId, month) {
         charges += order.amount;
         entries.push({ type: 'charge', date: order.charge_date, amount: order.amount, order });
       }
-      if (order.paid && order.payment_date) {
-        if (order.payment_date < bounds.start) opening -= order.amount;
-        else if (inRange(order.payment_date, bounds.start, bounds.end)) {
-          payments += order.amount;
-          entries.push({ type: 'payment', date: order.payment_date, amount: order.amount, order });
+      const paymentParts = [
+        { method: 'efectivo', amount: order.cash_amount, date: order.cash_payment_date },
+        { method: 'transferencia', amount: order.transfer_payment_date ? order.transfer_amount : 0, date: order.transfer_payment_date },
+      ];
+      for (const payment of paymentParts) {
+        if (!payment.amount || !payment.date) continue;
+        if (payment.date < bounds.start) opening -= payment.amount;
+        else if (inRange(payment.date, bounds.start, bounds.end)) {
+          payments += payment.amount;
+          if (payment.method === 'efectivo') cashPayments += payment.amount;
+          else transferPayments += payment.amount;
+          entries.push({ type: 'payment', method: payment.method, date: payment.date, amount: payment.amount, order });
         }
       }
     }
     const closing = opening + charges - payments;
     if (!entries.length && closing === 0) continue;
     result.push({
-      ...account, opening_balance: opening, charges, payments, closing_balance: closing,
+      ...account, opening_balance: opening, charges, payments,
+      cash_payments: cashPayments, transfer_payments: transferPayments, closing_balance: closing,
       entries: entries.sort((a, b) => a.date - b.date).map(e => ({ ...e, date: e.date.toISOString() })),
-      orders: account.orders.map(o => ({ ...o, charge_date: o.charge_date?.toISOString(), payment_date: o.payment_date?.toISOString() })),
+      orders: account.orders.map(o => ({
+        ...o,
+        charge_date: o.charge_date?.toISOString(), payment_date: o.payment_date?.toISOString(),
+        cash_payment_date: o.cash_payment_date?.toISOString(), transfer_payment_date: o.transfer_payment_date?.toISOString(),
+      })),
     });
   }
   result.sort((a, b) => b.closing_balance - a.closing_balance || a.customer_name.localeCompare(b.customer_name));
@@ -187,10 +217,12 @@ async function getAccounts(orgId, month) {
       debtors: result.filter(a => a.closing_balance > 0).length,
       orders: Number(monthlyOrders.orders) || 0,
       order_total: Math.round(Number(monthlyOrders.total) || 0),
-      transfer_orders: result.reduce((sum, a) => sum + a.orders.filter(o => inRange(asDate(o.charge_date), bounds.start, bounds.end)).length, 0),
+      charged_orders: result.reduce((sum, a) => sum + a.orders.filter(o => inRange(asDate(o.charge_date), bounds.start, bounds.end)).length, 0),
       receivable: result.reduce((sum, a) => sum + Math.max(0, a.closing_balance), 0),
       charges: result.reduce((sum, a) => sum + a.charges, 0),
       payments: result.reduce((sum, a) => sum + a.payments, 0),
+      cash_payments: result.reduce((sum, a) => sum + a.cash_payments, 0),
+      transfer_payments: result.reduce((sum, a) => sum + a.transfer_payments, 0),
     },
   };
 }
