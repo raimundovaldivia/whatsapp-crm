@@ -91,20 +91,27 @@ test('monthly account starts at zero in September and carries debt into October'
       INSERT INTO contacts(id,organization_id,phone,name,client_type) VALUES(1,1,'+56933334444','Empresa Cliente','empresa');
       INSERT INTO orders(id,organization_id,conversation_id,customer_phone,customer_name,items,total_price,status,payment_method,created_at,delivered_at)
       VALUES(1,1,1,'+56933334444','Empresa Cliente','[]',90000,'entregado','transferencia','2026-08-20','2026-08-20'),
-            (2,1,1,'+56933334444','Empresa Cliente','[]',40000,'entregado','transferencia','2026-09-20','2026-09-20');
+            (2,1,1,'+56933334444','Empresa Cliente','[]',40000,'entregado','transferencia','2026-09-20','2026-09-20'),
+            (3,1,1,'+56933334444','Empresa Cliente','[]',12000,'entregado','efectivo','2026-09-21','2026-09-21');
+      INSERT INTO orders(id,organization_id,conversation_id,customer_phone,customer_name,items,total_price,status,payment_method,
+                         payment_cash_amount,payment_transfer_amount,created_at,delivered_at)
+      VALUES(4,1,1,'+56933334444','Empresa Cliente','[]',20000,'entregado','mixto',8000,12000,'2026-09-22','2026-09-22');
     `);
     const accounts = load('src/services/payment-accounts.js', { '../db/database': db });
     const september = await accounts.getAccounts(1, '2026-09');
     assert.equal(september.accounts.length, 1);
     assert.equal(september.accounts[0].client_type, 'empresa');
     assert.equal(september.accounts[0].opening_balance, 0, 'August is outside the declared baseline');
-    assert.equal(september.accounts[0].charges, 40000);
-    assert.equal(september.accounts[0].closing_balance, 40000);
+    assert.equal(september.accounts[0].charges, 52000, 'mixed orders charge only their transfer portion');
+    assert.equal(september.accounts[0].closing_balance, 52000);
+    assert.equal(september.summary.orders, 3);
+    assert.equal(september.summary.order_total, 72000, 'monthly order total includes full cash and mixed orders');
+    assert.equal(september.summary.transfer_orders, 2);
 
     const october = await accounts.getAccounts(1, '2026-10');
-    assert.equal(october.accounts[0].opening_balance, 40000);
+    assert.equal(october.accounts[0].opening_balance, 52000);
     assert.equal(october.accounts[0].charges, 0);
-    assert.equal(october.accounts[0].closing_balance, 40000);
+    assert.equal(october.accounts[0].closing_balance, 52000);
   } finally {
     await engine.close();
   }

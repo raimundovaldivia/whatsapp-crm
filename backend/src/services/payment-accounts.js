@@ -21,13 +21,15 @@ async function getAccounts(orgId, month) {
   const pool = getPool();
   const bounds = monthBounds(month);
   const baseline = new Date(`${OPENING_DATE}T00:00:00.000Z`);
-  const [ordersResult, proofsResult, movementsResult] = await Promise.all([
+  const [ordersResult, proofsResult, movementsResult, monthlyOrdersResult] = await Promise.all([
     pool.query(
       `SELECT 'bot' AS source, o.id::text AS id, CONCAT('#BOT-', o.id) AS label,
               COALESCE(NULLIF(o.customer_name,''), c.contact_name, 'Cliente') AS customer_name,
               COALESCE(NULLIF(o.customer_phone,''), c.phone_number) AS phone,
               COALESCE(ct.client_type, 'personal') AS client_type,
-              o.total_price::numeric AS total, o.status, o.payment_method,
+              CASE WHEN o.payment_method='mixto' THEN COALESCE(o.payment_transfer_amount,0)
+                   ELSE o.total_price::numeric END AS total,
+              o.status, o.payment_method,
               COALESCE(o.delivered_at, o.created_at) AS charge_date,
               o.payment_marked_at AS payment_date
          FROM orders o
@@ -39,13 +41,18 @@ async function getAccounts(orgId, month) {
             ORDER BY co.updated_at DESC NULLS LAST LIMIT 1
          ) ct ON TRUE
         WHERE o.organization_id=$1 AND o.status NOT IN ('cancelled','cancelado')
-          AND o.payment_method='transferencia'
+          AND o.payment_method IN ('transferencia','mixto')
+          AND CASE WHEN o.payment_method='mixto' THEN COALESCE(o.payment_transfer_amount,0)
+                   ELSE o.total_price::numeric END > 0
           AND (o.delivered_at IS NOT NULL OR o.status IN ('entregado','paid'))
           AND COALESCE(o.delivered_at,o.created_at) >= $2::date
        UNION ALL
        SELECT 'shopify', s.shopify_order_id, COALESCE(NULLIF(s.shopify_name,''), '#' || s.shopify_order_id),
               COALESCE(NULLIF(s.customer_name,''), 'Cliente'), s.customer_phone,
-              COALESCE(ct.client_type, 'personal'), s.total_price::numeric, s.financial_status,
+              COALESCE(ct.client_type, 'personal'),
+              CASE WHEN s.payment_method='mixto' THEN COALESCE(s.payment_transfer_amount,0)
+                   ELSE s.total_price::numeric END,
+              s.financial_status,
               s.payment_method, COALESCE(s.delivered_at,s.shopify_created_at,s.synced_at), s.payment_marked_at
          FROM shopify_orders s
          LEFT JOIN LATERAL (
@@ -55,7 +62,9 @@ async function getAccounts(orgId, month) {
             ORDER BY co.updated_at DESC NULLS LAST LIMIT 1
          ) ct ON TRUE
         WHERE s.organization_id=$1 AND COALESCE(s.crm_status,'') <> 'cancelled'
-          AND s.payment_method='transferencia'
+          AND s.payment_method IN ('transferencia','mixto')
+          AND CASE WHEN s.payment_method='mixto' THEN COALESCE(s.payment_transfer_amount,0)
+                   ELSE s.total_price::numeric END > 0
           AND (s.delivered_at IS NOT NULL OR s.crm_status='entregado' OR UPPER(COALESCE(s.financial_status,''))='PAID')
           AND COALESCE(s.delivered_at,s.shopify_created_at,s.synced_at) >= $2::date`,
       [orgId, OPENING_DATE]
@@ -70,6 +79,29 @@ async function getAccounts(orgId, month) {
     pool.query(
       `SELECT id, amount, date, payer, doc_number, matched_orders, matched_at, match_method
          FROM bank_movements WHERE organization_id=$1 AND status='matched'`, [orgId]
+    ),
+    // Este total responde a "cuánto suman los pedidos del mes". Se calcula
+    // por fecha de creación y no por delivered_at: varias órdenes históricas
+    // de Shopify recibieron una fecha técnica al sincronizarse y no deben
+    // convertirse en ventas del mes por ese motivo.
+    pool.query(
+      `SELECT COUNT(*)::int AS orders, COALESCE(SUM(total), 0)::numeric AS total
+         FROM (
+           SELECT o.total_price::numeric AS total
+             FROM orders o
+            WHERE o.organization_id=$1
+              AND o.status NOT IN ('cancelled','cancelado')
+              AND COALESCE(NULLIF(o.total_price::text,''),'0')::numeric > 0
+              AND o.created_at >= $2 AND o.created_at < $3
+           UNION ALL
+           SELECT s.total_price::numeric
+             FROM shopify_orders s
+            WHERE s.organization_id=$1
+              AND COALESCE(s.crm_status,'') <> 'cancelled'
+              AND COALESCE(NULLIF(s.total_price::text,''),'0')::numeric > 0
+              AND s.shopify_created_at >= $2 AND s.shopify_created_at < $3
+         ) monthly_orders`,
+      [orgId, bounds.start.toISOString(), bounds.end.toISOString()]
     ),
   ]);
 
@@ -147,11 +179,15 @@ async function getAccounts(orgId, month) {
     });
   }
   result.sort((a, b) => b.closing_balance - a.closing_balance || a.customer_name.localeCompare(b.customer_name));
+  const monthlyOrders = monthlyOrdersResult.rows[0] || {};
   return {
     month: bounds.key, openingDate: OPENING_DATE, accounts: result,
     summary: {
       customers: result.length,
       debtors: result.filter(a => a.closing_balance > 0).length,
+      orders: Number(monthlyOrders.orders) || 0,
+      order_total: Math.round(Number(monthlyOrders.total) || 0),
+      transfer_orders: result.reduce((sum, a) => sum + a.orders.filter(o => inRange(asDate(o.charge_date), bounds.start, bounds.end)).length, 0),
       receivable: result.reduce((sum, a) => sum + Math.max(0, a.closing_balance), 0),
       charges: result.reduce((sum, a) => sum + a.charges, 0),
       payments: result.reduce((sum, a) => sum + a.payments, 0),

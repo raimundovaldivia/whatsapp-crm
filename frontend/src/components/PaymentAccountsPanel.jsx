@@ -67,10 +67,15 @@ export default function PaymentAccountsPanel({ onOpenProof }) {
       </div>
 
       {data?.summary && <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:'9px', marginBottom:'15px' }}>
+        {card('Total pedidos del mes', CLP(data.summary.order_total), colors.info, `${data.summary.orders} pedidos creados`) }
         {card('Por cobrar al cierre', CLP(data.summary.receivable), colors.amber, `${data.summary.debtors} cuentas con deuda`)}
-        {card('Cargos del mes', CLP(data.summary.charges), colors.textPrimary, 'Pedidos entregados por transferencia')}
-        {card('Pagos del mes', CLP(data.summary.payments), colors.success, 'Voucher, cartola o ambos')}
-        {card('Cuentas activas', data.summary.customers, colors.infoSoft || '#60a5fa', 'Personas y empresas')}
+        {card('Cargos por transferencia', CLP(data.summary.charges), colors.textPrimary, `${data.summary.transfer_orders} pedidos entregados`) }
+        {card('Pagos respaldados', CLP(data.summary.payments), colors.success, 'Voucher, cartola o ambos')}
+        {card('Cuentas con transferencia', data.summary.customers, colors.infoSoft || '#60a5fa', 'Personas y empresas')}
+      </div>}
+
+      {data?.summary && <div style={{ fontSize:'10px', color:colors.textMuted, margin:'-7px 0 13px' }}>
+        Total pedidos usa la fecha de creación. La cuenta corriente incluye solo pedidos entregados por transferencia; por eso ambos montos cumplen funciones distintas.
       </div>}
 
       {error && <div style={{ color:colors.dangerSoft, padding:'10px', border:`1px solid ${colors.dangerSoft}55`, borderRadius:'8px' }}>{error}</div>}
