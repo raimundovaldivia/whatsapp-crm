@@ -402,6 +402,7 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
                   )}
                   <div style={{ color: colors.textMuted, display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     {selected.linked_order_status && <span>Estado: {ORDER_STATUS_LABELS[selected.linked_order_status] || selected.linked_order_status}</span>}
+                    {selected.linked_order_created_at && <span>Fecha del pedido: {formatDateTime(selected.linked_order_created_at)}</span>}
                     {selected.linked_order_delivery_date && <span>Entrega: {new Date(selected.linked_order_delivery_date).toLocaleDateString('es-CL', { timeZone: 'UTC' })}</span>}
                   </div>
                 </div>
