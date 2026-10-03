@@ -17,6 +17,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
+const campaignGuard = require('../services/broadcast-campaign-guard');
 const {
   getBodyComponent,
   getMissingBodyParameters,
@@ -1749,9 +1750,14 @@ router.post('/campaigns', async (req, res) => {
 
 router.post('/campaigns/:id/finish', async (req, res) => {
   try {
-    const status = req.body?.status === 'interrupted' ? 'interrupted' : 'completed';
+    const requested = req.body?.status;
+    const status = requested === 'paused_payment'
+      ? 'paused_payment'
+      : (requested === 'interrupted' ? 'interrupted' : 'completed');
     const { rows } = await getPool().query(
-      `UPDATE broadcast_campaigns SET status = $1, completed_at = NOW()
+      `UPDATE broadcast_campaigns
+          SET status = CASE WHEN status = 'paused_payment' THEN status ELSE $1 END,
+              completed_at = COALESCE(completed_at, NOW())
        WHERE id = $2 AND organization_id = $3 RETURNING *`,
       [status, req.params.id, req.orgId]
     );
@@ -1765,6 +1771,24 @@ router.post('/campaigns/:id/finish', async (req, res) => {
 router.get('/campaigns', async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    // Red de seguridad: si el webhook de pago llegó antes de que la auditoría
+    // del destinatario terminara, la lectura del historial abre igualmente el
+    // cortacircuito y deja la causa persistida.
+    await getPool().query(
+      `UPDATE broadcast_campaigns c
+          SET status = 'paused_payment', pause_code = '131042',
+              pause_reason = 'Meta bloqueó los envíos por un problema de pago o elegibilidad',
+              paused_at = COALESCE(paused_at, NOW()),
+              completed_at = COALESCE(completed_at, NOW())
+        WHERE c.organization_id = $1 AND c.status <> 'paused_payment'
+          AND EXISTS (
+            SELECT 1 FROM broadcast_campaign_recipients r
+            JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
+             WHERE r.campaign_id = c.id AND m.status = 'failed'
+               AND m.delivery_error->>'code' = '131042'
+          )`,
+      [req.orgId]
+    );
     // Si el proceso fue reiniciado durante un envío, cerrar campañas sin
     // actividad reciente para que nunca queden en "procesando" eternamente.
     await getPool().query(
@@ -2164,8 +2188,17 @@ router.post('/send-bulk', async (req, res) => {
     return res.status(400).json({ success: false, error: 'items[] requerido' });
   }
 
-  if (campaignId && !await getBroadcastCampaign(req.orgId, campaignId)) {
-    return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+  if (campaignId) {
+    const campaign = await getBroadcastCampaign(req.orgId, campaignId);
+    if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (campaign.status === 'paused_payment') {
+      return res.status(409).json({
+        success: false,
+        campaignPaused: true,
+        errorCode: campaign.pause_code || campaignGuard.META_PAYMENT_ERROR,
+        error: campaign.pause_reason || 'Campaña detenida por un problema de pago de Meta',
+      });
+    }
   }
 
   const wc = await db.getWhatsappConfig(req.orgId);
@@ -2288,11 +2321,30 @@ router.post('/send-bulk', async (req, res) => {
         continue;
       }
       const failure = describeBroadcastError(err);
+      let pausedCampaign = null;
+      if (failure.code === campaignGuard.META_PAYMENT_ERROR && campaignId) {
+        pausedCampaign = await campaignGuard.pauseForPaymentFailure(req.orgId, {
+          campaignId,
+          errors: [{ code: failure.code }],
+        });
+        if (pausedCampaign) {
+          io?.to(`org_${req.orgId}`).emit(`broadcast_campaign_paused_${req.orgId}`, {
+            campaignId: pausedCampaign.id,
+            code: failure.code,
+            reason: pausedCampaign.pause_reason,
+            processed: pausedCampaign.processed_count,
+            total: pausedCampaign.total_count,
+          });
+        }
+      }
       await recordBroadcastRecipient(req.orgId, campaignId, item, {
         status: 'failed', errorCode: failure.code,
         errorMessage: failure.message, errorDetail: failure.detail,
       });
-      results.push({ phone: item.phone, success: false, error: failure.message, errorCode: failure.code });
+      results.push({
+        phone: item.phone, success: false, error: failure.message, errorCode: failure.code,
+        campaignPaused: failure.code === campaignGuard.META_PAYMENT_ERROR,
+      });
     }
 
     if (items.indexOf(item) < items.length - 1) {
@@ -2304,7 +2356,8 @@ router.post('/send-bulk', async (req, res) => {
   const skipped = results.filter(r => r.skipped).length;
   const pending = results.filter(r => r.pending).length;
   const failed  = results.filter(r => !r.success && !r.skipped && !r.pending).length;
-  res.json({ success: true, sent, skipped, pending, failed, results });
+  const campaignPaused = results.some(result => result.campaignPaused);
+  res.json({ success: true, sent, skipped, pending, failed, campaignPaused, results });
 });
 
 /* ─────────────────────────────────────────────────────────────────────

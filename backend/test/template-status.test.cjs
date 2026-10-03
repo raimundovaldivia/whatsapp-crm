@@ -90,6 +90,21 @@ test('Kapso webhook registration includes every delivery state',async()=>{
   'whatsapp.message.received','whatsapp.message.sent','whatsapp.message.delivered','whatsapp.message.read','whatsapp.message.failed'
  ]);
 });
+test('a Meta payment failure pauses the campaign exactly once',async()=>{
+ const engine=new PGlite();
+ const query=async(sql,params)=>{const r=params?.length?await engine.query(sql,params):(await engine.exec(sql)).at(-1);return {...r,rowCount:r.affectedRows??r.rows?.length??0};};
+ class Pool{query(...args){return query(...args)} async connect(){return {query,release(){}}} async end(){}}
+ try{
+  const setup=load('src/db/setup.js',{pg:{Pool}});await setup.setupDatabase();
+  await engine.exec("INSERT INTO organizations(id,name,slug) VALUES(1,'A','a'); INSERT INTO broadcast_campaigns(id,organization_id,template_name,total_count) VALUES(10,1,'promo',20);");
+  const guard=load('src/services/broadcast-campaign-guard.js',{'../db/database':{getPool:()=>new Pool()}});
+  assert.equal(guard.isPaymentFailure([{code:131042}]),true);
+  const paused=await guard.pauseForPaymentFailure(1,{campaignId:10,errors:[{code:131042}]});
+  assert.equal(paused.status,'paused_payment');assert.equal(paused.pause_code,'131042');
+  assert.equal(await guard.pauseForPaymentFailure(1,{campaignId:10,errors:[{code:131042}]}),null);
+  assert.equal((await query('SELECT status FROM broadcast_campaigns WHERE id=10')).rows[0].status,'paused_payment');
+ }finally{await engine.close()}
+});
 test('pending Kapso templates recover their provider status without guessing failures',async()=>{
  const updates=[];let reads=0;
  const recovery=load('src/services/message-status-recovery.js',{

@@ -1659,14 +1659,22 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       const concurrency = reviewPlan.testMode ? 1 : Math.min(6, items.length);
       let nextIndex = 0;
       let completed = 0;
+      let stopRequested = false;
+      let paymentBlocked = false;
       const workers = Array.from({ length: concurrency }, async () => {
         while (true) {
+          if (stopRequested) return;
           const index = nextIndex++;
           if (index >= items.length) return;
           const item = items[index];
           try {
             const res = await api.post('/reengagement/send-bulk', { items: [item], campaignId }, { timeout: 45000 });
             const result = (res.data.results || [])[0];
+            if (res.data.campaignPaused || result?.campaignPaused) {
+              stopRequested = true;
+              paymentBlocked = true;
+              campaignStatus = 'paused_payment';
+            }
             if (result?.success) sent++;
             else if (result?.skipped) skipped++;
             else if (result?.pending) pending++;
@@ -1676,10 +1684,18 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               if (!failureReasons.includes(reason)) failureReasons.push(reason);
             }
           } catch (error) {
-            campaignStatus = 'interrupted';
+            const pausedByPayment = error.response?.data?.campaignPaused
+              || String(error.response?.data?.errorCode || '') === '131042';
+            if (pausedByPayment) {
+              stopRequested = true;
+              paymentBlocked = true;
+              campaignStatus = 'paused_payment';
+            } else {
+              campaignStatus = 'interrupted';
+            }
             const timedOut = error.code === 'ECONNABORTED';
             if (timedOut) pending++;
-            else failed++;
+            else if (!pausedByPayment) failed++;
             const reason = error.response?.data?.error || (timedOut
               ? 'La confirmación demoró demasiado. No reenvíes: el historial verificará el resultado.'
               : error.message || 'No se pudo procesar este destinatario');
@@ -1688,11 +1704,21 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             completed++;
             setSendProgress({ done: completed, total: items.length });
           }
+          // Da tiempo a que llegue el webhook de Meta antes de tomar el
+          // siguiente destinatario. Así un fallo de pago detiene el lote con
+          // un máximo aproximado equivalente a los envíos ya simultáneos.
+          if (!stopRequested && index < items.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
         }
       });
       await Promise.all(workers);
-      setResults({ sent, failed, skipped, pending, reasons: failureReasons });
-      if (pending > 0) {
+      const stopped = Math.max(items.length - completed, 0);
+      setResults({ sent, failed, skipped, pending, stopped, paymentBlocked, reasons: failureReasons });
+      if (paymentBlocked) {
+        showToast(`🛑 Campaña detenida por pago de Meta. ${completed} procesados · ${stopped} no se enviaron.`, 'error');
+        setReviewPlan(null);
+      } else if (pending > 0) {
         campaignStatus = 'interrupted';
         showToast(`⏳ ${pending} mensaje${pending === 1 ? '' : 's'} por confirmar. No reenvíes; revisaremos el estado automáticamente.`);
         setReviewPlan(null);
@@ -1928,11 +1954,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
       {/* Resultado */}
       {results && (
-        <div style={{ padding: '10px 20px', backgroundColor: results.sent ? `${colors.green}18` : `${colors.red}14`, borderBottom: `1px solid ${results.sent ? colors.green : colors.red}33`, display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '✅' : '⚠️'} {results.sent} aceptados por WhatsApp</span>
+        <div style={{ padding: '10px 20px', backgroundColor: results.paymentBlocked ? `${colors.red}18` : (results.sent ? `${colors.green}18` : `${colors.red}14`), borderBottom: `1px solid ${results.paymentBlocked ? colors.red : (results.sent ? colors.green : colors.red)}33`, display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {results.paymentBlocked && <span style={{ color: colors.red, fontWeight: 850, fontSize: '13px' }}>🛑 Campaña detenida por pago de Meta</span>}
+          <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '↗' : '⚠️'} {results.sent} recibidos inicialmente por Meta</span>
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
           {results.skipped > 0 && <span style={{ color: colors.yellow, fontWeight: 600, fontSize: '13px' }}>⏭ {results.skipped} omitidos</span>}
           {results.pending > 0 && <span style={{ color: colors.yellow, fontWeight: 700, fontSize: '13px' }}>⏳ {results.pending} por confirmar</span>}
+          {results.stopped > 0 && <span style={{ color: colors.textPrimary, fontWeight: 750, fontSize: '13px' }}>✓ {results.stopped} detenidos antes de enviar</span>}
           {results.reasons?.length > 0 && <span style={{ color: colors.textSecondary, fontSize: '12px' }}>{results.reasons.join(' · ')}</span>}
         </div>
       )}
@@ -1965,7 +1993,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               </button>
             </div>
             <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textSecondary, fontSize: 11, lineHeight: 1.45 }}>
-              <strong style={{ color: colors.textPrimary }}>Cómo leer los estados:</strong> “Aceptado” confirma que WhatsApp recibió el envío; la entrega y lectura se actualizan después.
+              <strong style={{ color: colors.textPrimary }}>Cómo leer los estados:</strong> “Aceptado” sólo confirma que Meta recibió la solicitud; aún puede cambiar a entregado, leído o fallido.
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 20px 24px', backgroundColor: colors.bgApp }}>
         {!campaignsLoading && campaigns.length === 0 && (
@@ -1982,12 +2010,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             const uncertain = Number(campaign.unknown_count || 0);
             const isOpen = String(expandedCampaign) === String(campaign.id);
             return (
-              <div key={campaign.id} style={{ border: `1px solid ${failed ? colors.red + '55' : colors.border}`, borderRadius: 9, backgroundColor: colors.bgCard, overflow: 'hidden' }}>
+              <div key={campaign.id} style={{ border: `1px solid ${(failed || campaign.status === 'paused_payment') ? colors.red + '55' : colors.border}`, borderRadius: 9, backgroundColor: colors.bgCard, overflow: 'hidden' }}>
                 <button onClick={() => toggleCampaignDetails(campaign.id)} style={{ width: '100%', border: 'none', background: 'transparent', color: colors.textPrimary, padding: '10px 12px', cursor: 'pointer', textAlign: 'left' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 800 }}>{campaign.template_name}{campaign.test_mode ? ' · 🧪 Prueba' : ''}</div>
                       <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>{new Date(campaign.created_at).toLocaleString('es-CL')} · {campaign.total_count} seleccionados</div>
+                      {campaign.status === 'paused_payment' && <div style={{ color: colors.red, fontSize: 10, fontWeight: 850, marginTop: 4 }}>🛑 Detenida automáticamente por pago de Meta · código {campaign.pause_code || '131042'}</div>}
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, fontWeight: 700 }}>
                       {read > 0 && <span style={{ color: colors.green }}>👁 {read} leídos</span>}

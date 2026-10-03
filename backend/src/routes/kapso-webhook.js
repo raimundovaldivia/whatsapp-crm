@@ -26,6 +26,7 @@ const guardrail                 = require('../services/response-guardrail');
 const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
 const { resumeDivaOnInbound, keepHumanAfterReply } = require('../services/conversation-mode');
 const { isDeliveredOrder, buildPaymentProofReply } = require('../services/payment-proof-reply');
+const campaignGuard = require('../services/broadcast-campaign-guard');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -77,6 +78,21 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   if (statusUpdate) {
     const updated = await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status, statusUpdate.error, org.id);
     if (updated) io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, { ...statusUpdate, error: updated.delivery_error });
+    if (statusUpdate.status === 'failed' && campaignGuard.isPaymentFailure(statusUpdate.error)) {
+      const paused = await campaignGuard.pauseForPaymentFailure(org.id, {
+        messageId: statusUpdate.messageId,
+        errors: statusUpdate.error,
+      });
+      if (paused) {
+        io?.to(`org_${org.id}`).emit(`broadcast_campaign_paused_${org.id}`, {
+          campaignId: paused.id,
+          code: campaignGuard.META_PAYMENT_ERROR,
+          reason: paused.pause_reason,
+          processed: paused.processed_count,
+          total: paused.total_count,
+        });
+      }
+    }
     return;
   }
 

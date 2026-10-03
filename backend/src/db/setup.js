@@ -878,6 +878,17 @@ async function setupDatabase() {
 
       ALTER TABLE broadcast_campaigns
         ADD COLUMN IF NOT EXISTS provider_broadcast_id TEXT;
+      ALTER TABLE broadcast_campaigns
+        ADD COLUMN IF NOT EXISTS pause_code TEXT;
+      ALTER TABLE broadcast_campaigns
+        ADD COLUMN IF NOT EXISTS pause_reason TEXT;
+      ALTER TABLE broadcast_campaigns
+        ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+      ALTER TABLE broadcast_campaigns
+        DROP CONSTRAINT IF EXISTS broadcast_campaigns_status_check;
+      ALTER TABLE broadcast_campaigns
+        ADD CONSTRAINT broadcast_campaigns_status_check
+        CHECK(status IN ('processing','completed','interrupted','paused_payment'));
 
       CREATE TABLE IF NOT EXISTS broadcast_followup_jobs (
         id                 BIGSERIAL PRIMARY KEY,
