@@ -21,7 +21,20 @@ const apiPost = async (path, body) => {
   return d;
 };
 const fmt = (n) => `$${Number(n).toLocaleString('es-CL')}`;
-const FONT = "system-ui, -apple-system, sans-serif";
+const FONT = 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const BRAND_INK = '#2c2316';
+const BRAND_GREEN = '#0b5a37';
+const BRAND_CREAM = '#f5f0e8';
+const BRAND_SAND = '#d4b98c';
+const HERO_IMAGE = 'https://diezrios.com/cdn/shop/files/necesito_hacer_esto_202603230135_-_Editado.png?v=1774240834&width=1200';
+const STORY_IMAGE = 'https://diezrios.com/cdn/shop/files/ahora_haz_una_202603230222.jpg?v=1774243367&width=900';
+
+const readableAccent = (color) => {
+  if (!/^#[0-9a-f]{6}$/i.test(color || '')) return BRAND_GREEN;
+  const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
+  const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+  return brightness > 205 ? BRAND_INK : color;
+};
 
 export default function Tienda({ slug }) {
   const [store,       setStore]       = useState(null);
@@ -59,8 +72,8 @@ export default function Tienda({ slug }) {
     const prev = { overflow: document.body.style.overflow, height: document.body.style.height, bg: document.body.style.background, color: document.body.style.color };
     document.body.style.overflow   = 'auto';
     document.body.style.height     = 'auto';
-    document.body.style.background = '#ffffff';
-    document.body.style.color      = '#111827';
+    document.body.style.background = BRAND_CREAM;
+    document.body.style.color      = BRAND_INK;
     const root = document.getElementById('root');
     const prevRoot = root ? { height: root.style.height, display: root.style.display } : null;
     if (root) { root.style.height = 'auto'; root.style.display = 'block'; }
@@ -101,7 +114,7 @@ export default function Tienda({ slug }) {
 
   const storeName    = store?.name         || 'Tienda';
   const logoUrl      = store?.logo;
-  const PRIMARY      = store?.color        || '#22c55e';
+  const PRIMARY      = readableAccent(store?.color || BRAND_GREEN);
   const FREE_SHIP    = store?.freeShipping ?? null;
   const HAS_FREE_SHIP = Number.isFinite(FREE_SHIP) && FREE_SHIP >= 0;
   const ANNOUNCEMENT = store?.announcement || (HAS_FREE_SHIP ? `🚚 Delivery gratis en compras sobre ${fmt(FREE_SHIP)}` : 'Consulta las condiciones de entrega al realizar tu pedido');
@@ -222,23 +235,23 @@ export default function Tienda({ slug }) {
 
   // ── Render principal ─────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#faf8f5', fontFamily: FONT, color: '#1a1a1a' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: BRAND_CREAM, fontFamily: FONT, color: BRAND_INK }}>
 
       {/* Announcement bar */}
-      <div style={{ backgroundColor: '#2c2417', color: '#e8dfd0', textAlign: 'center', padding: '8px 16px', fontSize: isMobile ? 11 : 12, fontWeight: 400, letterSpacing: '0.04em' }}>
+      <div style={{ backgroundColor: '#fffdf9', color: '#75604b', textAlign: 'center', padding: '10px 16px', fontSize: isMobile ? 11 : 12, fontWeight: 500, letterSpacing: '0.02em' }}>
         {ANNOUNCEMENT}
       </div>
 
       {/* Header — estilo diezrios */}
-      <header style={{ backgroundColor: '#f5f0ea', position: 'sticky', top: 0, zIndex: 100, borderBottom: '1px solid rgba(0,0,0,0.09)' }}>
-        <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '0 16px' : '0 40px', display: 'flex', alignItems: 'center', height: isMobile ? 58 : 70, position: 'relative' }}>
+      <header style={{ backgroundColor: BRAND_CREAM, position: 'sticky', top: 0, zIndex: 100, borderBottom: '1px solid rgba(44,35,22,0.12)' }}>
+        <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '0 18px' : '0 74px', display: 'flex', alignItems: 'center', height: isMobile ? 62 : 74, position: 'relative' }}>
 
           {/* Logo */}
           <a href="#" onClick={e => { e.preventDefault(); setActiveTab('productos'); setView('catalog'); setCartOpen(false); setSearch(''); setMobileMenuOpen(false); window.scrollTo({ top: 0 }); }}
             style={{ textDecoration: 'none', flexShrink: 0, zIndex: 1 }}>
             {logoUrl
               ? <img src={logoUrl} alt={storeName} style={{ height: isMobile ? 30 : 38, width: 'auto', objectFit: 'contain' }} />
-              : <span style={{ fontSize: isMobile ? 14 : 17, fontWeight: 800, color: '#1a1a1a', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Georgia, "Times New Roman", serif' }}>{storeName}</span>}
+              : <span style={{ fontSize: isMobile ? 17 : 23, fontWeight: 700, color: BRAND_GREEN, letterSpacing: '0.12em', textTransform: 'uppercase', fontFamily: 'Georgia, "Times New Roman", serif' }}>{storeName}</span>}
           </a>
 
           {/* Nav centrado — solo desktop */}
@@ -361,56 +374,70 @@ export default function Tienda({ slug }) {
       {/* ── CATÁLOGO ──────────────────────────────────────────────── */}
       {view === 'catalog' && activeTab === 'productos' && (
         <>
-          {/* Hero */}
-          <section style={{ background: 'linear-gradient(135deg,#f5f0ea 0%,#ede8df 60%,#f5f0ea 100%)', padding: isMobile ? '36px 16px 40px' : '56px 24px' }}>
-            <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-              {/* Badge */}
-              <div style={{ display: 'inline-block', backgroundColor: `${PRIMARY}20`, color: PRIMARY, fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 20, marginBottom: 14, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                Del campo a tu mesa
+          {/* Hero — replica la portada de Diez Ríos en Shopify */}
+          <section style={{ backgroundColor: BRAND_CREAM, padding: isMobile ? '34px 20px 46px' : '48px 40px 56px', borderBottom: '1px solid rgba(44,35,22,0.08)' }}>
+            <div style={{ maxWidth: 1200, margin: '0 auto', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(360px,.86fr) minmax(440px,1.14fr)', alignItems: 'center', gap: isMobile ? 28 : 44 }}>
+              <div style={{ order: 1 }}>
+                <div style={{ display: 'flex', gap: 8, marginBottom: isMobile ? 22 : 26, flexWrap: 'wrap' }}>
+                  <span style={{ background: BRAND_INK, color: '#fff', padding: '9px 14px', borderRadius: 4, fontSize: 11, fontWeight: 800, letterSpacing: '.08em' }}>5% OFF POR</span>
+                  <span style={{ background: BRAND_SAND, color: BRAND_INK, padding: '9px 14px', borderRadius: 4, fontSize: 11, fontWeight: 800, letterSpacing: '.08em' }}>2 BANDEJAS DE HUEVOS</span>
+                </div>
+                <h1 style={{ margin: '0 0 18px', maxWidth: 540, fontSize: isMobile ? 44 : 'clamp(54px,5vw,72px)', fontWeight: 800, lineHeight: .98, letterSpacing: '-.045em', color: BRAND_INK }}>
+                  Del campo a tu mesa.
+                </h1>
+                <p style={{ margin: '0 0 22px', fontSize: isMobile ? 15 : 16, color: '#685744', lineHeight: 1.62, maxWidth: 520 }}>
+                  {HERO_SUB === 'Descubre nuestro catálogo y realiza tu pedido.'
+                    ? 'Productos frescos de animales criados con tiempo, libertad y cuidado. Sin atajos. Sin secretos. Directo a tu puerta en La Serena y Coquimbo.'
+                    : HERO_SUB}
+                </p>
+                <div style={{ display: 'grid', gap: 8, marginBottom: 28, color: '#493c2d', fontSize: isMobile ? 14 : 15 }}>
+                  {(HERO_TAGS.length ? HERO_TAGS : ['🥚 Huevos de gallinas libres', '🫒 Aceitunas artesanales', '🧀 Selección quesera', '🚚 Despacho de lunes a sábado', '🌿 Directo del campo, sin intermediarios']).map(tag => <span key={tag}>{tag}</span>)}
+                </div>
+                <button onClick={() => document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' })}
+                  style={{ padding: '16px 32px', minWidth: isMobile ? 210 : 220, borderRadius: 3, border: 'none', backgroundColor: BRAND_INK, color: 'white', fontWeight: 800, fontSize: 13, letterSpacing: '.04em', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  VER PRODUCTOS <span aria-hidden="true">→</span>
+                </button>
+                <div style={{ marginTop: 22, display: 'flex', alignItems: 'center', gap: 11, color: '#685744' }}>
+                  <span style={{ fontSize: 15, letterSpacing: 2, color: '#c49b31' }}>★★★★★</span>
+                  <span style={{ fontSize: 12 }}>Más de 500 caseritos felices cada semana</span>
+                </div>
               </div>
+              <div style={{ order: isMobile ? 0 : 2, minHeight: isMobile ? 260 : 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img src={HERO_IMAGE} alt="Del campo a tu mesa" style={{ width: '100%', maxWidth: 690, height: isMobile ? 290 : 520, objectFit: 'contain', objectPosition: 'center' }} />
+              </div>
+            </div>
+          </section>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 40, flexWrap: 'wrap' }}>
-                {/* Copy */}
-                <div style={{ flex: 1, minWidth: 260 }}>
-                  <h1 style={{ margin: '0 0 14px', fontSize: isMobile ? 30 : 'clamp(28px,4vw,46px)', fontWeight: 900, lineHeight: 1.12, letterSpacing: -1 }}>
-                    <span style={{ color: PRIMARY }}>{HERO_TITLE}</span>
-                  </h1>
-                  <p style={{ margin: '0 0 20px', fontSize: isMobile ? 14 : 16, color: '#6b7280', lineHeight: 1.7, maxWidth: 420 }}>
-                    {HERO_SUB}
-                  </p>
-                  {/* Tags */}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
-                    {HERO_TAGS.map(t => (
-                      <span key={t} style={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: 20, padding: '4px 12px', fontSize: isMobile ? 12 : 13, fontWeight: 500, color: '#374151' }}>{t}</span>
-                    ))}
-                  </div>
-                  <button onClick={() => document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' })}
-                    style={{ padding: isMobile ? '12px 22px' : '14px 28px', borderRadius: 12, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 800, fontSize: isMobile ? 14 : 16, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    Ver productos <ChevronRight size={16} />
-                  </button>
-                  {/* Social proof */}
-                  <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span style={{ fontSize: 18 }}>⭐⭐⭐⭐⭐</span>
-                    <span style={{ fontSize: 13, color: '#6b7280' }}>+500 caseritos felices</span>
-                  </div>
+          {/* Filosofía */}
+          <section style={{ background: '#fffdf9', padding: isMobile ? '56px 20px' : '86px 40px' }}>
+            <div style={{ maxWidth: 1200, margin: '0 auto', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: isMobile ? 34 : 72, alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.15em', color: '#75604b', marginBottom: 18 }}>NUESTRA FILOSOFÍA</div>
+                <h2 style={{ margin: '0 0 22px', fontSize: isMobile ? 36 : 52, lineHeight: 1.02, letterSpacing: '-.035em', color: BRAND_INK }}>Dedicación en cada producto.</h2>
+                <p style={{ margin: 0, maxWidth: 530, color: '#685744', fontSize: isMobile ? 15 : 16, lineHeight: 1.75 }}>
+                  Animales criados en libertad, en campos donde el tiempo corre distinto produciendo huevos frescos y quesos que llenan el gusto. Creemos que el buen sabor no se fabrica — se cuida.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 34, borderTop: '1px solid rgba(44,35,22,.15)', paddingTop: 24 }}>
+                  {[['100%','CAMPO LIBRE'],['0','INTERMEDIARIOS'],['52','SEMANAS AL AÑO']].map(([n,l]) => <div key={l}><div style={{ color: BRAND_GREEN, fontSize: isMobile ? 24 : 31, fontWeight: 800 }}>{n}</div><div style={{ color: '#75604b', fontSize: 9, fontWeight: 800, letterSpacing: '.09em', marginTop: 5 }}>{l}</div></div>)}
                 </div>
-
-                {/* Stats — en móvil van horizontales debajo del copy */}
-                <div style={{ display: 'flex', gap: isMobile ? 10 : 16, flexWrap: 'wrap', justifyContent: isMobile ? 'flex-start' : 'center', width: isMobile ? '100%' : 'auto' }}>
-                  {[{ num: '100%', label: 'Campo libre', icon: '🌿' }, { num: '0', label: 'Intermediarios', icon: '🤝' }, { num: '52', label: 'Sem. al año', icon: '📅' }].map(s => (
-                    <div key={s.label} style={{ background: 'white', borderRadius: 12, padding: isMobile ? '14px 16px' : '20px 22px', textAlign: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', border: '1px solid #e5e7eb', minWidth: isMobile ? 88 : 100, flex: isMobile ? 1 : 'none' }}>
-                      <div style={{ fontSize: isMobile ? 22 : 26 }}>{s.icon}</div>
-                      <div style={{ fontSize: isMobile ? 20 : 24, fontWeight: 900, color: PRIMARY, lineHeight: 1.2, marginTop: 6 }}>{s.num}</div>
-                      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 3, fontWeight: 500 }}>{s.label}</div>
-                    </div>
-                  ))}
-                </div>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <img src={STORY_IMAGE} alt="Dedicación en cada producto" style={{ width: '100%', aspectRatio: '1.15 / 1', objectFit: 'cover', borderRadius: 2, display: 'block' }} />
+                <div style={{ position: 'absolute', right: isMobile ? 12 : -14, bottom: isMobile ? 12 : -18, background: BRAND_GREEN, color: '#fff', padding: isMobile ? '13px 16px' : '17px 22px', fontWeight: 800, fontSize: isMobile ? 11 : 12, letterSpacing: '.08em' }}>LUN–SÁB. · DÍAS DE DESPACHO</div>
               </div>
             </div>
           </section>
 
           {/* Catálogo */}
-          <section id="catalogo" style={{ maxWidth: 1200, margin: '0 auto', padding: isMobile ? '32px 16px' : '48px 24px' }}>
+          <section id="catalogo" style={{ maxWidth: 1200, margin: '0 auto', padding: isMobile ? '52px 16px' : '78px 24px 72px' }}>
+
+            {!search && (
+              <div style={{ textAlign: 'center', margin: isMobile ? '0 auto 38px' : '0 auto 56px', maxWidth: 680 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.15em', color: '#75604b', marginBottom: 14 }}>LO QUE OFRECEMOS</div>
+                <h2 style={{ margin: '0 0 13px', fontSize: isMobile ? 34 : 48, lineHeight: 1.05, letterSpacing: '-.035em', color: BRAND_INK }}>Directo desde el origen</h2>
+                <p style={{ margin: 0, color: '#75604b', fontSize: 14 }}>Productos frescos, combinables y con descuentos automáticos.</p>
+              </div>
+            )}
 
             {/* Modo búsqueda — grid plano */}
             {search && (
@@ -434,13 +461,13 @@ export default function Tienda({ slug }) {
                   return (
                     <div key={product.id}
                       id={`product-${product.handle || product.id}`}
-                      style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden',
-                        border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1,
-                        boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column',
+                      style={{ background: '#fffdf9', borderRadius: 2, overflow: 'hidden',
+                        border: '1px solid rgba(44,35,22,.12)', opacity: outOfStock ? 0.65 : 1,
+                        boxShadow: 'none', display: 'flex', flexDirection: 'column',
                         scrollMarginTop: 90 }}>
 
                       {/* Image */}
-                      <div style={{ position: 'relative', height: isMobile ? 140 : 200, backgroundColor: '#f9fafb', overflow: 'hidden', flexShrink: 0 }}>
+                      <div style={{ position: 'relative', height: isMobile ? 170 : 250, backgroundColor: '#eee7db', overflow: 'hidden', flexShrink: 0 }}>
                         {product.image_url
                           ? <img src={product.image_url} alt={product.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                           : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>🥚</div>}
@@ -472,8 +499,8 @@ export default function Tienda({ slug }) {
                           <div style={{ textAlign: 'center', padding: '8px', borderRadius: 8, backgroundColor: '#f3f4f6', color: '#9ca3af', fontSize: 12, fontWeight: 600 }}>Sin stock</div>
                         ) : qty === 0 ? (
                           <button onClick={() => addToCart(product)}
-                            style={{ width: '100%', padding: isMobile ? '9px 0' : '10px', borderRadius: 9, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: isMobile ? 13 : 14 }}>
-                            Añadir
+                            style={{ width: '100%', padding: isMobile ? '10px 0' : '12px', borderRadius: 2, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 800, letterSpacing: '.04em', cursor: 'pointer', fontSize: isMobile ? 12 : 13 }}>
+                            AÑADIR
                           </button>
                         ) : (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', borderRadius: 9, padding: '3px 5px', border: `1.5px solid ${PRIMARY}` }}>
@@ -515,8 +542,8 @@ export default function Tienda({ slug }) {
                       return (
                         <div key={product.id}
                           id={`product-${product.handle || product.id}`}
-                          style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden', border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column', scrollMarginTop: 90 }}>
-                          <div style={{ position: 'relative', height: isMobile ? 140 : 200, backgroundColor: '#f9fafb', overflow: 'hidden', flexShrink: 0 }}>
+                          style={{ background: '#fffdf9', borderRadius: 2, overflow: 'hidden', border: '1px solid rgba(44,35,22,.12)', opacity: outOfStock ? 0.65 : 1, boxShadow: 'none', display: 'flex', flexDirection: 'column', scrollMarginTop: 90 }}>
+                          <div style={{ position: 'relative', height: isMobile ? 170 : 250, backgroundColor: '#eee7db', overflow: 'hidden', flexShrink: 0 }}>
                             {product.image_url
                               ? <img src={product.image_url} alt={product.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                               : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>🥚</div>}
@@ -533,7 +560,7 @@ export default function Tienda({ slug }) {
                             {outOfStock ? (
                               <div style={{ textAlign: 'center', padding: '8px', borderRadius: 8, backgroundColor: '#f3f4f6', color: '#9ca3af', fontSize: 12, fontWeight: 600 }}>Sin stock</div>
                             ) : qty === 0 ? (
-                              <button onClick={() => addToCart(product)} style={{ width: '100%', padding: isMobile ? '9px 0' : '10px', borderRadius: 9, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: isMobile ? 13 : 14 }}>Añadir</button>
+                              <button onClick={() => addToCart(product)} style={{ width: '100%', padding: isMobile ? '10px 0' : '12px', borderRadius: 2, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 800, letterSpacing: '.04em', cursor: 'pointer', fontSize: isMobile ? 12 : 13 }}>AÑADIR</button>
                             ) : (
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', borderRadius: 9, padding: '3px 5px', border: `1.5px solid ${PRIMARY}` }}>
                                 <button onClick={() => removeOne(product.id)} style={{ width: 32, height: 32, borderRadius: 7, border: 'none', background: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 18, color: '#374151', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
@@ -558,8 +585,8 @@ export default function Tienda({ slug }) {
                   const hasDiscount = product.compare_price && parseFloat(product.compare_price) > parseFloat(product.price);
                   const outOfStock  = product.stock === 0;
                   return (
-                    <div key={product.id} style={{ background: 'white', borderRadius: isMobile ? 10 : 14, overflow: 'hidden', border: '1px solid #e5e7eb', opacity: outOfStock ? 0.65 : 1, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column' }}>
-                      <div style={{ position: 'relative', height: isMobile ? 140 : 200, backgroundColor: '#f9fafb', overflow: 'hidden', flexShrink: 0 }}>
+                    <div key={product.id} style={{ background: '#fffdf9', borderRadius: 2, overflow: 'hidden', border: '1px solid rgba(44,35,22,.12)', opacity: outOfStock ? 0.65 : 1, boxShadow: 'none', display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ position: 'relative', height: isMobile ? 170 : 250, backgroundColor: '#eee7db', overflow: 'hidden', flexShrink: 0 }}>
                         {product.image_url ? <img src={product.image_url} alt={product.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>🥚</div>}
                         {outOfStock && <div style={{ position: 'absolute', top: 8, left: 8, background: '#111827', color: 'white', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20 }}>Agotado</div>}
                         {hasDiscount && !outOfStock && <div style={{ position: 'absolute', top: 8, left: 8, background: '#ef4444', color: 'white', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20 }}>-{Math.round((1 - product.price / product.compare_price) * 100)}%</div>}
@@ -573,7 +600,7 @@ export default function Tienda({ slug }) {
                         {outOfStock ? (
                           <div style={{ textAlign: 'center', padding: '8px', borderRadius: 8, backgroundColor: '#f3f4f6', color: '#9ca3af', fontSize: 12, fontWeight: 600 }}>Sin stock</div>
                         ) : qty === 0 ? (
-                          <button onClick={() => addToCart(product)} style={{ width: '100%', padding: isMobile ? '9px 0' : '10px', borderRadius: 9, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: isMobile ? 13 : 14 }}>Añadir</button>
+                          <button onClick={() => addToCart(product)} style={{ width: '100%', padding: isMobile ? '10px 0' : '12px', borderRadius: 2, border: 'none', backgroundColor: PRIMARY, color: 'white', fontWeight: 800, letterSpacing: '.04em', cursor: 'pointer', fontSize: isMobile ? 12 : 13 }}>AÑADIR</button>
                         ) : (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', borderRadius: 9, padding: '3px 5px', border: `1.5px solid ${PRIMARY}` }}>
                             <button onClick={() => removeOne(product.id)} style={{ width: 32, height: 32, borderRadius: 7, border: 'none', background: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
