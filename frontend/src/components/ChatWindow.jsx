@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2 } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
@@ -79,6 +79,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [historyEditError, setHistoryEditError] = useState('');
   const [historyProducts, setHistoryProducts] = useState([]);
   const [historyProductsLoading, setHistoryProductsLoading] = useState(false);
+  const [historyPayment, setHistoryPayment] = useState(null);
+  const [historyPaymentSaving, setHistoryPaymentSaving] = useState(false);
+  const [historyPaymentError, setHistoryPaymentError] = useState('');
 
   const openHistory = useCallback(async () => {
     const phone = conversation.phone_number;
@@ -193,6 +196,48 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       setHistoryEditSaving(false);
     }
   }, [historyEdit, reloadHistory]);
+
+  const openHistoryPayment = useCallback((order) => {
+    const total = Math.round(Number(order.total_price) || 0);
+    setHistoryPayment({
+      source: order._source,
+      id: order._source === 'shopify' ? order.shopify_order_id : order.id,
+      label: order.shopify_name || `#${order.id}`,
+      total,
+      paymentMethod: order.payment_method || 'transferencia',
+      cashAmount: '',
+      transferAmount: '',
+    });
+    setHistoryPaymentError('');
+  }, []);
+
+  const saveHistoryPayment = useCallback(async () => {
+    if (!historyPayment) return;
+    const payload = {
+      source: historyPayment.source,
+      id: historyPayment.id,
+      paymentMethod: historyPayment.paymentMethod,
+    };
+    if (historyPayment.paymentMethod === 'mixto') {
+      payload.paymentCashAmount = Number(historyPayment.cashAmount);
+      payload.paymentTransferAmount = Number(historyPayment.transferAmount);
+      if (payload.paymentCashAmount <= 0 || payload.paymentTransferAmount <= 0 || payload.paymentCashAmount + payload.paymentTransferAmount !== historyPayment.total) {
+        setHistoryPaymentError(`Efectivo y transferencia deben sumar $${historyPayment.total.toLocaleString('es-CL')}.`);
+        return;
+      }
+    }
+    setHistoryPaymentSaving(true);
+    setHistoryPaymentError('');
+    try {
+      await api.patch('/orders/history-payment', payload);
+      await reloadHistory();
+      setHistoryPayment(null);
+    } catch (err) {
+      setHistoryPaymentError(err.response?.data?.error || 'No se pudo registrar el pago.');
+    } finally {
+      setHistoryPaymentSaving(false);
+    }
+  }, [historyPayment, reloadHistory]);
 
   // Order modal state
   const [showOrderModal, setShowOrderModal]   = useState(false);
@@ -1398,6 +1443,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                         if (!Array.isArray(items)) items = [];
                         const isShopify = o._source === 'shopify';
                         const fs = isShopify ? (o.financial_status||'').toUpperCase() : (o.status||'').toUpperCase();
+                        const isPaid = isShopify ? fs === 'PAID' : ['PAID', 'PAYMENT_RECEIVED'].includes(fs);
+                        const canMarkPaid = !isPaid && !['CANCELLED', 'VOIDED', 'REFUNDED'].includes(fs);
                         // Etiqueta + color para TODOS los estados (Shopify y bot).
                         const STATUS_STYLE = {
                           PAID:{ l:'Pagado', c:'#22c55e' }, CONFIRMED:{ l:'Confirmado', c:'#22c55e' }, PAYMENT_RECEIVED:{ l:'Pago recibido', c:'#22c55e' },
@@ -1410,14 +1457,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                         const st = STATUS_STYLE[fs] || { l: (fs || '—').replace(/_/g,' ').toLowerCase().replace(/^\w/, m=>m.toUpperCase()), c: colors.textSecondary };
                         return (
                           <div key={`${o._source}_${o.id || o.shopify_order_id || i}`} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
-                            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
+                            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'8px', flexWrap:'wrap', marginBottom:'6px' }}>
                               <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                                 <span style={{ fontSize:'10px', padding:'1px 6px', borderRadius:'4px', backgroundColor: isShopify ? '#0d2020' : colors.bgSub, color: isShopify ? colors.tealSoft : colors.textSecondary, border:`1px solid ${isShopify ? '#1a3d3d' : colors.border}` }}>
                                   {isShopify ? 'Shopify' : 'Bot'}
                                 </span>
                                 <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}{o.shopify_name ? ` · ${o.shopify_name}` : ''}</span>
                               </div>
-                              <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                              <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:'6px', flexWrap:'wrap' }}>
                                 <button
                                   type="button"
                                   onClick={() => openHistoryEdit(o)}
@@ -1425,6 +1472,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                                   style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'4px 8px', borderRadius:'7px', border:`1px solid ${colors.border}`, backgroundColor:colors.bgSub, color:colors.textPrimary, cursor:'pointer', fontSize:'10px', fontWeight:700 }}>
                                   <Pencil size={11} /> Editar
                                 </button>
+                                {canMarkPaid && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openHistoryPayment(o)}
+                                    title="Registrar este pedido como pagado"
+                                    style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'4px 8px', borderRadius:'7px', border:`1px solid ${colors.green}66`, backgroundColor:`${colors.green}16`, color:colors.green, cursor:'pointer', fontSize:'10px', fontWeight:800 }}>
+                                    <CircleDollarSign size={11} /> Marcar pagado
+                                  </button>
+                                )}
                                 <span style={{ fontSize:'10px', fontWeight:700, padding:'2px 8px', borderRadius:'999px', color:st.c, backgroundColor:`${st.c}1f`, border:`1px solid ${st.c}55`, whiteSpace:'nowrap' }}>{st.l}</span>
                                 <span style={{ fontSize:'13px', fontWeight:700, color:colors.textPrimary }}>${Number(o.total_price||0).toLocaleString('es-CL')}</span>
                               </div>
@@ -1432,6 +1488,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                             {items.length > 0 && (
                               <div style={{ fontSize:'11px', color:colors.textSecondary }}>
                                 {items.map(it => `${it.quantity}x ${it.name || it.title}`).join(' · ')}
+                              </div>
+                            )}
+                            {isPaid && (
+                              <div style={{ fontSize:'10px', color:colors.green, marginTop:'5px', display:'flex', alignItems:'center', gap:'4px', fontWeight:700 }}>
+                                <CheckCircle2 size={11} /> Pago registrado{o.payment_method ? ` · ${({ efectivo:'Efectivo', transferencia:'Transferencia', mixto:'Mixto', otro:'Otro' })[o.payment_method] || o.payment_method}` : ''}
                               </div>
                             )}
                             {(() => {
@@ -1459,6 +1520,56 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 </>
               )}
             </div>
+
+            {historyPayment && (
+              <div onClick={e => { e.stopPropagation(); if (!historyPaymentSaving) setHistoryPayment(null); }} style={{ position:'fixed', inset:0, zIndex:1120, backgroundColor:'rgba(0,0,0,0.72)', display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+                <div onClick={e => e.stopPropagation()} style={{ width:'100%', maxWidth:'420px', backgroundColor:colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:'14px', boxShadow:'0 24px 70px rgba(0,0,0,.55)', overflow:'hidden' }}>
+                  <div style={{ padding:'16px 18px', borderBottom:`1px solid ${colors.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:'9px' }}>
+                      <CircleDollarSign size={18} color={colors.green} />
+                      <div>
+                        <div style={{ color:colors.textPrimary, fontSize:'14px', fontWeight:800 }}>Registrar pago</div>
+                        <div style={{ color:colors.textSecondary, fontSize:'11px', marginTop:'2px' }}>{historyPayment.label} · ${historyPayment.total.toLocaleString('es-CL')}</div>
+                      </div>
+                    </div>
+                    <button type="button" disabled={historyPaymentSaving} onClick={() => setHistoryPayment(null)} style={{ border:'none', background:'transparent', color:colors.textSecondary, cursor:'pointer', padding:'4px' }}><X size={18} /></button>
+                  </div>
+                  <div style={{ padding:'18px' }}>
+                    <label style={{ display:'block', color:colors.textSecondary, fontSize:'11px', fontWeight:700, marginBottom:'7px' }}>Medio de pago</label>
+                    <select value={historyPayment.paymentMethod} onChange={e => setHistoryPayment(current => ({ ...current, paymentMethod:e.target.value }))}
+                      style={{ width:'100%', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary, borderRadius:'9px', padding:'10px 11px', fontSize:'13px', outline:'none' }}>
+                      <option value="transferencia">Transferencia</option>
+                      <option value="efectivo">Efectivo</option>
+                      <option value="mixto">Pago mixto</option>
+                      <option value="otro">Otro</option>
+                    </select>
+                    {historyPayment.paymentMethod === 'mixto' && (
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'9px', marginTop:'12px' }}>
+                        <label style={{ color:colors.textSecondary, fontSize:'10px' }}>Efectivo
+                          <input type="number" min="0" value={historyPayment.cashAmount} onChange={e => setHistoryPayment(current => ({ ...current, cashAmount:e.target.value }))}
+                            style={{ width:'100%', boxSizing:'border-box', marginTop:'5px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary, borderRadius:'8px', padding:'9px' }} />
+                        </label>
+                        <label style={{ color:colors.textSecondary, fontSize:'10px' }}>Transferencia
+                          <input type="number" min="0" value={historyPayment.transferAmount} onChange={e => setHistoryPayment(current => ({ ...current, transferAmount:e.target.value }))}
+                            style={{ width:'100%', boxSizing:'border-box', marginTop:'5px', border:`1px solid ${colors.border}`, backgroundColor:colors.bg, color:colors.textPrimary, borderRadius:'8px', padding:'9px' }} />
+                        </label>
+                      </div>
+                    )}
+                    <div style={{ marginTop:'12px', padding:'9px 10px', borderRadius:'8px', backgroundColor:`${colors.green}0d`, border:`1px solid ${colors.green}33`, color:colors.textSecondary, fontSize:'10px', lineHeight:1.45 }}>
+                      Esta acción registra el pago en la cuenta corriente. No realiza un cobro ni modifica el pago remoto de Shopify.
+                    </div>
+                    {historyPaymentError && <div style={{ color:'#ef4444', fontSize:'11px', marginTop:'10px' }}>{historyPaymentError}</div>}
+                  </div>
+                  <div style={{ padding:'12px 18px', borderTop:`1px solid ${colors.border}`, display:'flex', justifyContent:'flex-end', gap:'8px' }}>
+                    <button type="button" disabled={historyPaymentSaving} onClick={() => setHistoryPayment(null)} style={{ border:`1px solid ${colors.border}`, backgroundColor:colors.bgSub, color:colors.textSecondary, borderRadius:'8px', padding:'8px 12px', cursor:'pointer', fontSize:'12px' }}>Cancelar</button>
+                    <button type="button" disabled={historyPaymentSaving} onClick={saveHistoryPayment} style={{ border:'none', backgroundColor:colors.green, color:'#fff', borderRadius:'8px', padding:'8px 13px', cursor:historyPaymentSaving?'wait':'pointer', fontSize:'12px', fontWeight:800, display:'inline-flex', alignItems:'center', gap:'6px' }}>
+                      {historyPaymentSaving ? <Loader size={13} style={{ animation:'spin 1s linear infinite' }} /> : <CheckCircle2 size={13} />}
+                      {historyPaymentSaving ? 'Registrando…' : 'Confirmar pago'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {historyEdit && (
               <div onClick={e => { e.stopPropagation(); if (!historyEditSaving) setHistoryEdit(null); }} style={{ position:'fixed', inset:0, zIndex:1100, backgroundColor:'rgba(0,0,0,0.68)', display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>

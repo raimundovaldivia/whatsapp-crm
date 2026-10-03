@@ -235,7 +235,8 @@ router.get('/history/:phone', async (req, res) => {
     const { rows: shopifyOrders } = await pool.query(`
       SELECT id, shopify_order_id, shopify_name, customer_name, total_price,
              financial_status, fulfillment_status, shopify_created_at, items,
-             shipping_address1, shipping_city
+             shipping_address1, shipping_city, payment_method, payment_marked_at,
+             payment_cash_amount, payment_transfer_amount, payment_record_source
       FROM shopify_orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])
@@ -244,7 +245,9 @@ router.get('/history/:phone', async (req, res) => {
     `, [req.orgId, variants]);
 
     const { rows: botOrders } = await pool.query(`
-      SELECT id, customer_name, total_price, status, created_at, items, shipping_address
+      SELECT id, customer_name, total_price, status, created_at, items, shipping_address,
+             payment_method, payment_marked_at, payment_cash_amount,
+             payment_transfer_amount, payment_record_source
       FROM orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])
@@ -1063,6 +1066,82 @@ router.patch('/history-edit', async (req, res) => {
     await client.query('ROLLBACK').catch(() => {});
     console.error('[Orders/history-edit]', err.message);
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * PATCH /api/orders/history-payment
+ * Registra manualmente un pago desde el historial del cliente. Es una marca
+ * contable local: no captura dinero ni modifica la orden remota de Shopify.
+ */
+router.patch('/history-payment', async (req, res) => {
+  const { source, id, paymentMethod, paymentCashAmount, paymentTransferAmount } = req.body || {};
+  if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
+  if (!['efectivo', 'transferencia', 'mixto', 'otro'].includes(paymentMethod)) {
+    return res.status(400).json({ success: false, error: 'Selecciona un medio de pago válido' });
+  }
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const table = source === 'shopify' ? 'shopify_orders' : 'orders';
+    const idColumn = source === 'shopify' ? 'shopify_order_id' : 'id';
+    const key = source === 'shopify' ? String(id) : parseInt(id);
+    if (source === 'bot' && !Number.isInteger(key)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, error: 'Pedido inválido' });
+    }
+    const { rows: [order] } = await client.query(
+      `SELECT * FROM ${table} WHERE ${idColumn}=$1 AND organization_id=$2 FOR UPDATE`,
+      [key, req.orgId]
+    );
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    }
+    const cancelled = source === 'shopify'
+      ? ['VOIDED', 'REFUNDED'].includes(String(order.financial_status || '').toUpperCase()) || order.crm_status === 'cancelled'
+      : order.status === 'cancelled';
+    if (cancelled) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'No se puede registrar pago en un pedido cancelado o reembolsado' });
+    }
+    const alreadyPaid = source === 'shopify'
+      ? String(order.financial_status || '').toUpperCase() === 'PAID'
+      : ['paid', 'payment_received'].includes(order.status);
+    if (alreadyPaid) {
+      await client.query('COMMIT');
+      return res.json({ success: true, alreadyPaid: true, order });
+    }
+    const total = Math.round(Number(order.total_price) || 0);
+    if (total <= 0) throw Object.assign(new Error('El pedido no tiene un total válido'), { status: 400 });
+    const amounts = paymentBreakdown(paymentMethod, total, paymentCashAmount, paymentTransferAmount);
+    const result = source === 'shopify'
+      ? await client.query(
+          `UPDATE shopify_orders
+              SET financial_status='paid', payment_method=$1,
+                  payment_cash_amount=$2, payment_transfer_amount=$3,
+                  payment_marked_at=NOW(), payment_marked_by=$4,
+                  payment_record_source='manual_history', updated_at=NOW()
+            WHERE shopify_order_id=$5 AND organization_id=$6 RETURNING *`,
+          [paymentMethod, amounts.cash, amounts.transfer, req.userId, key, req.orgId]
+        )
+      : await client.query(
+          `UPDATE orders
+              SET status='paid', payment_method=$1,
+                  payment_cash_amount=$2, payment_transfer_amount=$3,
+                  payment_marked_at=NOW(), payment_marked_by=$4,
+                  payment_record_source='manual_history', updated_at=NOW()
+            WHERE id=$5 AND organization_id=$6 RETURNING *`,
+          [paymentMethod, amounts.cash, amounts.transfer, req.userId, key, req.orgId]
+        );
+    await client.query('COMMIT');
+    res.json({ success: true, alreadyPaid: false, order: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[Orders/history-payment]', err.message);
+    res.status(err.status === 400 ? 400 : 500).json({ success: false, error: err.message });
   } finally {
     client.release();
   }

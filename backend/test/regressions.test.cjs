@@ -130,6 +130,33 @@ test('delivery outcomes cancel, reschedule or mark a visible delivery incident',
     assert.equal((await f.query("SELECT stop_notes->>'bot_1' note FROM delivery_routes WHERE id=1")).rows[0].note,'Cliente no responde');
   } finally {await f.engine.close();}
 });
+test('purchase history records manual bot and Shopify payments with method and audit source',async()=>{
+  const f=await fixture();
+  try {
+    await f.query("UPDATE shopify_orders SET total_price=200,financial_status='pending' WHERE shopify_order_id='gid://shopify/Order/42'");
+    const router=load('src/routes/orders.js',{
+      '../db/database':f.db,
+      '../middleware/auth':{requireAuth:noop,requireRole:()=>noop},
+      '../services/shopify-api':{},
+      '../services/payment-collection':{},
+      '../services/delivery-notifications':{},
+    });
+    const bot=response();
+    await handler(router,'patch','/history-payment')({orgId:1,userId:10,body:{source:'bot',id:1,paymentMethod:'transferencia'}},bot);
+    assert.equal(bot.code,200);assert.equal(bot.body.alreadyPaid,false);
+    const paidBot=(await f.query('SELECT status,payment_method,payment_cash_amount,payment_transfer_amount,payment_marked_by,payment_record_source FROM orders WHERE id=1')).rows[0];
+    assert.equal(paidBot.status,'paid');assert.equal(paidBot.payment_method,'transferencia');
+    assert.equal(Number(paidBot.payment_cash_amount),0);assert.equal(Number(paidBot.payment_transfer_amount),100);
+    assert.equal(paidBot.payment_marked_by,10);assert.equal(paidBot.payment_record_source,'manual_history');
+
+    const shopify=response();
+    await handler(router,'patch','/history-payment')({orgId:1,userId:10,body:{source:'shopify',id:'gid://shopify/Order/42',paymentMethod:'efectivo'}},shopify);
+    assert.equal(shopify.code,200);
+    const paidShopify=(await f.query("SELECT financial_status,payment_method,payment_cash_amount,payment_record_source FROM shopify_orders WHERE shopify_order_id='gid://shopify/Order/42'")).rows[0];
+    assert.equal(paidShopify.financial_status,'paid');assert.equal(paidShopify.payment_method,'efectivo');
+    assert.equal(Number(paidShopify.payment_cash_amount),200);assert.equal(paidShopify.payment_record_source,'manual_history');
+  } finally {await f.engine.close();}
+});
 test('stale in-transit routes become auditable delivery incidents the next day',async()=>{
   const f=await fixture();
   try {

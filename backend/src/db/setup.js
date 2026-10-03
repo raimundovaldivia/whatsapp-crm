@@ -439,6 +439,8 @@ async function setupDatabase() {
       -- enviados, para no cobrarle dos veces al mismo cliente por error.
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_marked_by    INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_record_source TEXT;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
@@ -566,6 +568,8 @@ async function setupDatabase() {
 
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_method       TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_at    TIMESTAMP;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_marked_by    INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_record_source TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
