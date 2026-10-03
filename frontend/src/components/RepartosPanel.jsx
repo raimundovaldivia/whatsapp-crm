@@ -1900,16 +1900,19 @@ function HistorialRepartos({ colors }) {
       setAddPool((r.data.orders || []).filter(o => !inRoute.has(`${o.source}_${o.id}`)));
     } catch (e) { alert(e.response?.data?.error || e.message); setAddFor(null); }
   }
-  async function confirmAdd(routeId) {
+  async function confirmAdd(route) {
     const chosen = addPool.filter(o => addSel.has(`${o.source}_${o.id}`));
     if (!chosen.length) { setAddFor(null); return; }
+    if (route.status === 'in_progress' && !window.confirm(
+      `La ruta ya está en reparto. Se agregarán ${chosen.length} parada${chosen.length === 1 ? '' : 's'} al final y el checklist de carga quedará desactivado. ¿Continuar?`
+    )) return;
     setAddBusy(true);
     try {
-      const { data } = await api.post(`/delivery/routes/${routeId}/orders`, { orders: chosen });
+      const { data } = await api.post(`/delivery/routes/${route.id}/orders`, { orders: chosen });
       setAddFor(null); setAddSel(new Set());
       await new Promise(r => setTimeout(r, 150));
       load();
-      if (data?.added) alert(`✅ ${data.added} pedido${data.added > 1 ? 's' : ''} agregado${data.added > 1 ? 's' : ''} a la ruta.`);
+      if (data?.added) alert(`✅ ${data.added} parada${data.added > 1 ? 's' : ''} agregada${data.added > 1 ? 's' : ''} a la ruta.${data.checklistInvalidated ? '\n\nEl checklist de carga quedó desactivado porque el reparto ya había comenzado.' : ''}`);
     } catch (e) { alert(e.response?.data?.error || e.message); }
     finally { setAddBusy(false); }
   }
@@ -2078,20 +2081,26 @@ function HistorialRepartos({ colors }) {
                       </div>
                     );
                     const checklist = route.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
+                    const checklistInvalidated = checklist.__invalidated === true;
                     const reviewed = details.filter(item => checklist[item.name] === true).length;
                     const canCheck = route.status === 'sent';
                     const showBreakdown = !!loadBreakdown[route.id];
                     const totalUnits = details.reduce((sum, item) => sum + item.quantity, 0);
                     return (
-                      <div style={{ marginBottom: '16px', border: `1px solid ${colors.border}`, borderRadius: '12px', overflow: 'hidden', backgroundColor: colors.bg }}>
+                      <div style={{ marginBottom: '16px', border: `1px solid ${checklistInvalidated ? '#f59e0b88' : colors.border}`, borderRadius: '12px', overflow: 'hidden', backgroundColor: colors.bg }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', borderBottom: `1px solid ${colors.border}` }}>
                           <Package size={16} color={colors.green} />
                           <div style={{ flex: 1 }}>
                             <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: '13px' }}>Carga de esta ruta</div>
                             <div style={{ color: colors.textMuted, fontSize: '11px', marginTop: '2px' }}>
-                              {totalUnits} unidades · {reviewed}/{details.length} productos revisados
+                              {totalUnits} unidades · {checklistInvalidated ? 'checklist desactivado' : `${reviewed}/${details.length} productos revisados`}
                             </div>
                           </div>
+                          {checklistInvalidated && (
+                            <span style={{ color: '#fbbf24', backgroundColor: '#f59e0b18', border: '1px solid #f59e0b55', borderRadius: '999px', padding: '4px 8px', fontSize: '10px', fontWeight: 800 }}>
+                              Desactivado
+                            </span>
+                          )}
                           <button onClick={() => setLoadBreakdown(current => ({ ...current, [route.id]: !showBreakdown }))}
                             style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '7px', padding: '5px 9px', color: colors.blue, cursor: 'pointer', fontSize: '11px', fontWeight: 700 }}>
                             {showBreakdown ? 'Ocultar cálculo' : 'Ver cálculo por cliente'}
@@ -2104,7 +2113,7 @@ function HistorialRepartos({ colors }) {
                             <div key={item.name} style={{ borderBottom: `1px solid ${colors.border}` }}>
                               <button type="button" onClick={() => toggleRouteLoad(route, item.name)} disabled={!canCheck || !!loadBusy}
                                 title={canCheck ? 'Marcar producto como revisado físicamente' : 'La carga solo se modifica antes de iniciar el reparto'}
-                                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', background: 'none', border: 'none', color: colors.textPrimary, cursor: canCheck ? 'pointer' : 'default', textAlign: 'left', opacity: busy ? 0.6 : 1 }}>
+                                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', background: 'none', border: 'none', color: colors.textPrimary, cursor: canCheck ? 'pointer' : 'default', textAlign: 'left', opacity: busy || checklistInvalidated ? 0.55 : 1 }}>
                                 <span style={{ width: '20px', height: '20px', borderRadius: '5px', border: `2px solid ${checked ? colors.green : colors.border}`, backgroundColor: checked ? colors.green : 'transparent', color: '#052e16', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, flexShrink: 0 }}>{checked ? '✓' : ''}</span>
                                 <span style={{ flex: 1, fontSize: '13px', textDecoration: checked ? 'line-through' : 'none', color: checked ? colors.textMuted : colors.textPrimary }}>{item.name}</span>
                                 <span style={{ minWidth: '42px', textAlign: 'center', padding: '3px 8px', borderRadius: '999px', backgroundColor: `${colors.green}20`, color: colors.green, fontWeight: 800, fontSize: '13px' }}>{item.quantity}</span>
@@ -2123,7 +2132,9 @@ function HistorialRepartos({ colors }) {
                           );
                         })}
                         <div style={{ padding: '8px 12px', color: colors.textMuted, fontSize: '11px', lineHeight: 1.4 }}>
-                          {canCheck
+                          {checklistInvalidated
+                            ? 'Checklist desactivado: se agregó una parada después de iniciar el reparto. La lista muestra la carga actual, pero ya no certifica la revisión inicial.'
+                            : canCheck
                             ? 'Marca cada fila después de contar físicamente la carga. El mismo avance aparecerá en la app del repartidor.'
                             : 'Esta es la carga registrada al preparar la ruta. El checklist queda en modo consulta después de iniciar.'}
                         </div>
@@ -2140,7 +2151,16 @@ function HistorialRepartos({ colors }) {
                       <>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                           <span style={{ fontSize: '11px', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Paradas ({ordersList.length})</span>
-                          <span style={{ fontSize: '11px', color: colors.textMuted }}>El detalle y la cobranza están en 📦 Despachos</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '11px', color: colors.textMuted }}>El detalle y la cobranza están en 📦 Despachos</span>
+                            {['draft', 'sent', 'in_progress'].includes(route.status) && addFor !== route.id && (
+                              <button onClick={() => openAdd(route)}
+                                title={route.status === 'in_progress' ? 'Agregar al final de la ruta y desactivar el checklist de carga' : 'Agregar una parada a esta ruta'}
+                                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: route.status === 'in_progress' ? '#f59e0b18' : 'none', border: `1px solid ${route.status === 'in_progress' ? '#f59e0b66' : colors.border}`, borderRadius: '8px', padding: '6px 10px', color: route.status === 'in_progress' ? '#fbbf24' : colors.blue, cursor: 'pointer', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                + Agregar parada
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                           {ordersList.map((o, idx) => {
@@ -2161,15 +2181,9 @@ function HistorialRepartos({ colors }) {
                   })()}
 
                   {/* ── Agregar pedido a esta ruta ── */}
-                  {['draft', 'sent'].includes(route.status) && (
+                  {['draft', 'sent', 'in_progress'].includes(route.status) && addFor === route.id && (
                     <div style={{ marginTop: '12px', borderTop: `1px dashed ${colors.border}`, paddingTop: '12px' }}>
-                      {addFor !== route.id ? (
-                        <button onClick={() => openAdd(route)}
-                          style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '6px 12px', color: colors.blue, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
-                          + Agregar pedido{route.status === 'sent' ? ' (reinicia el checklist de carga)' : ''}
-                        </button>
-                      ) : (
-                        <div style={{ backgroundColor: colors.bg, borderRadius: '10px', border: `1px solid ${colors.border}`, padding: '10px' }}>
+                      <div style={{ backgroundColor: colors.bg, borderRadius: '10px', border: `1px solid ${colors.border}`, padding: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                             <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '13px' }}>Pedidos pendientes</span>
                             <button onClick={() => setAddFor(null)} style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', fontSize: '12px' }}>✕ cerrar</button>
@@ -2198,13 +2212,12 @@ function HistorialRepartos({ colors }) {
                             </div>
                           )}
                           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
-                            <button disabled={addBusy || addSel.size === 0} onClick={() => confirmAdd(route.id)}
+                            <button disabled={addBusy || addSel.size === 0} onClick={() => confirmAdd(route)}
                               style={{ background: addSel.size ? colors.blue : colors.border, color: '#fff', border: 'none', borderRadius: '8px', padding: '7px 14px', cursor: addSel.size ? 'pointer' : 'default', fontSize: '12px', fontWeight: 700, opacity: addBusy ? 0.6 : 1 }}>
                               {addBusy ? 'Agregando...' : `Agregar ${addSel.size || ''}`}
                             </button>
                           </div>
-                        </div>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>

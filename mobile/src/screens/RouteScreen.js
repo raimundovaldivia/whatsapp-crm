@@ -194,6 +194,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const manifestUnits = manifest.reduce((acc, [, q]) => acc + q, 0);
   const payments   = route?.stop_payments && typeof route.stop_payments === 'object' ? route.stop_payments : {};
   const loadChecklist = route?.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
+  const loadChecklistInvalidated = loadChecklist.__invalidated === true;
   const financial = route?.financial_summary || {};
   const checkedLoad = manifest.filter(([name]) => !!loadChecklist[name]).length;
   const loadComplete = manifest.length === 0 || checkedLoad === manifest.length;
@@ -400,14 +401,17 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                 </View>
               </View>
               {manifest.length > 0 && (
-                <View style={s.manifestCard}>
+                <View style={[s.manifestCard, loadChecklistInvalidated && { borderColor: C.orange }]}>
                   <TouchableOpacity style={s.manifestHead} onPress={() => setShowManifest(v => !v)} activeOpacity={0.7}>
                     <View>
-                      <Text style={s.manifestTitle}>📦 Control de carga · {checkedLoad}/{manifest.length}</Text>
-                      <Text style={s.manifestProgress}>{manifestUnits} unidades en total{checkedLoad === manifest.length ? ' · carga completa ✅' : ''}</Text>
+                      <Text style={s.manifestTitle}>{loadChecklistInvalidated ? '⚠️ Checklist de carga desactivado' : `📦 Control de carga · ${checkedLoad}/${manifest.length}`}</Text>
+                      <Text style={s.manifestProgress}>{manifestUnits} unidades en total{!loadChecklistInvalidated && checkedLoad === manifest.length ? ' · carga completa ✅' : ''}</Text>
                     </View>
-                    <Text style={s.manifestToggle}>{showManifest ? 'Ocultar' : 'Revisar'}</Text>
+                    <Text style={s.manifestToggle}>{showManifest ? 'Ocultar' : 'Ver carga'}</Text>
                   </TouchableOpacity>
+                  {loadChecklistInvalidated && (
+                    <Text style={[s.manifestProgress, { paddingHorizontal: 14, paddingBottom: 10, color: C.orange }]}>Se agregó una parada después de iniciar. Esta lista muestra la carga actual, pero ya no certifica el control inicial.</Text>
+                  )}
                   {showManifest && manifest.map(([name, qty]) => {
                     const checked = !!loadChecklist[name];
                     return (

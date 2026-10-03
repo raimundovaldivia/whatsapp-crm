@@ -92,6 +92,41 @@ test('driver can persist a manual route order without adding or losing stops',as
     assert.equal(completed.code,409);
   } finally {await f.engine.close();}
 });
+test('admin can append a stop to an active route and invalidates the load checklist',async()=>{
+  const f=await fixture();const sent=[];
+  try {
+    await f.engine.exec(`
+      INSERT INTO orders(id,organization_id,conversation_id,items,total_price,status)
+      VALUES(5,1,1,'[{"name":"Huevos XL","quantity":2}]',12000,'por_despachar');
+      UPDATE delivery_routes
+         SET optimized_route='[{"source":"bot","id":1,"stopNumber":1,"customerName":"Primero"}]',
+             load_checklist='{"Producto anterior":true}'
+       WHERE id=1;
+    `);
+    const router=load('src/routes/delivery.js',{
+      '../db/database':f.db,
+      '../middleware/auth':{requireAuth:noop,requireRole:()=>noop},
+      '../services/push':{pushUser:async(...args)=>{sent.push(args);}},
+    });
+    const res=response();
+    await handler(router,'post','/routes/1/orders')({
+      orgId:1,userId:1,role:'owner',params:{id:'1'},
+      body:{orders:[{source:'bot',id:5,customerName:'Parada nueva',items:[{name:'Huevos XL',quantity:2}]}]},
+    },res);
+    assert.equal(res.code,200,JSON.stringify(res.body));
+    assert.equal(res.body.added,1);
+    assert.equal(res.body.checklistInvalidated,true);
+    const stored=(await f.query('SELECT orders,optimized_route,load_checklist FROM delivery_routes WHERE id=1')).rows[0];
+    assert.deepEqual(stored.orders.map(order=>order.id),[1,5]);
+    assert.deepEqual(stored.optimized_route.map(stop=>[stop.id,stop.stopNumber]),[[1,1],[5,2]]);
+    assert.equal(stored.load_checklist.__invalidated,true);
+    assert.equal(stored.load_checklist['Producto anterior'],undefined);
+    const added=(await f.query('SELECT status,dispatch_count FROM orders WHERE id=5')).rows[0];
+    assert.equal(added.status,'en_camino');
+    assert.equal(added.dispatch_count,1);
+    assert.equal(sent.length,1);
+  } finally {await f.engine.close();}
+});
 test('delivery outcomes cancel, reschedule or mark a visible delivery incident',async()=>{
   const f=await fixture();
   try {

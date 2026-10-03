@@ -1843,8 +1843,10 @@ router.post('/routes/:id/release', requireRole('owner', 'admin', 'supervisor', '
 //
 // POST /api/delivery/routes/:id/orders   body: { orders: [ {source,id,...} ] }
 //
-// Agrega paradas al final de una ruta en borrador o en preparación. Si ya fue
-// enviada, reinicia el checklist para consolidar nuevamente toda la carga.
+// Agrega paradas al final de una ruta abierta. Si ya fue enviada, reinicia el
+// checklist para consolidar nuevamente toda la carga. Si el reparto ya comenzó,
+// conserva el orden actual, deja la nueva parada al final e invalida el
+// checklist: ya no representa la carga con la que salió el vehículo.
 router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const pool = getPool();
   let client;
@@ -1859,8 +1861,6 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
       [parseInt(req.params.id), req.orgId]
     );
     if (!route) throw Object.assign(new Error('Ruta no encontrada'), { status: 404 });
-    if (route.status === 'in_progress')
-      throw Object.assign(new Error('La ruta ya comenzó. Crea otra ruta para los pedidos nuevos.'), { status: 409 });
     if (['completed', 'cancelled'].includes(route.status))
       throw Object.assign(new Error('No se pueden agregar pedidos a una ruta cerrada. Crea una ruta nueva.'), { status: 400 });
 
@@ -1879,17 +1879,25 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
     }
 
     const hydratedToAdd = eligible.keep;
-    const newOrders = prioritizeOrders([...cur, ...hydratedToAdd]);
+    const routeStarted = route.status === 'in_progress';
+    const newOrders = routeStarted ? [...cur, ...hydratedToAdd] : prioritizeOrders([...cur, ...hydratedToAdd]);
     const baseStops = curStops.length ? curStops : cur.map((o, i) => ({ ...o, stopNumber: i + 1 }));
-    const newStops = prioritizeOrders([...baseStops, ...hydratedToAdd])
+    const orderedStops = routeStarted ? [...baseStops, ...hydratedToAdd] : prioritizeOrders([...baseStops, ...hydratedToAdd]);
+    const newStops = orderedStops
       .map((order, index) => ({ ...order, stopNumber: index + 1 }));
+    const nextChecklist = routeStarted
+      ? { __invalidated: true, __invalidatedAt: new Date().toISOString() }
+      : {};
 
     await client.query(
-      `UPDATE delivery_routes SET orders = $3, optimized_route = $4, load_checklist = '{}'::jsonb WHERE id = $1 AND organization_id = $2`,
-      [route.id, req.orgId, JSON.stringify(newOrders), JSON.stringify(newStops)]
+      `UPDATE delivery_routes
+          SET orders = $3, optimized_route = $4, load_checklist = $5::jsonb
+        WHERE id = $1 AND organization_id = $2`,
+      [route.id, req.orgId, JSON.stringify(newOrders), JSON.stringify(newStops), JSON.stringify(nextChecklist)]
     );
 
     if (route.status === 'sent') await reserveOrdersForRoute(client, req.orgId, hydratedToAdd);
+    if (routeStarted) await markOrdersEnRoute(client, req.orgId, hydratedToAdd);
 
     const { rows: [updated] } = await client.query(
       `SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2`,
@@ -1897,10 +1905,11 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
     );
     await client.query('COMMIT');
     console.log(`[Delivery/routes ADD] ✅ ${toAdd.length} pedido(s) agregados a ruta ${route.id} (${route.status})`);
-    if (route.status === 'sent') {
-      notifyAssignedDriver(req.orgId, updated, `${updated.name || 'Tu ruta'} fue actualizada con ${toAdd.length} parada${toAdd.length === 1 ? '' : 's'} nueva${toAdd.length === 1 ? '' : 's'}`);
+    if (['sent', 'in_progress'].includes(route.status)) {
+      const suffix = routeStarted ? '. El checklist de carga quedó desactivado' : '';
+      notifyAssignedDriver(req.orgId, updated, `${updated.name || 'Tu ruta'} fue actualizada con ${toAdd.length} parada${toAdd.length === 1 ? '' : 's'} nueva${toAdd.length === 1 ? '' : 's'}${suffix}`);
     }
-    res.json({ success: true, added: toAdd.length, route: updated });
+    res.json({ success: true, added: toAdd.length, checklistInvalidated: routeStarted, route: updated });
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
     console.error('[Delivery/routes ADD]', err.message);
