@@ -65,3 +65,36 @@ export function buildBodyTemplateComponent(templateBody = '', variables = {}) {
 export function renderTemplateFromComponents(templateBody = '', components = [], options = {}) {
   return renderTemplate(templateBody, valuesFromBodyParameters(templateBody, components), options);
 }
+
+/**
+ * Reconstruye los parámetros a partir del cuerpo aprobado y del texto exacto
+ * que se guardó en el chat. Se usa sólo para campañas antiguas cuya auditoría
+ * perdió template_components; no inventa valores si el texto no coincide.
+ */
+export function recoverBodyTemplateComponent(templateBody = '', renderedText = '') {
+  const body = String(templateBody);
+  const rendered = String(renderedText);
+  const token = /\{\{(\d+)\}\}/g;
+  const numbers = [];
+  let cursor = 0;
+  let pattern = '^';
+  const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const match of body.matchAll(token)) {
+    pattern += escape(body.slice(cursor, match.index));
+    pattern += '([\\s\\S]*?)';
+    numbers.push(String(Number(match[1])));
+    cursor = match.index + match[0].length;
+  }
+  if (!numbers.length) return [];
+  pattern += escape(body.slice(cursor)) + '$';
+  const values = rendered.match(new RegExp(pattern));
+  if (!values) return [];
+  const byNumber = {};
+  for (let index = 0; index < numbers.length; index++) {
+    const number = numbers[index];
+    const value = values[index + 1];
+    if (Object.hasOwn(byNumber, number) && byNumber[number] !== value) return [];
+    byNumber[number] = value;
+  }
+  return buildBodyTemplateComponent(body, byNumber);
+}

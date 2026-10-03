@@ -1304,24 +1304,36 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   async function preparePaymentRetry(campaign) {
     setFollowUpBusy(true);
     try {
-      const { data } = await api.get(`/reengagement/campaigns/${campaign.id}`);
-      const failedPhones = (data.recipients || [])
-        .filter(recipient => recipient.current_status === 'failed'
-          && String(recipient.display_error_code || recipient.error_code || recipient.delivery_error?.code || '') === '131042')
-        .map(recipient => normPhone(recipient.destination_phone || recipient.original_phone))
-        .filter(Boolean);
-      const retrySet = new Set(failedPhones);
-      const availablePhones = contacts
-        .filter(contact => retrySet.has(normPhone(contact.phone)))
-        .map(contact => contact.phone);
-      const template = parentTemplates.find(item => item.name === campaign.template_name);
-      if (!availablePhones.length) throw new Error('No encontramos destinatarios 131042 disponibles para reintentar');
+      const { data } = await api.get(`/reengagement/campaigns/${campaign.id}/payment-retry-preview`);
+      const retryItems = data.items || [];
+      const template = parentTemplates.find(item => item.name === campaign.template_name) || data.template;
+      if (!retryItems.length) throw new Error('No encontramos destinatarios 131042 con variables recuperables para reintentar');
       if (!template) throw new Error(`El template ${campaign.template_name} ya no está disponible en Meta`);
       setSelTpl(template);
-      setSelected(new Set(availablePhones));
-      setPaymentRetryPhones(new Set(availablePhones.map(normPhone)));
+      const retryPhones = new Set(retryItems.map(item => normPhone(item.phone)));
+      setSelected(new Set(contacts.filter(contact => retryPhones.has(normPhone(contact.phone))).map(contact => contact.phone)));
+      setPaymentRetryPhones(retryPhones);
+      setReviewIdx(0);
+      setGuidedReview(false);
+      setReviewedItems(new Set());
+      setReviewPlan({
+        templateName: campaign.template_name,
+        entries: retryItems.map(item => ({
+          contact: contacts.find(contact => normPhone(contact.phone) === normPhone(item.phone))
+            || { phone: item.phone, name: item.contactName || 'Cliente' },
+          values: {},
+          previewText: item.previewText,
+          item,
+        })),
+        testMode: false,
+        testPhone: null,
+        paymentRetry: true,
+        sourceCampaignId: campaign.id,
+        createdAt: Date.now(),
+      });
       setHistoryOpen(false);
-      showToast(`${availablePhones.length} fallido${availablePhones.length === 1 ? '' : 's'} por pago seleccionados. Revisa el mensaje antes de reenviar.`);
+      const excluded = data.excluded?.length || 0;
+      showToast(`${retryItems.length} fallido${retryItems.length === 1 ? '' : 's'} por pago preparados con su mensaje original${excluded ? ` · ${excluded} requieren revisión manual` : ''}.`);
     } catch (error) {
       showToast(error.response?.data?.error || error.message || 'No se pudo preparar el reintento', 'error');
     } finally {

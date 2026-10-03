@@ -7,6 +7,7 @@ const {
   buildBodyTemplateComponent,
   getMissingBodyParameters,
   getTemplateVariables,
+  recoverBodyTemplateComponent,
   renderTemplate,
   renderTemplateFromComponents,
 } = require('../src/utils/template-renderer.mjs');
@@ -64,6 +65,17 @@ test('vista previa y parámetros de envío producen exactamente el mismo mensaje
     'Pack familiar', '¡Hola! 👋', '$25.000\nEntrega mañana',
   ]);
   assert.equal(renderTemplateFromComponents(body, components), renderTemplate(body, values));
+});
+
+test('recupera exactamente variables antiguas incluyendo Cliente y texto multilínea', () => {
+  const body = 'Hola {{1}}\n\n{{2}}\n\n¿Te guardamos tu pedido?';
+  const rendered = 'Hola Cliente\n\n🥚 30 XL = $12.000\n🧀 Queso = $15.000\n\n¿Te guardamos tu pedido?';
+  const recovered = recoverBodyTemplateComponent(body, rendered);
+  assert.deepEqual(recovered[0].parameters.map(parameter => parameter.text), [
+    'Cliente', '🥚 30 XL = $12.000\n🧀 Queso = $15.000',
+  ]);
+  assert.equal(renderTemplateFromComponents(body, recovered), rendered);
+  assert.deepEqual(recoverBodyTemplateComponent(body, 'texto distinto'), []);
 });
 
 test('trata el contenido como texto plano, sin interpretar HTML', () => {

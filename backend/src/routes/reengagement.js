@@ -21,6 +21,7 @@ const campaignGuard = require('../services/broadcast-campaign-guard');
 const {
   getBodyComponent,
   getMissingBodyParameters,
+  recoverBodyTemplateComponent,
   renderTemplate,
   renderTemplateFromComponents,
 } = require('../utils/template-renderer.mjs');
@@ -1885,6 +1886,65 @@ router.get('/campaigns/:id', async (req, res) => {
       [req.params.id, req.orgId]
     );
     res.json({ success: true, campaign, recipients: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/campaigns/:id/payment-retry-preview', async (req, res) => {
+  try {
+    const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
+    if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+    const templates = await require('../services/kapso-whatsapp').getTemplates(wc);
+    const template = templates.find(candidate => candidate.name === campaign.template_name);
+    if (!template) return res.status(409).json({ success: false, error: `El template ${campaign.template_name} ya no está disponible en Meta` });
+    const templateBody = getBodyComponent(template)?.text || '';
+    const { rows } = await getPool().query(
+      `SELECT r.*, m.content AS saved_content, m.conversation_id
+         FROM broadcast_campaign_recipients r
+         LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
+        WHERE r.campaign_id = $1 AND r.organization_id = $2
+          AND (r.error_code = '131042' OR m.delivery_error->>'code' = '131042')
+          AND (r.result_status = 'failed' OR m.status = 'failed')
+          AND NOT EXISTS (
+            SELECT 1 FROM messages newer
+             WHERE m.conversation_id IS NOT NULL
+               AND newer.conversation_id = m.conversation_id
+               AND newer.created_at > m.created_at
+               AND newer.direction = 'outbound' AND newer.type = 'template'
+               AND newer.status <> 'failed'
+               AND newer.content LIKE '[Template: ' || r.template_name || ']%'
+          )
+        ORDER BY r.id`,
+      [campaign.id, req.orgId]
+    );
+    const items = [];
+    const excluded = [];
+    for (const recipient of rows) {
+      const phone = db.normalizePhone(recipient.destination_phone || recipient.original_phone);
+      const previewText = String(recipient.saved_content || '')
+        .replace(/^\[Template:\s*[^\]]+\](?:\r?\n){0,2}/, '');
+      const components = recipient.template_components?.length
+        ? recipient.template_components
+        : recoverBodyTemplateComponent(templateBody, previewText);
+      if (!phone || !components.length || getMissingBodyParameters(templateBody, components).length) {
+        excluded.push({ id: recipient.id, name: recipient.contact_name || 'Cliente', reason: phone ? 'No se pudieron recuperar las variables exactas' : 'Número inválido' });
+        continue;
+      }
+      items.push({
+        phone,
+        originalPhone: recipient.original_phone || phone,
+        contactName: recipient.contact_name || 'Cliente',
+        templateName: campaign.template_name,
+        languageCode: recipient.language_code || template.language || 'es',
+        components,
+        previewText: previewText || renderTemplateFromComponents(templateBody, components),
+        force: true,
+      });
+    }
+    res.json({ success: true, campaign, template, items, excluded });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
