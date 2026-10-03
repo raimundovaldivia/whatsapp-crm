@@ -53,6 +53,45 @@ test('delivery: member and assignment checks, missing/completed orders, rollback
     assert.equal((await f.query('SELECT financial_status FROM shopify_orders')).rows[0].financial_status,'paid');
   } finally {await f.engine.close();}
 });
+test('driver can persist a manual route order without adding or losing stops',async()=>{
+  const f=await fixture();
+  try {
+    await f.query(`UPDATE delivery_routes
+      SET orders=$1, optimized_route=$2
+      WHERE id=1`,[
+      JSON.stringify([{source:'bot',id:1,customerName:'Uno'},{source:'bot',id:2,customerName:'Dos'}]),
+      JSON.stringify([{source:'bot',id:1,customerName:'Uno',stopNumber:1},{source:'bot',id:2,customerName:'Dos',stopNumber:2}]),
+    ]);
+    const router=load('src/routes/delivery.js',{'../db/database':f.db,'../middleware/auth':{requireAuth:noop,requireRole:()=>noop}});
+
+    const reordered=response();
+    await handler(router,'patch','/routes/1/reorder')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKeys:['bot_2','bot_1']}},reordered);
+    assert.equal(reordered.code,200);
+    assert.deepEqual(reordered.body.optimizedRoute.map(stop=>[stop.id,stop.stopNumber]),[[2,1],[1,2]]);
+    let stored=(await f.query('SELECT orders,optimized_route FROM delivery_routes WHERE id=1')).rows[0];
+    assert.deepEqual(stored.orders.map(stop=>stop.id),[2,1]);
+    assert.deepEqual(stored.optimized_route.map(stop=>stop.stopNumber),[1,2]);
+
+    const stale=response();
+    await handler(router,'patch','/routes/1/reorder')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKeys:['bot_1']}},stale);
+    assert.equal(stale.code,409);
+    stored=(await f.query('SELECT orders FROM delivery_routes WHERE id=1')).rows[0];
+    assert.deepEqual(stored.orders.map(stop=>stop.id),[2,1]);
+
+    const duplicated=response();
+    await handler(router,'patch','/routes/1/reorder')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKeys:['bot_1','bot_1']}},duplicated);
+    assert.equal(duplicated.code,400);
+
+    const anotherDriver=response();
+    await handler(router,'patch','/routes/2/reorder')({orgId:1,userId:10,role:'repartidor',params:{id:'2'},body:{stopKeys:['bot_2']}},anotherDriver);
+    assert.equal(anotherDriver.code,404);
+
+    await f.query("UPDATE delivery_routes SET status='completed' WHERE id=1");
+    const completed=response();
+    await handler(router,'patch','/routes/1/reorder')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKeys:['bot_2','bot_1']}},completed);
+    assert.equal(completed.code,409);
+  } finally {await f.engine.close();}
+});
 test('delivery outcomes cancel, reschedule or mark a visible delivery incident',async()=>{
   const f=await fixture();
   try {

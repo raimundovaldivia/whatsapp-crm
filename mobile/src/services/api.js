@@ -168,6 +168,16 @@ export async function updateLoadChecklist(routeId, itemName, checked) {
   return res.data?.loadChecklist || {};
 }
 
+/** Guarda el orden manual que el repartidor eligió para las paradas. */
+export async function reorderRouteStops(routeId, stopKeys) {
+  const client = await getClient();
+  const res = await client.patch(`/api/delivery/routes/${routeId}/reorder`, { stopKeys });
+  return {
+    orders: res.data?.orders || [],
+    optimizedRoute: res.data?.optimizedRoute || [],
+  };
+}
+
 export async function startRoute(routeId) {
   const client = await getClient();
   const res = await client.patch(`/api/delivery/routes/${routeId}/start`);

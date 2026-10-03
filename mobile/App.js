@@ -13,6 +13,7 @@ import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from 
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
 
@@ -112,17 +113,18 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="light" />
-      {!user ? (
-        <LoginScreen onLogin={(data) => setUser(data.user || { name: '' })} />
-      ) : (
-        <NavigationContainer ref={navigationRef} theme={navTheme} onReady={() => {
-          if (pendingRoute.current) {
-            navigationRef.navigate('Route', pendingRoute.current);
-            pendingRoute.current = null;
-          }
-        }}>
+    <GestureHandlerRootView style={s.appRoot}>
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        {!user ? (
+          <LoginScreen onLogin={(data) => setUser(data.user || { name: '' })} />
+        ) : (
+          <NavigationContainer ref={navigationRef} theme={navTheme} onReady={() => {
+            if (pendingRoute.current) {
+              navigationRef.navigate('Route', pendingRoute.current);
+              pendingRoute.current = null;
+            }
+          }}>
           <Stack.Navigator
             screenOptions={{
               headerStyle:      { backgroundColor: C.card },
@@ -184,12 +186,14 @@ export default function App() {
             />
 
           </Stack.Navigator>
-        </NavigationContainer>
-      )}
-    </SafeAreaProvider>
+          </NavigationContainer>
+        )}
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
 const s = StyleSheet.create({
+  appRoot: { flex: 1 },
   splash: { flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center' },
 });

@@ -11,13 +11,14 @@
  */
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput,
+  View, Text, StyleSheet, TouchableOpacity, Modal, TextInput,
   Image, Alert, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import * as ImagePicker from 'expo-image-picker';
-import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute } from '../services/api';
+import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute, reorderRouteStops } from '../services/api';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
 import { C, R, shadowSoft } from '../theme';
@@ -43,6 +44,13 @@ function stopsOf(route) {
 }
 
 const stopKeyOf = stop => `${stop.source}_${stop.id}`;
+
+function routeWithStopOrder(route, orderedStops) {
+  const optimizedRoute = orderedStops.map((stop, index) => ({ ...stop, stopNumber: index + 1 }));
+  const ordersByKey = new Map((Array.isArray(route?.orders) ? route.orders : []).map(order => [stopKeyOf(order), order]));
+  const orders = optimizedRoute.map(stop => ({ ...(ordersByKey.get(stopKeyOf(stop)) || stop), stopNumber: stop.stopNumber }));
+  return { ...route, orders, optimized_route: optimizedRoute };
+}
 const isPriorityRetry = stop => stop?.isRetry === true || stop?.deliveryPriority === 'retry' || Number(stop?.dispatchCount || 0) > 0;
 const retryDetail = stop => {
   const attempts = Number(stop?.previousAttempts ?? stop?.dispatchCount ?? 0) || 0;
@@ -76,6 +84,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const [showManifest, setShowManifest] = useState(false);
   const [checkBusy, setCheckBusy] = useState('');
   const [startBusy, setStartBusy] = useState(false);
+  const [savingOrder, setSavingOrder] = useState(false);
   // Rótulo de paradas: números (1, 2, 3…) o letras (A, B, C… como Google Maps).
   const [labelMode, setLabelMode] = useState('numbers');
   useFocusEffect(useCallback(() => { loadStopLabelMode().then(setLabelMode); }, []));
@@ -216,6 +225,27 @@ export default function RouteScreen({ route: navRoute, navigation }) {
     navigation.navigate('RouteMap', { routeId, routeName: route?.name || 'Mapa de la ruta', labelMode });
   }
 
+  async function handleDragEnd({ data, from, to }) {
+    if (from === to || savingOrder) return;
+    const previousRoute = route;
+    const orderedStops = data.map((stop, index) => ({ ...stop, stopNumber: index + 1 }));
+    setRoute(current => routeWithStopOrder(current, orderedStops));
+    setSavingOrder(true);
+    try {
+      const saved = await reorderRouteStops(routeId, orderedStops.map(stopKeyOf));
+      setRoute(current => ({
+        ...current,
+        orders: saved.orders,
+        optimized_route: saved.optimizedRoute,
+      }));
+    } catch (err) {
+      setRoute(previousRoute);
+      Alert.alert('No se pudo guardar el orden', err.response?.data?.error || 'Revisa tu conexión e intenta nuevamente.');
+    } finally {
+      setSavingOrder(false);
+    }
+  }
+
   async function toggleLoad(itemName) {
     const next = !loadChecklist[itemName];
     setCheckBusy(itemName);
@@ -336,14 +366,24 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           </TouchableOpacity>
         )}
 
-        <FlatList
+        <DraggableFlatList
           data={stops}
           keyExtractor={stopKeyOf}
+          onDragEnd={handleDragEnd}
+          activationDistance={8}
+          autoscrollThreshold={70}
+          autoscrollSpeed={150}
+          dragItemOverflow
           contentContainerStyle={{ paddingBottom: insets.bottom + 48 }}
-          refreshing={loading}
-          onRefresh={load}
+          refreshing={loading && !savingOrder}
+          onRefresh={savingOrder ? undefined : load}
           ListHeaderComponent={(
             <>
+              <View style={s.reorderHint}>
+                <Text style={s.reorderHintIcon}>↕</Text>
+                <Text style={s.reorderHintText}>Mantén presionada una parada y arrástrala para cambiar el orden.</Text>
+                {savingOrder ? <ActivityIndicator size="small" color={C.green} /> : null}
+              </View>
               {priorityCount > 0 && (
                 <View style={s.priorityNotice}>
                   <Text style={s.priorityNoticeTitle}>⚠️ Primero: {priorityCount} reintento{priorityCount === 1 ? '' : 's'} prioritario{priorityCount === 1 ? '' : 's'}</Text>
@@ -382,47 +422,56 @@ export default function RouteScreen({ route: navRoute, navigation }) {
               )}
             </>
           )}
-          renderItem={({ item: stop }) => {
+          renderItem={({ item: stop, drag, isActive }) => {
             const state  = stateOf(stop);
             const color  = colorOf(stop);
             const isDone = state !== 'pending';
             const isNext = nextPending && stopKeyOf(nextPending) === stopKeyOf(stop);
             const pay    = payments[stopKeyOf(stop)];
             return (
-              <TouchableOpacity
-                style={[s.stopCard, isDone && s.stopDone, isNext && s.stopNext]}
-                onPress={() => openStopDetail(stop)}
-                activeOpacity={0.75}>
-                <View style={[s.stopNum, { backgroundColor: color }]}>
-                  <Text style={[s.stopNumText, labelMode === 'letters' && String(stopLabel(stop.stopNumber, labelMode)).length > 1 && { fontSize: 12 }]}>{stopLabel(stop.stopNumber, labelMode)}</Text>
-                </View>
-                <View style={s.stopBody}>
-                  <Text style={[s.stopName, isDone && s.textDone]} numberOfLines={1}>
-                    {stop.customerName}
-                  </Text>
-                  <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || 'Sin dirección'}</Text>
-                  {isPriorityRetry(stop) && (
-                    <View style={s.retryChip}>
-                      <Text style={s.retryChipTitle}>⚠ PRIORIDAD · REINTENTO</Text>
-                      <Text style={s.retryChipText} numberOfLines={2}>{retryDetail(stop)}</Text>
-                    </View>
-                  )}
-                  {Array.isArray(stop.attemptHistory) && stop.attemptHistory.length > 0 ? (
-                    <Text style={s.stopHistory} numberOfLines={1}>↩️ {stop.attemptHistory.length} intento{stop.attemptHistory.length === 1 ? '' : 's'} anterior{stop.attemptHistory.length === 1 ? '' : 'es'} · revisar motivo</Text>
-                  ) : null}
-                  {stop.durationText ? (
-                    <Text style={s.stopTime}>{stop.distanceText} · {stop.durationText}</Text>
-                  ) : null}
-                  {isDone && pay ? (
-                    <Text style={s.stopPay}>{PAY_LABEL[pay] || pay}</Text>
-                  ) : null}
-                </View>
-                <View style={[s.badge, { backgroundColor: color + '22', borderColor: color + '44' }]}>
-                  <Text style={[s.badgeText, { color }]}>
-                    {state === 'entregado' ? 'Entregado' : state === 'cancelled' ? 'Cancelado' : state === 'postponed' ? 'Reprogramado' : state === 'not_delivered' ? 'Sin entrega' : isNext ? 'Siguiente' : 'Pendiente'}
-                  </Text>
-                </View>
-              </TouchableOpacity>
+              <ScaleDecorator>
+                <TouchableOpacity
+                  style={[s.stopCard, isDone && s.stopDone, isNext && s.stopNext, isActive && s.stopDragging]}
+                  onPress={() => !isActive && openStopDetail(stop)}
+                  onLongPress={!savingOrder ? drag : undefined}
+                  delayLongPress={220}
+                  disabled={savingOrder}
+                  accessibilityHint="Mantén presionado para mover esta parada"
+                  activeOpacity={0.75}>
+                  <View style={s.dragHandle}>
+                    <Text style={s.dragHandleText}>☰</Text>
+                  </View>
+                  <View style={[s.stopNum, { backgroundColor: color }]}>
+                    <Text style={[s.stopNumText, labelMode === 'letters' && String(stopLabel(stop.stopNumber, labelMode)).length > 1 && { fontSize: 12 }]}>{stopLabel(stop.stopNumber, labelMode)}</Text>
+                  </View>
+                  <View style={s.stopBody}>
+                    <Text style={[s.stopName, isDone && s.textDone]} numberOfLines={1}>
+                      {stop.customerName}
+                    </Text>
+                    <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || 'Sin dirección'}</Text>
+                    {isPriorityRetry(stop) && (
+                      <View style={s.retryChip}>
+                        <Text style={s.retryChipTitle}>⚠ PRIORIDAD · REINTENTO</Text>
+                        <Text style={s.retryChipText} numberOfLines={2}>{retryDetail(stop)}</Text>
+                      </View>
+                    )}
+                    {Array.isArray(stop.attemptHistory) && stop.attemptHistory.length > 0 ? (
+                      <Text style={s.stopHistory} numberOfLines={1}>↩️ {stop.attemptHistory.length} intento{stop.attemptHistory.length === 1 ? '' : 's'} anterior{stop.attemptHistory.length === 1 ? '' : 'es'} · revisar motivo</Text>
+                    ) : null}
+                    {stop.durationText ? (
+                      <Text style={s.stopTime}>{stop.distanceText} · {stop.durationText}</Text>
+                    ) : null}
+                    {isDone && pay ? (
+                      <Text style={s.stopPay}>{PAY_LABEL[pay] || pay}</Text>
+                    ) : null}
+                  </View>
+                  <View style={[s.badge, { backgroundColor: color + '22', borderColor: color + '44' }]}>
+                    <Text style={[s.badgeText, { color }]}>
+                      {state === 'entregado' ? 'Entregado' : state === 'cancelled' ? 'Cancelado' : state === 'postponed' ? 'Reprogramado' : state === 'not_delivered' ? 'Sin entrega' : isNext ? 'Siguiente' : 'Pendiente'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </ScaleDecorator>
             );
           }}
           ListFooterComponent={allDone ? (
@@ -546,6 +595,9 @@ const s = StyleSheet.create({
   labelBtnSep:  { color: C.border, fontSize: 11 },
   gastoBtn:     { backgroundColor: C.orange + '22', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: C.orange + '55' },
   gastoBtnText: { color: C.orange, fontSize: 12, fontWeight: '700' },
+  reorderHint:  { flexDirection: 'row', alignItems: 'center', gap: 9, marginHorizontal: 12, marginTop: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: C.blue + '12', borderWidth: 1, borderColor: C.blue + '35', borderRadius: R.md },
+  reorderHintIcon:{ color: C.blue, fontSize: 21, fontWeight: '900' },
+  reorderHintText:{ flex: 1, color: C.muted, fontSize: 12, lineHeight: 17 },
 
   modalWrap:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   modalCard:    { backgroundColor: C.card, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20, maxHeight: '90%', borderTopWidth: 1, borderColor: C.border },
@@ -567,6 +619,9 @@ const s = StyleSheet.create({
   saveTxt:      { color: '#04210f', fontWeight: '800', fontSize: 15 },
 
   stopCard:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, marginHorizontal: 12, marginTop: 9, backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.md, gap: 12, ...shadowSoft },
+  stopDragging: { opacity: 0.96, borderColor: C.green, backgroundColor: C.bgSoft, transform: [{ scale: 1.01 }] },
+  dragHandle:   { width: 22, minHeight: 38, alignItems: 'center', justifyContent: 'center' },
+  dragHandleText:{ color: C.muted, fontSize: 20, fontWeight: '900' },
   stopDone:     { opacity: 0.55 },
   stopNext:     { backgroundColor: '#202010', borderLeftWidth: 3, borderLeftColor: C.orange, borderColor: C.orange + '55' },
   stopNum:      { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },

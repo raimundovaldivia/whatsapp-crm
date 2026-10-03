@@ -936,6 +936,69 @@ router.get('/routes/:id', async (req, res) => {
   }
 });
 
+/**
+ * Guarda el orden manual definido por el repartidor en la app móvil.
+ * Se exige una permutación exacta de las paradas actuales para impedir que
+ * una actualización atrasada agregue o quite pedidos de la ruta.
+ */
+router.patch('/routes/:id/reorder', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  const stopKeys = req.body?.stopKeys;
+  if (!Array.isArray(stopKeys) || stopKeys.length > 500 || stopKeys.some(key => typeof key !== 'string' || !key.trim())) {
+    return res.status(400).json({ success: false, error: 'El orden de paradas no es válido' });
+  }
+  if (new Set(stopKeys).size !== stopKeys.length) {
+    return res.status(400).json({ success: false, error: 'El orden contiene paradas repetidas' });
+  }
+
+  const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
+  let client;
+  try {
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    const { rows: [storedRoute] } = await client.query(
+      `SELECT id, status, orders, optimized_route
+         FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2
+          AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
+        FOR UPDATE`,
+      [Number(req.params.id), req.orgId, driverScope]
+    );
+    if (!storedRoute) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+    if (!['sent', 'in_progress'].includes(storedRoute.status)) {
+      throw Object.assign(new Error('Solo se puede cambiar el orden de una ruta activa'), { status: 409 });
+    }
+
+    const currentStops = routeStops(storedRoute);
+    const currentKeys = currentStops.map(orderKey);
+    const requested = new Set(stopKeys);
+    const exactSameStops = currentKeys.length === stopKeys.length
+      && currentKeys.every(key => key && requested.has(key));
+    if (!exactSameStops) {
+      throw Object.assign(new Error('La ruta cambió mientras la estabas ordenando. Recárgala e intenta nuevamente.'), { status: 409 });
+    }
+
+    const stopsByKey = new Map(currentStops.map(stop => [orderKey(stop), stop]));
+    const ordersByKey = new Map(jsonList(storedRoute.orders).map(order => [orderKey(order), order]));
+    const optimizedRoute = stopKeys.map((key, index) => ({ ...stopsByKey.get(key), stopNumber: index + 1 }));
+    const orders = stopKeys.map((key, index) => ({ ...(ordersByKey.get(key) || stopsByKey.get(key)), stopNumber: index + 1 }));
+
+    const { rows: [updated] } = await client.query(
+      `UPDATE delivery_routes
+          SET orders = $3::jsonb, optimized_route = $4::jsonb
+        WHERE id = $1 AND organization_id = $2
+        RETURNING orders, optimized_route`,
+      [storedRoute.id, req.orgId, JSON.stringify(orders), JSON.stringify(optimizedRoute)]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, orders: updated.orders || [], optimizedRoute: updated.optimized_route || [] });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 500).json({ success: false, error: err.message });
+  } finally {
+    client?.release();
+  }
+});
+
 router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
   const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim().slice(0, 160) : '';
   const checked = req.body?.checked;

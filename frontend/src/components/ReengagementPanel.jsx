@@ -1169,6 +1169,51 @@ function formatOrderDate(dateValue) {
   return new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
 }
 
+function templatePreviewParts(templateBody = '') {
+  const body = String(templateBody);
+  const parts = [];
+  let cursor = 0;
+  for (const match of body.matchAll(/\{\{(\d+)\}\}/g)) {
+    if (match.index > cursor) parts.push({ type: 'text', value: body.slice(cursor, match.index) });
+    parts.push({ type: 'variable', number: String(Number(match[1])) });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < body.length) parts.push({ type: 'text', value: body.slice(cursor) });
+  return parts;
+}
+
+function FixedTextPreviewEditor({ number, value, onChange, colors }) {
+  const fieldRef = useRef(null);
+
+  useEffect(() => {
+    const field = fieldRef.current;
+    if (!field) return;
+    field.style.height = 'auto';
+    field.style.height = `${Math.max(52, field.scrollHeight)}px`;
+  }, [value]);
+
+  return (
+    <span style={{ display: 'block', margin: '6px 0', padding: '7px 8px 8px', borderRadius: 8, border: `1px dashed ${colors.blue}`, backgroundColor: `${colors.blue}0d` }}>
+      <span style={{ display: 'block', color: colors.blue, fontSize: 10, fontWeight: 800, marginBottom: 5 }}>
+        Texto fijo {`{{${number}}}`} · editable en la vista previa
+      </span>
+      <textarea
+        ref={fieldRef}
+        value={value}
+        rows={1}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Escribe aquí el texto fijo"
+        aria-label={`Editar texto fijo de la variable ${number}`}
+        style={{
+          display: 'block', width: '100%', minHeight: 52, boxSizing: 'border-box', overflow: 'hidden', resize: 'vertical',
+          padding: '8px 9px', borderRadius: 6, border: `1px solid ${colors.border}`, outlineColor: colors.blue,
+          backgroundColor: colors.bgApp, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5,
+        }}
+      />
+    </span>
+  );
+}
+
 function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [contacts,       setContacts]       = useState([]);
   const [sources,        setSources]        = useState(null);
@@ -1378,6 +1423,15 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     if (!v && mode !== 'text') v = String(varFallback[i] || defaultFallback(mode)).trim();
     if (!v) return '';
     return `${varPrefix[i] || ''}${v}${varSuffix[i] || ''}`;
+  }
+
+  function updateFixedText(index, value) {
+    setVarText(current => {
+      const next = [...current];
+      while (next.length < tplVarCount) next.push('');
+      next[index] = value;
+      return next;
+    });
   }
 
   const ONE_WEEK_AGO = Date.now() - 7 * 24 * 60 * 60 * 1000;
@@ -1991,7 +2045,15 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             <span key={number} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, padding: '5px 7px', border: `1px solid ${colors.border}`, borderRadius: colors.radiusMd }}>
               <span style={{ color: colors.textMuted, fontSize: 12 }}>{`{{${number}}}`}</span>
               <select value={mode}
-                onChange={e => setVarMap(m => { const n = [...m]; while (n.length < tplVarCount) n.push('fav'); n[i] = e.target.value; return n; })}
+                onChange={e => {
+                  const nextMode = e.target.value;
+                  setVarMap(m => { const n = [...m]; while (n.length < tplVarCount) n.push('fav'); n[i] = nextMode; return n; });
+                  if (nextMode === 'text') {
+                    setVarPrefix(current => { const next = [...current]; next[i] = ''; return next; });
+                    setVarSuffix(current => { const next = [...current]; next[i] = ''; return next; });
+                    setVarFallback(current => { const next = [...current]; next[i] = ''; return next; });
+                  }
+                }}
                 style={{ padding: '3px 6px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }}>
                 <option value="name">Primer nombre</option>
                 <option value="full_name">Nombre completo</option>
@@ -2007,7 +2069,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               </select>
               {mode === 'text' ? (
                 <textarea value={varText[i] || ''} rows={2}
-                  onChange={e => setVarText(t => { const n = [...t]; while (n.length < tplVarCount) n.push(''); n[i] = e.target.value; return n; })}
+                  onChange={e => updateFixedText(i, e.target.value)}
                   placeholder="Texto, también puede tener varias líneas"
                   style={{ width: 210, minHeight: 46, resize: 'vertical', whiteSpace: 'pre-wrap', padding: '5px 7px', borderRadius: colors.radiusSm, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontSize: 12 }} />
               ) : (
@@ -2043,6 +2105,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         const bodyComp = getBodyComponent(selTpl);
         const values = Object.fromEntries(tplVars.map((number, index) => [number, varValue(index, c)]));
         const text = bodyComp?.text ? renderTemplate(bodyComp.text, values) : '(Este template no tiene cuerpo de texto para previsualizar)';
+        const previewParts = bodyComp?.text ? templatePreviewParts(bodyComp.text) : [];
+        const variableIndexes = new Map(tplVars.map((number, index) => [number, index]));
         return (
           <div style={{ padding: '10px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
@@ -2058,9 +2122,27 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 </span>
               )}
             </div>
-            <div style={{ whiteSpace: 'pre-wrap', background: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '10px 12px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.5 }}>{text}</div>
+            <div style={{ whiteSpace: 'pre-wrap', background: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '10px 12px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.5 }}>
+              {previewParts.length ? previewParts.map((part, partIndex) => {
+                if (part.type === 'text') return <span key={`text-${partIndex}`}>{part.value}</span>;
+                const variableIndex = variableIndexes.get(part.number);
+                const mode = varMap[variableIndex] || (variableIndex === 0 ? 'name' : 'fav');
+                if (mode === 'text') {
+                  return (
+                    <FixedTextPreviewEditor
+                      key={`variable-${part.number}-${partIndex}`}
+                      number={part.number}
+                      value={varText[variableIndex] || ''}
+                      onChange={value => updateFixedText(variableIndex, value)}
+                      colors={colors}
+                    />
+                  );
+                }
+                return <span key={`variable-${part.number}-${partIndex}`}>{values[part.number] ?? `{{${part.number}}}`}</span>;
+              }) : text}
+            </div>
             <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
-              Así llega el mensaje; todas las variables cambian según cada cliente.{testMode && TEST_PHONE ? ` En modo prueba se enviará una sola muestra a ${TEST_PHONE}.` : ''}
+              Así llega el mensaje; los campos marcados como texto fijo se pueden editar aquí y las demás variables cambian según cada cliente.{testMode && TEST_PHONE ? ` En modo prueba se enviará una sola muestra a ${TEST_PHONE}.` : ''}
             </div>
           </div>
         );
