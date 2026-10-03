@@ -99,6 +99,8 @@ export default function Tienda({ slug }) {
     }, 400); // pequeño delay para que el DOM esté listo
   }, [loading]);
 
+  const storeName    = store?.name         || 'Tienda';
+  const logoUrl      = store?.logo;
   const PRIMARY      = store?.color        || '#22c55e';
   const FREE_SHIP    = store?.freeShipping ?? null;
   const HAS_FREE_SHIP = Number.isFinite(FREE_SHIP) && FREE_SHIP >= 0;
@@ -175,9 +177,6 @@ export default function Tienda({ slug }) {
     } catch (err) { alert(err.message); }
     finally { setSubmitting(false); }
   };
-
-  const storeName = store?.name || 'Tienda';
-  const logoUrl   = store?.logo;
 
   // ── Loading ──────────────────────────────────────────────────────
   if (loading) return (
