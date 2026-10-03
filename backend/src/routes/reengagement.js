@@ -109,10 +109,63 @@ async function recordBroadcastRecipient(orgId, campaignId, item, result) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [campaignId, orgId, item.phone || null, item.originalPhone || item.phone || null,
       item.contactName || null, item.templateName || null, item.languageCode || 'es',
-      item.components || null, result.status,
-      result.errorCode || null, result.errorMessage || null, result.errorDetail || null,
+      item.components ? JSON.stringify(item.components) : null, result.status,
+      result.errorCode || null, result.errorMessage || null,
+      result.errorDetail ? JSON.stringify(result.errorDetail) : null,
       result.whatsappMessageId || null]
   );
+}
+
+/**
+ * Recupera la auditoría de campañas cuyos mensajes sí quedaron en el chat,
+ * pero cuyo INSERT de destinatarios falló en versiones anteriores. Sólo lee
+ * mensajes ya existentes: nunca vuelve a enviar al cliente.
+ */
+async function recoverCampaignRecipientsFromSavedMessages(orgId) {
+  const { rowCount } = await getPool().query(
+    `WITH candidates AS (
+       SELECT m.id AS message_id, m.whatsapp_message_id, cv.phone_number,
+              cv.contact_name, c.id AS campaign_id, c.template_name,
+              c.total_count,
+              (SELECT COUNT(*) FROM broadcast_campaign_recipients existing
+                WHERE existing.campaign_id = c.id) AS existing_count,
+              ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY m.created_at, m.id) AS candidate_rank,
+              ROW_NUMBER() OVER (PARTITION BY m.id ORDER BY c.created_at DESC) AS campaign_rank
+         FROM messages m
+         JOIN conversations cv ON cv.id = m.conversation_id
+         JOIN broadcast_campaigns c
+           ON c.organization_id = cv.organization_id
+          AND c.created_at <= m.created_at
+          AND c.created_at > m.created_at - INTERVAL '30 minutes'
+          AND m.content LIKE '[Template: ' || c.template_name || ']%'
+        WHERE cv.organization_id = $1
+          AND c.created_at > NOW() - INTERVAL '30 days'
+          AND m.direction = 'outbound'
+          AND m.type = 'template'
+          AND m.whatsapp_message_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM broadcast_campaign_recipients linked
+             WHERE linked.organization_id = $1
+               AND linked.whatsapp_message_id = m.whatsapp_message_id
+          )
+     ), attributable AS (
+       SELECT * FROM candidates
+        WHERE campaign_rank = 1
+          AND candidate_rank <= GREATEST(total_count - existing_count, 0)
+     )
+     INSERT INTO broadcast_campaign_recipients
+       (campaign_id, organization_id, destination_phone, original_phone,
+        contact_name, template_name, language_code, result_status,
+        whatsapp_message_id)
+     SELECT campaign_id, $1, phone_number, phone_number,
+            COALESCE(contact_name, 'Cliente'), template_name, 'es', 'accepted',
+            whatsapp_message_id
+       FROM attributable
+     ON CONFLICT DO NOTHING`,
+    [orgId]
+  );
+  if (rowCount) console.log(`[SendBulk] ${rowCount} destinatarios reconstruidos desde chats de org ${orgId}`);
+  return rowCount || 0;
 }
 
 async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, savedContent, isTemplate }) {
@@ -1727,6 +1780,7 @@ router.get('/campaigns', async (req, res) => {
           )`,
       [req.orgId]
     );
+    const recoveredRecipients = await recoverCampaignRecipientsFromSavedMessages(req.orgId);
     const recoveredChats = await reconcileAcceptedBroadcastMessages(req.orgId);
     const { rows } = await getPool().query(
       `SELECT c.*,
@@ -1749,16 +1803,32 @@ router.get('/campaigns', async (req, res) => {
     let reasons = [];
     if (ids.length) {
       const result = await getPool().query(
-        `SELECT campaign_id, result_status, error_code, error_message, COUNT(*)::int AS total
-         FROM broadcast_campaign_recipients
-         WHERE campaign_id = ANY($1::bigint[]) AND result_status IN ('failed','skipped','unknown')
-         GROUP BY campaign_id, result_status, error_code, error_message
-         ORDER BY total DESC`,
+        `WITH campaign_reasons AS (
+           SELECT r.campaign_id, r.result_status, r.error_code, r.error_message
+             FROM broadcast_campaign_recipients r
+            WHERE r.campaign_id = ANY($1::bigint[])
+              AND r.result_status IN ('failed','skipped','unknown')
+           UNION ALL
+           SELECT r.campaign_id, 'failed' AS result_status,
+                  m.delivery_error->>'code' AS error_code,
+                  CASE WHEN m.delivery_error->>'code' = '131042'
+                       THEN 'Meta bloqueó el envío por un problema de pago o elegibilidad'
+                       ELSE COALESCE(m.delivery_error->>'message', 'WhatsApp informó un fallo de entrega')
+                  END AS error_message
+             FROM broadcast_campaign_recipients r
+             JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
+            WHERE r.campaign_id = ANY($1::bigint[])
+              AND r.result_status = 'accepted' AND m.status = 'failed'
+         )
+         SELECT campaign_id, result_status, error_code, error_message, COUNT(*)::int AS total
+           FROM campaign_reasons
+          GROUP BY campaign_id, result_status, error_code, error_message
+          ORDER BY total DESC`,
         [ids]
       );
       reasons = result.rows;
     }
-    res.json({ success: true, recoveredChats, campaigns: rows.map(row => ({
+    res.json({ success: true, recoveredChats, recoveredRecipients, campaigns: rows.map(row => ({
       ...row,
       reasons: reasons.filter(reason => String(reason.campaign_id) === String(row.id)),
     })) });
@@ -1778,7 +1848,12 @@ router.get('/campaigns/:id', async (req, res) => {
            WHEN m.status IS NOT NULL THEN m.status
            ELSE 'sent'
          END AS current_status,
-         m.delivery_error
+         m.delivery_error,
+         COALESCE(r.error_code, m.delivery_error->>'code') AS display_error_code,
+         COALESCE(r.error_message,
+           CASE WHEN m.delivery_error->>'code' = '131042'
+                THEN 'Meta bloqueó el envío por un problema de pago o elegibilidad'
+                ELSE m.delivery_error->>'message' END) AS display_error_message
        FROM broadcast_campaign_recipients r
        LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
        WHERE r.campaign_id = $1 AND r.organization_id = $2

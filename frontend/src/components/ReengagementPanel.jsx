@@ -1249,6 +1249,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expandedCampaign, setExpandedCampaign] = useState(null);
   const [campaignRecipients, setCampaignRecipients] = useState([]);
+  const [paymentRetryPhones, setPaymentRetryPhones] = useState(new Set());
   const [followUpPreview, setFollowUpPreview] = useState(null);
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [prodTerm,  setProdTerm]  = useState('');    // texto del filtro por producto
@@ -1297,6 +1298,34 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       setCampaignRecipients(data.recipients || []);
     } catch {
       showToast('No se pudo cargar el detalle de esta campaña', 'error');
+    }
+  }
+
+  async function preparePaymentRetry(campaign) {
+    setFollowUpBusy(true);
+    try {
+      const { data } = await api.get(`/reengagement/campaigns/${campaign.id}`);
+      const failedPhones = (data.recipients || [])
+        .filter(recipient => recipient.current_status === 'failed'
+          && String(recipient.display_error_code || recipient.error_code || recipient.delivery_error?.code || '') === '131042')
+        .map(recipient => normPhone(recipient.destination_phone || recipient.original_phone))
+        .filter(Boolean);
+      const retrySet = new Set(failedPhones);
+      const availablePhones = contacts
+        .filter(contact => retrySet.has(normPhone(contact.phone)))
+        .map(contact => contact.phone);
+      const template = parentTemplates.find(item => item.name === campaign.template_name);
+      if (!availablePhones.length) throw new Error('No encontramos destinatarios 131042 disponibles para reintentar');
+      if (!template) throw new Error(`El template ${campaign.template_name} ya no está disponible en Meta`);
+      setSelTpl(template);
+      setSelected(new Set(availablePhones));
+      setPaymentRetryPhones(new Set(availablePhones.map(normPhone)));
+      setHistoryOpen(false);
+      showToast(`${availablePhones.length} fallido${availablePhones.length === 1 ? '' : 's'} por pago seleccionados. Revisa el mensaje antes de reenviar.`);
+    } catch (error) {
+      showToast(error.response?.data?.error || error.message || 'No se pudo preparar el reintento', 'error');
+    } finally {
+      setFollowUpBusy(false);
     }
   }
 
@@ -1564,7 +1593,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           components,
           contactName: nombre,
           previewText,
-          ...(testMode && TEST_PHONE ? { force: true } : {}),
+          ...((testMode && TEST_PHONE) || paymentRetryPhones.has(normPhone(phone)) ? { force: true } : {}),
         },
       };
     });
@@ -1672,6 +1701,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         showToast(`No se envió ningún mensaje: ${failureReasons[0] || 'WhatsApp no confirmó el envío'}`, 'error');
       } else {
         showToast(`✅ ${sent} aceptados por WhatsApp${skipped ? ` · ${skipped} omitidos` : ''}${failed ? ` · ${failed} fallidos` : ''}`);
+        setPaymentRetryPhones(new Set());
         setReviewPlan(null);
       }
     } catch (err) {
@@ -1977,6 +2007,18 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 </button>
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${colors.border}`, padding: 10, maxHeight: 240, overflowY: 'auto' }}>
+                    {(campaign.reasons || []).some(reason => String(reason.error_code || '') === '131042') && (
+                      <div style={{ border: `1px solid ${colors.red}66`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: `${colors.red}0d` }}>
+                        <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>Envíos bloqueados por facturación de Meta</div>
+                        <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3, lineHeight: 1.4 }}>
+                          Corrige el método de pago en WhatsApp Manager. Después selecciona sólo estos fallidos, revisa el contenido y confirma el reenvío. Los entregados y leídos no se incluirán.
+                        </div>
+                        <button onClick={() => preparePaymentRetry(campaign)} disabled={followUpBusy}
+                          style={{ marginTop: 7, border: 'none', borderRadius: 6, background: colors.red, color: '#fff', padding: '6px 9px', cursor: followUpBusy ? 'wait' : 'pointer', fontSize: 11, fontWeight: 800 }}>
+                          {followUpBusy ? 'Preparando…' : 'Revisar y reintentar fallidos por pago'}
+                        </button>
+                      </div>
+                    )}
                     {!campaign.test_mode && read > 0 && (
                       <div style={{ border: `1px solid ${colors.border}`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: colors.bgApp }}>
                         <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>Seguimiento inteligente para mañana</div>
@@ -2017,7 +2059,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                       <div key={recipient.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 1fr) minmax(90px, auto)', gap: 8, padding: '6px 2px', borderBottom: `1px solid ${colors.border}`, fontSize: 11 }}>
                         <div style={{ minWidth: 0 }}>
                           <div style={{ color: colors.textPrimary, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis' }}>{recipient.contact_name || recipient.original_phone || recipient.destination_phone}</div>
-                          {(recipient.error_message || recipient.delivery_error) && <div style={{ color: colors.red, marginTop: 2 }}>{recipient.error_message || 'WhatsApp informó un fallo de entrega'}{recipient.error_code ? ` (código ${recipient.error_code})` : ''}</div>}
+                          {(recipient.display_error_message || recipient.error_message || recipient.delivery_error) && <div style={{ color: colors.red, marginTop: 2 }}>{recipient.display_error_message || recipient.error_message || 'WhatsApp informó un fallo de entrega'}{(recipient.display_error_code || recipient.error_code) ? ` (código ${recipient.display_error_code || recipient.error_code})` : ''}</div>}
                         </div>
                         <div style={{ color: ['read','delivered'].includes(recipient.current_status) ? colors.green : recipient.current_status === 'failed' ? colors.red : colors.textSecondary, fontWeight: 700, textAlign: 'right' }}>
                           {({ read: 'Leído', delivered: 'Entregado', sent: 'Aceptado', pending: 'Aceptado', accepted: 'Aceptado', failed: 'Fallido', skipped: 'Omitido' })[recipient.current_status] || recipient.current_status}
