@@ -1124,6 +1124,62 @@ async function conversationForStop(orgId, stop, { create = false } = {}) {
   return { window, conversation };
 }
 
+async function evolutionChatRoute(orgId, stop, { create = false, window = null } = {}) {
+  const config = typeof db.getEvolutionWhatsappChannel === 'function'
+    ? await db.getEvolutionWhatsappChannel(orgId)
+    : null;
+  if (!config) return null;
+  const conversation = create
+    ? await db.upsertConversation(
+        orgId,
+        stop.phone,
+        stop.customerName || stop.customer_name || 'Cliente',
+        config.id
+      )
+    : null;
+  return { window, conversation, config, available: true, channel: 'evolution', fallback: true };
+}
+
+async function deliveryChatRoute(orgId, stop, { create = false } = {}) {
+  const resolved = await conversationForStop(orgId, stop);
+  const primaryConversation = resolved.conversation;
+  const primaryConfig = await whatsappProvider.configForConversation(orgId, primaryConversation);
+
+  if (primaryConfig && (resolved.window.available || primaryConfig.provider === 'evolution')) {
+    let conversation = primaryConversation;
+    if (!conversation && create && primaryConfig) {
+      conversation = await db.upsertConversation(
+        orgId,
+        stop.phone,
+        stop.customerName || stop.customer_name || 'Cliente',
+        primaryConfig.provider === 'evolution' ? primaryConfig.id || null : null
+      );
+    }
+    return {
+      window: resolved.window,
+      conversation,
+      config: primaryConfig,
+      available: !!primaryConfig,
+      channel: primaryConfig?.provider || null,
+      fallback: false,
+    };
+  }
+
+  const evolutionRoute = await evolutionChatRoute(orgId, stop, { create, window: resolved.window });
+  if (!evolutionRoute) {
+    return {
+      window: resolved.window,
+      conversation: primaryConversation,
+      config: primaryConfig,
+      available: false,
+      channel: primaryConfig?.provider || null,
+      fallback: false,
+    };
+  }
+
+  return { ...evolutionRoute, conversation: evolutionRoute.conversation || primaryConversation };
+}
+
 // Chat acotado a una parada de la ruta. El teléfono y la conversación siempre
 // se resuelven en el servidor para impedir que un repartidor consulte clientes
 // ajenos enviando un número o conversationId arbitrario.
@@ -1133,15 +1189,26 @@ router.get('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor',
     if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
     if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
-    const { window, conversation } = await conversationForStop(req.orgId, stop);
-    const config = await whatsappProvider.configForConversation(req.orgId, conversation);
-    const messages = conversation ? await db.getMessagesByConversation(conversation.id, 60) : [];
+    const routing = await deliveryChatRoute(req.orgId, stop);
+    const messages = typeof db.getMessagesByCustomerPhone === 'function'
+      ? await db.getMessagesByCustomerPhone(req.orgId, stop.phone, 60)
+      : routing.conversation ? await db.getMessagesByConversation(routing.conversation.id, 60) : [];
     res.json({
       success: true,
       data: {
-        conversation,
+        conversation: routing.conversation,
         messages,
-        window: { ...window, available: !!window.available || config?.provider === 'evolution' },
+        window: {
+          ...routing.window,
+          available: routing.available,
+          channel: routing.channel,
+          fallback: routing.fallback,
+          message: routing.available
+            ? routing.fallback
+              ? 'La ventana de Kapso está cerrada. Los mensajes se enviarán automáticamente por Evolution.'
+              : 'El canal de WhatsApp está disponible.'
+            : 'La ventana de Kapso está cerrada y Evolution no está disponible.',
+        },
         customer: { name: stop.customerName || stop.customer_name || 'Cliente', phone: stop.phone },
       },
     });
@@ -1160,41 +1227,45 @@ router.post('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor'
 
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
     if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
-    const resolved = await conversationForStop(req.orgId, stop);
-    const { window } = resolved;
-    let { conversation } = resolved;
-    let config = await whatsappProvider.configForConversation(req.orgId, conversation);
+    let routing = await deliveryChatRoute(req.orgId, stop, { create: true });
+    let { conversation, config } = routing;
     if (!config) return res.status(400).json({ success: false, error: 'WhatsApp no está configurado para esta cuenta' });
-    if (!window.available && config.provider !== 'evolution') {
+    if (!routing.available) {
       return res.status(409).json({
         success: false,
         error: 'WINDOW_EXPIRED',
-        message: 'La ventana de 24 horas está cerrada. El cliente debe escribir primero o debes usar un aviso aprobado.',
-        window,
+        message: 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible.',
+        window: routing.window,
       });
-    }
-    if (!conversation) {
-      conversation = await db.upsertConversation(
-        req.orgId,
-        stop.phone,
-        stop.customerName || stop.customer_name || 'Cliente',
-        config.id || null
-      );
-      config = await whatsappProvider.configForConversation(req.orgId, conversation) || config;
     }
 
     let sent;
     try {
       sent = await whatsappProvider.sendTextMessage(conversation.phone_number, text, config);
     } catch (sendError) {
-      if (sendError.is24hWindow) {
+      if (sendError.is24hWindow && config.provider !== 'evolution') {
+        const fallback = await evolutionChatRoute(req.orgId, stop, { create: true, window: routing.window });
+        if (fallback) {
+          routing = fallback;
+          conversation = fallback.conversation;
+          config = fallback.config;
+          sent = await whatsappProvider.sendTextMessage(conversation.phone_number, text, config);
+        } else {
+          return res.status(409).json({
+            success: false,
+            error: 'WINDOW_EXPIRED',
+            message: 'La ventana de Kapso se cerró y no hay un canal Evolution disponible.',
+          });
+        }
+      } else if (sendError.is24hWindow) {
         return res.status(409).json({
           success: false,
           error: 'WINDOW_EXPIRED',
-          message: 'La ventana de 24 horas se cerró. El cliente debe escribir primero o debes usar un aviso aprobado.',
+          message: 'No se pudo enviar el mensaje por WhatsApp.',
         });
+      } else {
+        throw sendError;
       }
-      throw sendError;
     }
 
     const driver = await db.getUserById(req.userId).catch(() => null);
@@ -1215,7 +1286,7 @@ router.post('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor'
     const updatedConversation = await db.getConversationById(conversation.id, req.orgId);
     io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conversation.id, mode: 'human' });
     io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updatedConversation });
-    res.json({ success: true, data: { message, conversation: updatedConversation } });
+    res.json({ success: true, data: { message, conversation: updatedConversation, channel: routing.channel, fallback: routing.fallback } });
   } catch (error) {
     console.error('[Delivery chat] Error enviando:', error);
     res.status(error.status || 500).json({ success: false, error: error.code || error.message, message: error.message });
@@ -1229,21 +1300,15 @@ router.post('/routes/:id/stops/chat/media', requireRole('owner', 'admin', 'super
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
     if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
 
-    const resolved = await conversationForStop(req.orgId, stop);
-    const { window } = resolved;
-    let { conversation } = resolved;
-    let config = await whatsappProvider.configForConversation(req.orgId, conversation);
+    let routing = await deliveryChatRoute(req.orgId, stop, { create: true });
+    let { conversation, config } = routing;
     if (!config) return res.status(400).json({ success: false, error: 'WhatsApp no está configurado para esta cuenta' });
-    if (!window.available && config.provider !== 'evolution') {
+    if (!routing.available) {
       return res.status(409).json({
         success: false,
         error: 'WINDOW_EXPIRED',
-        message: 'La ventana de 24 horas está cerrada. El cliente debe escribir primero para recibir archivos.',
+        message: 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible para enviar archivos.',
       });
-    }
-    if (!conversation) {
-      conversation = await db.upsertConversation(req.orgId, stop.phone, stop.customerName || stop.customer_name || 'Cliente', config.id || null);
-      config = await whatsappProvider.configForConversation(req.orgId, conversation) || config;
     }
 
     const driver = await db.getUserById(req.userId).catch(() => null);
@@ -1258,16 +1323,32 @@ router.post('/routes/:id/stops/chat/media', requireRole('owner', 'admin', 'super
         agentType: `driver:${driverName}`,
       });
     } catch (sendErr) {
-      if (sendErr.is24hWindow) {
-        return res.status(409).json({ success: false, error: 'WINDOW_EXPIRED', message: 'La ventana de 24 horas se cerró. El cliente debe escribir primero para recibir archivos.' });
+      if (sendErr.is24hWindow && config.provider !== 'evolution') {
+        const fallback = await evolutionChatRoute(req.orgId, stop, { create: true, window: routing.window });
+        if (!fallback) {
+          return res.status(409).json({ success: false, error: 'WINDOW_EXPIRED', message: 'La ventana de Kapso se cerró y no hay un canal Evolution disponible para enviar archivos.' });
+        }
+        routing = fallback;
+        conversation = fallback.conversation;
+        config = fallback.config;
+        sent = await outboundMedia.send({
+          orgId: req.orgId,
+          conversation,
+          payload: req.body,
+          config,
+          agentType: `driver:${driverName}`,
+        });
+      } else if (sendErr.is24hWindow) {
+        return res.status(409).json({ success: false, error: 'WINDOW_EXPIRED', message: 'No se pudo enviar el archivo por WhatsApp.' });
+      } else {
+        throw sendErr;
       }
-      throw sendErr;
     }
     await db.setAgentMode(conversation.id, 'human');
     const updated = await db.getConversationById(conversation.id, req.orgId);
     io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conversation.id, mode: 'human' });
     io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: sent.message, conversation: updated });
-    res.json({ success: true, data: { message: sent.message, conversation: updated } });
+    res.json({ success: true, data: { message: sent.message, conversation: updated, channel: routing.channel, fallback: routing.fallback } });
   } catch (error) {
     console.error('[Delivery chat] Error enviando archivo:', error.message);
     res.status(error.status || 500).json({ success: false, error: error.code || error.message, message: error.message });

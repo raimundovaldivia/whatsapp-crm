@@ -263,3 +263,61 @@ test('el chat del repartidor usa solo el cliente de su parada y registra quién 
   assert.equal(res.code, 404);
   assert.equal(mediaSends.length, 1);
 });
+
+test('el chat del repartidor cambia automáticamente de Kapso a Evolution con la ventana cerrada', async () => {
+  const route = {
+    id: 5,
+    status: 'in_progress',
+    orders: [{ source: 'bot', id: 17, phone: '56911112222', customerName: 'Katherine', orderName: '#BOT-17' }],
+  };
+  const pool = { query: async () => ({ rows: [route] }) };
+  const kapsoConversation = { id: 41, phone_number: '56911112222', whatsapp_channel_id: null };
+  const evolutionConversation = { id: 42, phone_number: '56911112222', whatsapp_channel_id: 8 };
+  const saved = [];
+  const database = {
+    getPool: () => pool,
+    getConversationById: async id => id === 41 ? kapsoConversation : evolutionConversation,
+    getMessagesByCustomerPhone: async () => [
+      { id: 1, conversation_id: 41, direction: 'inbound', content: 'Mensaje anterior por Kapso' },
+      { id: 2, conversation_id: 42, direction: 'inbound', content: 'Respuesta por Evolution' },
+    ],
+    getEvolutionWhatsappChannel: async () => ({ id: 8, provider: 'evolution', status: 'connected' }),
+    upsertConversation: async (_orgId, _phone, _name, channelId) => channelId === 8 ? evolutionConversation : kapsoConversation,
+    getUserById: async () => ({ id: 9, name: 'Pedro Ruta' }),
+    saveMessage: async value => { saved.push(value); return { id: 3, ...value }; },
+    updateConversationLastMessage: async () => {},
+    setAgentMode: async () => {},
+  };
+  const provider = {
+    configForConversation: async () => ({ provider: 'kapso' }),
+    sendTextMessage: async (_phone, _text, config) => {
+      assert.equal(config.provider, 'evolution');
+      return { messageId: 'evo.driver.1' };
+    },
+    messageId: result => result.messageId,
+  };
+  const router = load('src/routes/delivery.js', {
+    '../db/database': database,
+    '../services/delivery-notifications': {
+      getCustomerServiceWindow: async () => ({ available: false, reason: 'WINDOW_EXPIRED', conversationId: 41 }),
+    },
+    '../services/whatsapp-provider': provider,
+    '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+  });
+  const base = { orgId: 3, userId: 9, role: 'repartidor', params: { id: '5' } };
+
+  let res = response();
+  await handler(router, 'get', '/routes/5/stops/chat')({ ...base, query: { stopKey: 'bot_17' } }, res);
+  assert.equal(res.code, 200);
+  assert.equal(res.body.data.window.available, true);
+  assert.equal(res.body.data.window.channel, 'evolution');
+  assert.equal(res.body.data.window.fallback, true);
+  assert.equal(res.body.data.messages.length, 2);
+
+  res = response();
+  await handler(router, 'post', '/routes/5/stops/chat')({ ...base, body: { stopKey: 'bot_17', text: 'Voy llegando.' } }, res);
+  assert.equal(res.code, 200);
+  assert.equal(res.body.data.channel, 'evolution');
+  assert.equal(res.body.data.fallback, true);
+  assert.equal(saved[0].conversationId, 42);
+});

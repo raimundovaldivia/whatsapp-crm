@@ -79,6 +79,9 @@ export default function CustomerChatScreen({ route }) {
       setText('');
       setAttachment(null);
       if (response?.data?.message) setMessages(prev => [...prev, response.data.message]);
+      if (response?.data?.channel) {
+        setWindowInfo(prev => ({ ...prev, available: true, channel: response.data.channel, fallback: !!response.data.fallback }));
+      }
       setError('');
     } catch (err) {
       if (err.response?.status === 401) return;
@@ -159,6 +162,7 @@ export default function CustomerChatScreen({ route }) {
   }
 
   const canWrite = !!windowInfo.available;
+  const usingEvolution = canWrite && windowInfo.channel === 'evolution';
 
   return (
     <KeyboardAvoidingView
@@ -176,16 +180,18 @@ export default function CustomerChatScreen({ route }) {
 
       <View style={[s.channelBanner, canWrite ? s.channelOpen : s.channelClosed]}>
         <View style={[s.channelIcon, { backgroundColor: (canWrite ? C.green : C.orange) + '1F' }]}>
-          <MaterialCommunityIcons name={canWrite ? 'message-check-outline' : 'clock-alert-outline'} size={20} color={canWrite ? C.green : C.orange} />
+          <MaterialCommunityIcons name={canWrite ? (usingEvolution ? 'swap-horizontal-circle-outline' : 'message-check-outline') : 'clock-alert-outline'} size={20} color={canWrite ? C.green : C.orange} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[s.channelTitle, { color: canWrite ? C.green : C.orange }]}>
-            {canWrite ? 'Canal oficial disponible' : 'Ventana de respuesta cerrada'}
+            {canWrite ? (usingEvolution ? 'Conversación por Evolution' : 'Canal oficial disponible') : 'Canales no disponibles'}
           </Text>
           <Text style={s.channelText}>
             {canWrite
-              ? 'El mensaje saldrá desde el WhatsApp del negocio y quedará registrado.'
-              : 'El cliente debe escribir primero. Usa el aviso operativo desde la parada.'}
+              ? usingEvolution
+                ? 'La ventana de Kapso está cerrada. La app enviará automáticamente por Evolution y guardará la conversación.'
+                : 'El mensaje saldrá por Kapso y quedará registrado en el chat central.'
+              : (windowInfo.message || 'Kapso está cerrado y Evolution no está disponible.')}
           </Text>
         </View>
       </View>
@@ -245,7 +251,7 @@ export default function CustomerChatScreen({ route }) {
           style={[s.input, !canWrite && s.inputDisabled]}
           value={text}
           onChangeText={setText}
-          placeholder={canWrite ? 'Escribe para coordinar la entrega…' : 'Espera un mensaje del cliente'}
+          placeholder={canWrite ? 'Escribe para coordinar la entrega…' : 'No hay un canal disponible'}
           placeholderTextColor={C.muted}
           selectionColor={C.green}
           cursorColor={C.green}

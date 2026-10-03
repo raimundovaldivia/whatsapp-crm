@@ -281,6 +281,19 @@ async function getDefaultWhatsappChannel(orgId) {
   );
 }
 
+async function getEvolutionWhatsappChannel(orgId) {
+  return queryOne(
+    `SELECT * FROM whatsapp_channels
+      WHERE organization_id = $1 AND provider = 'evolution'
+        AND evolution_api_url IS NOT NULL
+        AND evolution_api_key IS NOT NULL
+        AND evolution_instance IS NOT NULL
+      ORDER BY (status = 'connected') DESC, is_default DESC, id ASC
+      LIMIT 1`,
+    [orgId]
+  );
+}
+
 async function setDefaultWhatsappChannel(orgId, channelId) {
   const client = await pool.connect();
   try {
@@ -743,6 +756,25 @@ async function getMessagesByConversation(conversationId, limit = 80) {
     [conversationId, limit]
   );
   return rows.reverse();
+}
+
+async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80) {
+  const normalized = normalizePhone(phoneNumber);
+  if (!normalized) return [];
+  const rows = await query(
+    `SELECT recent.* FROM (
+       SELECT m.*
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.organization_id = $1
+          AND regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g') = $2
+        ORDER BY m.created_at DESC
+        LIMIT $3
+     ) recent
+     ORDER BY recent.created_at ASC`,
+    [orgId, normalized, limit]
+  );
+  return rows;
 }
 
 async function getLastMessages(conversationId, limit = 10) {
@@ -1652,7 +1684,7 @@ module.exports = {
   createUser, getUserByEmail, getUserById,
   // WhatsApp
   upsertWhatsappConfig, getWhatsappConfig, getOrgByWebhookToken, getOrgByPhoneNumberId, getOrgByTwilioNumber,
-  createWhatsappChannel, listWhatsappChannels, getWhatsappChannel, getDefaultWhatsappChannel,
+  createWhatsappChannel, listWhatsappChannels, getWhatsappChannel, getDefaultWhatsappChannel, getEvolutionWhatsappChannel,
   setDefaultWhatsappChannel, updateWhatsappChannelStatus,
   // Data sources
   createDataSource, getDataSources, getDataSource, updateDataSourceStatus, getPrimaryDataSource,
@@ -1666,7 +1698,7 @@ module.exports = {
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
-  saveMessage, getMessagesByConversation, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
+  saveMessage, getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Products propios
