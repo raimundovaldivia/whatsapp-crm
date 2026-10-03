@@ -22,6 +22,40 @@ const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
 
+const DELIVERY_STATUS_PATTERNS = [
+  /(a\s+qu[eé]\s+hora|qu[eé]\s+hora|en\s+qu[eé]\s+horario|qu[eé]\s+horario|horario\s+de\s+(entrega|reparto|despacho))\b/i,
+  /\bcu[aá]ndo\b.{0,25}\b(llega|lleg[aá]|entregan?|entrega|despachan?|sale|viene|reparten)\b/i,
+  /\b(ya\s+)?(va\s+en\s+camino|est[aá]\s+en\s+camino|en\s+ruta|va\s+en\s+ruta|sali[oó]\s+(mi|el)|despacharon|lo\s+mandaron|lo\s+enviaron)\b/i,
+  /\b(hoy|ma[ñn]ana)\b.{0,20}\b(llega|entregan?|reparten|despachan?|lo\s+traen)\b/i,
+  /\b(mi|el)\s+pedido\b.{0,30}\b(llega|viene|hora|cu[aá]ndo|en\s+camino|ruta)\b/i,
+  /\b(mi|el)\s+pedido\b.{0,45}\b(hoy|ma[ñn]ana)\b.{0,25}\b(se\s+har[aá]|sale|reparto|despacho|entrega)\b/i,
+  /\bpara\s+cu[aá]ndo\s+(lo\s+)?(tengo|llega|entregan)\b/i,
+  /\b(hicieron|hubo|sali[oó])\s+(el\s+|una\s+)?(reparto|ruta|despacho)\s+hoy\b/i,
+  /\b(repartieron|despacharon)\s+hoy\b/i,
+];
+
+const ROUTE_TODAY_PATTERNS = [
+  /\b(hicieron|hubo|sali[oó])\s+(el\s+|una\s+)?(reparto|ruta|despacho)\s+hoy\b/i,
+  /\b(repartieron|despacharon)\s+hoy\b/i,
+];
+
+function chileClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(now);
+  const hour = Number(parts.find(part => part.type === 'hour')?.value || 0) % 24;
+  const minute = Number(parts.find(part => part.type === 'minute')?.value || 0);
+  return { totalMinutes: hour * 60 + minute };
+}
+
+function deliveryWindowEnded(schedule, now = new Date()) {
+  const times = [...String(schedule || '').matchAll(/\b(\d{1,2})[:.](\d{2})\b/g)];
+  if (times.length < 2) return false;
+  const end = times[times.length - 1];
+  const endMinutes = Number(end[1]) * 60 + Number(end[2]);
+  return chileClock(now).totalMinutes > endMinutes;
+}
+
 // Un pedido al que todavía tiene sentido anotarle una preferencia de entrega:
 // registrado y no cancelado/entregado. Incluye los que ya salieron a reparto
 // (por_despachar / en_camino) porque ahí la nota es aún más útil.
@@ -247,6 +281,8 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
       if (lines.length) deliverySection = `## Información de Entrega\n${lines.join('\n')}`;
     } catch { /* JSON inválido — ignorar */ }
   }
+  const nowCl = new Date();
+  const deliveryHoursEnded = deliveryWindowEnded(deliverySchedule, nowCl);
 
   // Instrucciones de pago — sección EXPLÍCITA para que el bot las comparta cuando el cliente pregunte
   const paymentInfoRaw = await db.getSetting(orgId, 'payment_info') || '';
@@ -313,6 +349,7 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   let activeOrder = null;          // visible para modificar / cancelar más abajo
   let activeOrderSummary = '';
   let activeDeliveryRoute = null;
+  let todayDeliveryActivity = null;
   try {
     activeOrder = await db.getActiveOrderForBot(conversationId);
     if (activeOrder) {
@@ -359,29 +396,51 @@ Este cliente ya tiene un pedido registrado en nuestro sistema:
 
 Reglas estrictas para responder sobre este pedido:
 1. Si el cliente pregunta "¿cuándo llega?", "¿cómo va mi pedido?", "¿ya lo mandaron?" o similar → responde que su pedido está ${statusLabel.replace(/\*\*/g, '').toLowerCase()} y que pronto recibirá más novedades.
-2. NO vuelvas a pedir datos de entrega, dirección ni de pago — el pedido ya está registrado.
+2. NO vuelvas a pedir datos de entrega, dirección ni de pago — el pedido ya está registrado. No preguntes si pagará en efectivo o transferencia salvo que el cliente consulte explícitamente por el pago.
 3. NO ofrezcas iniciar un nuevo pedido para los mismos productos.
-4. Si el cliente quiere modificar o cancelar → dile que sí se puede hacer aquí mismo y pregúntale qué quiere cambiar (el sistema lo procesa automáticamente cuando lo diga).`;
+4. El horario general de reparto NO confirma que este pedido salga hoy. Solo puedes afirmar que sale hoy si aparece en una ruta activa o tiene un estado explícito que lo confirme.
+5. Si el horario de reparto de hoy ya terminó, NUNCA digas "esta tarde", "va para allá hoy" ni prometas una entrega hoy. Explica el estado real y pide confirmación al equipo si no aparece en una ruta.
+6. Si el cliente quiere modificar o cancelar → dile que sí se puede hacer aquí mismo y pregúntale qué quiere cambiar (el sistema lo procesa automáticamente cuando lo diga).`;
 
       console.log(`[Pipeline] 📦 Pedido activo inyectado al contexto: id=${activeOrder.id} status=${activeOrder.status}`);
 
       // Si Logística está contratada, vincular el pedido con su ruta activa.
       // La respuesta al cliente usa esta fuente real y evita inventar una hora.
       if (deliveryEnabled) {
-        const { rows: routeRows } = await getPool().query(
-          `SELECT id, name, status, driver_name, orders, optimized_route,
-                  stop_statuses, stop_times, sent_at
-             FROM delivery_routes r
-            WHERE r.organization_id = $1
-              AND r.status IN ('sent','in_progress')
-              AND EXISTS (
-                SELECT 1 FROM jsonb_array_elements(r.orders) stop
-                 WHERE stop->>'source' = 'bot' AND stop->>'id' = $2
-              )
-            ORDER BY r.created_at DESC LIMIT 1`,
-          [orgId, String(activeOrder.id)]
-        );
+        const pool = getPool();
+        const [{ rows: routeRows }, { rows: todayRouteRows }] = await Promise.all([
+          pool.query(
+            `SELECT id, name, status, driver_name, orders, optimized_route,
+                    stop_statuses, stop_times, sent_at
+               FROM delivery_routes r
+              WHERE r.organization_id = $1
+                AND r.status IN ('sent','in_progress')
+                AND EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(r.orders) stop
+                   WHERE stop->>'source' = 'bot' AND stop->>'id' = $2
+                )
+              ORDER BY r.created_at DESC LIMIT 1`,
+            [orgId, String(activeOrder.id)]
+          ),
+          pool.query(
+            `SELECT id, name, status, sent_at, started_at, completed_at,
+                    EXISTS (
+                      SELECT 1 FROM jsonb_array_elements(COALESCE(r.orders, '[]'::jsonb)) stop
+                       WHERE stop->>'source' = 'bot' AND stop->>'id' = $2
+                    ) AS includes_order
+               FROM delivery_routes r
+              WHERE r.organization_id = $1
+                AND r.status IN ('sent','in_progress','completed')
+                AND (COALESCE(r.started_at, r.sent_at, r.completed_at, r.created_at)
+                     AT TIME ZONE 'America/Santiago')::date
+                    = (NOW() AT TIME ZONE 'America/Santiago')::date
+              ORDER BY COALESCE(r.started_at, r.sent_at, r.completed_at, r.created_at) DESC
+              LIMIT 1`,
+            [orgId, String(activeOrder.id)]
+          ),
+        ]);
         activeDeliveryRoute = routeRows[0] || null;
+        todayDeliveryActivity = todayRouteRows[0] || null;
       }
     }
   } catch (e) {
@@ -511,11 +570,10 @@ Reglas estrictas:
   // Fecha y hora actual (Chile). Sin esto el bot no puede interpretar "hoy",
   // "mañana" ni "el viernes": ante "¿mañana reparten?" respondía que no tenía
   // información, aunque el horario de reparto estuviera en sus instrucciones.
-  const nowCl = new Date();
   const fechaLarga = nowCl.toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const horaCl     = nowCl.toLocaleTimeString('es-CL', { timeZone: 'America/Santiago', hour: '2-digit', minute: '2-digit' });
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
-  const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.`;
+  const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
   const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
@@ -757,6 +815,36 @@ REGLAS ABSOLUTAS:
     };
   }
 
+  // Solicitud de compra con entrega para hoy. No desentenderse de la logística
+  // ni prometer un cupo inexistente: se toma el pedido y se deja explícitamente
+  // sujeto a stock y disponibilidad de la ruta del día.
+  const SAME_DAY_DELIVERY_PATTERNS = [
+    /\b(alguna\s+posibilidad|se\s+puede|podr[ií]an?|pueden|alcanzan)\b.{0,45}\b(traer|entregar|despachar|mandar|enviar)(me|nos)?\b.{0,30}\bhoy\b/i,
+    /\b(traer|entregar|despachar|mandar|enviar)(me|nos)?\b.{0,35}\bhoy\b/i,
+    /\b(hoy)\b.{0,35}\b(traer|entregar|despachar|mandar|enviar)(me|nos)?\b/i,
+  ];
+  const asksForSameDayDelivery = !activeOrder
+    && !['collecting_order', 'scheduled', 'opted_out'].includes(currentState)
+    && SAME_DAY_DELIVERY_PATTERNS.some(pattern => pattern.test(userMessage));
+  if (asksForSameDayDelivery) {
+    const nextDraft = {
+      ...(orderDraft || {}),
+      delivery_requested_today: true,
+      notes: [orderDraft?.notes, 'Cliente solicita entrega hoy; sujeta a confirmación de stock y cupo en ruta.']
+        .filter(Boolean).join(' '),
+    };
+    await db.updatePipelineState(conversationId, 'collecting_order', nextDraft);
+    L.agent('orders', 0);
+    L.step('same_day_delivery_request', deliveryHoursEnded ? 'horario terminado' : 'tomar pedido y confirmar cupo');
+    return {
+      response: deliveryHoursEnded
+        ? 'El reparto de hoy ya terminó, así que no quiero prometerte una entrega que no alcanzará a salir. Sí puedo dejarte el pedido listo para el próximo reparto. ¿Qué tamaño y cuántos huevos necesitas?'
+        : 'Sí, podemos revisarlo 😊 Primero te tomo el pedido y confirmamos si hay stock y cupo en la ruta de hoy; no te voy a prometer la entrega hasta verificarlo. ¿Qué tamaño y cuántos huevos necesitas?',
+      agentType: 'orders',
+      newState: 'collecting_order',
+    };
+  }
+
   // ── Detectar "me queda todavía" → preguntar cuándo se termina ──────
   // Si el cliente dice que aún tiene stock, el bot pregunta cuándo se le acaba
   // para agendar un seguimiento automático.
@@ -900,8 +988,12 @@ REGLAS ABSOLUTAS:
 
   L.escalation(escalationResult.escalate, escalationResult.urgency, escalationResult.reason);
 
+  const isDeliveryStatusInquiry = !!activeOrder
+    && userMessage.length <= 160
+    && DELIVERY_STATUS_PATTERNS.some(pattern => pattern.test(userMessage));
+
   // Si el agente de escalación detecta que se necesita humano
-  if (escalationResult.escalate) {
+  if (escalationResult.escalate && !isDeliveryStatusInquiry) {
     console.log(`[Pipeline] 🚨 Escalación detectada (${escalationResult.urgency}): ${escalationResult.reason}`);
     await db.setAgentMode(conversationId, 'coordinating');
     await db.setLastEscalation(conversationId, userMessage, escalationResult.reason);
@@ -948,15 +1040,6 @@ REGLAS ABSOLUTAS:
   // Con un pedido activo, el bot responde con el DATO REAL (estado del pedido +
   // ventana de reparto configurada) en vez de inventar una hora o prometer
   // "le consulto al equipo" y dejar al cliente esperando.
-  const DELIVERY_STATUS_PATTERNS = [
-    /(a\s+qu[eé]\s+hora|qu[eé]\s+hora|en\s+qu[eé]\s+horario|qu[eé]\s+horario|horario\s+de\s+(entrega|reparto|despacho))\b/i,
-    /\bcu[aá]ndo\b.{0,25}\b(llega|lleg[aá]|entregan?|entrega|despachan?|sale|viene|reparten)\b/i,
-    /\b(ya\s+)?(va\s+en\s+camino|est[aá]\s+en\s+camino|en\s+ruta|va\s+en\s+ruta|salió\s+(mi|el)|despacharon|lo\s+mandaron|lo\s+enviaron)\b/i,
-    /\b(hoy|ma[ñn]ana)\b.{0,20}\b(llega|entregan?|reparten|despachan?|lo\s+traen)\b/i,
-    /\b(mi|el)\s+pedido\b.{0,30}\b(llega|viene|hora|cu[aá]ndo|en\s+camino|ruta)\b/i,
-    /\b(mi|el)\s+pedido\b.{0,45}\b(hoy|ma[ñn]ana)\b.{0,25}\b(se\s+har[aá]|sale|reparto|despacho|entrega)\b/i,
-    /\bpara\s+cu[aá]ndo\s+(lo\s+)?(tengo|llega|entregan)\b/i,
-  ];
   if (activeOrder && userMessage.length <= 160
       && intent !== 'modify_order' && intent !== 'cancel_order'
       && DELIVERY_STATUS_PATTERNS.some(p => p.test(userMessage))) {
@@ -980,6 +1063,7 @@ REGLAS ABSOLUTAS:
     let response;
     let switchToHuman = false;
     let escalationReason = null;
+    const asksAboutTodaysRoute = ROUTE_TODAY_PATTERNS.some(pattern => pattern.test(userMessage));
     if (scheduledRelation === 'future') {
       response = `Tu pedido quedó agendado para el ${scheduledDate} 📅.${win} Ese día te avisamos cuando vaya saliendo. ¿Algo más?`;
     } else if (activeDeliveryRoute) {
@@ -1020,16 +1104,35 @@ REGLAS ABSOLUTAS:
         routeProgress = ` Está como parada ${position + 1} de ${stops.length}; quedan ${pendingBefore} entrega${pendingBefore === 1 ? '' : 's'} antes. Calculando unos 15 minutos por parada, el rango estimado es ${eta}.`;
       }
       response = `¡Tu pedido ya está en la ruta de hoy${hi}! 🚚${routeProgress}${win} Es una estimación y puede variar por tránsito o demoras; te avisamos cuando vaya acercándose. 😊`;
-    } else if (activeOrder.status === 'por_despachar') {
+    } else if (asksAboutTodaysRoute && todayDeliveryActivity) {
+      const routeMismatch = todayDeliveryActivity.includes_order
+        ? 'Tu pedido aparece en el registro de esa ruta, pero todavía no figura como entregado'
+        : 'Tu pedido todavía no aparece incluido en esa ruta';
+      response = `Sí, hoy hubo reparto${hi}. ${routeMismatch} y sigue ${String(activeOrder.status) === 'por_despachar' ? 'listo para despachar' : 'en preparación'}.${deliveryHoursEnded ? ' El horario de hoy ya terminó.' : ''} Para no darte una fecha incorrecta, le pido al equipo revisar lo ocurrido y confirmar el próximo despacho. Te responden por aquí 🙏`;
+      switchToHuman = true;
+      escalationReason = todayDeliveryActivity.includes_order
+        ? `El pedido #${activeOrder.id} aparece en la ruta de hoy (${todayDeliveryActivity.name || `#${todayDeliveryActivity.id}`}) pero no figura entregado; revisar resultado`
+        : `Hoy hubo ruta (${todayDeliveryActivity.name || `#${todayDeliveryActivity.id}`}) pero el pedido #${activeOrder.id} no aparece incluido; confirmar próximo despacho`;
+    } else if (asksAboutTodaysRoute) {
+      response = `No veo una ruta de reparto registrada hoy que incluya tu pedido${hi}. El pedido sigue ${String(activeOrder.status) === 'por_despachar' ? 'listo para despachar' : 'en preparación'}${deliveryHoursEnded ? ' y el horario de hoy ya terminó' : ''}. Le pido al equipo revisar qué ocurrió y confirmar cuándo sale, para no darte una información incorrecta 🙏`;
+      switchToHuman = true;
+      escalationReason = `Pedido #${activeOrder.id}: cliente consulta si hubo reparto hoy, pero no hay ruta registrada que permita confirmarlo`;
+    } else if (activeOrder.status === 'por_despachar' && !deliveryHoursEnded) {
       response = `Tu pedido está listo para salir${hi} 📦.${win} Está considerado para el reparto de hoy; cuando salga a la ruta te avisamos. 😊`;
     } else if (scheduledRelation === 'today') {
-      response = `Tu pedido está agendado para hoy${hi}, pero todavía figura en preparación y aún no aparece en ruta.${win} Para que puedas organizarte, le pido al equipo confirmar si sale hoy o si conviene pasarlo para mañana. Te responden por aquí 🙏`;
+      response = deliveryHoursEnded
+        ? `Tu pedido estaba agendado para hoy${hi}, pero el horario de reparto ya terminó y todavía figura en preparación, sin aparecer en una ruta. Le pido al equipo revisar qué ocurrió y confirmar el próximo despacho. Te responden por aquí 🙏`
+        : `Tu pedido está agendado para hoy${hi}, pero todavía figura en preparación y aún no aparece en ruta.${win} Para que puedas organizarte, le pido al equipo confirmar si sale hoy o si conviene pasarlo para mañana. Te responden por aquí 🙏`;
       switchToHuman = true;
       escalationReason = `Pedido #${activeOrder.id} agendado para hoy sigue en estado ${activeOrder.status}; cliente necesita confirmar si se reparte hoy`;
     } else if (scheduledRelation === 'past') {
       response = `Veo que tu pedido estaba agendado para el ${scheduledDate}, pero todavía figura pendiente. Para darte una respuesta correcta, le pido al equipo revisarlo y confirmarte por aquí 🙏`;
       switchToHuman = true;
       escalationReason = `Pedido #${activeOrder.id} mantiene fecha vencida (${scheduledDate}) y estado ${activeOrder.status}`;
+    } else if (deliveryHoursEnded) {
+      response = `El horario de reparto de hoy ya terminó${hi}. Tu pedido sigue en preparación y no aparece en una ruta activa, así que no quiero prometerte una entrega que no está confirmada. Le pido al equipo revisar si quedó para el próximo reparto y te responden por aquí 🙏`;
+      switchToHuman = true;
+      escalationReason = `Pedido #${activeOrder.id} sigue en estado ${activeOrder.status} al terminar el horario de reparto y no figura en una ruta activa`;
     } else {
       // draft / nuevo / sent / payment_received → aún en preparación
       response = `Tu pedido está en preparación${hi} 😊.${win} Sale en el próximo reparto y te avisamos apenas vaya en camino.`;

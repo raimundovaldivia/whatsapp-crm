@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load } = require('./helpers.cjs');
 
-function buildPipeline(deliveryDate, status = 'draft') {
+function buildPipeline(deliveryDate, status = 'draft', options = {}) {
   const db = {
     getConversationById: async () => ({
       id: 71,
@@ -13,13 +13,15 @@ function buildPipeline(deliveryDate, status = 'draft') {
       agent_mode: 'ai',
     }),
     getLastMessages: async () => [],
-    getSetting: async () => null,
+    getSetting: async (_orgId, key) => key === 'delivery_info' && options.deliveryEnabled
+      ? JSON.stringify({ schedule: options.schedule || 'Lunes a Sábado de 15:00 a 21:00' })
+      : null,
     getContact: async () => ({ name: 'Katherine Andrea Bravo Becerra', contact_type: 'customer', client_type: 'personal' }),
     getPrimaryDataSource: async () => null,
     getCachedProducts: async () => [],
     getProducts: async () => [],
     getOrderDraft: async () => ({}),
-    getActiveOrderForBot: async () => ({
+    getActiveOrderForBot: async () => options.activeOrder === false ? null : ({
       id: 88,
       status,
       delivery_date: deliveryDate,
@@ -28,12 +30,20 @@ function buildPipeline(deliveryDate, status = 'draft') {
       items: [{ quantity: 1, name: 'Caja 100 Huevos Jumbo' }],
       shipping_address: { address: 'Gobernador Demetrio Reygada 4005', city: 'Coquimbo' },
     }),
-    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+    updatePipelineState: async () => {},
+    getPool: () => ({
+      query: async sql => ({
+        rows: String(sql).includes("COALESCE(r.started_at") && options.todayRoute
+          ? [options.todayRoute]
+          : [],
+        rowCount: 0,
+      }),
+    }),
   };
 
   return load('src/services/pipeline.js', {
     '../db/database': db,
-    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => !!options.deliveryEnabled },
     './inbound-message-policy': {
       isLikelyAutomaticReply: () => false,
       isGiftedStockReply: () => false,
@@ -54,7 +64,7 @@ function buildPipeline(deliveryDate, status = 'draft') {
       formatDateEs: value => `fecha ${String(value).slice(0, 10)}`,
     },
     './agents/orchestrator': {
-      checkEscalation: async () => ({ escalate: false, urgency: 'low', reason: '' }),
+      checkEscalation: async () => options.escalation || ({ escalate: false, urgency: 'low', reason: '' }),
       classifyIntent: async () => ({ intent: 'post_sale', confidence: 1, reason: 'consulta de reparto' }),
     },
   });
@@ -81,4 +91,33 @@ test('la fecha real de un pedido futuro se responde aunque logística no esté h
 
   assert.equal(result.switchToHuman, false);
   assert.match(result.response, new RegExp(`agendado para el fecha ${future}`, 'i'));
+});
+
+test('una consulta sobre el reparto usa la ruta real y no cae en una escalación genérica', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    deliveryEnabled: true,
+    todayRoute: { id: 19, name: 'Ruta viernes', status: 'completed' },
+    escalation: { escalate: true, urgency: 'high', reason: 'posible reclamo' },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'No\n¿Hicieron reparto hoy?');
+
+  assert.equal(result.switchToHuman, true);
+  assert.match(result.response, /sí, hoy hubo reparto/i);
+  assert.match(result.response, /tu pedido todavía no aparece incluido/i);
+  assert.match(result.escalationReason, /Ruta viernes/i);
+  assert.doesNotMatch(result.response, /lo siento por la molestia/i);
+});
+
+test('una solicitud de entrega para hoy toma el pedido sin prometer un cupo de ruta', async () => {
+  const pipeline = buildPipeline(null, 'draft', { activeOrder: false });
+
+  const result = await pipeline.processMessage(1, 71, '¿Alguna posibilidad de traerme huevos hoy? Olvidé pedirlos ayer');
+
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(result.agentType, 'orders');
+  assert.match(result.response, /primero te tomo el pedido/i);
+  assert.match(result.response, /stock y cupo en la ruta de hoy/i);
+  assert.match(result.response, /qué tamaño y cuántos huevos necesitas/i);
+  assert.doesNotMatch(result.response, /consulta(rlo)? directamente con el equipo/i);
 });
