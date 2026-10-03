@@ -59,6 +59,17 @@ export default function App() {
   const seenMessageIds = useRef(new Set());
   // Conversaciones cuyo historial ya fue cargado desde la API (evita saltear fetch por mensajes de socket)
   const loadedConvIds = useRef(new Set());
+  const selectedIdRef = useRef(null);
+  const viewRef = useRef('chats');
+  const syncInFlight = useRef(false);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
 
   // ── Verificar sesión al inicio ──────────────────────────────────
   useEffect(() => {
@@ -134,6 +145,41 @@ export default function App() {
       setConversations(data);
     } catch (err) { console.error(err); }
     finally { setLoadingConvs(false); }
+  }, [appState]);
+
+  // Sincronización de respaldo: recupera eventos que pudieron ocurrir mientras
+  // el socket estaba reconectando, la pestaña estaba suspendida o hubo un deploy.
+  // Es silenciosa para no bloquear ni hacer parpadear la interfaz.
+  const syncConversations = useCallback(async () => {
+    if (appState !== 'crm' || syncInFlight.current) return;
+    syncInFlight.current = true;
+    try {
+      const freshConversations = await conversationsAPI.getAll();
+      setConversations(freshConversations);
+
+      const activeId = viewRef.current === 'chats' ? selectedIdRef.current : null;
+      if (activeId) {
+        const { messages: freshMessages } = await conversationsAPI.getMessages(activeId);
+        loadedConvIds.current.add(activeId);
+        setMessages(prev => {
+          const localMessages = prev[activeId] || [];
+          const byId = new Map(localMessages.map(message => [message.id, message]));
+          for (const message of freshMessages) {
+            byId.set(message.id, { ...byId.get(message.id), ...message });
+          }
+          const merged = [...byId.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          return { ...prev, [activeId]: merged };
+        });
+        setConversations(prev => prev.map(conversation => (
+          conversation.id === activeId ? { ...conversation, unread_count: 0 } : conversation
+        )));
+      }
+    } catch (err) {
+      // Un corte breve no debe interrumpir al usuario; el próximo ciclo reintenta.
+      console.warn('[Chats] No se pudo completar la sincronización automática:', err.message);
+    } finally {
+      syncInFlight.current = false;
+    }
   }, [appState]);
 
   const loadOrderStats = useCallback(async () => {
@@ -214,7 +260,27 @@ export default function App() {
     setPendingProofs(n => n + 1);
   }, []);
 
-  const { connected } = useSocket(['owner', 'admin', 'supervisor', 'agent'].includes(user?.role) ? org?.id : null, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated, handleBotTyping, handlePaymentProof);
+  const realtimeOrgId = ['owner', 'admin', 'supervisor', 'agent'].includes(user?.role) ? org?.id : null;
+  const { connected } = useSocket(realtimeOrgId, handleNewMessage, handleAgentModeChanged, handleMessageStatus, handleOrderCreated, handleBotTyping, handlePaymentProof, syncConversations);
+
+  // Socket entrega los cambios al instante. Este ciclo liviano es una red de
+  // seguridad para navegadores móviles y pestañas suspendidas que pierden eventos.
+  useEffect(() => {
+    if (!realtimeOrgId || appState !== 'crm') return;
+    const syncWhenVisible = () => {
+      if (document.visibilityState === 'visible') syncConversations();
+    };
+    const timer = window.setInterval(syncWhenVisible, 15000);
+    window.addEventListener('focus', syncWhenVisible);
+    window.addEventListener('online', syncWhenVisible);
+    document.addEventListener('visibilitychange', syncWhenVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', syncWhenVisible);
+      window.removeEventListener('online', syncWhenVisible);
+      document.removeEventListener('visibilitychange', syncWhenVisible);
+    };
+  }, [realtimeOrgId, appState, syncConversations]);
 
   // En móvil, volver al sidebar limpiando la selección
   const handleBackToSidebar = useCallback(() => setSelectedId(null), []);
