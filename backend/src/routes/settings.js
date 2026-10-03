@@ -327,7 +327,7 @@ router.post('/whatsapp/channels', async (req, res) => {
       }
     }
 
-    const state = connection?.instance?.state || connection?.state || 'pending';
+    const state = evolution.normalizeConnectionState(connection);
     const channel = await db.createWhatsappChannel(req.orgId, {
       name: name.trim(),
       phoneNumber: phoneNumber ? db.normalizePhone(phoneNumber) : null,
@@ -335,7 +335,7 @@ router.post('/whatsapp/channels', async (req, res) => {
       evolutionApiKey: config.evolution_api_key,
       evolutionInstance: config.evolution_instance,
       webhookToken,
-      status: state === 'open' ? 'connected' : state,
+      status: state,
       isDefault,
     });
 
@@ -349,7 +349,7 @@ router.post('/whatsapp/channels', async (req, res) => {
       webhookWarning = 'Canal guardado, pero falta CRM_PUBLIC_URL para registrar el webhook.';
     }
 
-    if (!qr && state !== 'open') {
+    if (!qr && state !== 'connected') {
       try { qr = await evolution.getConnectQr(config); } catch { /* se puede solicitar luego */ }
     }
     res.json({ success: true, data: { channel, qr }, warning: webhookWarning });
@@ -367,9 +367,36 @@ router.get('/whatsapp/channels/:id/qr', async (req, res) => {
       evolution.getConnectionState(channel).catch(() => null),
       evolution.getConnectQr(channel).catch(() => null),
     ]);
-    const state = connection?.instance?.state || connection?.state || 'pending';
-    await db.updateWhatsappChannelStatus(req.orgId, channel.id, state === 'open' ? 'connected' : state);
+    const state = evolution.normalizeConnectionState(connection);
+    await db.updateWhatsappChannelStatus(req.orgId, channel.id, state);
     res.json({ success: true, data: { state, qr } });
+  } catch (err) {
+    res.status(502).json({ success: false, error: err.response?.data?.message || err.message });
+  }
+});
+
+/** Consulta liviana para que la pantalla detecte el QR completado sin pedir otro QR. */
+router.get('/whatsapp/channels/:id/status', async (req, res) => {
+  try {
+    const channel = await db.getWhatsappChannel(req.orgId, Number(req.params.id));
+    if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
+    const connection = await evolution.getConnectionState(channel);
+    const state = evolution.normalizeConnectionState(connection);
+    const updated = await db.updateWhatsappChannelStatus(req.orgId, channel.id, state);
+
+    let webhookWarning = null;
+    if (state === 'connected' && channel.status !== 'connected') {
+      const publicUrl = process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL;
+      if (publicUrl) {
+        const webhookUrl = `${publicUrl.replace(/\/$/, '')}/evolution-webhook/${req.orgId}/${channel.id}/${channel.webhook_token}`;
+        try { await evolution.configureWebhook(channel, webhookUrl); }
+        catch (err) { webhookWarning = `WhatsApp está conectado, pero no se pudo registrar el webhook: ${err.response?.data?.message || err.message}`; }
+      } else {
+        webhookWarning = 'WhatsApp está conectado, pero falta CRM_PUBLIC_URL para registrar el webhook.';
+      }
+    }
+
+    res.json({ success: true, data: { channel: updated, state }, warning: webhookWarning });
   } catch (err) {
     res.status(502).json({ success: false, error: err.response?.data?.message || err.message });
   }

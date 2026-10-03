@@ -113,6 +113,23 @@ function parseStatusUpdate(body) {
   return { messageId, status: statusMap[raw] || String(raw).toLowerCase(), error: data?.error || null };
 }
 
+function normalizeConnectionState(value) {
+  const raw = String(value?.instance?.state || value?.state || value?.status || value || '').toLowerCase();
+  if (['open', 'connected'].includes(raw)) return 'connected';
+  if (['close', 'closed', 'disconnected'].includes(raw)) return 'disconnected';
+  if (['connecting', 'pending'].includes(raw)) return raw;
+  return raw || 'pending';
+}
+
+function parseConnectionUpdate(body) {
+  if (eventName(body) !== 'connection.update') return null;
+  const data = unwrapData(body) || body?.data || {};
+  const status = normalizeConnectionState(data?.instance || data?.state || data?.status);
+  const identity = data?.wuid || data?.me?.id || data?.user?.id || body?.sender || '';
+  const phoneNumber = String(identity).split('@')[0].split(':')[0].replace(/\D/g, '') || null;
+  return { status, phoneNumber };
+}
+
 async function getConnectionState(config) {
   const { instance } = credentials(config);
   const response = await client(config).get(`/instance/connectionState/${encodeURIComponent(instance)}`);
@@ -151,5 +168,6 @@ async function configureWebhook(config, webhookUrl) {
 
 module.exports = {
   sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
+  parseConnectionUpdate, normalizeConnectionState,
   getConnectionState, createInstance, getConnectQr, configureWebhook,
 };

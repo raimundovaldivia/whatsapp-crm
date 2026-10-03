@@ -422,6 +422,32 @@ function EvolutionChannelsPanel({ colors }) {
   };
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    const waiting = channels.filter(channel => channel.status !== 'connected');
+    if (!waiting.length) return undefined;
+    const timer = setInterval(async () => {
+      const results = await Promise.all(waiting.map(async channel => {
+        try {
+          const response = await api.get(`/settings/whatsapp/channels/${channel.id}/status`, { timeout: 15000 });
+          return { id: channel.id, ...response.data?.data, warning: response.data?.warning || null };
+        } catch { return null; }
+      }));
+      const valid = results.filter(Boolean);
+      if (!valid.length) return;
+      setChannels(current => current.map(channel => {
+        const result = valid.find(item => item.id === channel.id);
+        return result?.channel || channel;
+      }));
+      const connected = valid.find(result => result.state === 'connected');
+      if (connected) {
+        setQr(null);
+        if (connected.warning) setError(connected.warning);
+        else setSuccess('WhatsApp conectado y webhook configurado correctamente.');
+      }
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [channels.map(channel => `${channel.id}:${channel.status}`).join('|')]);
+
   const qrImage = (value) => {
     const raw = value?.base64 || value?.qrcode?.base64 || value?.code || null;
     if (!raw || typeof raw !== 'string') return null;
@@ -446,7 +472,7 @@ function EvolutionChannelsPanel({ colors }) {
     try {
       const r = await api.get(`/settings/whatsapp/channels/${id}/qr`, { timeout: 20000 });
       setQr(r.data?.data?.qr || null);
-      if (r.data?.data?.state === 'open' || r.data?.data?.state === 'connected') setSuccess('El número ya está conectado.');
+      if (r.data?.data?.state === 'connected') setSuccess('El número ya está conectado.');
       await load();
     } catch (err) { setError(err.response?.data?.error || 'No se pudo obtener el QR'); }
   };

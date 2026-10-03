@@ -40,6 +40,18 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
   ]);
   if (!org || channel?.provider !== 'evolution') return;
 
+  const connection = evolution.parseConnectionUpdate(req.body);
+  if (connection) {
+    const updated = await db.updateWhatsappChannelStatus(orgId, channelId, connection.status, connection.phoneNumber);
+    if (updated) io?.to(`org_${orgId}`).emit(`whatsapp_channel_update_${orgId}`, {
+      id: channelId,
+      status: connection.status,
+      phoneNumber: connection.phoneNumber || updated.phone_number || null,
+    });
+    console.log(`[EvolutionWebhook] [Org:${org.name}] canal ${channelId}: ${connection.status}`);
+    return;
+  }
+
   const status = evolution.parseStatusUpdate(req.body);
   if (status) {
     const updated = await db.updateMessageStatus(status.messageId, status.status, status.error, orgId);

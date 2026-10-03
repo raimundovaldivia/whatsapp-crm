@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const evolution = require('../src/services/evolution-whatsapp');
+const { load, handler, response } = require('./helpers.cjs');
 
 test('parsea un mensaje entrante de Evolution y conserva el JID para marcar leído', () => {
   const parsed = evolution.parseWebhookMessage({
@@ -39,4 +40,40 @@ test('normaliza estados de entrega de Evolution', () => {
     event: 'MESSAGES_UPDATE',
     data: { key: { id: 'MSG1' }, status: 'DELIVERY_ACK' },
   }), { messageId: 'MSG1', status: 'delivered', error: null });
+});
+
+test('normaliza la conexión de Evolution y recupera el número vinculado', () => {
+  assert.deepEqual(evolution.parseConnectionUpdate({
+    event: 'CONNECTION_UPDATE',
+    data: { state: 'open', wuid: '56954565558:12@s.whatsapp.net' },
+  }), { status: 'connected', phoneNumber: '56954565558' });
+  assert.deepEqual(evolution.parseConnectionUpdate({
+    event: 'connection.update',
+    data: { instance: { state: 'close' } },
+  }), { status: 'disconnected', phoneNumber: null });
+  assert.equal(evolution.parseConnectionUpdate({ event: 'MESSAGES_UPSERT', data: {} }), null);
+});
+
+test('el webhook de conexión actualiza el canal sin iniciar el pipeline de mensajes', async () => {
+  const updates = [];
+  let inboundCalls = 0;
+  const channel = { id: 9, provider: 'evolution', webhook_token: 'token' };
+  const router = load('src/routes/evolution-webhook.js', {
+    '../db/database': {
+      getWhatsappChannel: async () => channel,
+      getOrgById: async () => ({ id: 1, name: 'Prueba' }),
+      updateWhatsappChannelStatus: async (...args) => { updates.push(args); return { ...channel, status: args[2], phone_number: args[3] }; },
+    },
+    '../services/evolution-whatsapp': evolution,
+    '../services/inbound-text': { processInboundText: async () => { inboundCalls++; } },
+    '../services/webhook-inbox': { durableWebhook: (_provider, fn) => fn },
+  });
+  const res = response();
+  await handler(router, 'post', '/1/9/token')({
+    params: { orgId: '1', channelId: '9', token: 'token' },
+    body: { event: 'CONNECTION_UPDATE', data: { state: 'open', wuid: '56954565558@s.whatsapp.net' } },
+  }, res);
+  assert.equal(res.code, 200);
+  assert.deepEqual(updates, [[1, 9, 'connected', '56954565558']]);
+  assert.equal(inboundCalls, 0);
 });
