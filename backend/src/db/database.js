@@ -905,6 +905,17 @@ async function createOrder({ conversationId, organizationId, items, customerName
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
     [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice, status]
   );
+  // Un pedido ya persistido es la fuente de verdad. Cerrar cualquier toma de
+  // pedido anterior evita que el bot retome un carrito obsoleto después de
+  // que el equipo creó o corrigió la orden manualmente desde el chat.
+  if (conversationId) {
+    await pool.query(
+      `UPDATE conversations
+          SET pipeline_state = 'done', order_draft = '{}', updated_at = NOW()
+        WHERE id = $1 AND organization_id = $2`,
+      [conversationId, organizationId]
+    );
+  }
   // Actualizar last_order_at en contacts para que el broadcast lo excluya correctamente
   if (customerPhone) {
     const normPhone = normalizePhone(customerPhone);

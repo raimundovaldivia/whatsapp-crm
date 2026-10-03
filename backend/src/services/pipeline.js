@@ -24,7 +24,7 @@ const { recordRouteOutcome } = require('./delivery-attempts');
 
 const DELIVERY_STATUS_PATTERNS = [
   /(a\s+qu[eé]\s+hora|qu[eé]\s+hora|en\s+qu[eé]\s+horario|qu[eé]\s+horario|horario\s+de\s+(entrega|reparto|despacho))\b/i,
-  /\bcu[aá]ndo\b.{0,25}\b(llega|lleg[aá]|entregan?|entrega|despachan?|sale|viene|reparten)\b/i,
+  /\bcu[aá]ndo\b.{0,25}\b(llega|lleg[aá]|entregan?|entrega|despachan?|sale|viene|traen?|reparten)\b/i,
   /\b(ya\s+)?(va\s+en\s+camino|est[aá]\s+en\s+camino|en\s+ruta|va\s+en\s+ruta|sali[oó]\s+(mi|el)|despacharon|lo\s+mandaron|lo\s+enviaron)\b/i,
   /\b(hoy|ma[ñn]ana)\b.{0,20}\b(llega|entregan?|reparten|despachan?|lo\s+traen)\b/i,
   /\b(mi|el)\s+pedido\b.{0,30}\b(llega|viene|hora|cu[aá]ndo|en\s+camino|ruta)\b/i,
@@ -250,6 +250,7 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   const promotionContext = promotions.fromHistory(history, products) || promotions.restore(orderDraft?.promotion);
   const baseSpecialPrices = { ...specialPrices };
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
+  productosTexto = promotions.alignPromotedAvailability(productosTexto, promotionContext);
   const promotionSection = promotions.promptSection(promotionContext);
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
@@ -401,6 +402,21 @@ Reglas estrictas para responder sobre este pedido:
 4. El horario general de reparto NO confirma que este pedido salga hoy. Solo puedes afirmar que sale hoy si aparece en una ruta activa o tiene un estado explícito que lo confirme.
 5. Si el horario de reparto de hoy ya terminó, NUNCA digas "esta tarde", "va para allá hoy" ni prometas una entrega hoy. Explica el estado real y pide confirmación al equipo si no aparece en una ruta.
 6. Si el cliente quiere modificar o cancelar → dile que sí se puede hacer aquí mismo y pregúntale qué quiere cambiar (el sistema lo procesa automáticamente cuando lo diga).`;
+
+      // Compatibilidad con pedidos manuales creados antes de que createOrder
+      // comenzara a cerrar el borrador automáticamente. Si el historial ya
+      // contiene el comprobante exacto de este pedido, el carrito anterior no
+      // puede seguir gobernando la conversación.
+      const hasManualOrderReceipt = history.some(message =>
+        message?.direction === 'outbound'
+        && new RegExp(`Pedido\\s+#${activeOrder.id}\\s+generado`, 'iu').test(String(message.content || ''))
+      );
+      if (currentState === 'collecting_order' && hasManualOrderReceipt) {
+        currentState = 'done';
+        orderDraft = {};
+        await db.updatePipelineState(conversationId, 'done', {});
+        console.log(`[Pipeline] 🧹 Borrador obsoleto cerrado por pedido manual #${activeOrder.id}`);
+      }
 
       console.log(`[Pipeline] 📦 Pedido activo inyectado al contexto: id=${activeOrder.id} status=${activeOrder.status}`);
 
@@ -1815,7 +1831,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           [`\n[bot] Modificado por el cliente por WhatsApp (${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })})`, orderId]
         ).catch(() => {});
         saveContact();
-        await db.updatePipelineState(conversationId, 'done', updatedDraft);
+        await db.updatePipelineState(conversationId, 'done', {});
         console.log(`[Pipeline] ✏️ Pedido ${orderId} modificado por el cliente`);
         const msg = `✅ ¡Pedido actualizado!\n\n${summary}\n${who}\n\n¡Te avisamos cuando esté en camino! 🚀`;
         return {
@@ -1860,7 +1876,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         if (updatedDraft.delivery_date) orderMeta.delivery_date = updatedDraft.delivery_date;
         if (Object.keys(orderMeta).length) await db.updateOrder(order.id, orderMeta);
         saveContact();
-        await db.updatePipelineState(conversationId, 'done', updatedDraft);
+        await db.updatePipelineState(conversationId, 'done', {});
         console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id} (${itemsForDb.length} ítems, total ${priced.total})`);
         const successMsg = `✅ ¡Pedido confirmado!\n\n${summary}\n${who}\n\nEl pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
         return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id } };
@@ -1875,7 +1891,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     try {
       const result = await createShopifyOrder(orgId, conversationId, { ...updatedDraft, items: itemsForDb, total: priced.total });
       saveContact();
-      await db.updatePipelineState(conversationId, 'awaiting_payment', updatedDraft);
+      await db.updatePipelineState(conversationId, 'awaiting_payment', {});
       const successMsg = `✅ ¡Pedido creado!\n\n${summary}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Te avisamos cuando esté en camino! 🚀`;
       return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
     } catch (err) {

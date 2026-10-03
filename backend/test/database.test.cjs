@@ -16,6 +16,12 @@ test('PostgreSQL migrations, tenant payment isolation, rollback and expense idem
     await setup.setupDatabase(); // Migration must also be safe on the next boot.
     await engine.exec("INSERT INTO organizations (id,name,slug) VALUES (1,'A','a'),(2,'B','b'); INSERT INTO conversations(id,organization_id,phone_number) VALUES (1,1,'111'),(2,2,'222'); INSERT INTO orders(id,organization_id,conversation_id,items,total_price,status) VALUES (1,1,1,'[]','100','sent'),(2,2,2,'[]','100','sent'); INSERT INTO payment_proofs(id,organization_id,conversation_id,order_id,media_id) VALUES (1,1,1,1,'m1'),(2,2,2,2,'m2');");
     const db=load('src/db/database.js',{pg:{Pool}});
+    await engine.query("SELECT setval(pg_get_serial_sequence('orders','id'), 2, true)");
+    await engine.exec(`UPDATE conversations SET pipeline_state='collecting_order', order_draft='{"items":[{"product_name":"pedido viejo","quantity":1}]}' WHERE id=1`);
+    await db.createOrder({ conversationId:1, organizationId:1, items:[{name:'Pedido real',quantity:1,price:100}], customerName:'Cliente', customerPhone:'111', shippingAddress:{address:'Test'}, totalPrice:100 });
+    const reconciledConversation=(await engine.query('SELECT pipeline_state,order_draft FROM conversations WHERE id=1')).rows[0];
+    assert.equal(reconciledConversation.pipeline_state,'done');
+    assert.equal(reconciledConversation.order_draft,'{}');
     assert.equal(await db.updatePaymentProof(2,{status:'verified'},1),null);
     assert.equal((await engine.query('SELECT status FROM orders WHERE id=2')).rows[0].status,'sent');
     await db.updatePaymentProof(1,{status:'verified'},1);

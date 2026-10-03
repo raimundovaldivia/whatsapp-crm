@@ -151,6 +151,25 @@ test('interpreta una promoción mixta aunque sus reglas no estén en la ficha de
   assert.equal(promotion.fromHistory([mixedTemplate], mixedProducts, new Date('2026-10-01T15:00:00.000Z')).active, false);
 });
 
+test('un producto ofrecido en una promoción activa no se rechaza por stock cacheado en cero', () => {
+  const promoTemplate = {
+    direction: 'outbound',
+    created_at: '2026-10-03T12:30:00.000Z',
+    content: '[Template: promocion_general_entrega_mismo_dia]\nQueso de cabra 900 g $15.000 | Jumbo: 20 unidades $9.000 | Promoción válida hasta hoy.',
+  };
+  const promoProducts = [
+    { id: 'cheese', title: 'Queso de Cabra Fresco Pasteurizado', variants: [{ id: '900', title: '900 g', price: 15000, stock: 0, available: false }] },
+    { id: 'other', title: 'Producto no promocionado', variants: [{ id: 'x', title: 'Unidad', price: 5000, stock: 0, available: false }] },
+  ];
+  const promo = promotion.fromHistory([promoTemplate], promoProducts, new Date('2026-10-03T13:00:00.000Z'));
+  const catalog = '• Queso de Cabra Fresco Pasteurizado | $15.000\n  · 900 g: $15.000 (stock: 0) ❌ agotado\n\n• Producto no promocionado | $5.000\n  · Unidad: $5.000 (stock: 0) ❌ agotado';
+  const aligned = promotion.alignPromotedAvailability(catalog, promo);
+
+  assert.match(aligned, /Queso de Cabra[\s\S]*Disponibilidad: validar al registrar/i);
+  assert.doesNotMatch(aligned.split('\n\n')[0], /agotado|stock:\s*0/i);
+  assert.match(aligned.split('\n\n')[1], /agotado/i);
+});
+
 test('conserva la variedad en ofertas agrupadas y elige 60 XL sin confundirla con 60 Jumbo', () => {
   const groupedTemplate = {
     direction: 'outbound',

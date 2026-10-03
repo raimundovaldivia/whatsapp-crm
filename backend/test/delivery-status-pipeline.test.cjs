@@ -3,16 +3,17 @@ const assert = require('node:assert/strict');
 const { load } = require('./helpers.cjs');
 
 function buildPipeline(deliveryDate, status = 'draft', options = {}) {
+  const stateUpdates = options.stateUpdates || [];
   const db = {
     getConversationById: async () => ({
       id: 71,
       organization_id: 1,
       phone_number: '56911111111',
       contact_name: 'Katherine',
-      pipeline_state: 'exploring',
+      pipeline_state: options.pipelineState || 'exploring',
       agent_mode: 'ai',
     }),
-    getLastMessages: async () => [],
+    getLastMessages: async () => options.history || [],
     getSetting: async (_orgId, key) => key === 'delivery_info' && options.deliveryEnabled
       ? JSON.stringify({ schedule: options.schedule || 'Lunes a Sábado de 15:00 a 21:00' })
       : null,
@@ -30,7 +31,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       items: [{ quantity: 1, name: 'Caja 100 Huevos Jumbo' }],
       shipping_address: { address: 'Gobernador Demetrio Reygada 4005', city: 'Coquimbo' },
     }),
-    updatePipelineState: async () => {},
+    updatePipelineState: async (_id, state, draft) => stateUpdates.push({ state, draft }),
     getPool: () => ({
       query: async sql => ({
         rows: String(sql).includes("COALESCE(r.started_at") && options.todayRoute
@@ -54,6 +55,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       fromHistory: () => null,
       restore: () => null,
       promptSection: () => '',
+      alignPromotedAvailability: text => text,
       selectedOffer: () => null,
     },
     './payment-collection': { getPendingCharges: async () => [] },
@@ -91,6 +93,31 @@ test('la fecha real de un pedido futuro se responde aunque logística no esté h
 
   assert.equal(result.switchToHuman, false);
   assert.match(result.response, new RegExp(`agendado para el fecha ${future}`, 'i'));
+});
+
+test('"cuándo me traen el pedido" consulta el pedido real y no retoma un borrador anterior', async () => {
+  const pipeline = buildPipeline(null, 'draft');
+
+  const result = await pipeline.processMessage(1, 71, '¿Cuándo me traen el pedido?');
+
+  assert.equal(result.agentType, 'orchestrator');
+  assert.match(result.response, /pedido está en preparación/i);
+  assert.doesNotMatch(result.response, /pedido confirmado/i);
+});
+
+test('un comprobante de pedido manual cierra también un borrador antiguo ya existente', async () => {
+  const stateUpdates = [];
+  const pipeline = buildPipeline(null, 'draft', {
+    pipelineState: 'collecting_order',
+    stateUpdates,
+    history: [{ direction: 'outbound', content: '🛒 Pedido #88 generado\n\n• Queso de cabra x1' }],
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿Cuándo me traen el pedido?');
+
+  assert.equal(result.agentType, 'orchestrator');
+  assert.match(result.response, /pedido está en preparación/i);
+  assert.ok(stateUpdates.some(update => update.state === 'done' && Object.keys(update.draft || {}).length === 0));
 });
 
 test('una consulta sobre el reparto usa la ruta real y no cae en una escalación genérica', async () => {

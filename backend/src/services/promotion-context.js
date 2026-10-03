@@ -296,6 +296,34 @@ function promptSection(promotion) {
   return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}${categoryRules ? ` ${categoryRules}` : ''}${secondUnitRules ? ` ${secondUnitRules}` : ''}\n- ${validity}${ordering ? `\n- ${ordering}` : ''}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}${shipping ? `\n- ${shipping}` : ''}\n- Si el cliente pide directamente productos enumerados en esta promoción, registra TODOS los productos solicitados. No descartes uno ni anuncies que está agotado basándote solo en el stock cacheado; la disponibilidad se valida al procesar el pedido.\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
 }
 
+/**
+ * Si el comercio acaba de ofrecer un producto en una promoción activa, una
+ * marca de stock cacheada no puede convertirse en un rechazo automático.
+ * Se quita solamente el "agotado" de los bloques promocionados y se deja
+ * explícito que la disponibilidad se valida al registrar el pedido.
+ */
+function alignPromotedAvailability(catalogText, promotion) {
+  if (!catalogText || !promotion?.active || !Array.isArray(promotion.offers)) return catalogText || '';
+  const promotedTitles = promotion.offers
+    .map(offer => norm(offer.productTitle || ''))
+    .filter(Boolean)
+    .map(title => title.split(' ').filter(token => token.length >= 3 && !/^\d+$/.test(token)));
+  if (!promotedTitles.length) return catalogText;
+
+  return String(catalogText).split(/\n\n/).map(block => {
+    const normalizedBlock = norm(block);
+    const promoted = promotedTitles.some(titleTokens => {
+      const hits = titleTokens.filter(token => normalizedBlock.includes(token)).length;
+      return hits >= Math.min(2, titleTokens.length) && hits / titleTokens.length >= 0.6;
+    });
+    if (!promoted || !/agotado|stock:\s*0/iu.test(block)) return block;
+    const cleaned = block
+      .replace(/\s*\(stock:\s*0\)/giu, '')
+      .replace(/\s*❌\s*agotado/giu, '');
+    return `${cleaned}\n  Disponibilidad: validar al registrar el pedido (producto incluido en promoción activa).`;
+  }).join('\n\n');
+}
+
 function optionText(promotion) {
   const offers = promotion.offers.map(offer => `${offer.label} a $${offer.price.toLocaleString('es-CL')}`).join(', ');
   return offers || (promotion.discountPct ? `${promotion.discountPct}% de descuento en tu pedido` : 'la promoción indicada');
@@ -385,4 +413,4 @@ function appliesToDelivery(promotion, deliveryDate) {
   return String(deliveryDate).slice(0, 10) <= promotion.validUntil;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };
+module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };
