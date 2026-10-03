@@ -83,7 +83,8 @@ router.get('/:slug/products', async (req, res) => {
     const org = await getOrgBySlug(req.params.slug);
     if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
 
-    const products = await db.getProducts(org.id, true); // solo activos
+    const products = (await db.getProducts(org.id, true))
+      .filter(product => product.is_business !== true); // nunca exponer catálogo mayorista
     res.json({ products });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -110,7 +111,8 @@ router.post('/:slug/orders', async (req, res) => {
     if (!items?.length)   return res.status(400).json({ error: 'Agrega al menos un producto' });
 
     // Resolver productos y calcular total
-    const allProducts = await db.getProducts(org.id, true);
+    const allProducts = (await db.getProducts(org.id, true))
+      .filter(product => product.is_business !== true);
     const productMap  = new Map(allProducts.map(p => [p.id, p]));
 
     const resolvedItems = [];
