@@ -126,7 +126,7 @@ function parseDiscountPct(body) {
 }
 
 function explicitUntil(body, sentDay) {
-  const m = String(body || '').match(/(?:v[aá]lid[oa]|vigente).{0,30}?hasta(?:\s+el)?\s+(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?/iu);
+  const m = String(body || '').match(/(?:v[aá]lid[oa]|vigente).{0,30}?hasta(?:\s+el)?(?:\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo))?\s*,?\s*(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?/iu);
   if (!m) return null;
   let year = m[3] ? Number(m[3]) : Number(String(sentDay || '').slice(0, 4));
   if (year < 100) year += 2000;

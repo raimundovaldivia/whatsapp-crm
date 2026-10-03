@@ -159,6 +159,7 @@ test('conserva la variedad en ofertas agrupadas y elige 60 XL sin confundirla co
 🥚✨ ¡Tenemos promos Jenny! | 📅 Promoción válida hasta el sábado 03/10/2026, inclusive. | 🥚 Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | 100 unidades $37.000 | 🥚 XL: 30 unidades $12.000 | 60 unidades $23.000 | 90 unidades $34.000 | 🧀 Queso de cabra 900 g $15.000 | 🚚 Despacho gratis en compras desde $10.000`,
   };
   const promo = promotion.fromHistory([groupedTemplate], products, new Date('2026-10-01T16:17:00.000Z'));
+  assert.equal(promo.validUntil, '2026-10-03');
   assert.deepEqual(
     promo.offers.filter(offer => offer.units === 60).map(offer => [offer.label, offer.price]),
     [['60 Jumbo', 25500], ['60 XL', 23000]],
@@ -168,6 +169,7 @@ test('conserva la variedad en ofertas agrupadas y elige 60 XL sin confundirla co
   assert.deepEqual(promotion.offerOrderItem(selected), {
     product_name: '60 huevos XL', quantity: 1, price: 23000, locked_quote: true, promotion_offer: true,
   });
+  assert.equal(promotion.fromHistory([groupedTemplate], products, new Date('2026-10-03T12:00:00.000Z')).active, true);
 });
 
 test('una promoción sin vigencia explícita vence automáticamente en 24 horas', () => {
