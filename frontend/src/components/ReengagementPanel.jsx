@@ -1252,6 +1252,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [paymentRetryPhones, setPaymentRetryPhones] = useState(new Set());
   const [followUpPreview, setFollowUpPreview] = useState(null);
   const [followUpBusy, setFollowUpBusy] = useState(false);
+  const [statusCheckCampaign, setStatusCheckCampaign] = useState(null);
   const [prodTerm,  setProdTerm]  = useState('');    // texto del filtro por producto
   const [prodPhones, setProdPhones] = useState(null); // Set de teléfonos que compraron el producto (null = sin filtro)
   const [prodBusy,  setProdBusy]  = useState(false);
@@ -1283,7 +1284,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [historyOpen]);
 
-  async function toggleCampaignDetails(campaignId) {
+  async function toggleCampaignDetails(campaign) {
+    const campaignId = campaign.id;
     if (String(expandedCampaign) === String(campaignId)) {
       setExpandedCampaign(null);
       setCampaignRecipients([]);
@@ -1294,6 +1296,20 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setCampaignRecipients([]);
     setFollowUpPreview(null);
     try {
+      if (campaign.status === 'paused_payment' && Number(campaign.accepted_count || 0) > 0) {
+        setStatusCheckCampaign(campaignId);
+        try {
+          const { data: verified } = await api.post(`/reengagement/campaigns/${campaignId}/reconcile-statuses`, {});
+          if (verified.checked > 0) {
+            showToast(`Estados verificados con Meta: ${verified.checked}${verified.failed ? ` · ${verified.failed} fallidos confirmados` : ''}.`);
+            await loadCampaigns();
+          }
+        } catch (error) {
+          showToast(error.response?.data?.error || 'No se pudieron verificar todos los estados con Meta', 'error');
+        } finally {
+          setStatusCheckCampaign(null);
+        }
+      }
       const { data } = await api.get(`/reengagement/campaigns/${campaignId}`);
       setCampaignRecipients(data.recipients || []);
     } catch {
@@ -2023,12 +2039,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             const isOpen = String(expandedCampaign) === String(campaign.id);
             return (
               <div key={campaign.id} style={{ border: `1px solid ${(failed || campaign.status === 'paused_payment') ? colors.red + '55' : colors.border}`, borderRadius: 9, backgroundColor: colors.bgCard, overflow: 'hidden' }}>
-                <button onClick={() => toggleCampaignDetails(campaign.id)} style={{ width: '100%', border: 'none', background: 'transparent', color: colors.textPrimary, padding: '10px 12px', cursor: 'pointer', textAlign: 'left' }}>
+                <button onClick={() => toggleCampaignDetails(campaign)} style={{ width: '100%', border: 'none', background: 'transparent', color: colors.textPrimary, padding: '10px 12px', cursor: 'pointer', textAlign: 'left' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 800 }}>{campaign.template_name}{campaign.test_mode ? ' · 🧪 Prueba' : ''}</div>
                       <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>{new Date(campaign.created_at).toLocaleString('es-CL')} · {campaign.total_count} seleccionados</div>
                       {campaign.status === 'paused_payment' && <div style={{ color: colors.red, fontSize: 10, fontWeight: 850, marginTop: 4 }}>🛑 Detenida automáticamente por pago de Meta · código {campaign.pause_code || '131042'}</div>}
+                      {String(statusCheckCampaign) === String(campaign.id) && <div style={{ color: colors.blue, fontSize: 10, fontWeight: 750, marginTop: 4 }}>↻ Verificando cada envío con Meta…</div>}
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, fontWeight: 700 }}>
                       {read > 0 && <span style={{ color: colors.green }}>👁 {read} leídos</span>}

@@ -126,6 +126,33 @@ test('pending Kapso templates recover their provider status without guessing fai
  assert.equal(recovered[0].status,'failed');
  assert.equal(await recovery.reconcilePendingMessages(7,messages,{provider:'meta'}).then(x=>x.length),0);
 });
+test('campaign reconciliation replaces initial acceptance with the provider final status',async()=>{
+ const messageUpdates=[];const recipientUpdates=[];let paused=0;
+ const db={
+  getWhatsappConfig:async()=>({provider:'kapso',phone_number_id:'pn'}),
+  getPool:()=>({query:async(sql,args)=>{
+   if(sql.includes('SELECT r.id'))return {rows:[
+    {id:1,whatsapp_message_id:'wamid.failed',local_status:'sent'},
+    {id:2,whatsapp_message_id:'wamid.read',local_status:'sent'},
+   ]};
+   if(sql.includes('UPDATE broadcast_campaign_recipients')){recipientUpdates.push(args);return {rows:[]}};
+   throw Error('Unexpected query');
+  }}),
+  updateMessageStatus:async(...args)=>{messageUpdates.push(args);return {status:args[1]};},
+ };
+ const service=load('src/services/broadcast-status-reconciliation.js',{
+  '../db/database':db,
+  './kapso-whatsapp':{getMessageStatus:async id=>id.endsWith('failed')
+   ?{status:'failed',error:[{code:131042}]}:{status:'read',error:null}},
+  './broadcast-campaign-guard':{META_PAYMENT_ERROR:'131042',pauseForPaymentFailure:async()=>{paused++;}},
+ });
+ const result=await service.reconcileCampaignStatuses(7,22);
+ assert.equal(result.checked,2);assert.equal(result.updated,2);
+ assert.equal(result.failed,1);assert.equal(result.pending,0);
+ assert.equal(messageUpdates.length,2);assert.equal(recipientUpdates.length,2);assert.equal(paused,1);
+ assert.equal(recipientUpdates.find(args=>args[4]===1)[0],'failed');
+ assert.equal(recipientUpdates.find(args=>args[4]===2)[0],'read');
+});
 test('collection retries confirmed failures and blocks pending, unknown and concurrent sends',async()=>{
  let current={source:'bot',id:'1',customer_phone:'111',total_price:100,order_label:'#1',charge_requested_at:new Date(),charge_status:'pending'};
  let sends=0,saved,registered,locked=true;

@@ -1891,6 +1891,22 @@ router.get('/campaigns/:id', async (req, res) => {
   }
 });
 
+router.post('/campaigns/:id/reconcile-statuses', async (req, res) => {
+  try {
+    const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
+    if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    const result = await require('../services/broadcast-status-reconciliation').reconcileCampaignStatuses(
+      req.orgId,
+      campaign.id,
+      { force: req.body?.force === true }
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[CampaignStatus]', err.message);
+    res.status(500).json({ success: false, error: 'No se pudieron verificar los estados con Meta' });
+  }
+});
+
 router.get('/campaigns/:id/payment-retry-preview', async (req, res) => {
   try {
     const campaign = await getBroadcastCampaign(req.orgId, req.params.id);

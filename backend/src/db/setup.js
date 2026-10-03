@@ -869,6 +869,10 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS language_code TEXT DEFAULT 'es';
       ALTER TABLE broadcast_campaign_recipients
         ADD COLUMN IF NOT EXISTS template_components JSONB;
+      ALTER TABLE broadcast_campaign_recipients
+        ADD COLUMN IF NOT EXISTS provider_checked_at TIMESTAMPTZ;
+      ALTER TABLE broadcast_campaign_recipients
+        ADD COLUMN IF NOT EXISTS provider_status TEXT;
 
       ALTER TABLE broadcast_campaign_recipients
         DROP CONSTRAINT IF EXISTS broadcast_campaign_recipients_result_status_check;
