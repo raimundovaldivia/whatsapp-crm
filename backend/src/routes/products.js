@@ -18,6 +18,14 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 router.use(requireAuth);
 router.use(requireRole('owner', 'admin'));
 
+const hasForbiddenEggPack = (title = '') => {
+  const normalized = String(title).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (!normalized.includes('huevo')) return false;
+  return [...normalized.matchAll(/(\d+)\s*(?:huevos?|unidades?|un\b)/g)].some(match => Number(match[1]) === 25);
+};
+
+const EGG_PACK_ERROR = 'No existen bandejas de 25 huevos. Usa una presentación válida de 20 o 30 huevos.';
+
 // ── GET /api/products ──────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
@@ -33,6 +41,7 @@ router.post('/', async (req, res) => {
   try {
     const { title, description, price, comparePrice, sku, stock, imageUrl, active, position, category, isBusiness, bulkPrice, bulkMinQty } = req.body;
     if (!title || price == null) return res.status(400).json({ error: 'title y price son requeridos' });
+    if (hasForbiddenEggPack(title)) return res.status(400).json({ error: EGG_PACK_ERROR });
     const product = await db.createProduct(req.orgId, { title, description, price, comparePrice, sku, stock, imageUrl, active, position, category, isBusiness, bulkPrice, bulkMinQty });
     res.status(201).json({ product });
   } catch (err) {
@@ -44,6 +53,9 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { title, description, price, compare_price, comparePrice, sku, stock, image_url, imageUrl, active, position, category, isBusiness, is_business, bulkPrice, bulk_price, bulkMinQty, bulk_min_qty } = req.body;
+    const existing = await db.getProductById(req.orgId, parseInt(req.params.id));
+    if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
+    if (hasForbiddenEggPack(title ?? existing.title)) return res.status(400).json({ error: EGG_PACK_ERROR });
     const updates = {};
     if (title       !== undefined) updates.title         = title;
     if (description !== undefined) updates.description   = description;
@@ -93,7 +105,7 @@ router.post('/import-shopify', async (req, res) => {
     // Traer TODOS los productos con paginación completa
     const shopifyProducts = await shopifyApi.getAllProducts(shop, token);
 
-    let imported = 0, updated = 0;
+    let imported = 0, updated = 0, rejected = 0;
     const existing = await db.getProducts(req.orgId);
     const existingTitles = new Map(existing.map(p => [p.title.toLowerCase(), p]));
 
@@ -108,6 +120,11 @@ router.post('/import-shopify', async (req, res) => {
       const stock       = variant.stock ?? variant.inventoryQuantity ?? -1;
       const active      = sp.status === 'ACTIVE' || sp.status === 'active';
       const category    = sp.productType || null;
+
+      if (hasForbiddenEggPack(title)) {
+        rejected++;
+        continue;
+      }
 
       // imageUrl viene directamente como URL (GraphQL) — no como { src }
       const shopifyImageUrl = sp.imageUrl || sp.image || null;
@@ -138,7 +155,7 @@ router.post('/import-shopify', async (req, res) => {
       }
     }
 
-    res.json({ success: true, imported, updated, total: imported + updated, imagesHostedOnR2: r2.isConfigured() });
+    res.json({ success: true, imported, updated, rejected, total: imported + updated, imagesHostedOnR2: r2.isConfigured() });
   } catch (err) {
     console.error('[Products] Error importando desde Shopify:', err.message);
     res.status(500).json({ error: err.message });

@@ -454,6 +454,12 @@ export default function ProductsPanel({ orgSlug }) {
 
   const handleSave = async () => {
     if (!form.title.trim() || !form.price) return;
+    const normalizedTitle = form.title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const has25EggPack = normalizedTitle.includes('huevo') && [...normalizedTitle.matchAll(/(\d+)\s*(?:huevos?|unidades?|un\b)/g)].some(match => Number(match[1]) === 25);
+    if (has25EggPack) {
+      alert('No existen bandejas de 25 huevos. Usa una presentación de 20 o 30 huevos.');
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
