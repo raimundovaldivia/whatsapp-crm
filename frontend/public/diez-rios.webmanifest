@@ -10,9 +10,9 @@
   "lang": "es-CL",
   "icons": [
     {
-      "src": "/store-assets/diez-rios/caja-logo-huevos-mixtos-v6.jpg",
-      "sizes": "900x900",
-      "type": "image/jpeg",
+      "src": "/store-assets/diez-rios/icono-diez-rios-oficial-v1.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
       "purpose": "any"
     }
   ]
