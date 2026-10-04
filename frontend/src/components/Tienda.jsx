@@ -18,7 +18,7 @@ const eggImage = p => {
   const name=norm(p?.title), units=unitsFor(p), bulk=Number(units)>=100;
   const tone=name.includes('blanco')?'blancos':name.includes('cafe')?'cafe':'mixtos';
   if(bulk)return`caja-cerrada-huevos-${tone}-v4.jpg`;
-  if(units===20)return'huevos-mixtos-20-hogar-v4.jpg';
+  if(units===20)return`huevos-${tone}-20-hogar-v4.jpg`;
   if(tone==='cafe')return'huevos-cafe-30-hogar-v4.jpg';
   return`huevos-${tone}-hogar-v3.jpg`;
 };
