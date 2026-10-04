@@ -80,6 +80,7 @@ async function setupDatabase() {
         evolution_api_key          TEXT,
         evolution_instance         TEXT,
         evolution_webhook_token    TEXT,
+        display_phone_number       TEXT,
         status                     TEXT DEFAULT 'pending',
         created_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
@@ -93,6 +94,7 @@ async function setupDatabase() {
       ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS evolution_api_key       TEXT;
       ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS evolution_instance      TEXT;
       ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS evolution_webhook_token TEXT;
+      ALTER TABLE whatsapp_configs ADD COLUMN IF NOT EXISTS display_phone_number    TEXT;
 
       -- ─── CANALES DE WHATSAPP (varios números por organización) ───
       CREATE TABLE IF NOT EXISTS whatsapp_channels (

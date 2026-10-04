@@ -17,9 +17,13 @@ let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 async function outboundConfig(orgId, conversation = null, requestedChannelId = null) {
+  if (requestedChannelId === 'official' || requestedChannelId === 'legacy') {
+    return db.getWhatsappConfig(orgId);
+  }
   const channelId = requestedChannelId || conversation?.whatsapp_channel_id;
-  if (channelId) {
-    const channel = await db.getWhatsappChannel(orgId, Number(channelId));
+  const numericChannelId = Number(channelId);
+  if (channelId && Number.isInteger(numericChannelId) && numericChannelId > 0) {
+    const channel = await db.getWhatsappChannel(orgId, numericChannelId);
     if (channel) return channel;
   }
   const legacyConfig = await db.getWhatsappConfig(orgId);
@@ -52,7 +56,6 @@ router.get('/:id/messages', async (req, res) => {
   try {
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
-
     let messages = await db.getMessagesByConversation(conv.id, parseInt(req.query.limit) || 50);
     const wc = await outboundConfig(req.orgId, conv);
     const recovered = await reconcilePendingMessages(req.orgId, messages, wc).catch(err => {
@@ -452,6 +455,9 @@ router.post('/:id/send-template', async (req, res) => {
 
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
+    if (conv.whatsapp_channel_id) {
+      return res.status(400).json({ success: false, error: 'Los templates pertenecen al número oficial. Abre la conversación Kapso/Meta de este cliente para enviarlo.' });
+    }
 
     const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });

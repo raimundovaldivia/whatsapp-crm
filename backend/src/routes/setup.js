@@ -381,6 +381,7 @@ router.post('/kapso/save', requireAuth, async (req, res) => {
       kapsoCustomerId:    wc?.kapso_customer_id || null,
       kapsoApiKey:        wc?.kapso_api_key     || null,
       webhookSecret:      wc?.webhook_secret    || null,
+      displayPhoneNumber: displayPhoneNumber     || null,
     });
 
     // Configurar el webhook en Kapso automáticamente usando la Platform API
@@ -408,6 +409,7 @@ router.post('/kapso/save', requireAuth, async (req, res) => {
             kapsoCustomerId:   wc2?.kapso_customer_id || null,
             kapsoApiKey:       wc2?.kapso_api_key     || null,
             webhookSecret:     webhookResult.generatedSecret,
+            displayPhoneNumber: displayPhoneNumber || null,
           });
           console.log(`[Setup/Kapso] ✅ webhook_secret guardado en DB`);
         }

@@ -91,11 +91,7 @@ export default function ConversationItem({ conversation, selected, onClick }) {
             }}>
               {displayName}
             </span>
-            {(displayPhone || conversation.whatsapp_channel_name) && (
-              <span style={{ fontSize: '11px', color: colors.textSecondary, display: 'block' }}>
-                {[displayPhone, conversation.whatsapp_channel_name ? `vía ${conversation.whatsapp_channel_name}` : null].filter(Boolean).join(' · ')}
-              </span>
-            )}
+            {displayPhone && <span style={{ fontSize: '11px', color: colors.textSecondary, display: 'block' }}>{displayPhone}</span>}
           </div>
           <span style={{ fontSize: '11px', color: unread_count > 0 ? colors.green : colors.textSecondary, flexShrink: 0 }}>
             {timeAgoStr}
@@ -134,6 +130,19 @@ export default function ConversationItem({ conversation, selected, onClick }) {
               {unread_count > 99 ? '99+' : unread_count}
             </span>
           )}
+        </div>
+        <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <span style={{
+            fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '10px',
+            color: conversation.whatsapp_provider === 'evolution' ? '#60a5fa' : colors.green,
+            backgroundColor: conversation.whatsapp_provider === 'evolution' ? '#2563eb22' : `${colors.green}18`,
+            border: `1px solid ${conversation.whatsapp_provider === 'evolution' ? '#3b82f655' : colors.green + '44'}`,
+          }}>
+            {conversation.whatsapp_provider === 'evolution' ? 'Evolution' : conversation.whatsapp_provider === 'kapso' ? 'Kapso' : 'WhatsApp oficial'}
+          </span>
+          <span style={{ fontSize: '10px', color: colors.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {conversation.whatsapp_channel_phone ? `+${String(conversation.whatsapp_channel_phone).replace(/^\+/, '')}` : conversation.whatsapp_channel_name}
+          </span>
         </div>
       </div>
     </div>

@@ -898,11 +898,28 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               </div>
             )}
             {!isMobile && (
-              <div onClick={openHistory}
-                style={{ fontSize: '12px', color: colors.green, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                title="Ver historial de compras">
-                <History size={11} />
-                {conversation.phone_number}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                <div onClick={openHistory}
+                  style={{ fontSize: '12px', color: colors.green, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  title="Ver historial de compras">
+                  <History size={11} />
+                  Cliente: {conversation.phone_number}
+                </div>
+                <span style={{ color: colors.textMuted, fontSize: '10px' }}>·</span>
+                <div title="Número del negocio usado en esta conversación" style={{
+                  fontSize: '11px', fontWeight: 700, padding: '2px 7px', borderRadius: '10px',
+                  color: conversation.whatsapp_provider === 'evolution' ? '#60a5fa' : colors.green,
+                  backgroundColor: conversation.whatsapp_provider === 'evolution' ? '#2563eb22' : `${colors.green}18`,
+                  border: `1px solid ${conversation.whatsapp_provider === 'evolution' ? '#3b82f655' : colors.green + '44'}`,
+                }}>
+                  {conversation.whatsapp_provider === 'evolution' ? 'Evolution' : conversation.whatsapp_provider === 'kapso' ? 'Kapso' : 'WhatsApp oficial'}
+                  {' · '}{conversation.whatsapp_channel_phone ? `+${String(conversation.whatsapp_channel_phone).replace(/^\+/, '')}` : conversation.whatsapp_channel_name || 'número pendiente de identificar'}
+                </div>
+              </div>
+            )}
+            {isMobile && (
+              <div style={{ color: colors.textSecondary, fontSize: '9px', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {conversation.whatsapp_provider === 'evolution' ? 'Evolution' : conversation.whatsapp_provider === 'kapso' ? 'Kapso' : 'WhatsApp oficial'} · {conversation.whatsapp_channel_phone ? `+${String(conversation.whatsapp_channel_phone).replace(/^\+/, '')}` : conversation.whatsapp_channel_name || 'sin número visible'}
               </div>
             )}
           </div>
@@ -945,7 +962,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             <ShoppingCart size={13} />
             {!isMobile && 'Nueva orden'}
           </button>
-          <button
+          {!conversation.whatsapp_channel_id && <button
             onClick={openTemplateModal}
             title="Enviar template de WhatsApp"
             style={{
@@ -960,7 +977,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           >
             <FileText size={13} />
             {!isMobile && 'Template'}
-          </button>
+          </button>}
           {isHotLead && (
             <button
               onClick={handleRemoveHotLead}
@@ -1069,8 +1086,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 }}>
                   <MobileHeaderAction icon={<ShoppingCart size={17} />} label="Crear pedido" colors={colors}
                     onClick={() => { setMobileActionsOpen(false); openOrderModal(); }} />
-                  <MobileHeaderAction icon={<FileText size={17} />} label="Enviar template" colors={colors}
-                    onClick={() => { setMobileActionsOpen(false); openTemplateModal(); }} />
+                  {!conversation.whatsapp_channel_id && <MobileHeaderAction icon={<FileText size={17} />} label="Enviar template" colors={colors}
+                    onClick={() => { setMobileActionsOpen(false); openTemplateModal(); }} />}
                   <MobileHeaderAction icon={<History size={17} />} label="Historial de compras" colors={colors}
                     onClick={() => { setMobileActionsOpen(false); openHistory(); }} />
                   <MobileHeaderAction icon={<BarChart2 size={17} />} label="Analizar conversación" colors={colors}
@@ -1277,7 +1294,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 </div>
               );
             }
-            acc.push(<MessageBubble key={msg.id} message={msg} />);
+            acc.push(<MessageBubble key={msg.id} message={msg} conversation={conversation} />);
             return acc;
           }, [])
         )}

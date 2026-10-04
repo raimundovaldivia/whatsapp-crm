@@ -154,9 +154,10 @@ async function upsertWhatsappConfig(orgId, config) {
       twilio_account_sid, twilio_auth_token, twilio_phone_number,
       kapso_api_key, webhook_secret, kapso_customer_id,
       evolution_api_url, evolution_api_key, evolution_instance, evolution_webhook_token,
+      display_phone_number,
       status
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'connected')
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'connected')
     ON CONFLICT(organization_id) DO UPDATE SET
       provider              = EXCLUDED.provider,
       phone_number_id       = EXCLUDED.phone_number_id,
@@ -173,6 +174,7 @@ async function upsertWhatsappConfig(orgId, config) {
       evolution_api_key       = EXCLUDED.evolution_api_key,
       evolution_instance      = EXCLUDED.evolution_instance,
       evolution_webhook_token = EXCLUDED.evolution_webhook_token,
+      display_phone_number     = COALESCE(EXCLUDED.display_phone_number, whatsapp_configs.display_phone_number),
       status                = 'connected'`,
     [
       orgId,
@@ -191,6 +193,7 @@ async function upsertWhatsappConfig(orgId, config) {
       config.evolutionApiKey       || null,
       config.evolutionInstance     || null,
       config.evolutionWebhookToken || null,
+      config.displayPhoneNumber     || null,
     ]
   );
 }
@@ -505,10 +508,14 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
          END AS contact_name,
          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
          co.client_type,
-         wc.name AS whatsapp_channel_name,
-         wc.phone_number AS whatsapp_channel_phone
+         COALESCE(wc.name,
+           CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END
+         ) AS whatsapp_channel_name,
+         COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
+         COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider
        FROM conversations c
        LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+       LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
        LEFT JOIN contacts co ON co.organization_id = c.organization_id
                              AND co.phone = ANY(ARRAY[
                                    c.phone_number,
@@ -526,10 +533,17 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
 }
 
 async function getConversationById(id, orgId = null) {
+  const select = `SELECT c.*,
+      COALESCE(wc.name, CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END) AS whatsapp_channel_name,
+      COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
+      COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider
+    FROM conversations c
+    LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+    LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id`;
   if (orgId) {
-    return queryOne('SELECT * FROM conversations WHERE id = $1 AND organization_id = $2', [id, orgId]);
+    return queryOne(`${select} WHERE c.id = $1 AND c.organization_id = $2`, [id, orgId]);
   }
-  return queryOne('SELECT * FROM conversations WHERE id = $1', [id]);
+  return queryOne(`${select} WHERE c.id = $1`, [id]);
 }
 
 async function updateConversationLastMessage(id, message, incrementUnread = false) {
@@ -752,7 +766,17 @@ async function saveMessage({ conversationId, whatsappMessageId, direction, conte
 async function getMessagesByConversation(conversationId, limit = 80) {
   // Traer los N más recientes (DESC) y luego invertir para mostrar en orden cronológico (ASC)
   const rows = await query(
-    'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2',
+    `SELECT m.*,
+            c.whatsapp_channel_id,
+            COALESCE(wc.name, CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END) AS whatsapp_channel_name,
+            COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS business_phone_number,
+            COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+       LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
+      WHERE m.conversation_id = $1
+      ORDER BY m.created_at DESC LIMIT $2`,
     [conversationId, limit]
   );
   return rows.reverse();
@@ -763,9 +787,16 @@ async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80) {
   if (!normalized) return [];
   const rows = await query(
     `SELECT recent.* FROM (
-       SELECT m.*
+       SELECT m.*,
+              c.whatsapp_channel_id,
+              wc.name AS whatsapp_channel_name,
+              wc.phone_number AS whatsapp_channel_phone,
+              CASE WHEN c.whatsapp_channel_id IS NULL THEN COALESCE(cfg.provider, 'meta') ELSE wc.provider END AS whatsapp_provider,
+              CASE WHEN c.whatsapp_channel_id IS NULL THEN cfg.display_phone_number ELSE wc.phone_number END AS business_phone_number
          FROM messages m
          JOIN conversations c ON c.id = m.conversation_id
+         LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+         LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
         WHERE c.organization_id = $1
           AND regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g') = $2
         ORDER BY m.created_at DESC
@@ -776,6 +807,7 @@ async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80) {
   );
   return rows;
 }
+
 
 async function getLastMessages(conversationId, limit = 10) {
   const rows = await query(

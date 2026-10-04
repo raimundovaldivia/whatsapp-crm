@@ -24,7 +24,7 @@ function parseTemplateContent(content) {
   return { name, body: rest || null };
 }
 
-export default function MessageBubble({ message }) {
+export default function MessageBubble({ message, conversation }) {
   const { colors, isDark } = useTheme();
   const isOutbound = message.direction === 'outbound';
   const isAI = message.sent_by === 'ai';
@@ -48,6 +48,10 @@ export default function MessageBubble({ message }) {
   };
 
   const templateData = parseTemplateContent(message.content);
+  const provider = message.whatsapp_provider || conversation?.whatsapp_provider;
+  const businessPhone = message.business_phone_number || conversation?.whatsapp_channel_phone;
+  const channelName = message.whatsapp_channel_name || conversation?.whatsapp_channel_name;
+  const channelLabel = `${provider === 'evolution' ? 'Evolution' : provider === 'kapso' ? 'Kapso' : 'WhatsApp oficial'}${businessPhone ? ` · +${String(businessPhone).replace(/^\+/, '')}` : channelName ? ` · ${channelName}` : ''}`;
 
   return (
     <div style={{
@@ -73,6 +77,9 @@ export default function MessageBubble({ message }) {
             )}
           </div>
         )}
+        <div style={{ fontSize: '9px', color: colors.textSecondary, marginBottom: '2px', padding: '0 4px', opacity: 0.9 }}>
+          {isOutbound ? `Enviado por ${channelLabel}` : `Recibido en ${channelLabel}`}
+        </div>
 
         {isOutbound && message.status === 'failed' && (
           <div role="alert" style={{ color: colors.red, fontSize: '12px', marginBottom: '4px', maxWidth: '420px' }}>

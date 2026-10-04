@@ -273,6 +273,7 @@ router.get('/whatsapp', async (req, res) => {
         // Kapso
         kapsoApiKey:        mask(wc.kapso_api_key),
         webhookSecret:      mask(wc.webhook_secret),
+        displayPhoneNumber:  wc.display_phone_number || '',
         // Estado
         status:             wc.status || 'pending',
       },
@@ -282,10 +283,45 @@ router.get('/whatsapp', async (req, res) => {
   }
 });
 
-/** Canales de WhatsApp: cada número Evolution es una instancia independiente. */
+/** Guarda solo el teléfono visible del número oficial, sin tocar credenciales. */
+router.patch('/whatsapp/display-phone', async (req, res) => {
+  try {
+    const phone = String(req.body?.displayPhoneNumber || '').replace(/[^0-9]/g, '');
+    if (phone && (phone.length < 8 || phone.length > 15)) {
+      return res.status(400).json({ success: false, error: 'Ingresa un número válido con código de país' });
+    }
+    const result = await db.getPool().query(
+      `UPDATE whatsapp_configs SET display_phone_number = $1
+        WHERE organization_id = $2 RETURNING display_phone_number`,
+      [phone || null, req.orgId]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, error: 'WhatsApp oficial no está configurado' });
+    res.json({ success: true, data: { displayPhoneNumber: result.rows[0].display_phone_number } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Todos los números disponibles: oficial (Kapso/Meta/Twilio) + Evolution. */
 router.get('/whatsapp/channels', async (req, res) => {
   try {
-    const channels = await db.listWhatsappChannels(req.orgId);
+    const [evolutionChannels, official] = await Promise.all([
+      db.listWhatsappChannels(req.orgId),
+      db.getWhatsappConfig(req.orgId),
+    ]);
+    const channels = [];
+    if (official?.status === 'connected') {
+      channels.push({
+        id: 'official',
+        provider: official.provider || 'meta',
+        name: official.provider === 'kapso' ? 'WhatsApp Oficial (Kapso)' : 'WhatsApp Oficial',
+        phone_number: official.display_phone_number || official.twilio_phone_number || null,
+        phone_number_id: official.phone_number_id || null,
+        status: official.status,
+        is_default: evolutionChannels.length === 0,
+      });
+    }
+    channels.push(...evolutionChannels);
     res.json({ success: true, data: channels });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -524,7 +560,7 @@ router.put('/whatsapp', async (req, res) => {
         status: 'connected',
       });
     } else if (provider === 'kapso') {
-      const { kapsoApiKey, phoneNumberId, webhookSecret, businessAccountId } = req.body;
+      const { kapsoApiKey, phoneNumberId, webhookSecret, businessAccountId, displayPhoneNumber } = req.body;
       if (!kapsoApiKey || !phoneNumberId) {
         return res.status(400).json({ success: false, error: 'Kapso requiere API Key y Phone Number ID' });
       }
@@ -533,17 +569,18 @@ router.put('/whatsapp', async (req, res) => {
         phoneNumberId, kapsoApiKey,
         businessAccountId: businessAccountId || null,  // WABA ID para templates
         webhookSecret: webhookSecret || null,
+        displayPhoneNumber: displayPhoneNumber || null,
         status: 'connected',
       });
     } else {
-      const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken } = req.body;
+      const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken, displayPhoneNumber } = req.body;
       if (!phoneNumberId || !accessToken || !webhookVerifyToken) {
         return res.status(400).json({ success: false, error: 'Meta requiere Phone Number ID, Access Token y Webhook Verify Token' });
       }
       await db.upsertWhatsappConfig(req.orgId, {
         provider: 'meta',
         phoneNumberId, businessAccountId, accessToken, webhookVerifyToken,
-        status: 'connected',
+        displayPhoneNumber: displayPhoneNumber || null, status: 'connected',
       });
     }
 

@@ -558,6 +558,8 @@ function WhatsAppTab() {
   const [kapsoPhoneId,    setKapsoPhoneId]    = useState('');
   const [kapsoWabaId,     setKapsoWabaId]     = useState('');  // WABA ID para templates
   const [webhookSecret,   setWebhookSecret]   = useState('');
+  const [displayPhone,    setDisplayPhone]    = useState('');
+  const [savingDisplayPhone, setSavingDisplayPhone] = useState(false);
   const [savingWabaId,    setSavingWabaId]    = useState(false);
   const [wabaIdSuccess,   setWabaIdSuccess]   = useState('');
 
@@ -580,6 +582,7 @@ function WhatsAppTab() {
       setKapsoPhoneId(d.phoneNumberId || '');  // Kapso también usa phone_number_id
       setKapsoWabaId(d.businessAccountId || '');  // WABA ID para templates
       setWebhookSecret(d.webhookSecret || '');
+      setDisplayPhone(d.displayPhoneNumber || '');
     }).catch(() => {}).finally(() => setLoading(false));
   };
 
@@ -591,8 +594,8 @@ function WhatsAppTab() {
       const body = provider === 'twilio'
         ? { provider: 'twilio', twilioAccountSid: twilioSid, twilioAuthToken: twilioToken, twilioPhoneNumber: twilioPhone }
         : provider === 'kapso'
-        ? { provider: 'kapso', kapsoApiKey, phoneNumberId: kapsoPhoneId, webhookSecret, businessAccountId: kapsoWabaId || null }
-        : { provider: 'meta', phoneNumberId, businessAccountId, accessToken, webhookVerifyToken };
+        ? { provider: 'kapso', kapsoApiKey, phoneNumberId: kapsoPhoneId, webhookSecret, businessAccountId: kapsoWabaId || null, displayPhoneNumber: displayPhone }
+        : { provider: 'meta', phoneNumberId, businessAccountId, accessToken, webhookVerifyToken, displayPhoneNumber: displayPhone };
       const r = await api.put('/settings/whatsapp', body);
       if (r.data.success) {
         setSuccess('✅ ' + r.data.message);
@@ -615,9 +618,10 @@ function WhatsAppTab() {
         phoneNumberId: kapsoPhoneId,
         webhookSecret,
         businessAccountId: kapsoWabaId || null,
+        displayPhoneNumber: displayPhone,
       });
       if (r.data.success) {
-        setWabaIdSuccess('✅ WABA ID guardado');
+        setWabaIdSuccess('✅ Datos del número oficial guardados');
         setSavedProvider('kapso');
         setTimeout(() => setWabaIdSuccess(''), 3000);
       } else {
@@ -626,6 +630,16 @@ function WhatsAppTab() {
     } catch (err) {
       setError(err.response?.data?.error || 'Error al guardar');
     } finally { setSavingWabaId(false); }
+  };
+
+  const saveDisplayPhone = async () => {
+    setSavingDisplayPhone(true); setError(''); setSuccess('');
+    try {
+      await api.patch('/settings/whatsapp/display-phone', { displayPhoneNumber: displayPhone });
+      setSuccess('✅ Número visible guardado');
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo guardar el número');
+    } finally { setSavingDisplayPhone(false); }
   };
 
   // Prueba enviando un GET al webhook propio para ver si responde
@@ -736,6 +750,16 @@ function WhatsAppTab() {
             <>
               <KapsoReconnectPanel colors={colors} />
 
+              <Field label="Número visible del WhatsApp oficial" value={displayPhone} onChange={setDisplayPhone}
+                placeholder="56912345678" hint="Se mostrará en la bandeja y en la cabecera del chat para distinguirlo de Evolution." colors={colors} />
+              <button onClick={saveDisplayPhone} disabled={savingDisplayPhone} style={{
+                alignSelf: 'flex-start', backgroundColor: colors.bgAccent, color: colors.green,
+                border: `1px solid ${colors.green}55`, borderRadius: '7px', padding: '7px 12px',
+                fontSize: '12px', fontWeight: 700, cursor: savingDisplayPhone ? 'wait' : 'pointer',
+              }}>
+                {savingDisplayPhone ? 'Guardando...' : 'Guardar número visible'}
+              </button>
+
               {/* WABA ID — necesario para enviar templates */}
               <div style={{
                 marginTop: '4px', backgroundColor: colors.bgApp, borderRadius: '9px', padding: '14px 16px',
@@ -779,7 +803,7 @@ function WhatsAppTab() {
                       flexShrink: 0, opacity: savingWabaId ? 0.7 : 1,
                       whiteSpace: 'nowrap',
                     }}>
-                    {savingWabaId ? 'Guardando...' : 'Guardar'}
+                    {savingWabaId ? 'Guardando...' : 'Guardar datos'}
                   </button>
                 </div>
                 {wabaIdSuccess && <div style={{ color: colors.greenLight, fontSize: '12px', marginTop: '6px' }}>{wabaIdSuccess}</div>}
