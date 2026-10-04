@@ -12,18 +12,22 @@ const request = async (path, options) => { const r = await fetch(`${API}${path}`
 const localImages = { 1:'huevos-bandeja.png',2:'huevos-bandeja.png',3:'huevos-bandeja.png',4:'huevos-bandeja.png',5:'huevos-bandeja-xl.png',6:'caja-m.png',7:'caja-l.png',8:'caja-xl.png',9:'caja-jumbo.png',10:'queso-vaca.png',11:'queso-cabra.png',12:'aceitunas-verdes.jpg',13:'aceitunas-negras.jpg',14:'aceitunas-moradas.jpg',15:'promo-60-xl.jpg',16:'pack-campo.png',18:'promo-m.jpg',21:'aceitunas-rajadas.jpg' };
 const category = p => { const s = norm(`${p?.category} ${p?.title}`); return s.includes('queso')?'Quesos':s.includes('aceituna')?'Aceitunas':(s.includes('promo')||s.includes('pack'))?'Promociones':'Huevos'; };
 const fallback = { Huevos:'huevos-bandeja.png',Quesos:'queso-vaca.png',Aceitunas:'aceitunas-verdes.jpg',Promociones:'promo-60-xl.jpg' };
+const unitsFor = p => { const match=String(p?.title||'').match(/(\d+)\s*(?:huevos|unidades|un\b)/i); return match?Number(match[1]):null; };
 const eggTone = p => { const name=norm(p?.title); return name.includes('blanco')?'Huevos blancos':name.includes('cafe')?'Huevos cafés':'Huevos mixtos'; };
 const eggImage = p => {
-  const name=norm(p?.title), bulk=name.includes('180')||name.includes('100');
+  const name=norm(p?.title), units=unitsFor(p), bulk=Number(units)>=100;
   const tone=name.includes('blanco')?'blancos':name.includes('cafe')?'cafe':'mixtos';
-  return bulk?`caja-huevos-${tone}-hogar-v3.jpg`:`huevos-${tone}-hogar-v3.jpg`;
+  if(bulk)return`caja-cerrada-huevos-${tone}-v4.jpg`;
+  if(units===20)return'huevos-mixtos-20-hogar-v4.jpg';
+  if(tone==='cafe')return'huevos-cafe-30-hogar-v4.jpg';
+  return`huevos-${tone}-hogar-v3.jpg`;
 };
 const imageFor = (p, local) => local ? `${ASSETS}/${category(p)==='Huevos'?eggImage(p):(localImages[p.id] || fallback[category(p)])}` : p.image_url;
 
 function routeFrom(base) { const tail = base && location.pathname.startsWith(base) ? location.pathname.slice(base.length) : location.pathname; const a = tail.split('/').filter(Boolean); if (a[0]==='productos'&&a[1]) return {page:'product',id:Number(a[1].split('-')[0])}; if(a[0]==='productos')return{page:'catalog'}; if(a[0]==='colecciones')return{page:'catalog',cat:a[1]}; if(a[0]==='como-comprar')return{page:'how'}; if(a[0]==='nuestra-historia')return{page:'story'}; return{page:'home'}; }
 function Qty({n,minus,plus}){return <div className="dr-qty"><button onClick={minus}><Minus/></button><b>{n}</b><button onClick={plus}>+</button></div>}
 function Pic({p,local,className=''}){const [bad,setBad]=useState(false);return bad?<div className={`dr-fallback ${className}`}><Leaf/></div>:<img className={className} src={imageFor(p,local)} alt={title(p.title)} loading="lazy" onError={()=>setBad(true)}/>}
-function Card({p,local,open,add}){const eggs=category(p)==='Huevos';return <article className="dr-card"><button className="dr-card-pic" onClick={()=>open(p)}><Pic p={p} local={local}/>{eggs&&<i>{eggTone(p)}</i>}{Number(p.stock)===0&&<span>Agotado</span>}</button><small>{eggs?eggTone(p):category(p)}</small><button className="dr-card-title" onClick={()=>open(p)}>{title(p.title)}</button><strong>{money(p.price)}</strong><button className="dr-card-add" disabled={Number(p.stock)===0} onClick={()=>add(p)}><ShoppingBag/>Agregar al carrito</button></article>}
+function Card({p,local,open,add}){const eggs=category(p)==='Huevos',units=eggs&&unitsFor(p);return <article className="dr-card"><button className="dr-card-pic" onClick={()=>open(p)}><Pic p={p} local={local}/>{eggs&&<i>{eggTone(p)}</i>}{units&&<b className="dr-card-units">{units} UN.</b>}{Number(p.stock)===0&&<span>Agotado</span>}</button><small>{eggs?eggTone(p):category(p)}</small><button className="dr-card-title" onClick={()=>open(p)}>{title(p.title)}</button><strong>{money(p.price)}</strong><button className="dr-card-add" disabled={Number(p.stock)===0} onClick={()=>add(p)}><ShoppingBag/>Agregar al carrito</button></article>}
 
 export default function Tienda({slug}){
   const local=slug.startsWith('diez-rios'), custom=['diezrios.com','www.diezrios.com'].includes(location.hostname), base=custom?'':`/tienda/${slug}`;
