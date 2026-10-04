@@ -7,7 +7,15 @@ const ASSETS = '/store-assets/diez-rios';
 const money = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const slugify = s => norm(s).replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-const title = s => String(s || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+const title = s => {
+  const clean=String(s || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+  const uniform={
+    'huevos de campo tamano l cafe':'Huevos de Campo Café Tamaño L – Bandeja 30 Unidades',
+    '30 huevos jumbo':'Huevos de Campo Tamaño Jumbo – Bandeja 30 Unidades',
+    'huevos especial (20un)':'Huevos de Campo Tamaño Especial – Bandeja 20 Unidades',
+  };
+  return uniform[norm(clean)]||clean;
+};
 const request = async (path, options) => { const r = await fetch(`${API}${path}`, options); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'No pudimos completar la solicitud'); return d; };
 const localImages = { 1:'huevos-bandeja.png',2:'huevos-bandeja.png',3:'huevos-bandeja.png',4:'huevos-bandeja.png',5:'huevos-bandeja-xl.png',6:'caja-m.png',7:'caja-l.png',8:'caja-xl.png',9:'caja-jumbo.png',10:'queso-vaca.png',11:'queso-cabra.png',12:'aceitunas-verdes.jpg',13:'aceitunas-negras.jpg',14:'aceitunas-moradas.jpg',15:'promo-60-xl.jpg',16:'pack-campo.png',18:'promo-m.jpg',21:'aceitunas-rajadas.jpg' };
 const category = p => { const s = norm(`${p?.category} ${p?.title}`); return s.includes('queso')?'Quesos':s.includes('aceituna')?'Aceitunas':(s.includes('promo')||s.includes('pack'))?'Promociones':'Huevos'; };
