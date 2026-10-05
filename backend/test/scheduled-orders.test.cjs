@@ -423,8 +423,7 @@ PROMO DIEZ RIOS: QUESO DE CABRA + BANDEJA XL 30 = $25.000
   assert.equal(savedDraft.editing_order_id, 88);
   assert.equal(savedDraft.total, 25000);
   assert.deepEqual(savedDraft.items.map(item => [item.name, item.price]), [
-    ['Queso de Cabra Fresco Pasteurizado – 900 g', 15000],
-    ['Huevos de Campo Tamaño XL – Bandeja 30 Unidades', 10000],
+    ['QUESO DE CABRA + BANDEJA XL 30', 25000],
   ]);
 });
 

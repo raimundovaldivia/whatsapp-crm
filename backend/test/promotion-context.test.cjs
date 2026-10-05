@@ -199,10 +199,10 @@ test('estructura la promo Diez Ríos como combo y calcula correctamente las band
 Hola Roxana, tenemos promociones en huevos y productos frescos del campo 🥚
 
 PROMO DIEZ RIOS: QUESO DE CABRA + BANDEJA XL 30 = $25.000
-| 2 BANDEJAS XL DE 30 HUEVOS A $23.000
-| 2 BANDEJAS JUMBO DE 20 HUEVOS A $18.000
-| 3 BANDEJAS XL DE 30 HUEVOS A $30.000
-| 3 BANDEJAS JUMBO DE 20 HUEVOS A $27.000
+2 BANDEJAS XL DE 30 HUEVOS A $23.000
+2 BANDEJAS JUMBO DE 20 HUEVOS A $18.000
+3 BANDEJAS XL DE 30 HUEVOS A $30.000
+3 BANDEJAS JUMBO DE 20 HUEVOS A $27.000
 
 Haz tu pedido antes de las 12:00 y te lo entregamos el mismo día si hay stock disponible.`,
   };
@@ -224,11 +224,11 @@ Haz tu pedido antes de las 12:00 y te lo entregamos el mismo día si hay stock d
   assert.equal(combo.price, 25000);
   const items = promotion.offerOrderItems(combo);
   assert.deepEqual(items.map(item => [item.product_name, item.quantity, item.price]), [
-    ['Queso de Cabra Fresco Pasteurizado – 900 g', 1, 15000],
-    ['Huevos de Campo Tamaño XL – Bandeja 30 Unidades', 1, 10000],
+    ['QUESO DE CABRA + BANDEJA XL 30', 1, 25000],
   ]);
   assert.equal(pricing.priceItems(items, promoProducts).total, 25000);
   assert.equal(promotion.selectedOffer('Promo diez Rios, queso de cabra más bandeja XL de 30 =25000', promo), combo);
+  assert.equal(promotion.selectedOffer('Por 25000', promo), combo);
   assert.equal(promotion.selectedOffer('la opción 1', promo), combo);
   assert.equal(promotion.selectedOffer('2 bandejas XL por favor', promo).price, 23000);
   assert.equal(promotion.selectedOffer('3 bandejas jumbo', promo).price, 27000);

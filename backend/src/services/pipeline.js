@@ -1708,7 +1708,7 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
     const contact = await db.getContact(orgId, phoneNumber);
     if (contact) {
       if (contact.name)       result.customer_name  = contact.name;
-      if (contact.address)    result.address        = contact.address;
+      if (contact.address || contact.address1) result.address = contact.address || contact.address1;
       if (contact.city)       result.city           = contact.city;
       if (contact.region)     result.region         = contact.region;
       if (contact.email)      result.customer_email = contact.email;
@@ -2155,4 +2155,4 @@ async function createShopifyOrder(orgId, conversationId, draft) {
   return shopifyResult;
 }
 
-module.exports = { processMessage };
+module.exports = { processMessage, _getKnownCustomerData: getKnownCustomerData };

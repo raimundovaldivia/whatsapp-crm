@@ -56,7 +56,9 @@ function parseOffers(body) {
   // El encabezado se hereda hasta que aparece otro; sin esto, "60 Jumbo" y
   // "60 XL" quedaban como dos ofertas indistinguibles llamadas "60 unidades".
   let groupedDescriptor = '';
-  const blocks = String(body || '').split('|');
+  // Los templates reales pueden separar las ofertas con "|" o solamente
+  // con saltos de línea. Cada oferta debe analizarse de forma independiente.
+  const blocks = String(body || '').split(/\||\r?\n/).map(block => block.trim()).filter(Boolean);
   for (const block of blocks) {
     // Una combinación es una sola oferta comercial con varios productos:
     // "QUESO DE CABRA + BANDEJA XL 30 = $25.000". No debe convertirse en
@@ -112,7 +114,7 @@ function parseOffers(body) {
   // Productos cuyo nombre va antes del tamaño, por ejemplo
   // "Queso de cabra 900 g $15.000". Se revisan por bloque para no absorber
   // el texto introductorio del template ni duplicar las ofertas anteriores.
-  for (const block of String(body || '').split('|')) {
+  for (const block of blocks) {
     if (!block.includes('$') || /(?:despachos?|env[ií]os?)\s+gratis/iu.test(block)) continue;
     if (/\+[^|$\n]{2,100}?\s*(?:=|a)\s*\$\s*[\d.]+/iu.test(block)) continue;
     if (/\b\d{1,2}\s+(?:bandejas?|packs?)\s+(?:de\s+)?(?:jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\s+(?:de\s+)?\d{1,3}\s+(?:huevos?|unidades?)/iu.test(block)) continue;
@@ -424,6 +426,12 @@ function selectedOffer(message, promotion) {
     const index = Number(numberedChoice[1]) - 1;
     return promotion.offers[index] || null;
   }
+  // "Por 25000" identifica el combo por su precio total, sin autorizar a
+  // repartir ese total inventando un precio para cada producto del pack.
+  const mentionedAmounts = [...String(message || '').matchAll(/(?:\$\s*)?(\d{1,3}(?:[.\s]\d{3})+|\d{4,6})/g)]
+    .map(match => money(match[1]));
+  const byPrice = promotion.offers.filter(offer => mentionedAmounts.includes(Number(offer.price)));
+  if (byPrice.length === 1) return byPrice[0];
   const matches = promotion.offers.filter(offer => {
     if (offer.combo) {
       return offer.components.every(component => {
@@ -485,17 +493,9 @@ function offerOrderItem(offer) {
 
 function offerOrderItems(offer) {
   if (!offer) return [];
-  if (!offer.combo || !Array.isArray(offer.components)) return [offerOrderItem(offer)].filter(Boolean);
-  return offer.components.map(component => ({
-    product_name: component.label,
-    quantity: Number(component.quantity) || 1,
-    price: Number(component.price),
-    ...(component.productId != null ? { product_id: component.productId } : {}),
-    ...(component.variantId != null ? { variant_id: component.variantId } : {}),
-    locked_quote: true,
-    promotion_offer: true,
-    promotion_combo: offer.label,
-  }));
+  // El template sólo publica el total del combo. Mantener una única línea
+  // evita afirmar precios individuales que el comercio nunca definió.
+  return [offerOrderItem(offer)].filter(Boolean);
 }
 
 function isBareAffirmative(message) {

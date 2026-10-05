@@ -172,6 +172,16 @@ Solo el JSON, nada más.`;
     const text = response.content[0]?.text || '{}';
     const extracted = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
 
+    // Un template puede decir "entrega el mismo día", pero eso no significa
+    // que el cliente haya solicitado una fecha. El modelo no puede convertir
+    // esa condición comercial en delivery_date por su cuenta.
+    const customerRequestedDate = conversationHistory
+      .filter(message => message?.direction === 'inbound')
+      .some(message => /\b(hoy|ma[ñn]ana|pasado\s+ma[ñn]ana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|fin\s+de\s+semana)\b|\bpara\s+el\s+\d{1,2}\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/iu.test(String(message.content || '')));
+    if (extracted.delivery_date && !currentDraft?.delivery_date && !customerRequestedDate) {
+      delete extracted.delivery_date;
+    }
+
     // Compatibilidad: si el modelo devolvió el formato viejo, convertirlo
     if (!Array.isArray(extracted.items) && extracted.product_name) {
       extracted.items = [{ product_name: extracted.product_name, quantity: parseInt(extracted.quantity, 10) || 1 }];
