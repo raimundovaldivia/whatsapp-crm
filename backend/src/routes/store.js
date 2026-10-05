@@ -103,6 +103,11 @@ router.post('/:slug/orders', async (req, res) => {
     if (![name, phone, address].every(v => typeof v === 'string' && v.length <= 300) ||
         !Array.isArray(items) || items.length < 1 || items.length > 100 ||
         (city !== undefined && (typeof city !== 'string' || city.length > 150))) return res.status(400).json({ error: 'Datos de pedido inválidos' });
+    const invalidItem = items.some(item =>
+      !Number.isSafeInteger(item?.productId) || item.productId < 1 ||
+      !Number.isSafeInteger(item?.quantity) || item.quantity < 1 || item.quantity > 1000
+    );
+    if (invalidItem) return res.status(400).json({ error: 'Producto o cantidad inválida' });
     if (!/^\d{8,15}$/.test(phone.replace(/\D/g, ''))) return res.status(400).json({ error: 'Teléfono inválido' });
     // Validaciones básicas
     if (!name?.trim())    return res.status(400).json({ error: 'Nombre requerido' });

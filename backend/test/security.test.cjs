@@ -81,7 +81,7 @@ test('media proxy rejects foreign reference before lookup, cache or transport',a
 });
 test('store rejects negative, fractional, zero and oversized quantities before writes',async()=>{
   let writes=0;
-  const db={getPool:()=>({query:async()=>({rows:[{id:1}]})}),getProducts:async()=>[{id:1,price:100}],upsertConversation:async()=>{writes++;return {id:1}},createOrder:async()=>({id:1}),upsertContact:async()=>{},getWhatsappConfig:async()=>null,getSetting:async()=>null};
+  const db={getPool:()=>({query:async()=>({rows:[{id:1}]})}),getEvolutionWhatsappChannel:async()=>null,upsertConversation:async()=>{writes++;return {id:1}},createStoreOrder:async({items})=>({order:{id:1},resolvedItems:items.map(item=>({id:item.productId,title:'Producto',quantity:item.quantity,price:100})),total:items.reduce((sum,item)=>sum+item.quantity*100,0)}),upsertContact:async()=>{},getSetting:async()=>null};
   const router=load('src/routes/store.js',{'../db/database':db});
   for(const quantity of [-2,0,1.5,1001,'2']){
     const res=response();await handler(router,'post','/test/orders')({params:{slug:'test'},body:{name:'Test',phone:'56912345678',address:'Test',items:[{productId:1,quantity}]}},res);assert.equal(res.code,400);
