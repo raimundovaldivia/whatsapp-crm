@@ -1758,9 +1758,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         sendingChannelId: reviewPlan.sendingChannelId,
       });
       campaignId = created.data.campaign.id;
-      let sent = 0, failed = 0, skipped = 0, pending = 0;
+      let sent = 0, failed = 0, skipped = 0, pending = 0, chatsPending = 0;
       const failureReasons = [];
-      setSendProgress({ done: 0, total: items.length });
+      setSendProgress({ done: 0, total: items.length, sent: 0, skipped: 0, pending: 0, failed: 0 });
       // Tanto la prueba como el envío real usan la ruta individual que ya
       // confirma correctamente con Meta. En campañas se ejecutan varios
       // destinatarios en paralelo, cada uno con auditoría independiente.
@@ -1794,6 +1794,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             if (direct && !result?.success && !result?.skipped) {
               stopRequested = true;
               campaignStatus = 'interrupted';
+            }
+            if (result?.persistencePending) {
+              chatsPending++;
+              stopRequested = true;
+              campaignStatus = 'interrupted';
+              showToast(result.warning, 'error');
+              if (!failureReasons.includes(result.warning)) failureReasons.push(result.warning);
             }
             if (res.data.campaignPaused || result?.campaignPaused) {
               stopRequested = true;
@@ -1829,7 +1836,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             if (!failureReasons.includes(reason)) failureReasons.push(reason);
           } finally {
             if (processed) completed++;
-            setSendProgress({ done: completed, total: items.length });
+            setSendProgress({ done: completed, total: items.length, sent, skipped, pending, failed, lastReason: failureReasons.at(-1) });
           }
           // Da tiempo a que llegue el webhook de Meta antes de tomar el
           // siguiente destinatario. Así un fallo de pago detiene el lote con
@@ -1847,10 +1854,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       if (paymentBlocked) {
         showToast(`🛑 Campaña detenida por pago de Meta. ${completed} procesados · ${stopped} no se enviaron.`, 'error');
         setReviewPlan(null);
+      } else if (chatsPending > 0) {
+        campaignStatus = 'interrupted';
+        showToast('Lote detenido: WhatsApp aceptó el mensaje, pero falta registrarlo en el chat. No lo reenvíes; revisa Historial.', 'error');
+        setReviewPlan(null);
       } else if (pending > 0) {
         campaignStatus = 'interrupted';
         showToast(`⏳ ${pending} mensaje${pending === 1 ? '' : 's'} por confirmar. No reenvíes; revisaremos el estado automáticamente.`);
         setReviewPlan(null);
+      } else if (stopSendingRef.current) {
+        showToast(`Lote detenido: ${sent} aceptados · ${skipped} omitidos · ${failed} fallidos · ${stopped} pendientes cancelados.`);
       } else if (sent === 0) {
         campaignStatus = 'interrupted';
         showToast(`No se envió ningún mensaje: ${failureReasons[0] || 'WhatsApp no confirmó el envío'}`, 'error');
@@ -1873,6 +1886,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } finally {
       // Liberar la interfaz inmediatamente. El cierre auditable y la recarga
       // del historial pueden continuar sin dejar el botón girando.
+      setReviewPlan(null);
       setSending(false);
       sendingRef.current = false;
       setSendProgress({ done: 0, total: 0 });
@@ -2117,11 +2131,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       {results && (
         <div style={{ padding: '10px 20px', backgroundColor: results.paymentBlocked ? `${colors.red}18` : (results.sent ? `${colors.green}18` : `${colors.red}14`), borderBottom: `1px solid ${results.paymentBlocked ? colors.red : (results.sent ? colors.green : colors.red)}33`, display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
           {results.paymentBlocked && <span style={{ color: colors.red, fontWeight: 850, fontSize: '13px' }}>🛑 Campaña detenida por pago de Meta</span>}
-          <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '↗' : '⚠️'} {results.sent} recibidos inicialmente por Meta</span>
+          <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '↗' : '⚠️'} {results.sent} aceptados por WhatsApp</span>
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
           {results.skipped > 0 && <span style={{ color: colors.yellow, fontWeight: 600, fontSize: '13px' }}>⏭ {results.skipped} omitidos</span>}
           {results.pending > 0 && <span style={{ color: colors.yellow, fontWeight: 700, fontSize: '13px' }}>⏳ {results.pending} por confirmar</span>}
           {results.stopped > 0 && <span style={{ color: colors.textPrimary, fontWeight: 750, fontSize: '13px' }}>✓ {results.stopped} detenidos antes de enviar</span>}
+          <button onClick={() => { setHistoryOpen(true); loadCampaigns(); }}>Ver detalle en Historial</button>
           {results.reasons?.length > 0 && <span style={{ color: colors.textSecondary, fontSize: '12px' }}>{results.reasons.join(' · ')}</span>}
         </div>
       )}
@@ -2490,6 +2505,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     {sendProgress.done} de {sendProgress.total} procesados
                     {waitSeconds > 0 && ` · Próximo envío en ${Math.floor(waitSeconds / 60)}:${String(waitSeconds % 60).padStart(2, '0')}`}
                     {' '}<button onClick={() => { stopSendingRef.current = true; }}>Detener pendientes</button>
+                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                      {sendProgress.sent || 0} aceptados por WhatsApp · {sendProgress.skipped || 0} omitidos · {sendProgress.pending || 0} por confirmar · {sendProgress.failed || 0} fallidos
+                    </div>
+                    {sendProgress.lastReason && <div style={{ marginTop: 4, fontSize: 12, color: colors.yellow }}>{sendProgress.lastReason}</div>}
                   </div>}
                   <div style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>Esta vista usa exactamente los mensajes preparados que se enviarán.</div>
                 </div>

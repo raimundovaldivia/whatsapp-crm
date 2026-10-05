@@ -178,6 +178,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   // el chat si el proceso se reinicia durante esta fase.
   const auditTasks = [recordBroadcastRecipient(orgId, campaignId, item, {
     status: 'accepted', whatsappMessageId,
+    errorDetail: channelId ? { savedContent, channelId, provider: 'evolution' } : null,
   })];
   if (item.templateName || channelId) auditTasks.push(markTemplateSent(orgId, item.phone));
   const auditResults = await Promise.allSettled(auditTasks);
@@ -190,7 +191,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   const bulkContactName = bulkClientData?.name ? toTitleCase(bulkClientData.name) : 'Cliente';
   const bulkConv = await db.upsertConversation(orgId, item.phone, item.contactName || bulkContactName, channelId);
   const convId = bulkConv?.id;
-  if (!convId) return;
+  if (!convId) throw new Error('No se pudo crear la conversación del destinatario');
 
   const savedMsg = await db.saveMessage({
     conversationId: convId,
@@ -206,7 +207,8 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
     await db.updatePipelineState(convId, 'template_sent');
   }
   const updated = await db.getConversationById(convId);
-  if (savedMsg) io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMsg, conversation: updated });
+  io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMsg, conversation: updated });
+  return { conversationId: convId };
 }
 
 /**
@@ -339,8 +341,9 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
   }
 
   const { rows } = await getPool().query(
-    `SELECT r.*
+    `SELECT r.*, bc.sending_provider, bc.sending_channel_id
        FROM broadcast_campaign_recipients r
+       JOIN broadcast_campaigns bc ON bc.id = r.campaign_id AND bc.organization_id = r.organization_id
        LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
       WHERE r.organization_id = $1
         AND r.result_status = 'accepted'
@@ -367,6 +370,20 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
   for (const recipient of rows) {
     const phone = db.normalizePhone(recipient.destination_phone || recipient.original_phone);
     if (!phone) continue;
+    if (recipient.sending_provider === 'evolution') {
+      // Restore only the exact persisted message, to its original channel. Never resend.
+      const content = recipient.error_detail?.savedContent;
+      const channelId = recipient.sending_channel_id;
+      if (typeof content !== 'string' || !content.trim() || !channelId) continue;
+      const conversation = await db.upsertConversation(orgId, phone, recipient.contact_name, channelId);
+      const message = await db.saveMessage({ conversationId: conversation.id,
+        whatsappMessageId: recipient.whatsapp_message_id, content, direction: 'outbound', type: 'text', sentBy: 'ai' });
+      await db.updateConversationLastMessage(conversation.id, content);
+      const updated = await db.getConversationById(conversation.id, orgId);
+      io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message, conversation: updated });
+      if (message) recovered++;
+      continue;
+    }
     const template = templatesByName.get(recipient.template_name);
     const body = getBodyComponent(template)?.text || '';
     const rendered = body
@@ -2399,24 +2416,24 @@ router.post('/send-bulk', async (req, res) => {
 
       acceptedMessageId = sentResult?.messages?.[0]?.id || sentResult?.messageId || sentResult?.key?.id || null;
       acceptedByProvider = true;
-      results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId });
       const persistAccepted = () => finalizeAcceptedBroadcast({
-          orgId: req.orgId,
-          campaignId,
-          item: { ...item },
-          sentResult,
-          savedContent,
-          isTemplate,
-          channelId: direct ? sendingChannelId : null,
-        }).catch(error => {
-          console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado posterior:`, error.message);
-        });
-      if (direct) await persistAccepted();
-      else setImmediate(persistAccepted);
+        orgId: req.orgId, campaignId, item: { ...item }, sentResult, savedContent,
+        isTemplate, channelId: direct ? sendingChannelId : null,
+      });
+      if (direct) {
+        const saved = await persistAccepted();
+        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId,
+          conversationId: saved.conversationId });
+      } else {
+        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId });
+        setImmediate(() => persistAccepted().catch(error => {
+          console.error('[SendBulk] Falló el guardado posterior:', error.message);
+        }));
+      }
     } catch (err) {
       if (acceptedByProvider) {
         console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado local:`, err.message);
-        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId, warning: 'Aceptado por WhatsApp; falló el guardado en la conversación' });
+        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId, persistencePending: true, warning: 'Aceptado por WhatsApp, pero el chat no pudo guardarse. Se detuvo el lote; no reenvíes este mensaje. Abre Historial para recuperar el registro' });
         continue;
       }
       const providerTimedOut = err?.code === 'ECONNABORTED'
