@@ -182,15 +182,25 @@ test('la cantidad promocional elegida después conserva fecha y precio en vez de
   assert.equal(savedDraft.items[0].locked_quote, true);
 });
 
-test('una opción promocional exacta entra al pedido sin escalar a humano', async () => {
+for (const scenario of [
+  { name: 'una opción promocional exacta vigente entra al pedido sin escalar a humano', now: '2026-10-01T16:10:00Z', active: true },
+  { name: 'una opción promocional vencida no aplica el precio antiguo y sigue la clasificación normal', now: '2026-10-05T16:10:00Z', active: false },
+]) test(scenario.name, async () => {
   let escalationChecks = 0;
   let savedDraft = null;
+  let agentMode = null;
+  // El escenario conserva su fecha aunque cambie el día de ejecución.
+  // Usamos el evaluador real de promociones con un reloj explícito.
+  const promotions = require('../src/services/promotion-context');
+  const now = new Date(scenario.now);
   const promoText = `[Template: promocion_general_entrega_mismo_dia]
 
-🥚✨ ¡Tenemos promos Oscar! | 📅 Promoción válida hasta el sábado 03/10/2099, inclusive, para pedidos con entrega hasta ese día. | 🥚 Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | 100 unidades $37.000 | 🥚 XL: 30 unidades $12.000 | 60 unidades $23.000 | 90 unidades $34.000 | 🫒 Aceitunas de 500 g: lleva 2 envases, paga el primero a precio normal y recibe 50% de descuento en el segundo. | 🧀 Queso de cabra 900 g $15.000 | 🚚 Despacho gratis en compras desde $10.000 | Promoción sujeta a disponibilidad de stock.`;
+🥚✨ ¡Tenemos promos Oscar! | 📅 Promoción válida hasta el sábado 03/10/2026, inclusive, para pedidos con entrega hasta ese día. | 🥚 Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | 100 unidades $37.000 | 🥚 XL: 30 unidades $12.000 | 60 unidades $23.000 | 90 unidades $34.000 | 🫒 Aceitunas de 500 g: lleva 2 envases, paga el primero a precio normal y recibe 50% de descuento en el segundo. | 🧀 Queso de cabra 900 g $15.000 | 🚚 Despacho gratis en compras desde $10.000 | Promoción sujeta a disponibilidad de stock.`;
   const db = {
     getConversationById: async () => ({ id: 19, organization_id: 1, phone_number: '56919191919', contact_name: 'Oscar', pipeline_state: 'template_sent', agent_mode: 'ai' }),
-    getLastMessages: async () => [{ direction: 'outbound', content: promoText, created_at: new Date().toISOString() }],
+    setAgentMode: async (_id, mode) => { agentMode = mode; },
+    setLastEscalation: async () => {},
+    getLastMessages: async () => [{ direction: 'outbound', content: promoText, created_at: '2026-10-01T13:05:00-03:00' }],
     getSetting: async () => null,
     getContact: async () => ({ name: 'Oscar', address1: 'Dirección 123', city: 'Coquimbo', contact_type: 'customer', client_type: 'personal' }),
     getPrimaryDataSource: async () => null,
@@ -203,6 +213,11 @@ test('una opción promocional exacta entra al pedido sin escalar a humano', asyn
   };
   const pipeline = load('src/services/pipeline.js', {
     '../db/database': db,
+    './promotion-context': {
+      ...promotions,
+      fromHistory: (history, products) => promotions.fromHistory(history, products, now),
+      restore: saved => promotions.restore(saved, now),
+    },
     './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
     './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
     './agents/orchestrator': {
@@ -230,6 +245,14 @@ test('una opción promocional exacta entra al pedido sin escalar a humano', asyn
   });
 
   const result = await pipeline.processMessage(1, 19, 'Quiero 100 jumbo');
+  if (!scenario.active) {
+    assert.equal(escalationChecks, 1);
+    assert.equal(savedDraft, null);
+    assert.equal(agentMode, 'coordinating');
+    assert.equal(result.switchToHuman, true);
+    assert.doesNotMatch(result.response, /37[.,]000/);
+    return;
+  }
   assert.equal(result.newState, 'collecting_order');
   assert.equal(escalationChecks, 0);
   assert.equal(savedDraft.items[0].price, 37000);

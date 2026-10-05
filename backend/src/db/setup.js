@@ -848,6 +848,13 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_broadcast_campaigns_org_created
         ON broadcast_campaigns(organization_id, created_at DESC);
+      ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_provider TEXT NOT NULL DEFAULT 'kapso';
+      ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_channel_id INTEGER;
+      CREATE TABLE IF NOT EXISTS broadcast_direct_pacing (
+        organization_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        next_send_at TIMESTAMPTZ NOT NULL
+      );
+    ALTER TABLE broadcast_direct_pacing ADD COLUMN IF NOT EXISTS batch_count INTEGER NOT NULL DEFAULT 1;
 
       CREATE TABLE IF NOT EXISTS broadcast_campaign_recipients (
         id                  BIGSERIAL PRIMARY KEY,

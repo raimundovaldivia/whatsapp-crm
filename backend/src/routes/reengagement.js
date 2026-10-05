@@ -170,8 +170,8 @@ async function recoverCampaignRecipientsFromSavedMessages(orgId) {
   return rowCount || 0;
 }
 
-async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, savedContent, isTemplate }) {
-  const whatsappMessageId = sentResult?.messages?.[0]?.id || null;
+async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, savedContent, isTemplate, channelId = null }) {
+  const whatsappMessageId = sentResult?.messages?.[0]?.id || sentResult?.messageId || sentResult?.key?.id || null;
 
   // Estas escrituras no deben mantener la pantalla esperando después de que
   // WhatsApp ya aceptó el mensaje. El webhook durable también puede reconstruir
@@ -179,7 +179,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   const auditTasks = [recordBroadcastRecipient(orgId, campaignId, item, {
     status: 'accepted', whatsappMessageId,
   })];
-  if (isTemplate) auditTasks.push(markTemplateSent(orgId, item.phone));
+  if (item.templateName) auditTasks.push(markTemplateSent(orgId, item.phone));
   const auditResults = await Promise.allSettled(auditTasks);
   auditResults.filter(result => result.status === 'rejected').forEach(result => {
     console.error('[SendBulk] No se pudo completar la auditoría posterior:', result.reason?.message || result.reason);
@@ -188,7 +188,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   const bulkCached = analysisCache.get(orgId);
   const bulkClientData = bulkCached?.data?.find(entry => entry.phone === item.phone);
   const bulkContactName = bulkClientData?.name ? toTitleCase(bulkClientData.name) : 'Cliente';
-  const bulkConv = await db.upsertConversation(orgId, item.phone, bulkContactName);
+  const bulkConv = await db.upsertConversation(orgId, item.phone, item.contactName || bulkContactName, channelId);
   const convId = bulkConv?.id;
   if (!convId) return;
 
@@ -1728,9 +1728,15 @@ router.post('/submit-templates', async (req, res) => {
 /* ─────────────────────────────────────────────────────────────────────
    Historial auditable de campañas masivas
 ───────────────────────────────────────────────────────────────────── */
+router.get('/sending-methods', async (req, res) => {
+  try { res.json({ methods: await require('../services/broadcast-sender').sendingMethods(req.orgId) }); }
+  catch (error) { res.status(503).json({ error: 'No se pudieron consultar las conexiones' }); }
+});
+
 router.post('/campaigns', async (req, res) => {
   try {
-    const { templateName, total, testMode = false, testPhone = null } = req.body || {};
+    const { templateName, total, testMode = false, testPhone = null, sendingProvider = 'kapso', sendingChannelId = null } = req.body || {};
+    if (req.body?.sendingProvider) await require('../services/broadcast-sender').resolveSender(req.orgId, sendingProvider, sendingChannelId);
     const totalCount = Number(total);
     if (!templateName) return res.status(400).json({ success: false, error: 'templateName requerido' });
     if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 5000) {
@@ -1738,10 +1744,10 @@ router.post('/campaigns', async (req, res) => {
     }
     const { rows } = await getPool().query(
       `INSERT INTO broadcast_campaigns
-         (organization_id, created_by, template_name, total_count, test_mode, test_phone)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [req.orgId, req.userId, templateName, totalCount, !!testMode,
-        testPhone ? db.normalizePhone(testPhone) : null]
+        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId]
     );
     res.json({ success: true, campaign: rows[0] });
   } catch (err) {
@@ -1801,7 +1807,7 @@ router.get('/campaigns', async (req, res) => {
           AND NOT EXISTS (
             SELECT 1 FROM broadcast_campaign_recipients r
              WHERE r.campaign_id = c.id
-               AND r.created_at > NOW() - INTERVAL '5 minutes'
+               AND r.created_at > NOW() - CASE WHEN c.sending_provider = 'evolution' THEN INTERVAL '15 minutes' ELSE INTERVAL '5 minutes' END
           )`,
       [req.orgId]
     );
@@ -1970,6 +1976,7 @@ router.get('/campaigns/:id/follow-up-preview', async (req, res) => {
   try {
     const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (campaign.sending_provider === 'evolution') return res.status(409).json({ error: 'El seguimiento programado sólo está disponible para campañas Kapso' });
     const audience = await require('../services/campaign-follow-up').getFollowUpAudience(req.orgId, req.params.id);
     const eligible = audience.filter(item => item.eligible);
     const excluded = audience.filter(item => !item.eligible);
@@ -2003,6 +2010,7 @@ router.post('/campaigns/:id/follow-up', async (req, res) => {
   try {
     const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (campaign.sending_provider === 'evolution') return res.status(409).json({ error: 'El seguimiento programado sólo está disponible para campañas Kapso' });
     const audience = await require('../services/campaign-follow-up').getFollowUpAudience(req.orgId, req.params.id);
     const eligible = audience.filter(item => item.eligible).length;
     if (!eligible) return res.status(400).json({ success: false, error: 'No hay personas elegibles para seguimiento' });
@@ -2260,6 +2268,8 @@ router.post('/send-broadcast', async (req, res) => {
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send-bulk', async (req, res) => {
   const { items, campaignId = null } = req.body;
+  let sendingProvider = req.body.sendingProvider || null;
+  let sendingChannelId = req.body.sendingChannelId || null;
   if (!Array.isArray(items) || !items.length) {
     return res.status(400).json({ success: false, error: 'items[] requerido' });
   }
@@ -2267,6 +2277,12 @@ router.post('/send-bulk', async (req, res) => {
   if (campaignId) {
     const campaign = await getBroadcastCampaign(req.orgId, campaignId);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if ((sendingProvider && sendingProvider !== (campaign.sending_provider || 'kapso'))
+      || (sendingChannelId && Number(sendingChannelId) !== Number(campaign.sending_channel_id))) {
+      return res.status(409).json({ error: 'El método de envío no coincide con la campaña' });
+    }
+    sendingProvider = campaign.sending_provider || 'kapso';
+    sendingChannelId = campaign.sending_channel_id || null;
     if (campaign.status === 'paused_payment') {
       return res.status(409).json({
         success: false,
@@ -2277,7 +2293,14 @@ router.post('/send-bulk', async (req, res) => {
     }
   }
 
-  const wc = await db.getWhatsappConfig(req.orgId);
+  const direct = sendingProvider === 'evolution';
+  if (direct && items.length !== 1) return res.status(400).json({ error: 'El envío directo procesa un destinatario a la vez' });
+  let wc;
+  try {
+    wc = sendingProvider
+      ? await require('../services/broadcast-sender').resolveSender(req.orgId, sendingProvider, sendingChannelId)
+      : await db.getWhatsappConfig(req.orgId);
+  } catch (error) { return res.status(error.status || 503).json({ error: error.message }); }
   if (!wc) {
     await Promise.all(items.map(item => recordBroadcastRecipient(req.orgId, campaignId, item, {
       status: 'failed', errorMessage: 'WhatsApp no configurado',
@@ -2301,10 +2324,19 @@ router.post('/send-bulk', async (req, res) => {
     let acceptedByProvider = false;
     let acceptedMessageId = null;
     try {
-      const isTemplate = !!item.templateName;
+      const isTemplate = !!item.templateName && !direct;
+      if (direct) {
+        const contact = await db.getContact(req.orgId, item.phone);
+        if (contact?.opt_out) {
+          await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: 'Contacto dado de baja' });
+          results.push({ phone: item.phone, success: false, skipped: true, error: 'Contacto dado de baja' });
+          continue;
+        }
+        if (!String(item.templateName ? item.previewText || '' : item.message || '').trim()) throw new Error('El mensaje directo está vacío');
+      }
 
       // ── Anti-duplicado: saltar si ya recibió un template hoy ─────
-      if (isTemplate && !item.force) {
+      if ((isTemplate || (direct && item.templateName)) && !item.force) {
         const alreadySent = await templateSentToday(req.orgId, item.phone);
         if (alreadySent) {
           const result = { phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' };
@@ -2331,7 +2363,17 @@ router.post('/send-bulk', async (req, res) => {
       let sentResult;
       let savedContent;
 
-      if (isTemplate) {
+      if (direct) {
+        const permit = await require('../services/broadcast-sender').claimDirectSlot(req.orgId);
+        if (!permit.allowed) return res.status(429).json({ rateLimited: true, retryAfterSeconds: permit.retryAfterSeconds, error: 'Pausa entre mensajes directos' });
+        savedContent = String(item.templateName ? item.previewText : item.message).trim();
+        sentResult = await require('../services/evolution-whatsapp').sendTextMessage(item.phone, savedContent, wc);
+        if (!sentResult?.messageId && !sentResult?.key?.id) {
+          const error = new Error('Evolution no confirmó el mensaje; revisa su estado antes de reenviar');
+          error.code = 'ETIMEDOUT';
+          throw error;
+        }
+      } else if (isTemplate) {
         const kapsoService = require('../services/kapso-whatsapp');
         // La interfaz ya obtuvo el template aprobado para construir components.
         // Consultarlo otra vez antes de cada envío duplicaba una llamada externa
@@ -2355,21 +2397,22 @@ router.post('/send-bulk', async (req, res) => {
         savedContent = item.message;
       }
 
-      acceptedMessageId = sentResult?.messages?.[0]?.id || null;
+      acceptedMessageId = sentResult?.messages?.[0]?.id || sentResult?.messageId || sentResult?.key?.id || null;
       acceptedByProvider = true;
       results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId });
-      setImmediate(() => {
-        finalizeAcceptedBroadcast({
+      const persistAccepted = () => finalizeAcceptedBroadcast({
           orgId: req.orgId,
           campaignId,
           item: { ...item },
           sentResult,
           savedContent,
           isTemplate,
+          channelId: direct ? sendingChannelId : null,
         }).catch(error => {
           console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado posterior:`, error.message);
         });
-      });
+      if (direct) await persistAccepted();
+      else setImmediate(persistAccepted);
     } catch (err) {
       if (acceptedByProvider) {
         console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado local:`, err.message);

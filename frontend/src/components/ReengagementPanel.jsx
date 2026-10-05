@@ -1235,6 +1235,22 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [sendProgress, setSendProgress] = useState({ done: 0, total: 0 });
   const [sending,        setSending]        = useState(false);
   const sendingRef = useRef(false);
+  const stopSendingRef = useRef(false);
+  const [sendingMethods, setSendingMethods] = useState([]);
+  const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  const selectedMethod = sendingMethods.find(m => (m.channelId ? `evolution:${m.channelId}` : 'kapso') === sendingMethodKey);
+  useEffect(() => {
+    api.get('/reengagement/sending-methods').then(r => setSendingMethods(r.data.methods || [])).catch(() => {});
+    return () => { stopSendingRef.current = true; };
+  }, []);
+  async function waitForNextSend(seconds) {
+    for (let remaining = Math.ceil(seconds); remaining > 0 && !stopSendingRef.current; remaining--) {
+      setWaitSeconds(remaining);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    setWaitSeconds(0);
+  }
   const [reviewPlan,     setReviewPlan]     = useState(null);
   const [reviewIdx,      setReviewIdx]      = useState(0);
   const [guidedReview,   setGuidedReview]   = useState(false);
@@ -1344,6 +1360,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         testMode: false,
         testPhone: null,
         paymentRetry: true,
+        sendingProvider: 'kapso',
+        sendingChannelId: null,
+        sendingLabel: 'Kapso · API oficial',
         sourceCampaignId: campaign.id,
         createdAt: Date.now(),
       });
@@ -1589,6 +1608,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   function prepareReview() {
+    if (!selectedMethod?.available) { showToast('Selecciona un método de envío conectado', 'error'); return; }
     if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
     if (selected.size === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
     if (testMode && !TEST_PHONE) { showToast('Ingresa un número de prueba antes de enviar', 'error'); return; }
@@ -1640,6 +1660,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setReviewPlan({
       templateName: selTpl.name,
       entries,
+      sendingProvider: selectedMethod.provider,
+      sendingChannelId: selectedMethod.channelId,
+      sendingLabel: selectedMethod.label,
+      intervalSeconds: selectedMethod.intervalSeconds,
+      batchSize: selectedMethod.batchSize,
+      batchPauseSeconds: selectedMethod.batchPauseSeconds,
       testMode,
       testPhone: TEST_PHONE,
       createdAt: Date.now(),
@@ -1665,6 +1691,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   async function confirmSend() {
     if (!reviewPlan?.entries?.length || sendingRef.current) return;
     sendingRef.current = true;
+    stopSendingRef.current = false;
+    const direct = reviewPlan.sendingProvider === 'evolution';
     const items = reviewPlan.entries.map(entry => entry.item);
     let campaignId = null;
     let campaignStatus = 'completed';
@@ -1676,6 +1704,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         total: items.length,
         testMode: reviewPlan.testMode,
         testPhone: reviewPlan.testPhone || null,
+        sendingProvider: reviewPlan.sendingProvider,
+        sendingChannelId: reviewPlan.sendingChannelId,
       });
       campaignId = created.data.campaign.id;
       let sent = 0, failed = 0, skipped = 0, pending = 0;
@@ -1684,20 +1714,37 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       // Tanto la prueba como el envío real usan la ruta individual que ya
       // confirma correctamente con Meta. En campañas se ejecutan varios
       // destinatarios en paralelo, cada uno con auditoría independiente.
-      const concurrency = reviewPlan.testMode ? 1 : Math.min(6, items.length);
+      const concurrency = direct || reviewPlan.testMode ? 1 : Math.min(6, items.length);
       let nextIndex = 0;
       let completed = 0;
       let stopRequested = false;
       let paymentBlocked = false;
       const workers = Array.from({ length: concurrency }, async () => {
         while (true) {
-          if (stopRequested) return;
+          if (stopRequested || stopSendingRef.current) return;
           const index = nextIndex++;
           if (index >= items.length) return;
           const item = items[index];
+          let processed = false;
           try {
-            const res = await api.post('/reengagement/send-bulk', { items: [item], campaignId }, { timeout: 45000 });
+            let res;
+            while (!stopSendingRef.current) {
+              try {
+                res = await api.post('/reengagement/send-bulk', { items: [item], campaignId }, { timeout: 45000 });
+                break;
+              } catch (error) {
+                if (direct && error.response?.status === 429 && error.response?.data?.rateLimited) {
+                  await waitForNextSend(error.response.data.retryAfterSeconds || 60);
+                } else throw error;
+              }
+            }
+            if (!res) return;
+            processed = true;
             const result = (res.data.results || [])[0];
+            if (direct && !result?.success && !result?.skipped) {
+              stopRequested = true;
+              campaignStatus = 'interrupted';
+            }
             if (res.data.campaignPaused || result?.campaignPaused) {
               stopRequested = true;
               paymentBlocked = true;
@@ -1712,6 +1759,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               if (!failureReasons.includes(reason)) failureReasons.push(reason);
             }
           } catch (error) {
+            processed = true;
+            if (direct) stopRequested = true;
             const pausedByPayment = error.response?.data?.campaignPaused
               || String(error.response?.data?.errorCode || '') === '131042';
             if (pausedByPayment) {
@@ -1729,19 +1778,21 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               : error.message || 'No se pudo procesar este destinatario');
             if (!failureReasons.includes(reason)) failureReasons.push(reason);
           } finally {
-            completed++;
+            if (processed) completed++;
             setSendProgress({ done: completed, total: items.length });
           }
           // Da tiempo a que llegue el webhook de Meta antes de tomar el
           // siguiente destinatario. Así un fallo de pago detiene el lote con
           // un máximo aproximado equivalente a los envíos ya simultáneos.
           if (!stopRequested && index < items.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 800));
+            if (direct) await waitForNextSend(completed % reviewPlan.batchSize === 0 ? reviewPlan.batchPauseSeconds : reviewPlan.intervalSeconds);
+            else await new Promise(resolve => setTimeout(resolve, 800));
           }
         }
       });
       await Promise.all(workers);
       const stopped = Math.max(items.length - completed, 0);
+      if (stopSendingRef.current) campaignStatus = 'interrupted';
       setResults({ sent, failed, skipped, pending, stopped, paymentBlocked, reasons: failureReasons });
       if (paymentBlocked) {
         showToast(`🛑 Campaña detenida por pago de Meta. ${completed} procesados · ${stopped} no se enviaron.`, 'error');
@@ -1799,6 +1850,22 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       )}
 
       {/* Toolbar */}
+      <div style={{ padding: '10px 20px', color: colors.textPrimary, backgroundColor: colors.bgPanel }}>
+        <label>Método de envío{' '}
+          <select aria-label="Método de envío" value={sendingMethodKey} disabled={sending || !!reviewPlan}
+            onChange={e => setSendingMethodKey(e.target.value)}>
+            {!sendingMethods.length && <option value="kapso">Conexiones no disponibles</option>}
+            {sendingMethods.map(method => <option key={method.channelId || 'kapso'}
+              value={method.channelId ? `evolution:${method.channelId}` : 'kapso'} disabled={!method.available}>
+              {method.label}{!method.available ? ' · No conectado' : ''}
+            </option>)}
+          </select>
+        </label>
+        {selectedMethod?.provider === 'evolution' && <div style={{ fontSize: 12, marginTop: 6 }}>
+          Lotes de 10 · 1 mensaje por minuto · pausa de 5 minutos entre lotes, luego continúa automáticamente.
+          Se envía sólo el texto revisado, sin botones ni archivos. Mantén esta pantalla abierta durante el envío.
+        </div>}
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
 
         {/* Search */}
@@ -2042,7 +2109,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 <button onClick={() => toggleCampaignDetails(campaign)} style={{ width: '100%', border: 'none', background: 'transparent', color: colors.textPrimary, padding: '10px 12px', cursor: 'pointer', textAlign: 'left' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 800 }}>{campaign.template_name}{campaign.test_mode ? ' · 🧪 Prueba' : ''}</div>
+                      <div style={{ fontSize: 12, fontWeight: 800 }}>{campaign.template_name}{campaign.test_mode ? ' · 🧪 Prueba' : ''} · {campaign.sending_provider === 'evolution' ? 'Directo · Evolution' : 'Kapso'}</div>
                       <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>{new Date(campaign.created_at).toLocaleString('es-CL')} · {campaign.total_count} seleccionados</div>
                       {campaign.status === 'paused_payment' && <div style={{ color: colors.red, fontSize: 10, fontWeight: 850, marginTop: 4 }}>🛑 Detenida automáticamente por pago de Meta · código {campaign.pause_code || '131042'}</div>}
                       {String(statusCheckCampaign) === String(campaign.id) && <div style={{ color: colors.blue, fontSize: 10, fontWeight: 750, marginTop: 4 }}>↻ Verificando cada envío con Meta…</div>}
@@ -2077,7 +2144,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                         </button>
                       </div>
                     )}
-                    {!campaign.test_mode && read > 0 && (
+                    {campaign.sending_provider !== 'evolution' && !campaign.test_mode && read > 0 && (
                       <div style={{ border: `1px solid ${colors.border}`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: colors.bgApp }}>
                         <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>Seguimiento inteligente para mañana</div>
                         <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>
@@ -2325,6 +2392,19 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 <CheckSquare size={19} color={colors.green} />
                 <div style={{ flex: 1 }}>
                   <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: 15 }}>Revisa antes de enviar</div>
+                  <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 5 }}>
+                    {reviewPlan.sendingLabel}
+                    {reviewPlan.sendingProvider === 'evolution' && <>
+                      {' · '}Lotes de {reviewPlan.batchSize}, pausa de {reviewPlan.batchPauseSeconds / 60} minutos.
+                      {' '}Tiempo mínimo aproximado: {Math.max(0, reviewPlan.entries.length - 1) + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * 4} minutos.
+                      {' '}Sólo texto. Mantén esta pantalla abierta; los siguientes lotes continúan automáticamente.
+                    </>}
+                  </div>
+                  {sending && <div style={{ marginTop: 8, color: colors.textPrimary }}>
+                    {sendProgress.done} de {sendProgress.total} procesados
+                    {waitSeconds > 0 && ` · Próximo envío en ${Math.floor(waitSeconds / 60)}:${String(waitSeconds % 60).padStart(2, '0')}`}
+                    {' '}<button onClick={() => { stopSendingRef.current = true; }}>Detener pendientes</button>
+                  </div>}
                   <div style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>Esta vista usa exactamente los mensajes preparados que se enviarán.</div>
                 </div>
                 <button onClick={() => setReviewPlan(null)} disabled={sending} aria-label="Cerrar revisión" style={{ border: 'none', background: 'none', color: colors.textMuted, cursor: sending ? 'not-allowed' : 'pointer', padding: 4 }}><X size={18} /></button>
