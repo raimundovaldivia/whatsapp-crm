@@ -59,6 +59,7 @@ const pushRouter           = require('./routes/push');             // Tokens pus
 const botEvalRouter        = require('./routes/bot-eval');          // Evaluación del bot y ciclo de mejora
 const metaRouter           = require('./routes/meta');              // Facebook, Instagram y Ads
 const metaWebhookRouter    = require('./routes/meta-webhook');      // Webhooks Messenger / Instagram
+const legalRouter          = require('./routes/legal');             // Privacidad y eliminación de datos (público)
 
 const app    = express();
 const server = http.createServer(app);
@@ -107,6 +108,8 @@ app.get('/ready', async (_req, res) => {
   try { await require('./db/database').getPool().query('SELECT 1'); res.json({ status: 'ready' }); }
   catch { res.status(503).json({ status: 'unavailable' }); }
 });
+
+app.use('/', legalRouter);
 
 app.use('/api/commercial', require('./routes/commercial'));
 app.use('/api', require('./middleware/commercial-access').commercialAccess);
