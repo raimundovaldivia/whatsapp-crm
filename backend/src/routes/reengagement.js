@@ -28,10 +28,20 @@ const {
 
 router.use(requireAuth, requireRole('owner', 'admin', 'supervisor'));
 
+const SERVER_QUEUE = Symbol('serverQueue');
 let io;
 let broadcastRecoveryStarted = false;
 function setSocketIO(socketIO) {
   io = socketIO;
+  require('../services/broadcast-worker').start(async job => {
+    const response = { status: 200, body: {} };
+    await sendBulk({ orgId: job.organization_id, [SERVER_QUEUE]: true,
+      body: { campaignId: job.campaign_id, items: [job.item] } }, {
+      status(code) { response.status = code; return this; },
+      json(body) { response.body = body; return this; },
+    });
+    return response;
+  });
   if (broadcastRecoveryStarted) return;
   broadcastRecoveryStarted = true;
   const timer = setTimeout(async () => {
@@ -1778,6 +1788,55 @@ router.post('/campaigns', async (req, res) => {
   }
 });
 
+router.post('/campaigns/:id/start', async (req, res) => {
+  let client;
+  try {
+    const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
+    if (!campaign) return res.status(404).json({ error: 'Campaña no encontrada' });
+    if (campaign.server_managed) return res.json({ success: true, campaign });
+    if (campaign.sending_provider !== 'evolution' || campaign.status !== 'processing') return res.status(409).json({ error: 'Campaña no disponible para envío en segundo plano' });
+    await require('../services/broadcast-sender').resolveSender(req.orgId, 'evolution', campaign.sending_channel_id);
+    const items = req.body.items;
+    if (!Array.isArray(items) || items.length !== Number(campaign.total_count) || items.length > 5000) return res.status(400).json({ error: 'Destinatarios inválidos' });
+    const phones = new Set();
+    const prepared = items.map(item => {
+      const phone = db.normalizePhone(item.phone);
+      const message = String(item.templateName ? item.previewText || '' : item.message || '').trim();
+      if (!/^[0-9]{8,15}$/.test(phone) || !message || message.length > 4096 || phones.has(phone)) throw Object.assign(new Error('Revisa los teléfonos y mensajes del lote; no debe haber destinatarios repetidos'), { status: 400 });
+      phones.add(phone);
+      return { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone };
+    });
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    const locked = (await client.query('SELECT * FROM broadcast_campaigns WHERE id = $1 AND organization_id = $2 FOR UPDATE', [campaign.id, req.orgId])).rows[0];
+    if (!locked || locked.status !== 'processing') throw Object.assign(new Error('Campaña detenida'), { status: 409 });
+    if (!locked.server_managed) {
+      const existing = await client.query('SELECT 1 FROM broadcast_campaign_recipients WHERE campaign_id = $1 LIMIT 1', [campaign.id]);
+      if (existing.rows.length) throw Object.assign(new Error('La campaña ya comenzó; crea una nueva con los pendientes'), { status: 409 });
+      await client.query(`INSERT INTO broadcast_jobs (campaign_id, organization_id, position, item)
+        SELECT $1, $2, ordinality::integer, value FROM jsonb_array_elements($3::jsonb) WITH ORDINALITY`,
+        [campaign.id, req.orgId, JSON.stringify(prepared)]);
+      await client.query('UPDATE broadcast_campaigns SET server_managed = TRUE WHERE id = $1', [campaign.id]);
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, campaign: { ...campaign, server_managed: true } });
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(error.status || 500).json({ error: error.message });
+  } finally { client?.release(); }
+});
+
+router.post('/campaigns/:id/stop', async (req, res) => {
+  try {
+    const { rows } = await getPool().query(`UPDATE broadcast_campaigns
+      SET status = CASE WHEN status = 'processing' THEN 'interrupted' ELSE status END,
+        completed_at = COALESCE(completed_at, NOW())
+      WHERE id = $1 AND organization_id = $2 AND server_managed RETURNING *`, [req.params.id, req.orgId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Campaña no encontrada' });
+    res.json({ success: true, campaign: rows[0] });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 router.post('/campaigns/:id/finish', async (req, res) => {
   try {
     const requested = req.body?.status;
@@ -1788,7 +1847,7 @@ router.post('/campaigns/:id/finish', async (req, res) => {
       `UPDATE broadcast_campaigns
           SET status = CASE WHEN status = 'paused_payment' THEN status ELSE $1 END,
               completed_at = COALESCE(completed_at, NOW())
-       WHERE id = $2 AND organization_id = $3 RETURNING *`,
+       WHERE id = $2 AND organization_id = $3 AND NOT server_managed RETURNING *`,
       [status, req.params.id, req.orgId]
     );
     if (!rows[0]) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
@@ -1825,7 +1884,7 @@ router.get('/campaigns', async (req, res) => {
       `UPDATE broadcast_campaigns c
           SET status = 'interrupted', completed_at = COALESCE(completed_at, NOW())
         WHERE c.organization_id = $1
-          AND c.status = 'processing'
+          AND c.status = 'processing' AND NOT c.server_managed
           AND c.created_at < NOW() - INTERVAL '10 minutes'
           AND NOT EXISTS (
             SELECT 1 FROM broadcast_campaign_recipients r
@@ -1838,6 +1897,7 @@ router.get('/campaigns', async (req, res) => {
     const recoveredChats = await reconcileAcceptedBroadcastMessages(req.orgId);
     const { rows } = await getPool().query(
       `SELECT c.*,
+         (SELECT COUNT(*)::int FROM broadcast_jobs j WHERE j.campaign_id = c.id AND j.state = 'unknown') AS queue_unknown_count,
          COUNT(r.id)::int AS processed_count,
          GREATEST(c.total_count - COUNT(r.id), 0)::int AS pending_count,
          COUNT(*) FILTER (WHERE r.result_status = 'skipped')::int AS skipped_count,
@@ -1914,6 +1974,16 @@ router.get('/campaigns/:id', async (req, res) => {
        ORDER BY r.id`,
       [req.params.id, req.orgId]
     );
+    if (campaign.server_managed) {
+      const uncertain = await getPool().query(`SELECT 'job-' || j.id AS id,
+        j.item->>'phone' AS destination_phone, j.item->>'contactName' AS contact_name,
+        'unknown' AS result_status, 'unknown' AS current_status,
+        COALESCE(j.result->>'error', j.result->>'warning', 'Envío pendiente de revisión; no reenviar sin confirmar') AS display_error_message
+        FROM broadcast_jobs j WHERE j.campaign_id = $1 AND j.organization_id = $2 AND j.state = 'unknown'
+          AND NOT EXISTS (SELECT 1 FROM broadcast_campaign_recipients r WHERE r.campaign_id = j.campaign_id
+            AND r.destination_phone = j.item->>'phone') ORDER BY j.position`, [req.params.id, req.orgId]);
+      rows.push(...uncertain.rows);
+    }
     res.json({ success: true, campaign, recipients: rows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -2289,7 +2359,7 @@ router.post('/send-broadcast', async (req, res) => {
      A) Texto libre:  { phone, message }
      B) Template:     { phone, templateName, languageCode?, components? }
 ───────────────────────────────────────────────────────────────────── */
-router.post('/send-bulk', async (req, res) => {
+async function sendBulk(req, res) {
   const { items, campaignId = null } = req.body;
   let pacing = req.body.pacingSettings || {};
   let sendingProvider = req.body.sendingProvider || null;
@@ -2301,6 +2371,9 @@ router.post('/send-bulk', async (req, res) => {
   if (campaignId) {
     const campaign = await getBroadcastCampaign(req.orgId, campaignId);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (campaign.server_managed && (!req[SERVER_QUEUE] || campaign.status !== 'processing')) {
+      return res.status(409).json({ error: 'Esta campaña se controla desde el servidor' });
+    }
     if ((sendingProvider && sendingProvider !== (campaign.sending_provider || 'kapso'))
       || (sendingChannelId && Number(sendingChannelId) !== Number(campaign.sending_channel_id))) {
       return res.status(409).json({ error: 'El método de envío no coincide con la campaña' });
@@ -2502,7 +2575,8 @@ router.post('/send-bulk', async (req, res) => {
   const failed  = results.filter(r => !r.success && !r.skipped && !r.pending).length;
   const campaignPaused = results.some(result => result.campaignPaused);
   res.json({ success: true, sent, skipped, pending, failed, campaignPaused, results });
-});
+}
+router.post('/send-bulk', sendBulk);
 
 /* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/calibrate

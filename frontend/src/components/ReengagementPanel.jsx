@@ -1322,6 +1322,20 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [historyOpen]);
 
+  useEffect(() => {
+    if (!historyOpen && !campaigns.some(c => c.server_managed && c.status === 'processing')) return undefined;
+    const timer = setInterval(() => { loadCampaigns(); }, 10000);
+    return () => clearInterval(timer);
+  }, [historyOpen, campaigns.some(c => c.server_managed && c.status === 'processing'), loadCampaigns]);
+
+  async function stopServerCampaign(campaign) {
+    try {
+      await api.post(`/reengagement/campaigns/${campaign.id}/stop`);
+      showToast('Pendientes detenidos. Un mensaje que ya estaba en envío puede terminar.');
+      await loadCampaigns();
+    } catch (error) { showToast(error.response?.data?.error || 'No se pudo detener el lote', 'error'); }
+  }
+
   async function toggleCampaignDetails(campaign) {
     const campaignId = campaign.id;
     if (String(expandedCampaign) === String(campaignId)) {
@@ -1745,6 +1759,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     const direct = reviewPlan.sendingProvider === 'evolution';
     const items = reviewPlan.entries.map(entry => entry.item);
     let campaignId = null;
+    let handedToServer = false;
     let campaignStatus = 'completed';
     setSending(true);
     setResults(null);
@@ -1759,6 +1774,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
       });
       campaignId = created.data.campaign.id;
+      if (direct) {
+        handedToServer = true;
+        await api.post(`/reengagement/campaigns/${campaignId}/start`, { items }, { timeout: 45000 });
+        setReviewPlan(null);
+        setHistoryOpen(true);
+        showToast('Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
+        return;
+      }
       let sent = 0, failed = 0, skipped = 0, pending = 0, chatsPending = 0;
       const failureReasons = [];
       setSendProgress({ done: 0, total: items.length, sent: 0, skipped: 0, pending: 0, failed: 0 });
@@ -1876,7 +1899,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       }
     } catch (err) {
       campaignStatus = 'interrupted';
-      const reason = err.response?.data?.error || err.message || 'No se pudo confirmar el envío con WhatsApp';
+      const reason = handedToServer ? 'No pudimos confirmar el inicio. Revisa Historial antes de crear otro lote.' : (err.response?.data?.error || err.message || 'No se pudo confirmar el envío con WhatsApp');
+      if (handedToServer) setHistoryOpen(true);
       setResults({
         sent: 0,
         failed: err.deliveryUnconfirmed ? 0 : 1,
@@ -1892,7 +1916,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       setSending(false);
       sendingRef.current = false;
       setSendProgress({ done: 0, total: 0 });
-      if (campaignId) {
+      if (campaignId && !handedToServer) {
         await api.post(`/reengagement/campaigns/${campaignId}/finish`, { status: campaignStatus }).catch(() => {});
       }
       await loadCampaigns();
@@ -1969,7 +1993,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             </label>)}
           </div>
           La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.
-          Se envía sólo el texto revisado, sin botones ni archivos. Mantén esta pantalla abierta durante el envío.
+          Se envía sólo el texto revisado, sin botones ni archivos. Puedes cerrar el navegador después de confirmar; el servidor continúa el envío.
         </div>}
       </section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
@@ -2225,6 +2249,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     </div>
                   ))}
                 </button>
+                {campaign.server_managed && <div style={{ padding: '8px 12px', fontSize: 12 }}>
+                  {campaign.status === 'processing' ? 'Enviando desde el servidor · puedes cerrar el navegador' : campaign.status === 'completed' ? 'Envío finalizado' : 'Envío detenido'}
+                  {Number(campaign.queue_unknown_count) > 0 && <div style={{ color: colors.yellow }}>Hay mensajes pendientes de revisión. No los reenvíes sin confirmar su estado.</div>}
+                  {campaign.status === 'processing' && <button style={{ marginLeft: 12 }} onClick={() => stopServerCampaign(campaign)}>Detener pendientes</button>}
+                </div>}
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${colors.border}`, padding: 10, maxHeight: 240, overflowY: 'auto' }}>
                     {(campaign.reasons || []).some(reason => String(reason.error_code || '') === '131042') && (
@@ -2512,7 +2541,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     {reviewPlan.sendingProvider === 'evolution' && <>
                       {' · '}Lotes de {reviewPlan.batchSize}, pausa de {reviewPlan.batchPauseSeconds / 60} minutos.
                       {' '}Tiempo mínimo aproximado: {Math.ceil((Math.max(0, reviewPlan.entries.length - 1) * reviewPlan.intervalSeconds + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * Math.max(0, reviewPlan.batchPauseSeconds - reviewPlan.intervalSeconds)) / 60)} minutos.
-                      {' '}Sólo texto. Mantén esta pantalla abierta; los siguientes lotes continúan automáticamente.
+                      {' '}Sólo texto. El servidor guarda el lote y continúa aunque cierres el navegador.
                     </>}
                   </div>
                   {sending && <div style={{ marginTop: 8, color: colors.textPrimary }}>

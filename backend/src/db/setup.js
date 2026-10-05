@@ -855,6 +855,20 @@ async function setupDatabase() {
       ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_provider TEXT NOT NULL DEFAULT 'kapso';
       ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_channel_id INTEGER;
       ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS pacing_settings JSONB;
+      ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS server_managed BOOLEAN NOT NULL DEFAULT FALSE;
+      CREATE TABLE IF NOT EXISTS broadcast_jobs (
+        id BIGSERIAL PRIMARY KEY,
+        campaign_id BIGINT NOT NULL REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        item JSONB NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','processing','done','unknown')),
+        available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        claimed_at TIMESTAMPTZ,
+        result JSONB,
+        UNIQUE(campaign_id, position)
+      );
+      CREATE INDEX IF NOT EXISTS idx_broadcast_jobs_pending ON broadcast_jobs(available_at, id) WHERE state = 'pending';
       CREATE TABLE IF NOT EXISTS broadcast_channel_pacing (
         organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
         channel_id INTEGER NOT NULL,
