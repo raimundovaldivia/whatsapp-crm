@@ -180,7 +180,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
     status: 'accepted', whatsappMessageId,
     errorDetail: channelId ? { savedContent, channelId, provider: 'evolution' } : null,
   })];
-  if (item.templateName || channelId) auditTasks.push(markTemplateSent(orgId, item.phone));
+  if (item.templateName && !channelId) auditTasks.push(markTemplateSent(orgId, item.phone));
   const auditResults = await Promise.allSettled(auditTasks);
   auditResults.filter(result => result.status === 'rejected').forEach(result => {
     console.error('[SendBulk] No se pudo completar la auditoría posterior:', result.reason?.message || result.reason);
@@ -944,19 +944,24 @@ async function customerRecentlyDeclined(orgId, phone) {
 /**
  * ¿Ya se envió un template hoy a este teléfono?
  */
-async function templateSentToday(orgId, phone) {
-  try {
-    const { getPool } = require('../db/database');
-    const pool = getPool();
-    const { rows } = await pool.query(
-      `SELECT 1 FROM contacts
-       WHERE organization_id = $1 AND phone = $2
-         AND last_template_sent_at >= DATE_TRUNC('day', NOW())
-       LIMIT 1`,
-      [orgId, phone]
-    );
-    return rows.length > 0;
-  } catch { return false; }
+async function templateSentToday(orgId, phone, channelId = null) {
+  const { rows } = await getPool().query(
+    `SELECT 1 WHERE EXISTS (
+       SELECT 1 FROM messages m JOIN conversations c ON c.id = m.conversation_id
+       WHERE c.organization_id = $1 AND c.phone_number = $2
+         AND c.whatsapp_channel_id IS NOT DISTINCT FROM $3::integer
+         AND m.direction = 'outbound' AND m.type = 'template'
+         AND m.status IS DISTINCT FROM 'failed'
+         AND m.created_at >= DATE_TRUNC('day', NOW())
+     ) OR EXISTS (
+       SELECT 1 FROM broadcast_campaign_recipients r
+       JOIN broadcast_campaigns bc ON bc.id = r.campaign_id AND bc.organization_id = r.organization_id
+       WHERE r.organization_id = $1 AND r.destination_phone = $2
+         AND bc.sending_channel_id IS NOT DISTINCT FROM $3::integer
+         AND r.result_status IN ('accepted', 'unknown')
+         AND r.created_at >= DATE_TRUNC('day', NOW())
+     )`, [orgId, phone, channelId]);
+  return rows.length > 0;
 }
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -1754,6 +1759,7 @@ router.post('/campaigns', async (req, res) => {
   try {
     const { templateName, total, testMode = false, testPhone = null, sendingProvider = 'kapso', sendingChannelId = null } = req.body || {};
     if (req.body?.sendingProvider) await require('../services/broadcast-sender').resolveSender(req.orgId, sendingProvider, sendingChannelId);
+    const pacing = sendingProvider === 'evolution' ? require('../services/broadcast-sender').pacingSettings(req.body.pacingSettings) : null;
     const totalCount = Number(total);
     if (!templateName) return res.status(400).json({ success: false, error: 'templateName requerido' });
     if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 5000) {
@@ -1761,14 +1767,14 @@ router.post('/campaigns', async (req, res) => {
     }
     const { rows } = await getPool().query(
       `INSERT INTO broadcast_campaigns
-         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id, pacing_settings)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [req.orgId, req.userId, templateName, totalCount, !!testMode,
-        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId]
+        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId, pacing ? JSON.stringify(pacing) : null]
     );
     res.json({ success: true, campaign: rows[0] });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 
@@ -2285,6 +2291,7 @@ router.post('/send-broadcast', async (req, res) => {
 ───────────────────────────────────────────────────────────────────── */
 router.post('/send-bulk', async (req, res) => {
   const { items, campaignId = null } = req.body;
+  let pacing = req.body.pacingSettings || {};
   let sendingProvider = req.body.sendingProvider || null;
   let sendingChannelId = req.body.sendingChannelId || null;
   if (!Array.isArray(items) || !items.length) {
@@ -2298,6 +2305,7 @@ router.post('/send-bulk', async (req, res) => {
       || (sendingChannelId && Number(sendingChannelId) !== Number(campaign.sending_channel_id))) {
       return res.status(409).json({ error: 'El método de envío no coincide con la campaña' });
     }
+    pacing = campaign.pacing_settings || {};
     sendingProvider = campaign.sending_provider || 'kapso';
     sendingChannelId = campaign.sending_channel_id || null;
     if (campaign.status === 'paused_payment') {
@@ -2354,9 +2362,9 @@ router.post('/send-bulk', async (req, res) => {
 
       // ── Anti-duplicado: saltar si ya recibió un template hoy ─────
       if ((isTemplate || direct) && !item.force) {
-        const alreadySent = await templateSentToday(req.orgId, item.phone);
+        const alreadySent = await templateSentToday(req.orgId, item.phone, direct ? sendingChannelId : null);
         if (alreadySent) {
-          const result = { phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' };
+          const result = { phone: item.phone, success: false, skipped: true, error: 'Ya recibió una campaña hoy por este canal' };
           await recordBroadcastRecipient(req.orgId, campaignId, item, {
             status: 'skipped', errorMessage: result.error,
           });
@@ -2381,7 +2389,7 @@ router.post('/send-bulk', async (req, res) => {
       let savedContent;
 
       if (direct) {
-        const permit = await require('../services/broadcast-sender').claimDirectSlot(req.orgId);
+        const permit = await require('../services/broadcast-sender').claimDirectSlot(req.orgId, sendingChannelId, pacing, campaignId);
         if (!permit.allowed) return res.status(429).json({ rateLimited: true, retryAfterSeconds: permit.retryAfterSeconds, error: 'Pausa entre mensajes directos' });
         savedContent = String(item.templateName ? item.previewText : item.message).trim();
         sentResult = await require('../services/evolution-whatsapp').sendTextMessage(item.phone, savedContent, wc);

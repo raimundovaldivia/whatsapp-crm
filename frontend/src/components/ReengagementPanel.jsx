@@ -1243,6 +1243,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [methodsLoading, setMethodsLoading] = useState(true);
   const [methodsError, setMethodsError] = useState('');
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
+  const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
   const [directText, setDirectText] = useState('');
   const directEditorRef = useRef(null);
   const isDirect = sendingMethodKey.startsWith('evolution:');
@@ -1647,6 +1648,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   function prepareReview() {
+    if (isDirect && !Object.entries(directPacing).every(([key, value]) => Number.isInteger(Number(value)) && Number(value) >= (key === 'batchPauseSeconds' ? 0 : 1) && Number(value) <= (key === 'batchSize' ? 5000 : 86400))) { showToast('Revisa los tiempos y el tamaño del lote', 'error'); return; }
     if (!selectedMethod?.available) { showToast('Selecciona un método de envío conectado', 'error'); return; }
     if (!messageReady) { showToast(isDirect ? 'Escribe el mensaje primero' : 'Selecciona un template primero', 'error'); return; }
     if (selectedCount === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
@@ -1713,9 +1715,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       sendingChannelId: selectedMethod.channelId,
       sendingLabel: selectedMethod.label,
       audienceLabel: purchaseAge === 'all' ? 'Todos los contactos filtrados' : `Último pedido hace más de ${purchaseDays} días`,
-      intervalSeconds: selectedMethod.intervalSeconds,
-      batchSize: selectedMethod.batchSize,
-      batchPauseSeconds: selectedMethod.batchPauseSeconds,
+      ...directPacing,
       testMode,
       testPhone: TEST_PHONE,
       createdAt: Date.now(),
@@ -1756,6 +1756,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         testPhone: reviewPlan.testPhone || null,
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
+        pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
       });
       campaignId = created.data.campaign.id;
       let sent = 0, failed = 0, skipped = 0, pending = 0, chatsPending = 0;
@@ -1776,6 +1777,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           if (index >= items.length) return;
           const item = items[index];
           let processed = false;
+          let accepted = false;
           try {
             let res;
             while (!stopSendingRef.current) {
@@ -1807,7 +1809,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               paymentBlocked = true;
               campaignStatus = 'paused_payment';
             }
-            if (result?.success) sent++;
+            if (result?.success) { sent++; accepted = true; }
             else if (result?.skipped) skipped++;
             else if (result?.pending) pending++;
             else failed++;
@@ -1842,8 +1844,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           // siguiente destinatario. Así un fallo de pago detiene el lote con
           // un máximo aproximado equivalente a los envíos ya simultáneos.
           if (!stopRequested && index < items.length - 1) {
-            if (direct) await waitForNextSend(completed % reviewPlan.batchSize === 0 ? reviewPlan.batchPauseSeconds : reviewPlan.intervalSeconds);
-            else await new Promise(resolve => setTimeout(resolve, 800));
+            if (direct && accepted) await waitForNextSend(sent % reviewPlan.batchSize === 0 ? Math.max(reviewPlan.batchPauseSeconds, reviewPlan.intervalSeconds) : reviewPlan.intervalSeconds);
+            else if (!direct) await new Promise(resolve => setTimeout(resolve, 800));
           }
         }
       });
@@ -1942,7 +1944,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               <div style={{ fontSize: 11, marginTop: 4, color: colors.textSecondary }}>
                 {methodsLoading ? 'Consultando conexión…' : !method.available
                   ? (methodsError ? 'Conexión sin verificar' : 'No conectado · revisar Ajustes')
-                  : method.provider === 'evolution' ? 'Lotes de 10 · pausas automáticas' : 'Plantillas de WhatsApp'}
+                  : method.provider === 'evolution' ? 'Lotes y pausas configurables' : 'Plantillas de WhatsApp'}
               </div>
             </button>;
           })}
@@ -1954,7 +1956,19 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         {methodsError && <div role="alert" style={{ width: '100%', color: colors.red, fontSize: 12 }}>{methodsError}</div>}
         {reviewPlan && <div style={{ width: '100%', fontSize: 12 }}>Cierra la revisión para cambiar el método de envío.</div>}
         {selectedMethod?.provider === 'evolution' && <div style={{ fontSize: 12, marginTop: 6 }}>
-          Lotes de 10 · 1 mensaje por minuto · pausa de 5 minutos entre lotes, luego continúa automáticamente.
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 8 }}>
+            {[
+              ['intervalSeconds', 'Tiempo entre mensajes (segundos)', 1, 86400],
+              ['batchSize', 'Mensajes por lote', 1, 5000],
+              ['batchPauseSeconds', 'Espera entre lotes (segundos)', 0, 86400],
+            ].map(([key, label, min, max]) => <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {label}
+              <input type="number" min={min} max={max} step="1" value={directPacing[key]} disabled={sending || !!reviewPlan}
+                onChange={event => setDirectPacing(current => ({ ...current, [key]: event.target.value === '' ? '' : Number(event.target.value) }))}
+                style={{ width: 150, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
+            </label>)}
+          </div>
+          La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.
           Se envía sólo el texto revisado, sin botones ni archivos. Mantén esta pantalla abierta durante el envío.
         </div>}
       </section>
@@ -2497,7 +2511,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     {reviewPlan.audienceLabel && <div style={{ marginTop: 4 }}>Destinatarios: {reviewPlan.audienceLabel}</div>}
                     {reviewPlan.sendingProvider === 'evolution' && <>
                       {' · '}Lotes de {reviewPlan.batchSize}, pausa de {reviewPlan.batchPauseSeconds / 60} minutos.
-                      {' '}Tiempo mínimo aproximado: {Math.max(0, reviewPlan.entries.length - 1) + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * 4} minutos.
+                      {' '}Tiempo mínimo aproximado: {Math.ceil((Math.max(0, reviewPlan.entries.length - 1) * reviewPlan.intervalSeconds + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * Math.max(0, reviewPlan.batchPauseSeconds - reviewPlan.intervalSeconds)) / 60)} minutos.
                       {' '}Sólo texto. Mantén esta pantalla abierta; los siguientes lotes continúan automáticamente.
                     </>}
                   </div>

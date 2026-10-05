@@ -854,6 +854,15 @@ async function setupDatabase() {
         ON broadcast_campaigns(organization_id, created_at DESC);
       ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_provider TEXT NOT NULL DEFAULT 'kapso';
       ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_channel_id INTEGER;
+      ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS pacing_settings JSONB;
+      CREATE TABLE IF NOT EXISTS broadcast_channel_pacing (
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        channel_id INTEGER NOT NULL,
+        campaign_id BIGINT,
+        batch_count INTEGER NOT NULL DEFAULT 1,
+        next_send_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (organization_id, channel_id)
+      );
       CREATE TABLE IF NOT EXISTS broadcast_direct_pacing (
         organization_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
         next_send_at TIMESTAMPTZ NOT NULL
