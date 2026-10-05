@@ -81,22 +81,71 @@ function parseWebhookMessage(body) {
   if (event && event !== 'messages.upsert') return null;
   const data = unwrapData(body);
   const key = data?.key;
-  if (!key || key.fromMe) return null;
+  if (!key?.id || key.fromMe) return null;
   const remoteJid = key.remoteJid || data.remoteJid;
   if (!remoteJid || /@(g\.us|broadcast)$/i.test(remoteJid)) return null;
   const source = key.senderPn || data.senderPn || remoteJid;
   const from = String(source).split('@')[0].replace(/\D/g, '');
-  const text = textFromMessage(data.message || {});
-  if (!from || !text) return null;
+  let message = data.message || {};
+  for (let depth = 0; depth < 5; depth++) {
+    const nested = message.ephemeralMessage?.message || message.viewOnceMessage?.message
+      || message.viewOnceMessageV2?.message || message.documentWithCaptionMessage?.message;
+    if (!nested) break;
+    message = nested;
+  }
+  const type = message.imageMessage ? 'image' : message.audioMessage ? 'audio'
+    : message.documentMessage ? 'document' : message.videoMessage ? 'video' : 'text';
+  const text = textFromMessage(message);
+  if (!from || (!text && type === 'text')) return null;
   return {
     messageId: key.id,
     from,
     remoteJid,
     contactName: data.pushName || body.sender || null,
     timestamp: data.messageTimestamp || null,
-    type: 'text',
-    text,
+    type,
+    text: text || '',
+    ...(type !== 'text' ? {
+      mimeType: message[`${type}Message`]?.mimetype || null,
+      fileName: message[`${type}Message`]?.fileName || null,
+      mediaMessage: { key, message },
+    } : {}),
   };
+}
+
+const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+function mediaReference(channelId, messageId) {
+  return `evolution:${channelId}:${Buffer.from(String(messageId)).toString('base64url')}`;
+}
+
+async function downloadMessageMedia(parsed, config) {
+  const { instance } = credentials(config);
+  const response = await client(config).post(`/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
+    message: parsed.mediaMessage || { key: { id: parsed.messageId } },
+    convertToMp4: false,
+  }, { timeout: 30000, maxRedirects: 0, maxContentLength: 15 * 1024 * 1024, maxBodyLength: 1024 * 1024 });
+  const payload = response.data;
+  const raw = typeof payload?.base64 === 'string' ? payload.base64 : '';
+  const base64 = raw.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
+  if (!base64 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new Error('Evolution no entregó un archivo válido de hasta 10 MB');
+  }
+  const data = Buffer.from(base64, 'base64');
+  if (!data.length || data.length > MAX_MEDIA_BYTES) throw new Error('Archivo vacío o demasiado grande');
+  const contentType = String(payload.mimetype || parsed.mimeType || '').split(';')[0].trim().toLowerCase();
+  if (!/^(image\/(jpeg|png|webp|gif)|audio\/(ogg|opus|mpeg|mp3|mp4|aac|wav|x-wav|webm)|video\/(mp4|webm)|application\/pdf)$/.test(contentType)) {
+    throw new Error('Tipo de archivo no compatible');
+  }
+  return { data, contentType };
+}
+
+async function downloadMediaReference(orgId, ref) {
+  const match = /^evolution:(\d+):([A-Za-z0-9_-]+)$/.exec(ref);
+  if (!match) throw new Error('Referencia Evolution inválida');
+  const channel = await require('../db/database').getWhatsappChannel(orgId, Number(match[1]));
+  if (!channel || channel.provider !== 'evolution') throw new Error('Canal no disponible');
+  const messageId = Buffer.from(match[2], 'base64url').toString('utf8');
+  return downloadMessageMedia({ messageId }, channel);
 }
 
 function parseStatusUpdate(body) {
@@ -167,6 +216,7 @@ async function configureWebhook(config, webhookUrl) {
 }
 
 module.exports = {
+  mediaReference, downloadMessageMedia, downloadMediaReference,
   sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
   parseConnectionUpdate, normalizeConnectionState,
   getConnectionState, createInstance, getConnectQr, configureWebhook,

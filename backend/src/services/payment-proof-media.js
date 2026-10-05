@@ -12,6 +12,12 @@ async function getPaymentProofMedia(orgId, mediaRef, whatsappConfig) {
   const cached = mediaCache.get(cacheKey);
   if (cached) return cached;
 
+  if (ref.startsWith('evolution:')) {
+    const media = await require('./evolution-whatsapp').downloadMediaReference(orgId, ref);
+    mediaCache.set(cacheKey, media.data, media.contentType);
+    return media;
+  }
+
   const mediaUrl = ref.startsWith('https://')
     ? ref
     : (await kapsoService.getMediaUrl(ref, whatsappConfig)).url;

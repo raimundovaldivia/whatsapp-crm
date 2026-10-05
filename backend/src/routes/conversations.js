@@ -1139,7 +1139,7 @@ router.get('/media/:mediaRef', async (req, res) => {
     try {
       const decoded = Buffer.from(ref.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
       // Validar que la decodificación produjo algo coherente
-      if (decoded.startsWith('https://') || /^[\w.\-]+$/.test(decoded)) {
+      if (decoded.startsWith('https://') || decoded.startsWith('evolution:') || /^[\w.\-]+$/.test(decoded)) {
         ref = decoded;
       }
     } catch (_) {}
@@ -1149,12 +1149,15 @@ router.get('/media/:mediaRef', async (req, res) => {
       [req.orgId, ref]);
     if (!rows.length) return res.status(404).json({ error: 'Media no disponible' });
     const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
-    if (!ref.startsWith('https://') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
+    if (!ref.startsWith('https://') && !ref.startsWith('evolution:') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
     const cacheKey = req.orgId + ':' + ref;
     const cached = mediaCache.get(cacheKey);
     let data, contentType;
     if (cached) ({ data, contentType } = cached);
-    else {
+    else if (ref.startsWith('evolution:')) {
+      ({ data, contentType } = await require('../services/evolution-whatsapp').downloadMediaReference(req.orgId, ref));
+      mediaCache.set(cacheKey, data, contentType);
+    } else {
       const url = ref.startsWith('https://') ? ref : (await kapsoSvc.getMediaUrl(ref, whatsappConfig)).url;
       ({ data, contentType } = await kapsoSvc.downloadMedia(url, whatsappConfig));
       mediaCache.set(cacheKey, data, contentType);

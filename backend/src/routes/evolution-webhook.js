@@ -59,18 +59,54 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
     return;
   }
 
-  const parsed = evolution.parseWebhookMessage(req.body);
-  if (!parsed) return;
-  console.log(`[EvolutionWebhook] [Org:${org.name}] ${parsed.from}: ${parsed.text}`);
-
-  await processInboundText({
-    org,
-    whatsappConfig: channel,
-    parsed,
-    io,
-    whatsappChannelId: channel.id,
-    markAsRead: () => evolution.markAsRead(parsed.messageId, parsed.remoteJid, channel),
-  });
+  const messages = Array.isArray(req.body.data) ? req.body.data : [req.body.data];
+  for (const data of messages) {
+    const parsed = evolution.parseWebhookMessage({ ...req.body, data });
+    if (!parsed) continue;
+    const markAsRead = () => evolution.markAsRead(parsed.messageId, parsed.remoteJid, channel);
+    let prepareMedia = null;
+    if (parsed.type !== 'text') {
+      parsed.mediaId = evolution.mediaReference(channel.id, parsed.messageId);
+      const mediaService = {
+        getMediaUrl: async () => ({ url: parsed.mediaId }),
+        downloadMedia: async () => {
+          const media = await evolution.downloadMessageMedia(parsed, channel);
+          require('../services/media-cache').set(`${org.id}:${parsed.mediaId}`, media.data, media.contentType);
+          return media;
+        },
+        markAsRead,
+        sendTextMessage: evolution.sendTextMessage,
+      };
+      const image = parsed.type === 'image' || (parsed.type === 'document' && /^image\/(jpeg|png|gif|webp)(;|$)/i.test(parsed.mimeType || ''));
+      if (image) {
+        await require('./kapso-webhook').handlePaymentProof(org, channel, parsed, { service: mediaService, io, channelId: channel.id });
+        continue;
+      }
+      const caption = parsed.text;
+      parsed.text = caption || (parsed.type === 'audio' ? '🎤 [Audio]' : parsed.type === 'video' ? '🎥 [Video]' : '📎 [Documento]');
+      prepareMedia = async () => {
+        if (parsed.type === 'audio' && process.env.OPENAI_API_KEY) {
+          try {
+            const transcript = await require('./kapso-webhook').transcribeAudio(parsed, channel, mediaService);
+            if (transcript) return { text: `🎤 ${transcript}` };
+          } catch (error) { console.warn('[EvolutionWebhook] No se pudo transcribir el audio:', error.message); }
+        }
+        if (caption) return { text: caption };
+        return { fallback: parsed.type === 'audio'
+          ? 'Recibí tu audio, pero no pude transcribirlo esta vez. ¿Puedes escribirme lo que necesitas?'
+          : 'Recibí tu archivo. ¿Puedes contarme por escrito qué necesitas revisar?' };
+      };
+    }
+    await processInboundText({
+      org,
+      whatsappConfig: channel,
+      parsed,
+      io,
+      whatsappChannelId: channel.id,
+      markAsRead,
+      prepareMedia,
+    });
+  }
 }));
 
 module.exports = router;

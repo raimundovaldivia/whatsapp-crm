@@ -45,7 +45,7 @@ router.get('/:id/image', async (req, res) => {
     if (!proof) return res.status(404).json({ error: 'Comprobante no encontrado' });
 
     const wc = await db.getWhatsappConfig(req.orgId);
-    if (!wc || wc.provider !== 'kapso') {
+    if (!String(proof.media_id || '').startsWith('evolution:') && (!wc || wc.provider !== 'kapso')) {
       return res.status(400).json({ error: 'Configuración de WhatsApp no disponible' });
     }
 

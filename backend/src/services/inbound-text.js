@@ -4,7 +4,7 @@ const { resumeDivaOnInbound } = require('./conversation-mode');
 const { notifyAdminHumanPendingReply } = require('./notifications');
 const provider = require('./whatsapp-provider');
 
-async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead, whatsappChannelId = null }) {
+async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead, whatsappChannelId = null, prepareMedia = null }) {
   if (!parsed?.from || !parsed?.text) return;
 
   const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName, whatsappChannelId);
@@ -14,10 +14,13 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     direction: 'inbound',
     content: parsed.text,
     sentBy: 'client',
+    type: parsed.type || 'text',
+    mediaId: parsed.mediaId || null,
   });
   if (!savedMsg) return;
 
   await db.updateConversationLastMessage(conversation.id, parsed.text, true);
+  if (db.updateLastInbound) await db.updateLastInbound(conversation.id);
   if (markAsRead) await markAsRead().catch(() => {});
 
   let updatedConv = await db.getConversationById(conversation.id);
@@ -34,8 +37,22 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
   }
 
-  const result = await pipeline.processMessage(org.id, conversation.id, parsed.text);
-  if (result.skipped || !result.response) return;
+  let prepared = null;
+  if (prepareMedia) {
+    if (!await require('./commercial').permitted(org.id, 'sales_ai')) return;
+    prepared = await prepareMedia();
+    if (prepared.text) {
+      parsed.text = prepared.text;
+      await db.getPool().query(`UPDATE messages SET content=$1 WHERE id=$2 AND conversation_id IN
+        (SELECT id FROM conversations WHERE organization_id=$3)`, [parsed.text, savedMsg.id, org.id]);
+      await db.updateConversationLastMessage(conversation.id, parsed.text);
+      io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { ...savedMsg, content: parsed.text }, conversation: await db.getConversationById(conversation.id) });
+    }
+  }
+  const result = prepared?.fallback
+    ? { response: prepared.fallback, agentType: 'system' }
+    : await pipeline.processMessage(org.id, conversation.id, parsed.text);
+  if (result.skipped || result.duplicate || !result.response) return;
 
   const sentResult = await provider.sendTextMessage(parsed.from, result.response, whatsappConfig);
   const outMsg = await db.saveMessage({

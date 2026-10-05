@@ -641,24 +641,41 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
  * Maneja una imagen entrante como posible comprobante de pago.
  * Guarda el comprobante, responde al cliente y notifica al admin.
  */
-async function handlePaymentProof(org, whatsappConfig, parsed) {
+async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
+  const service = options.service || kapsoService;
+  const eventIo = options.io || io;
+  const channelId = options.channelId || null;
   try {
     const commercial = require('../services/commercial');
     const payments = await commercial.permitted(org.id,'payments');
     const sales = await commercial.permitted(org.id,'sales_ai');
     if (!payments && !sales) {
-      const conversation = await db.upsertConversation(org.id,parsed.from,parsed.contactName);
+      const conversation = await db.upsertConversation(org.id,parsed.from,parsed.contactName,channelId);
       const message = await db.saveMessage({conversationId:conversation.id,whatsappMessageId:parsed.messageId,direction:'inbound',content:'📷 [Imagen]',type:'image',sentBy:'client',mediaId:parsed.mediaUrl || parsed.mediaId});
       await db.updateConversationLastMessage(conversation.id,'📷 [Imagen]',true);
       await db.updateLastInbound(conversation.id);
-      io?.to(`org_${org.id}`).emit(`new_message_${org.id}`,{message,conversation:await db.getConversationById(conversation.id)});
+      eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`,{message,conversation:await db.getConversationById(conversation.id)});
       return;
     }
     console.log(`[KapsoWebhook] 📸 Imagen de ${parsed.from} | mediaId: ${parsed.mediaId} — analizando con IA...`);
 
-    const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
+    const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName, channelId);
     db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
-    await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
+    await service.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
+
+    // Evolution conserva el control humano de su conversación y registra el adjunto.
+    if (channelId && conversation.agent_mode && conversation.agent_mode !== 'ai'
+        && !await resumeDivaOnInbound(conversation, db)) {
+      const message = await db.saveMessage({ conversationId: conversation.id, whatsappMessageId: parsed.messageId,
+        direction: 'inbound', content: parsed.text || '📷 [Imagen]', type: 'image', sentBy: 'client', mediaId: parsed.mediaId });
+      if (!message) return;
+      await db.updateConversationLastMessage(conversation.id, message.content, true);
+      await db.updateLastInbound(conversation.id);
+      const updated = await db.getConversationById(conversation.id);
+      eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message, conversation: updated });
+      await notifyAdminHumanPendingReply(org.id, updated, message.content);
+      return;
+    }
 
     // ── 1. Descargar imagen y analizar con Claude Vision ────────────
     // Kapso provee media_url directa en el webhook — usarla sin llamar getMediaUrl
@@ -667,11 +684,11 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     const downloadUrl = parsed.mediaUrl; // URL directa de Kapso (preferred)
     try {
       if (downloadUrl) {
-        ({ data, contentType } = await kapsoService.downloadMedia(downloadUrl, whatsappConfig));
+        ({ data, contentType } = await service.downloadMedia(downloadUrl, whatsappConfig));
       } else if (parsed.mediaId) {
         // Fallback: obtener URL a partir del media_id (más lento)
-        const mediaInfo = await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig);
-        ({ data, contentType } = await kapsoService.downloadMedia(mediaInfo.url, whatsappConfig));
+        const mediaInfo = await service.getMediaUrl(parsed.mediaId, whatsappConfig);
+        ({ data, contentType } = await service.downloadMedia(mediaInfo.url, whatsappConfig));
       }
       if (data) {
         // Guardar en cache para que el proxy del browser pueda servirlo sin re-descargar
@@ -696,7 +713,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
     // ── 2. Si NO es comprobante → analizar con Vision y pasar al bot ────────
     if (!analysis.is_payment_proof) {
-      await db.saveMessage({
+      const imageMessage = await db.saveMessage({
         conversationId:    conversation.id,
         whatsappMessageId: parsed.messageId,
         direction:         'inbound',
@@ -705,19 +722,20 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         sentBy:            'client',
         mediaId:           mediaRef,
       });
+      if (!imageMessage) return;
       await db.updateConversationLastMessage(conversation.id, '📷 [Imagen]', true);
       await db.updateLastInbound(conversation.id);
 
       // Emitir al CRM inmediatamente — no esperar Vision ni pipeline
       const earlyConv = await db.getConversationById(conversation.id);
-      io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
+      eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
         message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
         conversation: earlyConv,
       });
 
       if (!sales) return;
       // Analizar imagen con Claude Vision y pasar contexto al pipeline
-      let imageContext = '[imagen]';
+      let imageContext = '[No se pudo interpretar la imagen; pide al cliente que explique su contenido]';
       if (data && contentType) {
         try {
           const Anthropic = require('@anthropic-ai/sdk');
@@ -735,21 +753,28 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         } catch (_) {}
       }
 
+      if (parsed.text) imageContext += `\nTexto del cliente: ${parsed.text}`;
+      if (channelId) {
+        await db.getPool().query(`UPDATE messages SET content=$1 WHERE id=$2 AND conversation_id IN
+          (SELECT id FROM conversations WHERE organization_id=$3)`, [imageContext, imageMessage.id, org.id]);
+      }
+
       const imgLog = createBotLogger(org.name, parsed.from);
       imgLog.in(imageContext);
-      io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
+      eventIo?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
       let imgResult;
       try {
         imgResult = await pipeline.processMessage(org.id, conversation.id, imageContext, imgLog);
       } finally {
-        io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
+        eventIo?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: false });
       }
 
       if (imgResult && !imgResult.duplicate && !imgResult.skipped && imgResult.response) {
-        const sentMsg = await kapsoService.sendTextMessage(parsed.from, imgResult.response, whatsappConfig).catch(() => null);
+        const sentMsg = await service.sendTextMessage(parsed.from, imgResult.response, whatsappConfig).catch(() => null);
+        if (!sentMsg) return;
         const outMsg = await db.saveMessage({
           conversationId:    conversation.id,
-          whatsappMessageId: sentMsg?.messages?.[0]?.id || null,
+          whatsappMessageId: require('../services/whatsapp-provider').messageId(sentMsg) || null,
           direction:         'outbound',
           content:           imgResult.response,
           sentBy:            'ai',
@@ -757,14 +782,14 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
         });
         await db.updateConversationLastMessage(conversation.id, imgResult.response);
         const updatedConv = await db.getConversationById(conversation.id);
-        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
+        eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
           message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
           conversation: updatedConv,
         });
-        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
+        eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
       } else {
         const updatedConv = await db.getConversationById(conversation.id);
-        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
+        eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
           message: { conversationId: conversation.id, direction: 'inbound', content: '📷 [Imagen]', type: 'image', media_id: mediaRef },
           conversation: updatedConv,
         });
@@ -773,7 +798,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
     }
 
     // ── 3. ES un comprobante — guardar mensaje ───────────────────────
-    await db.saveMessage({
+    const proofMessage = await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: parsed.messageId,
       direction:         'inbound',
@@ -782,12 +807,13 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       sentBy:            'client',
       mediaId:           mediaRef,
     });
+    if (!proofMessage) return;
     await db.updateConversationLastMessage(conversation.id, '📸 [Comprobante de pago]', true);
     await db.updateLastInbound(conversation.id);
 
     // Emitir al CRM inmediatamente — no esperar análisis ni notificaciones
     const earlyConv2 = await db.getConversationById(conversation.id);
-    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
+    eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
       message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image', media_id: mediaRef },
       conversation: earlyConv2,
     });
@@ -853,12 +879,14 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
       firstName,
     });
 
-    const sentMsg = await kapsoService.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
-    await db.saveMessage({
-      conversationId: conversation.id, whatsappMessageId: sentMsg?.messages?.[0]?.id || null,
-      direction: 'outbound', content: reply, sentBy: 'ai', agentType: 'system',
-    });
-    await db.updateConversationLastMessage(conversation.id, reply);
+    const sentMsg = await service.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
+    if (sentMsg) {
+      await db.saveMessage({
+        conversationId: conversation.id, whatsappMessageId: require('../services/whatsapp-provider').messageId(sentMsg) || null,
+        direction: 'outbound', content: reply, sentBy: 'ai', agentType: 'system',
+      });
+      await db.updateConversationLastMessage(conversation.id, reply);
+    }
 
     // ── 7. Notificar al admin (con cola si la ventana está cerrada) ───
     {
@@ -888,11 +916,11 @@ async function handlePaymentProof(org, whatsappConfig, parsed) {
 
     // ── 8. Emitir al CRM en tiempo real ─────────────────────────────
     const updatedConv = await db.getConversationById(conversation.id);
-    io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
+    eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`, {
       message: { conversationId: conversation.id, direction: 'inbound', content: '📸 [Comprobante de pago]', type: 'image', media_id: mediaRef },
       conversation: updatedConv,
     });
-    io?.to(`org_${org.id}`).emit(`payment_proof_${org.id}`, { proof, conversationId: conversation.id });
+    eventIo?.to(`org_${org.id}`).emit(`payment_proof_${org.id}`, { proof, conversationId: conversation.id });
 
   } catch (err) {
     console.error('[KapsoWebhook] Error procesando imagen:', err.message, err.stack?.split('\n')[1]);
@@ -923,16 +951,16 @@ async function reverseGeocode({ lat, lng }) {
  * Transcribe un audio de WhatsApp con Whisper (OpenAI). Solo se usa si hay
  * OPENAI_API_KEY y Kapso no entregó transcript. Node 18+ trae fetch/FormData/Blob.
  */
-async function transcribeAudio(parsed, whatsappConfig) {
+async function transcribeAudio(parsed, whatsappConfig, service = kapsoService) {
   let data, contentType;
   if (parsed.mediaUrl) {
-    ({ data, contentType } = await kapsoService.downloadMedia(parsed.mediaUrl, whatsappConfig));
+    ({ data, contentType } = await service.downloadMedia(parsed.mediaUrl, whatsappConfig));
   } else {
-    const info = await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig);
-    ({ data, contentType } = await kapsoService.downloadMedia(info.url, whatsappConfig));
+    const info = await service.getMediaUrl(parsed.mediaId, whatsappConfig);
+    ({ data, contentType } = await service.downloadMedia(info.url, whatsappConfig));
   }
   if (!data) return null;
-  const ext = /mpeg|mp3/.test(contentType || '') ? 'mp3' : /ogg|opus/.test(contentType || '') ? 'ogg' : /mp4|m4a|aac/.test(contentType || '') ? 'm4a' : 'ogg';
+  const ext = /mpeg|mp3/.test(contentType || '') ? 'mp3' : /wav/.test(contentType || '') ? 'wav' : /webm/.test(contentType || '') ? 'webm' : /ogg|opus/.test(contentType || '') ? 'ogg' : /mp4|m4a|aac/.test(contentType || '') ? 'm4a' : 'ogg';
   const form = new FormData();
   form.append('file', new Blob([Buffer.from(data)], { type: contentType || 'audio/ogg' }), `audio.${ext}`);
   form.append('model', 'whisper-1');
@@ -941,6 +969,7 @@ async function transcribeAudio(parsed, whatsappConfig) {
     method: 'POST',
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: form,
+    signal: AbortSignal.timeout(45000),
   });
   if (!res.ok) throw new Error(`Whisper HTTP ${res.status}`);
   const json = await res.json();
@@ -950,3 +979,6 @@ async function transcribeAudio(parsed, whatsappConfig) {
 
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;
+
+module.exports.handlePaymentProof = handlePaymentProof;
+module.exports.transcribeAudio = transcribeAudio;
