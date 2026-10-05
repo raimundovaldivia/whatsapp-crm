@@ -764,14 +764,19 @@ router.get('/search-by-phone', async (req, res) => {
     const placeholders = [...variants].map((_, i) => `$${i + 2}`).join(', ');
     const { rows } = await pool.query(
       `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.agent_mode,
-              c.last_message_at, c.hot_lead_excluded,
-              COUNT(m.id)::int AS message_count,
-              MIN(m.created_at) AS first_message_at
+              c.last_message_at, c.hot_lead_excluded, c.whatsapp_channel_id,
+              COALESCE(wc.name,
+                CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END
+              ) AS whatsapp_channel_name,
+              COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
+              COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider,
+              (SELECT COUNT(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+              (SELECT MIN(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS first_message_at
        FROM conversations c
-       LEFT JOIN messages m ON m.conversation_id = c.id
+       LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+       LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
        WHERE c.organization_id = $1
          AND c.phone_number IN (${placeholders})
-       GROUP BY c.id
        ORDER BY c.last_message_at DESC`,
       [req.orgId, ...[...variants]]
     );

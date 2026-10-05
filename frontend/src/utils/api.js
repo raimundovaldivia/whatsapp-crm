@@ -47,6 +47,7 @@ export const setupAPI = {
 
 export const conversationsAPI = {
   getAll: () => api.get('/conversations').then(r => r.data.data),
+  getByPhone: (phone) => api.get('/conversations/search-by-phone', { params: { phone } }).then(r => r.data.conversations || []),
   getMessages: (id) => api.get(`/conversations/${id}/messages`).then(r => r.data.data),
   sendMessage: (id, text) => api.post(`/conversations/${id}/messages`, { text }).then(r => r.data.data),
   sendMedia: (id, data) => api.post(`/conversations/${id}/media`, data, { timeout: 120000 }).then(r => r.data.data),

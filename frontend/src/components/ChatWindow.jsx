@@ -10,7 +10,23 @@ import { alertOrderEditNotification } from '../utils/order-edit-notification.js'
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted }) {
+const channelKey = (item) => item?.whatsapp_channel_id
+  ? `channel:${item.whatsapp_channel_id}`
+  : `official:${item?.whatsapp_provider || 'meta'}`;
+
+const channelLabel = (item) => {
+  const provider = item?.whatsapp_provider === 'evolution'
+    ? 'Evolution'
+    : item?.whatsapp_provider === 'kapso'
+      ? 'Kapso'
+      : 'WhatsApp oficial';
+  const channel = item?.whatsapp_channel_phone
+    ? `+${String(item.whatsapp_channel_phone).replace(/^\+/, '')}`
+    : item?.whatsapp_channel_name || 'número sin identificar';
+  return `${provider} · ${channel}`;
+};
+
+export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted, onSelectConversation }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -23,6 +39,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [alternateSend, setAlternateSend] = useState(null);
   const [alternateSending, setAlternateSending] = useState(false);
   const [alternateError, setAlternateError] = useState('');
+  const [channelConversations, setChannelConversations] = useState([conversation]);
+  const [loadingChannels, setLoadingChannels] = useState(false);
 
   useEffect(() => {
     setMobileActionsOpen(false);
@@ -30,6 +48,35 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setAlternateSend(null);
     setAlternateError('');
   }, [conversation.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setChannelConversations([conversation]);
+    setLoadingChannels(true);
+
+    conversationsAPI.getByPhone(conversation.phone_number)
+      .then((rows) => {
+        if (cancelled) return;
+        const unique = new Map([[channelKey(conversation), conversation]]);
+        rows.forEach((row) => {
+          const key = channelKey(row);
+          if (!unique.has(key)) unique.set(key, row);
+        });
+        setChannelConversations([...unique.values()]);
+      })
+      .catch(() => {
+        if (!cancelled) setChannelConversations([conversation]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingChannels(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [conversation.id, conversation.phone_number]);
+
+  const selectChannelConversation = useCallback((conversationId) => {
+    if (Number(conversationId) !== Number(conversation.id)) return onSelectConversation?.(Number(conversationId));
+  }, [conversation.id, onSelectConversation]);
 
   // ── Editar contacto ──────────────────────────────────────────────
   const [showEditContact, setShowEditContact]     = useState(false);
@@ -553,6 +600,26 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   };
 
   const openExpiredWindowAlternative = async (draftText = '') => {
+    const preservedText = draftText || inputText;
+
+    try {
+      const peers = await conversationsAPI.getByPhone(conversation.phone_number);
+      const evolutionConversation = peers.find(item =>
+        item.whatsapp_provider === 'evolution'
+        && Number(item.id) !== Number(conversation.id)
+      );
+      if (evolutionConversation) {
+        setAlternateSend(null);
+        setAlternateError('');
+        setInputText(preservedText);
+        setError(null);
+        await selectChannelConversation(evolutionConversation.id);
+        return;
+      }
+    } catch (_) {
+      // Si falla la búsqueda del historial, se intenta con los canales conectados.
+    }
+
     try {
       const response = await api.get('/settings/whatsapp/channels');
       const channels = (response.data?.data || []).filter(channel =>
@@ -566,7 +633,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         setAlternateSend({
           channels,
           channelId: String(preferred.id),
-          text: draftText || inputText,
+          text: preservedText,
         });
         return;
       }
@@ -878,6 +945,38 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     } finally { setMerging(false); }
   };
 
+  const channelSelector = (
+    <select
+      aria-label="Cambiar historial de canal"
+      title={loadingChannels
+        ? 'Buscando otros canales de este cliente…'
+        : channelConversations.length > 1
+          ? 'Cambiar entre los historiales de Evolution y Kapso'
+          : 'Este cliente solo tiene historial en este canal'}
+      value={String(conversation.id)}
+      onChange={(event) => selectChannelConversation(event.target.value)}
+      disabled={loadingChannels || channelConversations.length < 2}
+      style={{
+        maxWidth: isMobile ? '170px' : '280px', minWidth: 0,
+        height: isMobile ? '22px' : '24px',
+        padding: isMobile ? '1px 22px 1px 6px' : '2px 24px 2px 7px',
+        borderRadius: '10px',
+        border: `1px solid ${conversation.whatsapp_provider === 'evolution' ? '#3b82f655' : colors.green + '55'}`,
+        backgroundColor: conversation.whatsapp_provider === 'evolution' ? '#2563eb22' : `${colors.green}18`,
+        color: conversation.whatsapp_provider === 'evolution' ? '#60a5fa' : colors.green,
+        fontSize: isMobile ? '9px' : '11px', fontWeight: 700,
+        cursor: loadingChannels || channelConversations.length < 2 ? 'default' : 'pointer',
+        opacity: loadingChannels ? 0.7 : 1, textOverflow: 'ellipsis',
+      }}
+    >
+      {channelConversations.map((item) => (
+        <option key={item.id} value={String(item.id)} style={{ color: colors.textPrimary, backgroundColor: colors.bgPanel }}>
+          {channelLabel(item)}
+        </option>
+      ))}
+    </select>
+  );
+
   return (
     <div
       onDragEnter={handleDragEnter}
@@ -972,20 +1071,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   Cliente: {conversation.phone_number}
                 </div>
                 <span style={{ color: colors.textMuted, fontSize: '10px' }}>·</span>
-                <div title="Número del negocio usado en esta conversación" style={{
-                  fontSize: '11px', fontWeight: 700, padding: '2px 7px', borderRadius: '10px',
-                  color: conversation.whatsapp_provider === 'evolution' ? '#60a5fa' : colors.green,
-                  backgroundColor: conversation.whatsapp_provider === 'evolution' ? '#2563eb22' : `${colors.green}18`,
-                  border: `1px solid ${conversation.whatsapp_provider === 'evolution' ? '#3b82f655' : colors.green + '44'}`,
-                }}>
-                  {conversation.whatsapp_provider === 'evolution' ? 'Evolution' : conversation.whatsapp_provider === 'kapso' ? 'Kapso' : 'WhatsApp oficial'}
-                  {' · '}{conversation.whatsapp_channel_phone ? `+${String(conversation.whatsapp_channel_phone).replace(/^\+/, '')}` : conversation.whatsapp_channel_name || 'número pendiente de identificar'}
-                </div>
+                {channelSelector}
               </div>
             )}
             {isMobile && (
-              <div style={{ color: colors.textSecondary, fontSize: '9px', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {conversation.whatsapp_provider === 'evolution' ? 'Evolution' : conversation.whatsapp_provider === 'kapso' ? 'Kapso' : 'WhatsApp oficial'} · {conversation.whatsapp_channel_phone ? `+${String(conversation.whatsapp_channel_phone).replace(/^\+/, '')}` : conversation.whatsapp_channel_name || 'sin número visible'}
+              <div style={{ marginTop: '1px', display: 'flex', minWidth: 0 }}>
+                {channelSelector}
               </div>
             )}
           </div>

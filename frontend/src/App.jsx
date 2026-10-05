@@ -543,6 +543,7 @@ export default function App() {
                 onConversationUpdated={(updatedConv) => {
                   setConversations(prev => prev.map(c => c.id === updatedConv.id ? { ...c, ...updatedConv } : c));
                 }}
+                onSelectConversation={handleSelectConversation}
                 onAlternateConversationStarted={async (data) => {
                   if (!data?.conversationId) return;
                   if (data.conversation) {
