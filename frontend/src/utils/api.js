@@ -133,6 +133,20 @@ export const adminAlertsAPI = {
   dismiss: (id) => api.delete(`/admin-alerts/${id}`).then(r => r.data),
 };
 
+export const metaAPI = {
+  status:       () => api.get('/meta/status').then(r => r.data),
+  authUrl:      () => api.get('/meta/auth-url').then(r => r.data.url),
+  assets:       () => api.get('/meta/assets').then(r => r.data),
+  selectAssets: data => api.patch('/meta/assets', data).then(r => r.data),
+  disconnect:   () => api.delete('/meta/connection').then(r => r.data),
+  threads:      () => api.get('/meta/threads').then(r => r.data.threads),
+  messages:     id => api.get(`/meta/threads/${id}/messages`).then(r => r.data.messages),
+  sendMessage:  (id, text) => api.post(`/meta/threads/${id}/messages`, { text }).then(r => r.data.message),
+  insights:     params => api.get('/meta/ads/insights', { params }).then(r => r.data),
+  campaigns:    () => api.get('/meta/ads/campaigns').then(r => r.data.campaigns),
+  publish:      data => api.post('/meta/publish', data, { timeout: 45000 }).then(r => r.data),
+};
+
 export const API_BASE = BASE_URL;
 
 export { api };

@@ -1199,6 +1199,60 @@ async function setupDatabase() {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_request
         ON delivery_expenses(organization_id, driver_user_id, client_request_id);
     `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS meta_connections (
+        id SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+        facebook_user_id TEXT,
+        facebook_user_name TEXT,
+        user_access_token TEXT,
+        page_id TEXT,
+        page_name TEXT,
+        page_access_token TEXT,
+        instagram_account_id TEXT,
+        instagram_username TEXT,
+        ad_account_id TEXT,
+        ad_account_name TEXT,
+        scopes TEXT[] NOT NULL DEFAULT '{}',
+        available_assets JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','connected','error')),
+        token_expires_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_connections_page ON meta_connections(page_id);
+      CREATE INDEX IF NOT EXISTS idx_meta_connections_ig ON meta_connections(instagram_account_id);
+
+      CREATE TABLE IF NOT EXISTS meta_threads (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL CHECK(channel IN ('facebook','instagram')),
+        external_user_id TEXT NOT NULL,
+        contact_name TEXT,
+        profile_picture_url TEXT,
+        last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        unread_count INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id,channel,external_user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_threads_org ON meta_threads(organization_id,last_message_at DESC);
+
+      CREATE TABLE IF NOT EXISTS meta_messages (
+        id BIGSERIAL PRIMARY KEY,
+        thread_id BIGINT NOT NULL REFERENCES meta_threads(id) ON DELETE CASCADE,
+        external_message_id TEXT UNIQUE,
+        direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+        content TEXT NOT NULL,
+        message_type TEXT NOT NULL DEFAULT 'text',
+        status TEXT NOT NULL DEFAULT 'sent',
+        sent_by TEXT NOT NULL DEFAULT 'human',
+        raw_payload JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_messages_thread ON meta_messages(thread_id,created_at);
+    `);
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {

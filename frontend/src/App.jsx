@@ -17,6 +17,7 @@ const RepartosPanel = lazy(() => import('./components/RepartosPanel.jsx'));
 const EvaluacionPanel = lazy(() => import('./components/EvaluacionPanel.jsx'));
 const UsersPanel = lazy(() => import('./components/UsersPanel.jsx'));
 const ReengagementPanel = lazy(() => import('./components/ReengagementPanel.jsx'));
+const SocialPanel = lazy(() => import('./components/SocialPanel.jsx'));
 import AdminAlertsBanner    from './components/AdminAlertsBanner.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
@@ -133,6 +134,10 @@ export default function App() {
     if (params.get('shopify_error')) {
       window.history.replaceState({}, '', window.location.pathname);
       setView('settings');
+    }
+    if (params.get('meta_success') === '1' || params.get('meta_error')) {
+      window.history.replaceState({}, '', window.location.pathname);
+      setView('social');
     }
   }, [appState]);
 
@@ -339,8 +344,8 @@ export default function App() {
 
   // Qué vistas puede ver cada rol
   const ROLE_VIEWS = {
-    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
-    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
+    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'social', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
+    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'social', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
     supervisor: new Set(['chats', 'orders', 'repartos', 'pagos']),
     coordinador: new Set(['repartos']),
     agent:      new Set(['chats']),
@@ -595,6 +600,7 @@ export default function App() {
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}
+      {view === 'social' && <SocialPanel />}
       {view === 'solutions' && ['owner','admin'].includes(userRole) && <SolutionsPanel />}
 
       {/* Vista Equipo (admin/owner only) */}

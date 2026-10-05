@@ -57,6 +57,8 @@ const adminAlertsRouter    = require('./routes/admin-alerts');      // Cola de a
 const reengagementRouter   = require('./routes/reengagement');     // Mensajería masiva y re-enganche
 const pushRouter           = require('./routes/push');             // Tokens push de la app Central (admin)
 const botEvalRouter        = require('./routes/bot-eval');          // Evaluación del bot y ciclo de mejora
+const metaRouter           = require('./routes/meta');              // Facebook, Instagram y Ads
+const metaWebhookRouter    = require('./routes/meta-webhook');      // Webhooks Messenger / Instagram
 
 const app    = express();
 const server = http.createServer(app);
@@ -84,6 +86,7 @@ conversationsRouter.setSocketIO(io);
 ordersRouter.setSocketIO(io);
 deliveryRouter.setSocketIO(io);
 reengagementRouter.setSocketIO(io);   // Mensajería masiva: emitir mensajes al panel en vivo
+metaWebhookRouter.setSocketIO(io);
 
 app.use(cors({ origin: checkOrigin, credentials: false }));
 const captureRaw = (req, _res, buffer) => { req.rawBody = Buffer.from(buffer); };
@@ -115,6 +118,8 @@ app.use('/kapso-webhook',     kapsoWebhookRouter);   // POST — Kapso webhook
 app.use('/evolution-webhook', evolutionWebhookRouter); // POST — Evolution API webhook
 app.use('/shopify-webhook',   shopifyWebhookRouter); // POST — Shopify eventos
 app.use('/shopify-oauth',     shopifyOAuthRouter);   // GET  — Shopify OAuth /connect y /callback (sin /api/ — redirect de Shopify)
+app.use('/meta-oauth',        metaRouter);            // GET  — Callback OAuth Meta (sin autenticación JWT)
+app.use('/meta-webhook',      metaWebhookRouter);     // GET/POST — Webhook de Facebook e Instagram
 app.use('/api/shopify-oauth', shopifyOAuthRouter);  // API  — /status y /disconnect (con /api/ — llamadas del frontend)
 app.use('/api/auth',          authRouter);           // POST login/register
 app.use('/api/setup',         setupRouter);          // Wizard configuración
@@ -138,6 +143,7 @@ app.use('/api/admin-alerts',  adminAlertsRouter);     // Cola de alertas al admi
 app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-enganche
 app.use('/api/push',          pushRouter);           // Registro de tokens push (app Central)
 app.use('/api/bot-eval',      botEvalRouter);        // Evaluación del bot y ciclo de mejora
+app.use('/api/meta',          metaRouter);            // Conexión, mensajería, Ads y publicaciones Meta
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 app.get('/api/webhook-inbox', require('./middleware/auth').requireAuth,
