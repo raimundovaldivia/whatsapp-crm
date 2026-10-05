@@ -758,7 +758,9 @@ async function setupDatabase() {
       WHERE so.customer_phone IS NOT NULL AND so.customer_phone <> ''
       ORDER BY so.organization_id, normalized_phone, so.shopify_created_at DESC
       ON CONFLICT (organization_id, phone) DO UPDATE SET
-        name         = COALESCE(EXCLUDED.name,  contacts.name),
+        name = CASE WHEN NULLIF(BTRIM(contacts.name), '') IS NOT NULL
+          AND LOWER(BTRIM(contacts.name)) <> 'cliente' AND contacts.name !~ '^[+0-9 ()-]+$'
+          THEN contacts.name ELSE EXCLUDED.name END,
         email        = COALESCE(EXCLUDED.email, contacts.email),
         city         = COALESCE(EXCLUDED.city,  contacts.city),
         contact_type = 'customer',
@@ -802,7 +804,9 @@ async function setupDatabase() {
       WHERE c.phone_number IS NOT NULL AND c.phone_number <> ''
       ORDER BY c.organization_id, normalized_phone, c.last_message_at DESC
       ON CONFLICT (organization_id, phone) DO UPDATE SET
-        name       = COALESCE(EXCLUDED.name, contacts.name),
+        name = CASE WHEN NULLIF(BTRIM(contacts.name), '') IS NOT NULL
+          AND LOWER(BTRIM(contacts.name)) <> 'cliente' AND contacts.name !~ '^[+0-9 ()-]+$'
+          THEN contacts.name ELSE EXCLUDED.name END,
         source     = COALESCE(contacts.source, 'whatsapp'),
         updated_at = NOW();
     `);

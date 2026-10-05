@@ -438,6 +438,36 @@ function normalizeName(name) {
 
 // ─── CONVERSATIONS ────────────────────────────────────────────────
 
+// One customer identity per organization and normalized phone, across channels.
+// CRM names take precedence over provider profile aliases.
+function identityPhoneSql(column) {
+  const digits = `REGEXP_REPLACE(${column}, '[^0-9]', '', 'g')`;
+  return `(CASE WHEN ${digits} ~ '^9[0-9]{8}$' THEN '56' || ${digits} ELSE ${digits} END)`;
+}
+function usableNameSql(column) {
+  return `NULLIF(BTRIM(${column}), '') IS NOT NULL AND LOWER(BTRIM(${column})) <> 'cliente' AND ${column} !~ '^[+0-9 ()-]+$'`;
+}
+function customerIdentityJoin() {
+  return `LEFT JOIN LATERAL (
+    SELECT contact.name, contact.client_type FROM contacts contact
+    WHERE contact.organization_id = c.organization_id
+      AND ${identityPhoneSql('contact.phone')} = ${identityPhoneSql('c.phone_number')}
+    ORDER BY (${usableNameSql('contact.name')}) DESC NULLS LAST,
+      (contact.phone = ${identityPhoneSql('c.phone_number')}) DESC, contact.id DESC
+    LIMIT 1
+  ) co ON TRUE`;
+}
+const customerNameSql = `CASE WHEN ${usableNameSql('co.name')} THEN co.name ELSE c.contact_name END`;
+
+async function savedCustomerName(orgId, phone) {
+  const customer = await queryOne(
+    `SELECT name FROM contacts WHERE organization_id = $1
+      AND ${identityPhoneSql('phone')} = $2 AND ${usableNameSql('name')}
+      ORDER BY (phone = $2) DESC, id DESC LIMIT 1`, [orgId, phone]
+  );
+  return customer?.name || null;
+}
+
 async function upsertConversation(orgId, phoneNumber, contactName = null, whatsappChannelId = null) {
   // Normalizar: siempre con código de país, sin "+"
   const phone = normalizePhone(phoneNumber);
@@ -447,15 +477,16 @@ async function upsertConversation(orgId, phoneNumber, contactName = null, whatsa
     [orgId, phone, whatsappChannelId]
   );
 
-  const isGenericName = n => !n || n === 'Cliente' || /^\d+$/.test(n);
-  const resolvedName = isGenericName(contactName) ? null : contactName;
+  const isGenericName = n => !n || !n.trim() || n.trim().toLowerCase() === 'cliente' || /^[+0-9 ()-]+$/.test(n);
+  const customerName = await savedCustomerName(orgId, phone);
+  const resolvedName = customerName || (isGenericName(contactName) ? null : normalizeName(contactName));
 
   if (existing) {
     const existingIsGeneric = isGenericName(existing.contact_name);
     if (resolvedName && (existingIsGeneric || resolvedName !== existing.contact_name)) {
       await pool.query(
-        'UPDATE conversations SET contact_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [resolvedName, existing.id]
+        'UPDATE conversations SET contact_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND organization_id = $3',
+        [resolvedName, existing.id, orgId]
       );
     }
   } else {
@@ -471,7 +502,7 @@ async function upsertConversation(orgId, phoneNumber, contactName = null, whatsa
       `INSERT INTO contacts (organization_id, phone, name, updated_at)
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (organization_id, phone) DO UPDATE SET
-         name       = CASE WHEN $3 IS NOT NULL AND contacts.name IS NULL THEN $3 ELSE contacts.name END,
+         name       = CASE WHEN ${usableNameSql('contacts.name')} THEN contacts.name ELSE $3 END,
          updated_at = NOW()`,
       [orgId, phone, resolvedName]
     );
@@ -487,25 +518,12 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
   const where = unreadOnly
     ? 'c.organization_id = $1 AND c.unread_count > 0'
     : 'c.organization_id = $1';
-  // JOIN con contacts para mostrar el nombre real cuando el de la conversación es genérico
-  // contacts.phone está normalizado (sin +, con código de país) igual que conversations.phone_number
-  // DISTINCT ON evita duplicados cuando hay múltiples contactos con el mismo teléfono
-  // en distintos formatos (ej: 9XXXXXXXX y 569XXXXXXXX). El subquery reordena por
-  // last_message_at después de eliminar duplicados por id.
+  // Resolve the saved customer name consistently without merging channel conversations.
   return query(
     `SELECT * FROM (
        SELECT DISTINCT ON (c.id)
          c.*,
-         CASE
-           WHEN c.contact_name IS NOT NULL
-             AND c.contact_name <> 'Cliente'
-             AND c.contact_name <> c.phone_number
-             AND c.contact_name !~ '^[0-9]+$'
-           THEN c.contact_name
-           WHEN co.name IS NOT NULL AND co.name !~ '^[0-9]+$' AND co.name <> 'Cliente'
-           THEN co.name
-           ELSE c.contact_name
-         END AS contact_name,
+         ${customerNameSql} AS contact_name,
          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
          CASE
            WHEN EXISTS (
@@ -530,14 +548,7 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
        FROM conversations c
        LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
        LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
-       LEFT JOIN contacts co ON co.organization_id = c.organization_id
-                             AND co.phone = ANY(ARRAY[
-                                   c.phone_number,
-                                   CASE WHEN c.phone_number ~ '^9[0-9]{8}$'   THEN '56' || c.phone_number END,
-                                   CASE WHEN c.phone_number ~ '^569[0-9]{8}$' THEN SUBSTRING(c.phone_number FROM 3) END,
-                                   CASE WHEN c.phone_number LIKE '+%'          THEN SUBSTRING(c.phone_number FROM 2) END,
-                                   '+' || c.phone_number
-                                 ])
+       ${customerIdentityJoin()}
        WHERE ${where}
        ORDER BY c.id, c.last_message_at DESC
      ) sub
@@ -547,13 +558,14 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
 }
 
 async function getConversationById(id, orgId = null) {
-  const select = `SELECT c.*,
+  const select = `SELECT c.*, ${customerNameSql} AS contact_name,
       COALESCE(wc.name, CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END) AS whatsapp_channel_name,
       COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
       COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider
     FROM conversations c
     LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
-    LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id`;
+    LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
+    ${customerIdentityJoin()}`;
   if (orgId) {
     return queryOne(`${select} WHERE c.id = $1 AND c.organization_id = $2`, [id, orgId]);
   }
@@ -1426,16 +1438,18 @@ async function setContactOptOut(orgId, phone, value) {
  */
 async function touchLead(orgId, phone, name = null) {
   if (!phone) return;
+  phone = normalizePhone(phone);
+  const savedName = await savedCustomerName(orgId, phone);
   await pool.query(
     `INSERT INTO contacts (organization_id, phone, name, contact_type, source, last_seen_at, updated_at)
      VALUES ($1, $2, $3, 'lead', 'whatsapp', NOW(), NOW())
      ON CONFLICT (organization_id, phone) DO UPDATE SET
-       name         = COALESCE(EXCLUDED.name, contacts.name),
+       name         = CASE WHEN ${usableNameSql('contacts.name')} THEN contacts.name ELSE EXCLUDED.name END,
        contact_type = COALESCE(contacts.contact_type, 'lead'),
        source       = COALESCE(contacts.source, 'whatsapp'),
        last_seen_at = NOW(),
        updated_at   = NOW()`,
-    [orgId, phone, name || null]
+    [orgId, phone, savedName || normalizeName(name)]
   );
 }
 

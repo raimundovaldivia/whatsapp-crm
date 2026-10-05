@@ -759,7 +759,9 @@ router.patch('/:phone', async (req, res) => {
   try {
     const pool = require('../db/database').getPool();
     const { name, email, address, city } = req.body;
-    const phone = req.params.phone;
+    const { normalizePhone, normalizeName } = require('../db/database');
+    const phone = normalizePhone(req.params.phone);
+    const customerName = normalizeName(name);
 
     // Upsert en tabla contacts
     const { rows: [contact] } = await pool.query(
@@ -774,15 +776,15 @@ router.patch('/:phone', async (req, res) => {
          city       = CASE WHEN $6 IS NOT NULL THEN $6 ELSE contacts.city END,
          updated_at = NOW()
        RETURNING *`,
-      [req.orgId, phone, name || null, email || null, address || null, city || null]
+      [req.orgId, phone, customerName, email || null, address || null, city || null]
     );
 
     // Sincronizar contact_name en conversaciones para que el sidebar/header reflejen el cambio
-    if (name) {
+    if (customerName) {
       await pool.query(
         `UPDATE conversations SET contact_name = $1
-         WHERE organization_id = $2 AND phone_number IN ($3, $4)`,
-        [name, req.orgId, phone, `+${phone}`]
+         WHERE organization_id = $2 AND REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g') = ANY($3::text[])`,
+        [customerName, req.orgId, [phone, ...( /^569\d{8}$/.test(phone) ? [phone.slice(2)] : [])]]
       );
     }
 
