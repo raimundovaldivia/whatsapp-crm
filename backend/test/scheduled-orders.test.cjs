@@ -317,6 +317,117 @@ test('una preferencia de frescura se conserva como nota del pedido promocional',
   assert.match(result.response, /bien frescos/i);
 });
 
+test('un sí a un template con varias promociones pide elegir y no crea un pedido al azar', async () => {
+  let createdOrders = 0;
+  let savedState = null;
+  let savedDraft = null;
+  const promoText = `[Template: promocion_general_entrega_mismo_dia]
+PROMO DIEZ RIOS: QUESO DE CABRA + BANDEJA XL 30 = $25.000
+| 2 BANDEJAS XL DE 30 HUEVOS A $23.000
+| 2 BANDEJAS JUMBO DE 20 HUEVOS A $18.000
+| 3 BANDEJAS XL DE 30 HUEVOS A $30.000
+| 3 BANDEJAS JUMBO DE 20 HUEVOS A $27.000`;
+  const db = {
+    getConversationById: async () => ({ id: 31, organization_id: 1, phone_number: '56931000000', contact_name: 'Roxana', pipeline_state: 'template_sent', agent_mode: 'ai' }),
+    getLastMessages: async () => [{ direction: 'outbound', content: promoText, created_at: new Date() }],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Roxana', address1: 'Juan Soldado 458', city: 'La Serena', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => [],
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    createOrder: async () => { createdOrders++; },
+    updatePipelineState: async (_id, state, draft) => { savedState = state; savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 31, 'Sí');
+  assert.equal(result.newState, 'interested');
+  assert.equal(savedState, 'interested');
+  assert.equal(createdOrders, 0);
+  assert.equal(savedDraft.items, undefined);
+  assert.match(result.response, /¿Cuál de estas promociones quieres\?/i);
+  assert.match(result.response, /QUESO DE CABRA \+ BANDEJA XL 30.*\$25\.000/is);
+});
+
+test('elegir la promo correcta tras una confirmación errónea prepara la edición del mismo pedido', async () => {
+  let savedDraft = null;
+  let createdOrders = 0;
+  const promoText = `[Template: promocion_general_entrega_mismo_dia]
+PROMO DIEZ RIOS: QUESO DE CABRA + BANDEJA XL 30 = $25.000
+| 2 BANDEJAS XL DE 30 HUEVOS A $23.000
+| 2 BANDEJAS JUMBO DE 20 HUEVOS A $18.000
+| 3 BANDEJAS XL DE 30 HUEVOS A $30.000
+| 3 BANDEJAS JUMBO DE 20 HUEVOS A $27.000`;
+  const products = [
+    { id: 'cheese', title: 'Queso de Cabra Fresco Pasteurizado – 900 g', price: 15000, active: true },
+    { id: 'xl30', title: 'Huevos de Campo Tamaño XL – Bandeja 30 Unidades', price: 12000, active: true },
+  ];
+  const activeOrder = {
+    id: 88, status: 'nuevo', customer_name: 'Roxana', created_at: new Date(), total_price: 30000,
+    items: [{ name: 'Huevos de Campo Tamaño XL – Bandeja 30 Unidades', quantity: 1, price: 30000 }],
+    shipping_address: { address: 'Juan Soldado 458', city: 'La Serena' },
+  };
+  const db = {
+    getConversationById: async () => ({ id: 32, organization_id: 1, phone_number: '56932000000', contact_name: 'Roxana', pipeline_state: 'confirmed', agent_mode: 'ai' }),
+    getLastMessages: async () => [
+      { direction: 'outbound', content: promoText, created_at: new Date() },
+      { direction: 'inbound', content: 'Si' },
+      { direction: 'outbound', content: '✅ ¡Pedido confirmado!\n\n1x XL — $30.000', created_at: new Date() },
+    ],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Roxana', address1: 'Juan Soldado 458', city: 'La Serena', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => products,
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => activeOrder,
+    createOrder: async () => { createdOrders++; },
+    updatePipelineState: async (_id, state, draft) => { if (state === 'collecting_order') savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './agents/orders': {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => ({ ...draft }),
+      generateOrderResponse: async () => 'Queso de cabra + bandeja XL 30 por $25.000. ¿Todo correcto?',
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => true,
+      missingFields: () => [],
+    },
+    './order-pricing': require('../src/services/order-pricing'),
+    './order-quote': require('../src/services/order-quote'),
+    './scheduled-orders': {
+      isFutureOrderIntent: scheduled.isFutureOrderIntent,
+      isSoftFutureIntent: scheduled.isSoftFutureIntent,
+      extractScheduledOrderData: async () => null,
+      formatDateEs: value => value,
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 32, 'Queso de cabra más huevos');
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(createdOrders, 0);
+  assert.equal(savedDraft.editing_order_id, 88);
+  assert.equal(savedDraft.total, 25000);
+  assert.deepEqual(savedDraft.items.map(item => [item.name, item.price]), [
+    ['Queso de Cabra Fresco Pasteurizado – 900 g', 15000],
+    ['Huevos de Campo Tamaño XL – Bandeja 30 Unidades', 10000],
+  ]);
+});
+
 test('pipeline agenda la fecha respondida tras decir que aún queda stock sin escalar a humano', async () => {
   let scheduledOrder = null;
   let state = null;

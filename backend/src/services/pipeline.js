@@ -798,18 +798,61 @@ REGLAS ABSOLUTAS:
     return { response, agentType: 'sales', newState: promotionContext.active ? 'interested' : 'exploring' };
   }
 
+  // "Sí" confirma interés, no una opción concreta cuando el template
+  // contiene varias promociones. Antes el modelo escogía una al azar y podía
+  // crear un pedido con cantidad/precio que el cliente nunca solicitó.
+  if (promotionContext?.active
+      && promotionContext.offers?.length > 1
+      && promotions.isBareAffirmative(userMessage)
+      && ['template_sent', 'interested'].includes(currentState)
+      && !(orderDraft?.items?.length)) {
+    const nextDraft = { ...(orderDraft || {}), promotion: promotions.snapshot(promotionContext) };
+    await db.updatePipelineState(conversationId, 'interested', nextDraft);
+    L.agent('sales', 0);
+    L.step('promotion_choice_required', `${promotionContext.offers.length} opciones; respuesta afirmativa sin selección`);
+    return {
+      response: promotions.choiceReply(promotionContext),
+      agentType: 'sales',
+      newState: 'interested',
+    };
+  }
+
   // Una presentación exacta de una promoción activa es una intención de
   // compra inequívoca. Resolverla antes del clasificador y del agente de
   // escalación evita que respuestas breves como "Quiero 100 jumbo" terminen
   // derivadas a una persona aunque el template ya contiene producto y precio.
   const chosenImmediatePromotion = promotions.selectedOffer(userMessage, promotionContext);
   if (chosenImmediatePromotion && !isFutureOrderIntent(userMessage)) {
+    const latestOutbound = history.slice().reverse().find(message => message.direction === 'outbound');
+    const correctsJustConfirmedOrder = activeOrder
+      && ['draft', 'nuevo', 'sent', 'payment_received'].includes(String(activeOrder.status))
+      && /pedido\s+confirmado/iu.test(String(latestOutbound?.content || ''));
+    let editSeed = {};
+    if (correctsJustConfirmedOrder) {
+      let address = {};
+      try {
+        address = typeof activeOrder.shipping_address === 'string'
+          ? JSON.parse(activeOrder.shipping_address)
+          : (activeOrder.shipping_address || {});
+      } catch { address = {}; }
+      editSeed = {
+        editing_order_id: activeOrder.id,
+        customer_name: activeOrder.customer_name || undefined,
+        address: address.address || address.address1 || undefined,
+        city: address.city || undefined,
+      };
+      Object.keys(editSeed).forEach(key => editSeed[key] === undefined && delete editSeed[key]);
+    }
     const promoDraft = {
       ...(orderDraft || {}),
-      items: [promotions.offerOrderItem(chosenImmediatePromotion)],
+      ...editSeed,
+      items: promotions.offerOrderItems(chosenImmediatePromotion),
       promotion: promotions.snapshot(promotionContext),
     };
-    L.step('immediate_promo_order', `${chosenImmediatePromotion.label} $${chosenImmediatePromotion.price}`);
+    L.step(
+      correctsJustConfirmedOrder ? 'immediate_promo_order_correction' : 'immediate_promo_order',
+      `${chosenImmediatePromotion.label} $${chosenImmediatePromotion.price}${correctsJustConfirmedOrder ? `; edita pedido #${activeOrder.id}` : ''}`
+    );
     L.agent('orders', 0);
     return handleOrderCollection(
       orgId, conversationId, conversation, userMessage, history,
@@ -1788,7 +1831,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     const chosenPromotion = inboundChoices
       .map(text => promotions.selectedOffer(text, promotionContext))
       .find(Boolean);
-    if (chosenPromotion) updatedDraft.items = [promotions.offerOrderItem(chosenPromotion)];
+    if (chosenPromotion) updatedDraft.items = promotions.offerOrderItems(chosenPromotion);
   }
 
   // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a

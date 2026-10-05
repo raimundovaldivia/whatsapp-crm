@@ -194,6 +194,9 @@ function priceItems(items = [], products = [], opts = {}) {
         product_name: name, name, title: name, quantity: qty,
         price: Number(raw.price), unit_source: 'promocion', matched: true,
         locked_quote: true, promotion_offer: !!raw.promotion_offer,
+        ...(raw.promotion_combo ? { promotion_combo: raw.promotion_combo } : {}),
+        ...(raw.product_id != null ? { product_id: raw.product_id } : {}),
+        ...(raw.variant_id != null ? { variant_id: raw.variant_id } : {}),
       });
       continue;
     }

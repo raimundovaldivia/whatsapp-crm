@@ -25,6 +25,28 @@ function money(value) {
   return Number(String(value || '').replace(/[^0-9]/g, '')) || 0;
 }
 
+function cleanOfferLabel(value) {
+  return String(value || '')
+    .replace(/^\s*(?:promo(?:ci[oó]n)?\s+[^:]{1,40}:)\s*/iu, '')
+    .replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '')
+    .trim();
+}
+
+function comboComponent(value) {
+  const label = cleanOfferLabel(value);
+  const tray = label.match(/(?:bandeja|pack)\s+(?:de\s+)?(jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\s+(?:de\s+)?(\d{1,3})/iu)
+    || label.match(/(jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\s*[-–]?\s*(?:bandeja|pack)\s+(?:de\s+)?(\d{1,3})/iu);
+  if (tray) {
+    const size = tray[1].replace(/\s+/g, ' ').toUpperCase();
+    const units = Number(tray[2]);
+    return {
+      label: `Huevos de Campo Tamaño ${size} – Bandeja ${units} Unidades`,
+      kind: 'eggs', size, units, quantity: 1,
+    };
+  }
+  return { label, kind: /queso/iu.test(label) ? 'cheese' : 'product', quantity: 1 };
+}
+
 function parseOffers(body) {
   const offers = [];
   const seen = new Set();
@@ -36,6 +58,41 @@ function parseOffers(body) {
   let groupedDescriptor = '';
   const blocks = String(body || '').split('|');
   for (const block of blocks) {
+    // Una combinación es una sola oferta comercial con varios productos:
+    // "QUESO DE CABRA + BANDEJA XL 30 = $25.000". No debe convertirse en
+    // una bandeja de $25.000 ni perder uno de sus componentes.
+    const comboMatch = block.match(/(?:^|:)\s*([^|$\n]{2,100}\+[^|$\n]{2,100}?)\s*(?:=|a)\s*\$\s*([\d.]+)/iu);
+    if (comboMatch) {
+      const label = cleanOfferLabel(comboMatch[1]);
+      const price = money(comboMatch[2]);
+      const components = label.split(/\s*\+\s*/).map(comboComponent).filter(component => component.label);
+      const key = `combo_${norm(label)}_${price}`;
+      if (price && components.length > 1 && !seen.has(key)) {
+        seen.add(key);
+        offers.push({ units: null, descriptor: label, price, label, named: true, combo: true, components });
+      }
+      continue;
+    }
+
+    // "2 bandejas XL de 30 huevos a $23.000" expresa 60 huevos en dos
+    // envases, no una bandeja de 30 a ese precio.
+    const trayMatch = block.match(/\b(\d{1,2})\s+(?:bandejas?|packs?)\s+(?:de\s+)?(jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\s+(?:de\s+)?(\d{1,3})\s+(?:huevos?|unidades?)\s*(?:a|=)?\s*\$\s*([\d.]+)/iu);
+    if (trayMatch) {
+      const packs = Number(trayMatch[1]);
+      const size = trayMatch[2].replace(/\s+/g, ' ').toUpperCase();
+      const packSize = Number(trayMatch[3]);
+      const units = packs * packSize;
+      const price = money(trayMatch[4]);
+      const descriptor = `${size} (${packs} bandejas de ${packSize})`;
+      const label = `${packs} bandejas ${size} de ${packSize} huevos`;
+      const key = `${units}_${norm(descriptor)}_${price}`;
+      if (packs && packSize && price && !seen.has(key)) {
+        seen.add(key);
+        offers.push({ units, descriptor, price, label, packs, packSize, size });
+      }
+      continue;
+    }
+
     const headings = [...block.matchAll(/\b(jumbo|extra\s+large|xl|large|mediano|mediana|medium)\s*:\s*(?=\d)/giu)];
     if (headings.length) groupedDescriptor = headings.at(-1)[1].replace(/\s+/g, ' ').trim();
 
@@ -57,6 +114,8 @@ function parseOffers(body) {
   // el texto introductorio del template ni duplicar las ofertas anteriores.
   for (const block of String(body || '').split('|')) {
     if (!block.includes('$') || /(?:despachos?|env[ií]os?)\s+gratis/iu.test(block)) continue;
+    if (/\+[^|$\n]{2,100}?\s*(?:=|a)\s*\$\s*[\d.]+/iu.test(block)) continue;
+    if (/\b\d{1,2}\s+(?:bandejas?|packs?)\s+(?:de\s+)?(?:jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\s+(?:de\s+)?\d{1,3}\s+(?:huevos?|unidades?)/iu.test(block)) continue;
     const hasRegularOffer = [...block.matchAll(re)].some(match => {
       const descriptor = match[2].replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '').trim();
       return !/^(?:g|gr|gramos?|kg|kilos?|ml|litros?)$/iu.test(descriptor);
@@ -207,6 +266,28 @@ function parseTemplate(message, products = [], now = new Date()) {
   const catalog = pricing.flattenCatalog(products);
   const specialPrices = {};
   for (const offer of offers) {
+    if (offer.combo) {
+      let remaining = Number(offer.price);
+      offer.components = offer.components.map((component, index) => {
+        const matched = pricing.matchProduct(component.label, catalog);
+        const candidate = matched && !matched.ambiguous ? matched.candidate : null;
+        const componentsLeft = offer.components.length - index;
+        const fallback = Math.floor(remaining / componentsLeft);
+        const candidatePrice = Number(candidate?.price) || 0;
+        const allocatedPrice = index === offer.components.length - 1
+          ? remaining
+          : (candidatePrice > 0 && candidatePrice < remaining ? candidatePrice : fallback);
+        remaining -= allocatedPrice;
+        return {
+          ...component,
+          label: candidate?.title || component.label,
+          productId: candidate?.product_id,
+          variantId: candidate?.variant_id,
+          price: allocatedPrice,
+        };
+      });
+      continue;
+    }
     const matched = pricing.matchProduct(offer.named ? offer.label : `${offer.units} ${offer.descriptor}`, catalog);
     if (!matched || matched.ambiguous) continue;
     offer.productId = matched.candidate.product_id;
@@ -338,10 +419,34 @@ function selectedOffer(message, promotion) {
   if (!promotion?.active || !Array.isArray(promotion.offers)) return null;
   const text = norm(message);
   if (!text) return null;
+  const numberedChoice = text.match(/^(?:la\s+)?(?:opcion\s+)?(\d{1,2})$/iu);
+  if (numberedChoice) {
+    const index = Number(numberedChoice[1]) - 1;
+    return promotion.offers[index] || null;
+  }
   const matches = promotion.offers.filter(offer => {
+    if (offer.combo) {
+      return offer.components.every(component => {
+        const source = norm(`${component.label} ${component.kind || ''}`);
+        if (component.kind === 'cheese' || /queso|cabra/.test(source)) return /\b(queso|cabra)\b/.test(text);
+        if (component.kind === 'eggs' || /huevo|bandeja|\bxl\b|jumbo/.test(source)) {
+          return /\b(huevo|huevos|bandeja|xl|jumbo)\b/.test(text);
+        }
+        const tokens = source.split(' ').filter(token => token.length > 3);
+        return tokens.some(token => text.includes(token));
+      });
+    }
     if (offer.named) {
       const meaningful = norm(offer.label).split(' ').filter(token => token.length > 3 && !/^\d+$/.test(token));
       return meaningful.some(token => text.includes(token));
+    }
+    if (offer.packs && offer.size) {
+      const packCount = new RegExp(`(^|\\s)${Number(offer.packs)}(?=\\s+(?:bandeja|bandejas|pack|packs)\\b)`).test(text);
+      const size = norm(offer.size);
+      const hasSize = size.length <= 2
+        ? new Set(text.split(' ')).has(size)
+        : text.includes(size);
+      if (packCount && hasSize) return true;
     }
     const units = String(Number(offer.units));
     const hasUnits = new RegExp(`(^|\\s)${units}(?=\\s|$)`).test(text);
@@ -376,6 +481,32 @@ function offerOrderItem(offer) {
     locked_quote: true,
     promotion_offer: true,
   };
+}
+
+function offerOrderItems(offer) {
+  if (!offer) return [];
+  if (!offer.combo || !Array.isArray(offer.components)) return [offerOrderItem(offer)].filter(Boolean);
+  return offer.components.map(component => ({
+    product_name: component.label,
+    quantity: Number(component.quantity) || 1,
+    price: Number(component.price),
+    ...(component.productId != null ? { product_id: component.productId } : {}),
+    ...(component.variantId != null ? { variant_id: component.variantId } : {}),
+    locked_quote: true,
+    promotion_offer: true,
+    promotion_combo: offer.label,
+  }));
+}
+
+function isBareAffirmative(message) {
+  return /^(?:si+|si\s+por\s+favor|si+\s+porfa(?:vor)?|claro|dale|ok(?:ey)?|bueno)$/iu.test(norm(message));
+}
+
+function choiceReply(promotion) {
+  const choices = (promotion?.offers || []).map((offer, index) =>
+    `${index + 1}) ${offer.label} — $${Number(offer.price).toLocaleString('es-CL')}`
+  ).join('\n');
+  return `Claro 😊 ¿Cuál de estas promociones quieres?\n\n${choices}\n\nPuedes responder con el número o escribir la promoción.`;
 }
 
 function isFuturePromotionQuestion(message) {
@@ -413,4 +544,4 @@ function appliesToDelivery(promotion, deliveryDate) {
   return String(deliveryDate).slice(0, 10) <= promotion.validUntil;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };
+module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, offerOrderItems, isBareAffirmative, choiceReply, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };
