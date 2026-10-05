@@ -861,6 +861,62 @@ REGLAS ABSOLUTAS:
     };
   }
 
+  // ── Correcciones breves sobre un pedido ya registrado ──────────────────
+  // En WhatsApp es común que el cliente escriba en varios mensajes y con
+  // abreviaciones: "Q ise" + "Era para hoy" + "Supue". Si existe un pedido
+  // activo, estas frases se resuelven con sus datos reales antes de que el
+  // clasificador las derive como una consulta ambigua.
+  const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+  const activeDeliveryISO = (() => {
+    if (!activeOrder?.delivery_date) return null;
+    try {
+      const raw = String(activeOrder.delivery_date);
+      return raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0]
+        || new Date(activeOrder.delivery_date).toISOString().slice(0, 10);
+    } catch (_) {
+      return null;
+    }
+  })();
+  const activeDeliveryLabel = activeDeliveryISO ? formatDateEs(activeDeliveryISO) : null;
+
+  const ORDER_RECAP_PATTERNS = [
+    /^\s*(q|qu[eé])\s+(ise|hice)\s*[?!.]*\s*$/iu,
+    /\bqu[eé]\s+(pedido|encargo)\s+(hice|tengo)\b/iu,
+    /\bqu[eé]\s+ped[ií]\b/iu,
+  ];
+  if (activeOrder && userMessage.length <= 120
+      && ORDER_RECAP_PATTERNS.some(pattern => pattern.test(userMessage))) {
+    const dateText = activeDeliveryLabel ? ` Está registrado para el ${activeDeliveryLabel}.` : '';
+    const summaryText = activeOrderSummary || 'pedido activo';
+    L.agent('orchestrator', 0);
+    L.step('order_recap', `pedido #${activeOrder.id}`);
+    return {
+      response: `Tienes registrado el pedido #${activeOrder.id}: ${summaryText}.${dateText} ¿Eso es lo que querías revisar?`,
+      agentType: 'orchestrator',
+      newState: currentState,
+    };
+  }
+
+  const CORRECTS_DELIVERY_TO_TODAY = [
+    /\bera\s+para\s+hoy\b/iu,
+    /\b(lo|la)\s+(quer[ií]a|necesitaba|ped[ií]|encargu[eé])\s+(para\s+)?hoy\b/iu,
+    /\bhab[ií]a\s+(pedido|encargado)\b.{0,25}\bpara\s+hoy\b/iu,
+    /\byo\s+(dije|ped[ií]|encargu[eé])\b.{0,20}\bhoy\b/iu,
+  ];
+  if (activeOrder && activeDeliveryISO > todayISO
+      && CORRECTS_DELIVERY_TO_TODAY.some(pattern => pattern.test(userMessage))) {
+    const reason = `Cliente aclara que necesitaba hoy el pedido #${activeOrder.id}, pero está registrado para ${activeDeliveryLabel}; confirmar cupo y cambio de fecha`;
+    L.agent('orchestrator', 0);
+    L.step('delivery_date_correction', reason);
+    return {
+      response: `Entiendo: tú necesitabas el pedido para hoy. En el sistema quedó registrado para el ${activeDeliveryLabel}, así que voy a pedir al equipo que revise si puede cambiarse a hoy sin prometerte el despacho antes de confirmar el cupo. Te respondemos por aquí 🙏`,
+      agentType: 'orchestrator',
+      newState: currentState,
+      switchToHuman: true,
+      escalationReason: reason,
+    };
+  }
+
   // ── Detectar "me queda todavía" → preguntar cuándo se termina ──────
   // Si el cliente dice que aún tiene stock, el bot pregunta cuándo se le acaba
   // para agendar un seguimiento automático.

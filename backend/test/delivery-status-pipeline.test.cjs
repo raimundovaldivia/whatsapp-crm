@@ -148,3 +148,36 @@ test('una solicitud de entrega para hoy toma el pedido sin prometer un cupo de r
   assert.match(result.response, /qué tamaño y cuántos huevos necesitas/i);
   assert.doesNotMatch(result.response, /consulta(rlo)? directamente con el equipo/i);
 });
+
+test('una abreviación pregunta por el pedido activo sin caer en escalación genérica', async () => {
+  const future = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+  const pipeline = buildPipeline(future, 'draft', {
+    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje ambiguo' },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'Q ise');
+
+  assert.equal(result.switchToHuman, undefined);
+  assert.equal(result.agentType, 'orchestrator');
+  assert.match(result.response, /pedido #88/i);
+  assert.match(result.response, /Caja 100 Huevos Jumbo/i);
+  assert.match(result.response, new RegExp(`registrado para el fecha ${future}`, 'i'));
+  assert.doesNotMatch(result.response, /equipo/i);
+});
+
+test('si el cliente aclara que el pedido futuro era para hoy se pide revisar el cambio con contexto', async () => {
+  const future = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+  const pipeline = buildPipeline(future, 'draft', {
+    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje ambiguo' },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'Era para hoy\nSupue');
+
+  assert.equal(result.switchToHuman, true);
+  assert.match(result.response, /necesitabas el pedido para hoy/i);
+  assert.match(result.response, new RegExp(`registrado para el fecha ${future}`, 'i'));
+  assert.match(result.response, /confirmar el cupo/i);
+  assert.match(result.escalationReason, /pedido #88/i);
+  assert.match(result.escalationReason, /cambio de fecha/i);
+  assert.doesNotMatch(result.response, /Esto lo tiene que ver alguien/i);
+});
