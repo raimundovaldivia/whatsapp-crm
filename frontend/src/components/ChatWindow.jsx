@@ -10,7 +10,7 @@ import { alertOrderEditNotification } from '../utils/order-edit-notification.js'
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated }) {
+export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -20,10 +20,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [feedbackSent, setFeedbackSent] = useState(null); // 'correct' | 'unnecessary' | null
   const [deleting, setDeleting] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [alternateSend, setAlternateSend] = useState(null);
+  const [alternateSending, setAlternateSending] = useState(false);
+  const [alternateError, setAlternateError] = useState('');
 
   useEffect(() => {
     setMobileActionsOpen(false);
     setAttachment(null);
+    setAlternateSend(null);
+    setAlternateError('');
   }, [conversation.id]);
 
   // ── Editar contacto ──────────────────────────────────────────────
@@ -547,6 +552,53 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
   };
 
+  const openExpiredWindowAlternative = async (draftText = '') => {
+    try {
+      const response = await api.get('/settings/whatsapp/channels');
+      const channels = (response.data?.data || []).filter(channel =>
+        channel.provider === 'evolution'
+        && channel.status === 'connected'
+        && String(channel.id) !== String(conversation.whatsapp_channel_id || '')
+      );
+      if (channels.length) {
+        const preferred = channels.find(channel => channel.is_default) || channels[0];
+        setAlternateError('');
+        setAlternateSend({
+          channels,
+          channelId: String(preferred.id),
+          text: draftText || inputText,
+        });
+        return;
+      }
+    } catch (_) {
+      // Si no se pueden recuperar los otros canales, todavía queda el template.
+    }
+    if (!conversation.whatsapp_channel_id) await openTemplateModal();
+  };
+
+  const sendThroughAlternateChannel = async () => {
+    const text = alternateSend?.text?.trim();
+    if (!text || alternateSending) return;
+    setAlternateSending(true);
+    setAlternateError('');
+    try {
+      const result = await conversationsAPI.startConversation({
+        phone: conversation.phone_number,
+        name: conversation.contact_name || '',
+        text,
+        channelId: alternateSend.channelId,
+      });
+      setAlternateSend(null);
+      setInputText('');
+      setError(null);
+      await onAlternateConversationStarted?.(result.data);
+    } catch (err) {
+      setAlternateError(err.response?.data?.error || err.message || 'No se pudo enviar por el canal alternativo.');
+    } finally {
+      setAlternateSending(false);
+    }
+  };
+
   const handleSend = async () => {
     const text = inputText.trim();
     if ((!text && !attachment) || sending) return;
@@ -569,7 +621,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     } catch (err) {
       const is24h = err.response?.data?.error === 'WINDOW_EXPIRED';
       if (is24h) {
-        setError('⏰ Ventana de 24h expirada — el cliente debe escribirte primero para poder responder.');
+        setError('⏰ Ventana de 24h expirada — usa otro WhatsApp conectado o un template aprobado.');
+        if (!pendingAttachment) await openExpiredWindowAlternative(text);
       } else {
         setError('Error enviando el mensaje. Intenta de nuevo.');
       }
@@ -1198,9 +1251,17 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           <span>⏰</span>
           <span>
             <strong>Ventana de 24 horas expirada.</strong>{' '}
-            WhatsApp solo permite responder si el cliente ha escrito en las últimas 24h.
-            Espera a que el cliente te escriba primero.
+            El canal oficial no permite texto libre. Usa tu otro WhatsApp conectado o un template aprobado.
           </span>
+          <button
+            onClick={() => openExpiredWindowAlternative(inputText)}
+            style={{
+              marginLeft: 'auto', border: '1px solid #d97706', borderRadius: '7px',
+              background: '#78350f', color: '#fde68a', padding: '5px 9px',
+              fontSize: '11px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+            }}>
+            Abrir alternativa
+          </button>
         </div>
       )}
 
@@ -2028,6 +2089,66 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {alternateSend && (
+        <div style={{
+          position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.66)',
+          zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+        }} onClick={() => !alternateSending && setAlternateSend(null)}>
+          <div style={{
+            width: '100%', maxWidth: '480px', backgroundColor: colors.bgPanel,
+            border: `1px solid ${colors.border}`, borderRadius: '14px', overflow: 'hidden',
+            boxShadow: '0 20px 60px rgba(0,0,0,.42)',
+          }} onClick={event => event.stopPropagation()}>
+            <div style={{ padding: '16px 18px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '15px' }}>Enviar por otro WhatsApp</div>
+                <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '3px' }}>La ventana del canal oficial venció; tu mensaje sigue listo.</div>
+              </div>
+              <button onClick={() => setAlternateSend(null)} disabled={alternateSending}
+                style={{ border: 0, background: 'none', color: colors.textSecondary, cursor: 'pointer', padding: '4px' }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: '13px' }}>
+              <div style={{ padding: '10px 12px', borderRadius: '9px', backgroundColor: '#2563eb18', border: '1px solid #3b82f644', color: colors.infoSoft, fontSize: '12px' }}>
+                Se enviará a <strong>{conversation.contact_name || conversation.phone_number}</strong> ({conversation.phone_number}) desde Evolution.
+              </div>
+              {alternateSend.channels.length > 1 && (
+                <label style={{ color: colors.textSecondary, fontSize: '11px' }}>
+                  Número de salida
+                  <select value={alternateSend.channelId}
+                    onChange={event => setAlternateSend(current => ({ ...current, channelId: event.target.value }))}
+                    style={{ width: '100%', marginTop: '6px', padding: '9px 10px', borderRadius: '7px', backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
+                    {alternateSend.channels.map(channel => (
+                      <option key={channel.id} value={channel.id}>{channel.name}{channel.phone_number ? ` · ${channel.phone_number}` : ''}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label style={{ color: colors.textSecondary, fontSize: '11px' }}>
+                Mensaje
+                <textarea value={alternateSend.text}
+                  onChange={event => setAlternateSend(current => ({ ...current, text: event.target.value }))}
+                  rows={4} autoFocus
+                  style={{ width: '100%', boxSizing: 'border-box', marginTop: '6px', padding: '10px 11px', resize: 'vertical', borderRadius: '8px', backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontFamily: 'inherit' }} />
+              </label>
+              {alternateError && <div style={{ color: colors.red, fontSize: '12px' }}>{alternateError}</div>}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button onClick={() => setAlternateSend(null)} disabled={alternateSending}
+                  style={{ border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, borderRadius: '8px', padding: '9px 13px', cursor: 'pointer' }}>
+                  Cancelar
+                </button>
+                <button onClick={sendThroughAlternateChannel} disabled={alternateSending || !alternateSend.text.trim()}
+                  style={{ border: 0, backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', padding: '9px 15px', fontWeight: 700, cursor: alternateSending ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                  {alternateSending ? <Loader size={14} className="spin" /> : <Send size={14} />}
+                  {alternateSending ? 'Enviando...' : 'Enviar por Evolution'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -543,6 +543,27 @@ export default function App() {
                 onConversationUpdated={(updatedConv) => {
                   setConversations(prev => prev.map(c => c.id === updatedConv.id ? { ...c, ...updatedConv } : c));
                 }}
+                onAlternateConversationStarted={async (data) => {
+                  if (!data?.conversationId) return;
+                  if (data.conversation) {
+                    setConversations(prev => [
+                      data.conversation,
+                      ...prev.filter(item => item.id !== data.conversation.id),
+                    ]);
+                  }
+                  if (data.message) {
+                    seenMessageIds.current.add(data.message.id);
+                    setMessages(prev => ({
+                      ...prev,
+                      [data.conversationId]: [
+                        ...(prev[data.conversationId] || []).filter(item => item.id !== data.message.id),
+                        data.message,
+                      ],
+                    }));
+                  }
+                  await handleSelectConversation(data.conversationId);
+                  loadConversations();
+                }}
               />
             ) : !isMobile ? (
               <EmptyState orgName={org?.name} onChangeView={handleChangeView} />
