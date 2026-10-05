@@ -8,6 +8,7 @@ import {
 
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import { matchesPurchaseAge, selectedAudience } from '../utils/broadcast-audience.mjs';
 import * as ui from '../ui.js';
 import {
   buildBodyTemplateComponent,
@@ -1219,7 +1220,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [sources,        setSources]        = useState(null);
   const [loading,        setLoading]        = useState(true);
   const [search,         setSearch]         = useState('');
-  const [excludeRecent,  setExcludeRecent]  = useState(false);
+  const [purchaseAge, setPurchaseAge] = useState('all');
+  const [customPurchaseDays, setCustomPurchaseDays] = useState('45');
   const [excludeEmpresas, setExcludeEmpresas] = useState(false);
   const [selected,       setSelected]       = useState(new Set());
   const [templates,      setTemplates]      = useState(parentTemplates);
@@ -1237,13 +1239,27 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const sendingRef = useRef(false);
   const stopSendingRef = useRef(false);
   const [sendingMethods, setSendingMethods] = useState([]);
+  const [methodsLoading, setMethodsLoading] = useState(true);
+  const [methodsError, setMethodsError] = useState('');
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
   const [waitSeconds, setWaitSeconds] = useState(0);
   const selectedMethod = sendingMethods.find(m => (m.channelId ? `evolution:${m.channelId}` : 'kapso') === sendingMethodKey);
-  useEffect(() => {
-    api.get('/reengagement/sending-methods').then(r => setSendingMethods(r.data.methods || [])).catch(() => {});
-    return () => { stopSendingRef.current = true; };
+  const loadSendingMethods = useCallback(async () => {
+    setMethodsLoading(true);
+    setMethodsError('');
+    try {
+      const { data } = await api.get('/reengagement/sending-methods');
+      setSendingMethods(data.methods || []);
+    } catch (error) {
+      setMethodsError(error.response?.data?.error || 'No se pudieron cargar las conexiones.');
+    } finally {
+      setMethodsLoading(false);
+    }
   }, []);
+  useEffect(() => {
+    loadSendingMethods();
+    return () => { stopSendingRef.current = true; };
+  }, [loadSendingMethods]);
   async function waitForNextSend(seconds) {
     for (let remaining = Math.ceil(seconds); remaining > 0 && !stopSendingRef.current; remaining--) {
       setWaitSeconds(remaining);
@@ -1510,23 +1526,24 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     });
   }
 
-  const ONE_WEEK_AGO = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const purchaseDays = purchaseAge === 'custom' ? customPurchaseDays : purchaseAge;
   const filtered = contacts.filter(c => {
     if (search) {
       const q = search.toLowerCase();
       if (!(c.name || '').toLowerCase().includes(q) && !(c.phone || '').includes(q)) return false;
     }
-    if (excludeRecent && c.last_order_at) {
-      if (new Date(c.last_order_at).getTime() >= ONE_WEEK_AGO) return false;
-    }
+    if (!matchesPurchaseAge(c, purchaseDays)) return false;
     if (excludeEmpresas && c.client_type === 'empresa') return false;
     if (prodPhones && !prodPhones.has(normPhone(c.phone))) return false;
     if (deliveryPhones && !deliveryPhones.has(normPhone(c.phone))) return false;
     return true;
   });
 
+  const audience = selectedAudience(filtered, selected);
+  const selectedCount = audience.length;
+
   function toggleAll() {
-    if (selected.size === filtered.length) {
+    if (selectedCount === filtered.length) {
       setSelected(new Set());
     } else {
       setSelected(new Set(filtered.map(c => c.phone)));
@@ -1610,7 +1627,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   function prepareReview() {
     if (!selectedMethod?.available) { showToast('Selecciona un método de envío conectado', 'error'); return; }
     if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
-    if (selected.size === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
+    if (selectedCount === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
     if (testMode && !TEST_PHONE) { showToast('Ingresa un número de prueba antes de enviar', 'error'); return; }
 
     const bodyComp = getBodyComponent(selTpl);
@@ -1619,7 +1636,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     // El modo prueba valida UN mensaje. Antes se conservaba toda la audiencia
     // seleccionada y cada variante se redirigía al mismo teléfono de prueba,
     // provocando cientos de copias y una pantalla cargando durante minutos.
-    const selectedPhones = Array.from(selected);
+    const selectedPhones = audience.map(contact => contact.phone);
     const phonesToPrepare = testMode ? selectedPhones.slice(0, 1) : selectedPhones;
     const entries = phonesToPrepare.map(phone => {
       const contact = contacts.find(c => c.phone === phone);
@@ -1663,6 +1680,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       sendingProvider: selectedMethod.provider,
       sendingChannelId: selectedMethod.channelId,
       sendingLabel: selectedMethod.label,
+      audienceLabel: purchaseAge === 'all' ? 'Todos los contactos filtrados' : `Último pedido hace más de ${purchaseDays} días`,
       intervalSeconds: selectedMethod.intervalSeconds,
       batchSize: selectedMethod.batchSize,
       batchPauseSeconds: selectedMethod.batchPauseSeconds,
@@ -1850,22 +1868,50 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       )}
 
       {/* Toolbar */}
-      <div style={{ padding: '10px 20px', color: colors.textPrimary, backgroundColor: colors.bgPanel }}>
-        <label>Método de envío{' '}
-          <select aria-label="Método de envío" value={sendingMethodKey} disabled={sending || !!reviewPlan}
-            onChange={e => setSendingMethodKey(e.target.value)}>
-            {!sendingMethods.length && <option value="kapso">Conexiones no disponibles</option>}
-            {sendingMethods.map(method => <option key={method.channelId || 'kapso'}
-              value={method.channelId ? `evolution:${method.channelId}` : 'kapso'} disabled={!method.available}>
-              {method.label}{!method.available ? ' · No conectado' : ''}
-            </option>)}
-          </select>
-        </label>
+      <section aria-label="Método de envío" style={{ flexShrink: 0, padding: '12px 20px', color: colors.textPrimary,
+        backgroundColor: colors.bgPanel, borderBottom: `2px solid ${colors.green}`, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+        <div style={{ minWidth: 145 }}>
+          <div style={{ fontWeight: 800, fontSize: 14 }}>¿Cómo quieres enviar?</div>
+          <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>Elige el método de esta campaña</div>
+        </div>
+        <div role="group" aria-label="Elegir Kapso o Evolution" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {(sendingMethods.length ? [
+            ...sendingMethods,
+            ...(!sendingMethods.some(method => method.provider === 'evolution')
+              ? [{ provider: 'evolution', channelId: null, label: 'Directo · Evolution', available: false }] : []),
+          ] : [
+            { provider: 'kapso', label: 'Kapso · API oficial', available: false },
+            { provider: 'evolution', label: 'Directo · Evolution', available: false },
+          ]).map(method => {
+            const methodKey = method.provider === 'evolution' ? `evolution:${method.channelId}` : 'kapso';
+            const isSelected = sendingMethodKey === methodKey && method.available;
+            return <button key={methodKey} type="button" aria-pressed={isSelected}
+              disabled={!method.available || methodsLoading || sending || !!reviewPlan}
+              onClick={() => setSendingMethodKey(methodKey)}
+              style={{ minWidth: 205, textAlign: 'left', padding: '10px 14px', borderRadius: 8,
+                border: `2px solid ${isSelected ? colors.green : colors.border}`,
+                backgroundColor: isSelected ? `${colors.green}22` : colors.bgCard, color: colors.textPrimary,
+                cursor: method.available && !sending && !reviewPlan ? 'pointer' : 'default' }}>
+              <div style={{ fontSize: 13, fontWeight: 800 }}>{isSelected ? '✓ ' : ''}{method.label}</div>
+              <div style={{ fontSize: 11, marginTop: 4, color: colors.textSecondary }}>
+                {methodsLoading ? 'Consultando conexión…' : !method.available
+                  ? (methodsError ? 'Conexión sin verificar' : 'No conectado · revisar Ajustes')
+                  : method.provider === 'evolution' ? 'Lotes de 10 · pausas automáticas' : 'Plantillas de WhatsApp'}
+              </div>
+            </button>;
+          })}
+        </div>
+        {!sending && !reviewPlan && <button type="button" onClick={loadSendingMethods} disabled={methodsLoading}
+          style={{ background: 'transparent', border: `1px solid ${colors.border}`, color: colors.textSecondary, borderRadius: 6, padding: '7px 10px', cursor: 'pointer' }}>
+          {methodsLoading ? 'Cargando…' : 'Actualizar conexiones'}
+        </button>}
+        {methodsError && <div role="alert" style={{ width: '100%', color: colors.red, fontSize: 12 }}>{methodsError}</div>}
+        {reviewPlan && <div style={{ width: '100%', fontSize: 12 }}>Cierra la revisión para cambiar el método de envío.</div>}
         {selectedMethod?.provider === 'evolution' && <div style={{ fontSize: 12, marginTop: 6 }}>
           Lotes de 10 · 1 mensaje por minuto · pausa de 5 minutos entre lotes, luego continúa automáticamente.
           Se envía sólo el texto revisado, sin botones ni archivos. Mantén esta pantalla abierta durante el envío.
         </div>}
-      </div>
+      </section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
 
         {/* Search */}
@@ -1899,34 +1945,22 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           )}
         </div>
 
-        {/* Filtro: excluir compradores recientes */}
-        <button
-          onClick={() => {
-            const next = !excludeRecent;
-            setExcludeRecent(next);
-            // Reajustar selección: mantener solo los que pasan el filtro nuevo
-            if (next) {
-              setSelected(prev => {
-                const n = new Set();
-                contacts.forEach(c => {
-                  if (!prev.has(c.phone)) return;
-                  if (c.last_order_at && new Date(c.last_order_at).getTime() >= Date.now() - 7 * 24 * 60 * 60 * 1000) return;
-                  n.add(c.phone);
-                });
-                return n;
-              });
-            }
-          }}
-          style={{
-            padding: '6px 11px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
-            cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-            border: `1px solid ${excludeRecent ? colors.green + '66' : colors.border}`,
-            backgroundColor: excludeRecent ? colors.green + '22' : 'transparent',
-            color: excludeRecent ? colors.green : colors.textMuted,
-          }}
-        >
-          {excludeRecent ? '✓ ' : ''}Sin compras esta semana
-        </button>
+        <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
+          Último pedido
+          <select aria-label="Tiempo sin pedir" value={purchaseAge} disabled={sending || !!reviewPlan}
+            onChange={e => { setPurchaseAge(e.target.value); setPreviewIdx(0); }}
+            style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
+            <option value="all">Cualquier fecha</option>
+            {[7, 15, 30, 60, 90].map(days => <option key={days} value={String(days)}>Hace más de {days} días</option>)}
+            <option value="custom">Otra cantidad de días</option>
+          </select>
+          {purchaseAge === 'custom' && <input aria-label="Días sin pedir" type="number" min="1" max="3650" step="1"
+            value={customPurchaseDays} disabled={sending || !!reviewPlan} onChange={e => setCustomPurchaseDays(e.target.value)}
+            style={{ width: 65, padding: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 7 }} />}
+        </label>
+        {purchaseAge !== 'all' && <span style={{ fontSize: 11, color: colors.textMuted }}>
+          Sólo clientes con fecha de pedido registrada. Se envía únicamente a los seleccionados de este grupo.
+        </span>}
 
         <button onClick={toggleDeliveryAudience} disabled={deliveryBusy}
           title="Pedidos que salieron a ruta ayer y no quedaron entregados"
@@ -2017,16 +2051,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </button>
 
         {/* Enviar */}
-        <button onClick={prepareReview} disabled={sending || selected.size === 0 || !selTpl} style={{
+        <button onClick={prepareReview} disabled={sending || selectedCount === 0 || !selTpl} style={{
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '7px 16px', borderRadius: colors.radiusMd, border: 'none',
-          backgroundColor: (selected.size > 0 && selTpl) ? colors.green : colors.bgHover,
-          color: (selected.size > 0 && selTpl) ? '#fff' : colors.textMuted,
-          fontSize: '13px', fontWeight: 700, cursor: (sending || selected.size === 0 || !selTpl) ? 'not-allowed' : 'pointer',
+          backgroundColor: (selectedCount > 0 && selTpl) ? colors.green : colors.bgHover,
+          color: (selectedCount > 0 && selTpl) ? '#fff' : colors.textMuted,
+          fontSize: '13px', fontWeight: 700, cursor: (sending || selectedCount === 0 || !selTpl) ? 'not-allowed' : 'pointer',
           opacity: sending ? 0.7 : 1,
         }}>
           <Send size={14} />
-          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : (testMode ? 'Revisar 1 mensaje de prueba' : `Revisar envío a ${selected.size}`)}
+          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : (testMode ? 'Revisar 1 mensaje de prueba' : `Revisar envío a ${selectedCount}`)}
         </button>
       </div>
 
@@ -2265,7 +2299,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
       {/* Vista previa del mensaje */}
       {!loading && selTpl && (() => {
-        const sel = contacts.filter(c => selected.has(c.phone));
+        const sel = audience;
         if (!sel.length) return null;
         const idx = Math.min(previewIdx, sel.length - 1);
         const c = sel[idx];
@@ -2326,10 +2360,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             {allChecked ? 'Deseleccionar todos' : 'Seleccionar todos'}
           </button>
           <span style={{ color: colors.textMuted, fontSize: '12px', marginLeft: 'auto' }}>
-            {selected.size} de {filtered.length} seleccionados
-            {excludeRecent && contacts.length > filtered.length && (
+            {selectedCount} de {filtered.length} seleccionados
+            {contacts.length > filtered.length && (
               <span style={{ marginLeft: '8px', color: colors.yellow, fontWeight: 600 }}>
-                · {contacts.length - filtered.length} excluidos (compraron esta semana)
+                · {contacts.length - filtered.length} fuera de los filtros
               </span>
             )}
             {sources && <span style={{ marginLeft: '10px', opacity: 0.7 }}>· 💬 {sources.whatsapp} WhatsApp · 🛒 {sources.shopify} Shopify</span>}
@@ -2394,6 +2428,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   <div style={{ color: colors.textPrimary, fontWeight: 800, fontSize: 15 }}>Revisa antes de enviar</div>
                   <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 5 }}>
                     {reviewPlan.sendingLabel}
+                    {reviewPlan.audienceLabel && <div style={{ marginTop: 4 }}>Destinatarios: {reviewPlan.audienceLabel}</div>}
                     {reviewPlan.sendingProvider === 'evolution' && <>
                       {' · '}Lotes de {reviewPlan.batchSize}, pausa de {reviewPlan.batchPauseSeconds / 60} minutos.
                       {' '}Tiempo mínimo aproximado: {Math.max(0, reviewPlan.entries.length - 1) + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * 4} minutos.
