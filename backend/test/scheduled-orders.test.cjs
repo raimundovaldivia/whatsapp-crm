@@ -187,7 +187,7 @@ test('una opción promocional exacta entra al pedido sin escalar a humano', asyn
   let savedDraft = null;
   const promoText = `[Template: promocion_general_entrega_mismo_dia]
 
-🥚✨ ¡Tenemos promos Oscar! | ⏰ ¡Hoy extendimos el plazo para realizar pedidos hasta las 14:30 AM! para recibir hoy | 📅 Promoción válida hasta el sábado 03/10/2026, inclusive, para pedidos con entrega hasta ese día. | 🥚 Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | 100 unidades $37.000 | 🥚 XL: 30 unidades $12.000 | 60 unidades $23.000 | 90 unidades $34.000 | 🫒 Aceitunas de 500 g: lleva 2 envases, paga el primero a precio normal y recibe 50% de descuento en el segundo. | 🧀 Queso de cabra 900 g $15.000 | 🚚 Despacho gratis en compras desde $10.000 | Promoción sujeta a disponibilidad de stock.`;
+🥚✨ ¡Tenemos promos Oscar! | 📅 Promoción válida hasta el sábado 03/10/2099, inclusive, para pedidos con entrega hasta ese día. | 🥚 Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | 100 unidades $37.000 | 🥚 XL: 30 unidades $12.000 | 60 unidades $23.000 | 90 unidades $34.000 | 🫒 Aceitunas de 500 g: lleva 2 envases, paga el primero a precio normal y recibe 50% de descuento en el segundo. | 🧀 Queso de cabra 900 g $15.000 | 🚚 Despacho gratis en compras desde $10.000 | Promoción sujeta a disponibilidad de stock.`;
   const db = {
     getConversationById: async () => ({ id: 19, organization_id: 1, phone_number: '56919191919', contact_name: 'Oscar', pipeline_state: 'template_sent', agent_mode: 'ai' }),
     getLastMessages: async () => [{ direction: 'outbound', content: promoText, created_at: '2026-10-01T13:05:00-03:00' }],

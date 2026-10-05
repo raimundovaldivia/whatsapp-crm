@@ -31,6 +31,38 @@ test('saludos simples y combinados nunca activan una escalación por el historia
   }
 });
 
+test('una pregunta de precio usa el catálogo aunque exista contexto antiguo pendiente', async () => {
+  let modelCalls = 0;
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async () => {
+        modelCalls++;
+        return { content: [{ text: '{"escalate":true,"reason":"factura anterior","urgency":"medium"}' }] };
+      } };
+    }
+  }
+  const orchestrator = load('src/services/agents/orchestrator.js', {
+    '@anthropic-ai/sdk': Anthropic,
+    '../inbound-message-policy': { isBareLinkMessage: () => false },
+  });
+  const oldContext = [
+    { direction: 'inbound', content: 'La factura anterior no coincide' },
+    { direction: 'outbound', content: 'Lo revisará el equipo' },
+    { direction: 'inbound', content: 'También envié el comprobante' },
+    { direction: 'outbound', content: 'Quedó pendiente de revisión' },
+    { direction: 'inbound', content: 'Ok' },
+    { direction: 'outbound', content: 'Te avisaremos' },
+    { direction: 'inbound', content: 'Gracias' },
+    { direction: 'outbound', content: 'Hasta luego' },
+  ];
+
+  const result = await orchestrator.checkEscalation('Buen día\nPrecio de la bandeja L?', oldContext, 'template_sent', 1);
+
+  assert.equal(result.escalate, false);
+  assert.equal(result.reason, 'Consulta comercial resoluble con catálogo');
+  assert.equal(modelCalls, 0);
+});
+
 test('Diva coordinates safely and never sends an ambiguous admin instruction', async () => {
   let systemPrompt = '';
   class Anthropic {

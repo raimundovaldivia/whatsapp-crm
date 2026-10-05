@@ -136,6 +136,21 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     return { escalate: false, reason: 'Mensaje simple', urgency: 'low' };
   }
 
+  // Una pregunta comercial normal que el catálogo puede resolver nunca debe
+  // heredarse como "caso complejo" por reclamos o coordinaciones antiguas del
+  // mismo cliente. Esto incluye mensajes combinados como
+  // "Buen día, precio de la bandeja L?".
+  const productInfoPatterns = [
+    /\b(precio|valor)\s+(de|del|para|por)?\s*(la|el|los|las|una|un)?\b/iu,
+    /\bcu[aá]nto\s+(cuesta|sale|vale|salen|valen)\b/iu,
+    /\bqu[eé]\s+precio\s+(tiene|tienen|sale)\b/iu,
+    /\b(tienen|hay|venden)\b.{0,45}\b(huevos?|bandejas?|cajas?|queso|aceitunas?|productos?)\b/iu,
+  ];
+  const complaintAboutPrice = /\b(me\s+cobraron|cobro|cobrado|pagu[eé]|factura|boleta|no\s+coincide|incorrecto|equivocado|distinto|reclamo|devoluci[oó]n)\b/iu.test(userMessage);
+  if (!complaintAboutPrice && productInfoPatterns.some(pattern => pattern.test(userMessage))) {
+    return { escalate: false, reason: 'Consulta comercial resoluble con catálogo', urgency: 'low' };
+  }
+
   // ── 2. Solicitud explícita de humano (alta prioridad) ──────────
   const hardEscalationPatterns = [
     /habla[r]? con (una |un )?(persona|humano|asesor|agente|vendedor)/i,
