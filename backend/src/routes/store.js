@@ -9,7 +9,7 @@
 const express       = require('express');
 const router        = express.Router();
 const db            = require('../db/database');
-const kapsoService  = require('../services/kapso-whatsapp');
+const whatsapp      = require('../services/whatsapp-provider');
 const { getPool }   = require('../db/database');
 
 // ── Helper: obtener org por slug ────────────────────────────────────
@@ -110,89 +110,85 @@ router.post('/:slug/orders', async (req, res) => {
     if (!address?.trim()) return res.status(400).json({ error: 'Dirección requerida' });
     if (!items?.length)   return res.status(400).json({ error: 'Agrega al menos un producto' });
 
-    // Resolver productos y calcular total
-    const allProducts = (await db.getProducts(org.id, true))
-      .filter(product => product.is_business !== true);
-    const productMap  = new Map(allProducts.map(p => [p.id, p]));
-
-    const resolvedItems = [];
-    let total = 0;
-
-    for (const item of items) {
-      if (!item || typeof item !== 'object') return res.status(400).json({ error: 'Producto inválido' });
-      const product = productMap.get(Number(item.productId));
-      if (!product) return res.status(400).json({ error: `Producto ${item.productId} no encontrado` });
-      const qty = item.quantity;
-      if (!Number.isSafeInteger(qty) || qty < 1 || qty > 1000) return res.status(400).json({ error: 'Cantidad inválida' });
-      const price = Number(product.price);
-      if (!Number.isFinite(price) || price < 0) return res.status(400).json({ error: 'Precio inválido' });
-      resolvedItems.push({ id: product.id, title: product.title, quantity: qty, price });
-      total += price * qty;
-    }
-
     // Normalizar teléfono (quitar +, espacios)
     const phoneClean = phone.replace(/\D/g, '');
 
-    // Crear/obtener conversación para este cliente
-    const conversation = await db.upsertConversation(org.id, phoneClean, name);
+    // La tienda web usa la conexión directa (Evolution), nunca Kapso.
+    const directChannel = await db.getEvolutionWhatsappChannel(org.id);
+    const evolutionChannel = directChannel?.status === 'connected' ? directChannel : null;
 
-    // Guardar pedido en DB
-    const order = await db.createOrder({
+    // Crear/obtener conversación para este cliente y asociarla al canal directo.
+    const conversation = await db.upsertConversation(org.id, phoneClean, name, evolutionChannel?.id || null);
+
+    // Crear el pedido y descontar stock dentro de una misma transacción.
+    const { order, resolvedItems, total } = await db.createStoreOrder({
       conversationId:  conversation.id,
       organizationId:  org.id,
-      items:           resolvedItems,
       customerName:    name,
       customerPhone:   phoneClean,
       shippingAddress: { address, city },
-      totalPrice:      total.toFixed(0),
+      items,
     });
 
     // Guardar contacto
     db.upsertContact(org.id, { phone: phoneClean, name, address, city }).catch(() => {});
 
-    // Enviar confirmación por WhatsApp
-    const wc = await db.getWhatsappConfig(org.id);
-    if (wc?.provider === 'kapso') {
-      const itemsText = resolvedItems
-        .map(i => `  • ${i.title} x${i.quantity} — $${(i.price * i.quantity).toLocaleString('es-CL')}`)
-        .join('\n');
+    const itemsText = resolvedItems
+      .map(i => `  • ${i.title} x${i.quantity} — $${(i.price * i.quantity).toLocaleString('es-CL')}`)
+      .join('\n');
+    const msg = [
+      `¡Hola ${name}! 👋`,
+      ``,
+      `Tu pedido fue recibido ✅`,
+      ``,
+      `📦 *Productos:*`,
+      itemsText,
+      ``,
+      `📍 *Entrega:* ${address}, ${city}`,
+      `💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}`,
+      `💳 *Pago:* Contra entrega`,
+      ``,
+      `Pronto te confirmaremos la fecha de despacho 🚀`,
+    ].join('\n');
 
-      const msg = [
-        `¡Hola ${name}! 👋`,
-        ``,
-        `Tu pedido fue recibido ✅`,
-        ``,
-        `📦 *Productos:*`,
-        itemsText,
-        ``,
-        `📍 *Entrega:* ${address}, ${city}`,
-        `💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}`,
-        `💳 *Pago:* Contra entrega`,
-        ``,
-        `Pronto te confirmaremos la fecha de despacho 🚀`,
-      ].join('\n');
-
-      kapsoService.sendTextMessage(phoneClean, msg, wc).catch(() => {});
+    let confirmationSent = false;
+    if (evolutionChannel) {
+      try {
+        await whatsapp.sendTextMessage(phoneClean, msg, evolutionChannel);
+        confirmationSent = true;
+      } catch (sendError) {
+        console.error('[Store] Pedido guardado, pero Evolution no confirmó el mensaje al cliente:', sendError.message);
+      }
+    } else {
+      console.warn('[Store] Pedido guardado sin confirmación: no hay canal Evolution conectado');
     }
 
-    // Notificar al admin
+    // Notificar al admin por la misma conexión directa.
     const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
-    if (adminPhone && wc?.provider === 'kapso') {
+    if (adminPhone && evolutionChannel) {
       const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
       const adminMsg = `🛒 *Nuevo pedido desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
-      kapsoService.sendTextMessage(adminPhone, adminMsg, wc).catch(() => {});
+      try {
+        await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
+      } catch (sendError) {
+        console.error('[Store] Pedido guardado, pero Evolution no notificó al administrador:', sendError.message);
+      }
     }
 
     res.status(201).json({
       success: true,
       orderId: order.id,
       total:   parseInt(total),
-      message: `¡Pedido recibido! Te enviamos confirmación al ${phoneClean} por WhatsApp.`,
+      confirmationSent,
+      whatsappProvider: confirmationSent ? 'evolution' : null,
+      message: confirmationSent
+        ? `¡Pedido recibido! Enviamos la confirmación al ${phoneClean} por WhatsApp.`
+        : '¡Pedido recibido! Lo guardamos correctamente y te contactaremos para confirmarlo.',
     });
 
   } catch (err) {
     console.error('[Store] Error creando pedido:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message, code: err.code || undefined });
   }
 });
 

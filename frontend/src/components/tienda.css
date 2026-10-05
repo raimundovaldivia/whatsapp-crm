@@ -198,3 +198,6 @@
   .dr-mobile-search span{display:none}
   .dr-checkout header>b{width:125px;height:25px}
 }
+
+/* La etiqueta de calibre no debe heredar el tamaño completo de la fotografía. */
+.dr-product-img>.dr-product-weight{width:auto;height:auto;object-fit:initial}

@@ -934,6 +934,94 @@ async function createOrder({ conversationId, organizationId, items, customerName
   return order;
 }
 
+async function createStoreOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress }) {
+  const requested = new Map();
+  for (const item of items || []) {
+    const productId = Number(item?.productId);
+    const quantity = Number(item?.quantity);
+    if (!Number.isSafeInteger(productId) || productId < 1 || !Number.isSafeInteger(quantity) || quantity < 1) {
+      throw Object.assign(new Error('Producto o cantidad inválida'), { status: 400 });
+    }
+    const accumulated = (requested.get(productId) || 0) + quantity;
+    if (accumulated > 1000) throw Object.assign(new Error('Cantidad inválida'), { status: 400 });
+    requested.set(productId, accumulated);
+  }
+  if (!requested.size) throw Object.assign(new Error('Agrega al menos un producto'), { status: 400 });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const ids = [...requested.keys()];
+    const { rows: products } = await client.query(
+      `SELECT id, title, price, stock, active, is_business
+         FROM products
+        WHERE organization_id = $1 AND id = ANY($2::int[])
+        FOR UPDATE`,
+      [organizationId, ids]
+    );
+    const productMap = new Map(products.map(product => [Number(product.id), product]));
+    const resolvedItems = [];
+    let total = 0;
+
+    for (const [productId, quantity] of requested) {
+      const product = productMap.get(productId);
+      if (!product || product.active === false || product.is_business === true) {
+        throw Object.assign(new Error(`Producto ${productId} no disponible`), { status: 400 });
+      }
+      const price = Number(product.price);
+      const stock = Number(product.stock);
+      if (!Number.isFinite(price) || price < 0) throw Object.assign(new Error('Precio inválido'), { status: 400 });
+      if (Number.isFinite(stock) && stock >= 0 && stock < quantity) {
+        throw Object.assign(new Error(`Stock insuficiente para ${product.title}. Disponible: ${stock}`), {
+          status: 409,
+          code: 'INSUFFICIENT_STOCK',
+        });
+      }
+      resolvedItems.push({ id: product.id, title: product.title, quantity, price });
+      total += price * quantity;
+    }
+
+    for (const [productId, quantity] of requested) {
+      await client.query(
+        `UPDATE products
+            SET stock = CASE WHEN stock >= 0 THEN stock - $1 ELSE stock END,
+                updated_at = NOW()
+          WHERE id = $2 AND organization_id = $3`,
+        [quantity, productId, organizationId]
+      );
+    }
+
+    const { rows: [order] } = await client.query(
+      `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft') RETURNING *`,
+      [conversationId, organizationId, JSON.stringify(resolvedItems), customerName, customerPhone,
+        JSON.stringify(shippingAddress), total.toFixed(0)]
+    );
+    await client.query('COMMIT');
+
+    if (customerPhone) {
+      const normPhone = normalizePhone(customerPhone);
+      pool.query(
+        `UPDATE contacts SET last_order_at = NOW(), updated_at = NOW()
+          WHERE organization_id = $1 AND phone = $2`,
+        [organizationId, normPhone]
+      ).catch(() => {});
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    pool.query(
+      `UPDATE reengagement_daily_cache SET candidates = NULL WHERE organization_id = $1 AND cache_date = $2`,
+      [organizationId, today]
+    ).catch(() => {});
+
+    return { order, resolvedItems, total };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function updateOrder(id, updates) {
   const keys = Object.keys(updates);
   const values = Object.values(updates);
@@ -1774,7 +1862,7 @@ module.exports = {
   // Products propios
   getProducts, getProductById, createProduct, updateProduct, deleteProduct,
   // Orders
-  createOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation, getOrdersAwaitingPayment, getActiveOrderForBot, getRecentDeliveredOrder,
+  createOrder, createStoreOrder, updateOrder, getOrdersByOrg, getLatestPendingOrderByConversation, getOrdersAwaitingPayment, getActiveOrderForBot, getRecentDeliveredOrder,
   // Payment proofs
   savePaymentProof, getPaymentProofs, updatePaymentProof,
   // Contacts
