@@ -286,7 +286,9 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const isDevUser = currentUserEmail === DEV_EMAIL;
   const HOT_STATES = ['interested', 'collecting_order'];
   const isHotLead = HOT_STATES.includes(conversation.pipeline_state);
-  const isEmpresa  = conversation.client_type === 'empresa';
+  const [clientType, setClientType] = useState(conversation.client_type || 'personal');
+  const [togglingEmpresa, setTogglingEmpresa] = useState(false);
+  const isEmpresa  = clientType === 'empresa';
   const [optOut, setOptOut] = useState(!!conversation.opt_out);
   const [togglingOptOut, setTogglingOptOut] = useState(false);
 
@@ -362,6 +364,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   // Sync si cambia de conversación
   useEffect(() => { setOptOut(!!conversation.opt_out); }, [conversation.id, conversation.opt_out]);
+  useEffect(() => { setClientType(conversation.client_type || 'personal'); }, [conversation.id, conversation.client_type]);
 
   const handleToggleOptOut = async () => {
     if (togglingOptOut) return;
@@ -386,11 +389,21 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   };
 
   const handleToggleEmpresa = async () => {
+    if (togglingEmpresa) return;
     const newType = isEmpresa ? 'personal' : 'empresa';
+    setTogglingEmpresa(true);
     try {
-      await api.patch(`/conversations/${conversation.id}/client-type`, { clientType: newType });
-      onRefresh?.();
-    } catch (e) { console.error(e); }
+      const response = await api.patch(`/conversations/${conversation.id}/client-type`, { clientType: newType });
+      const savedType = response.data?.clientType || newType;
+      setClientType(savedType);
+      onConversationUpdated?.({ ...conversation, client_type: savedType });
+      await onRefresh?.();
+    } catch (e) {
+      console.error(e);
+      setError(e.response?.data?.error || 'No se pudo cambiar el tipo de cliente.');
+    } finally {
+      setTogglingEmpresa(false);
+    }
   };
 
   // Reset feedback state when conversation changes
@@ -1018,6 +1031,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           </button>
           <button
             onClick={handleToggleEmpresa}
+            disabled={togglingEmpresa}
             title={isEmpresa ? 'Marcar como cliente particular' : 'Marcar como empresa (B2B)'}
             style={{
               backgroundColor: isEmpresa ? colors.indigo : 'transparent',
@@ -1025,14 +1039,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               borderRadius: '20px',
               padding: '4px 10px',
               color: isEmpresa ? 'white' : colors.textMuted,
-              cursor: 'pointer',
+              cursor: togglingEmpresa ? 'wait' : 'pointer',
               display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
               fontSize: '11px', fontWeight: isEmpresa ? 600 : 400, transition: 'all 0.15s',
             }}
             onMouseEnter={e => { e.currentTarget.style.backgroundColor = isEmpresa ? '#4f46e5' : colors.indigo + '20'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.indigo; }}
             onMouseLeave={e => { e.currentTarget.style.backgroundColor = isEmpresa ? colors.indigo : 'transparent'; e.currentTarget.style.color = isEmpresa ? 'white' : colors.textMuted; }}
           >
-            🏢 {isEmpresa ? 'Empresa' : 'Empresa'}
+            🏢 {togglingEmpresa ? 'Guardando...' : 'Empresa'}
           </button>
           <button
             onClick={openAnalysis}
@@ -1094,7 +1108,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     onClick={() => { setMobileActionsOpen(false); openAnalysis(); }} />
                   <MobileHeaderAction icon={<span style={{ fontSize: '15px' }}>🏢</span>}
                     label={isEmpresa ? 'Marcar como particular' : 'Marcar como empresa'} colors={colors}
-                    active={isEmpresa} onClick={() => { setMobileActionsOpen(false); handleToggleEmpresa(); }} />
+                    active={isEmpresa} disabled={togglingEmpresa} onClick={() => { setMobileActionsOpen(false); handleToggleEmpresa(); }} />
                   <MobileHeaderAction icon={<BellOff size={17} />}
                     label={optOut ? 'Volver a contactar' : 'No contactar'} colors={colors}
                     active={optOut} danger={optOut} disabled={togglingOptOut}

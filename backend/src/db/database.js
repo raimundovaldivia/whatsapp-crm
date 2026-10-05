@@ -507,7 +507,21 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
            ELSE c.contact_name
          END AS contact_name,
          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
-         co.client_type,
+         CASE
+           WHEN EXISTS (
+             SELECT 1 FROM contacts co_type
+              WHERE co_type.organization_id = c.organization_id
+                AND co_type.client_type = 'empresa'
+                AND co_type.phone = ANY(ARRAY[
+                  c.phone_number,
+                  CASE WHEN c.phone_number ~ '^9[0-9]{8}$' THEN '56' || c.phone_number END,
+                  CASE WHEN c.phone_number ~ '^569[0-9]{8}$' THEN SUBSTRING(c.phone_number FROM 3) END,
+                  CASE WHEN c.phone_number LIKE '+%' THEN SUBSTRING(c.phone_number FROM 2) END,
+                  '+' || c.phone_number
+                ])
+           ) THEN 'empresa'
+           ELSE COALESCE(co.client_type, 'personal')
+         END AS client_type,
          COALESCE(wc.name,
            CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END
          ) AS whatsapp_channel_name,
@@ -1266,12 +1280,25 @@ async function upsertShopifyCustomerProfile(orgId, c) {
 async function updateContactClientType(orgId, phone, clientType) {
   if (!['personal', 'empresa'].includes(clientType)) throw new Error('clientType inválido');
   phone = normalizePhone(phone);
+  if (!phone) throw new Error('Teléfono inválido');
+  const localPhone = /^569\d{8}$/.test(phone) ? phone.slice(2) : null;
+  const variants = [...new Set([phone, `+${phone}`, localPhone].filter(Boolean))];
+
+  // Los contactos históricos pueden existir como 9XXXXXXXX, 569XXXXXXXX o
+  // +569XXXXXXXX. Mantenerlos sincronizados evita que la bandeja lea una fila
+  // antigua con un tipo diferente.
+  await pool.query(
+    `UPDATE contacts
+        SET client_type = $3, updated_at = NOW()
+      WHERE organization_id = $1
+        AND phone = ANY($2::text[])`,
+    [orgId, variants, clientType]
+  );
   await pool.query(
     `INSERT INTO contacts (organization_id, phone, client_type, updated_at)
      VALUES ($1, $2, $3, NOW())
-     ON CONFLICT (organization_id, phone) DO UPDATE SET
-       client_type = EXCLUDED.client_type,
-       updated_at  = NOW()`,
+     ON CONFLICT (organization_id, phone) DO UPDATE
+       SET client_type = EXCLUDED.client_type, updated_at = NOW()`,
     [orgId, phone, clientType]
   );
   return getContact(orgId, phone);
