@@ -179,7 +179,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   const auditTasks = [recordBroadcastRecipient(orgId, campaignId, item, {
     status: 'accepted', whatsappMessageId,
   })];
-  if (item.templateName) auditTasks.push(markTemplateSent(orgId, item.phone));
+  if (item.templateName || channelId) auditTasks.push(markTemplateSent(orgId, item.phone));
   const auditResults = await Promise.allSettled(auditTasks);
   auditResults.filter(result => result.status === 'rejected').forEach(result => {
     console.error('[SendBulk] No se pudo completar la auditoría posterior:', result.reason?.message || result.reason);
@@ -2336,7 +2336,7 @@ router.post('/send-bulk', async (req, res) => {
       }
 
       // ── Anti-duplicado: saltar si ya recibió un template hoy ─────
-      if ((isTemplate || (direct && item.templateName)) && !item.force) {
+      if ((isTemplate || direct) && !item.force) {
         const alreadySent = await templateSentToday(req.orgId, item.phone);
         if (alreadySent) {
           const result = { phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' };

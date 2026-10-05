@@ -73,7 +73,11 @@ test('direct route never falls back to Kapso, enforces opt-out and pauses before
   assert.equal(sends, 1);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(channelUsed, 3);
+  req.body.items = [{ phone: '56912345678', message: 'Hola', force: true }];
+  res = response(); await send(req, res);
+  assert.equal(res.body.results[0].success, true);
+  assert.equal(sends, 2);
   unconfirmed = true; res = response(); await send(req, res);
   assert.equal(res.body.results[0].pending, true);
-  assert.equal(sends, 2);
+  assert.equal(sends, 3);
 });

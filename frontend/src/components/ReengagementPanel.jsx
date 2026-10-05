@@ -9,6 +9,7 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience } from '../utils/broadcast-audience.mjs';
+import { DIRECT_PARAMETERS, renderDirectMessage, insertDirectParameter } from '../utils/direct-message.mjs';
 import * as ui from '../ui.js';
 import {
   buildBodyTemplateComponent,
@@ -1242,6 +1243,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [methodsLoading, setMethodsLoading] = useState(true);
   const [methodsError, setMethodsError] = useState('');
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
+  const [directText, setDirectText] = useState('');
+  const directEditorRef = useRef(null);
+  const isDirect = sendingMethodKey.startsWith('evolution:');
+  const messageReady = isDirect ? !!directText.trim() : !!selTpl;
   const [waitSeconds, setWaitSeconds] = useState(0);
   const selectedMethod = sendingMethods.find(m => (m.channelId ? `evolution:${m.channelId}` : 'kapso') === sendingMethodKey);
   const loadSendingMethods = useCallback(async () => {
@@ -1496,8 +1501,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     if (mode === 'delivery_order') return 'tu pedido';
     return '';
   }
-  function varValue(i, contact) {
-    const mode = varMap[i] || (i === 0 ? 'name' : 'fav');
+  function varValue(i, contact, directMode = null) {
+    const mode = directMode || varMap[i] || (i === 0 ? 'name' : 'fav');
     let v;
     if (mode === 'name') v = toTitleCase((contact?.name || 'Cliente').split(' ')[0]);
     else if (mode === 'full_name') v = toTitleCase(contact?.name || 'Cliente');
@@ -1512,9 +1517,26 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     else if (mode === 'text') v = varText[i] || '';
     else v = '';
     v = String(v ?? '').trim();
+    if (directMode) return v;
     if (!v && mode !== 'text') v = String(varFallback[i] || defaultFallback(mode)).trim();
     if (!v) return '';
     return `${varPrefix[i] || ''}${v}${varSuffix[i] || ''}`;
+  }
+
+  function directMessageFor(contact) {
+    return renderDirectMessage(directText, Object.fromEntries(
+      DIRECT_PARAMETERS.map(parameter => [parameter.key, varValue(-1, contact, parameter.mode)])
+    ));
+  }
+
+  function insertParameter(key) {
+    const editor = directEditorRef.current;
+    const result = insertDirectParameter(directText, key, editor?.selectionStart ?? directText.length, editor?.selectionEnd ?? directText.length);
+    setDirectText(result.text);
+    requestAnimationFrame(() => {
+      editor?.focus();
+      editor?.setSelectionRange(result.cursor, result.cursor);
+    });
   }
 
   function updateFixedText(index, value) {
@@ -1626,11 +1648,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   function prepareReview() {
     if (!selectedMethod?.available) { showToast('Selecciona un método de envío conectado', 'error'); return; }
-    if (!selTpl) { showToast('Selecciona un template primero', 'error'); return; }
+    if (!messageReady) { showToast(isDirect ? 'Escribe el mensaje primero' : 'Selecciona un template primero', 'error'); return; }
     if (selectedCount === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
     if (testMode && !TEST_PHONE) { showToast('Ingresa un número de prueba antes de enviar', 'error'); return; }
 
-    const bodyComp = getBodyComponent(selTpl);
+    const bodyComp = isDirect ? null : getBodyComponent(selTpl);
     const variableNumbers = getTemplateVariables(bodyComp?.text || '');
 
     // El modo prueba valida UN mensaje. Antes se conservaba toda la audiencia
@@ -1644,24 +1666,34 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
       const values = Object.fromEntries(variableNumbers.map((number, index) => [number, varValue(index, contact)]));
       const components = buildBodyTemplateComponent(bodyComp?.text || '', values);
-      const previewText = bodyComp?.text ? renderTemplate(bodyComp.text, values) : null;
+      const directMessage = isDirect ? directMessageFor(contact) : null;
+      const previewText = isDirect ? directMessage.text : (bodyComp?.text ? renderTemplate(bodyComp.text, values) : null);
 
       return {
         contact,
         values,
         previewText,
+        missingDirect: directMessage?.missing || [],
         item: {
           phone: testMode && TEST_PHONE ? TEST_PHONE : phone,
           originalPhone: phone,
-          templateName: selTpl.name,
-          languageCode: selTpl.language || 'es',
-          components,
+          ...(isDirect ? { message: previewText } : {
+            templateName: selTpl.name,
+            languageCode: selTpl.language || 'es',
+            components,
+          }),
           contactName: nombre,
           previewText,
           ...((testMode && TEST_PHONE) || paymentRetryPhones.has(normPhone(phone)) ? { force: true } : {}),
         },
       };
     });
+
+    const missingDirect = entries.flatMap(entry => entry.missingDirect.map(key => `${entry.contact?.name || entry.contact?.phone}: {{${key}}}`));
+    if (missingDirect.length) {
+      showToast(`Faltan datos para personalizar: ${missingDirect.slice(0, 3).join(', ')}. Completa el dato o quita ese parámetro.`, 'error');
+      return;
+    }
 
     const missing = entries.flatMap(entry => variableNumbers
       .filter(number => !String(entry.values[number] || '').trim())
@@ -1675,7 +1707,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setGuidedReview(false);
     setReviewedItems(new Set());
     setReviewPlan({
-      templateName: selTpl.name,
+      templateName: isDirect ? 'Mensaje libre · Evolution' : selTpl.name,
       entries,
       sendingProvider: selectedMethod.provider,
       sendingChannelId: selectedMethod.channelId,
@@ -2003,7 +2035,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </button>
 
         {/* Template selector */}
-        {tplLoading ? (
+        {!isDirect && (tplLoading ? (
           <span style={{ color: colors.textMuted, fontSize: '13px' }}>Cargando templates...</span>
         ) : templates.length === 0 ? (
           <span style={{ color: colors.red, fontSize: '13px' }}>Sin templates aprobados</span>
@@ -2016,7 +2048,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               <option key={t.name} value={t.name}>{t.name}</option>
             ))}
           </select>
-        )}
+        ))}
 
         <button
           onClick={() => {
@@ -2051,12 +2083,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </button>
 
         {/* Enviar */}
-        <button onClick={prepareReview} disabled={sending || selectedCount === 0 || !selTpl} style={{
+        <button onClick={prepareReview} disabled={sending || selectedCount === 0 || !messageReady} style={{
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '7px 16px', borderRadius: colors.radiusMd, border: 'none',
-          backgroundColor: (selectedCount > 0 && selTpl) ? colors.green : colors.bgHover,
-          color: (selectedCount > 0 && selTpl) ? '#fff' : colors.textMuted,
-          fontSize: '13px', fontWeight: 700, cursor: (sending || selectedCount === 0 || !selTpl) ? 'not-allowed' : 'pointer',
+          backgroundColor: (selectedCount > 0 && messageReady) ? colors.green : colors.bgHover,
+          color: (selectedCount > 0 && messageReady) ? '#fff' : colors.textMuted,
+          fontSize: '13px', fontWeight: 700, cursor: (sending || selectedCount === 0 || !messageReady) ? 'not-allowed' : 'pointer',
           opacity: sending ? 0.7 : 1,
         }}>
           <Send size={14} />
@@ -2237,7 +2269,24 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       )}
 
       {/* Mapeo de variables del template */}
-      {!loading && selTpl && tplVarCount > 0 && (
+      {isDirect && <section aria-label="Redactar mensaje para Evolution" style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}` }}>
+        <label htmlFor="evolution-message" style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 800 }}>Escribe tu mensaje</label>
+        <p style={{ margin: '6px 0 10px', fontSize: 12, color: colors.textSecondary }}>Texto libre. Puedes insertar estos datos donde quieras; todos son opcionales.</p>
+        <div role="group" aria-label="Insertar dato del cliente" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+          {DIRECT_PARAMETERS.map(parameter => <button key={parameter.key} type="button"
+            onClick={() => insertParameter(parameter.key)} disabled={sending || !!reviewPlan}
+            title={`Insertar {{${parameter.key}}}`}
+            style={{ padding: '5px 9px', borderRadius: 6, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: 12, cursor: 'pointer' }}>
+            + {parameter.label}
+          </button>)}
+        </div>
+        <textarea id="evolution-message" ref={directEditorRef} value={directText} disabled={sending || !!reviewPlan}
+          onChange={event => setDirectText(event.target.value)} rows={6}
+          placeholder="Escribe aquí. Por ejemplo: Hola {{nombre}}, ¿necesitas huevos esta semana?"
+          style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 12, borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5 }} />
+        <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>Los datos se reemplazan por los de cada cliente. Si falta un dato usado, te avisaremos antes de enviar.</div>
+      </section>}
+      {!isDirect && !loading && selTpl && tplVarCount > 0 && (
         <div style={{ padding: '8px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 700 }}>Variables del mensaje:</span>
           {tplVars.map((number, i) => {
@@ -2298,14 +2347,15 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       )}
 
       {/* Vista previa del mensaje */}
-      {!loading && selTpl && (() => {
+      {!loading && (isDirect || selTpl) && (() => {
         const sel = audience;
         if (!sel.length) return null;
         const idx = Math.min(previewIdx, sel.length - 1);
         const c = sel[idx];
-        const bodyComp = getBodyComponent(selTpl);
+        const bodyComp = isDirect ? null : getBodyComponent(selTpl);
         const values = Object.fromEntries(tplVars.map((number, index) => [number, varValue(index, c)]));
-        const text = bodyComp?.text ? renderTemplate(bodyComp.text, values) : '(Este template no tiene cuerpo de texto para previsualizar)';
+        const directPreview = isDirect ? directMessageFor(c) : null;
+        const text = isDirect ? directPreview.text || '(Escribe tu mensaje arriba)' : bodyComp?.text ? renderTemplate(bodyComp.text, values) : '(Este template no tiene cuerpo de texto para previsualizar)';
         const previewParts = bodyComp?.text ? templatePreviewParts(bodyComp.text) : [];
         const variableIndexes = new Map(tplVars.map((number, index) => [number, index]));
         return (
@@ -2343,7 +2393,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               }) : text}
             </div>
             <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
-              Así llega el mensaje; los campos marcados como texto fijo se pueden editar aquí y las demás variables cambian según cada cliente.{testMode && TEST_PHONE ? ` En modo prueba se enviará una sola muestra a ${TEST_PHONE}.` : ''}
+              {isDirect ? 'Así queda tu texto para este cliente.' : 'Así llega el mensaje; los campos marcados como texto fijo se pueden editar aquí y las demás variables cambian según cada cliente.'}{testMode && TEST_PHONE ? ` En modo prueba se enviará una sola muestra a ${TEST_PHONE}.` : ''}
+              {directPreview?.missing.length > 0 && <div role="alert" style={{ color: colors.red, marginTop: 5 }}>Faltan datos: {directPreview.missing.join(', ')}. Completa el dato o quita ese parámetro.</div>}
             </div>
           </div>
         );
@@ -2446,7 +2497,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               </div>
 
               <div style={{ padding: '14px 18px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-                <div style={{ padding: 10, borderRadius: 8, backgroundColor: colors.bgCard }}><div style={{ color: colors.textMuted, fontSize: 11 }}>Template</div><div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 700, wordBreak: 'break-word' }}>{reviewPlan.templateName}</div></div>
+                <div style={{ padding: 10, borderRadius: 8, backgroundColor: colors.bgCard }}><div style={{ color: colors.textMuted, fontSize: 11 }}>{reviewPlan.sendingProvider === 'evolution' ? 'Mensaje' : 'Template'}</div><div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 700, wordBreak: 'break-word' }}>{reviewPlan.templateName}</div></div>
                 <div style={{ padding: 10, borderRadius: 8, backgroundColor: colors.bgCard }}><div style={{ color: colors.textMuted, fontSize: 11 }}>Mensajes</div><div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 700 }}>{reviewPlan.entries.length}</div></div>
                 <div style={{ padding: 10, borderRadius: 8, backgroundColor: colors.bgCard }}><div style={{ color: colors.textMuted, fontSize: 11 }}>Destino</div><div style={{ color: reviewPlan.testMode ? colors.yellow : colors.textPrimary, fontSize: 13, fontWeight: 700 }}>{reviewPlan.testMode ? `Prueba: ${reviewPlan.testPhone}` : 'Clientes seleccionados'}</div></div>
               </div>
