@@ -38,6 +38,25 @@ function consolidateVisibleCandidates(rows = []) {
   }
   return [...grouped.values()];
 }
+
+async function consolidateWithShopifyProfiles(rows = []) {
+  let enriched = rows;
+  try {
+    const response = await api.get('/clientes/all', { timeout: 15000 });
+    const emailByPhone = new Map((response.data?.customers || []).map(customer => [
+      String(customer.phone || '').replace(/\D/g, ''),
+      String(customer.email || '').trim().toLowerCase(),
+    ]));
+    enriched = rows.map(candidate => ({
+      ...candidate,
+      email: candidate.email || emailByPhone.get(String(candidate.phone || '').replace(/\D/g, '')) || null,
+    }));
+  } catch (_) {
+    // El filtro sigue operativo si Shopify no responde; la API de campañas
+    // ya realiza la misma consolidación en el servidor.
+  }
+  return consolidateVisibleCandidates(enriched);
+}
 import { DIRECT_PARAMETERS, renderDirectMessage, insertDirectParameter } from '../utils/direct-message.mjs';
 import * as ui from '../ui.js';
 import {
@@ -155,7 +174,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
       );
 
       if (res.data.refreshing) {
-        setCandidates(consolidateVisibleCandidates(res.data.data || []));
+        setCandidates(await consolidateWithShopifyProfiles(res.data.data || []));
         setFromCache(res.data.fromCache || false);
         setCacheDate(res.data.cacheDate || null);
         setCacheSource(res.data.cacheSource || null);
@@ -167,7 +186,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
             const poll = await api.get(`/reengagement/candidates?identityVersion=${CUSTOMER_IDENTITY_VERSION}`, { timeout: 15000 });
             if (!poll.data.refreshing && poll.data.data?.length > 0) {
               stopPolling();
-              setCandidates(consolidateVisibleCandidates(poll.data.data));
+              setCandidates(await consolidateWithShopifyProfiles(poll.data.data));
               setFromCache(poll.data.fromCache || false);
               setCacheDate(poll.data.cacheDate || null);
               setCacheSource(poll.data.cacheSource || null);
@@ -178,7 +197,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         return;
       }
 
-      setCandidates(consolidateVisibleCandidates(res.data.data || []));
+      setCandidates(await consolidateWithShopifyProfiles(res.data.data || []));
       setFromCache(res.data.fromCache || false);
       setCacheDate(res.data.cacheDate || null);
       setCacheSource(res.data.cacheSource || null);
