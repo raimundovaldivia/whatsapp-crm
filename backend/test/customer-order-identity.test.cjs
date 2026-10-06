@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
 const {
   buildCustomerIdentityMap,
+  consolidateBroadcastContacts,
   consolidateCustomerCandidates,
   loadCustomerIdentityMap,
   resolveCustomerPhones,
@@ -96,4 +97,23 @@ test('cached candidates inherit the Shopify email and consolidate even when cach
   } finally {
     await engine.close();
   }
+});
+
+test('broadcast audience sends once to a Shopify identity and keeps the combined order count', () => {
+  const contacts = consolidateBroadcastContacts([
+    { phone: '56982295945', name: 'Denisse Duhalde', email: 'denisseduhalde@gmail.com', total_orders: 5, last_order_at: '2026-04-06', source: 'shopify' },
+    { phone: '56982294847', name: 'Denisse Duhalde', email: 'denisseduhalde@gmail.com', total_orders: 14, last_order_at: '2026-09-21', source: 'shopify' },
+  ]);
+  assert.equal(contacts.length, 1);
+  assert.equal(contacts[0].phone, '56982294847');
+  assert.equal(contacts[0].total_orders, 19);
+});
+
+test('broadcast audience blocks every alias when one phone opted out or has pending follow-up', () => {
+  const base = [
+    { phone: '56982295945', email: 'denisseduhalde@gmail.com', last_order_at: '2026-04-06' },
+    { phone: '56982294847', email: 'denisseduhalde@gmail.com', last_order_at: '2026-09-21' },
+  ];
+  assert.equal(consolidateBroadcastContacts([{ ...base[0], opt_out: true }, base[1]]).length, 0);
+  assert.equal(consolidateBroadcastContacts([base[0], { ...base[1], has_pending_scheduled: true }]).length, 0);
 });

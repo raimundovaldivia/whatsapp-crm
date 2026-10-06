@@ -10,6 +10,7 @@ const express = require('express');
 const router  = express.Router();
 const db      = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { consolidateBroadcastContacts } = require('../services/customer-identity');
 
 router.use(requireAuth);
 
@@ -327,19 +328,17 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
   const pool = getPool();
   try {
     const { rows } = await pool.query(
-      `SELECT phone, name, email, city, contact_type, client_type,
+      `SELECT phone, name, email, address, address1, city, contact_type, client_type,
               shopify_id, total_orders, last_order_at, opt_out,
+              EXISTS (
+                SELECT 1 FROM scheduled_orders so
+                WHERE so.organization_id = contacts.organization_id
+                  AND so.phone = contacts.phone
+                  AND so.status = 'pending'
+              ) AS has_pending_scheduled,
               CASE WHEN shopify_id IS NOT NULL THEN 'shopify' ELSE 'whatsapp' END AS source
        FROM contacts
        WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
-         AND (opt_out IS NULL OR opt_out = FALSE)
-         -- Excluir contactos con pedido agendado pendiente (ya tienen seguimiento)
-         AND NOT EXISTS (
-           SELECT 1 FROM scheduled_orders so
-           WHERE so.organization_id = contacts.organization_id
-             AND so.phone = contacts.phone
-             AND so.status = 'pending'
-         )
        ORDER BY total_orders DESC NULLS LAST, last_order_at DESC NULLS LAST`,
       [req.orgId]
     );
@@ -359,7 +358,7 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
         seen.set(key, { ...row, phone: key });
       }
     }
-    const contacts = [...seen.values()];
+    const contacts = consolidateBroadcastContacts([...seen.values()]);
 
     const whatsapp = contacts.filter(c => c.source === 'whatsapp').length;
     const shopify  = contacts.filter(c => c.source === 'shopify').length;

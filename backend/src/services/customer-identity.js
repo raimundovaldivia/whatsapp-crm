@@ -173,6 +173,54 @@ function consolidateCustomerCandidates(candidates = [], providedIdentityMap = nu
   return [...grouped.values()];
 }
 
+function consolidateBroadcastContacts(contacts = []) {
+  const identityMap = buildCustomerIdentityMap(contacts.map(contact => ({
+    phone: contact.phone,
+    name: contact.name,
+    email: contact.email,
+    shopifyId: contact.shopify_id,
+    address: contact.address,
+    address1: contact.address1,
+    city: contact.city,
+    lastOrderAt: contact.last_order_at,
+  })));
+  const grouped = new Map();
+
+  for (const contact of contacts) {
+    const phone = normalizePhone(contact.phone);
+    const canonical = identityMap.get(phone) || phone;
+    if (!canonical) continue;
+    const current = grouped.get(canonical);
+    const blocked = Boolean(contact.opt_out || contact.has_pending_scheduled);
+    if (!current) {
+      grouped.set(canonical, {
+        ...contact,
+        phone: canonical,
+        total_orders: Number(contact.total_orders || 0),
+        identity_blocked: blocked,
+      });
+      continue;
+    }
+
+    const contactIsNewer = String(contact.last_order_at || '') > String(current.last_order_at || '');
+    grouped.set(canonical, {
+      ...current,
+      ...(contactIsNewer ? contact : {}),
+      phone: canonical,
+      name: String(contact.name || '').length > String(current.name || '').length ? contact.name : current.name,
+      email: current.email || contact.email || null,
+      shopify_id: current.shopify_id || contact.shopify_id || null,
+      contact_type: current.contact_type === 'customer' || contact.contact_type === 'customer' ? 'customer' : current.contact_type,
+      client_type: current.client_type === 'empresa' || contact.client_type === 'empresa' ? 'empresa' : (current.client_type || contact.client_type),
+      source: current.source === 'shopify' || contact.source === 'shopify' ? 'shopify' : 'whatsapp',
+      total_orders: Number(current.total_orders || 0) + Number(contact.total_orders || 0),
+      identity_blocked: Boolean(current.identity_blocked || blocked),
+    });
+  }
+
+  return [...grouped.values()].filter(contact => !contact.identity_blocked);
+}
+
 async function loadCustomerIdentityMap(pool, orgId, extraRecords = []) {
   const { rows } = await pool.query(
     `SELECT phone, name, email, address, address1, city, shopify_id, last_order_at
@@ -227,6 +275,7 @@ module.exports = {
   normalizeEmail,
   buildCustomerIdentityMap,
   consolidateCustomerCandidates,
+  consolidateBroadcastContacts,
   loadCustomerIdentityMap,
   resolveCustomerPhones,
 };
