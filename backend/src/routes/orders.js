@@ -236,7 +236,8 @@ router.get('/history/:phone', async (req, res) => {
       SELECT id, shopify_order_id, shopify_name, customer_name, total_price,
              financial_status, fulfillment_status, shopify_created_at, items,
              shipping_address1, shipping_city, payment_method, payment_marked_at,
-             payment_cash_amount, payment_transfer_amount, payment_record_source
+             payment_cash_amount, payment_transfer_amount, payment_record_source,
+             crm_status, delivered_at
       FROM shopify_orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])
@@ -247,7 +248,7 @@ router.get('/history/:phone', async (req, res) => {
     const { rows: botOrders } = await pool.query(`
       SELECT id, customer_name, total_price, status, created_at, items, shipping_address,
              payment_method, payment_marked_at, payment_cash_amount,
-             payment_transfer_amount, payment_record_source
+             payment_transfer_amount, payment_record_source, delivered_at
       FROM orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])

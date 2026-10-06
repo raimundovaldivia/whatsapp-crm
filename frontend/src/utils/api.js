@@ -139,6 +139,7 @@ export const metaAPI = {
   authUrl:      () => api.get('/meta/auth-url').then(r => r.data.url),
   assets:       () => api.get('/meta/assets').then(r => r.data),
   selectAssets: data => api.patch('/meta/assets', data).then(r => r.data),
+  activateWhatsApp: data => api.post('/meta/whatsapp/activate', data).then(r => r.data),
   disconnect:   () => api.delete('/meta/connection').then(r => r.data),
   threads:      () => api.get('/meta/threads').then(r => r.data.threads),
   messages:     id => api.get(`/meta/threads/${id}/messages`).then(r => r.data.messages),

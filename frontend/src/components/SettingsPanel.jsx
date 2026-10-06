@@ -12,7 +12,7 @@ import {
   Bot, X, Send, RotateCcw, FlaskConical, Store, LayoutGrid,
   QrCode, Plus, Radio,
 } from 'lucide-react';
-import { setupAPI, api, storeSettingsAPI, settingsAPI } from '../utils/api.js';
+import { setupAPI, api, storeSettingsAPI, settingsAPI, metaAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
@@ -547,6 +547,13 @@ function WhatsAppTab() {
   const [businessAccountId,  setBusinessAccountId]  = useState('');
   const [accessToken,        setAccessToken]        = useState('');
   const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
+  const [metaStatus,         setMetaStatus]         = useState(null);
+  const [metaAssets,         setMetaAssets]         = useState(null);
+  const [metaWabaId,         setMetaWabaId]         = useState('');
+  const [metaPhoneId,        setMetaPhoneId]        = useState('');
+  const [metaLoading,        setMetaLoading]        = useState(true);
+  const [metaActivating,     setMetaActivating]     = useState(false);
+  const [metaActivation,     setMetaActivation]     = useState(null);
 
   // Twilio fields
   const [twilioSid,   setTwilioSid]   = useState('');
@@ -564,6 +571,11 @@ function WhatsAppTab() {
   const [wabaIdSuccess,   setWabaIdSuccess]   = useState('');
 
   const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', padding: undefined });
+  const metaSelect = {
+    width: '100%', backgroundColor: colors.bgSub, border: `1px solid ${colors.borderStrong}`,
+    borderRadius: '7px', padding: '8px 10px', color: colors.textPrimary,
+    fontSize: '12px', outline: 'none', boxSizing: 'border-box',
+  };
 
   const loadConfig = () => {
     api.get('/settings/whatsapp').then(r => {
@@ -587,6 +599,59 @@ function WhatsAppTab() {
   };
 
   useEffect(() => { loadConfig(); }, []);
+
+  const loadMetaConnection = async () => {
+    setMetaLoading(true);
+    try {
+      const status = await metaAPI.status();
+      setMetaStatus(status);
+      if (status.connected) setMetaAssets(await metaAPI.assets());
+      else setMetaAssets(null);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo consultar la conexión de Meta');
+    } finally { setMetaLoading(false); }
+  };
+
+  useEffect(() => { loadMetaConnection(); }, []);
+
+  useEffect(() => {
+    const accounts = metaAssets?.whatsappAccounts || [];
+    if (!accounts.length) return;
+    setMetaWabaId(current => current || businessAccountId || String(accounts[0].id));
+  }, [metaAssets, businessAccountId]);
+
+  useEffect(() => {
+    const account = (metaAssets?.whatsappAccounts || []).find(item => String(item.id) === String(metaWabaId));
+    const phones = account?.phone_numbers || [];
+    if (!phones.some(item => String(item.id) === String(metaPhoneId))) {
+      const saved = phones.find(item => String(item.id) === String(phoneNumberId));
+      setMetaPhoneId(saved ? String(saved.id) : (phones[0] ? String(phones[0].id) : ''));
+    }
+  }, [metaAssets, metaWabaId, metaPhoneId, phoneNumberId]);
+
+  const connectMeta = async () => {
+    setError('');
+    try { window.location.assign(await metaAPI.authUrl()); }
+    catch (err) { setError(err.response?.data?.error || 'No se pudo iniciar la autorización de Meta'); }
+  };
+
+  const activateMetaWhatsApp = async () => {
+    setMetaActivating(true); setError(''); setSuccess(''); setMetaActivation(null);
+    try {
+      const result = await metaAPI.activateWhatsApp({ businessAccountId: metaWabaId, phoneNumberId: metaPhoneId });
+      const data = result.data || {};
+      setBusinessAccountId(data.businessAccountId || metaWabaId);
+      setPhoneNumberId(data.phoneNumberId || metaPhoneId);
+      setDisplayPhone(String(data.displayPhoneNumber || '').replace(/\D/g, ''));
+      setSavedProvider('meta');
+      setProvider('meta');
+      setMetaActivation(data);
+      setSuccess(`✅ ${result.message}`);
+      await loadConfig();
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo activar WhatsApp Business');
+    } finally { setMetaActivating(false); }
+  };
 
   const save = async () => {
     setSaving(true); setError(''); setSuccess(''); setTestResult(null);
@@ -816,8 +881,63 @@ function WhatsAppTab() {
             </>
           ) : provider === 'meta' ? (
             <>
+              <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${metaStatus?.connected ? colors.green + '55' : colors.border}`, borderRadius: '10px', padding: '14px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <MessageCircle size={18} color={metaStatus?.connected ? colors.green : colors.textSecondary} />
+                  <div style={{ flex: 1, minWidth: '190px' }}>
+                    <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 700 }}>Conectar con la cuenta de Meta</div>
+                    <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '3px' }}>
+                      {metaLoading ? 'Comprobando autorización…' : metaStatus?.connected
+                        ? `Meta autorizado como ${metaStatus.connection?.facebook_user_name || 'administrador'}`
+                        : 'Autoriza Facebook, Instagram y WhatsApp Business en un solo acceso.'}
+                    </div>
+                  </div>
+                  <button onClick={connectMeta} disabled={metaLoading}
+                    style={{ backgroundColor: metaStatus?.connected ? colors.bgSub : colors.green, color: metaStatus?.connected ? colors.green : 'white', border: `1px solid ${colors.green}66`, borderRadius: '7px', padding: '8px 12px', fontSize: '12px', fontWeight: 700, cursor: metaLoading ? 'wait' : 'pointer' }}>
+                    {metaStatus?.connected ? 'Reautorizar Meta' : 'Conectar Meta'}
+                  </button>
+                </div>
+
+                {metaStatus?.connected && (metaAssets?.whatsappAccounts || []).length > 0 && (
+                  <div style={{ marginTop: '14px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '10px' }}>
+                    <label style={{ fontSize: '11px', color: colors.textSecondary }}>
+                      Cuenta de WhatsApp Business
+                      <select value={metaWabaId} onChange={e => setMetaWabaId(e.target.value)} style={{ ...metaSelect, marginTop: '5px' }}>
+                        {(metaAssets.whatsappAccounts || []).map(account => <option key={account.id} value={account.id}>{account.name || account.id}</option>)}
+                      </select>
+                    </label>
+                    <label style={{ fontSize: '11px', color: colors.textSecondary }}>
+                      Número de WhatsApp
+                      <select value={metaPhoneId} onChange={e => setMetaPhoneId(e.target.value)} style={{ ...metaSelect, marginTop: '5px' }}>
+                        {((metaAssets.whatsappAccounts || []).find(account => String(account.id) === String(metaWabaId))?.phone_numbers || []).map(phone => (
+                          <option key={phone.id} value={phone.id}>{phone.verified_name || 'WhatsApp'} · {phone.display_phone_number || phone.id}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button onClick={activateMetaWhatsApp} disabled={metaActivating || !metaPhoneId}
+                      style={{ gridColumn: '1 / -1', justifySelf: 'start', backgroundColor: colors.green, color: 'white', border: 'none', borderRadius: '8px', padding: '9px 14px', fontSize: '12px', fontWeight: 700, cursor: metaActivating || !metaPhoneId ? 'not-allowed' : 'pointer', opacity: metaActivating || !metaPhoneId ? 0.65 : 1 }}>
+                      {metaActivating ? 'Activando…' : 'Activar WhatsApp Business en la app'}
+                    </button>
+                  </div>
+                )}
+
+                {metaStatus?.connected && !metaLoading && (metaAssets?.whatsappAccounts || []).length === 0 && (
+                  <div style={{ marginTop: '12px', padding: '9px 11px', borderRadius: '7px', backgroundColor: `${colors.yellow}14`, color: colors.yellow, fontSize: '11px', lineHeight: 1.5 }}>
+                    No encontramos una cuenta de WhatsApp Business autorizada. Pulsa “Reautorizar Meta” para aceptar los permisos de WhatsApp; si aún no aparece, agrega primero el número en WhatsApp Manager.
+                    {metaAssets?.whatsappError ? <div style={{ marginTop: 4, color: colors.textMuted }}>{metaAssets.whatsappError}</div> : null}
+                  </div>
+                )}
+
+                {metaActivation && (
+                  <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '7px', backgroundColor: `${colors.green}12`, border: `1px solid ${colors.green}44`, color: colors.textSecondary, fontSize: '11px', lineHeight: 1.6 }}>
+                    <strong style={{ color: colors.green }}>Número activado.</strong> Webhook: <code>{metaActivation.webhookUrl}</code><br />
+                    Token de verificación: <code>{metaActivation.webhookVerifyToken}</code>
+                  </div>
+                )}
+              </div>
+
               <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.7 }}>
-                Obtén estos datos en{' '}
+                Configuración manual de respaldo. Obtén estos datos en{' '}
                 <a href="https://developers.facebook.com/apps" target="_blank" rel="noreferrer" style={{ color: colors.green }}>Meta for Developers</a>
                 {' '}→ tu app → WhatsApp → Configuración de la API.
               </div>

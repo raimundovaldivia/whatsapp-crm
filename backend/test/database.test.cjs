@@ -16,6 +16,17 @@ test('PostgreSQL migrations, tenant payment isolation, rollback and expense idem
     await setup.setupDatabase(); // Migration must also be safe on the next boot.
     await engine.exec("INSERT INTO organizations (id,name,slug) VALUES (1,'A','a'),(2,'B','b'); INSERT INTO conversations(id,organization_id,phone_number) VALUES (1,1,'111'),(2,2,'222'); INSERT INTO orders(id,organization_id,conversation_id,items,total_price,status) VALUES (1,1,1,'[]','100','sent'),(2,2,2,'[]','100','sent'); INSERT INTO payment_proofs(id,organization_id,conversation_id,order_id,media_id) VALUES (1,1,1,1,'m1'),(2,2,2,2,'m2');");
     const db=load('src/db/database.js',{pg:{Pool}});
+    await engine.exec(`INSERT INTO shopify_orders
+      (organization_id,shopify_order_id,shopify_name,financial_status,fulfillment_status,
+       payment_marked_at,payment_record_source,delivered_at)
+      VALUES (1,'sync-safe','#SAFE','paid','fulfilled',NOW(),'manual_history',NOW())`);
+    await db.upsertShopifyOrders(1,[{
+      id:'sync-safe',name:'#SAFE',financialStatus:'pending',fulfillmentStatus:'unfulfilled',
+      totalPrice:100,customer:{},items:[],createdAt:'2026-10-01T12:00:00Z'
+    }]);
+    const preserved=(await engine.query("SELECT financial_status,fulfillment_status FROM shopify_orders WHERE shopify_order_id='sync-safe'")).rows[0];
+    assert.equal(preserved.financial_status,'paid');
+    assert.equal(preserved.fulfillment_status,'fulfilled');
     await engine.query("SELECT setval(pg_get_serial_sequence('orders','id'), 2, true)");
     await engine.exec(`UPDATE conversations SET pipeline_state='collecting_order', order_draft='{"items":[{"product_name":"pedido viejo","quantity":1}]}' WHERE id=1`);
     await db.createOrder({ conversationId:1, organizationId:1, items:[{name:'Pedido real',quantity:1,price:100}], customerName:'Cliente', customerPhone:'111', shippingAddress:{address:'Test'}, totalPrice:100 });

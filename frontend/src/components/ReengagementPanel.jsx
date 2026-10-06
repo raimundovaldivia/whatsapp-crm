@@ -1297,11 +1297,38 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [deliveryPhones, setDeliveryPhones] = useState(null); // no entregados en la ruta de ayer
   const [deliveryCases, setDeliveryCases] = useState(new Map());
   const [deliveryBusy, setDeliveryBusy] = useState(false);
+  const [contactOrders, setContactOrders] = useState(null);
+  const [contactOrdersLoading, setContactOrdersLoading] = useState(false);
+  const [contactOrdersError, setContactOrdersError] = useState('');
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 5000);
   };
+
+  async function openContactOrders(event, contact) {
+    event.stopPropagation();
+    setContactOrders({ contact, data: null });
+    setContactOrdersLoading(true);
+    setContactOrdersError('');
+    try {
+      const response = await api.get(`/orders/history/${encodeURIComponent(contact.phone)}`);
+      setContactOrders({ contact, data: response.data?.data || null });
+    } catch (error) {
+      setContactOrdersError(error.response?.data?.error || 'No se pudieron cargar los pedidos.');
+    } finally {
+      setContactOrdersLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!contactOrders) return undefined;
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setContactOrders(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [contactOrders]);
 
   const loadCampaigns = useCallback(() => {
     setCampaignsLoading(true);
@@ -2506,9 +2533,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 )}
               </div>
               {c.total_orders > 0 && (
-                <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: colors.radiusSm, padding: '2px 6px' }}>
+                <button type="button" onClick={event => openContactOrders(event, c)} title="Ver pedidos de esta persona"
+                  style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: colors.radiusSm, padding: '3px 8px', border: `1px solid ${colors.green}33`, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                   {c.total_orders} pedidos
-                </span>
+                </button>
               )}
               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '5px', backgroundColor: c.contact_type === 'customer' ? `${colors.green}22` : `${colors.blue}22`, color: c.contact_type === 'customer' ? colors.green : colors.blue }}>
                 {c.contact_type === 'customer' ? 'Cliente' : 'Lead'}
@@ -2521,6 +2549,89 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         })}
       </div>
       </div>
+
+      {contactOrders && (
+        <div role="dialog" aria-modal="true" aria-label={`Pedidos de ${contactOrders.contact.name || contactOrders.contact.phone}`}
+          onClick={() => setContactOrders(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 10020, backgroundColor: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18 }}>
+          <div onClick={event => event.stopPropagation()}
+            style={{ width: 'min(760px, 96vw)', maxHeight: '88vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, boxShadow: '0 22px 70px rgba(0,0,0,0.55)' }}>
+            <div style={{ padding: '15px 18px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <ShoppingBag size={18} color={colors.green} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: colors.textPrimary, fontSize: 15, fontWeight: 800 }}>Pedidos de {toTitleCase(contactOrders.contact.name) || 'esta persona'}</div>
+                <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>{contactOrders.contact.phone} · Vista de solo lectura</div>
+              </div>
+              <button type="button" onClick={() => setContactOrders(null)} aria-label="Cerrar pedidos"
+                style={{ border: 'none', background: 'transparent', color: colors.textMuted, cursor: 'pointer', padding: 5 }}><X size={19} /></button>
+            </div>
+
+            <div style={{ overflowY: 'auto', padding: 16 }}>
+              {contactOrdersLoading ? (
+                <div style={{ minHeight: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: colors.textSecondary }}>
+                  <Loader size={18} style={{ animation: 'spin 1s linear infinite' }} /> Cargando pedidos…
+                </div>
+              ) : contactOrdersError ? (
+                <div role="alert" style={{ padding: 14, color: colors.red, backgroundColor: `${colors.red}12`, border: `1px solid ${colors.red}44`, borderRadius: 9 }}>{contactOrdersError}</div>
+              ) : (() => {
+                const data = contactOrders.data || {};
+                const orders = [
+                  ...(data.shopifyOrders || []).map(order => ({ ...order, source: 'Shopify', date: order.shopify_created_at, status: order.financial_status, deliveryStatus: order.delivered_at ? 'ENTREGADO' : (order.crm_status || order.fulfillment_status) })),
+                  ...(data.botOrders || []).map(order => ({ ...order, source: 'Bot', date: order.created_at, status: order.status, deliveryStatus: order.delivered_at || String(order.status || '').toUpperCase() === 'PAID' ? 'ENTREGADO' : order.status })),
+                ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+                const total = orders.reduce((sum, order) => sum + Number(order.total_price || 0), 0);
+                const statusText = value => {
+                  const key = String(value || '').toUpperCase();
+                  return ({ PAID: 'Pagado', PAYMENT_RECEIVED: 'Pago recibido', PENDING: 'Pago pendiente', REFUNDED: 'Reembolsado', VOIDED: 'Anulado', FULFILLED: 'Entregado', PARTIALLY_FULFILLED: 'Entrega parcial', UNFULFILLED: 'Pendiente de entrega', ENTREGADO: 'Entregado', EN_CAMINO: 'En camino', POR_DESPACHAR: 'Por despachar', NUEVO: 'Nuevo', SENT: 'Enviado', DRAFT: 'Borrador', CANCELLED: 'Cancelado' })[key]
+                    || (key ? key.replaceAll('_', ' ').toLowerCase().replace(/^./, char => char.toUpperCase()) : 'Sin información');
+                };
+                const parseItems = raw => {
+                  try {
+                    const value = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+                    return Array.isArray(value) ? value : [];
+                  } catch { return []; }
+                };
+                if (!orders.length) return <div style={{ padding: 50, textAlign: 'center', color: colors.textMuted }}>No hay pedidos registrados para esta persona.</div>;
+                return <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 8, marginBottom: 14 }}>
+                    {[
+                      ['Pedidos visibles', orders.length],
+                      ['Total registrado', `$${Math.round(total).toLocaleString('es-CL')}`],
+                      ['Último pedido', orders[0]?.date ? new Date(orders[0].date).toLocaleDateString('es-CL') : '—'],
+                    ].map(([label, value]) => <div key={label} style={{ padding: 10, borderRadius: 9, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+                      <div style={{ color: colors.textMuted, fontSize: 10 }}>{label}</div>
+                      <div style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 800, marginTop: 3 }}>{value}</div>
+                    </div>)}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {orders.map((order, index) => {
+                      const items = parseItems(order.items);
+                      const payment = statusText(order.status);
+                      const delivery = statusText(order.deliveryStatus);
+                      const paid = ['PAID', 'PAYMENT_RECEIVED'].includes(String(order.status || '').toUpperCase());
+                      const delivered = ['FULFILLED', 'ENTREGADO', 'PAID'].includes(String(order.deliveryStatus || '').toUpperCase());
+                      return <div key={`${order.source}_${order.id || order.shopify_order_id || index}`} style={{ padding: '12px 13px', borderRadius: 10, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                          <div>
+                            <span style={{ color: colors.textPrimary, fontSize: 12, fontWeight: 800 }}>{order.shopify_name || `Pedido #${order.id}`}</span>
+                            <span style={{ color: colors.textMuted, fontSize: 10, marginLeft: 7 }}>{order.source} · {order.date ? new Date(order.date).toLocaleDateString('es-CL') : 'Sin fecha'}</span>
+                          </div>
+                          <strong style={{ color: colors.textPrimary, fontSize: 13 }}>${Number(order.total_price || 0).toLocaleString('es-CL')}</strong>
+                        </div>
+                        {items.length > 0 && <div style={{ color: colors.textSecondary, fontSize: 11, marginTop: 7 }}>{items.map(item => `${item.quantity || 1}× ${item.name || item.title || 'Producto'}`).join(' · ')}</div>}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                          <span style={{ fontSize: 10, fontWeight: 750, color: paid ? colors.green : colors.yellow, backgroundColor: paid ? `${colors.green}16` : `${colors.yellow}16`, borderRadius: 999, padding: '3px 7px' }}>Pago: {payment}</span>
+                          <span style={{ fontSize: 10, fontWeight: 750, color: delivered ? colors.green : colors.blue, backgroundColor: delivered ? `${colors.green}16` : `${colors.blue}16`, borderRadius: 999, padding: '3px 7px' }}>Entrega: {delivery}</span>
+                        </div>
+                      </div>;
+                    })}
+                  </div>
+                </>;
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmación intermedia: esta instantánea es exactamente la que se enviará. */}
       {reviewPlan && (() => {

@@ -2,7 +2,8 @@ const express = require('express');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { getPool } = require('../db/database');
+const db = require('../db/database');
+const { getPool } = db;
 const { requireAuth, requireRole, JWT_SECRET } = require('../middleware/auth');
 const meta = require('../services/meta-platform');
 
@@ -12,6 +13,7 @@ const SCOPES = [
   'pages_messaging', 'pages_manage_posts',
   'instagram_basic', 'instagram_manage_messages', 'instagram_content_publish',
   'ads_read', 'ads_management', 'business_management',
+  'whatsapp_business_management', 'whatsapp_business_messaging',
 ];
 
 function publicUrl() {
@@ -36,6 +38,36 @@ async function getConnection(orgId, includeSecrets = false) {
   return rows[0] || null;
 }
 
+async function fetchWhatsappAssets(userToken) {
+  const businesses = await meta.graphGet('me/businesses', userToken, { fields: 'id,name', limit: 100 });
+  const accounts = new Map();
+  for (const business of businesses.data || []) {
+    for (const edge of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      try {
+        const result = await meta.graphGet(`${business.id}/${edge}`, userToken, {
+          fields: 'id,name,currency,timezone_id', limit: 100,
+        });
+        for (const account of result.data || []) {
+          if (!accounts.has(account.id)) accounts.set(account.id, { ...account, business_id: business.id, business_name: business.name, phone_numbers: [] });
+        }
+      } catch (error) {
+        console.warn(`[Meta] No se pudo consultar ${edge} de ${business.id}:`, meta.graphError(error));
+      }
+    }
+  }
+  for (const account of accounts.values()) {
+    try {
+      const phones = await meta.graphGet(`${account.id}/phone_numbers`, userToken, {
+        fields: 'id,display_phone_number,verified_name,quality_rating,code_verification_status', limit: 100,
+      });
+      account.phone_numbers = phones.data || [];
+    } catch (error) {
+      console.warn(`[Meta] No se pudieron listar números de WABA ${account.id}:`, meta.graphError(error));
+    }
+  }
+  return [...accounts.values()];
+}
+
 async function fetchAssets(userToken) {
   const profile = await meta.graphGet('me', userToken, { fields: 'id,name' });
   const pages = await meta.graphGet('me/accounts', userToken, {
@@ -50,7 +82,15 @@ async function fetchAssets(userToken) {
   } catch (error) {
     console.warn('[Meta] No se pudieron listar cuentas publicitarias:', meta.graphError(error));
   }
-  return { profile, pages: pages.data || [], adAccounts: adAccounts.data || [] };
+  let whatsappAccounts = [];
+  let whatsappError = null;
+  try {
+    whatsappAccounts = await fetchWhatsappAssets(userToken);
+  } catch (error) {
+    whatsappError = meta.graphError(error);
+    console.warn('[Meta] No se pudieron listar cuentas de WhatsApp:', whatsappError);
+  }
+  return { profile, pages: pages.data || [], adAccounts: adAccounts.data || [], whatsappAccounts, whatsappError };
 }
 
 // Callback público: Meta redirige aquí después del login.
@@ -96,7 +136,7 @@ router.get('/callback', async (req, res) => {
         page?.name || null, meta.encryptToken(page?.access_token), instagram?.id || null, instagram?.username || null,
         adAccount?.id || null, adAccount?.name || null, SCOPES, JSON.stringify({ pages: assets.pages.map(p => ({
           id: p.id, name: p.name, tasks: p.tasks, instagram: p.instagram_business_account || null,
-        })), adAccounts: assets.adAccounts }), expiresAt]
+        })), adAccounts: assets.adAccounts, whatsappAccounts: assets.whatsappAccounts }), expiresAt]
     );
 
     if (page?.id && page?.access_token) {
@@ -146,8 +186,58 @@ router.get('/assets', requireRole('owner', 'admin'), async (req, res) => {
     const connection = await getConnection(req.orgId, true);
     if (!connection) return res.status(404).json({ error: 'Meta no está conectado' });
     const assets = await fetchAssets(meta.decryptToken(connection.user_access_token));
-    res.json({ pages: assets.pages.map(p => ({ id: p.id, name: p.name, tasks: p.tasks, instagram: p.instagram_business_account || null })), adAccounts: assets.adAccounts });
+    res.json({
+      pages: assets.pages.map(p => ({ id: p.id, name: p.name, tasks: p.tasks, instagram: p.instagram_business_account || null })),
+      adAccounts: assets.adAccounts,
+      whatsappAccounts: assets.whatsappAccounts,
+      whatsappError: assets.whatsappError,
+    });
   } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
+});
+
+router.post('/whatsapp/activate', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const wabaId = String(req.body.businessAccountId || '').trim();
+    const phoneId = String(req.body.phoneNumberId || '').trim();
+    if (!wabaId || !phoneId) return res.status(400).json({ error: 'Selecciona una cuenta de WhatsApp Business y un número' });
+
+    const connection = await getConnection(req.orgId, true);
+    if (!connection || connection.status !== 'connected') return res.status(400).json({ error: 'Conecta Meta antes de activar WhatsApp Business' });
+    const token = meta.decryptToken(connection.user_access_token);
+    const accounts = await fetchWhatsappAssets(token);
+    const account = accounts.find(item => String(item.id) === wabaId);
+    const phone = account?.phone_numbers?.find(item => String(item.id) === phoneId);
+    if (!account || !phone) return res.status(400).json({ error: 'El número seleccionado no pertenece a los activos autorizados' });
+
+    // Suscribe el WABA a los webhooks de esta app. La URL y el token de
+    // verificación se configuran una sola vez en Meta for Developers.
+    await meta.graphPost(`${wabaId}/subscribed_apps`, token);
+    const existing = await db.getWhatsappConfig(req.orgId);
+    const verifyToken = process.env.WEBHOOK_VERIFY_TOKEN || existing?.webhook_verify_token || crypto.randomBytes(24).toString('hex');
+    await db.upsertWhatsappConfig(req.orgId, {
+      provider: 'meta',
+      phoneNumberId: phoneId,
+      businessAccountId: wabaId,
+      accessToken: token,
+      webhookVerifyToken: verifyToken,
+      displayPhoneNumber: String(phone.display_phone_number || '').replace(/\D/g, '') || null,
+    });
+
+    res.json({
+      success: true,
+      message: `WhatsApp Business activado · ${phone.verified_name || phone.display_phone_number || phoneId}`,
+      data: {
+        businessAccountId: wabaId,
+        businessAccountName: account.name || null,
+        phoneNumberId: phoneId,
+        displayPhoneNumber: phone.display_phone_number || null,
+        webhookUrl: `${publicUrl()}/webhook`,
+        webhookVerifyToken: verifyToken,
+      },
+    });
+  } catch (error) {
+    res.status(502).json({ error: meta.graphError(error) });
+  }
 });
 
 router.patch('/assets', requireRole('owner', 'admin'), async (req, res) => {

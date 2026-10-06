@@ -1728,8 +1728,19 @@ async function upsertShopifyOrders(orgId, orders) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
        ON CONFLICT (organization_id, shopify_order_id) DO UPDATE SET
          shopify_name        = EXCLUDED.shopify_name,
-         financial_status    = EXCLUDED.financial_status,
-         fulfillment_status  = EXCLUDED.fulfillment_status,
+         -- La importación refresca el espejo de Shopify, pero nunca debe
+         -- deshacer estados de pago o entrega ya confirmados dentro del CRM.
+         financial_status    = CASE
+           WHEN shopify_orders.payment_marked_at IS NOT NULL
+             OR shopify_orders.payment_record_source IS NOT NULL
+           THEN shopify_orders.financial_status
+           ELSE EXCLUDED.financial_status
+         END,
+         fulfillment_status  = CASE
+           WHEN shopify_orders.delivered_at IS NOT NULL
+           THEN shopify_orders.fulfillment_status
+           ELSE EXCLUDED.fulfillment_status
+         END,
          total_price         = EXCLUDED.total_price,
          customer_name       = EXCLUDED.customer_name,
          customer_email      = EXCLUDED.customer_email,

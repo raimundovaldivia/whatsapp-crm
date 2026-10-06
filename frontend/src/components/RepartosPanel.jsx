@@ -1055,6 +1055,9 @@ function chargeInfo(row) {
   if (row.paid) return { label: 'Pagado', color: '#22c55e', icon: '✅' };
   if (row.payment_method === 'efectivo') return { label: 'Efectivo al entregar', color: '#22c55e', icon: '💵' };
   if (!['transferencia', 'mixto'].includes(row.payment_method)) return null;
+  if (['pending', 'pre_verified'].includes(row.proof_status)) {
+    return { label: 'Transferencia por verificar', color: '#a78bfa', icon: '🔎' };
+  }
   const state = row.charge?.status;
   if (state === 'failed') return { label: `Cobro no enviado${row.charge.error?.code ? ` (${row.charge.error.code})` : ''} — reintentar`, color: '#f87171', icon: '⚠️' };
   if (state === 'pending' || state === 'sent') return { label: 'Cobro pendiente de entrega', color: '#fbbf24', icon: '⏳' };
