@@ -259,6 +259,9 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
   const extraPrompt   = await db.getSetting(orgId, 'ai_system_prompt_extra') || '';
+  const cheeseWeight = await db.getSetting(orgId, 'goat_cheese_weight');
+  const catalogFacts = cheeseWeight ? `Ficha general confirmada: cada pieza de queso de cabra fresco pasteurizado pesa ${cheeseWeight}. Esta especificación prevalece sobre pesos antiguos del historial, catálogo importado o promociones. No afirmes que pesa 800 g ni que tiene un peso fijo. No extrapoles este dato al queso de vaca ni a presentaciones especiales acordadas con clientes.` : '';
+
   const botRulesRaw   = await db.getSetting(orgId, 'bot_improvement_rules');
   let botRulesSection = '';
   try {
@@ -591,7 +594,7 @@ Reglas estrictas:
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
-  const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts].filter(Boolean).join('\n\n---\n\n');
 
   if (isSoftFutureIntent(userMessage) && !['collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
     if (currentState !== 'scheduled') await db.updatePipelineState(conversationId, 'future_interest');

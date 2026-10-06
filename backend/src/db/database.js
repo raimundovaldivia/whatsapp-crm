@@ -904,7 +904,9 @@ async function cacheProducts(orgId, dataSourceId, products) {
 }
 
 async function getCachedProducts(orgId) {
-  return query('SELECT * FROM products_cache WHERE organization_id = $1 ORDER BY title ASC', [orgId]);
+  const rows = await query('SELECT * FROM products_cache WHERE organization_id = $1 ORDER BY title ASC', [orgId]);
+  const weight = await getSetting(orgId, 'goat_cheese_weight');
+  return weight ? rows.map(row => require('../services/catalog-facts').applyCheeseWeight(row, weight)) : rows;
 }
 
 async function getProductsCacheAge(orgId) {

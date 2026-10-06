@@ -706,6 +706,18 @@ async function setupDatabase() {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT FALSE;
       ALTER TABLE products_cache ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT FALSE;
 
+      -- Confirmed general product specification, scoped to Diez Ríos (not customer-specific SKUs).
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'goat_cheese_weight', '900 g–1 kg' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO NOTHING;
+      UPDATE products p SET title = 'Queso de Cabra Fresco Pasteurizado – 900 g–1 kg',
+        description = 'Queso fresco elaborado con leche de cabra pasteurizada. Peso por pieza: entre 900 g y 1 kg.',
+        updated_at = NOW()
+      FROM organizations o WHERE p.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND p.id = 11 AND p.is_business IS NOT TRUE AND p.title ILIKE '%queso de cabra%'
+        AND p.title NOT LIKE '%900 g–1 kg%';
+
+
       -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos)
       -- Eliminar primero los que quedarían duplicados tras normalizar
 
