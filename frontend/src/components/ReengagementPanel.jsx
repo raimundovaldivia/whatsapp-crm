@@ -9,6 +9,35 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience } from '../utils/broadcast-audience.mjs';
+
+function consolidateVisibleCandidates(rows = []) {
+  const grouped = new Map();
+  for (const candidate of rows) {
+    const email = String(candidate.email || '').trim().toLowerCase();
+    const key = email && email.includes('@') ? `email:${email}` : `phone:${String(candidate.phone || '').replace(/\D/g, '')}`;
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, { ...candidate, recentOrders: [...(candidate.recentOrders || [])] });
+      continue;
+    }
+    const newer = String(candidate.lastOrderDate || '') > String(current.lastOrderDate || '');
+    const totalOrders = Number(current.totalOrders || 0) + Number(candidate.totalOrders || 0);
+    const totalSpent = Number(current.totalSpent || 0) + Number(candidate.totalSpent || 0);
+    grouped.set(key, {
+      ...current,
+      ...(newer ? candidate : {}),
+      phone: newer ? candidate.phone : current.phone,
+      name: String(candidate.name || '').length > String(current.name || '').length ? candidate.name : current.name,
+      email: current.email || candidate.email,
+      totalOrders,
+      totalSpent,
+      avgOrderVal: totalOrders ? Math.round(totalSpent / totalOrders) : 0,
+      recentOrders: [...(current.recentOrders || []), ...(candidate.recentOrders || [])]
+        .sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 5),
+    });
+  }
+  return [...grouped.values()];
+}
 import { DIRECT_PARAMETERS, renderDirectMessage, insertDirectParameter } from '../utils/direct-message.mjs';
 import * as ui from '../ui.js';
 import {
@@ -124,7 +153,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
       );
 
       if (res.data.refreshing) {
-        setCandidates(res.data.data || []);
+        setCandidates(consolidateVisibleCandidates(res.data.data || []));
         setFromCache(res.data.fromCache || false);
         setCacheDate(res.data.cacheDate || null);
         setCacheSource(res.data.cacheSource || null);
@@ -136,7 +165,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
             const poll = await api.get('/reengagement/candidates', { timeout: 15000 });
             if (!poll.data.refreshing && poll.data.data?.length > 0) {
               stopPolling();
-              setCandidates(poll.data.data);
+              setCandidates(consolidateVisibleCandidates(poll.data.data));
               setFromCache(poll.data.fromCache || false);
               setCacheDate(poll.data.cacheDate || null);
               setCacheSource(poll.data.cacheSource || null);
@@ -147,7 +176,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         return;
       }
 
-      setCandidates(res.data.data || []);
+      setCandidates(consolidateVisibleCandidates(res.data.data || []));
       setFromCache(res.data.fromCache || false);
       setCacheDate(res.data.cacheDate || null);
       setCacheSource(res.data.cacheSource || null);
