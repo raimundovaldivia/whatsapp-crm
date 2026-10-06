@@ -18,6 +18,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
 const campaignGuard = require('../services/broadcast-campaign-guard');
+const { buildCustomerIdentityMap } = require('../services/customer-identity');
 const {
   getBodyComponent,
   getMissingBodyParameters,
@@ -455,7 +456,7 @@ function normalizePhone(raw) {
   return p.length >= 8 ? p : null;
 }
 
-function buildCustomerStats(orders) {
+function buildCustomerStats(orders, identityMap = new Map()) {
   const map = new Map();
   const DOW = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
 
@@ -466,7 +467,8 @@ function buildCustomerStats(orders) {
       order.billingAddress?.phone ||
       null;
 
-    const phone = normalizePhone(rawPhone);
+    const normalizedPhone = normalizePhone(rawPhone);
+    const phone = identityMap.get(normalizedPhone) || normalizedPhone;
     if (!phone) continue;
 
     const name =
@@ -773,7 +775,21 @@ async function runFullAnalysis(orgId, ds) {
     };
   });
 
-  const allStats = buildCustomerStats(allOrders);
+  const { rows: identityContacts } = await pool.query(
+    `SELECT phone, name, email, address, address1, city, shopify_id, last_order_at
+       FROM contacts WHERE organization_id = $1`,
+    [orgId]
+  );
+  const identityMap = buildCustomerIdentityMap([
+    ...identityContacts,
+    ...dbRows.map(row => ({
+      phone: row.customer_phone,
+      name: row.customer_name,
+      email: row.customer_email,
+      orderDate: row.order_date,
+    })),
+  ]);
+  const allStats = buildCustomerStats(allOrders, identityMap);
   console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
   if (!allStats.length) return null;
 

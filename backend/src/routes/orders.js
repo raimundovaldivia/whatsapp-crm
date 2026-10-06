@@ -17,6 +17,7 @@ const collection  = require('../services/payment-collection');
 const { paymentBreakdown } = require('../utils/payment-breakdown');
 const { recordRouteOutcome } = require('../services/delivery-attempts');
 const deliveryNotifications = require('../services/delivery-notifications');
+const { resolveCustomerPhones } = require('../services/customer-identity');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 async function sendOrderEditNotification(...args) {
@@ -226,11 +227,9 @@ router.get('/history/:phone', async (req, res) => {
   try {
     const pool  = getPool();
     const phone = req.params.phone.replace(/\s+/g, '');
-    // Variantes del número para búsqueda flexible
-    const variants = [phone];
-    if (phone.startsWith('56') && phone.length >= 10)       variants.push(phone.slice(2));
-    if (phone.startsWith('9')  && phone.length === 9)        variants.push('56' + phone);
-    if (!phone.startsWith('+') && phone.startsWith('56'))    variants.push('+' + phone);
+    // Incluye formatos equivalentes y teléfonos anteriores que estén unidos
+    // por una identidad fuerte (Shopify, email o nombre+dirección).
+    const variants = await resolveCustomerPhones(pool, req.orgId, phone);
 
     const { rows: shopifyOrders } = await pool.query(`
       SELECT id, shopify_order_id, shopify_name, customer_name, total_price,
