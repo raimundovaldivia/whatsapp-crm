@@ -548,6 +548,13 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
             }}
             onMouseLeave={() => setMenuOpen(false)}>
 
+              <button onClick={() => { setMenuOpen(false); load(true); }} disabled={loading}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'none', border: 'none', color: loading ? colors.textMuted : colors.textPrimary, fontSize: '13px', cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'left' }}
+                onMouseEnter={e => { if (!loading) e.currentTarget.style.backgroundColor = colors.bgHover; }}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                <RefreshCw size={14} color={colors.green} /> Actualizar análisis
+              </button>
+
               <button onClick={() => { exportToExcel(); setMenuOpen(false); }} disabled={loading || !candidates.length}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'none', border: 'none', color: (!candidates.length || loading) ? colors.textMuted : colors.textPrimary, fontSize: '13px', cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer', textAlign: 'left' }}
                 onMouseEnter={e => { if (candidates.length && !loading) e.currentTarget.style.backgroundColor = colors.bgHover; }}
