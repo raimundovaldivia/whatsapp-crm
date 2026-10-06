@@ -123,14 +123,18 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         { timeout: 30000 }
       );
 
-      if (res.data.refreshing && forceRefresh) {
+      if (res.data.refreshing) {
+        setCandidates(res.data.data || []);
+        setFromCache(res.data.fromCache || false);
+        setCacheDate(res.data.cacheDate || null);
+        setCacheSource(res.data.cacheSource || null);
         setLoading(false);
         setLoadingStep('');
-        showToast('Análisis iniciado en segundo plano. Se actualizará automáticamente en ~5 min.', 'info');
+        showToast('Actualizando identidades e historial en segundo plano. La lista se renovará automáticamente.', 'info');
         pollRef.current = setInterval(async () => {
           try {
             const poll = await api.get('/reengagement/candidates', { timeout: 15000 });
-            if (poll.data.data?.length > 0) {
+            if (!poll.data.refreshing && poll.data.data?.length > 0) {
               stopPolling();
               setCandidates(poll.data.data);
               setFromCache(poll.data.fromCache || false);
@@ -139,7 +143,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               showToast(`Análisis completado: ${poll.data.total} clientes`, 'success');
             }
           } catch (_) {}
-        }, 60000);
+        }, 15000);
         return;
       }
 

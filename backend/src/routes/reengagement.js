@@ -435,6 +435,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Cache en memoria: sesión actual (respaldo al cache de DB)
 const analysisCache = new Map();
 const CACHE_TTL = 2 * 60 * 60 * 1000;
+const CUSTOMER_IDENTITY_VERSION = 2;
 
 /* ─────────────────────────────────────────────────────────────────────
    ESTADÍSTICAS POR CLIENTE
@@ -856,7 +857,8 @@ async function runFullAnalysis(orgId, ds) {
     else if (predictedDays <= 30)  { buyWindow = 'mes';    urgency = 2; }
     else                           { buyWindow = 'lejano'; urgency = 1; }
 
-    return { ...c, predictedDays, confidenceRaw, confidence, aiReason, predSource, buyWindow, urgency, overdueRatio };
+    return { ...c, predictedDays, confidenceRaw, confidence, aiReason, predSource, buyWindow, urgency, overdueRatio,
+      identityVersion: CUSTOMER_IDENTITY_VERSION };
   })
   .filter(c => c.predictedDays <= 365)
   .sort((a, b) => a.predictedDays - b.predictedDays);
@@ -1003,7 +1005,8 @@ router.get('/candidates', async (req, res) => {
 
     // ── 1. Cache en memoria ──────────────────────────────────────────
     const memCached = analysisCache.get(req.orgId);
-    if (!refresh && memCached && Date.now() - memCached.ts < CACHE_TTL) {
+    const memoryIdentityCurrent = memCached?.data?.every(item => item.identityVersion === CUSTOMER_IDENTITY_VERSION);
+    if (!refresh && memCached && memoryIdentityCurrent && Date.now() - memCached.ts < CACHE_TTL) {
       const enrichedMem = await enrichCandidatesWithTemplateSent(memCached.data, req.orgId);
       return res.json({ success: true, data: enrichedMem, total: enrichedMem.length, fromCache: true, cacheSource: 'memory' });
     }
@@ -1037,6 +1040,18 @@ router.get('/candidates', async (req, res) => {
     const dbCached = await db.getDailyCache(req.orgId, today);
     if (dbCached && (Array.isArray(dbCached) ? dbCached.length > 0 : JSON.parse(dbCached).length > 0)) {
       const candidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+      const identityCurrent = candidates.every(item => item.identityVersion === CUSTOMER_IDENTITY_VERSION);
+      if (!identityCurrent) {
+        if (!bgProcessing.has(req.orgId)) {
+          try { await db.saveDailyCache(req.orgId, today, null); } catch {}
+          analysisCache.delete(req.orgId);
+          bgProcessing.add(req.orgId);
+          runFullAnalysis(req.orgId, ds).finally(() => bgProcessing.delete(req.orgId));
+        }
+        const stale = await enrichCandidatesWithTemplateSent(candidates, req.orgId);
+        return res.json({ success: true, data: stale, total: stale.length, fromCache: true,
+          cacheSource: 'db_stale', cacheDate: today, refreshing: true });
+      }
       analysisCache.set(req.orgId, { data: candidates, ts: Date.now() });
       const enriched = await enrichCandidatesWithTemplateSent(candidates, req.orgId);
       return res.json({ success: true, data: enriched, total: enriched.length, fromCache: true, cacheSource: 'db', cacheDate: today });
