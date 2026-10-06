@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
 const {
   buildCustomerIdentityMap,
+  consolidateCustomerCandidates,
   resolveCustomerPhones,
 } = require('../src/services/customer-identity');
 
@@ -15,6 +16,18 @@ test('customer order identity joins strong aliases and chooses the most recent p
   assert.equal(map.get('56982295945'), '56982294847');
   assert.equal(map.get('56982294847'), '56982294847');
   assert.equal(map.get('56911111111'), '56911111111', 'same name alone must never merge customers');
+});
+
+test('cached campaign candidates collapse into the current phone and combined history', () => {
+  const candidates = consolidateCustomerCandidates([
+    { phone: '56982295945', name: 'Denisse Duhalde', email: 'denisse@example.com', lastOrderDate: '2026-04-06', totalOrders: 5, totalSpent: 130000, recentOrders: [] },
+    { phone: '56982294847', name: 'Denisse Duhalde', email: 'denisse@example.com', lastOrderDate: '2026-09-21', totalOrders: 14, totalSpent: 266000, recentOrders: [] },
+  ]);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].phone, '56982294847');
+  assert.equal(candidates[0].totalOrders, 19);
+  assert.equal(candidates[0].totalSpent, 396000);
+  assert.equal(candidates[0].lastOrderDate, '2026-09-21');
 });
 
 test('customer order identity can join an old phone by exact name and address', () => {

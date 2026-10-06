@@ -105,6 +105,61 @@ function buildCustomerIdentityMap(records = []) {
   return result;
 }
 
+function consolidateCustomerCandidates(candidates = []) {
+  const identityMap = buildCustomerIdentityMap(candidates.map(candidate => ({
+    phone: candidate.phone,
+    name: candidate.name,
+    email: candidate.email,
+    orderDate: candidate.lastOrderDate,
+  })));
+  const grouped = new Map();
+
+  for (const candidate of candidates) {
+    const phone = normalizePhone(candidate.phone);
+    const canonical = identityMap.get(phone) || phone;
+    if (!canonical) continue;
+    const current = grouped.get(canonical);
+    if (!current) {
+      grouped.set(canonical, { ...candidate, phone: canonical,
+        recentOrders: [...(candidate.recentOrders || [])] });
+      continue;
+    }
+
+    const candidateIsNewer = String(candidate.lastOrderDate || '') > String(current.lastOrderDate || '');
+    const combinedOrders = [...(current.recentOrders || []), ...(candidate.recentOrders || [])]
+      .filter((order, index, all) => all.findIndex(other =>
+        `${other.orderName || ''}|${other.date || ''}|${other.price || 0}` ===
+        `${order.orderName || ''}|${order.date || ''}|${order.price || 0}`) === index)
+      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+      .slice(0, 5);
+    const totalOrders = Number(current.totalOrders || 0) + Number(candidate.totalOrders || 0);
+    const totalSpent = Number(current.totalSpent || 0) + Number(candidate.totalSpent || 0);
+    grouped.set(canonical, {
+      ...current,
+      ...(candidateIsNewer ? {
+        lastOrderDate: candidate.lastOrderDate,
+        lastProducts: candidate.lastProducts,
+        daysInactive: candidate.daysInactive,
+        predictedDays: candidate.predictedDays,
+        buyWindow: candidate.buyWindow,
+        urgency: candidate.urgency,
+        aiReason: candidate.aiReason,
+        predSource: candidate.predSource,
+      } : {}),
+      phone: canonical,
+      name: String(candidate.name || '').length > String(current.name || '').length ? candidate.name : current.name,
+      email: current.email || candidate.email || null,
+      totalOrders,
+      totalSpent,
+      avgOrderVal: totalOrders ? Math.round(totalSpent / totalOrders) : 0,
+      recentOrders: combinedOrders,
+      identityVersion: Math.max(Number(current.identityVersion || 0), Number(candidate.identityVersion || 0)),
+    });
+  }
+
+  return [...grouped.values()];
+}
+
 async function resolveCustomerPhones(pool, orgId, rawPhone) {
   const seedPhone = normalizePhone(rawPhone);
   if (!seedPhone) return [];
@@ -134,5 +189,6 @@ module.exports = {
   phoneVariants,
   identitySignals,
   buildCustomerIdentityMap,
+  consolidateCustomerCandidates,
   resolveCustomerPhones,
 };
