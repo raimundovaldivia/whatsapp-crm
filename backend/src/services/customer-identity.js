@@ -105,8 +105,8 @@ function buildCustomerIdentityMap(records = []) {
   return result;
 }
 
-function consolidateCustomerCandidates(candidates = []) {
-  const identityMap = buildCustomerIdentityMap(candidates.map(candidate => ({
+function consolidateCustomerCandidates(candidates = [], providedIdentityMap = null) {
+  const identityMap = providedIdentityMap || buildCustomerIdentityMap(candidates.map(candidate => ({
     phone: candidate.phone,
     name: candidate.name,
     email: candidate.email,
@@ -160,9 +160,7 @@ function consolidateCustomerCandidates(candidates = []) {
   return [...grouped.values()];
 }
 
-async function resolveCustomerPhones(pool, orgId, rawPhone) {
-  const seedPhone = normalizePhone(rawPhone);
-  if (!seedPhone) return [];
+async function loadCustomerIdentityMap(pool, orgId, extraRecords = []) {
   const { rows } = await pool.query(
     `SELECT phone, name, email, address, address1, city, shopify_id, last_order_at
        FROM contacts
@@ -175,8 +173,13 @@ async function resolveCustomerPhones(pool, orgId, rawPhone) {
       WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''`,
     [orgId]
   );
-  rows.push({ phone: seedPhone });
-  const identityMap = buildCustomerIdentityMap(rows);
+  return buildCustomerIdentityMap([...rows, ...extraRecords]);
+}
+
+async function resolveCustomerPhones(pool, orgId, rawPhone) {
+  const seedPhone = normalizePhone(rawPhone);
+  if (!seedPhone) return [];
+  const identityMap = await loadCustomerIdentityMap(pool, orgId, [{ phone: seedPhone }]);
   const canonical = identityMap.get(seedPhone) || seedPhone;
   const aliases = [...identityMap.entries()]
     .filter(([, target]) => target === canonical)
@@ -190,5 +193,6 @@ module.exports = {
   identitySignals,
   buildCustomerIdentityMap,
   consolidateCustomerCandidates,
+  loadCustomerIdentityMap,
   resolveCustomerPhones,
 };

@@ -18,7 +18,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
 const campaignGuard = require('../services/broadcast-campaign-guard');
-const { buildCustomerIdentityMap, consolidateCustomerCandidates } = require('../services/customer-identity');
+const { buildCustomerIdentityMap, consolidateCustomerCandidates, loadCustomerIdentityMap } = require('../services/customer-identity');
 const {
   getBodyComponent,
   getMissingBodyParameters,
@@ -999,6 +999,7 @@ router.get('/candidates', async (req, res) => {
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, data: [], total: 0 });
+    const pool = getPool();
 
     const refresh = req.query.refresh === 'true';
     const today   = new Date().toISOString().slice(0, 10);
@@ -1007,7 +1008,8 @@ router.get('/candidates', async (req, res) => {
     const memCached = analysisCache.get(req.orgId);
     const memoryIdentityCurrent = memCached?.data?.every(item => item.identityVersion === CUSTOMER_IDENTITY_VERSION);
     if (!refresh && memCached && memoryIdentityCurrent && Date.now() - memCached.ts < CACHE_TTL) {
-      const enrichedMem = await enrichCandidatesWithTemplateSent(consolidateCustomerCandidates(memCached.data), req.orgId);
+      const identityMap = await loadCustomerIdentityMap(pool, req.orgId, memCached.data);
+      const enrichedMem = await enrichCandidatesWithTemplateSent(consolidateCustomerCandidates(memCached.data, identityMap), req.orgId);
       return res.json({ success: true, data: enrichedMem, total: enrichedMem.length, fromCache: true, cacheSource: 'memory' });
     }
 
@@ -1017,7 +1019,9 @@ router.get('/candidates', async (req, res) => {
         // Ya está corriendo — devolver caché anterior si existe
         const dbCached = await db.getDailyCache(req.orgId, today);
         if (dbCached) {
-          const data = consolidateCustomerCandidates(Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached));
+          const rawData = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+          const identityMap = await loadCustomerIdentityMap(pool, req.orgId, rawData);
+          const data = consolidateCustomerCandidates(rawData, identityMap);
           return res.json({ success: true, data, total: data.length, fromCache: true, cacheSource: 'db_stale', refreshing: true });
         }
         return res.json({ success: true, data: [], total: 0, refreshing: true, message: 'Análisis en progreso...' });
@@ -1039,7 +1043,9 @@ router.get('/candidates', async (req, res) => {
     // ── 3. Cache en DB (mismo día) ───────────────────────────────────
     const dbCached = await db.getDailyCache(req.orgId, today);
     if (dbCached && (Array.isArray(dbCached) ? dbCached.length > 0 : JSON.parse(dbCached).length > 0)) {
-      const candidates = consolidateCustomerCandidates(Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached));
+      const rawCandidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+      const identityMap = await loadCustomerIdentityMap(pool, req.orgId, rawCandidates);
+      const candidates = consolidateCustomerCandidates(rawCandidates, identityMap);
       const identityCurrent = candidates.every(item => item.identityVersion === CUSTOMER_IDENTITY_VERSION);
       if (!identityCurrent) {
         if (!bgProcessing.has(req.orgId)) {

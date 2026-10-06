@@ -19,10 +19,12 @@ test('customer order identity joins strong aliases and chooses the most recent p
 });
 
 test('cached campaign candidates collapse into the current phone and combined history', () => {
-  const candidates = consolidateCustomerCandidates([
-    { phone: '56982295945', name: 'Denisse Duhalde', email: 'denisse@example.com', lastOrderDate: '2026-04-06', totalOrders: 5, totalSpent: 130000, recentOrders: [] },
-    { phone: '56982294847', name: 'Denisse Duhalde', email: 'denisse@example.com', lastOrderDate: '2026-09-21', totalOrders: 14, totalSpent: 266000, recentOrders: [] },
-  ]);
+  const staleCandidates = [
+    { phone: '56982295945', name: 'Denisse Duhalde', lastOrderDate: '2026-04-06', totalOrders: 5, totalSpent: 130000, recentOrders: [] },
+    { phone: '56982294847', name: 'Denisse Duhalde', lastOrderDate: '2026-09-21', totalOrders: 14, totalSpent: 266000, recentOrders: [] },
+  ];
+  const identityMap = buildCustomerIdentityMap(staleCandidates.map(candidate => ({ ...candidate, email: 'denisse@example.com', orderDate: candidate.lastOrderDate })));
+  const candidates = consolidateCustomerCandidates(staleCandidates, identityMap);
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].phone, '56982294847');
   assert.equal(candidates[0].totalOrders, 19);
