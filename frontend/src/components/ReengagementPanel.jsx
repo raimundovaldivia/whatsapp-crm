@@ -47,6 +47,8 @@ import {
   renderTemplate,
 } from '../utils/template-renderer.js';
 
+const CUSTOMER_IDENTITY_VERSION = 3;
+
 function Tooltip({ text, children, position = 'top' }) {
   const { colors } = useTheme();
   const [show, setShow] = useState(false);
@@ -148,7 +150,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
 
     try {
       const res = await api.get(
-        `/reengagement/candidates${forceRefresh ? '?refresh=true' : ''}`,
+        `/reengagement/candidates?identityVersion=${CUSTOMER_IDENTITY_VERSION}${forceRefresh ? '&refresh=true' : ''}`,
         { timeout: 30000 }
       );
 
@@ -162,7 +164,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         showToast('Actualizando identidades e historial en segundo plano. La lista se renovará automáticamente.', 'info');
         pollRef.current = setInterval(async () => {
           try {
-            const poll = await api.get('/reengagement/candidates', { timeout: 15000 });
+            const poll = await api.get(`/reengagement/candidates?identityVersion=${CUSTOMER_IDENTITY_VERSION}`, { timeout: 15000 });
             if (!poll.data.refreshing && poll.data.data?.length > 0) {
               stopPolling();
               setCandidates(consolidateVisibleCandidates(poll.data.data));

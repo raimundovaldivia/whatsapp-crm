@@ -435,7 +435,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Cache en memoria: sesión actual (respaldo al cache de DB)
 const analysisCache = new Map();
 const CACHE_TTL = 2 * 60 * 60 * 1000;
-const CUSTOMER_IDENTITY_VERSION = 2;
+const CUSTOMER_IDENTITY_VERSION = 3;
 
 /* ─────────────────────────────────────────────────────────────────────
    ESTADÍSTICAS POR CLIENTE
