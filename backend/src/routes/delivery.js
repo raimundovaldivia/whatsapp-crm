@@ -1557,6 +1557,20 @@ router.get('/expenses', async (req, res) => {
   }
 });
 
+router.get('/cash-register', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const cashRegister = require('../services/cash-register');
+  const { from, to } = req.query;
+  if (!cashRegister.validDate(from) || !cashRegister.validDate(to) || from > to) {
+    return res.status(400).json({ error: 'Indica un período de fechas válido.' });
+  }
+  try {
+    res.json({ success: true, ...await cashRegister.report(getPool(), req.orgId, from, to) });
+  } catch (err) {
+    console.error('[Delivery/cash-register]', err.message);
+    res.status(500).json({ error: 'No se pudo calcular la caja. Intenta nuevamente.' });
+  }
+});
+
 router.get('/expenses/:id/photo', async (req, res) => {
   const pool = getPool();
   try {
