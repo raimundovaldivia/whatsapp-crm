@@ -61,6 +61,12 @@ test('pipeline agenda una respuesta a template con fecha antes de iniciar un ped
   assert.equal(scheduledOrder.desiredDate, '2026-09-30');
   assert.equal(scheduledOrder.productNotes, '1 caja de 100 Huevos Jumbo');
   assert.equal(immediateOrders, 0);
+  scheduledOrder = null;
+  const tentative = await pipeline.processMessage(1, 7, 'Lo tendré en cuenta para la próxima semana');
+  assert.equal(scheduledOrder, null);
+  assert.equal(tentative.newState, 'future_interest');
+  assert.doesNotMatch(tentative.response, /agendado|apartado|pedido habitual/i);
+
 });
 
 test('una consulta por promo para mañana aclara condiciones y no agenda cantidad desconocida', async () => {
@@ -516,4 +522,22 @@ test('una conversación ya agendada recibe contexto humano y reglas contra repet
   assert.match(capturedSystem, /no volver a venderle ni reiniciar el pedido/i);
   assert.match(capturedSystem, /Si solo agradece, confirma brevemente y cierra sin preguntas/i);
   assert.match(capturedSystem, /no recites de nuevo todos los datos/i);
+});
+
+
+test('tentative interest never becomes a scheduled order even with a date', async () => {
+  for (const message of ['Lo tendré en cuenta para la próxima semana', 'Quizás para el viernes', 'Te aviso que podría ser', 'Tal vez mañana']) {
+    assert.equal(scheduled.isFutureOrderIntent(message), false, message);
+    assert.equal(scheduled.isSoftFutureIntent(message), true, message);
+  }
+  const extracted = await scheduled.extractScheduledOrderData('Para la próxima semana', [], '2026-10-06');
+  assert.equal(extracted.desiredDate, null);
+  assert.equal(extracted.productNotes, null);
+});
+
+test('internal instructions are blocked before reaching the customer', async () => {
+  const guard = load('src/services/response-guardrail.js');
+  assert.equal((await guard.checkResponseFreshness(1, 1, 'El último mensaje está incompleto. Espero el resto para responder apropiadamente.')).ok, false);
+  assert.equal((await guard.checkResponseFreshness(1, 1, 'Si el cliente completa el mensaje, responde únicamente a lo que diga.')).ok, false);
+  assert.equal((await guard.checkResponseFreshness(1, 1, 'Claro, avísame cuando lo tengas decidido 😊')).ok, true);
 });

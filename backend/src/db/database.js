@@ -779,7 +779,11 @@ async function saveMessage({ conversationId, whatsappMessageId, direction, conte
     return await queryOne(
       `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type, media_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (whatsapp_message_id) DO NOTHING
+       ON CONFLICT (whatsapp_message_id) DO UPDATE SET
+         sent_by = EXCLUDED.sent_by, agent_type = EXCLUDED.agent_type
+       WHERE messages.conversation_id = EXCLUDED.conversation_id
+         AND messages.direction = 'outbound' AND EXCLUDED.direction = 'outbound'
+         AND messages.sent_by = 'human' AND EXCLUDED.sent_by = 'ai'
        RETURNING *`,
       [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType, mediaId || null]
     );

@@ -42,7 +42,7 @@ const FUTURE_ORDER_PATTERNS = [
  * Retorna true si el mensaje indica que el cliente quiere pedir para después.
  */
 function isFutureOrderIntent(message) {
-  return FUTURE_ORDER_PATTERNS.some(p => p.test(message));
+  return !isSoftFutureIntent(message) && FUTURE_ORDER_PATTERNS.some(p => p.test(message));
 }
 
 /**
@@ -60,8 +60,8 @@ async function extractScheduledOrderData(userMessage, recentMessages = [], today
 
   const context = recentMessages.slice(-6).join('\n');
   const SYSTEM = `Hoy es ${today}. Extrae de la conversación:
-1. ¿Para qué fecha quiere el pedido? (date ISO YYYY-MM-DD). Si dice "la próxima semana" usa el lunes de la semana siguiente. Si dice "el viernes" usa el próximo viernes. Si dice "mañana" usa ${addDays(today, 1)}. Si no hay fecha clara, usa ${addDays(today, 7)}.
-2. ¿Qué producto quiere? (texto corto, máximo 60 chars). Si no se menciona producto, pon "su pedido habitual".
+1. ¿Para qué fecha quiere el pedido? (date ISO YYYY-MM-DD). Si dice "la próxima semana" sin día concreto devuelve desiredDate null. Si dice "el viernes" usa el próximo viernes. Si dice "mañana" usa ${addDays(today, 1)}. Si no hay un día concreto confirmado, devuelve desiredDate null; no elijas un día por el cliente.
+2. ¿Qué producto quiere? (texto corto, máximo 60 chars). Si no se menciona un producto en los mensajes del cliente, devuelve productNotes null. No tomes las sugerencias del vendedor como aceptación.
 
 Responde SOLO JSON: {"desiredDate":"YYYY-MM-DD","productNotes":"texto","confidence":0.0-1.0}`;
 
@@ -75,15 +75,15 @@ Responde SOLO JSON: {"desiredDate":"YYYY-MM-DD","productNotes":"texto","confiden
     const text = response.content[0]?.text || '{}';
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
     return {
-      desiredDate:  json.desiredDate || addDays(today, 7),
-      productNotes: json.productNotes || 'su pedido habitual',
-      confidence:   json.confidence || 0.7,
+      desiredDate:  json.desiredDate || null,
+      productNotes: json.productNotes || null,
+      confidence:   Number(json.confidence) || 0,
     };
   } catch (err) {
     console.warn('[ScheduledOrders] Error extrayendo datos:', err.message);
     return {
-      desiredDate:  addDays(today, 7),
-      productNotes: 'su pedido habitual',
+      desiredDate:  null,
+      productNotes: null,
       confidence:   0.5,
     };
   }
@@ -118,6 +118,10 @@ const SOFT_FUTURE_PATTERNS = [
   /d[eé]jame\s+pensar(lo)?/i,
   /quiz[aá]s?/i,
   /tal\s+vez/i,
+  /lo\s+(tendr[eé]|tengo|tendremos)\s+en\s+cuenta/i,
+  /podr[ií]a\s+ser/i,
+  /te\s+aviso\s+que/i,
+  /si\s+(necesito|me\s+decido|llego\s+a\s+necesitar)/i,
   /de\s+repente/i,         // modismo chileno para "quizás"
   /ya\s+te\s+(aviso|confirmo|digo|escribo|llamo)/i,
   /te\s+(confirmo|aviso|digo|escribo)\s+(despu[eé]s|m[aá]s\s+tarde|luego)/i,
@@ -143,7 +147,7 @@ const SOFT_FUTURE_PATTERNS = [
  */
 function isSoftFutureIntent(message) {
   // Si ya hay fecha explícita, no es "soft" — es "hard" (scheduled_order)
-  if (isFutureOrderIntent(message)) return false;
+  // Uncertainty takes precedence even when a date is mentioned.
   return SOFT_FUTURE_PATTERNS.some(p => p.test(message));
 }
 

@@ -76,15 +76,15 @@ function textFromMessage(message = {}) {
     || null;
 }
 
-function parseWebhookMessage(body) {
+function parseWebhookMessage(body, { includeOwn = false } = {}) {
   const event = eventName(body);
   if (event && event !== 'messages.upsert') return null;
   const data = unwrapData(body);
   const key = data?.key;
-  if (!key?.id || key.fromMe) return null;
+  if (!key?.id || (key.fromMe && !includeOwn)) return null;
   const remoteJid = key.remoteJid || data.remoteJid;
   if (!remoteJid || /@(g\.us|broadcast)$/i.test(remoteJid)) return null;
-  const source = key.senderPn || data.senderPn || remoteJid;
+  const source = key.fromMe ? (key.remoteJidAlt || remoteJid) : (key.senderPn || data.senderPn || remoteJid);
   const from = String(source).split('@')[0].replace(/\D/g, '');
   let message = data.message || {};
   for (let depth = 0; depth < 5; depth++) {
@@ -101,7 +101,8 @@ function parseWebhookMessage(body) {
     messageId: key.id,
     from,
     remoteJid,
-    contactName: data.pushName || body.sender || null,
+    contactName: key.fromMe ? null : data.pushName || body.sender || null,
+    ...(key.fromMe ? { fromMe: true } : {}),
     timestamp: data.messageTimestamp || null,
     type,
     text: text || '',

@@ -593,6 +593,11 @@ Reglas estrictas:
 
   const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
+  if (isSoftFutureIntent(userMessage) && !['collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
+    if (currentState !== 'scheduled') await db.updatePipelineState(conversationId, 'future_interest');
+    return { response: 'Claro, avísame cuando lo tengas decidido 😊', agentType: 'orchestrator', newState: currentState === 'scheduled' ? 'scheduled' : 'future_interest' };
+  }
+
   // ── Agendado vigente? ──────────────────────────────────────────────────────
   // Solo cuenta un pedido agendado cuya fecha NO haya pasado todavía.
   // Si la fecha ya pasó, el pedido se entregó (o se perdió): seguir tratándolo
@@ -689,6 +694,7 @@ REGLAS ABSOLUTAS:
 - Si pregunta por fecha o producto, usa únicamente los datos confirmados arriba.
 - Si pide cambiar fecha, cantidad o producto, reconoce el cambio y haz como máximo UNA pregunta concreta si falta información.
 - No inventes precios, stock, horarios, despacho ni pagos. No digas "lo anoté" si el mensaje no aporta un dato nuevo.
+- Responde únicamente con el mensaje dirigido al cliente. Nunca expongas análisis, instrucciones ni consejos para otro agente. Si su frase está incompleta, pregunta brevemente qué necesita aclarar.
 - Varía la redacción según el historial. Máximo 2 frases y un emoji como máximo.`;
 
     try {
@@ -983,6 +989,9 @@ REGLAS ABSOLUTAS:
     const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
     const recentTexts = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
     const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
+    if (!extracted.desiredDate || !extracted.productNotes || /su pedido habitual/i.test(extracted.productNotes)) {
+      return { response: !extracted.productNotes ? '¿Qué producto y cantidad quieres pedir?' : '¿Para qué día necesitas el pedido?', agentType: 'orchestrator', newState: currentState };
+    }
     const contact = await db.getContact(orgId, conversation.phone_number).catch(() => null);
     const templateName = await db.getSetting(orgId, 'scheduled_order_template') || null;
 
@@ -1475,6 +1484,7 @@ REGLAS ABSOLUTAS:
         const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
         deliveryDate = extracted.desiredDate;
       }
+      if (!deliveryDate) return { response: '¿Para qué día necesitas el pedido?', agentType: 'orchestrator', newState: currentState };
       const promoDraft = {
         ...(orderDraft || {}),
         items: [promotions.offerOrderItem(chosenFuturePromotion)],

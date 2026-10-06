@@ -54,6 +54,11 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     : await pipeline.processMessage(org.id, conversation.id, parsed.text);
   if (result.skipped || result.duplicate || !result.response) return;
 
+  const checked = await require('./response-guardrail').checkResponseFreshness(org.id, conversation.id, result.response, { userMessage: parsed.text });
+  if (!checked.ok) {
+    result.response = 'Para asegurarme de entenderte bien, ¿qué necesitas confirmar?';
+  }
+
   const sentResult = await provider.sendTextMessage(parsed.from, result.response, whatsappConfig);
   const outMsg = await db.saveMessage({
     conversationId: conversation.id,

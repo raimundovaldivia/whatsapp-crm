@@ -215,6 +215,10 @@ async function loadConversationFacts(conversationId) {
  */
 async function checkResponseFreshness(orgId, conversationId, response, turn = {}) {
   if (!response || typeof response !== 'string') return { ok: true };
+  if (/el (último|ultimo) mensaje est[aá] incompleto|responde (únicamente|unicamente|solo) a lo que|si el cliente (completa|est[aá] a punto)|lee todo antes de responder|para responder apropiadamente|mant[eé]n la calma/i.test(response)) {
+    return { ok: false, reason: 'instrucciones_internas', detail: 'El texto contiene instrucciones para el agente, no una respuesta al cliente.' };
+  }
+
 
   try {
     // 1. Fechas ya pasadas dentro de una promesa a futuro.

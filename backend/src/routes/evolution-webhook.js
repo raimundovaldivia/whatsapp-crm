@@ -61,8 +61,20 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
 
   const messages = Array.isArray(req.body.data) ? req.body.data : [req.body.data];
   for (const data of messages) {
-    const parsed = evolution.parseWebhookMessage({ ...req.body, data });
+    const parsed = evolution.parseWebhookMessage({ ...req.body, data }, { includeOwn: true });
     if (!parsed) continue;
+    if (parsed.fromMe) {
+      const conversation = await db.upsertConversation(org.id, parsed.from, null, channel.id);
+      const content = parsed.text || (parsed.type === 'audio' ? '🎤 [Audio enviado]' : '📎 [Archivo enviado]');
+      const message = await db.saveMessage({ conversationId: conversation.id, whatsappMessageId: parsed.messageId,
+        direction: 'outbound', content, type: parsed.type, sentBy: 'human',
+        mediaId: parsed.type === 'text' ? null : evolution.mediaReference(channel.id, parsed.messageId) });
+      if (message) {
+        await db.updateConversationLastMessage(conversation.id, content);
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message, conversation: await db.getConversationById(conversation.id, org.id) });
+      }
+      continue;
+    }
     const markAsRead = () => evolution.markAsRead(parsed.messageId, parsed.remoteJid, channel);
     let prepareMedia = null;
     if (parsed.type !== 'text') {
