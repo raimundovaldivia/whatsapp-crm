@@ -117,6 +117,7 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
       whatsappChannelId: channel.id,
       markAsRead,
       prepareMedia,
+      scheduleResponse: fn => require('../services/webhook-inbox').defer(`${org.id}:${channel.id}:${parsed.from}`, fn),
     });
   }
 }));

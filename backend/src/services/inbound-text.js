@@ -4,7 +4,7 @@ const { resumeDivaOnInbound } = require('./conversation-mode');
 const { notifyAdminHumanPendingReply } = require('./notifications');
 const provider = require('./whatsapp-provider');
 
-async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead, whatsappChannelId = null, prepareMedia = null }) {
+async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead, whatsappChannelId = null, prepareMedia = null, scheduleResponse = null }) {
   if (!parsed?.from || !parsed?.text) return;
 
   const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName, whatsappChannelId);
@@ -49,9 +49,20 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
       io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: { ...savedMsg, content: parsed.text }, conversation: await db.getConversationById(conversation.id) });
     }
   }
+  const respond = async () => {
+    let textToProcess = parsed.text;
+    if (scheduleResponse) {
+      const messages = await db.getLastMessages(conversation.id, 20);
+      let trailing = [];
+      for (const message of messages) {
+        if (message.direction === 'inbound') trailing.push(message); else trailing = [];
+      }
+      const recent = trailing.filter(message => !message.created_at || new Date(message.created_at).getTime() >= Date.now() - 120000);
+      textToProcess = recent.map(message => message.content).filter(Boolean).join('\n') || parsed.text;
+    }
   const result = prepared?.fallback
     ? { response: prepared.fallback, agentType: 'system' }
-    : await pipeline.processMessage(org.id, conversation.id, parsed.text);
+    : await pipeline.processMessage(org.id, conversation.id, textToProcess);
   if (result.skipped || result.duplicate || !result.response) return;
 
   const checked = await require('./response-guardrail').checkResponseFreshness(org.id, conversation.id, result.response, { userMessage: parsed.text });
@@ -82,6 +93,9 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
       order: result.orderCreated,
     });
   }
+  };
+  if (scheduleResponse) scheduleResponse(respond);
+  else await respond();
 }
 
 module.exports = { processInboundText };

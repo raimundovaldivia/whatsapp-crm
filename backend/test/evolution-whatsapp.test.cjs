@@ -119,3 +119,15 @@ test('an early provider echo cannot relabel an AI message as human', async () =>
     assert.equal(rows.length,1); assert.equal(rows[0].sent_by,'ai');
   } finally { await engine.close(); }
 });
+
+
+test('response window allows composing without delaying own echoes', () => {
+  const inbox = load('src/services/webhook-inbox.js');
+  const body = {data:{key:{remoteJid:'56911111111@s.whatsapp.net'},message:{conversation:'Quiero un queso'}}};
+  assert.equal(inbox.streamInfo('evolution',body,'messages.upsert').delay,8);
+  body.data.message.conversation = 'Hola';
+  assert.equal(inbox.streamInfo('evolution',body,'messages.upsert').delay,12);
+  body.data.key.fromMe = true;
+  assert.equal(inbox.streamInfo('evolution',body,'messages.upsert').delay,0);
+  assert.equal(inbox.streamInfo('kapso',{message:{text:{body:'Uno porfa'}}},'whatsapp.message.received').delay,8);
+});

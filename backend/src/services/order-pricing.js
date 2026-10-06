@@ -158,6 +158,11 @@ function matchProduct(name, catalog) {
  */
 function unitPriceFor(candidate, qty, specialPrices = {}) {
   const sp = specialPrices[candidate.product_id] ?? specialPrices[norm(candidate.product_title)] ?? specialPrices[norm(candidate.title)];
+  if (sp && typeof sp === 'object') {
+    const total = Number(sp.quantities?.[String(qty)]);
+    if (total > 0) return { price: total / qty, source: 'promocion_cantidad' };
+    if (Number(sp.unitPrice) > 0) return { price: Number(sp.unitPrice), source: 'especial' };
+  }
   if (sp != null && Number(sp) > 0) return { price: Number(sp), source: 'especial' };
   if (candidate.bulk_price && candidate.bulk_min_qty && qty >= candidate.bulk_min_qty) {
     return { price: Number(candidate.bulk_price), source: 'volumen' };
