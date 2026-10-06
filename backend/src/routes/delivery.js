@@ -36,6 +36,16 @@ const push = require('../services/push');
 const { attachAttemptHistory } = require('../services/delivery-attempts');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
+// Un pedido importado sin decisión logística local no vuelve a reparto si
+// Shopify ya lo completó o anuló. FULFILLED no acredita entrega al cliente:
+// esto filtra elegibilidad, sin reescribir crm_status ni delivered_at.
+// Los reintentos/reprogramaciones explícitos del CRM siguen siendo válidos.
+const importedShopifyClosed = `(COALESCE(crm_status, 'nuevo') IN ('', 'nuevo') AND (
+  UPPER(COALESCE(fulfillment_status, '')) = 'FULFILLED'
+  OR UPPER(COALESCE(financial_status, '')) IN ('VOIDED', 'REFUNDED')
+  OR NULLIF(raw_json->>'cancelledAt', '') IS NOT NULL
+))`;
+
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
@@ -175,6 +185,7 @@ async function reserveOrdersForRoute(client, orgId, orders) {
          WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])
            AND delivered_at IS NULL
            AND COALESCE(crm_status, '') NOT IN ('asignado_ruta','en_camino','entregado','cancelled')
+           AND NOT ${importedShopifyClosed}
        RETURNING shopify_order_id`,
       [orgId, shopifyIds]
     ) : null,
@@ -458,6 +469,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
           AND (crm_status IS NULL OR crm_status NOT IN ('asignado_ruta', 'en_camino', 'entregado', 'cancelled'))
           AND (delivery_date IS NULL OR delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
           AND delivered_at IS NULL   -- ya se repartió: no vuelve a la lista
+          AND NOT ${importedShopifyClosed}
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
@@ -1599,7 +1611,8 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
     const { rows } = await pool.query(
       `SELECT shopify_order_id AS id, crm_status AS status, dispatch_count,
               last_attempt_status, delivery_note,
-              (delivered_at IS NOT NULL OR crm_status IN ('en_camino', 'entregado', 'cancelled')
+              (delivered_at IS NOT NULL OR ${importedShopifyClosed}
+                OR crm_status IN ('en_camino', 'entregado', 'cancelled')
                 OR (crm_status = 'asignado_ruta' AND NOT $3::boolean)
                 OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
          FROM shopify_orders
