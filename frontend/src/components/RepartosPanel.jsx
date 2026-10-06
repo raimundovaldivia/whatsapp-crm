@@ -5,6 +5,7 @@
  *   - Tab "Historial": ver rutas enviadas/en progreso/completadas
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
+import ReturnsPanel from './ReturnsPanel.jsx';
 import CajaRepartos from './CajaRepartos.jsx';
 import { api, API_BASE } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -256,6 +257,7 @@ export default function RepartosPanel() {
             { key: 'historial', label: '🚚 Rutas' },
             { key: 'gastos',    label: '💸 Gastos' },
             { key: 'caja',      label: '💵 Caja' },
+            { key: 'returns', label: '↩ Cambios y devoluciones' },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setTab(key)} style={{
               padding: '8px 16px', borderRadius: '8px 8px 0 0', border: 'none', cursor: 'pointer',
@@ -275,6 +277,7 @@ export default function RepartosPanel() {
         {tab === 'nuevo'     && <NuevoReparto colors={colors} />}
         {tab === 'despachos' && <DespachosRepartos colors={colors} />}
         {tab === 'historial' && <HistorialRepartos colors={colors} />}
+        {tab === 'returns' && <ReturnsPanel colors={colors} />}
         {tab === 'gastos'    && <GastosRepartos colors={colors} />}
         {tab === 'caja'      && <CajaRepartos colors={colors} onShowExpenses={() => setTab('gastos')} />}
       </div>

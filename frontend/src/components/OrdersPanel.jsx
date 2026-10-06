@@ -1,3 +1,4 @@
+import ReturnsPanel from './ReturnsPanel.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatDateTime } from '../utils/dates.js';
 import {
@@ -140,6 +141,7 @@ function getShopifyFulfillmentStyle(status, colors) {
 
 // ─── Componente principal ─────────────────────────────────────────
 export default function OrdersPanel({ onSelectConversation, onOrderPaid, paymentsMode = false }) {
+  const [returnOrder,setReturnOrder]=useState(null);
   const { colors } = useTheme();
   const [botOrders,        setBotOrders]        = useState([]);
   const [shopifyOrders,    setShopifyOrders]    = useState([]);
@@ -1151,6 +1153,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
           )}
         </div>
 
+        {returnOrder && <div style={{position:'fixed',inset:0,zIndex:100,background:'#0009',display:'flex',justifyContent:'center',padding:24}}><div style={{background:colors.bgPanel,width:'min(900px,100%)',borderRadius:14,overflow:'hidden',display:'flex',flexDirection:'column'}}><button onClick={()=>setReturnOrder(null)} style={{alignSelf:'end',padding:12,cursor:'pointer'}}>Cerrar</button><ReturnsPanel colors={colors} order={returnOrder}/></div></div>}
         {/* Lista unificada */}
         {loading ? (
           <EmptyMsg icon={<Package size={40} />} text="Cargando pedidos..." />
@@ -1160,7 +1163,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {paginated.map(order => (
-                order.source === 'bot'
+                <div key={order._key}>
+                {order.source === 'bot'
                   ? <BotOrderCard key={order._key} order={order.raw}
                       onStatusChange={handleStatusChange}
                       onResendLink={handleResendLink}
@@ -1176,7 +1180,9 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
                       selected={selected.has(order._key)}
                       onToggleSelect={() => toggleSelect(order._key)}
                       onAddressUpdated={load}
-                    />
+                    />}
+                  <button onClick={()=>setReturnOrder(order)} style={{background:'none',border:0,color:colors.textSecondary,cursor:'pointer',padding:8}}>↩ Registrar devolución o cambio</button>
+                </div>
               ))}
             </div>
 

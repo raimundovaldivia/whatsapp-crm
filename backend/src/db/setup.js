@@ -1299,6 +1299,31 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_meta_messages_thread ON meta_messages(thread_id,created_at);
     `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS order_returns (
+        id SERIAL PRIMARY KEY, organization_id INTEGER NOT NULL REFERENCES organizations(id),
+        source TEXT NOT NULL CHECK(source IN ('bot','shopify')), order_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('return','exchange','issue')),
+        status TEXT NOT NULL DEFAULT 'requested', items JSONB NOT NULL,
+        customer JSONB NOT NULL, reason TEXT NOT NULL, replacement_description TEXT NOT NULL DEFAULT '',
+        pickup_required BOOLEAN NOT NULL DEFAULT TRUE,
+        money_direction TEXT NOT NULL DEFAULT 'none', money_method TEXT NOT NULL DEFAULT 'none',
+        money_amount INTEGER NOT NULL DEFAULT 0 CHECK(money_amount >= 0),
+        money_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+        driver_user_id INTEGER REFERENCES users(id), scheduled_date DATE,
+        inventory_status TEXT NOT NULL DEFAULT 'not_received',
+        events JSONB NOT NULL DEFAULT '[]', created_by INTEGER NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        request_key TEXT NOT NULL, UNIQUE(organization_id,request_key)
+      );
+      CREATE INDEX IF NOT EXISTS order_returns_order ON order_returns(organization_id,source,order_id);
+      CREATE INDEX IF NOT EXISTS order_returns_driver ON order_returns(organization_id,driver_user_id,status);
+      CREATE TABLE IF NOT EXISTS return_money_movements (
+        id SERIAL PRIMARY KEY, return_id INTEGER NOT NULL UNIQUE REFERENCES order_returns(id),
+        organization_id INTEGER NOT NULL REFERENCES organizations(id), method TEXT NOT NULL,
+        amount INTEGER NOT NULL, recorded_by INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {

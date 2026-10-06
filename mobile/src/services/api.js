@@ -315,3 +315,6 @@ export async function setOrderItems(source, id, items, routeId) {
   const res = await client.patch(`/api/delivery/routes/${routeId}/order-items`, { source, id, items });
   return res.data;
 }
+
+export async function getReturnTasks() { const client=await getClient(); return (await client.get('/api/delivery/returns')).data; }
+export async function updateReturnTask(id,body) { const client=await getClient(); return (await client.post(`/api/delivery/returns/${id}/actions`,body)).data; }

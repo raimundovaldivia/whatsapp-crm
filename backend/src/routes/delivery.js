@@ -59,6 +59,7 @@ let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 router.use(requireAuth);
+router.use('/returns', require('./order-returns'));
 const { routeItems } = require('../services/delivery-items');
 router.get('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
 router.patch('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);

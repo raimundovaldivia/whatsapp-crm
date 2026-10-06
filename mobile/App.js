@@ -22,6 +22,7 @@ import OrdersScreen  from './src/screens/OrdersScreen';
 import RouteScreen   from './src/screens/RouteScreen';
 import RouteMapScreen from './src/screens/RouteMapScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
+import ReturnsScreen from './src/screens/ReturnsScreen';
 import ExpensesScreen from './src/screens/ExpensesScreen';
 import StopScreen    from './src/screens/StopScreen';
 import CustomerChatScreen from './src/screens/CustomerChatScreen';
@@ -146,6 +147,7 @@ export default function App() {
               options={{ title: 'Rutas anteriores', headerBackTitle: 'Rutas' }}
             />
 
+            <Stack.Screen name="Returns" component={ReturnsScreen} options={{ title: 'Cambios y devoluciones', headerBackTitle: 'Rutas' }} />
             <Stack.Screen
               name="Expenses"
               component={ExpensesScreen}

@@ -31,19 +31,19 @@ export default function CajaRepartos({ colors, onShowExpenses }) {
   const invalid = Object.values(numbers).some(value => !Number.isSafeInteger(value) || value < 0)
     || (report && numbers.outside > report.expenses);
   const expenseCash = report ? report.expenses - numbers.outside : 0;
-  const expected = report ? numbers.opening + report.cash - expenseCash - numbers.withdrawn : 0;
+  const expected = report ? numbers.opening + report.cash + (report.adjustments || 0) - expenseCash - numbers.withdrawn : 0;
   const difference = numbers.counted - expected;
   function download() {
     if (!report || invalid) return;
     const rows = [
       ['Caja de reparto', range.from, range.to], ['Saldo inicial', numbers.opening],
-      ['Efectivo cobrado', report.cash], ['Gastos rendidos', report.expenses],
+      ['Efectivo cobrado', report.cash], ['Cambios y devoluciones en efectivo', report.adjustments || 0], ['Gastos rendidos', report.expenses],
       ['Gastos fuera de caja', numbers.outside], ['Retiros', numbers.withdrawn],
       ['Efectivo esperado', expected], ['Efectivo contado', values.counted === '' ? 'Sin contar' : numbers.counted],
       ['Diferencia', values.counted === '' ? 'Sin contar' : difference],
       ['Entregas con pago por revisar', report.unresolved.length], [],
-      ['Día', 'Efectivo cobrado', 'Gastos rendidos', 'Diferencia antes de ajustes'],
-      ...report.byDay.map(row => [row.day, row.cash, row.expenses, row.cash - row.expenses]),
+      ['Día', 'Efectivo cobrado', 'Gastos rendidos', 'Cambios/devoluciones', 'Diferencia antes de ajustes'],
+      ...report.byDay.map(row => [row.day, row.cash, row.expenses, row.adjustments || 0, row.cash + (row.adjustments || 0) - row.expenses]),
     ];
     const csv = rows.map(row => row.map(value => '"' + String(value).replaceAll('"', '""') + '"').join(';')).join('\r\n');
     const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }));
@@ -78,6 +78,7 @@ export default function CajaRepartos({ colors, onShowExpenses }) {
         {card('Efectivo cobrado', report.cash, colors.green)}
         {card(`Gastos rendidos (${report.expenseCount})`, report.expenses)}
         {card('Gastos descontados de caja', expenseCash)}
+        {card('Cambios y devoluciones', report.adjustments || 0)}
         {card('Efectivo esperado', expected, colors.green)}
       </div>
       {report.unresolved.length > 0 && <p role="status" style={{ color: colors.yellow }}>Saldo provisional: {report.unresolved.length} entrega(s) sin medio de pago o monto de efectivo definido. Revisa sus pagos en Despachos.</p>}
@@ -87,15 +88,15 @@ export default function CajaRepartos({ colors, onShowExpenses }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 12 }}>
           {[['opening','Saldo inicial del período'],['outside','Gastos pagados fuera de caja'],['withdrawn','Efectivo retirado o entregado'],['counted','Efectivo contado físicamente']].map(([key,label]) => <label key={key} style={{ display: 'grid', gap: 6, fontSize: 12 }}>{label}<input type="number" min="0" step="1" placeholder={key === 'counted' ? 'Ingresa lo que contaste' : '0'} style={input} value={values[key]} onChange={event => setValues({ ...values, [key]: event.target.value })}/></label>)}
         </div>
-        <p style={{ color: colors.textSecondary, fontSize: 12 }}>Saldo inicial + efectivo cobrado − gastos de caja − retiros = efectivo esperado. Si dejas «gastos pagados fuera de caja» en cero, se descuentan todos los gastos rendidos.</p>
+        <p style={{ color: colors.textSecondary, fontSize: 12 }}>Saldo inicial + efectivo cobrado + cobros de cambios − reembolsos − gastos de caja − retiros = efectivo esperado. Si dejas «gastos pagados fuera de caja» en cero, se descuentan todos los gastos rendidos.</p>
         {invalid && <p role="alert" style={{ color: colors.red }}>Usa pesos enteros positivos o cero. Los gastos fuera de caja no pueden superar el total de gastos.</p>}
         {!invalid && values.counted !== '' && <strong style={{ color: difference === 0 ? colors.green : colors.yellow, fontSize: 20 }}>{difference === 0 ? 'La caja cuadra' : `${difference > 0 ? 'Sobra' : 'Falta'} ${clp(Math.abs(difference))}`}</strong>}
         <p style={{ color: colors.textMuted, fontSize: 12 }}>Este arqueo es un cálculo de consulta: los montos ingresados no se guardan y se limpian al cambiar el período.</p>
       </div>
       <div style={{ ...box, marginTop: 14, overflowX: 'auto' }}>
         <h4 style={{ marginTop: 0 }}>Efectivo y gastos por día</h4>
-        <table style={{ width: '100%', textAlign: 'right', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th style={{ textAlign: 'left' }}>Día</th><th>Efectivo cobrado</th><th>Gastos rendidos</th><th>Diferencia</th></tr></thead><tbody>
-          {report.byDay.map(row => <tr key={row.day}><td style={{ textAlign: 'left', padding: '10px 0' }}>{row.day}</td><td>{clp(row.cash)}</td><td>{clp(row.expenses)}</td><td>{clp(row.cash - row.expenses)}</td></tr>)}
+        <table style={{ width: '100%', textAlign: 'right', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th style={{ textAlign: 'left' }}>Día</th><th>Efectivo cobrado</th><th>Gastos rendidos</th><th>Cambios/devoluciones</th><th>Diferencia</th></tr></thead><tbody>
+          {report.byDay.map(row => <tr key={row.day}><td style={{ textAlign: 'left', padding: '10px 0' }}>{row.day}</td><td>{clp(row.cash)}</td><td>{clp(row.expenses)}</td><td>{clp(row.adjustments || 0)}</td><td>{clp(row.cash + (row.adjustments || 0) - row.expenses)}</td></tr>)}
         </tbody></table>
         <p style={{ color: colors.textMuted, fontSize: 12 }}>Detalle antes de los ajustes manuales del arqueo.</p>
       </div>

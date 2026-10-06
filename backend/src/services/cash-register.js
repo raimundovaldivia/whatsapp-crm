@@ -45,7 +45,7 @@ function summarize(routes, orders, expenses, from, to) {
     expenseCount: expenses.length, byDay: [...daily.values()].sort((a,b) => a.day.localeCompare(b.day)) };
 }
 async function report(pool, orgId, from, to) {
-  const [routes, orders, expenses] = await Promise.all([
+  const [routes, orders, expenses, movements] = await Promise.all([
     // Read all marked routes: an old route can have a delivery during this period.
     pool.query(`SELECT id,orders,optimized_route,stop_statuses,stop_payments,stop_payment_amounts,
       stop_extras,stop_times,completed_at,sent_at,created_at,driver_name FROM delivery_routes
@@ -57,7 +57,12 @@ async function report(pool, orgId, from, to) {
     pool.query(`SELECT amount,TO_CHAR(((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago')::date,'YYYY-MM-DD') AS day
       FROM delivery_expenses WHERE organization_id=$1
       AND ((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago')::date BETWEEN $2::date AND $3::date`, [orgId, from, to]),
+    pool.query(`SELECT return_id,amount,created_at FROM return_money_movements WHERE organization_id=$1 AND method='efectivo'
+      AND (created_at AT TIME ZONE 'America/Santiago')::date BETWEEN $2::date AND $3::date ORDER BY created_at`, [orgId,from,to]),
   ]);
-  return summarize(routes.rows, orders.rows, expenses.rows, from, to);
+  const result=summarize(routes.rows, orders.rows, expenses.rows, from, to);
+  const days=new Map(result.byDay.map(row=>[row.day,{...row,adjustments:0}]));
+  for(const movement of movements.rows){const day=dayOf(movement.created_at);if(!days.has(day))days.set(day,{day,cash:0,expenses:0,adjustments:0});days.get(day).adjustments+=Number(movement.amount);}
+  return {...result, movements:movements.rows, adjustments:movements.rows.reduce((sum,row)=>sum+Number(row.amount),0),byDay:[...days.values()].sort((a,b)=>a.day.localeCompare(b.day))};
 }
 module.exports = { report, summarize, validDate };
