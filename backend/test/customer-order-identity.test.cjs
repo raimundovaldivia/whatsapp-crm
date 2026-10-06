@@ -4,6 +4,7 @@ const { PGlite } = require('@electric-sql/pglite');
 const {
   buildCustomerIdentityMap,
   consolidateCustomerCandidates,
+  loadCustomerIdentityMap,
   resolveCustomerPhones,
 } = require('../src/services/customer-identity');
 
@@ -62,6 +63,36 @@ test('history resolver returns every phone belonging to the same strong identity
     assert.ok(phones.includes('56982294847'));
     assert.ok(phones.includes('56982295945'));
     assert.ok(!phones.includes('56911111111'));
+  } finally {
+    await engine.close();
+  }
+});
+
+test('cached candidates inherit the Shopify email and consolidate even when cache omitted it', async () => {
+  const engine = new PGlite();
+  try {
+    await engine.exec(`
+      CREATE TABLE contacts (organization_id INT, phone TEXT, name TEXT, email TEXT, address TEXT,
+        address1 TEXT, city TEXT, shopify_id TEXT, last_order_at TIMESTAMP);
+      CREATE TABLE shopify_orders (organization_id INT, customer_phone TEXT, customer_name TEXT,
+        customer_email TEXT, shipping_address1 TEXT, shipping_city TEXT, raw_json JSONB,
+        shopify_created_at TIMESTAMP);
+      INSERT INTO contacts VALUES
+        (1,'56982295945','Denisse Duhalde','denisseduhalde@gmail.com',NULL,NULL,'La Serena',NULL,'2026-04-06'),
+        (1,'56982294847','Denisse Duhalde','denisseduhalde@gmail.com',NULL,NULL,'La Serena',NULL,'2026-09-21');
+    `);
+    const pool = { query: (sql, params) => engine.query(sql, params) };
+    const stale = [
+      { phone: '56982295945', name: 'Denisse Duhalde', lastOrderDate: '2026-04-06', totalOrders: 5, totalSpent: 130000 },
+      { phone: '56982294847', name: 'Denisse Duhalde', lastOrderDate: '2026-09-21', totalOrders: 14, totalSpent: 266000 },
+    ];
+    const identityMap = await loadCustomerIdentityMap(pool, 1, stale);
+    const consolidated = consolidateCustomerCandidates(stale, identityMap);
+    assert.equal(consolidated.length, 1);
+    assert.equal(consolidated[0].phone, '56982294847');
+    assert.equal(consolidated[0].email, 'denisseduhalde@gmail.com');
+    assert.equal(consolidated[0].totalOrders, 19);
+    assert.equal(consolidated[0].totalSpent, 396000);
   } finally {
     await engine.close();
   }

@@ -29,7 +29,7 @@ function normalizeText(value) {
 function identitySignals(record) {
   const signals = [];
   const shopifyId = String(record.shopifyId || record.shopify_id || '').trim();
-  const email = String(record.email || record.customer_email || '').trim().toLowerCase();
+  const email = normalizeEmail(record.email || record.customer_email);
   const name = normalizeText(record.name || record.customer_name);
   const address = normalizeText(record.address1 || record.address || record.shipping_address1);
   const city = normalizeText(record.city || record.shipping_city);
@@ -40,6 +40,13 @@ function identitySignals(record) {
   // compartida sí permite enlazar el teléfono anterior con el actual.
   if (name && address) signals.push(`name-address:${name}|${address}|${city}`);
   return signals;
+}
+
+function normalizeEmail(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\u200B-\u200D\uFEFF]+/g, '');
 }
 
 /**
@@ -118,9 +125,15 @@ function consolidateCustomerCandidates(candidates = [], providedIdentityMap = nu
     const phone = normalizePhone(candidate.phone);
     const canonical = identityMap.get(phone) || phone;
     if (!canonical) continue;
+    // Los candidatos guardados en caché no siempre incluyen email. El mapa
+    // cargado desde Shopify conserva el perfil por teléfono para que la API
+    // y el navegador puedan aplicar la misma deduplicación como resguardo.
+    const profile = providedIdentityMap?.profiles?.get(phone);
+    const canonicalProfile = providedIdentityMap?.profiles?.get(canonical);
+    const storedEmail = profile?.email || canonicalProfile?.email || null;
     const current = grouped.get(canonical);
     if (!current) {
-      grouped.set(canonical, { ...candidate, phone: canonical,
+      grouped.set(canonical, { ...candidate, phone: canonical, email: candidate.email || storedEmail,
         recentOrders: [...(candidate.recentOrders || [])] });
       continue;
     }
@@ -148,7 +161,7 @@ function consolidateCustomerCandidates(candidates = [], providedIdentityMap = nu
       } : {}),
       phone: canonical,
       name: String(candidate.name || '').length > String(current.name || '').length ? candidate.name : current.name,
-      email: current.email || candidate.email || null,
+      email: current.email || candidate.email || storedEmail,
       totalOrders,
       totalSpent,
       avgOrderVal: totalOrders ? Math.round(totalSpent / totalOrders) : 0,
@@ -173,7 +186,27 @@ async function loadCustomerIdentityMap(pool, orgId, extraRecords = []) {
       WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''`,
     [orgId]
   );
-  return buildCustomerIdentityMap([...rows, ...extraRecords]);
+  const records = [...rows, ...extraRecords];
+  const identityMap = buildCustomerIdentityMap(records);
+  const profiles = new Map();
+  for (const record of records) {
+    const phone = normalizePhone(record.phone || record.customer_phone);
+    if (!phone) continue;
+    const email = normalizeEmail(record.email || record.customer_email);
+    const rawDate = record.orderDate || record.order_date || record.lastOrderAt || record.last_order_at;
+    const timestamp = rawDate ? new Date(rawDate).getTime() : 0;
+    const current = profiles.get(phone);
+    if (!current || timestamp >= current.timestamp) {
+      profiles.set(phone, {
+        email: email && email.includes('@') ? email : (current?.email || null),
+        timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+      });
+    } else if (!current.email && email.includes('@')) {
+      current.email = email;
+    }
+  }
+  identityMap.profiles = profiles;
+  return identityMap;
 }
 
 async function resolveCustomerPhones(pool, orgId, rawPhone) {
@@ -191,6 +224,7 @@ module.exports = {
   normalizePhone,
   phoneVariants,
   identitySignals,
+  normalizeEmail,
   buildCustomerIdentityMap,
   consolidateCustomerCandidates,
   loadCustomerIdentityMap,
