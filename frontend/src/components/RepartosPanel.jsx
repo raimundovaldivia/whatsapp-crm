@@ -201,19 +201,26 @@ function WarehouseEditor({ colors, warehouse, onSaved }) {
 const VEHICLE_COLORS = ['#22c55e', '#38bdf8', '#f59e0b', '#a78bfa', '#f87171', '#2dd4bf', '#fb923c', '#e879f9'];
 const vehicleColor = (i) => VEHICLE_COLORS[i % VEHICLE_COLORS.length];
 
-// Orden de despacho: suma la cantidad por producto de una lista de paradas.
-// Devuelve [[nombre, cantidad], ...] ordenado de mayor a menor.
+// Orden de despacho: agrupa por identidad operacional, no por el texto histórico.
+// Devuelve [[etiqueta, bultos, detalle], ...] ordenado de mayor a menor.
 function buildManifest(stops) {
-  const totals = {};
+  const totals = new Map();
   for (const st of (stops || [])) {
     for (const it of (st.items || [])) {
       const name = (it.name || it.title || it.product_name || 'Sin nombre').trim() || 'Sin nombre';
+      const key = it.product_key || `raw:${name.toLocaleLowerCase('es')}`;
+      const label = it.product_label || name;
       const qty  = Number(it.quantity) || 0;
       if (!qty) continue;
-      totals[name] = (totals[name] || 0) + qty;
+      const row = totals.get(key) || { label, quantity: 0, contentUnits: 0, contentUnit: it.pack_unit || null };
+      row.quantity += qty;
+      if (Number(it.content_units) > 0) row.contentUnits += Number(it.content_units) * qty;
+      totals.set(key, row);
     }
   }
-  return Object.entries(totals).sort((a, b) => b[1] - a[1]);
+  return [...totals.entries()]
+    .map(([key, row]) => [row.label, row.quantity, { key, contentUnits: row.contentUnits, contentUnit: row.contentUnit }])
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'es'));
 }
 const manifestUnits = (manifest) => manifest.reduce((s, [, q]) => s + q, 0);
 
@@ -812,12 +819,12 @@ function NuevoReparto({ colors }) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                     <Package size={16} color={colors.green} />
                     <span style={{ color: colors.textPrimary, fontWeight: 800, fontSize: '14px' }}>Orden de despacho</span>
-                    <span style={{ marginLeft: 'auto', color: colors.textMuted, fontSize: '12px' }}>{manifestUnits(manifest)} u. en total</span>
+                    <span style={{ marginLeft: 'auto', color: colors.textMuted, fontSize: '12px' }}>{manifestUnits(manifest)} bultos/piezas</span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                    {manifest.map(([name, qty]) => (
-                      <div key={name} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px', paddingBottom: '5px', borderBottom: `1px solid ${colors.border}` }}>
-                        <span style={{ color: colors.textSecondary }}>{name}</span>
+                    {manifest.map(([name, qty, detail]) => (
+                      <div key={detail.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px', paddingBottom: '5px', borderBottom: `1px solid ${colors.border}` }}>
+                        <span style={{ color: colors.textSecondary }}>{name}{detail.contentUnits > 0 && detail.contentUnit === 'huevos' ? <small style={{ color: colors.textMuted, marginLeft: '8px' }}>({detail.contentUnits} huevos)</small> : null}</span>
                         <span style={{ color: colors.textPrimary, fontWeight: 700, flexShrink: 0 }}>{qty}</span>
                       </div>
                     ))}
@@ -870,11 +877,11 @@ function NuevoReparto({ colors }) {
                       <div style={{ padding: '10px 14px', borderTop: `1px solid ${colors.border}`, backgroundColor: `${color}0d` }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
                           <Package size={14} color={color} />
-                          <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '12px' }}>Cargar en este vehículo · {manifestUnits(manifest)} u.</span>
+                          <span style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '12px' }}>Cargar en este vehículo · {manifestUnits(manifest)} bultos/piezas</span>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          {manifest.map(([name, qty]) => (
-                            <div key={name} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '13px' }}>
+                          {manifest.map(([name, qty, detail]) => (
+                            <div key={detail.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '13px' }}>
                               <span style={{ color: colors.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
                               <span style={{ color: colors.textPrimary, fontWeight: 700, flexShrink: 0 }}>{qty}</span>
                             </div>

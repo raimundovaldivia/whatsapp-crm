@@ -11,6 +11,13 @@ const router  = express.Router();
 const db      = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { consolidateBroadcastContacts } = require('../services/customer-identity');
+const productIdentity = require('../services/product-identity');
+const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem === 'function'
+  ? productIdentity.canonicalizeProductItem
+  : item => ({ ...item, product_key: `raw:${String(item?.name || item?.title || '').toLowerCase()}`, product_label: item?.name || item?.title || '' });
+const productMatchesQuery = typeof productIdentity.productMatchesQuery === 'function'
+  ? productIdentity.productMatchesQuery
+  : (item, query) => String(item?.name || item?.title || '').toLowerCase().includes(String(query || '').toLowerCase());
 
 router.use(requireAuth);
 
@@ -244,7 +251,7 @@ router.get('/favorite-products', requireContactsAccess, async (req, res) => {
       if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return []; } }
       return Array.isArray(x) ? x : [];
     };
-    // phone -> { productName -> count }
+    // phone -> { productKey -> { label, count } }
     const tally = new Map();
     const eat = (rows) => {
       for (const r of rows) {
@@ -253,10 +260,13 @@ router.get('/favorite-products', requireContactsAccess, async (req, res) => {
         const m = tally.get(k);
         for (const it of parseItems(r.items)) {
           if (it && it._deliveryExtra) continue;              // ignorar extras de reparto
-          const name = String(it?.name || it?.title || '').trim();
-          if (!name) continue;
+          const identity = canonicalizeProductItem(it);
+          const key = identity.product_key;
+          if (!key) continue;
           const q = Number(it?.quantity) || 1;
-          m.set(name, (m.get(name) || 0) + q);
+          const current = m.get(key) || { label: identity.product_label, count: 0 };
+          current.count += q;
+          m.set(key, current);
         }
       }
     };
@@ -264,7 +274,7 @@ router.get('/favorite-products', requireContactsAccess, async (req, res) => {
     const favorites = {};
     for (const [phone, m] of tally) {
       let best = null, bestN = 0;
-      for (const [name, n] of m) if (n > bestN) { best = name; bestN = n; }
+      for (const value of m.values()) if (value.count > bestN) { best = value.label; bestN = value.count; }
       if (best) favorites[phone] = best;
     }
     res.json({ success: true, favorites, count: Object.keys(favorites).length });
@@ -280,25 +290,28 @@ router.get('/by-product', requireContactsAccess, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.json({ success: true, phones: [], count: 0, term: '' });
   try {
-    const like = `%${q}%`;
     const { rows } = await pool.query(
-      `SELECT DISTINCT customer_phone FROM (
-         SELECT customer_phone FROM orders
-           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
-             AND status <> 'cancelled' AND items::text ILIKE $2
-         UNION
-         SELECT customer_phone FROM shopify_orders
-           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
-             AND items::text ILIKE $2
-       ) t`,
-      [req.orgId, like]
+      `SELECT customer_phone, items FROM orders
+         WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+           AND status <> 'cancelled' AND items IS NOT NULL
+       UNION ALL
+       SELECT customer_phone, items FROM shopify_orders
+         WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+           AND items IS NOT NULL`,
+      [req.orgId]
     );
     const norm = p => {
       const n = String(p || '').replace(/\D/g, '');
       if (/^9\d{8}$/.test(n)) return '56' + n;
       return n;
     };
-    const phones = [...new Set(rows.map(r => norm(r.customer_phone)).filter(Boolean))];
+    const parseItems = value => {
+      if (Array.isArray(value)) return value;
+      try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+    };
+    const phones = [...new Set(rows
+      .filter(row => parseItems(row.items).some(item => !item?._deliveryExtra && productMatchesQuery(item, q)))
+      .map(row => norm(row.customer_phone)).filter(Boolean))];
     const ds = await db.getPrimaryDataSource(req.orgId);
     const scopes = ds?.config?.scopes || [];
     const { rows: coverageRows } = await pool.query(

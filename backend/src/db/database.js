@@ -1723,6 +1723,11 @@ async function upsertShopifyOrders(orgId, orders) {
       name:     li.title || li.name,
       quantity: li.quantity,
       price:    li.price,
+      sku:      li.sku || null,
+      variantId: li.variantId || null,
+      variantTitle: li.variantTitle || null,
+      productId: li.productId || null,
+      productTitle: li.productTitle || null,
     }));
     const createdAt     = o.createdAt || null;
 

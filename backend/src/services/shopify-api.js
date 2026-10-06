@@ -334,7 +334,13 @@ const ORDERS_QUERY = `
             edges {
               node {
                 title
+                sku
                 quantity
+                variant {
+                  id
+                  title
+                  product { id title }
+                }
                 originalUnitPriceSet { shopMoney { amount } }
               }
             }
@@ -406,6 +412,11 @@ async function getOrders(shop, token, opts = {}) {
       title:    li.title,
       quantity: li.quantity,
       price:    parseFloat(li.originalUnitPriceSet?.shopMoney?.amount || 0),
+      sku:      li.sku || null,
+      variantId: li.variant?.id || null,
+      variantTitle: li.variant?.title || null,
+      productId: li.variant?.product?.id || null,
+      productTitle: li.variant?.product?.title || null,
     })) || [],
   }));
 

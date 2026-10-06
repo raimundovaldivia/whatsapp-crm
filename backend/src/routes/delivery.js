@@ -33,6 +33,10 @@ const deliveryNotifications = require('../services/delivery-notifications');
 const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
 const push = require('../services/push');
+const productIdentity = require('../services/product-identity');
+const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem === 'function'
+  ? productIdentity.canonicalizeProductItem
+  : item => item;
 const { attachAttemptHistory } = require('../services/delivery-attempts');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -403,6 +407,7 @@ function normalizeShopifyOrder(row) {
   const city   = addr.city || row.shipping_city || '';
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
+  items = items.map(canonicalizeProductItem);
   return {
     id: row.id, source: 'shopify',
     orderName: row.order_name || `#${row.id}`,      // shopify_name aliaseado como order_name
@@ -440,6 +445,7 @@ function normalizeBotOrder(row) {
     : row.customer_name;
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
+  items = items.map(canonicalizeProductItem);
   return {
     id: String(row.id), source: 'bot',
     orderName: `#BOT-${row.id}`,
