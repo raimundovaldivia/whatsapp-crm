@@ -23,10 +23,16 @@ test('history sync preserves local logistics and does not recreate historical di
       customer: {}, items: [], totalPrice: 100, createdAt: '2025-01-01T12:00:00Z',
     });
     await db.upsertShopifyOrders(1, [order('history'), order('pending', 'UNFULFILLED'),
-      order('partial', 'PARTIALLY_FULFILLED'), order('retry'), order('rescheduled'),
+      order('partial', 'PARTIALLY_FULFILLED'), order('old-open', 'UNFULFILLED'),
+      order('old-partial', 'PARTIALLY_FULFILLED'), order('old-scheduled', 'UNFULFILLED'),
+      order('old-attempt', 'UNFULFILLED'), order('retry'), order('rescheduled'),
       order('delivered'), order('cancelled'), order('assigned'), order('enroute'), order('refunded')]);
     await db.upsertShopifyOrders(2, [order('other-tenant', 'UNFULFILLED')]);
     await engine.exec(`
+      UPDATE shopify_orders SET shopify_created_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - INTERVAL '1 day'
+        WHERE shopify_order_id IN ('pending','partial');
+      UPDATE shopify_orders SET delivery_date=CURRENT_DATE - 1 WHERE shopify_order_id='old-scheduled';
+      UPDATE shopify_orders SET dispatch_count=1,last_attempt_at=NOW() WHERE shopify_order_id='old-attempt';
       UPDATE shopify_orders SET crm_status='no_entregado', dispatch_count=2,
         last_attempt_status='failed', delivery_note='Reintentar' WHERE shopify_order_id='retry';
       UPDATE shopify_orders SET crm_status='por_despachar' WHERE shopify_order_id='rescheduled';
@@ -51,13 +57,15 @@ test('history sync preserves local logistics and does not recreate historical di
     const res = response();
     await handler(router, 'get', '/orders')({ orgId: 1 }, res);
     assert.equal(res.code, 200, JSON.stringify(res.body));
-    assert.deepEqual(Array.from(res.body.orders, o => o.id).sort(), ['partial','pending','rescheduled','retry']);
+    assert.deepEqual(Array.from(res.body.orders, o => o.id).sort(), ['old-attempt','old-scheduled','partial','pending','rescheduled','retry']);
     // Reject a stale browser selection on the server as well.
-    const send = response();
-    await handler(router, 'post', '/routes')({ orgId: 1, body: {
-      send: true, orders: [{ id: 'history', source: 'shopify', items: [] }],
-    } }, send);
-    assert.equal(send.code, 400, JSON.stringify(send.body));
+    for (const id of ['history', 'old-open', 'old-partial']) {
+      const send = response();
+      await handler(router, 'post', '/routes')({ orgId: 1, body: {
+        send: true, orders: [{ id, source: 'shopify', items: [] }],
+      } }, send);
+      assert.equal(send.code, 400, JSON.stringify(send.body));
+    }
     assert.equal((await engine.query('SELECT COUNT(*)::int AS n FROM delivery_routes')).rows[0].n, 0);
     assert.deepEqual((await logistics()).rows, before, 'filtering must not invent delivery states');
   } finally { await engine.close(); }

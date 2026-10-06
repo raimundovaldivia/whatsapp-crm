@@ -583,6 +583,10 @@ function NuevoReparto({ colors }) {
           </span>
         </div>
 
+        <div style={{ padding: '8px 16px', color: colors.textMuted, fontSize: '11px', borderBottom: `1px solid ${colors.border}` }}>
+          Shopify: últimos 60 días y pedidos anteriores con gestión de despacho. El historial completo sigue disponible en Clientes.
+        </div>
+
         {error && (
           <div style={{ margin: '12px', padding: '10px 14px', backgroundColor: `${colors.red}18`, borderRadius: '8px', color: colors.red, fontSize: '13px' }}>
             {error}
