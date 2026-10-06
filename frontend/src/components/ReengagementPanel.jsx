@@ -51,11 +51,11 @@ async function consolidateWithShopifyProfiles(rows = []) {
       ...candidate,
       email: candidate.email || emailByPhone.get(String(candidate.phone || '').replace(/\D/g, '')) || null,
     }));
-    console.info('[ReengagementIdentity]', {
+    console.info('[ReengagementIdentity]', JSON.stringify({
       candidates: rows.length,
       shopifyProfiles: emailByPhone.size,
       candidatesWithEmail: enriched.filter(candidate => candidate.email).length,
-    });
+    }));
   } catch (_) {
     // El filtro sigue operativo si Shopify no responde; la API de campañas
     // ya realiza la misma consolidación en el servidor.
