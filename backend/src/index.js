@@ -29,6 +29,7 @@ const evolutionWebhookRouter = require('./routes/evolution-webhook'); // WhatsAp
 const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follow-up
 const { startScheduledFollowUpJob } = require('./services/scheduled-follow-up'); // Job pedidos agendados
 const { startCampaignFollowUpJob } = require('./services/campaign-follow-up');
+const { startJourneyRunner } = require('./services/campaign-journeys');
 const { startAdminWindowJob } = require('./services/admin-notify');
 const { startEscalationWatchJob } = require('./services/escalation-watch'); // Recordatorio si una escalación queda sin respuesta              // Aviso previo + cola de alertas admin
 const { startConversationModeWatchJob } = require('./services/conversation-mode-watch');
@@ -181,6 +182,7 @@ setupDatabase().then(() => {
     startFollowUpJob(io);
     startScheduledFollowUpJob(io);
     startCampaignFollowUpJob(io);
+    startJourneyRunner(io);
     startAdminWindowJob();
     startEscalationWatchJob();
     startConversationModeWatchJob(io);

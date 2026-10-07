@@ -1733,6 +1733,98 @@ router.get('/sending-methods', async (req, res) => {
   catch (error) { res.status(503).json({ error: 'No se pudieron consultar las conexiones' }); }
 });
 
+/* ─────────────────────────────────────────────────────────────────────
+   Secuencias automáticas: público + pasos + hilo conductor
+───────────────────────────────────────────────────────────────────── */
+router.get('/journeys', async (req, res) => {
+  try {
+    const journeys = await require('../services/campaign-journeys').listJourneys(req.orgId);
+    res.json({ success: true, journeys });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/journeys/plan', async (req, res) => {
+  try {
+    await require('../services/commercial').assertModule(req.orgId, 'marketing');
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc || !['kapso', 'meta'].includes(wc.provider)) {
+      return res.status(409).json({ success: false, error: 'Conecta WhatsApp oficial antes de preparar una campaña automática' });
+    }
+    const templates = await require('../services/kapso-whatsapp').getTemplates(wc);
+    const plan = await require('../services/campaign-planner').planCampaign({
+      instruction: req.body?.instruction,
+      templates,
+      currentAudience: req.body?.currentAudience || {},
+    });
+    res.json({ success: true, plan });
+  } catch (error) {
+    console.error('[CampaignPlanner]', error.message);
+    res.status(error.status || 400).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/journeys/:id', async (req, res) => {
+  try {
+    const journey = await require('../services/campaign-journeys').journeyDetail(req.orgId, req.params.id);
+    if (!journey) return res.status(404).json({ success: false, error: 'Secuencia no encontrada' });
+    res.json({ success: true, journey });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/journeys', async (req, res) => {
+  try {
+    const journey = await require('../services/campaign-journeys').createJourney(req.orgId, req.userId, req.body || {});
+    res.status(201).json({ success: true, journey });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/journeys/:id/activate', async (req, res) => {
+  try {
+    const journeyDetail = await require('../services/campaign-journeys').journeyDetail(req.orgId, req.params.id);
+    if (!journeyDetail) return res.status(404).json({ success: false, error: 'Secuencia no encontrada' });
+    const wc = await db.getWhatsappConfig(req.orgId);
+    if (!wc || !['kapso', 'meta'].includes(wc.provider)) {
+      return res.status(409).json({ success: false, error: 'Las secuencias necesitan WhatsApp oficial conectado para enviar templates aprobados' });
+    }
+    const availableTemplates = await require('../services/kapso-whatsapp').getTemplates(wc);
+    const availableNames = new Set(availableTemplates.map(template => template.name));
+    const missingTemplates = journeyDetail.steps.filter(step => !availableNames.has(step.template_name)).map(step => step.template_name);
+    if (missingTemplates.length) {
+      return res.status(409).json({ success: false, error: `Templates no disponibles o no aprobados: ${[...new Set(missingTemplates)].join(', ')}` });
+    }
+    const result = await require('../services/campaign-journeys').activateJourney(req.orgId, req.params.id);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(409).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/journeys/:id/pause', async (req, res) => {
+  try {
+    const journey = await require('../services/campaign-journeys').setJourneyStatus(req.orgId, req.params.id, 'paused');
+    if (!journey) return res.status(404).json({ success: false, error: 'Secuencia no encontrada o no modificable' });
+    res.json({ success: true, journey });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/journeys/:id/cancel', async (req, res) => {
+  try {
+    const journey = await require('../services/campaign-journeys').setJourneyStatus(req.orgId, req.params.id, 'cancelled');
+    if (!journey) return res.status(404).json({ success: false, error: 'Secuencia no encontrada o no modificable' });
+    res.json({ success: true, journey });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
 router.post('/campaigns', async (req, res) => {
   try {
     const { templateName, total, testMode = false, testPhone = null, sendingProvider = 'kapso', sendingChannelId = null } = req.body || {};
@@ -2164,6 +2256,13 @@ router.post('/send-broadcast', async (req, res) => {
       results.push({ phone: rawItem.phone, success: false, error: 'Número inválido' });
       continue;
     }
+    const activeJourney = await require('../services/campaign-journeys').activeJourneyForPhone(req.orgId, item.phone);
+    if (activeJourney) {
+      const reason = `Ya participa en la secuencia activa: ${activeJourney.name}`;
+      await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: reason });
+      results.push({ phone: item.phone, success: false, skipped: true, error: reason });
+      continue;
+    }
     if (await templateSentToday(req.orgId, item.phone)) {
       await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: 'Ya recibió un template hoy' });
       results.push({ phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' });
@@ -2333,6 +2432,16 @@ router.post('/send-bulk', async (req, res) => {
           continue;
         }
         if (!String(item.templateName ? item.previewText || '' : item.message || '').trim()) throw new Error('El mensaje directo está vacío');
+      }
+
+      if (!item.force) {
+        const activeJourney = await require('../services/campaign-journeys').activeJourneyForPhone(req.orgId, item.phone);
+        if (activeJourney) {
+          const result = { phone: item.phone, success: false, skipped: true, error: `Ya participa en la secuencia activa: ${activeJourney.name}` };
+          await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: result.error });
+          results.push(result);
+          continue;
+        }
       }
 
       // ── Anti-duplicado: saltar si ya recibió un template hoy ─────

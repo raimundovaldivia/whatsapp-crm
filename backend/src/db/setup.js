@@ -926,6 +926,83 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_broadcast_followup_due
         ON broadcast_followup_jobs(status, scheduled_for);
+
+      -- Secuencias automáticas: una campaña deja de ser un envío aislado y
+      -- pasa a ser un hilo con público, pasos, condiciones de continuidad y
+      -- estado individual por destinatario.
+      CREATE TABLE IF NOT EXISTS campaign_journeys (
+        id                    BIGSERIAL PRIMARY KEY,
+        organization_id       INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        created_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        name                  TEXT NOT NULL,
+        objective             TEXT NOT NULL DEFAULT 'promocion',
+        status                TEXT NOT NULL DEFAULT 'draft'
+                              CHECK(status IN ('draft','active','paused','completed','cancelled')),
+        audience_filters      JSONB NOT NULL DEFAULT '{}'::jsonb,
+        cooldown_hours        INTEGER NOT NULL DEFAULT 48 CHECK(cooldown_hours BETWEEN 0 AND 8760),
+        stop_on_reply         BOOLEAN NOT NULL DEFAULT TRUE,
+        stop_on_order         BOOLEAN NOT NULL DEFAULT TRUE,
+        stop_on_human         BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        activated_at          TIMESTAMPTZ,
+        completed_at          TIMESTAMPTZ,
+        updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_campaign_journeys_org_status
+        ON campaign_journeys(organization_id, status, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS campaign_journey_steps (
+        id                    BIGSERIAL PRIMARY KEY,
+        journey_id            BIGINT NOT NULL REFERENCES campaign_journeys(id) ON DELETE CASCADE,
+        step_order            INTEGER NOT NULL CHECK(step_order >= 1),
+        template_name         TEXT NOT NULL,
+        language_code         TEXT NOT NULL DEFAULT 'es',
+        wait_hours            INTEGER NOT NULL DEFAULT 0 CHECK(wait_hours BETWEEN 0 AND 8760),
+        trigger_condition     TEXT NOT NULL DEFAULT 'no_reply'
+                              CHECK(trigger_condition IN ('always','no_reply','read_no_reply','delivered_no_reply')),
+        variable_modes        JSONB NOT NULL DEFAULT '["first_name"]'::jsonb,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(journey_id, step_order)
+      );
+
+      CREATE TABLE IF NOT EXISTS campaign_journey_enrollments (
+        id                    BIGSERIAL PRIMARY KEY,
+        journey_id            BIGINT NOT NULL REFERENCES campaign_journeys(id) ON DELETE CASCADE,
+        organization_id       INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        phone                 TEXT NOT NULL,
+        contact_name          TEXT,
+        status                TEXT NOT NULL DEFAULT 'draft'
+                              CHECK(status IN ('draft','active','completed','stopped','excluded','failed')),
+        current_step          INTEGER NOT NULL DEFAULT 0,
+        next_run_at           TIMESTAMPTZ,
+        last_sent_at          TIMESTAMPTZ,
+        last_message_id       TEXT,
+        last_campaign_id      BIGINT REFERENCES broadcast_campaigns(id) ON DELETE SET NULL,
+        stop_reason           TEXT,
+        failure_count         INTEGER NOT NULL DEFAULT 0,
+        locked_at             TIMESTAMPTZ,
+        enrolled_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(journey_id, phone)
+      );
+      CREATE INDEX IF NOT EXISTS idx_campaign_journey_due
+        ON campaign_journey_enrollments(status, next_run_at)
+        WHERE status='active';
+      CREATE INDEX IF NOT EXISTS idx_campaign_journey_phone_active
+        ON campaign_journey_enrollments(organization_id, phone, status);
+
+      CREATE TABLE IF NOT EXISTS campaign_journey_events (
+        id                    BIGSERIAL PRIMARY KEY,
+        journey_id            BIGINT NOT NULL REFERENCES campaign_journeys(id) ON DELETE CASCADE,
+        enrollment_id         BIGINT REFERENCES campaign_journey_enrollments(id) ON DELETE CASCADE,
+        organization_id       INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        event_type            TEXT NOT NULL,
+        step_order            INTEGER,
+        detail                JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_campaign_journey_events
+        ON campaign_journey_events(journey_id, created_at DESC);
     `);
 
     // Migración: precios especiales por empresa

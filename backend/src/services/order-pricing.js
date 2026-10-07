@@ -189,11 +189,12 @@ function priceItems(items = [], products = [], opts = {}) {
     // "60 Jumbo $23.500") llegan como una cotización cerrada. Conservar esa
     // línea exacta evita que el matcher la cambie por XL/100 unidades o que
     // pierda el precio al no encontrarla en el catálogo.
-    if (raw.locked_quote && Number(raw.price) > 0) {
+    if (raw.locked_quote && (Number(raw.price) > 0 || (raw.free_gift && Number(raw.price) === 0))) {
       priced.push({
         product_name: name, name, title: name, quantity: qty,
         price: Number(raw.price), unit_source: 'promocion', matched: true,
         locked_quote: true, promotion_offer: !!raw.promotion_offer,
+        ...(raw.free_gift ? { free_gift: true } : {}),
         ...(raw.promotion_combo ? { promotion_combo: raw.promotion_combo } : {}),
         ...(raw.product_id != null ? { product_id: raw.product_id } : {}),
         ...(raw.variant_id != null ? { variant_id: raw.variant_id } : {}),
@@ -285,7 +286,7 @@ function fmt(n) { return `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}
 
 /** Líneas "📦 2x Bandeja 30 XL — $24.000" para el resumen al cliente. */
 function itemLines(items = []) {
-  return items.map(it => `📦 ${it.quantity}x ${it.name}${it.price ? ` — ${fmt(it.price * it.quantity)}` : ''}`).join('\n');
+  return items.map(it => `📦 ${it.quantity}x ${it.name}${it.free_gift ? ' — GRATIS 🎁' : (it.price ? ` — ${fmt(it.price * it.quantity)}` : '')}`).join('\n');
 }
 
 /** Texto para el prompt del agente de pedidos: qué hay valorizado y qué no. */
@@ -294,6 +295,7 @@ function pricingContext(pricing) {
   const lines = pricing.items.map(it => {
     if (it.ambiguous) return `- ${it.quantity}x "${it.name}"  ⚠️ AMBIGUO: puede ser ${it.alternatives.join(' o ')} — pregunta al cliente cuál (no muestres el resumen todavía)`;
     if (!it.matched) return `- ${it.quantity}x "${it.name}"  ⚠️ NO está en el catálogo tal cual — pide al cliente que aclare cuál es (no muestres el resumen todavía)`;
+    if (it.free_gift) return `- ${it.quantity}x ${it.name} = GRATIS (beneficio promocional; no cobrar)`;
     return `- ${it.quantity}x ${it.name} @ ${fmt(it.price)} c/u = ${fmt(it.price * it.quantity)}`;
   });
   const out = [`Subtotal: ${fmt(pricing.subtotal)}`];

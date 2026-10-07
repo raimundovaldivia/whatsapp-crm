@@ -184,6 +184,43 @@ function parseDiscountPct(body) {
   return 0;
 }
 
+/**
+ * Extrae beneficios del tipo "1 producto de aceitunas GRATIS en compras sobre
+ * $20.000". El producto, la cantidad y el monto salen del propio template.
+ */
+function parseFreeGift(body) {
+  const text = String(body || '');
+  const threshold = '(sobre|superiores?\\s+a|mayores?\\s+a|desde|iguales?\\s+o\\s+superiores?\\s+a|(?:por\\s+un\\s+)?m[ií]nimo(?:\\s+de)?|m[ií]nimas?\\s+de|de\\s+al\\s+menos)';
+  const patterns = [
+    new RegExp(`(?:tienes?|recibes?|recibe|lleva|obt[eé]n|te\\s+regalamos)?\\s*(\\d{1,2}|un(?:o|a)?|dos|tres|cuatro|cinco)\\s+(?:productos?|unidades?|envases?|potes?|frascos?)?\\s*(?:de\\s+)?([^|.!?\\n]{2,55}?)\\s+gratis\\s+(?:en|por|con)\\s+compras?\\s+${threshold}\\s*\\$?\\s*([\\d.]+)`, 'iu'),
+    new RegExp(`([^|.!?\\n]{2,55}?)\\s+gratis\\s+(?:en|por|con)\\s+compras?\\s+${threshold}\\s*\\$?\\s*([\\d.]+)`, 'iu'),
+  ];
+  for (let index = 0; index < patterns.length; index++) {
+    const match = text.match(patterns[index]);
+    if (!match) continue;
+    const hasQuantity = index === 0;
+    const quantityWords = { un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5 };
+    const quantity = hasQuantity ? (Number(match[1]) || quantityWords[norm(match[1])] || 0) : 1;
+    const target = cleanOfferLabel(hasQuantity ? match[2] : match[1])
+      .replace(/^(?:recibe|lleva|obt[eé]n|te\s+regalamos)\s+(?:un|una)?\s*/iu, '')
+      .replace(/^(?:un|una|el|la)\s+/iu, '')
+      .trim();
+    const comparator = norm(hasQuantity ? match[3] : match[2]);
+    const minPurchase = money(hasQuantity ? match[4] : match[3]);
+    if (!quantity || !target || !minPurchase) continue;
+    return {
+      quantity,
+      target,
+      minPurchase,
+      minimumExclusive: /^(sobre|superior|superiores|mayor|mayores)/.test(comparator),
+      choiceRequired: /(?:a\s+elecci[oó]n|elige|escoge|variedades?)/iu.test(text),
+      stockRequired: /(?:disponib(?:le|les)\s+en\s+stock|sujeta?\s+a\s+stock|hasta\s+agotar\s+stock|seg[uú]n\s+stock)/iu.test(text),
+      candidates: [],
+    };
+  }
+  return null;
+}
+
 function explicitUntil(body, sentDay) {
   const m = String(body || '').match(/(?:v[aá]lid[oa]|vigente).{0,30}?hasta(?:\s+el)?(?:\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo))?\s*,?\s*(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?/iu);
   if (!m) return null;
@@ -231,15 +268,20 @@ function parseTemplate(message, products = [], now = new Date()) {
   const templateName = content.match(/\[Template:\s*([^\]]+)\]/i)?.[1]?.trim() || '';
   if (!templateName) return null;
   const body = content.replace(/^\s*\[Template:[^\]]+\]\s*/i, '').trim();
-  const offers = parseOffers(body);
+  // El monto mínimo de una regla de regalo no es el precio de una oferta.
+  // Ej.: "1 aceituna GRATIS en compras sobre $20.000" no significa que la
+  // aceituna cueste $20.000.
+  const offers = parseOffers(body).filter(offer => !/\b(?:gratis|regalo)\b/iu.test(`${offer.label || ''} ${offer.descriptor || ''}`));
   const categoryDiscounts = parseCategoryDiscounts(body);
   const secondUnitDiscounts = parseSecondUnitDiscounts(body);
+  const freeGift = parseFreeGift(body);
   const parsedDiscountPct = parseDiscountPct(body);
   // Un template con precios finales y porcentaje informativo no acumula ambos
   // beneficios. Los precios explícitos mandan; el porcentaje se usa cuando la
   // promoción realmente consiste en descontar el subtotal.
   const discountPct = (offers.length || categoryDiscounts.length || secondUnitDiscounts.length) ? 0 : parsedDiscountPct;
-  const promotional = (offers.length > 0 || parsedDiscountPct > 0) && (/promo|promoci[oó]n|oferta|descuento|dcto|rebaja/i.test(`${templateName} ${body}`));
+  const promotional = (offers.length > 0 || parsedDiscountPct > 0 || freeGift)
+    && (/promo|promoci[oó]n|oferta|descuento|dcto|rebaja|gratis|regalo/i.test(`${templateName} ${body}`));
   if (!promotional) return null;
 
   const sentAtCandidate = new Date(message.created_at || message.createdAt || now);
@@ -252,18 +294,43 @@ function parseTemplate(message, products = [], now = new Date()) {
     || /v[aá]lid[oa][^.!?\n]{0,55}esta\s+semana/iu.test(body);
   const validUntil = explicitUntil(body, sentDay) || (validOnlyToday ? sentDay : (deliveryWeekOnly ? endOfWeek(sentDay) : null));
   const cutoff = parseCutoff(body);
-  const orderCutoffOnlyToday = /(?:extendimos|ampliamos|extendido|nuevo\s+horario)[^.!?\n]{0,90}?pedidos?\s+de\s+hoy[^.!?\n]{0,60}?(?:hasta|a)\s+las?/iu.test(body);
+  const orderCutoffOnlyToday = /(?:extendimos|ampliamos|extendido|nuevo\s+horario)[^.!?\n]{0,90}?pedidos?\s+de\s+hoy[^.!?\n]{0,60}?(?:hasta|a)\s+las?/iu.test(body)
+    || (freeGift && validOnlyToday && /(?:pedido|compra|orden)(?:s|do|dos)?[^.!?\n]{0,80}?antes\s+de\s+las?/iu.test(body));
   const usesDefaultValidity = !validUntil && !orderCutoffOnlyToday;
   const expiresAt = usesDefaultValidity ? new Date(sentAt.getTime() + 24 * 60 * 60 * 1000).toISOString() : null;
   const activeByDate = !validUntil || (!!today && today <= validUntil);
   const activeByDefault = !expiresAt || new Date(now).getTime() <= new Date(expiresAt).getTime();
   const active = activeByDate && activeByDefault && (!orderCutoffOnlyToday || beforeChileCutoff(now, sentDay, cutoff));
   const sameDayConditional = /(mismo\s+d[ií]a|durante\s+el\s+d[ií]a)/iu.test(body);
-  const stockConditional = /(si\s+(tenemos|hay)\s+stock|sujeto\s+a\s+stock)/iu.test(body);
+  const stockConditional = /(si\s+(tenemos|hay)\s+stock|sujeta?\s+a\s+stock|disponib(?:le|les)\s+en\s+stock|hasta\s+agotar\s+stock)/iu.test(body);
   const freeShippingMatch = body.match(/(?:despachos?|env[ií]os?)\s+gratis[^$\d]{0,35}(?:sobre|desde|superiores?\s+a)\s*\$?\s*([\d.]+)/iu);
   const freeShippingMin = freeShippingMatch ? money(freeShippingMatch[1]) : 0;
 
   const catalog = pricing.flattenCatalog(products);
+  if (freeGift) {
+    const targetTokens = norm(freeGift.target)
+      .split(' ')
+      .filter(token => token.length > 2)
+      .map(token => token.endsWith('s') ? token.slice(0, -1) : token);
+    const seenGift = new Set();
+    freeGift.candidates = catalog
+      .filter(candidate => candidate.available !== false)
+      .filter(candidate => {
+        const title = norm(candidate.title);
+        return targetTokens.length > 0 && targetTokens.some(token => title.includes(token));
+      })
+      .filter(candidate => {
+        const key = `${candidate.product_id || ''}:${candidate.variant_id || ''}:${norm(candidate.title)}`;
+        if (seenGift.has(key)) return false;
+        seenGift.add(key);
+        return true;
+      })
+      .map(candidate => ({
+        title: candidate.title,
+        productId: candidate.product_id,
+        variantId: candidate.variant_id,
+      }));
+  }
   const specialPrices = {};
   for (const offer of offers) {
     if (offer.combo) {
@@ -313,7 +380,7 @@ function parseTemplate(message, products = [], now = new Date()) {
   }
 
   return {
-    templateName, body, offers, discountPct, categoryDiscounts, secondUnitDiscounts, specialPrices, sentDay, validUntil, validOnlyToday,
+    templateName, body, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday,
     deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, active, cutoff, sameDayConditional, stockConditional,
   };
 }
@@ -331,8 +398,8 @@ function fromHistory(history = [], products = [], now = new Date()) {
 
 function snapshot(promotion) {
   if (!promotion) return null;
-  const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional } = promotion;
-  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional };
+  const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional } = promotion;
+  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional };
 }
 
 function restore(saved, now = new Date()) {
@@ -361,7 +428,7 @@ function promptSection(promotion) {
     : '';
   const priceRule = promotion.discountPct
     ? `Aplica exactamente ${promotion.discountPct}% de descuento al subtotal del pedido.`
-    : 'Para estas presentaciones usa el precio promocional, nunca el precio normal del catálogo.';
+    : (promotion.offers.length ? 'Para estas presentaciones usa el precio promocional, nunca el precio normal del catálogo.' : 'Usa los precios normales del catálogo para los productos comprados.');
   const categoryRules = (promotion.categoryDiscounts || []).map(rule => `Aplica ${rule.pct}% de descuento solamente a ${rule.target}.`).join(' ');
   const secondUnitRules = (promotion.secondUnitDiscounts || []).map(rule => {
     const values = (rule.products || []).map(product => `${product.title}: 1 envase $${product.price.toLocaleString('es-CL')}; 2 envases (${rule.packSize} cada uno) $${product.pairTotal.toLocaleString('es-CL')} en total`).join(' | ');
@@ -374,7 +441,10 @@ function promptSection(promotion) {
       : (promotion.usesDefaultValidity ? 'El template no indicó vigencia: por seguridad esta promoción vence 24 horas después de su envío.' : `Vigencia: ${promotion.validUntil}.`));
   const shipping = promotion.freeShippingMin ? `Despacho gratis si el total del pedido es igual o superior a $${promotion.freeShippingMin.toLocaleString('es-CL')}.` : '';
   const ordering = promotion.orderCutoffOnlyToday ? `El pedido debe confirmarse hoy antes de las ${promotion.cutoff}; la hora antigua indicada más abajo no se usa.` : '';
-  return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}${categoryRules ? ` ${categoryRules}` : ''}${secondUnitRules ? ` ${secondUnitRules}` : ''}\n- ${validity}${ordering ? `\n- ${ordering}` : ''}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}${shipping ? `\n- ${shipping}` : ''}\n- Si el cliente pide directamente productos enumerados en esta promoción, registra TODOS los productos solicitados. No descartes uno ni anuncies que está agotado basándote solo en el stock cacheado; la disponibilidad se valida al procesar el pedido.\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
+  const giftRule = promotion.freeGift
+    ? `Regalo: ${promotion.freeGift.quantity} ${promotion.freeGift.target} GRATIS sólo si el total pagado ${promotion.freeGift.minimumExclusive ? 'supera' : 'es igual o superior a'} $${promotion.freeGift.minPurchase.toLocaleString('es-CL')}. El regalo vale $0 y no cuenta para alcanzar el mínimo.${promotion.freeGift.choiceRequired ? ' El cliente debe elegir una variedad disponible antes de confirmar.' : ''}${promotion.freeGift.stockRequired ? ' Está sujeto al stock real.' : ''}`
+    : '';
+  return `## Promoción activa recibida por este cliente (${promotion.templateName})\n${options ? `Precios exactos:\n${options}\n` : ''}REGLAS OBLIGATORIAS:\n- ${priceRule}${categoryRules ? ` ${categoryRules}` : ''}${secondUnitRules ? ` ${secondUnitRules}` : ''}${giftRule ? `\n- ${giftRule}` : ''}\n- ${validity}${ordering ? `\n- ${ordering}` : ''}\n- ${deliveryRule || 'No inventes condiciones de entrega que el template no indique.'}${shipping ? `\n- ${shipping}` : ''}\n- Si el cliente pide directamente productos enumerados en esta promoción, registra TODOS los productos solicitados. No descartes uno ni anuncies que está agotado basándote solo en el stock cacheado; la disponibilidad se valida al procesar el pedido.\n- No prometas stock; registra el pedido y conserva las condiciones escritas en el template.`;
 }
 
 /**
@@ -544,4 +614,47 @@ function appliesToDelivery(promotion, deliveryDate) {
   return String(deliveryDate).slice(0, 10) <= promotion.validUntil;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, offerOrderItems, isBareAffirmative, choiceReply, isFuturePromotionQuestion, futureReply, appliesToDelivery, norm, chileDay };
+function giftQualifies(freeGift, paidTotal) {
+  if (!freeGift) return false;
+  const total = Number(paidTotal) || 0;
+  return freeGift.minimumExclusive ? total > freeGift.minPurchase : total >= freeGift.minPurchase;
+}
+
+function selectedFreeGift(message, freeGift) {
+  if (!freeGift?.candidates?.length) return null;
+  const text = norm(message);
+  if (!text) return null;
+  const numbered = text.match(/^(?:la\s+)?(?:opcion\s+)?(\d{1,2})$/iu);
+  if (numbered) return freeGift.candidates[Number(numbered[1]) - 1] || null;
+  const scored = freeGift.candidates.map(candidate => {
+    const candidateTokens = norm(candidate.title).split(' ')
+      .filter(token => token.length > 2 && !/^(?:aceituna|aceitunas|producto|productos)$/.test(token));
+    const hits = candidateTokens.filter(token => text.includes(token)).length;
+    return { candidate, hits };
+  }).filter(entry => entry.hits > 0).sort((a, b) => b.hits - a.hits);
+  if (scored.length && (scored.length === 1 || scored[0].hits > scored[1].hits)) return scored[0].candidate;
+  const targetMentioned = norm(freeGift.target).split(' ').some(token => token.length > 2 && text.includes(token.replace(/s$/, '')));
+  return targetMentioned && freeGift.candidates.length === 1 ? freeGift.candidates[0] : null;
+}
+
+function freeGiftOrderItem(candidate, freeGift) {
+  if (!candidate || !freeGift) return null;
+  return {
+    product_name: candidate.title,
+    quantity: Number(freeGift.quantity) || 1,
+    price: 0,
+    locked_quote: true,
+    free_gift: true,
+    promotion_offer: true,
+    ...(candidate.productId != null ? { product_id: candidate.productId } : {}),
+    ...(candidate.variantId != null ? { variant_id: candidate.variantId } : {}),
+  };
+}
+
+function freeGiftChoiceReply(freeGift) {
+  const choices = (freeGift?.candidates || []).map((candidate, index) => `${index + 1}) ${candidate.title}`).join('\n');
+  if (!choices) return `Tu compra califica para ${freeGift?.quantity || 1} ${freeGift?.target || 'producto'} gratis, sujeto a stock. Voy a validar con el equipo qué variedades están disponibles.`;
+  return `¡Tu compra califica para ${freeGift.quantity} ${freeGift.target} gratis! 🎁\n\nElige una variedad disponible:\n${choices}\n\nPuedes responder con el número o el nombre.`;
+}
+
+module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseFreeGift, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, offerOrderItems, isBareAffirmative, choiceReply, isFuturePromotionQuestion, futureReply, appliesToDelivery, giftQualifies, selectedFreeGift, freeGiftOrderItem, freeGiftChoiceReply, norm, chileDay };

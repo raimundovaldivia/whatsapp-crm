@@ -278,3 +278,78 @@ test('la segunda aceituna al 50% cobra un envase completo y medio envase por cad
   assert.equal(priced.total, 12000);
   assert.match(promotion.promptSection(promo), /1 envase \$8\.000; 2 envases.*\$12\.000/i);
 });
+
+test('interpreta regalos condicionados genéricos desde el texto del template', () => {
+  const giftTemplate = {
+    direction: 'outbound',
+    created_at: '2026-10-05T13:00:00.000Z',
+    content: `[Template: regalo_del_dia]
+¡Hola Angelica! Hoy tienes 1 producto de aceitunas GRATIS en compras sobre $20.000, realizando tu pedido antes de las 14:00 hrs, para entrega durante el día de hoy.
+La aceituna gratis será a elección entre las variedades que tengamos disponibles en stock.
+Promoción válida solo por hoy y hasta agotar stock.`,
+  };
+  const giftProducts = [
+    { id: 'eggs', title: 'Bandeja XL 30 huevos', priceMin: 12000 },
+    { id: 'green', title: 'Aceitunas verdes 500 g', priceMin: 8000 },
+    { id: 'purple', title: 'Aceitunas moradas 500 g', priceMin: 9000 },
+    { id: 'sold-out', title: 'Aceitunas sevillanas 500 g', priceMin: 8500, available: false },
+  ];
+
+  const promo = promotion.fromHistory([giftTemplate], giftProducts, new Date('2026-10-05T15:00:00.000Z'));
+  assert.equal(promo.active, true);
+  assert.equal(promo.offers.length, 0);
+  assert.equal(promo.freeGift.quantity, 1);
+  assert.equal(promo.freeGift.target, 'aceitunas');
+  assert.equal(promo.freeGift.minPurchase, 20000);
+  assert.equal(promo.freeGift.minimumExclusive, true);
+  assert.equal(promo.freeGift.choiceRequired, true);
+  assert.equal(promo.freeGift.stockRequired, true);
+  assert.deepEqual(promo.freeGift.candidates.map(candidate => candidate.title), [
+    'Aceitunas verdes 500 g',
+    'Aceitunas moradas 500 g',
+  ]);
+  assert.equal(promotion.giftQualifies(promo.freeGift, 20000), false);
+  assert.equal(promotion.giftQualifies(promo.freeGift, 20001), true);
+  assert.equal(promotion.selectedFreeGift('quiero las moradas', promo.freeGift).title, 'Aceitunas moradas 500 g');
+  assert.match(promotion.freeGiftChoiceReply(promo.freeGift), /1\) Aceitunas verdes 500 g/);
+  assert.match(promotion.promptSection(promo), /regalo: 1 aceitunas gratis/i);
+
+  const restored = promotion.restore(promotion.snapshot(promo), new Date('2026-10-05T15:30:00.000Z'));
+  assert.equal(restored.freeGift.minPurchase, 20000);
+  const expired = promotion.fromHistory([giftTemplate], giftProducts, new Date('2026-10-05T18:01:00.000Z'));
+  assert.equal(expired.active, false);
+});
+
+test('el regalo queda en cero y no altera el total pagado', () => {
+  const freeGift = {
+    quantity: 1,
+    target: 'queso',
+    minPurchase: 30000,
+    candidates: [{ title: 'Queso de cabra 900 g', productId: 'cheese' }],
+  };
+  const catalog = [
+    { id: 'eggs', title: 'Caja 100 huevos Jumbo', priceMin: 37000 },
+    { id: 'cheese', title: 'Queso de cabra 900 g', priceMin: 15000 },
+  ];
+  const result = pricing.priceItems([
+    { product_name: 'Caja 100 huevos Jumbo', quantity: 1 },
+    promotion.freeGiftOrderItem(freeGift.candidates[0], freeGift),
+  ], catalog);
+  assert.equal(result.total, 37000);
+  assert.equal(result.items[1].price, 0);
+  assert.equal(result.items[1].free_gift, true);
+  assert.match(pricing.summaryBlock(result), /Queso de cabra 900 g — GRATIS/);
+});
+
+test('la regla de regalo no depende del producto, monto ni forma exacta de escribirla', () => {
+  const rule = promotion.parseFreeGift('Recibe dos frascos de miel gratis por compras mínimas de $30.000. Elige entre las variedades disponibles.');
+  assert.equal(rule.quantity, 2);
+  assert.equal(rule.target, 'miel');
+  assert.equal(rule.minPurchase, 30000);
+  assert.equal(rule.minimumExclusive, false);
+
+  const singularRule = promotion.parseFreeGift('Lleva un queso gratis con compras desde $25.000.');
+  assert.equal(singularRule.quantity, 1);
+  assert.equal(singularRule.target, 'queso');
+  assert.equal(singularRule.minPurchase, 25000);
+});

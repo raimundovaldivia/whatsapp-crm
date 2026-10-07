@@ -252,6 +252,17 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
   productosTexto = promotions.alignPromotedAvailability(productosTexto, promotionContext);
   const promotionSection = promotions.promptSection(promotionContext);
+  let campaignThreadSection = '';
+  try {
+    const thread = await require('./campaign-journeys').registerInbound(orgId, conversation.phone_number);
+    if (thread) {
+      campaignThreadSection = `## Hilo de campaña automática activo
+El cliente está respondiendo a la secuencia "${thread.name}" (objetivo: ${thread.objective}), después del paso ${thread.current_step} de ${thread.total_steps}${thread.last_template ? `, template ${thread.last_template}` : ''}.
+Trata este mensaje como continuación directa del hilo que aparece en el historial: no reinicies la conversación, no repitas el saludo inicial y responde exactamente a lo que el cliente entendió o pidió. Conserva las condiciones comerciales del último template si siguen vigentes. La automatización quedó detenida al recibir esta respuesta; desde ahora continúa la atención normal y no anuncies próximos mensajes automáticos.`;
+    }
+  } catch (error) {
+    console.warn('[Pipeline] No se pudo cargar el hilo de campaña:', error.message);
+  }
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
   const orderCtx = { products, specialPrices, baseSpecialPrices, isLead, promotionContext };
@@ -591,7 +602,7 @@ Reglas estrictas:
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
-  const storeCustomPrompt = [dateSection, chargeSection, pendingOrderSection, contactAddressSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [dateSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection].filter(Boolean).join('\n\n---\n\n');
 
   // ── Agendado vigente? ──────────────────────────────────────────────────────
   // Solo cuenta un pedido agendado cuya fecha NO haya pasado todavía.
@@ -1834,6 +1845,28 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     if (chosenPromotion) updatedDraft.items = promotions.offerOrderItems(chosenPromotion);
   }
 
+  // Los regalos condicionados se administran fuera del LLM: nunca deben
+  // convertirse accidentalmente en un producto cobrado. Si estábamos
+  // esperando la variedad, una respuesta como "la verde" selecciona el
+  // regalo y cualquier línea que el extractor haya agregado se reemplaza por
+  // una cotización bloqueada de $0.
+  const freeGiftRule = promotionApplies ? promotionContext?.freeGift : null;
+  let selectedGift = orderDraft.free_gift_choice || null;
+  const giftMention = promotions.selectedFreeGift(userMessage, freeGiftRule);
+  if (giftMention) selectedGift = giftMention;
+  updatedDraft.items = (updatedDraft.items || []).filter(item => !item?.free_gift);
+  if (orderDraft.awaiting_free_gift && selectedGift) {
+    const giftTitle = promotions.norm(selectedGift.title);
+    let removedGiftCandidate = false;
+    updatedDraft.items = updatedDraft.items.filter(item => {
+      if (removedGiftCandidate) return true;
+      const itemTitle = promotions.norm(item?.product_name || item?.name || item?.title);
+      const sameGift = itemTitle && giftTitle && (itemTitle === giftTitle || itemTitle.includes(giftTitle) || giftTitle.includes(itemTitle));
+      if (sameGift) removedGiftCandidate = true;
+      return !sameGift;
+    });
+  }
+
   // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a
   //     leads (es la escalera de bienvenida del prompt de ventas); para
   //     clientes existentes cualquier descuento lo maneja el equipo.
@@ -1846,6 +1879,29 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       : (isLead ? updatedDraft.discount_pct : 0),
     maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
   });
+  const giftQualifies = freeGiftRule && promotions.giftQualifies(freeGiftRule, priced.total);
+  if (giftQualifies && !selectedGift && freeGiftRule.candidates?.length === 1) {
+    selectedGift = freeGiftRule.candidates[0];
+  }
+  if (giftQualifies && selectedGift) {
+    const giftItem = promotions.freeGiftOrderItem(selectedGift, freeGiftRule);
+    if (giftItem) {
+      priced = pricing.priceItems([...priced.items, giftItem], products, {
+        specialPrices: promotionApplies ? specialPrices : baseSpecialPrices,
+        categoryDiscounts: promotionApplies ? promotionContext.categoryDiscounts : [],
+        secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
+        discountPct: promotionApplies && promotionContext.discountPct
+          ? promotionContext.discountPct
+          : (isLead ? updatedDraft.discount_pct : 0),
+        maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
+      });
+      updatedDraft.free_gift_choice = selectedGift;
+      delete updatedDraft.awaiting_free_gift;
+    }
+  } else if (!giftQualifies) {
+    delete updatedDraft.free_gift_choice;
+    delete updatedDraft.awaiting_free_gift;
+  }
   // Si el cliente está confirmando un resumen que ya mostró un precio total,
   // conservar esa cotización. Evita cambiar una promoción entre "¿Todo correcto?"
   // y el mensaje final de pedido confirmado.
@@ -1857,6 +1913,19 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   updatedDraft.total    = priced.total;
   if (priced.unmatched.length) console.log(`[Pipeline] 🛒 Ítems sin match en catálogo: ${priced.unmatched.join(' | ')}`);
   await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
+
+  // El pedido ya alcanza el mínimo, pero todavía falta elegir la variedad del
+  // regalo. Detener la confirmación aquí evita que el agente cierre el pedido
+  // sin el beneficio o invente una variedad.
+  if (giftQualifies && !selectedGift && freeGiftRule.candidates?.length > 1) {
+    updatedDraft.awaiting_free_gift = true;
+    await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
+    return {
+      response: promotions.freeGiftChoiceReply(freeGiftRule),
+      agentType: 'orders',
+      newState: 'collecting_order',
+    };
+  }
 
   // 1b. Si el cliente acaba de dar dirección o ciudad que no teníamos → guardar en contacts.
   const addrChanged = (updatedDraft.address && updatedDraft.address !== orderDraft.address)
@@ -1892,6 +1961,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       name: it.name, title: it.name, quantity: it.quantity, price: it.price,
       product_id: it.product_id || null, variant_id: it.variant_id || null,
       ...(it.locked_quote ? { locked_quote: true } : {}),
+      ...(it.free_gift ? { free_gift: true, promotion_offer: true } : {}),
     }));
     const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city };
     const summary = pricing.summaryBlock(priced);

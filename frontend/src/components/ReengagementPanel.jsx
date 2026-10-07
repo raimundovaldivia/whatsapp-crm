@@ -1223,7 +1223,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [search,         setSearch]         = useState('');
   const [purchaseAge, setPurchaseAge] = useState('all');
   const [customPurchaseDays, setCustomPurchaseDays] = useState('45');
-  const [excludeEmpresas, setExcludeEmpresas] = useState(false);
+  const [audienceType, setAudienceType] = useState('all');
+  const [audienceSegment, setAudienceSegment] = useState('all');
   const [selected,       setSelected]       = useState(new Set());
   const [templates,      setTemplates]      = useState(parentTemplates);
   const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
@@ -1296,6 +1297,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [deliveryPhones, setDeliveryPhones] = useState(null); // no entregados en la ruta de ayer
   const [deliveryCases, setDeliveryCases] = useState(new Map());
   const [deliveryBusy, setDeliveryBusy] = useState(false);
+  const [journeyOpen, setJourneyOpen] = useState(false);
+  const [journeyBusy, setJourneyBusy] = useState(false);
+  const [journeys, setJourneys] = useState([]);
+  const [journeyName, setJourneyName] = useState('');
+  const [journeyObjective, setJourneyObjective] = useState('promocion');
+  const [journeyCooldown, setJourneyCooldown] = useState(48);
+  const [journeySteps, setJourneySteps] = useState([]);
+  const [journeyPrompt, setJourneyPrompt] = useState('');
+  const [journeyPlanning, setJourneyPlanning] = useState(false);
+  const [journeyPlanInfo, setJourneyPlanInfo] = useState(null);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -1311,6 +1322,178 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }, []);
 
   useEffect(() => { loadCampaigns(); }, [loadCampaigns]);
+
+  const templateVariableModes = useCallback((templateName) => {
+    const template = templates.find(item => item.name === templateName);
+    const body = getBodyComponent(template)?.text || '';
+    return getTemplateVariables(body).map(() => 'first_name');
+  }, [templates]);
+
+  const loadJourneys = useCallback(async () => {
+    try {
+      const { data } = await api.get('/reengagement/journeys');
+      setJourneys(data.journeys || []);
+    } catch { setJourneys([]); }
+  }, []);
+
+  function openJourneyBuilder() {
+    const firstTemplate = selTpl?.name || templates[0]?.name || '';
+    setJourneyName('');
+    setJourneyObjective('promocion');
+    setJourneyCooldown(48);
+    setJourneyPrompt('');
+    setJourneyPlanInfo(null);
+    setJourneySteps(firstTemplate ? [{
+      templateName: firstTemplate, waitHours: 0, triggerCondition: 'always',
+      variableModes: templateVariableModes(firstTemplate),
+    }] : []);
+    setJourneyOpen(true);
+    loadJourneys();
+  }
+
+  function contactMatchesPlan(contact, planAudience, productPhones = null, incidentPhones = null) {
+    if (planAudience.type === 'natural' && contact.client_type === 'empresa') return false;
+    if (planAudience.type === 'empresa' && contact.client_type !== 'empresa') return false;
+    const orders = Number(contact.total_orders || 0);
+    if (planAudience.segment === 'lead' && (contact.contact_type === 'customer' || orders > 0)) return false;
+    if (planAudience.segment === 'new' && orders !== 1) return false;
+    if (planAudience.segment === 'repeat' && (orders < 2 || orders > 4)) return false;
+    if (planAudience.segment === 'loyal' && orders < 5) return false;
+    if (planAudience.purchaseDays && !matchesPurchaseAge(contact, String(planAudience.purchaseDays))) return false;
+    if (productPhones && !productPhones.has(normPhone(contact.phone))) return false;
+    if (incidentPhones && !incidentPhones.has(normPhone(contact.phone))) return false;
+    return true;
+  }
+
+  async function generateJourneyPlan() {
+    if (journeyPrompt.trim().length < 10) {
+      showToast('Describe la campaña con un poco más de detalle', 'error');
+      return;
+    }
+    setJourneyPlanning(true);
+    try {
+      const { data } = await api.post('/reengagement/journeys/plan', {
+        instruction: journeyPrompt.trim(),
+        currentAudience: {
+          type: audienceType, segment: audienceSegment,
+          purchaseDays: purchaseAge === 'all' ? null : Number(purchaseDays),
+          product: prodTerm.trim() || null,
+          deliveryIncidentsOnly: !!deliveryPhones,
+          selectedCount: audience.length,
+        },
+      });
+      const plan = data.plan;
+      let plannedProductPhones = null;
+      if (plan.audience.product) {
+        const productResult = await api.get(`/contacts/by-product?q=${encodeURIComponent(plan.audience.product)}`);
+        plannedProductPhones = new Set((productResult.data.phones || []).map(normPhone));
+      }
+      let plannedDeliveryPhones = null;
+      let plannedDeliveryCases = new Map();
+      if (plan.audience.deliveryIncidentsOnly) {
+        const deliveryResult = await api.get('/contacts/delivery-audience?scope=yesterday');
+        plannedDeliveryCases = new Map();
+        for (const incident of deliveryResult.data.incidents || []) {
+          const phone = normPhone(incident.phone);
+          if (!phone) continue;
+          const current = plannedDeliveryCases.get(phone) || { reason: incident.reason, orderLabels: [], incidents: [] };
+          if (incident.order_label && !current.orderLabels.includes(incident.order_label)) current.orderLabels.push(incident.order_label);
+          current.incidents.push(incident);
+          plannedDeliveryCases.set(phone, current);
+        }
+        plannedDeliveryPhones = new Set(plannedDeliveryCases.keys());
+      }
+
+      setJourneyName(plan.name);
+      setJourneyObjective(plan.objective);
+      setJourneyCooldown(plan.cooldownHours);
+      setJourneySteps(plan.steps);
+      setAudienceType(plan.audience.type);
+      setAudienceSegment(plan.audience.segment);
+      setPurchaseAge(plan.audience.purchaseDays ? 'custom' : 'all');
+      if (plan.audience.purchaseDays) setCustomPurchaseDays(String(plan.audience.purchaseDays));
+      setProdTerm(plan.audience.product || '');
+      setProdPhones(plannedProductPhones);
+      setDeliveryPhones(plannedDeliveryPhones);
+      setDeliveryCases(plannedDeliveryCases);
+      const plannedContacts = contacts.filter(contact => contactMatchesPlan(contact, plan.audience, plannedProductPhones, plannedDeliveryPhones));
+      setSelected(new Set(plannedContacts.map(contact => contact.phone)));
+      setPreviewIdx(0);
+      setJourneyPlanInfo({ ...plan, calculatedAudience: plannedContacts.length });
+      showToast(`Propuesta preparada para ${plannedContacts.length} contacto(s). Revísala antes de activarla.`);
+    } catch (error) {
+      showToast(error.response?.data?.error || 'No se pudo preparar la campaña con IA', 'error');
+    } finally {
+      setJourneyPlanning(false);
+    }
+  }
+
+  function updateJourneyStep(index, patch) {
+    setJourneySteps(current => current.map((step, stepIndex) => stepIndex === index ? { ...step, ...patch } : step));
+  }
+
+  function changeJourneyTemplate(index, templateName) {
+    updateJourneyStep(index, { templateName, variableModes: templateVariableModes(templateName) });
+  }
+
+  function addJourneyStep() {
+    const templateName = templates[0]?.name || '';
+    setJourneySteps(current => [...current, {
+      templateName, waitHours: 24, triggerCondition: 'no_reply', variableModes: templateVariableModes(templateName),
+    }]);
+  }
+
+  function updateJourneyVariable(stepIndex, variableIndex, value) {
+    setJourneySteps(current => current.map((step, index) => {
+      if (index !== stepIndex) return step;
+      const modes = [...(step.variableModes || [])];
+      modes[variableIndex] = value;
+      return { ...step, variableModes: modes };
+    }));
+  }
+
+  async function saveJourney(activate = false) {
+    if (!journeyName.trim()) { showToast('Ponle un nombre a la secuencia', 'error'); return; }
+    if (!journeySteps.length || journeySteps.some(step => !step.templateName)) { showToast('Cada paso necesita un template', 'error'); return; }
+    if (journeySteps.some(step => (step.variableModes || []).some(mode => typeof mode === 'object' && mode.mode === 'fixed' && !String(mode.value || '').trim()))) {
+      showToast('Completa las variables marcadas como texto fijo antes de guardar', 'error'); return;
+    }
+    if (!audience.length) { showToast('Selecciona el público antes de crear la secuencia', 'error'); return; }
+    setJourneyBusy(true);
+    try {
+      const payload = {
+        name: journeyName.trim(), objective: journeyObjective, cooldownHours: Number(journeyCooldown) || 0,
+        audienceFilters: {
+          purchaseAge, purchaseDays, audienceType, audienceSegment, product: prodTerm.trim() || null,
+          excludeCompanies: audienceType === 'natural', deliveryIncidentsOnly: !!deliveryPhones,
+          selectedCount: audience.length,
+        },
+        recipients: audience.map(contact => ({ phone: contact.phone, name: contact.name })),
+        steps: journeySteps,
+        stopOnReply: true, stopOnOrder: true, stopOnHuman: true,
+      };
+      const { data } = await api.post('/reengagement/journeys', payload);
+      if (activate) {
+        const activated = await api.post(`/reengagement/journeys/${data.journey.id}/activate`, {});
+        const excluded = Number(activated.data.excluded || 0);
+        showToast(`Secuencia activada para ${activated.data.active} contacto(s)${excluded ? ` · ${excluded} excluidos por seguridad` : ''}`);
+      } else {
+        showToast('Secuencia guardada como borrador');
+      }
+      await loadJourneys();
+      setJourneyOpen(false);
+    } catch (error) {
+      showToast(error.response?.data?.error || 'No se pudo guardar la secuencia', 'error');
+    } finally { setJourneyBusy(false); }
+  }
+
+  async function changeJourneyStatus(journey, action) {
+    try {
+      const { data } = await api.post(`/reengagement/journeys/${journey.id}/${action}`, {});
+      showToast(action === 'pause' ? 'Secuencia pausada' : `Secuencia activada para ${data.active || journey.active_count || 0} contacto(s)`);
+      await loadJourneys();
+    } catch (error) { showToast(error.response?.data?.error || 'No se pudo cambiar la secuencia', 'error'); }
+  }
 
   useEffect(() => {
     if (!historyOpen) return undefined;
@@ -1555,7 +1738,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       if (!(c.name || '').toLowerCase().includes(q) && !(c.phone || '').includes(q)) return false;
     }
     if (!matchesPurchaseAge(c, purchaseDays)) return false;
-    if (excludeEmpresas && c.client_type === 'empresa') return false;
+    if (audienceType === 'natural' && c.client_type === 'empresa') return false;
+    if (audienceType === 'empresa' && c.client_type !== 'empresa') return false;
+    const totalOrders = Number(c.total_orders || 0);
+    if (audienceSegment === 'lead' && (c.contact_type === 'customer' || totalOrders > 0)) return false;
+    if (audienceSegment === 'new' && totalOrders !== 1) return false;
+    if (audienceSegment === 'repeat' && (totalOrders < 2 || totalOrders > 4)) return false;
+    if (audienceSegment === 'loyal' && totalOrders < 5) return false;
     if (prodPhones && !prodPhones.has(normPhone(c.phone))) return false;
     if (deliveryPhones && !deliveryPhones.has(normPhone(c.phone))) return false;
     return true;
@@ -1899,6 +2088,161 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         }}>{toast.msg}</div>
       )}
 
+      {journeyOpen && (
+        <div role="dialog" aria-modal="true" aria-label="Crear secuencia automática"
+          onMouseDown={event => { if (event.target === event.currentTarget && !journeyBusy) setJourneyOpen(false); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 10020, backgroundColor: 'rgba(3,10,15,.76)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ width: 'min(880px, 98vw)', maxHeight: '94dvh', overflowY: 'auto', borderRadius: 15, border: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, boxShadow: '0 24px 80px rgba(0,0,0,.5)' }}>
+            <div style={{ position: 'sticky', top: 0, zIndex: 2, padding: '16px 18px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, display: 'flex', alignItems: 'center', gap: 11 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: `${colors.green}1c`, color: colors.green, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Zap size={19} /></div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: colors.textPrimary, fontSize: 16, fontWeight: 850 }}>Secuencia automática</div>
+                <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 3 }}>Un solo hilo comercial con pasos relacionados y salida automática al responder o comprar.</div>
+              </div>
+              <button onClick={() => setJourneyOpen(false)} disabled={journeyBusy} aria-label="Cerrar" style={{ border: 'none', background: 'none', color: colors.textMuted, cursor: 'pointer' }}><X size={19} /></button>
+            </div>
+
+            <div style={{ padding: 18 }}>
+              <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${colors.green}55`, background: `linear-gradient(135deg, ${colors.green}12, ${colors.blue}0c)` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: colors.textPrimary, fontSize: 13, fontWeight: 850 }}>
+                  <Sparkles size={16} color={colors.green} /> Describe la campaña en lenguaje natural
+                </div>
+                <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
+                  Indica qué quieres lograr, para quién, cuándo y qué debe pasar si no responden. La IA preparará una propuesta, pero no enviará nada.
+                </div>
+                <textarea value={journeyPrompt} disabled={journeyPlanning}
+                  onChange={event => setJourneyPrompt(event.target.value)}
+                  onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') generateJourneyPlan(); }}
+                  placeholder="Ej: Reactiva a personas naturales que compraron huevos XL y llevan más de 45 días sin pedir. Envía la promoción hoy y, si leen pero no responden, recuérdales mañana."
+                  rows={4}
+                  style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, padding: '10px 11px', resize: 'vertical', minHeight: 88, borderRadius: 9, border: `1px solid ${colors.border}`, outlineColor: colors.green, backgroundColor: colors.bgApp, color: colors.textPrimary, font: 'inherit', fontSize: 12, lineHeight: 1.5 }} />
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                  {[
+                    ['Reactivar inactivos', 'Reactiva a personas naturales que llevan más de 60 días sin comprar. Envía una promoción ahora y un recordatorio mañana solamente si leyeron y no respondieron.'],
+                    ['Seguimiento de promoción', 'Haz seguimiento a los clientes seleccionados que recibieron la promoción. Envía el primer mensaje ahora y otro en 24 horas solo si no respondieron.'],
+                    ['Cobranza empresas', 'Crea una secuencia de cobranza para empresas: aviso inicial ahora y recordatorio en 48 horas si no responden.'],
+                  ].map(([label, example]) => <button key={label} type="button" onClick={() => setJourneyPrompt(example)} disabled={journeyPlanning}
+                    style={{ padding: '5px 8px', borderRadius: 99, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textSecondary, fontSize: 10, cursor: 'pointer' }}>{label}</button>)}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9 }}>
+                  <button onClick={generateJourneyPlan} disabled={journeyPlanning || journeyPrompt.trim().length < 10}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', border: 'none', borderRadius: 8, backgroundColor: colors.green, color: '#fff', fontWeight: 800, cursor: journeyPlanning ? 'wait' : 'pointer', opacity: journeyPrompt.trim().length < 10 ? .55 : 1 }}>
+                    {journeyPlanning ? <Loader size={14} className="spin" /> : <Sparkles size={14} />}
+                    {journeyPlanning ? 'Preparando propuesta…' : 'Crear propuesta con IA'}
+                  </button>
+                  <span style={{ color: colors.textMuted, fontSize: 10 }}>Ctrl + Enter para generar</span>
+                </div>
+              </div>
+
+              {journeyPlanInfo && <div style={{ marginTop: 12, display: 'grid', gap: 7 }}>
+                {journeyPlanInfo.summary && <div style={{ padding: '10px 12px', borderRadius: 9, border: `1px solid ${colors.blue}35`, backgroundColor: `${colors.blue}0d`, color: colors.textSecondary, fontSize: 11, lineHeight: 1.5 }}>
+                  <strong style={{ color: colors.textPrimary }}>Propuesta:</strong> {journeyPlanInfo.summary}
+                </div>}
+                {journeyPlanInfo.assumptions?.length > 0 && <div style={{ padding: '10px 12px', borderRadius: 9, border: `1px solid ${colors.yellow}35`, backgroundColor: `${colors.yellow}0d`, color: colors.textSecondary, fontSize: 11, lineHeight: 1.55 }}>
+                  <strong style={{ color: colors.yellow }}>Suposiciones para revisar:</strong> {journeyPlanInfo.assumptions.join(' · ')}
+                </div>}
+                {[...(journeyPlanInfo.warnings || []), ...(journeyPlanInfo.missingInfo || [])].length > 0 && <div style={{ padding: '10px 12px', borderRadius: 9, border: `1px solid ${colors.red}45`, backgroundColor: `${colors.red}0c`, color: colors.textSecondary, fontSize: 11, lineHeight: 1.55 }}>
+                  <strong style={{ color: colors.red }}>Necesita revisión:</strong> {[...(journeyPlanInfo.warnings || []), ...(journeyPlanInfo.missingInfo || [])].join(' · ')}
+                </div>}
+              </div>}
+
+              <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                <label style={{ color: colors.textSecondary, fontSize: 11 }}>Nombre del hilo
+                  <input value={journeyName} onChange={event => setJourneyName(event.target.value)} placeholder="Ej: Recuperación clientes inactivos"
+                    style={{ width: '100%', boxSizing: 'border-box', marginTop: 5, padding: '9px 10px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary }} />
+                </label>
+                <label style={{ color: colors.textSecondary, fontSize: 11 }}>Objetivo
+                  <select value={journeyObjective} onChange={event => setJourneyObjective(event.target.value)} style={{ width: '100%', marginTop: 5, padding: '9px 10px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary }}>
+                    <option value="promocion">Promoción</option><option value="reactivacion">Reactivación</option>
+                    <option value="seguimiento">Seguimiento</option><option value="cobranza">Cobranza</option>
+                    <option value="despacho">Despacho</option><option value="informativo">Informativo</option>
+                  </select>
+                </label>
+                <label style={{ color: colors.textSecondary, fontSize: 11 }}>Descanso entre campañas
+                  <select value={journeyCooldown} onChange={event => setJourneyCooldown(Number(event.target.value))} style={{ width: '100%', marginTop: 5, padding: '9px 10px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary }}>
+                    <option value={24}>24 horas</option><option value={48}>48 horas</option><option value={72}>3 días</option><option value={168}>7 días</option>
+                  </select>
+                </label>
+              </div>
+
+              <div style={{ marginTop: 14, padding: '11px 13px', borderRadius: 10, backgroundColor: `${colors.blue}10`, border: `1px solid ${colors.blue}2d`, color: colors.textSecondary, fontSize: 12 }}>
+                <strong style={{ color: colors.textPrimary }}>Público actual: {audience.length} contacto(s).</strong>{' '}
+                Se guarda una fotografía exacta de los seleccionados y de estos filtros: {audienceType === 'natural' ? 'personas naturales' : audienceType === 'empresa' ? 'empresas' : 'personas y empresas'} · {({ all: 'todos los segmentos', lead: 'sin compras', new: '1 pedido', repeat: '2 a 4 pedidos', loyal: '5 o más pedidos' })[audienceSegment]} · {purchaseAge === 'all' ? 'cualquier fecha de compra' : `más de ${purchaseDays} días sin comprar`}{prodTerm.trim() ? ` · producto “${prodTerm.trim()}”` : ''}{deliveryPhones ? ' · no entregados ayer' : ''}.
+              </div>
+
+              <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <div><div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 800 }}>Pasos del hilo</div><div style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>Cada paso conserva el contexto del anterior.</div></div>
+                <button onClick={addJourneyStep} disabled={journeySteps.length >= 10} style={{ padding: '7px 10px', borderRadius: 7, border: `1px solid ${colors.green}55`, backgroundColor: `${colors.green}15`, color: colors.green, cursor: 'pointer', fontWeight: 750 }}>+ Agregar paso</button>
+              </div>
+
+              <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
+                {journeySteps.map((step, index) => {
+                  const stepTemplate = templates.find(template => template.name === step.templateName);
+                  const templateBody = getBodyComponent(stepTemplate)?.text || '';
+                  const variableNumbers = getTemplateVariables(templateBody);
+                  return <div key={`${index}-${step.templateName}`} style={{ padding: 13, borderRadius: 11, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard }}>
+                    <div style={{ display: 'flex', gap: 9, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ width: 27, height: 27, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.green, color: '#fff', fontSize: 12, fontWeight: 850, alignSelf: 'center' }}>{index + 1}</div>
+                      <label style={{ flex: '2 1 260px', color: colors.textSecondary, fontSize: 11 }}>Template
+                        <select value={step.templateName} onChange={event => changeJourneyTemplate(index, event.target.value)} style={{ width: '100%', marginTop: 4, padding: '8px 9px', borderRadius: 7, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary }}>
+                          {templates.map(template => <option key={template.name} value={template.name}>{template.name}</option>)}
+                        </select>
+                      </label>
+                      <label style={{ flex: '0 1 120px', color: colors.textSecondary, fontSize: 11 }}>Esperar
+                        <select value={step.waitHours} onChange={event => updateJourneyStep(index, { waitHours: Number(event.target.value) })} style={{ width: '100%', marginTop: 4, padding: '8px 9px', borderRadius: 7, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary }}>
+                          <option value={0}>Ahora</option><option value={6}>6 horas</option><option value={24}>1 día</option><option value={48}>2 días</option><option value={72}>3 días</option><option value={168}>7 días</option>
+                        </select>
+                      </label>
+                      <label style={{ flex: '1 1 190px', color: colors.textSecondary, fontSize: 11 }}>Continuar si
+                        <select value={step.triggerCondition} disabled={index === 0} onChange={event => updateJourneyStep(index, { triggerCondition: event.target.value })} style={{ width: '100%', marginTop: 4, padding: '8px 9px', borderRadius: 7, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary }}>
+                          {index === 0 && <option value="always">Inicio del hilo</option>}
+                          <option value="no_reply">No respondió</option><option value="read_no_reply">Leyó y no respondió</option><option value="delivered_no_reply">Se entregó y no respondió</option>
+                        </select>
+                      </label>
+                      {journeySteps.length > 1 && <button onClick={() => setJourneySteps(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Eliminar paso ${index + 1}`} style={{ border: 'none', background: `${colors.red}15`, color: colors.red, borderRadius: 7, padding: 8, cursor: 'pointer' }}><X size={15} /></button>}
+                    </div>
+                    {variableNumbers.length > 0 && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                      {variableNumbers.map((number, variableIndex) => {
+                        const mode = step.variableModes?.[variableIndex] ?? 'first_name';
+                        const modeKey = typeof mode === 'object' ? mode.mode : mode;
+                        return <div key={number} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ color: colors.textMuted, fontSize: 11 }}>{`{{${number}}}`}</span>
+                          <select value={modeKey} onChange={event => updateJourneyVariable(index, variableIndex, event.target.value === 'fixed' ? { mode: 'fixed', value: '' } : event.target.value)} style={{ padding: '6px 7px', borderRadius: 6, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: 11 }}>
+                            <option value="first_name">Primer nombre</option><option value="full_name">Nombre completo</option><option value="city">Ciudad</option><option value="phone">Teléfono</option><option value="fixed">Texto fijo</option>
+                          </select>
+                          {modeKey === 'fixed' && <input value={typeof mode === 'object' ? mode.value : ''} onChange={event => updateJourneyVariable(index, variableIndex, { mode: 'fixed', value: event.target.value })} placeholder="Valor" style={{ width: 120, padding: '6px 7px', borderRadius: 6, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, color: colors.textPrimary, fontSize: 11 }} />}
+                        </div>;
+                      })}
+                    </div>}
+                    {templateBody && <div style={{ marginTop: 10, padding: '9px 10px', borderRadius: 7, backgroundColor: colors.bgApp, border: `1px solid ${colors.border}`, color: colors.textSecondary, fontSize: 11, lineHeight: 1.45, whiteSpace: 'pre-wrap', maxHeight: 125, overflowY: 'auto' }}>{templateBody}</div>}
+                  </div>;
+                })}
+              </div>
+
+              <div style={{ marginTop: 14, padding: 12, borderRadius: 10, border: `1px solid ${colors.yellow}35`, backgroundColor: `${colors.yellow}0c`, color: colors.textSecondary, fontSize: 11, lineHeight: 1.55 }}>
+                Protección automática: se excluyen bajas, pedidos activos, atención humana, contactos dentro del descanso y personas incluidas en otra secuencia. El hilo se detiene al responder o comprar.
+              </div>
+
+              {journeys.length > 0 && <div style={{ marginTop: 18 }}>
+                <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 800, marginBottom: 8 }}>Secuencias existentes</div>
+                <div style={{ display: 'grid', gap: 6 }}>{journeys.slice(0, 6).map(journey => <div key={journey.id} style={{ padding: '9px 11px', borderRadius: 8, backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ color: colors.textPrimary, fontSize: 12, fontWeight: 750 }}>{journey.name}</div><div style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>{journey.step_count} pasos · {journey.audience_count} personas · {journey.active_count} activas · {journey.completed_count} completadas</div></div>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: journey.status === 'active' ? colors.green : journey.status === 'paused' ? colors.yellow : colors.textMuted }}>{({ draft: 'Borrador', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', cancelled: 'Cancelada' })[journey.status] || journey.status}</span>
+                  {journey.status === 'active' && <button onClick={() => changeJourneyStatus(journey, 'pause')} style={{ border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textSecondary, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Pausar</button>}
+                  {['draft', 'paused'].includes(journey.status) && <button onClick={() => changeJourneyStatus(journey, 'activate')} style={{ border: `1px solid ${colors.green}55`, background: `${colors.green}15`, color: colors.green, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Activar</button>}
+                </div>)}</div>
+              </div>}
+            </div>
+
+            <div style={{ position: 'sticky', bottom: 0, padding: '13px 18px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, display: 'flex', justifyContent: 'flex-end', gap: 9 }}>
+              <button onClick={() => setJourneyOpen(false)} disabled={journeyBusy} style={{ padding: '8px 13px', borderRadius: 8, border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textSecondary }}>Cancelar</button>
+              <button onClick={() => saveJourney(false)} disabled={journeyBusy} style={{ padding: '8px 13px', borderRadius: 8, border: `1px solid ${colors.green}55`, background: `${colors.green}12`, color: colors.green, fontWeight: 750 }}>{journeyBusy ? 'Guardando…' : 'Guardar borrador'}</button>
+              <button onClick={() => saveJourney(true)} disabled={journeyBusy} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: colors.green, color: '#fff', fontWeight: 800 }}>{journeyBusy ? 'Activando…' : `Crear y activar para ${audience.length}`}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toolbar */}
       <section aria-label="Método de envío" style={{ flexShrink: 0, padding: '12px 20px', color: colors.textPrimary,
         backgroundColor: colors.bgPanel, borderBottom: `2px solid ${colors.green}`, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
@@ -1978,6 +2322,30 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </div>
 
         <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
+          Público
+          <select aria-label="Tipo de público" value={audienceType} disabled={sending || !!reviewPlan}
+            onChange={event => { setAudienceType(event.target.value); setPreviewIdx(0); }}
+            style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
+            <option value="all">Personas y empresas</option>
+            <option value="natural">Personas naturales</option>
+            <option value="empresa">Empresas</option>
+          </select>
+        </label>
+
+        <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
+          Segmento
+          <select aria-label="Segmento del público" value={audienceSegment} disabled={sending || !!reviewPlan}
+            onChange={event => { setAudienceSegment(event.target.value); setPreviewIdx(0); }}
+            style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
+            <option value="all">Todos</option>
+            <option value="lead">Sin compras</option>
+            <option value="new">1 pedido</option>
+            <option value="repeat">2 a 4 pedidos</option>
+            <option value="loyal">5 o más pedidos</option>
+          </select>
+        </label>
+
+        <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
           Último pedido
           <select aria-label="Tiempo sin pedir" value={purchaseAge} disabled={sending || !!reviewPlan}
             onChange={e => { setPurchaseAge(e.target.value); setPreviewIdx(0); }}
@@ -2004,34 +2372,6 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             color:deliveryPhones ? '#fb923c' : colors.textMuted,
           }}>
           {deliveryBusy ? 'Revisando ruta…' : `${deliveryPhones ? '✓ ' : ''}No entregados ayer${deliveryPhones ? ` (${deliveryPhones.size})` : ''}`}
-        </button>
-
-        {/* Filtro: excluir empresas */}
-        <button
-          onClick={() => {
-            const next = !excludeEmpresas;
-            setExcludeEmpresas(next);
-            if (next) {
-              setSelected(prev => {
-                const n = new Set();
-                contacts.forEach(c => {
-                  if (!prev.has(c.phone)) return;
-                  if (c.client_type === 'empresa') return;
-                  n.add(c.phone);
-                });
-                return n;
-              });
-            }
-          }}
-          style={{
-            padding: '6px 11px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
-            cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-            border: `1px solid ${excludeEmpresas ? colors.yellow + '66' : colors.border}`,
-            backgroundColor: excludeEmpresas ? colors.yellow + '22' : 'transparent',
-            color: excludeEmpresas ? colors.yellow : colors.textMuted,
-          }}
-        >
-          {excludeEmpresas ? '✓ ' : ''}Sin empresas
         </button>
 
         {/* Template selector */}
@@ -2070,6 +2410,21 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               {campaigns.length}
             </span>
           )}
+        </button>
+
+        <button
+          onClick={openJourneyBuilder}
+          disabled={contacts.length === 0 || templates.length === 0}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+            borderRadius: 7, border: `1px solid ${colors.green}66`,
+            backgroundColor: `${colors.green}16`, color: colors.green,
+            fontSize: 12, fontWeight: 750, cursor: contacts.length && templates.length ? 'pointer' : 'not-allowed',
+            whiteSpace: 'nowrap', opacity: contacts.length && templates.length ? 1 : 0.5,
+          }}
+          title="Crear una secuencia automática con el público seleccionado"
+        >
+          <Zap size={14} /> Secuencia
         </button>
 
         {/* Test mode */}
