@@ -42,6 +42,10 @@ export default function CajaRepartos({ colors, onShowExpenses }) {
       ['Efectivo esperado', expected], ['Efectivo contado', values.counted === '' ? 'Sin contar' : numbers.counted],
       ['Diferencia', values.counted === '' ? 'Sin contar' : difference],
       ['Entregas con pago por revisar', report.unresolved.length], [],
+      ['Resumen por repartidor'],
+      ['Repartidor', 'Despachos entregados', 'Cobros en efectivo', 'Efectivo cobrado', 'Gastos', 'Cambios/devoluciones', 'Efectivo esperado', 'Pagos por revisar'],
+      ...(report.byDriver || []).map(row => [row.driver, row.deliveries, row.cashDeliveries, row.cash, row.expenses, row.adjustments || 0, row.expectedCash, row.unresolved]),
+      [],
       ['Día', 'Efectivo cobrado', 'Gastos rendidos', 'Cambios/devoluciones', 'Diferencia antes de ajustes'],
       ...report.byDay.map(row => [row.day, row.cash, row.expenses, row.adjustments || 0, row.cash + (row.adjustments || 0) - row.expenses]),
     ];
@@ -83,6 +87,20 @@ export default function CajaRepartos({ colors, onShowExpenses }) {
       </div>
       {report.unresolved.length > 0 && <p role="status" style={{ color: colors.yellow }}>Saldo provisional: {report.unresolved.length} entrega(s) sin medio de pago o monto de efectivo definido. Revisa sus pagos en Despachos.</p>}
       {report.receipts.some(row => row.approximateDate) && <p style={{ color: colors.textSecondary, fontSize: 12 }}>Algunas entregas antiguas usan la fecha de cierre de la ruta porque no tienen hora de entrega registrada.</p>}
+      <div style={{ ...box, marginTop: 14, overflowX: 'auto' }}>
+        <h4 style={{ margin: '0 0 4px' }}>Efectivo esperado por repartidor</h4>
+        <p style={{ color: colors.textSecondary, fontSize: 12, marginTop: 0 }}>Calculado solo con despachos marcados como entregados: efectivo cobrado + cambios/devoluciones − gastos rendidos.</p>
+        {!(report.byDriver || []).length ? <p>No hay actividad de repartidores en este período.</p> : <table style={{ width: '100%', textAlign: 'right', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead><tr><th style={{ textAlign: 'left' }}>Repartidor</th><th>Despachos</th><th>Con efectivo</th><th>Efectivo cobrado</th><th>Gastos</th><th>Ajustes</th><th>Debe tener</th><th>Por revisar</th></tr></thead>
+          <tbody>{report.byDriver.map(row => <tr key={row.key}>
+            <td style={{ textAlign: 'left', padding: '11px 0', fontWeight: 700 }}>{row.driver}</td>
+            <td>{row.deliveries}</td><td>{row.cashDeliveries}</td><td>{clp(row.cash)}</td><td>{clp(row.expenses)}</td><td>{clp(row.adjustments || 0)}</td>
+            <td style={{ color: row.expectedCash >= 0 ? colors.green : colors.red, fontWeight: 800 }}>{clp(row.expectedCash)}</td>
+            <td style={{ color: row.unresolved ? colors.yellow : colors.textSecondary }}>{row.unresolved || '—'}</td>
+          </tr>)}</tbody>
+        </table>}
+        {(report.byDriver || []).some(row => row.driver === 'Sin repartidor') && <p style={{ color: colors.yellow, fontSize: 12 }}>Hay movimientos sin repartidor asignado. Asígnalos o revisa la ruta para poder responsabilizar ese efectivo.</p>}
+      </div>
       <div style={{ ...box, marginTop: 14 }}>
         <h4 style={{ margin: '0 0 12px' }}>Arqueo de caja</h4>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 12 }}>

@@ -9,6 +9,20 @@ const makeRoute = (id, key, method, amount, status = 'entregado') => ({
   stop_payment_amounts: amount ? { ['bot_' + key]: { cash: amount } } : {},
   stop_times: { ['bot_' + key]: '2026-10-06T12:00:00Z' },
 });
+test('cash accountability is grouped by driver and subtracts only that driver expenses', () => {
+  const ana = { ...makeRoute(1, 1, 'efectivo'), driver_user_id: 10, driver_name: 'Ana' };
+  const leo = { ...makeRoute(2, 2, 'mixto', 4000), driver_user_id: 20, driver_name: 'Leo' };
+  const result = summarize([ana, leo], [], [
+    { day: '2026-10-06', amount: 1000, driver_user_id: 10, driver_name: 'Ana' },
+    { day: '2026-10-06', amount: 500, driver_user_id: 20, driver_name: 'Leo' },
+  ], '2026-10-06', '2026-10-06');
+  const byName = Object.fromEntries(result.byDriver.map(row => [row.driver, row]));
+  assert.equal(byName.Ana.deliveries, 1);
+  assert.equal(byName.Ana.cash, 10000);
+  assert.equal(byName.Ana.expectedCash, 9000);
+  assert.equal(byName.Leo.cash, 4000);
+  assert.equal(byName.Leo.expectedCash, 3500);
+});
 test('cash counts delivered receipts once, splits mixed payments, excludes transfers and flags unknowns', () => {
   const routes = [makeRoute(1,1,'efectivo'), makeRoute(2,1,'efectivo'), makeRoute(3,2,'mixto',4000),
     makeRoute(4,3,'transferencia'), makeRoute(5,4,'efectivo',null,'not_delivered'),
