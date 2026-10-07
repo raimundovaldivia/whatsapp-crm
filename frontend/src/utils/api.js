@@ -47,6 +47,7 @@ export const setupAPI = {
 
 export const conversationsAPI = {
   getAll: () => api.get('/conversations').then(r => r.data.data),
+  getByPhone: (phone) => api.get('/conversations/search-by-phone', { params: { phone } }).then(r => r.data.conversations || []),
   getMessages: (id) => api.get(`/conversations/${id}/messages`).then(r => r.data.data),
   sendMessage: (id, text) => api.post(`/conversations/${id}/messages`, { text }).then(r => r.data.data),
   sendMedia: (id, data) => api.post(`/conversations/${id}/media`, data, { timeout: 120000 }).then(r => r.data.data),
@@ -138,6 +139,7 @@ export const metaAPI = {
   authUrl:      () => api.get('/meta/auth-url').then(r => r.data.url),
   assets:       () => api.get('/meta/assets').then(r => r.data),
   selectAssets: data => api.patch('/meta/assets', data).then(r => r.data),
+  activateWhatsApp: data => api.post('/meta/whatsapp/activate', data).then(r => r.data),
   disconnect:   () => api.delete('/meta/connection').then(r => r.data),
   threads:      () => api.get('/meta/threads').then(r => r.data.threads),
   messages:     id => api.get(`/meta/threads/${id}/messages`).then(r => r.data.messages),

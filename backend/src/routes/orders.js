@@ -17,6 +17,7 @@ const collection  = require('../services/payment-collection');
 const { paymentBreakdown } = require('../utils/payment-breakdown');
 const { recordRouteOutcome } = require('../services/delivery-attempts');
 const deliveryNotifications = require('../services/delivery-notifications');
+const { resolveCustomerPhones } = require('../services/customer-identity');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 async function sendOrderEditNotification(...args) {
@@ -226,17 +227,16 @@ router.get('/history/:phone', async (req, res) => {
   try {
     const pool  = getPool();
     const phone = req.params.phone.replace(/\s+/g, '');
-    // Variantes del número para búsqueda flexible
-    const variants = [phone];
-    if (phone.startsWith('56') && phone.length >= 10)       variants.push(phone.slice(2));
-    if (phone.startsWith('9')  && phone.length === 9)        variants.push('56' + phone);
-    if (!phone.startsWith('+') && phone.startsWith('56'))    variants.push('+' + phone);
+    // Incluye formatos equivalentes y teléfonos anteriores que estén unidos
+    // por una identidad fuerte (Shopify, email o nombre+dirección).
+    const variants = await resolveCustomerPhones(pool, req.orgId, phone);
 
     const { rows: shopifyOrders } = await pool.query(`
       SELECT id, shopify_order_id, shopify_name, customer_name, total_price,
              financial_status, fulfillment_status, shopify_created_at, items,
              shipping_address1, shipping_city, payment_method, payment_marked_at,
-             payment_cash_amount, payment_transfer_amount, payment_record_source
+             payment_cash_amount, payment_transfer_amount, payment_record_source,
+             crm_status, delivered_at
       FROM shopify_orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])
@@ -247,7 +247,7 @@ router.get('/history/:phone', async (req, res) => {
     const { rows: botOrders } = await pool.query(`
       SELECT id, customer_name, total_price, status, created_at, items, shipping_address,
              payment_method, payment_marked_at, payment_cash_amount,
-             payment_transfer_amount, payment_record_source
+             payment_transfer_amount, payment_record_source, delivered_at
       FROM orders
       WHERE organization_id = $1
         AND customer_phone = ANY($2::text[])
@@ -260,6 +260,7 @@ router.get('/history/:phone', async (req, res) => {
     const { rows: contactRows } = await pool.query(`
       SELECT address1, address, city FROM contacts
       WHERE organization_id = $1 AND phone = ANY($2::text[])
+      ORDER BY updated_at DESC NULLS LAST
       LIMIT 1
     `, [req.orgId, variants]);
     const contactAddress = contactRows[0]
@@ -976,13 +977,14 @@ router.patch('/set-items', async (req, res) => {
 /**
  * PATCH /api/orders/history-edit
  * Edita productos y dirección como una sola operación desde el historial.
- * Body: { source, id, items, address, city, updateContact }
+ * Body: { source, id, items, address, city, note, updateContact }
  */
 router.patch('/history-edit', async (req, res) => {
-  const { source, id, items, address, city, updateContact = false } = req.body;
+  const { source, id, items, address, city, note = '', updateContact = false } = req.body;
   if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
   if (!Array.isArray(items)) return res.status(400).json({ success: false, error: 'items debe ser un array' });
   if (!String(address || '').trim()) return res.status(400).json({ success: false, error: 'La dirección es requerida' });
+  if (typeof note !== 'string' || note.trim().length > 1000) return res.status(400).json({ success: false, error: 'La nota no puede superar 1000 caracteres' });
 
   const clean = items
     .map(item => ({
@@ -1017,11 +1019,12 @@ router.patch('/history-edit', async (req, res) => {
                 total_price = $2,
                 shipping_address1 = $3,
                 shipping_city = $4,
+                delivery_note = $5,
                 delivery_modified = TRUE,
                 synced_at = NOW()
-          WHERE shopify_order_id = $5 AND organization_id = $6
+          WHERE shopify_order_id = $6 AND organization_id = $7
           RETURNING *`,
-        [JSON.stringify(clean), total, address.trim(), String(city || '').trim() || null, String(id), req.orgId]
+        [JSON.stringify(clean), total, address.trim(), String(city || '').trim() || null, note.trim() || null, String(id), req.orgId]
       );
       order = rows[0];
     } else {
@@ -1030,11 +1033,12 @@ router.patch('/history-edit', async (req, res) => {
             SET items = $1,
                 total_price = $2,
                 shipping_address = $3,
+                delivery_note = $4,
                 delivery_modified = TRUE,
                 updated_at = NOW()
-          WHERE id = $4 AND organization_id = $5
+          WHERE id = $5 AND organization_id = $6
           RETURNING *`,
-        [JSON.stringify(clean), String(total), JSON.stringify({ address: address.trim(), city: String(city || '').trim() }), parseInt(id), req.orgId]
+        [JSON.stringify(clean), String(total), JSON.stringify({ address: address.trim(), city: String(city || '').trim() }), note.trim() || null, parseInt(id), req.orgId]
       );
       order = rows[0];
     }

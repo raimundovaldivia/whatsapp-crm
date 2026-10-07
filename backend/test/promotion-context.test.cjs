@@ -199,10 +199,10 @@ test('estructura la promo Diez Ríos como combo y calcula correctamente las band
 Hola Roxana, tenemos promociones en huevos y productos frescos del campo 🥚
 
 PROMO DIEZ RIOS: QUESO DE CABRA + BANDEJA XL 30 = $25.000
-| 2 BANDEJAS XL DE 30 HUEVOS A $23.000
-| 2 BANDEJAS JUMBO DE 20 HUEVOS A $18.000
-| 3 BANDEJAS XL DE 30 HUEVOS A $30.000
-| 3 BANDEJAS JUMBO DE 20 HUEVOS A $27.000
+2 BANDEJAS XL DE 30 HUEVOS A $23.000
+2 BANDEJAS JUMBO DE 20 HUEVOS A $18.000
+3 BANDEJAS XL DE 30 HUEVOS A $30.000
+3 BANDEJAS JUMBO DE 20 HUEVOS A $27.000
 
 Haz tu pedido antes de las 12:00 y te lo entregamos el mismo día si hay stock disponible.`,
   };
@@ -224,11 +224,11 @@ Haz tu pedido antes de las 12:00 y te lo entregamos el mismo día si hay stock d
   assert.equal(combo.price, 25000);
   const items = promotion.offerOrderItems(combo);
   assert.deepEqual(items.map(item => [item.product_name, item.quantity, item.price]), [
-    ['Queso de Cabra Fresco Pasteurizado – 900 g', 1, 15000],
-    ['Huevos de Campo Tamaño XL – Bandeja 30 Unidades', 1, 10000],
+    ['QUESO DE CABRA + BANDEJA XL 30', 1, 25000],
   ]);
   assert.equal(pricing.priceItems(items, promoProducts).total, 25000);
   assert.equal(promotion.selectedOffer('Promo diez Rios, queso de cabra más bandeja XL de 30 =25000', promo), combo);
+  assert.equal(promotion.selectedOffer('Por 25000', promo), combo);
   assert.equal(promotion.selectedOffer('la opción 1', promo), combo);
   assert.equal(promotion.selectedOffer('2 bandejas XL por favor', promo).price, 23000);
   assert.equal(promotion.selectedOffer('3 bandejas jumbo', promo).price, 27000);
@@ -352,4 +352,32 @@ test('la regla de regalo no depende del producto, monto ni forma exacta de escri
   assert.equal(singularRule.quantity, 1);
   assert.equal(singularRule.target, 'queso');
   assert.equal(singularRule.minPurchase, 25000);
+});
+
+test('Vale: one cheese uses $12,000, two use $23,000 and egg combos remain separate', () => {
+  const body = `Hola Vale, tenemos promociones en huevos y productos frescos del campo 🥚
+🧀 YA TENEMOS PRODUCCIÓN DE QUESO DE CABRA 🧀
+🧀 Queso de Cabra Fresco – hoy con $3.000 de descuento: $12.000
+🥚 30 Huevos XL + Queso de Cabra Fresco: $25.000
+🥚 60 Huevos XL + Queso de Cabra Fresco: $36.000
+🧀 2 Quesos de Cabra Frescos: $23.000
+Haz tu pedido antes de las 13:00 y te lo entregamos el mismo día si hay stock disponible 🚚`;
+  const catalog = [{id:10,title:'Queso de Cabra Fresco Pasteurizado 800g',price:15000},
+    {id:11,title:'Huevos XL Bandeja 30 unidades',price:15000}];
+  for (const text of [body, body.split('\n').reverse().join('\n')]) {
+    const promo = promotion.fromHistory([{direction:'outbound',created_at:'2026-10-06T14:34:00Z',content:'[Template: queso]\n\n'+text}],catalog,new Date('2026-10-06T15:00:00Z'));
+    assert.equal(promo.offers.length,4);
+    assert.equal(promo.offers.filter(o=>o.combo).length,2);
+    const one = pricing.priceItems([{product_name:catalog[0].title,quantity:1,price:23000}],catalog,{specialPrices:promo.specialPrices});
+    const two = pricing.priceItems([{product_name:catalog[0].title,quantity:2}],catalog,{specialPrices:promo.specialPrices});
+    assert.equal(one.total,12000); assert.equal(one.items[0].price,12000);
+    assert.equal(two.total,23000); assert.equal(two.items[0].price,11500);
+    const pair = promo.offers.find(o=>o.quantity===2);
+    const pairItems = promotion.offerOrderItems(pair);
+    assert.equal(pairItems[0].quantity,2);
+    assert.equal(pricing.priceItems(pairItems,catalog).total,23000);
+    const single = promotion.selectedOffer('un queso de cabra',promo);
+    assert.equal(single.quantity,1);
+    assert.equal(pricing.priceItems([{product_name:catalog[1].title,quantity:1}],catalog,{specialPrices:promo.specialPrices}).total,15000);
+  }
 });

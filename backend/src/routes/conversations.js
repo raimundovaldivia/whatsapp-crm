@@ -200,6 +200,44 @@ router.patch('/:id/read', async (req, res) => {
 });
 
 /**
+ * PATCH /api/conversations/:id/pin
+ * Mantiene una conversación destacada al comienzo de la lista.
+ */
+router.patch('/:id/pin', async (req, res) => {
+  try {
+    if (typeof req.body?.pinned !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'pinned debe ser verdadero o falso' });
+    }
+    const updated = await db.setConversationPinned(Number(req.params.id), req.orgId, req.body.pinned);
+    if (!updated) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/conversations/:id/customer-note
+ * Nota interna persistente, compartida por los canales del mismo cliente.
+ */
+router.patch('/:id/customer-note', async (req, res) => {
+  try {
+    if (typeof req.body?.note !== 'string') {
+      return res.status(400).json({ success: false, error: 'La nota debe ser texto' });
+    }
+    if (req.body.note.trim().length > 1000) {
+      return res.status(400).json({ success: false, error: 'La nota no puede superar 1000 caracteres' });
+    }
+    const conv = await db.getConversationById(Number(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    const note = await db.setCustomerNote(req.orgId, conv.phone_number, req.body.note);
+    res.json({ success: true, note, data: await db.getConversationById(conv.id, req.orgId) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/conversations/start
  * Inicia o reutiliza una conversación con un número y envía el primer mensaje.
  * Body: { phone: "56912345678", name?: "Juan", text: "Hola..." }
@@ -315,8 +353,11 @@ router.post('/:id/orders', async (req, res) => {
     const conv   = await db.getConversationById(convId, req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
-    const { items = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent' } = req.body;
+    const { items = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '' } = req.body;
     if (!items.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
+    if (typeof note !== 'string' || note.trim().length > 1000) {
+      return res.status(400).json({ success: false, error: 'La nota del pedido no puede superar 1000 caracteres' });
+    }
 
     const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
     const discountNum   = parseFloat(discount) || 0;
@@ -352,6 +393,7 @@ router.post('/:id/orders', async (req, res) => {
       customerPhone:   conv.phone_number,
       shippingAddress: finalAddress,
       totalPrice,
+      note: note.trim() || null,
     });
 
     // Guardar mensaje de resumen en el chat y enviarlo al cliente
@@ -764,14 +806,19 @@ router.get('/search-by-phone', async (req, res) => {
     const placeholders = [...variants].map((_, i) => `$${i + 2}`).join(', ');
     const { rows } = await pool.query(
       `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.agent_mode,
-              c.last_message_at, c.hot_lead_excluded,
-              COUNT(m.id)::int AS message_count,
-              MIN(m.created_at) AS first_message_at
+              c.last_message_at, c.hot_lead_excluded, c.whatsapp_channel_id,
+              COALESCE(wc.name,
+                CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END
+              ) AS whatsapp_channel_name,
+              COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
+              COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider,
+              (SELECT COUNT(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+              (SELECT MIN(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS first_message_at
        FROM conversations c
-       LEFT JOIN messages m ON m.conversation_id = c.id
+       LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+       LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
        WHERE c.organization_id = $1
          AND c.phone_number IN (${placeholders})
-       GROUP BY c.id
        ORDER BY c.last_message_at DESC`,
       [req.orgId, ...[...variants]]
     );

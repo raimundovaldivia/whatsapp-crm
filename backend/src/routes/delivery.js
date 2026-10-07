@@ -33,13 +33,37 @@ const deliveryNotifications = require('../services/delivery-notifications');
 const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
 const push = require('../services/push');
+const productIdentity = require('../services/product-identity');
+const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem === 'function'
+  ? productIdentity.canonicalizeProductItem
+  : item => item;
 const { attachAttemptHistory } = require('../services/delivery-attempts');
 const { requireAuth, requireRole } = require('../middleware/auth');
+
+// Un pedido importado sin decisión logística local no vuelve a reparto si
+// Shopify ya lo completó/anuló o pertenece al historial ampliado sin gestión
+// local. FULFILLED no acredita entrega al cliente:
+// esto filtra elegibilidad, sin reescribir crm_status ni delivered_at.
+// Los reintentos/reprogramaciones explícitos del CRM siguen siendo válidos.
+const importedShopifyClosed = `(COALESCE(crm_status, 'nuevo') IN ('', 'nuevo') AND (
+  UPPER(COALESCE(fulfillment_status, '')) = 'FULFILLED'
+  OR UPPER(COALESCE(financial_status, '')) IN ('VOIDED', 'REFUNDED')
+  OR NULLIF(raw_json->>'cancelledAt', '') IS NOT NULL
+  OR (
+    COALESCE(shopify_created_at < (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - INTERVAL '60 days', FALSE)
+    AND delivery_date IS NULL
+    AND COALESCE(dispatch_count, 0) = 0
+    AND last_attempt_at IS NULL
+    AND last_attempt_status IS NULL
+    AND NULLIF(delivery_note, '') IS NULL
+  )
+))`;
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 router.use(requireAuth);
+router.use('/returns', require('./order-returns'));
 const { routeItems } = require('../services/delivery-items');
 router.get('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
 router.patch('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
@@ -175,6 +199,7 @@ async function reserveOrdersForRoute(client, orgId, orders) {
          WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])
            AND delivered_at IS NULL
            AND COALESCE(crm_status, '') NOT IN ('asignado_ruta','en_camino','entregado','cancelled')
+           AND NOT ${importedShopifyClosed}
        RETURNING shopify_order_id`,
       [orgId, shopifyIds]
     ) : null,
@@ -382,6 +407,7 @@ function normalizeShopifyOrder(row) {
   const city   = addr.city || row.shipping_city || '';
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
+  items = items.map(canonicalizeProductItem);
   return {
     id: row.id, source: 'shopify',
     orderName: row.order_name || `#${row.id}`,      // shopify_name aliaseado como order_name
@@ -419,6 +445,7 @@ function normalizeBotOrder(row) {
     : row.customer_name;
   let items = [];
   try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
+  items = items.map(canonicalizeProductItem);
   return {
     id: String(row.id), source: 'bot',
     orderName: `#BOT-${row.id}`,
@@ -458,6 +485,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
           AND (crm_status IS NULL OR crm_status NOT IN ('asignado_ruta', 'en_camino', 'entregado', 'cancelled'))
           AND (delivery_date IS NULL OR delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
           AND delivered_at IS NULL   -- ya se repartió: no vuelve a la lista
+          AND NOT ${importedShopifyClosed}
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
@@ -1092,7 +1120,7 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
 async function getOwnedActiveStop(req, routeId, stopKey) {
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   const { rows: [route] } = await getPool().query(`
-    SELECT id, status, orders
+    SELECT id, status, orders, driver_user_id
       FROM delivery_routes
      WHERE id = $1 AND organization_id = $2
        AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
@@ -1102,7 +1130,7 @@ async function getOwnedActiveStop(req, routeId, stopKey) {
   const orders = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
   const stop = orders.find(item => `${item.source}_${item.id}` === stopKey);
   if (!stop) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
-  return stop;
+  return { ...stop, driver_user_id: route.driver_user_id || driverScope };
 }
 
 async function conversationForStop(orgId, stop, { create = false } = {}) {
@@ -1141,11 +1169,14 @@ async function evolutionChatRoute(orgId, stop, { create = false, window = null }
 }
 
 async function deliveryChatRoute(orgId, stop, { create = false } = {}) {
+  const personal = await require('../services/driver-whatsapp').route(orgId, stop, create);
+  if (personal) return personal;
+
   const resolved = await conversationForStop(orgId, stop);
   const primaryConversation = resolved.conversation;
   const primaryConfig = await whatsappProvider.configForConversation(orgId, primaryConversation);
 
-  if (primaryConfig && (resolved.window.available || primaryConfig.provider === 'evolution')) {
+  if (primaryConfig && !primaryConfig.assigned_user_id && (resolved.window.available || primaryConfig.provider === 'evolution')) {
     let conversation = primaryConversation;
     if (!conversation && create && primaryConfig) {
       conversation = await db.upsertConversation(
@@ -1190,8 +1221,10 @@ router.get('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor',
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
     if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
     const routing = await deliveryChatRoute(req.orgId, stop);
-    const messages = typeof db.getMessagesByCustomerPhone === 'function'
-      ? await db.getMessagesByCustomerPhone(req.orgId, stop.phone, 60)
+    const messages = routing.personal
+      ? routing.conversation ? await db.getMessagesByConversation(routing.conversation.id, 60) : []
+      : typeof db.getMessagesByCustomerPhone === 'function'
+      ? await db.getMessagesByCustomerPhone(req.orgId, stop.phone, 60, true)
       : routing.conversation ? await db.getMessagesByConversation(routing.conversation.id, 60) : [];
     res.json({
       success: true,
@@ -1203,11 +1236,13 @@ router.get('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor',
           available: routing.available,
           channel: routing.channel,
           fallback: routing.fallback,
-          message: routing.available
+          sender: routing.sender || null,
+          personal: !!routing.personal,
+          message: routing.message || (routing.available
             ? routing.fallback
               ? 'La ventana de Kapso está cerrada. Los mensajes se enviarán automáticamente por Evolution.'
               : 'El canal de WhatsApp está disponible.'
-            : 'La ventana de Kapso está cerrada y Evolution no está disponible.',
+            : 'La ventana de Kapso está cerrada y Evolution no está disponible.'),
         },
         customer: { name: stop.customerName || stop.customer_name || 'Cliente', phone: stop.phone },
       },
@@ -1234,7 +1269,7 @@ router.post('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor'
       return res.status(409).json({
         success: false,
         error: 'WINDOW_EXPIRED',
-        message: 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible.',
+        message: routing.message || 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible.',
         window: routing.window,
       });
     }
@@ -1307,7 +1342,7 @@ router.post('/routes/:id/stops/chat/media', requireRole('owner', 'admin', 'super
       return res.status(409).json({
         success: false,
         error: 'WINDOW_EXPIRED',
-        message: 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible para enviar archivos.',
+        message: routing.message || 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible para enviar archivos.',
       });
     }
 
@@ -1420,7 +1455,7 @@ router.get('/drivers', async (req, res) => {
              (SELECT COUNT(*) FROM delivery_routes r
                WHERE r.driver_user_id = u.id AND r.status IN ('sent','in_progress'))::int AS active_routes
         FROM users u
-       WHERE u.organization_id = $1 AND u.role IN ('repartidor', 'coordinador')
+       WHERE u.organization_id = $1 AND u.merged_into_user_id IS NULL AND u.role IN ('repartidor', 'coordinador')
        ORDER BY u.name ASC NULLS LAST, u.email ASC
     `, [req.orgId]);
     res.json({ success: true, drivers: rows });
@@ -1536,6 +1571,20 @@ router.get('/expenses', async (req, res) => {
   }
 });
 
+router.get('/cash-register', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const cashRegister = require('../services/cash-register');
+  const { from, to } = req.query;
+  if (!cashRegister.validDate(from) || !cashRegister.validDate(to) || from > to) {
+    return res.status(400).json({ error: 'Indica un período de fechas válido.' });
+  }
+  try {
+    res.json({ success: true, ...await cashRegister.report(getPool(), req.orgId, from, to) });
+  } catch (err) {
+    console.error('[Delivery/cash-register]', err.message);
+    res.status(500).json({ error: 'No se pudo calcular la caja. Intenta nuevamente.' });
+  }
+});
+
 router.get('/expenses/:id/photo', async (req, res) => {
   const pool = getPool();
   try {
@@ -1599,7 +1648,8 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
     const { rows } = await pool.query(
       `SELECT shopify_order_id AS id, crm_status AS status, dispatch_count,
               last_attempt_status, delivery_note,
-              (delivered_at IS NOT NULL OR crm_status IN ('en_camino', 'entregado', 'cancelled')
+              (delivered_at IS NOT NULL OR ${importedShopifyClosed}
+                OR crm_status IN ('en_camino', 'entregado', 'cancelled')
                 OR (crm_status = 'asignado_ruta' AND NOT $3::boolean)
                 OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
          FROM shopify_orders
@@ -1649,7 +1699,7 @@ async function resolveDriver(pool, orgId, { driverUserId, driverName, driverPhon
   if (!driverUserId) return { driverUserId: null, driverName: driverName || null, driverPhone: driverPhone || null };
   const { rows: [u] } = await pool.query(
     `SELECT id, name, email, whatsapp_phone FROM users
-      WHERE id = $1 AND organization_id = $2 AND role IN ('repartidor', 'coordinador')`,
+      WHERE id = $1 AND organization_id = $2 AND merged_into_user_id IS NULL AND role IN ('repartidor', 'coordinador')`,
     [parseInt(driverUserId), orgId]
   );
   if (!u) throw Object.assign(new Error('El usuario seleccionado no existe o no puede repartir'), { status: 400 });

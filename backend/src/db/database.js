@@ -53,7 +53,7 @@ async function getUserByEmail(email) {
 
 async function getUserById(id) {
   return queryOne(
-    'SELECT id, organization_id, email, name, role, auth_version FROM users WHERE id = $1',
+    'SELECT id, organization_id, email, name, role, auth_version FROM users WHERE id = $1 AND merged_into_user_id IS NULL',
     [id]
   );
 }
@@ -62,7 +62,7 @@ async function listOrgUsers(orgId) {
   return query(
     `SELECT id, email, name, role, whatsapp_phone, wa_notifications, created_at
      FROM users
-     WHERE organization_id = $1
+     WHERE organization_id = $1 AND merged_into_user_id IS NULL
      ORDER BY created_at ASC`,
     [orgId]
   );
@@ -73,7 +73,7 @@ async function getUserByWhatsappPhone(orgId, phone) {
   const result = await query(
     `SELECT id, organization_id, email, name, role, whatsapp_phone, wa_notifications
      FROM users
-     WHERE organization_id = $1
+     WHERE organization_id = $1 AND merged_into_user_id IS NULL
        AND (whatsapp_phone = $2 OR whatsapp_phone = $3)`,
     [orgId, phone, normalized]
   );
@@ -103,6 +103,7 @@ async function getAgentsWithNotification(orgId, notifKey) {
      WHERE organization_id = $1
        AND whatsapp_phone IS NOT NULL
        AND whatsapp_phone <> ''
+       AND merged_into_user_id IS NULL
        AND (wa_notifications->>'${notifKey}')::boolean = true`,
     [orgId]
   );
@@ -227,6 +228,9 @@ async function createWhatsappChannel(orgId, channel) {
   return getPool().connect().then(async client => {
     try {
       await client.query('BEGIN');
+      const reserved = await client.query('SELECT assigned_user_id FROM whatsapp_channels WHERE organization_id=$1 AND provider=$2 AND evolution_instance=$3', [orgId, 'evolution', channel.evolutionInstance]);
+      if (reserved.rows[0]?.assigned_user_id) throw Object.assign(new Error('Esta instancia pertenece a un despachador. Gestiona su conexión desde Equipo.'), { status: 409 });
+
       const existingDefault = await client.query(
         'SELECT 1 FROM whatsapp_channels WHERE organization_id = $1 AND is_default = TRUE LIMIT 1',
         [orgId]
@@ -249,6 +253,7 @@ async function createWhatsappChannel(orgId, channel) {
            status = EXCLUDED.status,
            is_default = CASE WHEN EXCLUDED.is_default THEN TRUE ELSE whatsapp_channels.is_default END,
            updated_at = NOW()
+         WHERE whatsapp_channels.assigned_user_id IS NULL
          RETURNING *`,
         [orgId, channel.name, channel.phoneNumber || null, channel.evolutionApiUrl,
           channel.evolutionApiKey, channel.evolutionInstance, channel.webhookToken,
@@ -267,7 +272,7 @@ async function listWhatsappChannels(orgId) {
   return query(
     `SELECT id, organization_id, provider, name, phone_number, evolution_api_url,
             evolution_instance, status, is_default, created_at, updated_at
-       FROM whatsapp_channels WHERE organization_id = $1
+       FROM whatsapp_channels WHERE organization_id = $1 AND assigned_user_id IS NULL
       ORDER BY is_default DESC, id ASC`,
     [orgId]
   );
@@ -279,7 +284,7 @@ async function getWhatsappChannel(orgId, channelId) {
 
 async function getDefaultWhatsappChannel(orgId) {
   return queryOne(
-    'SELECT * FROM whatsapp_channels WHERE organization_id = $1 ORDER BY is_default DESC, id ASC LIMIT 1',
+    'SELECT * FROM whatsapp_channels WHERE organization_id = $1 AND assigned_user_id IS NULL ORDER BY is_default DESC, id ASC LIMIT 1',
     [orgId]
   );
 }
@@ -287,7 +292,7 @@ async function getDefaultWhatsappChannel(orgId) {
 async function getEvolutionWhatsappChannel(orgId) {
   return queryOne(
     `SELECT * FROM whatsapp_channels
-      WHERE organization_id = $1 AND provider = 'evolution'
+      WHERE organization_id = $1 AND provider = 'evolution' AND assigned_user_id IS NULL
         AND evolution_api_url IS NOT NULL
         AND evolution_api_key IS NOT NULL
         AND evolution_instance IS NOT NULL
@@ -301,7 +306,7 @@ async function setDefaultWhatsappChannel(orgId, channelId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const found = await client.query('SELECT id FROM whatsapp_channels WHERE id = $1 AND organization_id = $2 FOR UPDATE', [channelId, orgId]);
+    const found = await client.query('SELECT id FROM whatsapp_channels WHERE id = $1 AND organization_id = $2 AND assigned_user_id IS NULL FOR UPDATE', [channelId, orgId]);
     if (!found.rowCount) {
       await client.query('ROLLBACK');
       return null;
@@ -438,6 +443,43 @@ function normalizeName(name) {
 
 // ─── CONVERSATIONS ────────────────────────────────────────────────
 
+// One customer identity per organization and normalized phone, across channels.
+// CRM names take precedence over provider profile aliases.
+function identityPhoneSql(column) {
+  const digits = `REGEXP_REPLACE(${column}, '[^0-9]', '', 'g')`;
+  return `(CASE WHEN ${digits} ~ '^9[0-9]{8}$' THEN '56' || ${digits} ELSE ${digits} END)`;
+}
+function usableNameSql(column) {
+  return `NULLIF(BTRIM(${column}), '') IS NOT NULL AND LOWER(BTRIM(${column})) <> 'cliente' AND ${column} !~ '^[+0-9 ()-]+$'`;
+}
+function customerIdentityJoin() {
+  return `LEFT JOIN LATERAL (
+    SELECT contact.name, contact.client_type,
+      (SELECT note_contact.notes FROM contacts note_contact
+        WHERE note_contact.organization_id = c.organization_id
+          AND ${identityPhoneSql('note_contact.phone')} = ${identityPhoneSql('c.phone_number')}
+          AND NULLIF(BTRIM(note_contact.notes), '') IS NOT NULL
+        ORDER BY (note_contact.phone = ${identityPhoneSql('c.phone_number')}) DESC, note_contact.id DESC
+        LIMIT 1) AS notes
+    FROM contacts contact
+    WHERE contact.organization_id = c.organization_id
+      AND ${identityPhoneSql('contact.phone')} = ${identityPhoneSql('c.phone_number')}
+    ORDER BY (${usableNameSql('contact.name')}) DESC NULLS LAST,
+      (contact.phone = ${identityPhoneSql('c.phone_number')}) DESC, contact.id DESC
+    LIMIT 1
+  ) co ON TRUE`;
+}
+const customerNameSql = `CASE WHEN ${usableNameSql('co.name')} THEN co.name ELSE c.contact_name END`;
+
+async function savedCustomerName(orgId, phone) {
+  const customer = await queryOne(
+    `SELECT name FROM contacts WHERE organization_id = $1
+      AND ${identityPhoneSql('phone')} = $2 AND ${usableNameSql('name')}
+      ORDER BY (phone = $2) DESC, id DESC LIMIT 1`, [orgId, phone]
+  );
+  return customer?.name || null;
+}
+
 async function upsertConversation(orgId, phoneNumber, contactName = null, whatsappChannelId = null) {
   // Normalizar: siempre con código de país, sin "+"
   const phone = normalizePhone(phoneNumber);
@@ -447,15 +489,16 @@ async function upsertConversation(orgId, phoneNumber, contactName = null, whatsa
     [orgId, phone, whatsappChannelId]
   );
 
-  const isGenericName = n => !n || n === 'Cliente' || /^\d+$/.test(n);
-  const resolvedName = isGenericName(contactName) ? null : contactName;
+  const isGenericName = n => !n || !n.trim() || n.trim().toLowerCase() === 'cliente' || /^[+0-9 ()-]+$/.test(n);
+  const customerName = await savedCustomerName(orgId, phone);
+  const resolvedName = customerName || (isGenericName(contactName) ? null : normalizeName(contactName));
 
   if (existing) {
     const existingIsGeneric = isGenericName(existing.contact_name);
     if (resolvedName && (existingIsGeneric || resolvedName !== existing.contact_name)) {
       await pool.query(
-        'UPDATE conversations SET contact_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [resolvedName, existing.id]
+        'UPDATE conversations SET contact_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND organization_id = $3',
+        [resolvedName, existing.id, orgId]
       );
     }
   } else {
@@ -471,7 +514,7 @@ async function upsertConversation(orgId, phoneNumber, contactName = null, whatsa
       `INSERT INTO contacts (organization_id, phone, name, updated_at)
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (organization_id, phone) DO UPDATE SET
-         name       = CASE WHEN $3 IS NOT NULL AND contacts.name IS NULL THEN $3 ELSE contacts.name END,
+         name       = CASE WHEN ${usableNameSql('contacts.name')} THEN contacts.name ELSE $3 END,
          updated_at = NOW()`,
       [orgId, phone, resolvedName]
     );
@@ -487,25 +530,13 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
   const where = unreadOnly
     ? 'c.organization_id = $1 AND c.unread_count > 0'
     : 'c.organization_id = $1';
-  // JOIN con contacts para mostrar el nombre real cuando el de la conversación es genérico
-  // contacts.phone está normalizado (sin +, con código de país) igual que conversations.phone_number
-  // DISTINCT ON evita duplicados cuando hay múltiples contactos con el mismo teléfono
-  // en distintos formatos (ej: 9XXXXXXXX y 569XXXXXXXX). El subquery reordena por
-  // last_message_at después de eliminar duplicados por id.
+  // Resolve the saved customer name consistently without merging channel conversations.
   return query(
     `SELECT * FROM (
        SELECT DISTINCT ON (c.id)
          c.*,
-         CASE
-           WHEN c.contact_name IS NOT NULL
-             AND c.contact_name <> 'Cliente'
-             AND c.contact_name <> c.phone_number
-             AND c.contact_name !~ '^[0-9]+$'
-           THEN c.contact_name
-           WHEN co.name IS NOT NULL AND co.name !~ '^[0-9]+$' AND co.name <> 'Cliente'
-           THEN co.name
-           ELSE c.contact_name
-         END AS contact_name,
+         ${customerNameSql} AS contact_name,
+         co.notes AS contact_notes,
          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
          CASE
            WHEN EXISTS (
@@ -530,34 +561,63 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
        FROM conversations c
        LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
        LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
-       LEFT JOIN contacts co ON co.organization_id = c.organization_id
-                             AND co.phone = ANY(ARRAY[
-                                   c.phone_number,
-                                   CASE WHEN c.phone_number ~ '^9[0-9]{8}$'   THEN '56' || c.phone_number END,
-                                   CASE WHEN c.phone_number ~ '^569[0-9]{8}$' THEN SUBSTRING(c.phone_number FROM 3) END,
-                                   CASE WHEN c.phone_number LIKE '+%'          THEN SUBSTRING(c.phone_number FROM 2) END,
-                                   '+' || c.phone_number
-                                 ])
+       ${customerIdentityJoin()}
        WHERE ${where}
        ORDER BY c.id, c.last_message_at DESC
      ) sub
-     ORDER BY last_message_at DESC`,
+     ORDER BY is_pinned DESC, pinned_at DESC NULLS LAST, last_message_at DESC`,
     [orgId]
   );
 }
 
 async function getConversationById(id, orgId = null) {
-  const select = `SELECT c.*,
+  const select = `SELECT c.*, ${customerNameSql} AS contact_name, co.notes AS contact_notes,
       COALESCE(wc.name, CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END) AS whatsapp_channel_name,
       COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
       COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider
     FROM conversations c
     LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
-    LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id`;
+    LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
+    ${customerIdentityJoin()}`;
   if (orgId) {
     return queryOne(`${select} WHERE c.id = $1 AND c.organization_id = $2`, [id, orgId]);
   }
   return queryOne(`${select} WHERE c.id = $1`, [id]);
+}
+
+async function setConversationPinned(id, orgId, pinned) {
+  const updated = await queryOne(
+    `UPDATE conversations
+        SET is_pinned = $3,
+            pinned_at = CASE WHEN $3 THEN NOW() ELSE NULL END,
+            updated_at = NOW()
+      WHERE id = $1 AND organization_id = $2
+      RETURNING id`,
+    [id, orgId, !!pinned]
+  );
+  return updated ? getConversationById(id, orgId) : null;
+}
+
+async function setCustomerNote(orgId, phone, note) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return null;
+  const cleanNote = typeof note === 'string' && note.trim() ? note.trim() : null;
+
+  await pool.query(
+    `INSERT INTO contacts (organization_id, phone, notes, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (organization_id, phone) DO UPDATE SET
+       notes = EXCLUDED.notes,
+       updated_at = NOW()`,
+    [orgId, normalizedPhone, cleanNote]
+  );
+  await pool.query(
+    `UPDATE contacts SET notes = $3, updated_at = NOW()
+      WHERE organization_id = $1
+        AND ${identityPhoneSql('phone')} = $2`,
+    [orgId, normalizedPhone, cleanNote]
+  );
+  return cleanNote;
 }
 
 async function updateConversationLastMessage(id, message, incrementUnread = false) {
@@ -767,7 +827,11 @@ async function saveMessage({ conversationId, whatsappMessageId, direction, conte
     return await queryOne(
       `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type, media_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (whatsapp_message_id) DO NOTHING
+       ON CONFLICT (whatsapp_message_id) DO UPDATE SET
+         sent_by = EXCLUDED.sent_by, agent_type = EXCLUDED.agent_type
+       WHERE messages.conversation_id = EXCLUDED.conversation_id
+         AND messages.direction = 'outbound' AND EXCLUDED.direction = 'outbound'
+         AND messages.sent_by = 'human' AND EXCLUDED.sent_by = 'ai'
        RETURNING *`,
       [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType, mediaId || null]
     );
@@ -796,7 +860,7 @@ async function getMessagesByConversation(conversationId, limit = 80) {
   return rows.reverse();
 }
 
-async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80) {
+async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80, excludePersonal = false) {
   const normalized = normalizePhone(phoneNumber);
   if (!normalized) return [];
   const rows = await query(
@@ -812,12 +876,13 @@ async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80) {
          LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
          LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
         WHERE c.organization_id = $1
+          AND (NOT $4::boolean OR wc.assigned_user_id IS NULL)
           AND regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g') = $2
         ORDER BY m.created_at DESC
         LIMIT $3
      ) recent
      ORDER BY recent.created_at ASC`,
-    [orgId, normalized, limit]
+    [orgId, normalized, limit, excludePersonal]
   );
   return rows;
 }
@@ -888,7 +953,9 @@ async function cacheProducts(orgId, dataSourceId, products) {
 }
 
 async function getCachedProducts(orgId) {
-  return query('SELECT * FROM products_cache WHERE organization_id = $1 ORDER BY title ASC', [orgId]);
+  const rows = await query('SELECT * FROM products_cache WHERE organization_id = $1 ORDER BY title ASC', [orgId]);
+  const weight = await getSetting(orgId, 'goat_cheese_weight');
+  return weight ? rows.map(row => require('../services/catalog-facts').applyCheeseWeight(row, weight)) : rows;
 }
 
 async function getProductsCacheAge(orgId) {
@@ -899,11 +966,11 @@ async function getProductsCacheAge(orgId) {
 
 // ─── ORDERS ───────────────────────────────────────────────────────
 
-async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice, status = 'draft' }) {
+async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice, status = 'draft', note = null }) {
   const order = await queryOne(
-    `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice, status]
+    `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status, notes, delivery_note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING *`,
+    [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice, status, note || null]
   );
   // Un pedido ya persistido es la fuente de verdad. Cerrar cualquier toma de
   // pedido anterior evita que el bot retome un carrito obsoleto después de
@@ -1426,16 +1493,18 @@ async function setContactOptOut(orgId, phone, value) {
  */
 async function touchLead(orgId, phone, name = null) {
   if (!phone) return;
+  phone = normalizePhone(phone);
+  const savedName = await savedCustomerName(orgId, phone);
   await pool.query(
     `INSERT INTO contacts (organization_id, phone, name, contact_type, source, last_seen_at, updated_at)
      VALUES ($1, $2, $3, 'lead', 'whatsapp', NOW(), NOW())
      ON CONFLICT (organization_id, phone) DO UPDATE SET
-       name         = COALESCE(EXCLUDED.name, contacts.name),
+       name         = CASE WHEN ${usableNameSql('contacts.name')} THEN contacts.name ELSE EXCLUDED.name END,
        contact_type = COALESCE(contacts.contact_type, 'lead'),
        source       = COALESCE(contacts.source, 'whatsapp'),
        last_seen_at = NOW(),
        updated_at   = NOW()`,
-    [orgId, phone, name || null]
+    [orgId, phone, savedName || normalizeName(name)]
   );
 }
 
@@ -1703,6 +1772,11 @@ async function upsertShopifyOrders(orgId, orders) {
       name:     li.title || li.name,
       quantity: li.quantity,
       price:    li.price,
+      sku:      li.sku || null,
+      variantId: li.variantId || null,
+      variantTitle: li.variantTitle || null,
+      productId: li.productId || null,
+      productTitle: li.productTitle || null,
     }));
     const createdAt     = o.createdAt || null;
 
@@ -1714,8 +1788,19 @@ async function upsertShopifyOrders(orgId, orders) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
        ON CONFLICT (organization_id, shopify_order_id) DO UPDATE SET
          shopify_name        = EXCLUDED.shopify_name,
-         financial_status    = EXCLUDED.financial_status,
-         fulfillment_status  = EXCLUDED.fulfillment_status,
+         -- La importación refresca el espejo de Shopify, pero nunca debe
+         -- deshacer estados de pago o entrega ya confirmados dentro del CRM.
+         financial_status    = CASE
+           WHEN shopify_orders.payment_marked_at IS NOT NULL
+             OR shopify_orders.payment_record_source IS NOT NULL
+           THEN shopify_orders.financial_status
+           ELSE EXCLUDED.financial_status
+         END,
+         fulfillment_status  = CASE
+           WHEN shopify_orders.delivered_at IS NOT NULL
+           THEN shopify_orders.fulfillment_status
+           ELSE EXCLUDED.fulfillment_status
+         END,
          total_price         = EXCLUDED.total_price,
          customer_name       = EXCLUDED.customer_name,
          customer_email      = EXCLUDED.customer_email,
@@ -1849,7 +1934,7 @@ module.exports = {
   // Agents
   createAgent, getAgents, createDefaultAgents,
   // Conversations
-  upsertConversation, getAllConversations, getConversationById,
+  upsertConversation, getAllConversations, getConversationById, setConversationPinned, setCustomerNote,
   updateConversationLastMessage, markConversationAsRead, setAgentMode, claimHumanPendingNotification,
   updatePipelineState, getOrderDraft, claimOrderCreation,
   // Scheduled orders

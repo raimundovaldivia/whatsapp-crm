@@ -116,6 +116,11 @@ async function setupDatabase() {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_channels_one_default
         ON whatsapp_channels(organization_id) WHERE is_default;
 
+      ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS assigned_user_id INTEGER REFERENCES users(id) ON DELETE RESTRICT;
+      ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS expected_phone TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_channels_assigned_user
+        ON whatsapp_channels(organization_id, assigned_user_id) WHERE assigned_user_id IS NOT NULL;
+
       -- ─── CONVERSACIONES ─────────────────────────────────────────
 
       CREATE TABLE IF NOT EXISTS conversations (
@@ -138,9 +143,13 @@ async function setupDatabase() {
       );
 
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS whatsapp_channel_id INTEGER REFERENCES whatsapp_channels(id) ON DELETE SET NULL;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
       ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_organization_id_phone_number_key;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_org_channel_phone
         ON conversations(organization_id, COALESCE(whatsapp_channel_id, 0), phone_number);
+      CREATE INDEX IF NOT EXISTS idx_conversations_org_pinned
+        ON conversations(organization_id, is_pinned DESC, pinned_at DESC, last_message_at DESC);
 
       -- ─── MENSAJES ────────────────────────────────────────────────
 
@@ -706,6 +715,56 @@ async function setupDatabase() {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT FALSE;
       ALTER TABLE products_cache ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT FALSE;
 
+      -- Confirmed general product specification, scoped to Diez Ríos (not customer-specific SKUs).
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'goat_cheese_weight', '900 g–1 kg' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO NOTHING;
+      UPDATE products p SET title = 'Queso de Cabra Fresco Pasteurizado – 900 g–1 kg',
+        description = 'Queso fresco elaborado con leche de cabra pasteurizada. Peso por pieza: entre 900 g y 1 kg.',
+        updated_at = NOW()
+      FROM organizations o WHERE p.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND p.id = 11 AND p.is_business IS NOT TRUE AND p.title ILIKE '%queso de cabra%'
+        AND p.title NOT LIKE '%900 g–1 kg%';
+
+      -- Catálogo vigente de Diez Ríos (07-10-2026): se retiraron todas las
+      -- promociones y packs. El stock operativo queda en 100 unidades, salvo
+      -- el queso de vaca, que no está disponible. La IA usa este catálogo
+      -- local como fuente autoritativa y no recupera promociones del historial.
+      DELETE FROM products p USING organizations o
+      WHERE p.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND NOT EXISTS (
+          SELECT 1 FROM settings s WHERE s.organization_id = o.id
+            AND s.key = 'catalog_reset_2026_10_07_applied' AND s.value = 'true'
+        )
+        AND (
+          COALESCE(p.title, '') ILIKE '%promo%'
+          OR COALESCE(p.category, '') ILIKE '%promo%'
+          OR COALESCE(p.title, '') ILIKE '%pack%'
+          OR COALESCE(p.category, '') ILIKE '%pack%'
+        );
+      UPDATE products p SET
+        stock = CASE
+          WHEN COALESCE(p.title, '') ILIKE '%queso%vaca%' THEN 0
+          ELSE 100
+        END,
+        updated_at = NOW()
+      FROM organizations o
+      WHERE p.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND NOT EXISTS (
+          SELECT 1 FROM settings s WHERE s.organization_id = o.id
+            AND s.key = 'catalog_reset_2026_10_07_applied' AND s.value = 'true'
+        );
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'catalog_reset_2026_10_07_applied', 'true' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO NOTHING;
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'catalog_source', 'local' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value;
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'promotions_enabled', 'false' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value;
+
+
       -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos)
       -- Eliminar primero los que quedarían duplicados tras normalizar
 
@@ -758,7 +817,9 @@ async function setupDatabase() {
       WHERE so.customer_phone IS NOT NULL AND so.customer_phone <> ''
       ORDER BY so.organization_id, normalized_phone, so.shopify_created_at DESC
       ON CONFLICT (organization_id, phone) DO UPDATE SET
-        name         = COALESCE(EXCLUDED.name,  contacts.name),
+        name = CASE WHEN NULLIF(BTRIM(contacts.name), '') IS NOT NULL
+          AND LOWER(BTRIM(contacts.name)) <> 'cliente' AND contacts.name !~ '^[+0-9 ()-]+$'
+          THEN contacts.name ELSE EXCLUDED.name END,
         email        = COALESCE(EXCLUDED.email, contacts.email),
         city         = COALESCE(EXCLUDED.city,  contacts.city),
         contact_type = 'customer',
@@ -802,7 +863,9 @@ async function setupDatabase() {
       WHERE c.phone_number IS NOT NULL AND c.phone_number <> ''
       ORDER BY c.organization_id, normalized_phone, c.last_message_at DESC
       ON CONFLICT (organization_id, phone) DO UPDATE SET
-        name       = COALESCE(EXCLUDED.name, contacts.name),
+        name = CASE WHEN NULLIF(BTRIM(contacts.name), '') IS NOT NULL
+          AND LOWER(BTRIM(contacts.name)) <> 'cliente' AND contacts.name !~ '^[+0-9 ()-]+$'
+          THEN contacts.name ELSE EXCLUDED.name END,
         source     = COALESCE(contacts.source, 'whatsapp'),
         updated_at = NOW();
     `);
@@ -850,6 +913,29 @@ async function setupDatabase() {
         ON broadcast_campaigns(organization_id, created_at DESC);
       ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_provider TEXT NOT NULL DEFAULT 'kapso';
       ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS sending_channel_id INTEGER;
+      ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS pacing_settings JSONB;
+      ALTER TABLE broadcast_campaigns ADD COLUMN IF NOT EXISTS server_managed BOOLEAN NOT NULL DEFAULT FALSE;
+      CREATE TABLE IF NOT EXISTS broadcast_jobs (
+        id BIGSERIAL PRIMARY KEY,
+        campaign_id BIGINT NOT NULL REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        item JSONB NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','processing','done','unknown')),
+        available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        claimed_at TIMESTAMPTZ,
+        result JSONB,
+        UNIQUE(campaign_id, position)
+      );
+      CREATE INDEX IF NOT EXISTS idx_broadcast_jobs_pending ON broadcast_jobs(available_at, id) WHERE state = 'pending';
+      CREATE TABLE IF NOT EXISTS broadcast_channel_pacing (
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        channel_id INTEGER NOT NULL,
+        campaign_id BIGINT,
+        batch_count INTEGER NOT NULL DEFAULT 1,
+        next_send_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (organization_id, channel_id)
+      );
       CREATE TABLE IF NOT EXISTS broadcast_direct_pacing (
         organization_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
         next_send_at TIMESTAMPTZ NOT NULL
@@ -1278,6 +1364,14 @@ async function setupDatabase() {
       UPDATE webhook_inbox w SET stream_id=s.id FROM webhook_streams s
         WHERE w.stream_id IS NULL AND s.provider=w.provider AND s.organization_id=w.organization_id AND s.stream_key='organization';
       CREATE INDEX IF NOT EXISTS idx_webhook_stream_status ON webhook_inbox(stream_id,status,id);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS merged_into_user_id INTEGER REFERENCES users(id);
+      CREATE TABLE IF NOT EXISTS user_merge_audit (
+        id SERIAL PRIMARY KEY, organization_id INTEGER NOT NULL,
+        source_user_id INTEGER NOT NULL, target_user_id INTEGER NOT NULL,
+        actor_user_id INTEGER NOT NULL, details JSONB NOT NULL, created_at TIMESTAMP DEFAULT NOW()
+      );
+      ALTER TABLE delivery_routes ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
+      ALTER TABLE delivery_expenses ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE delivery_expenses ADD COLUMN IF NOT EXISTS client_request_id TEXT;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_request
@@ -1336,6 +1430,32 @@ async function setupDatabase() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_meta_messages_thread ON meta_messages(thread_id,created_at);
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS order_returns (
+        id SERIAL PRIMARY KEY, organization_id INTEGER NOT NULL REFERENCES organizations(id),
+        source TEXT NOT NULL CHECK(source IN ('bot','shopify')), order_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('return','exchange','issue')),
+        status TEXT NOT NULL DEFAULT 'requested', items JSONB NOT NULL,
+        customer JSONB NOT NULL, reason TEXT NOT NULL, replacement_description TEXT NOT NULL DEFAULT '',
+        pickup_required BOOLEAN NOT NULL DEFAULT TRUE,
+        money_direction TEXT NOT NULL DEFAULT 'none', money_method TEXT NOT NULL DEFAULT 'none',
+        money_amount INTEGER NOT NULL DEFAULT 0 CHECK(money_amount >= 0),
+        money_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+        driver_user_id INTEGER REFERENCES users(id), scheduled_date DATE,
+        inventory_status TEXT NOT NULL DEFAULT 'not_received',
+        events JSONB NOT NULL DEFAULT '[]', created_by INTEGER NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        request_key TEXT NOT NULL, UNIQUE(organization_id,request_key)
+      );
+      CREATE INDEX IF NOT EXISTS order_returns_order ON order_returns(organization_id,source,order_id);
+      ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
+      CREATE INDEX IF NOT EXISTS order_returns_driver ON order_returns(organization_id,driver_user_id,status);
+      CREATE TABLE IF NOT EXISTS return_money_movements (
+        id SERIAL PRIMARY KEY, return_id INTEGER NOT NULL UNIQUE REFERENCES order_returns(id),
+        organization_id INTEGER NOT NULL REFERENCES organizations(id), method TEXT NOT NULL,
+        amount INTEGER NOT NULL, recorded_by INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');

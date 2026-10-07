@@ -50,18 +50,33 @@ function comboComponent(value) {
 function parseOffers(body) {
   const offers = [];
   const seen = new Set();
+  const countedBlocks = new Set();
   const re = /\b(\d{1,4})\s+([a-záéíóúüñ][^|$\n]{0,45}?)\s*\$\s*([\d.]+)/giu;
   // Algunos templates declaran la variedad una vez y después enumeran bloques:
   // "Jumbo: 40 unidades $18.000 | 60 unidades $25.500 | XL: 30 unidades...".
   // El encabezado se hereda hasta que aparece otro; sin esto, "60 Jumbo" y
   // "60 XL" quedaban como dos ofertas indistinguibles llamadas "60 unidades".
   let groupedDescriptor = '';
-  const blocks = String(body || '').split('|');
+  // Los templates reales pueden separar las ofertas con "|" o solamente
+  // con saltos de línea. Cada oferta debe analizarse de forma independiente.
+  const blocks = String(body || '').split(/\||\r?\n/).map(block => block.replace(/^[^\p{L}\p{N}]+/u, '').trim()).filter(Boolean);
   for (const block of blocks) {
+    if (!block.includes('+')) {
+      const cheese = block.match(/^(?:(\d+)\s+)?(quesos?\s+de\s+cabra[^$]*?)\s*\$[\d.]+/iu);
+      const amounts = [...block.matchAll(/\$\s*([\d.]+)/g)];
+      if (cheese && amounts.length) {
+        const quantity = Number(cheese[1] || 1);
+        const productLabel = cheese[2].split(/\s*[-–—:]\s*|\s+hoy\s+/iu)[0].trim().replace(/^quesos\b/iu, 'Queso').replace(/frescos\b/iu, 'Fresco');
+        const price = money(amounts.at(-1)[1]);
+        offers.push({ units: null, quantity, productLabel, descriptor: productLabel, label: quantity === 1 ? productLabel : `${quantity} ${productLabel}`, price, named: true });
+        countedBlocks.add(block);
+        continue;
+      }
+    }
     // Una combinación es una sola oferta comercial con varios productos:
     // "QUESO DE CABRA + BANDEJA XL 30 = $25.000". No debe convertirse en
     // una bandeja de $25.000 ni perder uno de sus componentes.
-    const comboMatch = block.match(/(?:^|:)\s*([^|$\n]{2,100}\+[^|$\n]{2,100}?)\s*(?:=|a)\s*\$\s*([\d.]+)/iu);
+    const comboMatch = block.match(/(?:^|:)\s*([^|$\n]{2,100}\+[^|$\n]{2,100}?)\s*(?:=|a|:)\s*\$\s*([\d.]+)/iu);
     if (comboMatch) {
       const label = cleanOfferLabel(comboMatch[1]);
       const price = money(comboMatch[2]);
@@ -112,9 +127,10 @@ function parseOffers(body) {
   // Productos cuyo nombre va antes del tamaño, por ejemplo
   // "Queso de cabra 900 g $15.000". Se revisan por bloque para no absorber
   // el texto introductorio del template ni duplicar las ofertas anteriores.
-  for (const block of String(body || '').split('|')) {
+  for (const block of blocks) {
+    if (countedBlocks.has(block)) continue;
     if (!block.includes('$') || /(?:despachos?|env[ií]os?)\s+gratis/iu.test(block)) continue;
-    if (/\+[^|$\n]{2,100}?\s*(?:=|a)\s*\$\s*[\d.]+/iu.test(block)) continue;
+    if (/\+[^|$\n]{2,100}?\s*(?:=|a|:)\s*\$\s*[\d.]+/iu.test(block)) continue;
     if (/\b\d{1,2}\s+(?:bandejas?|packs?)\s+(?:de\s+)?(?:jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\s+(?:de\s+)?\d{1,3}\s+(?:huevos?|unidades?)/iu.test(block)) continue;
     const hasRegularOffer = [...block.matchAll(re)].some(match => {
       const descriptor = match[2].replace(/^[\s:;,.-]+|[\s:;,.-]+$/g, '').trim();
@@ -355,13 +371,20 @@ function parseTemplate(message, products = [], now = new Date()) {
       });
       continue;
     }
-    const matched = pricing.matchProduct(offer.named ? offer.label : `${offer.units} ${offer.descriptor}`, catalog);
+    const matched = pricing.matchProduct(offer.productLabel || (offer.named ? offer.label : `${offer.units} ${offer.descriptor}`), catalog);
     if (!matched || matched.ambiguous) continue;
     offer.productId = matched.candidate.product_id;
     offer.productTitle = matched.candidate.title;
-    if (offer.productId != null) specialPrices[String(offer.productId)] = offer.price;
-    specialPrices[norm(matched.candidate.product_title)] = offer.price;
-    specialPrices[norm(matched.candidate.title)] = offer.price;
+    const keys = [String(offer.productId), norm(matched.candidate.product_title), norm(matched.candidate.title)];
+    for (const key of keys) {
+      if (offer.quantity) {
+        const previous = specialPrices[key];
+        const rule = previous && typeof previous === 'object' ? previous : { unitPrice: Number(previous) || Number(matched.candidate.price), quantities: {} };
+        if (offer.quantity === 1) rule.unitPrice = offer.price;
+        else rule.quantities[String(offer.quantity)] = offer.price;
+        specialPrices[key] = rule;
+      } else specialPrices[key] = offer.price;
+    }
   }
   for (const rule of secondUnitDiscounts) {
     const targetTokens = norm(rule.target).split(' ').filter(token => token.length > 2);
@@ -494,6 +517,12 @@ function selectedOffer(message, promotion) {
     const index = Number(numberedChoice[1]) - 1;
     return promotion.offers[index] || null;
   }
+  // "Por 25000" identifica el combo por su precio total, sin autorizar a
+  // repartir ese total inventando un precio para cada producto del pack.
+  const mentionedAmounts = [...String(message || '').matchAll(/(?:\$\s*)?(\d{1,3}(?:[.\s]\d{3})+|\d{4,6})/g)]
+    .map(match => money(match[1]));
+  const byPrice = promotion.offers.filter(offer => mentionedAmounts.includes(Number(offer.price)));
+  if (byPrice.length === 1) return byPrice[0];
   const matches = promotion.offers.filter(offer => {
     if (offer.combo) {
       return offer.components.every(component => {
@@ -507,6 +536,13 @@ function selectedOffer(message, promotion) {
       });
     }
     if (offer.named) {
+      if (offer.quantity) {
+        const quantity = text.match(/\b(\d+|un|uno|una|dos)\b/);
+        if (quantity) {
+          const value = ({un:1,uno:1,una:1,dos:2})[quantity[1]] || Number(quantity[1]);
+          if (value !== offer.quantity) return false;
+        }
+      }
       const meaningful = norm(offer.label).split(' ').filter(token => token.length > 3 && !/^\d+$/.test(token));
       return meaningful.some(token => text.includes(token));
     }
@@ -534,6 +570,7 @@ function selectedOffer(message, promotion) {
 function offerOrderItem(offer) {
   if (!offer) return null;
   const descriptor = String(offer.descriptor || 'huevos').trim();
+  if (offer.quantity && offer.productId != null) return { product_name: offer.productTitle || offer.productLabel, product_id: offer.productId, quantity: offer.quantity, price: offer.price / offer.quantity, locked_quote: true, promotion_offer: true };
   if (offer.named) {
     return { product_name: offer.label, quantity: 1, price: Number(offer.price), locked_quote: true, promotion_offer: true };
   }
@@ -555,17 +592,9 @@ function offerOrderItem(offer) {
 
 function offerOrderItems(offer) {
   if (!offer) return [];
-  if (!offer.combo || !Array.isArray(offer.components)) return [offerOrderItem(offer)].filter(Boolean);
-  return offer.components.map(component => ({
-    product_name: component.label,
-    quantity: Number(component.quantity) || 1,
-    price: Number(component.price),
-    ...(component.productId != null ? { product_id: component.productId } : {}),
-    ...(component.variantId != null ? { variant_id: component.variantId } : {}),
-    locked_quote: true,
-    promotion_offer: true,
-    promotion_combo: offer.label,
-  }));
+  // El template sólo publica el total del combo. Mantener una única línea
+  // evita afirmar precios individuales que el comercio nunca definió.
+  return [offerOrderItem(offer)].filter(Boolean);
 }
 
 function isBareAffirmative(message) {

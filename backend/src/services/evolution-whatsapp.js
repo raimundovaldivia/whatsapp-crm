@@ -76,15 +76,15 @@ function textFromMessage(message = {}) {
     || null;
 }
 
-function parseWebhookMessage(body) {
+function parseWebhookMessage(body, { includeOwn = false } = {}) {
   const event = eventName(body);
   if (event && event !== 'messages.upsert') return null;
   const data = unwrapData(body);
   const key = data?.key;
-  if (!key?.id || key.fromMe) return null;
+  if (!key?.id || (key.fromMe && !includeOwn)) return null;
   const remoteJid = key.remoteJid || data.remoteJid;
   if (!remoteJid || /@(g\.us|broadcast)$/i.test(remoteJid)) return null;
-  const source = key.senderPn || data.senderPn || remoteJid;
+  const source = key.fromMe ? (key.remoteJidAlt || remoteJid) : (key.senderPn || data.senderPn || remoteJid);
   const from = String(source).split('@')[0].replace(/\D/g, '');
   let message = data.message || {};
   for (let depth = 0; depth < 5; depth++) {
@@ -101,7 +101,8 @@ function parseWebhookMessage(body) {
     messageId: key.id,
     from,
     remoteJid,
-    contactName: data.pushName || body.sender || null,
+    contactName: key.fromMe ? null : data.pushName || body.sender || null,
+    ...(key.fromMe ? { fromMe: true } : {}),
     timestamp: data.messageTimestamp || null,
     type,
     text: text || '',
@@ -185,6 +186,15 @@ async function getConnectionState(config) {
   return response.data;
 }
 
+// Only return the connected identity; never expose instance tokens from fetchInstances.
+async function getConnectedPhone(config) {
+  const { instance } = credentials(config);
+  const response = await client(config).get('/instance/fetchInstances', { params: { instanceName: instance } });
+  const entries = Array.isArray(response.data) ? response.data : [response.data];
+  const found = entries.map(row => row?.instance || row).find(row => (row?.name || row?.instanceName) === instance);
+  return String(found?.ownerJid || found?.owner || '').split('@')[0].split(':')[0].replace(/\D/g, '') || null;
+}
+
 async function createInstance(config) {
   const { instance } = credentials(config);
   const response = await client(config).post('/instance/create', {
@@ -219,5 +229,5 @@ module.exports = {
   mediaReference, downloadMessageMedia, downloadMediaReference,
   sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
   parseConnectionUpdate, normalizeConnectionState,
-  getConnectionState, createInstance, getConnectQr, configureWebhook,
+  getConnectionState, getConnectedPhone, createInstance, getConnectQr, configureWebhook,
 };

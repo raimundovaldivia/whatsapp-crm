@@ -191,4 +191,31 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// Dedicated dispatcher accounts reuse only the server credentials, never the sales instance.
+router.post('/:id/whatsapp/connect', async (req, res) => {
+  try {
+    const data = await require('../services/driver-whatsapp').prepare(req.orgId, Number(req.params.id), req.body.phone);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(error.status || 502).json({ success: false, error: error.status ? error.message : 'No se pudo preparar WhatsApp. Reintenta la conexión.' });
+  }
+});
+router.get('/:id/whatsapp', async (req, res) => {
+  try {
+    const data = await require('../services/driver-whatsapp').inspect(req.orgId, Number(req.params.id));
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(error.status || 502).json({ success: false, error: 'No se pudo consultar la conexión de WhatsApp' });
+  }
+});
+
+router.post('/:id/merge', async (req, res) => {
+  try {
+    const data = await require('../services/merge-drivers').merge(req.orgId, Number(req.params.id), Number(req.body.targetId), req.userId, req.body.name);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'No se pudieron unificar los usuarios. No se guardaron cambios.' });
+  }
+});
+
 module.exports = router;

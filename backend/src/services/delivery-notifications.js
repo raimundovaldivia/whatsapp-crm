@@ -40,6 +40,7 @@ async function getCustomerServiceWindow(orgId, phone, now = new Date()) {
                AND m.direction = 'inbound') AS last_inbound_at
       FROM conversations c
      WHERE c.organization_id = $1
+       AND NOT EXISTS (SELECT 1 FROM whatsapp_channels personal WHERE personal.id=c.whatsapp_channel_id AND personal.assigned_user_id IS NOT NULL)
        AND regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g') = $2
      ORDER BY last_inbound_at DESC NULLS LAST, c.last_message_at DESC NULLS LAST
      LIMIT 1`, [orgId, normalized]);

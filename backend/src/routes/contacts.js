@@ -10,6 +10,17 @@ const express = require('express');
 const router  = express.Router();
 const db      = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { consolidateBroadcastContacts, resolveCustomerPhones } = require('../services/customer-identity');
+const resolveIdentityPhones = typeof resolveCustomerPhones === 'function'
+  ? resolveCustomerPhones
+  : async (_pool, _orgId, phone) => [phone];
+const productIdentity = require('../services/product-identity');
+const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem === 'function'
+  ? productIdentity.canonicalizeProductItem
+  : item => ({ ...item, product_key: `raw:${String(item?.name || item?.title || '').toLowerCase()}`, product_label: item?.name || item?.title || '' });
+const productMatchesQuery = typeof productIdentity.productMatchesQuery === 'function'
+  ? productIdentity.productMatchesQuery
+  : (item, query) => String(item?.name || item?.title || '').toLowerCase().includes(String(query || '').toLowerCase());
 
 router.use(requireAuth);
 
@@ -243,7 +254,7 @@ router.get('/favorite-products', requireContactsAccess, async (req, res) => {
       if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return []; } }
       return Array.isArray(x) ? x : [];
     };
-    // phone -> { productName -> count }
+    // phone -> { productKey -> { label, count } }
     const tally = new Map();
     const eat = (rows) => {
       for (const r of rows) {
@@ -252,10 +263,13 @@ router.get('/favorite-products', requireContactsAccess, async (req, res) => {
         const m = tally.get(k);
         for (const it of parseItems(r.items)) {
           if (it && it._deliveryExtra) continue;              // ignorar extras de reparto
-          const name = String(it?.name || it?.title || '').trim();
-          if (!name) continue;
+          const identity = canonicalizeProductItem(it);
+          const key = identity.product_key;
+          if (!key) continue;
           const q = Number(it?.quantity) || 1;
-          m.set(name, (m.get(name) || 0) + q);
+          const current = m.get(key) || { label: identity.product_label, count: 0 };
+          current.count += q;
+          m.set(key, current);
         }
       }
     };
@@ -263,7 +277,7 @@ router.get('/favorite-products', requireContactsAccess, async (req, res) => {
     const favorites = {};
     for (const [phone, m] of tally) {
       let best = null, bestN = 0;
-      for (const [name, n] of m) if (n > bestN) { best = name; bestN = n; }
+      for (const value of m.values()) if (value.count > bestN) { best = value.label; bestN = value.count; }
       if (best) favorites[phone] = best;
     }
     res.json({ success: true, favorites, count: Object.keys(favorites).length });
@@ -279,25 +293,28 @@ router.get('/by-product', requireContactsAccess, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.json({ success: true, phones: [], count: 0, term: '' });
   try {
-    const like = `%${q}%`;
     const { rows } = await pool.query(
-      `SELECT DISTINCT customer_phone FROM (
-         SELECT customer_phone FROM orders
-           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
-             AND status <> 'cancelled' AND items::text ILIKE $2
-         UNION
-         SELECT customer_phone FROM shopify_orders
-           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
-             AND items::text ILIKE $2
-       ) t`,
-      [req.orgId, like]
+      `SELECT customer_phone, items FROM orders
+         WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+           AND status <> 'cancelled' AND items IS NOT NULL
+       UNION ALL
+       SELECT customer_phone, items FROM shopify_orders
+         WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
+           AND items IS NOT NULL`,
+      [req.orgId]
     );
     const norm = p => {
       const n = String(p || '').replace(/\D/g, '');
       if (/^9\d{8}$/.test(n)) return '56' + n;
       return n;
     };
-    const phones = [...new Set(rows.map(r => norm(r.customer_phone)).filter(Boolean))];
+    const parseItems = value => {
+      if (Array.isArray(value)) return value;
+      try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+    };
+    const phones = [...new Set(rows
+      .filter(row => parseItems(row.items).some(item => !item?._deliveryExtra && productMatchesQuery(item, q)))
+      .map(row => norm(row.customer_phone)).filter(Boolean))];
     const ds = await db.getPrimaryDataSource(req.orgId);
     const scopes = ds?.config?.scopes || [];
     const { rows: coverageRows } = await pool.query(
@@ -327,19 +344,17 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
   const pool = getPool();
   try {
     const { rows } = await pool.query(
-      `SELECT phone, name, email, city, contact_type, client_type,
+      `SELECT phone, name, email, address, address1, city, contact_type, client_type,
               shopify_id, total_orders, last_order_at, opt_out,
+              EXISTS (
+                SELECT 1 FROM scheduled_orders so
+                WHERE so.organization_id = contacts.organization_id
+                  AND so.phone = contacts.phone
+                  AND so.status = 'pending'
+              ) AS has_pending_scheduled,
               CASE WHEN shopify_id IS NOT NULL THEN 'shopify' ELSE 'whatsapp' END AS source
        FROM contacts
        WHERE organization_id = $1 AND phone IS NOT NULL AND phone <> ''
-         AND (opt_out IS NULL OR opt_out = FALSE)
-         -- Excluir contactos con pedido agendado pendiente (ya tienen seguimiento)
-         AND NOT EXISTS (
-           SELECT 1 FROM scheduled_orders so
-           WHERE so.organization_id = contacts.organization_id
-             AND so.phone = contacts.phone
-             AND so.status = 'pending'
-         )
        ORDER BY total_orders DESC NULLS LAST, last_order_at DESC NULLS LAST`,
       [req.orgId]
     );
@@ -359,7 +374,7 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
         seen.set(key, { ...row, phone: key });
       }
     }
-    const contacts = [...seen.values()];
+    const contacts = consolidateBroadcastContacts([...seen.values()]);
 
     const whatsapp = contacts.filter(c => c.source === 'whatsapp').length;
     const shopify  = contacts.filter(c => c.source === 'shopify').length;
@@ -759,7 +774,10 @@ router.patch('/:phone', async (req, res) => {
   try {
     const pool = require('../db/database').getPool();
     const { name, email, address, city } = req.body;
-    const phone = req.params.phone;
+    const { normalizePhone, normalizeName } = require('../db/database');
+    const phone = normalizePhone(req.params.phone);
+    const customerName = normalizeName(name);
+    const identityPhones = await resolveIdentityPhones(pool, req.orgId, phone);
 
     // Upsert en tabla contacts
     const { rows: [contact] } = await pool.query(
@@ -774,15 +792,32 @@ router.patch('/:phone', async (req, res) => {
          city       = CASE WHEN $6 IS NOT NULL THEN $6 ELSE contacts.city END,
          updated_at = NOW()
        RETURNING *`,
-      [req.orgId, phone, name || null, email || null, address || null, city || null]
+      [req.orgId, phone, customerName, email || null, address || null, city || null]
     );
 
     // Sincronizar contact_name en conversaciones para que el sidebar/header reflejen el cambio
-    if (name) {
+    if (customerName) {
       await pool.query(
         `UPDATE conversations SET contact_name = $1
-         WHERE organization_id = $2 AND phone_number IN ($3, $4)`,
-        [name, req.orgId, phone, `+${phone}`]
+         WHERE organization_id = $2 AND REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g') = ANY($3::text[])`,
+        [customerName, req.orgId, [phone, ...( /^569\d{8}$/.test(phone) ? [phone.slice(2)] : [])]]
+      );
+    }
+
+    // Una misma persona puede conservar teléfonos históricos. La dirección
+    // vigente debe ser consistente en todos sus alias fuertes, sin tocar las
+    // direcciones guardadas dentro de pedidos anteriores.
+    if (Object.hasOwn(req.body, 'address') || Object.hasOwn(req.body, 'city')) {
+      await pool.query(
+        `UPDATE contacts SET
+           address  = CASE WHEN $1::boolean THEN $2 ELSE address END,
+           address1 = CASE WHEN $1::boolean THEN $2 ELSE address1 END,
+           city     = CASE WHEN $3::boolean THEN $4 ELSE city END,
+           updated_at = NOW()
+         WHERE organization_id = $5 AND phone = ANY($6::text[])`,
+        [Object.hasOwn(req.body, 'address'), address?.trim() || null,
+         Object.hasOwn(req.body, 'city'), city?.trim() || null,
+         req.orgId, identityPhones]
       );
     }
 

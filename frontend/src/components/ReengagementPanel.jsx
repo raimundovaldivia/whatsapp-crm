@@ -9,6 +9,54 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience } from '../utils/broadcast-audience.mjs';
+
+function consolidateVisibleCandidates(rows = []) {
+  const grouped = new Map();
+  for (const candidate of rows) {
+    const email = String(candidate.email || '').trim().toLowerCase();
+    const key = email && email.includes('@') ? `email:${email}` : `phone:${String(candidate.phone || '').replace(/\D/g, '')}`;
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, { ...candidate, recentOrders: [...(candidate.recentOrders || [])] });
+      continue;
+    }
+    const newer = String(candidate.lastOrderDate || '') > String(current.lastOrderDate || '');
+    const totalOrders = Number(current.totalOrders || 0) + Number(candidate.totalOrders || 0);
+    const totalSpent = Number(current.totalSpent || 0) + Number(candidate.totalSpent || 0);
+    grouped.set(key, {
+      ...current,
+      ...(newer ? candidate : {}),
+      phone: newer ? candidate.phone : current.phone,
+      name: String(candidate.name || '').length > String(current.name || '').length ? candidate.name : current.name,
+      email: current.email || candidate.email,
+      totalOrders,
+      totalSpent,
+      avgOrderVal: totalOrders ? Math.round(totalSpent / totalOrders) : 0,
+      recentOrders: [...(current.recentOrders || []), ...(candidate.recentOrders || [])]
+        .sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 5),
+    });
+  }
+  return [...grouped.values()];
+}
+
+async function consolidateWithShopifyProfiles(rows = []) {
+  let enriched = rows;
+  try {
+    const response = await api.get('/clientes/all', { timeout: 15000 });
+    const emailByPhone = new Map((response.data?.customers || []).map(customer => [
+      String(customer.phone || '').replace(/\D/g, ''),
+      String(customer.email || '').trim().toLowerCase(),
+    ]));
+    enriched = rows.map(candidate => ({
+      ...candidate,
+      email: candidate.email || emailByPhone.get(String(candidate.phone || '').replace(/\D/g, '')) || null,
+    }));
+  } catch (_) {
+    // El filtro sigue operativo si Shopify no responde; la API de campañas
+    // ya realiza la misma consolidación en el servidor.
+  }
+  return consolidateVisibleCandidates(enriched);
+}
 import { DIRECT_PARAMETERS, renderDirectMessage, insertDirectParameter } from '../utils/direct-message.mjs';
 import * as ui from '../ui.js';
 import {
@@ -17,6 +65,8 @@ import {
   getTemplateVariables,
   renderTemplate,
 } from '../utils/template-renderer.js';
+
+const CUSTOMER_IDENTITY_VERSION = 3;
 
 function Tooltip({ text, children, position = 'top' }) {
   const { colors } = useTheme();
@@ -119,31 +169,35 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
 
     try {
       const res = await api.get(
-        `/reengagement/candidates${forceRefresh ? '?refresh=true' : ''}`,
+        `/reengagement/candidates?identityVersion=${CUSTOMER_IDENTITY_VERSION}${forceRefresh ? '&refresh=true' : ''}`,
         { timeout: 30000 }
       );
 
-      if (res.data.refreshing && forceRefresh) {
+      if (res.data.refreshing) {
+        setCandidates(await consolidateWithShopifyProfiles(res.data.data || []));
+        setFromCache(res.data.fromCache || false);
+        setCacheDate(res.data.cacheDate || null);
+        setCacheSource(res.data.cacheSource || null);
         setLoading(false);
         setLoadingStep('');
-        showToast('Análisis iniciado en segundo plano. Se actualizará automáticamente en ~5 min.', 'info');
+        showToast('Actualizando identidades e historial en segundo plano. La lista se renovará automáticamente.', 'info');
         pollRef.current = setInterval(async () => {
           try {
-            const poll = await api.get('/reengagement/candidates', { timeout: 15000 });
-            if (poll.data.data?.length > 0) {
+            const poll = await api.get(`/reengagement/candidates?identityVersion=${CUSTOMER_IDENTITY_VERSION}`, { timeout: 15000 });
+            if (!poll.data.refreshing && poll.data.data?.length > 0) {
               stopPolling();
-              setCandidates(poll.data.data);
+              setCandidates(await consolidateWithShopifyProfiles(poll.data.data));
               setFromCache(poll.data.fromCache || false);
               setCacheDate(poll.data.cacheDate || null);
               setCacheSource(poll.data.cacheSource || null);
               showToast(`Análisis completado: ${poll.data.total} clientes`, 'success');
             }
           } catch (_) {}
-        }, 60000);
+        }, 15000);
         return;
       }
 
-      setCandidates(res.data.data || []);
+      setCandidates(await consolidateWithShopifyProfiles(res.data.data || []));
       setFromCache(res.data.fromCache || false);
       setCacheDate(res.data.cacheDate || null);
       setCacheSource(res.data.cacheSource || null);
@@ -543,6 +597,13 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               minWidth: '200px', overflow: 'hidden',
             }}
             onMouseLeave={() => setMenuOpen(false)}>
+
+              <button onClick={() => { setMenuOpen(false); load(true); }} disabled={loading}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'none', border: 'none', color: loading ? colors.textMuted : colors.textPrimary, fontSize: '13px', cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'left' }}
+                onMouseEnter={e => { if (!loading) e.currentTarget.style.backgroundColor = colors.bgHover; }}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                <RefreshCw size={14} color={colors.green} /> Actualizar análisis
+              </button>
 
               <button onClick={() => { exportToExcel(); setMenuOpen(false); }} disabled={loading || !candidates.length}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'none', border: 'none', color: (!candidates.length || loading) ? colors.textMuted : colors.textPrimary, fontSize: '13px', cursor: (!candidates.length || loading) ? 'not-allowed' : 'pointer', textAlign: 'left' }}
@@ -1244,6 +1305,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [methodsLoading, setMethodsLoading] = useState(true);
   const [methodsError, setMethodsError] = useState('');
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
+  const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
   const [directText, setDirectText] = useState('');
   const directEditorRef = useRef(null);
   const isDirect = sendingMethodKey.startsWith('evolution:');
@@ -1307,11 +1369,38 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [journeyPrompt, setJourneyPrompt] = useState('');
   const [journeyPlanning, setJourneyPlanning] = useState(false);
   const [journeyPlanInfo, setJourneyPlanInfo] = useState(null);
+  const [contactOrders, setContactOrders] = useState(null);
+  const [contactOrdersLoading, setContactOrdersLoading] = useState(false);
+  const [contactOrdersError, setContactOrdersError] = useState('');
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 5000);
   };
+
+  async function openContactOrders(event, contact) {
+    event.stopPropagation();
+    setContactOrders({ contact, data: null });
+    setContactOrdersLoading(true);
+    setContactOrdersError('');
+    try {
+      const response = await api.get(`/orders/history/${encodeURIComponent(contact.phone)}`);
+      setContactOrders({ contact, data: response.data?.data || null });
+    } catch (error) {
+      setContactOrdersError(error.response?.data?.error || 'No se pudieron cargar los pedidos.');
+    } finally {
+      setContactOrdersLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!contactOrders) return undefined;
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setContactOrders(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [contactOrders]);
 
   const loadCampaigns = useCallback(() => {
     setCampaignsLoading(true);
@@ -1503,6 +1592,20 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [historyOpen]);
+
+  useEffect(() => {
+    if (!historyOpen && !campaigns.some(c => c.server_managed && c.status === 'processing')) return undefined;
+    const timer = setInterval(() => { loadCampaigns(); }, 10000);
+    return () => clearInterval(timer);
+  }, [historyOpen, campaigns.some(c => c.server_managed && c.status === 'processing'), loadCampaigns]);
+
+  async function stopServerCampaign(campaign) {
+    try {
+      await api.post(`/reengagement/campaigns/${campaign.id}/stop`);
+      showToast('Pendientes detenidos. Un mensaje que ya estaba en envío puede terminar.');
+      await loadCampaigns();
+    } catch (error) { showToast(error.response?.data?.error || 'No se pudo detener el lote', 'error'); }
+  }
 
   async function toggleCampaignDetails(campaign) {
     const campaignId = campaign.id;
@@ -1836,6 +1939,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   function prepareReview() {
+    if (isDirect && !Object.entries(directPacing).every(([key, value]) => Number.isInteger(Number(value)) && Number(value) >= (key === 'batchPauseSeconds' ? 0 : 1) && Number(value) <= (key === 'batchSize' ? 5000 : 86400))) { showToast('Revisa los tiempos y el tamaño del lote', 'error'); return; }
     if (!selectedMethod?.available) { showToast('Selecciona un método de envío conectado', 'error'); return; }
     if (!messageReady) { showToast(isDirect ? 'Escribe el mensaje primero' : 'Selecciona un template primero', 'error'); return; }
     if (selectedCount === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
@@ -1902,9 +2006,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       sendingChannelId: selectedMethod.channelId,
       sendingLabel: selectedMethod.label,
       audienceLabel: purchaseAge === 'all' ? 'Todos los contactos filtrados' : `Último pedido hace más de ${purchaseDays} días`,
-      intervalSeconds: selectedMethod.intervalSeconds,
-      batchSize: selectedMethod.batchSize,
-      batchPauseSeconds: selectedMethod.batchPauseSeconds,
+      ...directPacing,
       testMode,
       testPhone: TEST_PHONE,
       createdAt: Date.now(),
@@ -1934,6 +2036,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     const direct = reviewPlan.sendingProvider === 'evolution';
     const items = reviewPlan.entries.map(entry => entry.item);
     let campaignId = null;
+    let handedToServer = false;
     let campaignStatus = 'completed';
     setSending(true);
     setResults(null);
@@ -1945,11 +2048,20 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         testPhone: reviewPlan.testPhone || null,
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
+        pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
       });
       campaignId = created.data.campaign.id;
-      let sent = 0, failed = 0, skipped = 0, pending = 0;
+      if (direct) {
+        handedToServer = true;
+        await api.post(`/reengagement/campaigns/${campaignId}/start`, { items }, { timeout: 45000 });
+        setReviewPlan(null);
+        setHistoryOpen(true);
+        showToast('Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
+        return;
+      }
+      let sent = 0, failed = 0, skipped = 0, pending = 0, chatsPending = 0;
       const failureReasons = [];
-      setSendProgress({ done: 0, total: items.length });
+      setSendProgress({ done: 0, total: items.length, sent: 0, skipped: 0, pending: 0, failed: 0 });
       // Tanto la prueba como el envío real usan la ruta individual que ya
       // confirma correctamente con Meta. En campañas se ejecutan varios
       // destinatarios en paralelo, cada uno con auditoría independiente.
@@ -1965,6 +2077,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           if (index >= items.length) return;
           const item = items[index];
           let processed = false;
+          let accepted = false;
           try {
             let res;
             while (!stopSendingRef.current) {
@@ -1984,12 +2097,19 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               stopRequested = true;
               campaignStatus = 'interrupted';
             }
+            if (result?.persistencePending) {
+              chatsPending++;
+              stopRequested = true;
+              campaignStatus = 'interrupted';
+              showToast(result.warning, 'error');
+              if (!failureReasons.includes(result.warning)) failureReasons.push(result.warning);
+            }
             if (res.data.campaignPaused || result?.campaignPaused) {
               stopRequested = true;
               paymentBlocked = true;
               campaignStatus = 'paused_payment';
             }
-            if (result?.success) sent++;
+            if (result?.success) { sent++; accepted = true; }
             else if (result?.skipped) skipped++;
             else if (result?.pending) pending++;
             else failed++;
@@ -2018,14 +2138,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             if (!failureReasons.includes(reason)) failureReasons.push(reason);
           } finally {
             if (processed) completed++;
-            setSendProgress({ done: completed, total: items.length });
+            setSendProgress({ done: completed, total: items.length, sent, skipped, pending, failed, lastReason: failureReasons.at(-1) });
           }
           // Da tiempo a que llegue el webhook de Meta antes de tomar el
           // siguiente destinatario. Así un fallo de pago detiene el lote con
           // un máximo aproximado equivalente a los envíos ya simultáneos.
           if (!stopRequested && index < items.length - 1) {
-            if (direct) await waitForNextSend(completed % reviewPlan.batchSize === 0 ? reviewPlan.batchPauseSeconds : reviewPlan.intervalSeconds);
-            else await new Promise(resolve => setTimeout(resolve, 800));
+            if (direct && accepted) await waitForNextSend(sent % reviewPlan.batchSize === 0 ? Math.max(reviewPlan.batchPauseSeconds, reviewPlan.intervalSeconds) : reviewPlan.intervalSeconds);
+            else if (!direct) await new Promise(resolve => setTimeout(resolve, 800));
           }
         }
       });
@@ -2036,10 +2156,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       if (paymentBlocked) {
         showToast(`🛑 Campaña detenida por pago de Meta. ${completed} procesados · ${stopped} no se enviaron.`, 'error');
         setReviewPlan(null);
+      } else if (chatsPending > 0) {
+        campaignStatus = 'interrupted';
+        showToast('Lote detenido: WhatsApp aceptó el mensaje, pero falta registrarlo en el chat. No lo reenvíes; revisa Historial.', 'error');
+        setReviewPlan(null);
       } else if (pending > 0) {
         campaignStatus = 'interrupted';
         showToast(`⏳ ${pending} mensaje${pending === 1 ? '' : 's'} por confirmar. No reenvíes; revisaremos el estado automáticamente.`);
         setReviewPlan(null);
+      } else if (stopSendingRef.current) {
+        showToast(`Lote detenido: ${sent} aceptados · ${skipped} omitidos · ${failed} fallidos · ${stopped} pendientes cancelados.`);
       } else if (sent === 0) {
         campaignStatus = 'interrupted';
         showToast(`No se envió ningún mensaje: ${failureReasons[0] || 'WhatsApp no confirmó el envío'}`, 'error');
@@ -2050,7 +2176,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       }
     } catch (err) {
       campaignStatus = 'interrupted';
-      const reason = err.response?.data?.error || err.message || 'No se pudo confirmar el envío con WhatsApp';
+      const reason = handedToServer ? 'No pudimos confirmar el inicio. Revisa Historial antes de crear otro lote.' : (err.response?.data?.error || err.message || 'No se pudo confirmar el envío con WhatsApp');
+      if (handedToServer) setHistoryOpen(true);
       setResults({
         sent: 0,
         failed: err.deliveryUnconfirmed ? 0 : 1,
@@ -2062,10 +2189,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } finally {
       // Liberar la interfaz inmediatamente. El cierre auditable y la recarga
       // del historial pueden continuar sin dejar el botón girando.
+      setReviewPlan(null);
       setSending(false);
       sendingRef.current = false;
       setSendProgress({ done: 0, total: 0 });
-      if (campaignId) {
+      if (campaignId && !handedToServer) {
         await api.post(`/reengagement/campaigns/${campaignId}/finish`, { status: campaignStatus }).catch(() => {});
       }
       await loadCampaigns();
@@ -2272,7 +2400,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               <div style={{ fontSize: 11, marginTop: 4, color: colors.textSecondary }}>
                 {methodsLoading ? 'Consultando conexión…' : !method.available
                   ? (methodsError ? 'Conexión sin verificar' : 'No conectado · revisar Ajustes')
-                  : method.provider === 'evolution' ? 'Lotes de 10 · pausas automáticas' : 'Plantillas de WhatsApp'}
+                  : method.provider === 'evolution' ? 'Lotes y pausas configurables' : 'Plantillas de WhatsApp'}
               </div>
             </button>;
           })}
@@ -2284,8 +2412,20 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         {methodsError && <div role="alert" style={{ width: '100%', color: colors.red, fontSize: 12 }}>{methodsError}</div>}
         {reviewPlan && <div style={{ width: '100%', fontSize: 12 }}>Cierra la revisión para cambiar el método de envío.</div>}
         {selectedMethod?.provider === 'evolution' && <div style={{ fontSize: 12, marginTop: 6 }}>
-          Lotes de 10 · 1 mensaje por minuto · pausa de 5 minutos entre lotes, luego continúa automáticamente.
-          Se envía sólo el texto revisado, sin botones ni archivos. Mantén esta pantalla abierta durante el envío.
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 8 }}>
+            {[
+              ['intervalSeconds', 'Tiempo entre mensajes (segundos)', 1, 86400],
+              ['batchSize', 'Mensajes por lote', 1, 5000],
+              ['batchPauseSeconds', 'Espera entre lotes (segundos)', 0, 86400],
+            ].map(([key, label, min, max]) => <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {label}
+              <input type="number" min={min} max={max} step="1" value={directPacing[key]} disabled={sending || !!reviewPlan}
+                onChange={event => setDirectPacing(current => ({ ...current, [key]: event.target.value === '' ? '' : Number(event.target.value) }))}
+                style={{ width: 150, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
+            </label>)}
+          </div>
+          La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.
+          Se envía sólo el texto revisado, sin botones ni archivos. Puedes cerrar el navegador después de confirmar; el servidor continúa el envío.
         </div>}
       </section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
@@ -2472,11 +2612,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       {results && (
         <div style={{ padding: '10px 20px', backgroundColor: results.paymentBlocked ? `${colors.red}18` : (results.sent ? `${colors.green}18` : `${colors.red}14`), borderBottom: `1px solid ${results.paymentBlocked ? colors.red : (results.sent ? colors.green : colors.red)}33`, display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
           {results.paymentBlocked && <span style={{ color: colors.red, fontWeight: 850, fontSize: '13px' }}>🛑 Campaña detenida por pago de Meta</span>}
-          <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '↗' : '⚠️'} {results.sent} recibidos inicialmente por Meta</span>
+          <span style={{ color: results.sent ? colors.green : colors.red, fontWeight: 700, fontSize: '13px' }}>{results.sent ? '↗' : '⚠️'} {results.sent} aceptados por WhatsApp</span>
           {results.failed > 0 && <span style={{ color: colors.red, fontWeight: 600, fontSize: '13px' }}>❌ {results.failed} fallidos</span>}
           {results.skipped > 0 && <span style={{ color: colors.yellow, fontWeight: 600, fontSize: '13px' }}>⏭ {results.skipped} omitidos</span>}
           {results.pending > 0 && <span style={{ color: colors.yellow, fontWeight: 700, fontSize: '13px' }}>⏳ {results.pending} por confirmar</span>}
           {results.stopped > 0 && <span style={{ color: colors.textPrimary, fontWeight: 750, fontSize: '13px' }}>✓ {results.stopped} detenidos antes de enviar</span>}
+          <button onClick={() => { setHistoryOpen(true); loadCampaigns(); }}>Ver detalle en Historial</button>
           {results.reasons?.length > 0 && <span style={{ color: colors.textSecondary, fontSize: '12px' }}>{results.reasons.join(' · ')}</span>}
         </div>
       )}
@@ -2551,6 +2692,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     </div>
                   ))}
                 </button>
+                {campaign.server_managed && <div style={{ padding: '8px 12px', fontSize: 12 }}>
+                  {campaign.status === 'processing' ? 'Enviando desde el servidor · puedes cerrar el navegador' : campaign.status === 'completed' ? 'Envío finalizado' : 'Envío detenido'}
+                  {Number(campaign.queue_unknown_count) > 0 && <div style={{ color: colors.yellow }}>Hay mensajes pendientes de revisión. No los reenvíes sin confirmar su estado.</div>}
+                  {campaign.status === 'processing' && <button style={{ marginLeft: 12 }} onClick={() => stopServerCampaign(campaign)}>Detener pendientes</button>}
+                </div>}
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${colors.border}`, padding: 10, maxHeight: 240, overflowY: 'auto' }}>
                     {(campaign.reasons || []).some(reason => String(reason.error_code || '') === '131042') && (
@@ -2803,9 +2949,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 )}
               </div>
               {c.total_orders > 0 && (
-                <span style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: colors.radiusSm, padding: '2px 6px' }}>
+                <button type="button" onClick={event => openContactOrders(event, c)} title="Ver pedidos de esta persona"
+                  style={{ color: colors.green, fontSize: '11px', fontWeight: 700, backgroundColor: `${colors.green}18`, borderRadius: colors.radiusSm, padding: '3px 8px', border: `1px solid ${colors.green}33`, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                   {c.total_orders} pedidos
-                </span>
+                </button>
               )}
               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '5px', backgroundColor: c.contact_type === 'customer' ? `${colors.green}22` : `${colors.blue}22`, color: c.contact_type === 'customer' ? colors.green : colors.blue }}>
                 {c.contact_type === 'customer' ? 'Cliente' : 'Lead'}
@@ -2818,6 +2965,89 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         })}
       </div>
       </div>
+
+      {contactOrders && (
+        <div role="dialog" aria-modal="true" aria-label={`Pedidos de ${contactOrders.contact.name || contactOrders.contact.phone}`}
+          onClick={() => setContactOrders(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 10020, backgroundColor: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18 }}>
+          <div onClick={event => event.stopPropagation()}
+            style={{ width: 'min(760px, 96vw)', maxHeight: '88vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, boxShadow: '0 22px 70px rgba(0,0,0,0.55)' }}>
+            <div style={{ padding: '15px 18px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <ShoppingBag size={18} color={colors.green} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: colors.textPrimary, fontSize: 15, fontWeight: 800 }}>Pedidos de {toTitleCase(contactOrders.contact.name) || 'esta persona'}</div>
+                <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>{contactOrders.contact.phone} · Vista de solo lectura</div>
+              </div>
+              <button type="button" onClick={() => setContactOrders(null)} aria-label="Cerrar pedidos"
+                style={{ border: 'none', background: 'transparent', color: colors.textMuted, cursor: 'pointer', padding: 5 }}><X size={19} /></button>
+            </div>
+
+            <div style={{ overflowY: 'auto', padding: 16 }}>
+              {contactOrdersLoading ? (
+                <div style={{ minHeight: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: colors.textSecondary }}>
+                  <Loader size={18} style={{ animation: 'spin 1s linear infinite' }} /> Cargando pedidos…
+                </div>
+              ) : contactOrdersError ? (
+                <div role="alert" style={{ padding: 14, color: colors.red, backgroundColor: `${colors.red}12`, border: `1px solid ${colors.red}44`, borderRadius: 9 }}>{contactOrdersError}</div>
+              ) : (() => {
+                const data = contactOrders.data || {};
+                const orders = [
+                  ...(data.shopifyOrders || []).map(order => ({ ...order, source: 'Shopify', date: order.shopify_created_at, status: order.financial_status, deliveryStatus: order.delivered_at ? 'ENTREGADO' : (order.crm_status || order.fulfillment_status) })),
+                  ...(data.botOrders || []).map(order => ({ ...order, source: 'Bot', date: order.created_at, status: order.status, deliveryStatus: order.delivered_at || String(order.status || '').toUpperCase() === 'PAID' ? 'ENTREGADO' : order.status })),
+                ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+                const total = orders.reduce((sum, order) => sum + Number(order.total_price || 0), 0);
+                const statusText = value => {
+                  const key = String(value || '').toUpperCase();
+                  return ({ PAID: 'Pagado', PAYMENT_RECEIVED: 'Pago recibido', PENDING: 'Pago pendiente', REFUNDED: 'Reembolsado', VOIDED: 'Anulado', FULFILLED: 'Entregado', PARTIALLY_FULFILLED: 'Entrega parcial', UNFULFILLED: 'Pendiente de entrega', ENTREGADO: 'Entregado', EN_CAMINO: 'En camino', POR_DESPACHAR: 'Por despachar', NUEVO: 'Nuevo', SENT: 'Enviado', DRAFT: 'Borrador', CANCELLED: 'Cancelado' })[key]
+                    || (key ? key.replaceAll('_', ' ').toLowerCase().replace(/^./, char => char.toUpperCase()) : 'Sin información');
+                };
+                const parseItems = raw => {
+                  try {
+                    const value = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+                    return Array.isArray(value) ? value : [];
+                  } catch { return []; }
+                };
+                if (!orders.length) return <div style={{ padding: 50, textAlign: 'center', color: colors.textMuted }}>No hay pedidos registrados para esta persona.</div>;
+                return <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 8, marginBottom: 14 }}>
+                    {[
+                      ['Pedidos visibles', orders.length],
+                      ['Total registrado', `$${Math.round(total).toLocaleString('es-CL')}`],
+                      ['Último pedido', orders[0]?.date ? new Date(orders[0].date).toLocaleDateString('es-CL') : '—'],
+                    ].map(([label, value]) => <div key={label} style={{ padding: 10, borderRadius: 9, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+                      <div style={{ color: colors.textMuted, fontSize: 10 }}>{label}</div>
+                      <div style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 800, marginTop: 3 }}>{value}</div>
+                    </div>)}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {orders.map((order, index) => {
+                      const items = parseItems(order.items);
+                      const payment = statusText(order.status);
+                      const delivery = statusText(order.deliveryStatus);
+                      const paid = ['PAID', 'PAYMENT_RECEIVED'].includes(String(order.status || '').toUpperCase());
+                      const delivered = ['FULFILLED', 'ENTREGADO', 'PAID'].includes(String(order.deliveryStatus || '').toUpperCase());
+                      return <div key={`${order.source}_${order.id || order.shopify_order_id || index}`} style={{ padding: '12px 13px', borderRadius: 10, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                          <div>
+                            <span style={{ color: colors.textPrimary, fontSize: 12, fontWeight: 800 }}>{order.shopify_name || `Pedido #${order.id}`}</span>
+                            <span style={{ color: colors.textMuted, fontSize: 10, marginLeft: 7 }}>{order.source} · {order.date ? new Date(order.date).toLocaleDateString('es-CL') : 'Sin fecha'}</span>
+                          </div>
+                          <strong style={{ color: colors.textPrimary, fontSize: 13 }}>${Number(order.total_price || 0).toLocaleString('es-CL')}</strong>
+                        </div>
+                        {items.length > 0 && <div style={{ color: colors.textSecondary, fontSize: 11, marginTop: 7 }}>{items.map(item => `${item.quantity || 1}× ${item.name || item.title || 'Producto'}`).join(' · ')}</div>}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                          <span style={{ fontSize: 10, fontWeight: 750, color: paid ? colors.green : colors.yellow, backgroundColor: paid ? `${colors.green}16` : `${colors.yellow}16`, borderRadius: 999, padding: '3px 7px' }}>Pago: {payment}</span>
+                          <span style={{ fontSize: 10, fontWeight: 750, color: delivered ? colors.green : colors.blue, backgroundColor: delivered ? `${colors.green}16` : `${colors.blue}16`, borderRadius: 999, padding: '3px 7px' }}>Entrega: {delivery}</span>
+                        </div>
+                      </div>;
+                    })}
+                  </div>
+                </>;
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmación intermedia: esta instantánea es exactamente la que se enviará. */}
       {reviewPlan && (() => {
@@ -2837,14 +3067,18 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     {reviewPlan.audienceLabel && <div style={{ marginTop: 4 }}>Destinatarios: {reviewPlan.audienceLabel}</div>}
                     {reviewPlan.sendingProvider === 'evolution' && <>
                       {' · '}Lotes de {reviewPlan.batchSize}, pausa de {reviewPlan.batchPauseSeconds / 60} minutos.
-                      {' '}Tiempo mínimo aproximado: {Math.max(0, reviewPlan.entries.length - 1) + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * 4} minutos.
-                      {' '}Sólo texto. Mantén esta pantalla abierta; los siguientes lotes continúan automáticamente.
+                      {' '}Tiempo mínimo aproximado: {Math.ceil((Math.max(0, reviewPlan.entries.length - 1) * reviewPlan.intervalSeconds + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * Math.max(0, reviewPlan.batchPauseSeconds - reviewPlan.intervalSeconds)) / 60)} minutos.
+                      {' '}Sólo texto. El servidor guarda el lote y continúa aunque cierres el navegador.
                     </>}
                   </div>
                   {sending && <div style={{ marginTop: 8, color: colors.textPrimary }}>
                     {sendProgress.done} de {sendProgress.total} procesados
                     {waitSeconds > 0 && ` · Próximo envío en ${Math.floor(waitSeconds / 60)}:${String(waitSeconds % 60).padStart(2, '0')}`}
                     {' '}<button onClick={() => { stopSendingRef.current = true; }}>Detener pendientes</button>
+                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                      {sendProgress.sent || 0} aceptados por WhatsApp · {sendProgress.skipped || 0} omitidos · {sendProgress.pending || 0} por confirmar · {sendProgress.failed || 0} fallidos
+                    </div>
+                    {sendProgress.lastReason && <div style={{ marginTop: 4, fontSize: 12, color: colors.yellow }}>{sendProgress.lastReason}</div>}
                   </div>}
                   <div style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>Esta vista usa exactamente los mensajes preparados que se enviarán.</div>
                 </div>

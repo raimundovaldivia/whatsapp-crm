@@ -24,10 +24,10 @@ function streamInfo(provider, body, event) {
     : value?.messages?.[0]?.from || value?.statuses?.[0]?.recipient_id;
   const key = sender ? String(sender).replace(/[^0-9]/g, '') : 'organization';
   const incoming = (provider === 'kapso' && event === 'whatsapp.message.received')
-    || (provider === 'evolution' && String(event).toLowerCase().replace(/_/g, '.') === 'messages.upsert');
+    || (provider === 'evolution' && String(event).toLowerCase().replace(/_/g, '.') === 'messages.upsert' && !evolutionData?.key?.fromMe);
   const evolutionText = evolutionData?.message?.conversation || evolutionData?.message?.extendedTextMessage?.text;
   const opener = /^(hola+|holi+|buenas+(\s+(tardes|d[ií]as|noches))?|buen\s+d[ií]a|buenos\s+d[ií]as|hey)[\s!.,?¡¿]*$/iu.test(body.message?.text?.body || evolutionText || '');
-  return { key: key || 'organization', delay: incoming ? (opener ? 12 : 3) : 0 };
+  return { key: key || 'organization', delay: incoming ? (opener ? 12 : 8) : 0 };
 }
 function durableWebhook(provider, handler) {
   handlers.set(provider, handler);
@@ -48,7 +48,7 @@ function durableWebhook(provider, handler) {
         const inserted = await client.query(`INSERT INTO webhook_inbox (provider,organization_id,event_key,payload,headers,params,stream_id)
           VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7) ON CONFLICT(provider,organization_id,event_key) DO NOTHING RETURNING id`,
         [provider, delivery.orgId, key, JSON.stringify(delivery.body), JSON.stringify(headers), JSON.stringify(req.params || {}), stream.id]);
-        if (inserted.rows.length) await client.query(`UPDATE webhook_streams SET available_at=NOW()+($2 * INTERVAL '1 second') WHERE id=$1`, [stream.id, info.delay]);
+        if (inserted.rows.length) await client.query(`UPDATE webhook_streams SET available_at=GREATEST(available_at, NOW()+($2 * INTERVAL '1 second')) WHERE id=$1`, [stream.id, info.delay]);
       }
       await client.query('COMMIT');
       if (provider === 'twilio') res.type('text/xml').send('<Response></Response>');

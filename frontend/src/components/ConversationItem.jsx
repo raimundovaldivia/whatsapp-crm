@@ -1,5 +1,5 @@
 import { timeAgo } from '../utils/dates.js';
-import { Bot, User, MessagesSquare } from 'lucide-react';
+import { Bot, User, MessagesSquare, Pin, StickyNote } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 export default function ConversationItem({ conversation, selected, onClick }) {
@@ -93,9 +93,13 @@ export default function ConversationItem({ conversation, selected, onClick }) {
             </span>
             {displayPhone && <span style={{ fontSize: '11px', color: colors.textSecondary, display: 'block' }}>{displayPhone}</span>}
           </div>
-          <span style={{ fontSize: '11px', color: unread_count > 0 ? colors.green : colors.textSecondary, flexShrink: 0 }}>
-            {timeAgoStr}
-          </span>
+          <div style={{ display:'flex', alignItems:'center', gap:'5px', flexShrink:0 }}>
+            {conversation.contact_notes && <StickyNote size={11} color="#f59e0b" aria-label="Tiene nota" />}
+            {conversation.is_pinned && <Pin size={11} color={colors.green} fill="currentColor" aria-label="Chat fijado" />}
+            <span style={{ fontSize: '11px', color: unread_count > 0 ? colors.green : colors.textSecondary }}>
+              {timeAgoStr}
+            </span>
+          </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
           <span style={{

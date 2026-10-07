@@ -27,25 +27,40 @@ async function sendingMethods(orgId) {
     })),
   ];
 }
-// Atomic permit shared by tabs, channels and campaigns; survives server restarts.
-async function claimDirectSlot(orgId) {
+function pacingSettings(input = {}) {
+  input = input || {};
+  const defaults = { intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 };
+  const result = {};
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const value = Number(input[key] ?? fallback);
+    const min = key === 'batchPauseSeconds' ? 0 : 1;
+    const max = key === 'batchSize' ? 5000 : 86400;
+    if (!Number.isInteger(value) || value < min || value > max) throw error(`Valor inválido para ${key}`, 400);
+    result[key] = value;
+  }
+  return result;
+}
+// Shared by all tabs using this channel. Campaign changes do not bypass an active wait.
+async function claimDirectSlot(orgId, channelId, settings = {}, campaignId = null) {
+  const { intervalSeconds, batchSize, batchPauseSeconds } = pacingSettings(settings);
+  const pause = Math.max(intervalSeconds, batchPauseSeconds);
   const pool = db.getPool();
   const { rows } = await pool.query(
-    `INSERT INTO broadcast_direct_pacing (organization_id, next_send_at)
-     VALUES ($1, NOW() + $2 * INTERVAL '1 second')
-     ON CONFLICT (organization_id) DO UPDATE SET
-       batch_count = CASE WHEN broadcast_direct_pacing.next_send_at < NOW() - $4 * INTERVAL '1 second'
-         THEN 1 ELSE (broadcast_direct_pacing.batch_count % $3) + 1 END,
-       next_send_at = NOW() + CASE
-         WHEN broadcast_direct_pacing.next_send_at >= NOW() - $4 * INTERVAL '1 second'
-           AND (broadcast_direct_pacing.batch_count % $3) + 1 = $3 THEN $4
-         ELSE $2 END * INTERVAL '1 second'
-     WHERE broadcast_direct_pacing.next_send_at <= NOW()
-     RETURNING next_send_at`, [orgId, DIRECT_INTERVAL_SECONDS, DIRECT_BATCH_SIZE, DIRECT_BATCH_PAUSE_SECONDS]);
+    `INSERT INTO broadcast_channel_pacing (organization_id, channel_id, campaign_id, batch_count, next_send_at)
+     VALUES ($1, $2, $6, 1, NOW() + CASE WHEN $4 = 1 THEN $5::integer ELSE $3::integer END * INTERVAL '1 second')
+     ON CONFLICT (organization_id, channel_id) DO UPDATE SET
+       campaign_id = $6,
+       batch_count = CASE WHEN broadcast_channel_pacing.campaign_id IS DISTINCT FROM $6
+         THEN 1 ELSE (broadcast_channel_pacing.batch_count % $4) + 1 END,
+       next_send_at = NOW() + CASE WHEN
+         (CASE WHEN broadcast_channel_pacing.campaign_id IS DISTINCT FROM $6 THEN 1
+          ELSE (broadcast_channel_pacing.batch_count % $4) + 1 END) = $4 THEN $5::integer ELSE $3::integer END * INTERVAL '1 second'
+     WHERE broadcast_channel_pacing.next_send_at <= NOW()
+     RETURNING next_send_at`, [orgId, channelId, intervalSeconds, batchSize, pause, campaignId]);
   if (rows.length) return { allowed: true, retryAfterSeconds: 0 };
   const result = await pool.query(
     `SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (next_send_at - NOW()))))::int AS wait_seconds
-     FROM broadcast_direct_pacing WHERE organization_id = $1`, [orgId]);
-  return { allowed: false, retryAfterSeconds: result.rows[0]?.wait_seconds || DIRECT_INTERVAL_SECONDS };
+     FROM broadcast_channel_pacing WHERE organization_id = $1 AND channel_id = $2`, [orgId, channelId]);
+  return { allowed: false, retryAfterSeconds: result.rows[0]?.wait_seconds || intervalSeconds };
 }
-module.exports = { resolveSender, sendingMethods, claimDirectSlot, DIRECT_INTERVAL_SECONDS, DIRECT_BATCH_SIZE, DIRECT_BATCH_PAUSE_SECONDS };
+module.exports = { resolveSender, sendingMethods, claimDirectSlot, pacingSettings, DIRECT_INTERVAL_SECONDS, DIRECT_BATCH_SIZE, DIRECT_BATCH_PAUSE_SECONDS };

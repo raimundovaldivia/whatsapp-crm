@@ -157,6 +157,11 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
           </View>
         )}
 
+        <TouchableOpacity onPress={() => navigation.navigate('Returns')} style={{margin:16,padding:16,backgroundColor:C.card,borderRadius:12,borderWidth:1,borderColor:C.green}}>
+          <Text style={{color:C.green,fontSize:17,fontWeight:'700'}}>↩ Cambios y devoluciones</Text>
+          <Text style={{color:C.text,marginTop:5}}>Ver retiros y reemplazos asignados</Text>
+        </TouchableOpacity>
+
         {!loading && !error && routes.length === 0 && (
           <View style={s.emptyBox}>
             <Text style={s.emptyIcon}>📭</Text>

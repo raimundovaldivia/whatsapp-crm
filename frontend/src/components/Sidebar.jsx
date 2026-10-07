@@ -11,6 +11,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [msgLoading, setMsgLoading]   = useState(false);
   const msgTimerRef                   = useRef(null);
   const [activeTab, setActiveTab]     = useState('all');
+  const [providerFilter, setProviderFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
   const [retrying, setRetrying]   = useState(false);
@@ -90,8 +91,16 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
   const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state) && !c.hot_lead_excluded).length;
   const stalledCount = conversations.filter(isStalled).length;
+  const isEvolution = c => c?.whatsapp_provider === 'evolution';
+  const isMeta = c => c?.whatsapp_provider === 'meta' || c?.whatsapp_provider === 'kapso';
+  const matchesProvider = c => providerFilter === 'all'
+    || (providerFilter === 'evolution' && isEvolution(c))
+    || (providerFilter === 'meta' && isMeta(c));
+  const metaCount = conversations.filter(isMeta).length;
+  const evolutionCount = conversations.filter(isEvolution).length;
 
   const filtered = conversations.filter(c => {
+    if (!matchesProvider(c)) return false;
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
     if (activeTab === 'coordinating' && c.agent_mode !== 'coordinating') return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
@@ -104,6 +113,14 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       c.phone_number?.includes(q) ||
       c.last_message?.toLowerCase().includes(q)
     );
+  }).sort((a, b) => {
+    const pinOrder = Number(!!b.is_pinned) - Number(!!a.is_pinned);
+    if (pinOrder) return pinOrder;
+    if (a.is_pinned && b.is_pinned) {
+      const pinnedOrder = new Date(b.pinned_at || 0).getTime() - new Date(a.pinned_at || 0).getTime();
+      if (pinnedOrder) return pinnedOrder;
+    }
+    return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
   });
 
   const [triggering, setTriggering] = useState(false);
@@ -430,6 +447,39 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         </div>
       </div>
 
+      {/* Filtro por proveedor de WhatsApp — se combina con los filtros de estado */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '6px',
+        padding: '4px 12px 2px', backgroundColor: colors.bgSub,
+      }}>
+        <span style={{ fontSize: '10px', fontWeight: 700, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '2px' }}>
+          Canal
+        </span>
+        {[
+          { key: 'all', label: 'Todos', count: conversations.length },
+          { key: 'meta', label: 'Meta', count: metaCount },
+          { key: 'evolution', label: 'Evolution', count: evolutionCount },
+        ].map(provider => {
+          const active = providerFilter === provider.key;
+          const accent = provider.key === 'evolution' ? '#3b82f6' : colors.green;
+          return (
+            <button key={provider.key} onClick={() => setProviderFilter(provider.key)}
+              aria-pressed={active}
+              style={{
+                padding: '4px 9px', borderRadius: '14px',
+                border: `1px solid ${active ? accent : colors.border}`,
+                backgroundColor: active ? `${accent}22` : colors.bgPanel,
+                color: active ? accent : colors.textSecondary,
+                fontSize: '11px', fontWeight: active ? 700 : 500,
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+              }}>
+              <span>{provider.label}</span>
+              <span style={{ fontSize: '9px', opacity: 0.85 }}>{provider.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Chips de filtro — scrollable horizontal, estilo WhatsApp */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: '6px',
@@ -513,7 +563,10 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
             {search.trim().length >= 2 && (
               <>
                 {/* Separador solo si hay resultados de conversaciones arriba */}
-                {filtered.length > 0 && msgResults.filter(r => !filtered.find(f => f.id === r.id)).length > 0 && (
+                {filtered.length > 0 && msgResults.filter(r => {
+                  const conversation = conversations.find(c => c.id === r.id) || r;
+                  return matchesProvider(conversation) && !filtered.find(f => f.id === r.id);
+                }).length > 0 && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px 4px' }}>
                     <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
                     <span style={{ fontSize: '10px', color: colors.textMuted, fontWeight: 600, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Mensajes</span>
@@ -522,7 +575,10 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
                 )}
                 {/* Mostrar resultados de mensajes que no aparecen ya en la lista normal */}
                 {msgResults
-                  .filter(r => !filtered.find(f => f.id === r.id))
+                  .filter(r => {
+                    const conversation = conversations.find(c => c.id === r.id) || r;
+                    return matchesProvider(conversation) && !filtered.find(f => f.id === r.id);
+                  })
                   .map(r => {
                     const q = search.trim().toLowerCase();
                     const content = r.matched_content || '';

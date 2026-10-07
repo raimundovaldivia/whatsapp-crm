@@ -44,13 +44,14 @@ test('media downloads use the configured Evolution endpoint, never untrusted med
   await assert.rejects(service.downloadMessageMedia(parsed, config), /10 MB/);
 });
 
-function inboundHarness({ mode = 'ai', permitted = true, duplicate = false } = {}) {
+function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, scheduleResponse = null } = {}) {
   const saved = [], sent = [], pipelineCalls = [], queries = [];
   const conv = { id: 5, agent_mode: mode, agent_mode_changed_at: new Date().toISOString() };
   const service = load('src/services/inbound-text.js', {
     '../db/database': {
       upsertConversation: async (...args) => { assert.equal(args[3], 9); return conv; },
       getConversationById: async () => conv,
+      getLastMessages: async () => saved,
       saveMessage: async message => { saved.push(message); return duplicate ? null : { ...message, id: saved.length }; },
       updateConversationLastMessage: async () => {}, updateLastInbound: async () => {},
       getPool: () => ({ query: async (...args) => { queries.push(args); } }),
@@ -62,7 +63,7 @@ function inboundHarness({ mode = 'ai', permitted = true, duplicate = false } = {
     './whatsapp-provider': { sendTextMessage: async (...args) => { sent.push(args); return { messageId: 'OUT1' }; }, messageId: result => result.messageId },
   });
   const invoke = prepareMedia => service.processInboundText({ org: { id: 1 }, whatsappConfig: config, whatsappChannelId: 9,
-    parsed: { from: '56911112222', messageId: 'MEDIA1', type: 'audio', text: '🎤 [Audio]', mediaId: evolution.mediaReference(9, 'MEDIA1') }, prepareMedia });
+    parsed: { from: '56911112222', messageId: 'MEDIA1', type: 'audio', text: '🎤 [Audio]', mediaId: evolution.mediaReference(9, 'MEDIA1') }, prepareMedia, scheduleResponse });
   return { saved, sent, pipelineCalls, queries, invoke };
 }
 
@@ -195,4 +196,18 @@ test('payment proof image route works without Kapso and rejects another organiza
   await get({ orgId: 2, params: { id: '7' } }, foreign);
   assert.equal(foreign.code, 404);
   assert.equal(downloads, 1);
+});
+
+
+test('Evolution stores every text before producing one combined reply', async () => {
+  let reply;
+  const h = inboundHarness({scheduleResponse:fn=>{reply=fn;}});
+  await h.invoke(null);
+  await h.invoke(null);
+  assert.equal(h.pipelineCalls.length,0);
+  assert.equal(h.saved.length,2);
+  await reply();
+  assert.equal(h.pipelineCalls.length,1);
+  assert.equal(h.pipelineCalls[0][2],'🎤 [Audio]\n🎤 [Audio]');
+  assert.equal(h.sent.length,1);
 });

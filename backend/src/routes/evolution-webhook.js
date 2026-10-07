@@ -42,10 +42,12 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
 
   const connection = evolution.parseConnectionUpdate(req.body);
   if (connection) {
-    const updated = await db.updateWhatsappChannelStatus(orgId, channelId, connection.status, connection.phoneNumber);
+    const updated = await db.updateWhatsappChannelStatus(orgId, channelId, channel.assigned_user_id && connection.status === 'connected'
+      ? (!connection.phoneNumber ? 'pending_verification' : connection.phoneNumber === channel.expected_phone ? 'connected' : 'wrong_number')
+      : connection.status, connection.phoneNumber);
     if (updated) io?.to(`org_${orgId}`).emit(`whatsapp_channel_update_${orgId}`, {
       id: channelId,
-      status: connection.status,
+      status: updated.status,
       phoneNumber: connection.phoneNumber || updated.phone_number || null,
     });
     console.log(`[EvolutionWebhook] [Org:${org.name}] canal ${channelId}: ${connection.status}`);
@@ -61,8 +63,35 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
 
   const messages = Array.isArray(req.body.data) ? req.body.data : [req.body.data];
   for (const data of messages) {
-    const parsed = evolution.parseWebhookMessage({ ...req.body, data });
+    const parsed = evolution.parseWebhookMessage({ ...req.body, data }, { includeOwn: true });
     if (!parsed) continue;
+    if (channel.assigned_user_id) {
+      // Dispatcher messages are human conversations: no sales bot, payment parser or scheduled response.
+      const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName, channel.id);
+      await db.setAgentMode(conversation.id, 'human');
+      const content = parsed.text || (parsed.type === 'audio' ? '🎤 [Audio]' : '📎 [Archivo]');
+      const message = await db.saveMessage({ conversationId: conversation.id, whatsappMessageId: parsed.messageId,
+        direction: parsed.fromMe ? 'outbound' : 'inbound', content, type: parsed.type,
+        sentBy: parsed.fromMe ? 'human' : 'client',
+        mediaId: parsed.type === 'text' ? null : evolution.mediaReference(channel.id, parsed.messageId) });
+      if (message) {
+        await db.updateConversationLastMessage(conversation.id, content);
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message, conversation: await db.getConversationById(conversation.id, org.id) });
+      }
+      continue;
+    }
+    if (parsed.fromMe) {
+      const conversation = await db.upsertConversation(org.id, parsed.from, null, channel.id);
+      const content = parsed.text || (parsed.type === 'audio' ? '🎤 [Audio enviado]' : '📎 [Archivo enviado]');
+      const message = await db.saveMessage({ conversationId: conversation.id, whatsappMessageId: parsed.messageId,
+        direction: 'outbound', content, type: parsed.type, sentBy: 'human',
+        mediaId: parsed.type === 'text' ? null : evolution.mediaReference(channel.id, parsed.messageId) });
+      if (message) {
+        await db.updateConversationLastMessage(conversation.id, content);
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message, conversation: await db.getConversationById(conversation.id, org.id) });
+      }
+      continue;
+    }
     const markAsRead = () => evolution.markAsRead(parsed.messageId, parsed.remoteJid, channel);
     let prepareMedia = null;
     if (parsed.type !== 'text') {
@@ -105,6 +134,7 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
       whatsappChannelId: channel.id,
       markAsRead,
       prepareMedia,
+      scheduleResponse: fn => require('../services/webhook-inbox').defer(`${org.id}:${channel.id}:${parsed.from}`, fn),
     });
   }
 }));

@@ -18,6 +18,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
 const campaignGuard = require('../services/broadcast-campaign-guard');
+const { buildCustomerIdentityMap, consolidateCustomerCandidates, loadCustomerIdentityMap } = require('../services/customer-identity');
 const {
   getBodyComponent,
   getMissingBodyParameters,
@@ -28,10 +29,20 @@ const {
 
 router.use(requireAuth, requireRole('owner', 'admin', 'supervisor'));
 
+const SERVER_QUEUE = Symbol('serverQueue');
 let io;
 let broadcastRecoveryStarted = false;
 function setSocketIO(socketIO) {
   io = socketIO;
+  require('../services/broadcast-worker').start(async job => {
+    const response = { status: 200, body: {} };
+    await sendBulk({ orgId: job.organization_id, [SERVER_QUEUE]: true,
+      body: { campaignId: job.campaign_id, items: [job.item] } }, {
+      status(code) { response.status = code; return this; },
+      json(body) { response.body = body; return this; },
+    });
+    return response;
+  });
   if (broadcastRecoveryStarted) return;
   broadcastRecoveryStarted = true;
   const timer = setTimeout(async () => {
@@ -178,8 +189,9 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   // el chat si el proceso se reinicia durante esta fase.
   const auditTasks = [recordBroadcastRecipient(orgId, campaignId, item, {
     status: 'accepted', whatsappMessageId,
+    errorDetail: channelId ? { savedContent, channelId, provider: 'evolution' } : null,
   })];
-  if (item.templateName || channelId) auditTasks.push(markTemplateSent(orgId, item.phone));
+  if (item.templateName && !channelId) auditTasks.push(markTemplateSent(orgId, item.phone));
   const auditResults = await Promise.allSettled(auditTasks);
   auditResults.filter(result => result.status === 'rejected').forEach(result => {
     console.error('[SendBulk] No se pudo completar la auditoría posterior:', result.reason?.message || result.reason);
@@ -190,7 +202,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   const bulkContactName = bulkClientData?.name ? toTitleCase(bulkClientData.name) : 'Cliente';
   const bulkConv = await db.upsertConversation(orgId, item.phone, item.contactName || bulkContactName, channelId);
   const convId = bulkConv?.id;
-  if (!convId) return;
+  if (!convId) throw new Error('No se pudo crear la conversación del destinatario');
 
   const savedMsg = await db.saveMessage({
     conversationId: convId,
@@ -206,7 +218,8 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
     await db.updatePipelineState(convId, 'template_sent');
   }
   const updated = await db.getConversationById(convId);
-  if (savedMsg) io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMsg, conversation: updated });
+  io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMsg, conversation: updated });
+  return { conversationId: convId };
 }
 
 /**
@@ -339,8 +352,9 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
   }
 
   const { rows } = await getPool().query(
-    `SELECT r.*
+    `SELECT r.*, bc.sending_provider, bc.sending_channel_id
        FROM broadcast_campaign_recipients r
+       JOIN broadcast_campaigns bc ON bc.id = r.campaign_id AND bc.organization_id = r.organization_id
        LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
       WHERE r.organization_id = $1
         AND r.result_status = 'accepted'
@@ -367,6 +381,20 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
   for (const recipient of rows) {
     const phone = db.normalizePhone(recipient.destination_phone || recipient.original_phone);
     if (!phone) continue;
+    if (recipient.sending_provider === 'evolution') {
+      // Restore only the exact persisted message, to its original channel. Never resend.
+      const content = recipient.error_detail?.savedContent;
+      const channelId = recipient.sending_channel_id;
+      if (typeof content !== 'string' || !content.trim() || !channelId) continue;
+      const conversation = await db.upsertConversation(orgId, phone, recipient.contact_name, channelId);
+      const message = await db.saveMessage({ conversationId: conversation.id,
+        whatsappMessageId: recipient.whatsapp_message_id, content, direction: 'outbound', type: 'text', sentBy: 'ai' });
+      await db.updateConversationLastMessage(conversation.id, content);
+      const updated = await db.getConversationById(conversation.id, orgId);
+      io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message, conversation: updated });
+      if (message) recovered++;
+      continue;
+    }
     const template = templatesByName.get(recipient.template_name);
     const body = getBodyComponent(template)?.text || '';
     const rendered = body
@@ -407,6 +435,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Cache en memoria: sesión actual (respaldo al cache de DB)
 const analysisCache = new Map();
 const CACHE_TTL = 2 * 60 * 60 * 1000;
+const CUSTOMER_IDENTITY_VERSION = 3;
 
 /* ─────────────────────────────────────────────────────────────────────
    ESTADÍSTICAS POR CLIENTE
@@ -428,7 +457,7 @@ function normalizePhone(raw) {
   return p.length >= 8 ? p : null;
 }
 
-function buildCustomerStats(orders) {
+function buildCustomerStats(orders, identityMap = new Map()) {
   const map = new Map();
   const DOW = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
 
@@ -439,7 +468,8 @@ function buildCustomerStats(orders) {
       order.billingAddress?.phone ||
       null;
 
-    const phone = normalizePhone(rawPhone);
+    const normalizedPhone = normalizePhone(rawPhone);
+    const phone = identityMap.get(normalizedPhone) || normalizedPhone;
     if (!phone) continue;
 
     const name =
@@ -746,7 +776,21 @@ async function runFullAnalysis(orgId, ds) {
     };
   });
 
-  const allStats = buildCustomerStats(allOrders);
+  const { rows: identityContacts } = await pool.query(
+    `SELECT phone, name, email, address, address1, city, shopify_id, last_order_at
+       FROM contacts WHERE organization_id = $1`,
+    [orgId]
+  );
+  const identityMap = buildCustomerIdentityMap([
+    ...identityContacts,
+    ...dbRows.map(row => ({
+      phone: row.customer_phone,
+      name: row.customer_name,
+      email: row.customer_email,
+      orderDate: row.order_date,
+    })),
+  ]);
+  const allStats = buildCustomerStats(allOrders, identityMap);
   console.log(`[Reengagement] Clientes únicos con teléfono: ${allStats.length}`);
   if (!allStats.length) return null;
 
@@ -780,7 +824,7 @@ async function runFullAnalysis(orgId, ds) {
 
   let aiHits = 0, heuristicHits = 0;
 
-  const enriched = allStats.map(c => {
+  const enriched = consolidateCustomerCandidates(allStats.map(c => {
     const aiEntry = aiMap.get(c.phone);
     let predictedDays, confidenceRaw, aiReason, predSource;
 
@@ -813,10 +857,11 @@ async function runFullAnalysis(orgId, ds) {
     else if (predictedDays <= 30)  { buyWindow = 'mes';    urgency = 2; }
     else                           { buyWindow = 'lejano'; urgency = 1; }
 
-    return { ...c, predictedDays, confidenceRaw, confidence, aiReason, predSource, buyWindow, urgency, overdueRatio };
+    return { ...c, predictedDays, confidenceRaw, confidence, aiReason, predSource, buyWindow, urgency, overdueRatio,
+      identityVersion: CUSTOMER_IDENTITY_VERSION };
   })
   .filter(c => c.predictedDays <= 365)
-  .sort((a, b) => a.predictedDays - b.predictedDays);
+  .sort((a, b) => a.predictedDays - b.predictedDays));
 
   console.log(`[Reengagement] Resultado: IA=${aiHits} | heurística=${heuristicHits} | total=${enriched.length}`);
 
@@ -927,19 +972,24 @@ async function customerRecentlyDeclined(orgId, phone) {
 /**
  * ¿Ya se envió un template hoy a este teléfono?
  */
-async function templateSentToday(orgId, phone) {
-  try {
-    const { getPool } = require('../db/database');
-    const pool = getPool();
-    const { rows } = await pool.query(
-      `SELECT 1 FROM contacts
-       WHERE organization_id = $1 AND phone = $2
-         AND last_template_sent_at >= DATE_TRUNC('day', NOW())
-       LIMIT 1`,
-      [orgId, phone]
-    );
-    return rows.length > 0;
-  } catch { return false; }
+async function templateSentToday(orgId, phone, channelId = null) {
+  const { rows } = await getPool().query(
+    `SELECT 1 WHERE EXISTS (
+       SELECT 1 FROM messages m JOIN conversations c ON c.id = m.conversation_id
+       WHERE c.organization_id = $1 AND c.phone_number = $2
+         AND c.whatsapp_channel_id IS NOT DISTINCT FROM $3::integer
+         AND m.direction = 'outbound' AND m.type = 'template'
+         AND m.status IS DISTINCT FROM 'failed'
+         AND m.created_at >= DATE_TRUNC('day', NOW())
+     ) OR EXISTS (
+       SELECT 1 FROM broadcast_campaign_recipients r
+       JOIN broadcast_campaigns bc ON bc.id = r.campaign_id AND bc.organization_id = r.organization_id
+       WHERE r.organization_id = $1 AND r.destination_phone = $2
+         AND bc.sending_channel_id IS NOT DISTINCT FROM $3::integer
+         AND r.result_status IN ('accepted', 'unknown')
+         AND r.created_at >= DATE_TRUNC('day', NOW())
+     )`, [orgId, phone, channelId]);
+  return rows.length > 0;
 }
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -949,14 +999,17 @@ router.get('/candidates', async (req, res) => {
   try {
     const ds = await db.getPrimaryDataSource(req.orgId);
     if (!ds) return res.json({ success: true, data: [], total: 0 });
+    const pool = getPool();
 
     const refresh = req.query.refresh === 'true';
     const today   = new Date().toISOString().slice(0, 10);
 
     // ── 1. Cache en memoria ──────────────────────────────────────────
     const memCached = analysisCache.get(req.orgId);
-    if (!refresh && memCached && Date.now() - memCached.ts < CACHE_TTL) {
-      const enrichedMem = await enrichCandidatesWithTemplateSent(memCached.data, req.orgId);
+    const memoryIdentityCurrent = memCached?.data?.every(item => item.identityVersion === CUSTOMER_IDENTITY_VERSION);
+    if (!refresh && memCached && memoryIdentityCurrent && Date.now() - memCached.ts < CACHE_TTL) {
+      const identityMap = await loadCustomerIdentityMap(pool, req.orgId, memCached.data);
+      const enrichedMem = await enrichCandidatesWithTemplateSent(consolidateCustomerCandidates(memCached.data, identityMap), req.orgId);
       return res.json({ success: true, data: enrichedMem, total: enrichedMem.length, fromCache: true, cacheSource: 'memory' });
     }
 
@@ -966,7 +1019,9 @@ router.get('/candidates', async (req, res) => {
         // Ya está corriendo — devolver caché anterior si existe
         const dbCached = await db.getDailyCache(req.orgId, today);
         if (dbCached) {
-          const data = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+          const rawData = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+          const identityMap = await loadCustomerIdentityMap(pool, req.orgId, rawData);
+          const data = consolidateCustomerCandidates(rawData, identityMap);
           return res.json({ success: true, data, total: data.length, fromCache: true, cacheSource: 'db_stale', refreshing: true });
         }
         return res.json({ success: true, data: [], total: 0, refreshing: true, message: 'Análisis en progreso...' });
@@ -988,7 +1043,21 @@ router.get('/candidates', async (req, res) => {
     // ── 3. Cache en DB (mismo día) ───────────────────────────────────
     const dbCached = await db.getDailyCache(req.orgId, today);
     if (dbCached && (Array.isArray(dbCached) ? dbCached.length > 0 : JSON.parse(dbCached).length > 0)) {
-      const candidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+      const rawCandidates = Array.isArray(dbCached) ? dbCached : JSON.parse(dbCached);
+      const identityMap = await loadCustomerIdentityMap(pool, req.orgId, rawCandidates);
+      const candidates = consolidateCustomerCandidates(rawCandidates, identityMap);
+      const identityCurrent = candidates.every(item => item.identityVersion === CUSTOMER_IDENTITY_VERSION);
+      if (!identityCurrent) {
+        if (!bgProcessing.has(req.orgId)) {
+          try { await db.saveDailyCache(req.orgId, today, null); } catch {}
+          analysisCache.delete(req.orgId);
+          bgProcessing.add(req.orgId);
+          runFullAnalysis(req.orgId, ds).finally(() => bgProcessing.delete(req.orgId));
+        }
+        const stale = await enrichCandidatesWithTemplateSent(candidates, req.orgId);
+        return res.json({ success: true, data: stale, total: stale.length, fromCache: true,
+          cacheSource: 'db_stale', cacheDate: today, refreshing: true });
+      }
       analysisCache.set(req.orgId, { data: candidates, ts: Date.now() });
       const enriched = await enrichCandidatesWithTemplateSent(candidates, req.orgId);
       return res.json({ success: true, data: enriched, total: enriched.length, fromCache: true, cacheSource: 'db', cacheDate: today });
@@ -1829,6 +1898,7 @@ router.post('/campaigns', async (req, res) => {
   try {
     const { templateName, total, testMode = false, testPhone = null, sendingProvider = 'kapso', sendingChannelId = null } = req.body || {};
     if (req.body?.sendingProvider) await require('../services/broadcast-sender').resolveSender(req.orgId, sendingProvider, sendingChannelId);
+    const pacing = sendingProvider === 'evolution' ? require('../services/broadcast-sender').pacingSettings(req.body.pacingSettings) : null;
     const totalCount = Number(total);
     if (!templateName) return res.status(400).json({ success: false, error: 'templateName requerido' });
     if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 5000) {
@@ -1836,15 +1906,64 @@ router.post('/campaigns', async (req, res) => {
     }
     const { rows } = await getPool().query(
       `INSERT INTO broadcast_campaigns
-         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id, pacing_settings)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [req.orgId, req.userId, templateName, totalCount, !!testMode,
-        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId]
+        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId, pacing ? JSON.stringify(pacing) : null]
     );
     res.json({ success: true, campaign: rows[0] });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
+});
+
+router.post('/campaigns/:id/start', async (req, res) => {
+  let client;
+  try {
+    const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
+    if (!campaign) return res.status(404).json({ error: 'Campaña no encontrada' });
+    if (campaign.server_managed) return res.json({ success: true, campaign });
+    if (campaign.sending_provider !== 'evolution' || campaign.status !== 'processing') return res.status(409).json({ error: 'Campaña no disponible para envío en segundo plano' });
+    await require('../services/broadcast-sender').resolveSender(req.orgId, 'evolution', campaign.sending_channel_id);
+    const items = req.body.items;
+    if (!Array.isArray(items) || items.length !== Number(campaign.total_count) || items.length > 5000) return res.status(400).json({ error: 'Destinatarios inválidos' });
+    const phones = new Set();
+    const prepared = items.map(item => {
+      const phone = db.normalizePhone(item.phone);
+      const message = String(item.templateName ? item.previewText || '' : item.message || '').trim();
+      if (!/^[0-9]{8,15}$/.test(phone) || !message || message.length > 4096 || phones.has(phone)) throw Object.assign(new Error('Revisa los teléfonos y mensajes del lote; no debe haber destinatarios repetidos'), { status: 400 });
+      phones.add(phone);
+      return { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone };
+    });
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    const locked = (await client.query('SELECT * FROM broadcast_campaigns WHERE id = $1 AND organization_id = $2 FOR UPDATE', [campaign.id, req.orgId])).rows[0];
+    if (!locked || locked.status !== 'processing') throw Object.assign(new Error('Campaña detenida'), { status: 409 });
+    if (!locked.server_managed) {
+      const existing = await client.query('SELECT 1 FROM broadcast_campaign_recipients WHERE campaign_id = $1 LIMIT 1', [campaign.id]);
+      if (existing.rows.length) throw Object.assign(new Error('La campaña ya comenzó; crea una nueva con los pendientes'), { status: 409 });
+      await client.query(`INSERT INTO broadcast_jobs (campaign_id, organization_id, position, item)
+        SELECT $1, $2, ordinality::integer, value FROM jsonb_array_elements($3::jsonb) WITH ORDINALITY`,
+        [campaign.id, req.orgId, JSON.stringify(prepared)]);
+      await client.query('UPDATE broadcast_campaigns SET server_managed = TRUE WHERE id = $1', [campaign.id]);
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, campaign: { ...campaign, server_managed: true } });
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(error.status || 500).json({ error: error.message });
+  } finally { client?.release(); }
+});
+
+router.post('/campaigns/:id/stop', async (req, res) => {
+  try {
+    const { rows } = await getPool().query(`UPDATE broadcast_campaigns
+      SET status = CASE WHEN status = 'processing' THEN 'interrupted' ELSE status END,
+        completed_at = COALESCE(completed_at, NOW())
+      WHERE id = $1 AND organization_id = $2 AND server_managed RETURNING *`, [req.params.id, req.orgId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Campaña no encontrada' });
+    res.json({ success: true, campaign: rows[0] });
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 router.post('/campaigns/:id/finish', async (req, res) => {
@@ -1857,7 +1976,7 @@ router.post('/campaigns/:id/finish', async (req, res) => {
       `UPDATE broadcast_campaigns
           SET status = CASE WHEN status = 'paused_payment' THEN status ELSE $1 END,
               completed_at = COALESCE(completed_at, NOW())
-       WHERE id = $2 AND organization_id = $3 RETURNING *`,
+       WHERE id = $2 AND organization_id = $3 AND NOT server_managed RETURNING *`,
       [status, req.params.id, req.orgId]
     );
     if (!rows[0]) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
@@ -1894,7 +2013,7 @@ router.get('/campaigns', async (req, res) => {
       `UPDATE broadcast_campaigns c
           SET status = 'interrupted', completed_at = COALESCE(completed_at, NOW())
         WHERE c.organization_id = $1
-          AND c.status = 'processing'
+          AND c.status = 'processing' AND NOT c.server_managed
           AND c.created_at < NOW() - INTERVAL '10 minutes'
           AND NOT EXISTS (
             SELECT 1 FROM broadcast_campaign_recipients r
@@ -1907,6 +2026,7 @@ router.get('/campaigns', async (req, res) => {
     const recoveredChats = await reconcileAcceptedBroadcastMessages(req.orgId);
     const { rows } = await getPool().query(
       `SELECT c.*,
+         (SELECT COUNT(*)::int FROM broadcast_jobs j WHERE j.campaign_id = c.id AND j.state = 'unknown') AS queue_unknown_count,
          COUNT(r.id)::int AS processed_count,
          GREATEST(c.total_count - COUNT(r.id), 0)::int AS pending_count,
          COUNT(*) FILTER (WHERE r.result_status = 'skipped')::int AS skipped_count,
@@ -1983,6 +2103,16 @@ router.get('/campaigns/:id', async (req, res) => {
        ORDER BY r.id`,
       [req.params.id, req.orgId]
     );
+    if (campaign.server_managed) {
+      const uncertain = await getPool().query(`SELECT 'job-' || j.id AS id,
+        j.item->>'phone' AS destination_phone, j.item->>'contactName' AS contact_name,
+        'unknown' AS result_status, 'unknown' AS current_status,
+        COALESCE(j.result->>'error', j.result->>'warning', 'Envío pendiente de revisión; no reenviar sin confirmar') AS display_error_message
+        FROM broadcast_jobs j WHERE j.campaign_id = $1 AND j.organization_id = $2 AND j.state = 'unknown'
+          AND NOT EXISTS (SELECT 1 FROM broadcast_campaign_recipients r WHERE r.campaign_id = j.campaign_id
+            AND r.destination_phone = j.item->>'phone') ORDER BY j.position`, [req.params.id, req.orgId]);
+      rows.push(...uncertain.rows);
+    }
     res.json({ success: true, campaign, recipients: rows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -2365,8 +2495,9 @@ router.post('/send-broadcast', async (req, res) => {
      A) Texto libre:  { phone, message }
      B) Template:     { phone, templateName, languageCode?, components? }
 ───────────────────────────────────────────────────────────────────── */
-router.post('/send-bulk', async (req, res) => {
+async function sendBulk(req, res) {
   const { items, campaignId = null } = req.body;
+  let pacing = req.body.pacingSettings || {};
   let sendingProvider = req.body.sendingProvider || null;
   let sendingChannelId = req.body.sendingChannelId || null;
   if (!Array.isArray(items) || !items.length) {
@@ -2376,10 +2507,14 @@ router.post('/send-bulk', async (req, res) => {
   if (campaignId) {
     const campaign = await getBroadcastCampaign(req.orgId, campaignId);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (campaign.server_managed && (!req[SERVER_QUEUE] || campaign.status !== 'processing')) {
+      return res.status(409).json({ error: 'Esta campaña se controla desde el servidor' });
+    }
     if ((sendingProvider && sendingProvider !== (campaign.sending_provider || 'kapso'))
       || (sendingChannelId && Number(sendingChannelId) !== Number(campaign.sending_channel_id))) {
       return res.status(409).json({ error: 'El método de envío no coincide con la campaña' });
     }
+    pacing = campaign.pacing_settings || {};
     sendingProvider = campaign.sending_provider || 'kapso';
     sendingChannelId = campaign.sending_channel_id || null;
     if (campaign.status === 'paused_payment') {
@@ -2446,9 +2581,9 @@ router.post('/send-bulk', async (req, res) => {
 
       // ── Anti-duplicado: saltar si ya recibió un template hoy ─────
       if ((isTemplate || direct) && !item.force) {
-        const alreadySent = await templateSentToday(req.orgId, item.phone);
+        const alreadySent = await templateSentToday(req.orgId, item.phone, direct ? sendingChannelId : null);
         if (alreadySent) {
-          const result = { phone: item.phone, success: false, skipped: true, error: 'Ya recibió un template hoy' };
+          const result = { phone: item.phone, success: false, skipped: true, error: 'Ya recibió una campaña hoy por este canal' };
           await recordBroadcastRecipient(req.orgId, campaignId, item, {
             status: 'skipped', errorMessage: result.error,
           });
@@ -2473,7 +2608,7 @@ router.post('/send-bulk', async (req, res) => {
       let savedContent;
 
       if (direct) {
-        const permit = await require('../services/broadcast-sender').claimDirectSlot(req.orgId);
+        const permit = await require('../services/broadcast-sender').claimDirectSlot(req.orgId, sendingChannelId, pacing, campaignId);
         if (!permit.allowed) return res.status(429).json({ rateLimited: true, retryAfterSeconds: permit.retryAfterSeconds, error: 'Pausa entre mensajes directos' });
         savedContent = String(item.templateName ? item.previewText : item.message).trim();
         sentResult = await require('../services/evolution-whatsapp').sendTextMessage(item.phone, savedContent, wc);
@@ -2508,24 +2643,24 @@ router.post('/send-bulk', async (req, res) => {
 
       acceptedMessageId = sentResult?.messages?.[0]?.id || sentResult?.messageId || sentResult?.key?.id || null;
       acceptedByProvider = true;
-      results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId });
       const persistAccepted = () => finalizeAcceptedBroadcast({
-          orgId: req.orgId,
-          campaignId,
-          item: { ...item },
-          sentResult,
-          savedContent,
-          isTemplate,
-          channelId: direct ? sendingChannelId : null,
-        }).catch(error => {
-          console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado posterior:`, error.message);
-        });
-      if (direct) await persistAccepted();
-      else setImmediate(persistAccepted);
+        orgId: req.orgId, campaignId, item: { ...item }, sentResult, savedContent,
+        isTemplate, channelId: direct ? sendingChannelId : null,
+      });
+      if (direct) {
+        const saved = await persistAccepted();
+        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId,
+          conversationId: saved.conversationId });
+      } else {
+        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId });
+        setImmediate(() => persistAccepted().catch(error => {
+          console.error('[SendBulk] Falló el guardado posterior:', error.message);
+        }));
+      }
     } catch (err) {
       if (acceptedByProvider) {
         console.error(`[SendBulk] WhatsApp aceptó ${item.phone}, pero falló el guardado local:`, err.message);
-        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId, warning: 'Aceptado por WhatsApp; falló el guardado en la conversación' });
+        results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId, persistencePending: true, warning: 'Aceptado por WhatsApp, pero el chat no pudo guardarse. Se detuvo el lote; no reenvíes este mensaje. Abre Historial para recuperar el registro' });
         continue;
       }
       const providerTimedOut = err?.code === 'ECONNABORTED'
@@ -2586,7 +2721,8 @@ router.post('/send-bulk', async (req, res) => {
   const failed  = results.filter(r => !r.success && !r.skipped && !r.pending).length;
   const campaignPaused = results.some(result => result.campaignPaused);
   res.json({ success: true, sent, skipped, pending, failed, campaignPaused, results });
-});
+}
+router.post('/send-bulk', sendBulk);
 
 /* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/calibrate

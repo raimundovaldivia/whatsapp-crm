@@ -77,3 +77,57 @@ test('el webhook de conexión actualiza el canal sin iniciar el pipeline de mens
   assert.deepEqual(updates, [[1, 9, 'connected', '56954565558']]);
   assert.equal(inboundCalls, 0);
 });
+
+
+test('phone messages sync to the right conversation without calling AI or duplicating echoes', async () => {
+  const records = new Map(), events = [];
+  let inboundCalls = 0;
+  const router = load('src/routes/evolution-webhook.js', {
+    '../db/database': {
+      getOrgById: async () => ({ id: 1 }),
+      getWhatsappChannel: async () => ({ id: 9, provider: 'evolution' }),
+      upsertConversation: async (org, phone, name, channel) => { assert.equal(phone, '56911112222'); assert.equal(name, null); assert.equal(channel, 9); return {id:77}; },
+      saveMessage: async message => { if (records.has(message.whatsappMessageId)) return null; records.set(message.whatsappMessageId,message); return {id:1,...message}; },
+      updateConversationLastMessage: async () => {}, getConversationById: async () => ({id:77}),
+    },
+    '../services/evolution-whatsapp': evolution,
+    '../services/inbound-text': {processInboundText: async () => { inboundCalls++; }},
+    '../services/webhook-inbox': {durableWebhook:(_provider,fn)=>fn},
+  });
+  router.setSocketIO({to:()=>({emit:(...args)=>events.push(args)})});
+  const req = {params:{orgId:'1',channelId:'9'},body:{event:'messages.upsert',data:{key:{id:'PHONE1',fromMe:true,remoteJid:'56911112222@s.whatsapp.net'},pushName:'Nombre del vendedor',message:{conversation:'Hola Patricia, te ayudo por aquí'}}}};
+  await handler(router,'post','/1/9/token')(req,response());
+  await handler(router,'post','/1/9/token')(req,response());
+  assert.equal(records.size,1); assert.equal(events.length,1); assert.equal(inboundCalls,0);
+  assert.equal(records.get('PHONE1').sentBy,'human');
+  assert.equal(records.get('PHONE1').direction,'outbound');
+});
+
+test('an early provider echo cannot relabel an AI message as human', async () => {
+  const { PGlite } = require('@electric-sql/pglite');
+  const engine = new PGlite();
+  try {
+    await engine.exec(`CREATE TABLE messages(id SERIAL PRIMARY KEY, conversation_id INT, whatsapp_message_id TEXT UNIQUE,
+      direction TEXT, content TEXT, type TEXT, status TEXT, sent_by TEXT, agent_type TEXT, media_id TEXT)`);
+    class Pool { query(sql,params) { return engine.query(sql,params); } }
+    const db = load('src/db/database.js',{pg:{Pool}});
+    const input={conversationId:1,whatsappMessageId:'ECHO1',direction:'outbound',content:'Hola'};
+    await db.saveMessage({...input,sentBy:'human'});
+    await db.saveMessage({...input,sentBy:'ai',agentType:'orders'});
+    assert.equal(await db.saveMessage({...input,sentBy:'human'}),null);
+    const rows=(await engine.query('SELECT * FROM messages')).rows;
+    assert.equal(rows.length,1); assert.equal(rows[0].sent_by,'ai');
+  } finally { await engine.close(); }
+});
+
+
+test('response window allows composing without delaying own echoes', () => {
+  const inbox = load('src/services/webhook-inbox.js');
+  const body = {data:{key:{remoteJid:'56911111111@s.whatsapp.net'},message:{conversation:'Quiero un queso'}}};
+  assert.equal(inbox.streamInfo('evolution',body,'messages.upsert').delay,8);
+  body.data.message.conversation = 'Hola';
+  assert.equal(inbox.streamInfo('evolution',body,'messages.upsert').delay,12);
+  body.data.key.fromMe = true;
+  assert.equal(inbox.streamInfo('evolution',body,'messages.upsert').delay,0);
+  assert.equal(inbox.streamInfo('kapso',{message:{text:{body:'Uno porfa'}}},'whatsapp.message.received').delay,8);
+});
