@@ -24,3 +24,30 @@ test('weight migration targets the general cheese in Diez Ríos only and is repe
     assert.match(rows[0].title,/900 g–1 kg/);assert.equal(rows[1].description,'especial');assert.equal(rows[2].description,'otra');
   }finally{await engine.close();}
 });
+
+test('Diez Ríos catalog migration removes promotions and sets the requested stock safely', async () => {
+  const {PGlite}=require('@electric-sql/pglite');const fs=require('node:fs');const path=require('node:path');
+  const engine=new PGlite();try {
+    await engine.exec(`CREATE TABLE organizations(id INT,slug TEXT); INSERT INTO organizations VALUES(1,'diez-rios-mrs96z69'),(2,'otra');
+      CREATE TABLE settings(organization_id INT,key TEXT,value TEXT,UNIQUE(organization_id,key));
+      CREATE TABLE products(id INT,organization_id INT,title TEXT,category TEXT,stock INT,updated_at TIMESTAMP);
+      INSERT INTO products VALUES
+        (1,1,'Huevos XL','Huevos',-1,NULL),
+        (2,1,'Queso de Vaca Artesanal – 900 g','Quesos',8,NULL),
+        (3,1,'PROMO 60 XL','Huevos',10,NULL),
+        (4,1,'Pack Campo Diez Ríos','Para los Caseritos',5,NULL),
+        (5,1,'Huevos Especiales','Huevos',0,NULL),
+        (6,2,'PROMO ajena','Promociones',7,NULL);`);
+    const source=fs.readFileSync(path.join(__dirname,'../src/db/setup.js'),'utf8');
+    const sql=source.match(/DELETE FROM products p USING organizations o[\s\S]*?SELECT id, 'promotions_enabled', 'false'[\s\S]*?EXCLUDED\.value;/)[0];
+    await engine.exec(sql);await engine.exec(sql);
+    const rows=(await engine.query('SELECT id,stock FROM products ORDER BY id')).rows;
+    assert.deepEqual(rows.map(r=>[r.id,r.stock]),[[1,100],[2,0],[5,100],[6,7]]);
+    const settings=(await engine.query("SELECT key,value FROM settings WHERE organization_id=1 ORDER BY key")).rows;
+    assert.deepEqual(settings,[
+      {key:'catalog_reset_2026_10_07_applied',value:'true'},
+      {key:'catalog_source',value:'local'},
+      {key:'promotions_enabled',value:'false'},
+    ]);
+  }finally{await engine.close();}
+});

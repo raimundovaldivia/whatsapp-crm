@@ -156,43 +156,63 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   // Para clientes "personal": se excluyen los productos is_business=TRUE
   const ds = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
+  const catalogSource = await db.getSetting(orgId, 'catalog_source');
   let products = [];
   let productosTexto = '';
   try {
-    // Intentar primero products_cache (tiene raw_json con variantes y stock completos)
-    const cached = await db.getCachedProducts(orgId);
-    if (cached?.length) {
-      // Filtrar productos empresa si el cliente es personal
-      const visibleCached = isEmpresa ? cached : cached.filter(p => !p.is_business);
-      products = visibleCached.map(p => {
-        if (p.raw_json) {
-          try { return JSON.parse(p.raw_json); } catch (_) {}
-        }
-        return {
-          id: p.external_id, title: p.title, description: p.description,
-          priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
-          inventoryQuantity: p.inventory_quantity,
-          sku: p.sku, imageUrl: p.image_url, tags: p.tags,
-          productType: p.product_type, handle: p.handle,
-        };
-      });
-      console.log(`[Pipeline] 📦 Catálogo desde DB/caché (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
-    } else {
-      // Fallback: tabla products propia del CRM
+    // Algunas organizaciones administran el stock directamente en el CRM.
+    // Cuando catalog_source=local, esa tabla es autoritativa: no volver al
+    // caché de Shopify si está vacía, porque reviviría productos eliminados.
+    if (catalogSource === 'local') {
       const ownProducts = await db.getProducts(orgId, true);
-      if (ownProducts?.length) {
-        const visibleOwn = isEmpresa ? ownProducts : ownProducts.filter(p => !p.is_business);
-        products = visibleOwn.map(p => ({
-          id: String(p.id), title: p.title, description: p.description,
-          priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
-          compare_price: p.compare_price ?? null,
-          bulk_price: p.bulk_price ?? null,
-          bulk_min_qty: p.bulk_min_qty ?? null,
-          inventoryQuantity: p.stock ?? null,
-          handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
-          productType: p.category || '',
-        }));
-        console.log(`[Pipeline] 📦 Catálogo desde tabla products propia (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
+      const visibleOwn = isEmpresa ? ownProducts : ownProducts.filter(p => !p.is_business);
+      products = visibleOwn.map(p => ({
+        id: String(p.id), title: p.title, description: p.description,
+        priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
+        compare_price: p.compare_price ?? null,
+        bulk_price: p.bulk_price ?? null,
+        bulk_min_qty: p.bulk_min_qty ?? null,
+        inventoryQuantity: p.stock ?? null,
+        handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
+        productType: p.category || '',
+      }));
+      console.log(`[Pipeline] 📦 Catálogo local autoritativo (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
+    } else {
+      // Por defecto, products_cache conserva variantes y stock de Shopify.
+      const cached = await db.getCachedProducts(orgId);
+      if (cached?.length) {
+      // Filtrar productos empresa si el cliente es personal
+        const visibleCached = isEmpresa ? cached : cached.filter(p => !p.is_business);
+        products = visibleCached.map(p => {
+          if (p.raw_json) {
+            try { return JSON.parse(p.raw_json); } catch (_) {}
+          }
+          return {
+            id: p.external_id, title: p.title, description: p.description,
+            priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
+            inventoryQuantity: p.inventory_quantity,
+            sku: p.sku, imageUrl: p.image_url, tags: p.tags,
+            productType: p.product_type, handle: p.handle,
+          };
+        });
+        console.log(`[Pipeline] 📦 Catálogo desde DB/caché (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
+      } else {
+        // Fallback: tabla products propia del CRM
+        const ownProducts = await db.getProducts(orgId, true);
+        if (ownProducts?.length) {
+          const visibleOwn = isEmpresa ? ownProducts : ownProducts.filter(p => !p.is_business);
+          products = visibleOwn.map(p => ({
+            id: String(p.id), title: p.title, description: p.description,
+            priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
+            compare_price: p.compare_price ?? null,
+            bulk_price: p.bulk_price ?? null,
+            bulk_min_qty: p.bulk_min_qty ?? null,
+            inventoryQuantity: p.stock ?? null,
+            handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
+            productType: p.category || '',
+          }));
+          console.log(`[Pipeline] 📦 Catálogo desde tabla products propia (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
+        }
       }
     }
     if (products.length) {
@@ -272,7 +292,14 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   // El template es una fuente comercial real: precios, vigencia y condiciones
   // se extraen del mensaje efectivamente enviado, no se dejan a interpretación
   // del modelo. La promoción activa prevalece sobre el precio de catálogo.
-  const promotionContext = promotions.fromHistory(history, products) || promotions.restore(orderDraft?.promotion);
+  const promotionsEnabled = (await db.getSetting(orgId, 'promotions_enabled')) !== 'false';
+  const promotionContext = promotionsEnabled
+    ? promotions.fromHistory(history, products) || promotions.restore(orderDraft?.promotion)
+    : null;
+  if (!promotionsEnabled && orderDraft?.promotion) {
+    orderDraft = { ...orderDraft };
+    delete orderDraft.promotion;
+  }
   const baseSpecialPrices = { ...specialPrices };
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
   productosTexto = promotions.alignPromotedAvailability(productosTexto, promotionContext);

@@ -726,6 +726,44 @@ async function setupDatabase() {
         AND p.id = 11 AND p.is_business IS NOT TRUE AND p.title ILIKE '%queso de cabra%'
         AND p.title NOT LIKE '%900 g–1 kg%';
 
+      -- Catálogo vigente de Diez Ríos (07-10-2026): se retiraron todas las
+      -- promociones y packs. El stock operativo queda en 100 unidades, salvo
+      -- el queso de vaca, que no está disponible. La IA usa este catálogo
+      -- local como fuente autoritativa y no recupera promociones del historial.
+      DELETE FROM products p USING organizations o
+      WHERE p.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND NOT EXISTS (
+          SELECT 1 FROM settings s WHERE s.organization_id = o.id
+            AND s.key = 'catalog_reset_2026_10_07_applied' AND s.value = 'true'
+        )
+        AND (
+          COALESCE(p.title, '') ILIKE '%promo%'
+          OR COALESCE(p.category, '') ILIKE '%promo%'
+          OR COALESCE(p.title, '') ILIKE '%pack%'
+          OR COALESCE(p.category, '') ILIKE '%pack%'
+        );
+      UPDATE products p SET
+        stock = CASE
+          WHEN COALESCE(p.title, '') ILIKE '%queso%vaca%' THEN 0
+          ELSE 100
+        END,
+        updated_at = NOW()
+      FROM organizations o
+      WHERE p.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND NOT EXISTS (
+          SELECT 1 FROM settings s WHERE s.organization_id = o.id
+            AND s.key = 'catalog_reset_2026_10_07_applied' AND s.value = 'true'
+        );
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'catalog_reset_2026_10_07_applied', 'true' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO NOTHING;
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'catalog_source', 'local' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value;
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'promotions_enabled', 'false' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value;
+
 
       -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos)
       -- Eliminar primero los que quedarían duplicados tras normalizar
