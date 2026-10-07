@@ -449,7 +449,14 @@ function usableNameSql(column) {
 }
 function customerIdentityJoin() {
   return `LEFT JOIN LATERAL (
-    SELECT contact.name, contact.client_type FROM contacts contact
+    SELECT contact.name, contact.client_type,
+      (SELECT note_contact.notes FROM contacts note_contact
+        WHERE note_contact.organization_id = c.organization_id
+          AND ${identityPhoneSql('note_contact.phone')} = ${identityPhoneSql('c.phone_number')}
+          AND NULLIF(BTRIM(note_contact.notes), '') IS NOT NULL
+        ORDER BY (note_contact.phone = ${identityPhoneSql('c.phone_number')}) DESC, note_contact.id DESC
+        LIMIT 1) AS notes
+    FROM contacts contact
     WHERE contact.organization_id = c.organization_id
       AND ${identityPhoneSql('contact.phone')} = ${identityPhoneSql('c.phone_number')}
     ORDER BY (${usableNameSql('contact.name')}) DESC NULLS LAST,
@@ -524,6 +531,7 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
        SELECT DISTINCT ON (c.id)
          c.*,
          ${customerNameSql} AS contact_name,
+         co.notes AS contact_notes,
          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
          CASE
            WHEN EXISTS (
@@ -552,13 +560,13 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
        WHERE ${where}
        ORDER BY c.id, c.last_message_at DESC
      ) sub
-     ORDER BY last_message_at DESC`,
+     ORDER BY is_pinned DESC, pinned_at DESC NULLS LAST, last_message_at DESC`,
     [orgId]
   );
 }
 
 async function getConversationById(id, orgId = null) {
-  const select = `SELECT c.*, ${customerNameSql} AS contact_name,
+  const select = `SELECT c.*, ${customerNameSql} AS contact_name, co.notes AS contact_notes,
       COALESCE(wc.name, CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END) AS whatsapp_channel_name,
       COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
       COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider
@@ -570,6 +578,41 @@ async function getConversationById(id, orgId = null) {
     return queryOne(`${select} WHERE c.id = $1 AND c.organization_id = $2`, [id, orgId]);
   }
   return queryOne(`${select} WHERE c.id = $1`, [id]);
+}
+
+async function setConversationPinned(id, orgId, pinned) {
+  const updated = await queryOne(
+    `UPDATE conversations
+        SET is_pinned = $3,
+            pinned_at = CASE WHEN $3 THEN NOW() ELSE NULL END,
+            updated_at = NOW()
+      WHERE id = $1 AND organization_id = $2
+      RETURNING id`,
+    [id, orgId, !!pinned]
+  );
+  return updated ? getConversationById(id, orgId) : null;
+}
+
+async function setCustomerNote(orgId, phone, note) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return null;
+  const cleanNote = typeof note === 'string' && note.trim() ? note.trim() : null;
+
+  await pool.query(
+    `INSERT INTO contacts (organization_id, phone, notes, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (organization_id, phone) DO UPDATE SET
+       notes = EXCLUDED.notes,
+       updated_at = NOW()`,
+    [orgId, normalizedPhone, cleanNote]
+  );
+  await pool.query(
+    `UPDATE contacts SET notes = $3, updated_at = NOW()
+      WHERE organization_id = $1
+        AND ${identityPhoneSql('phone')} = $2`,
+    [orgId, normalizedPhone, cleanNote]
+  );
+  return cleanNote;
 }
 
 async function updateConversationLastMessage(id, message, incrementUnread = false) {
@@ -917,11 +960,11 @@ async function getProductsCacheAge(orgId) {
 
 // ─── ORDERS ───────────────────────────────────────────────────────
 
-async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice, status = 'draft' }) {
+async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice, status = 'draft', note = null }) {
   const order = await queryOne(
-    `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice, status]
+    `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status, notes, delivery_note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING *`,
+    [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice, status, note || null]
   );
   // Un pedido ya persistido es la fuente de verdad. Cerrar cualquier toma de
   // pedido anterior evita que el bot retome un carrito obsoleto después de
@@ -1885,7 +1928,7 @@ module.exports = {
   // Agents
   createAgent, getAgents, createDefaultAgents,
   // Conversations
-  upsertConversation, getAllConversations, getConversationById,
+  upsertConversation, getAllConversations, getConversationById, setConversationPinned, setCustomerNote,
   updateConversationLastMessage, markConversationAsRead, setAgentMode, claimHumanPendingNotification,
   updatePipelineState, getOrderDraft, claimOrderCreation,
   // Scheduled orders

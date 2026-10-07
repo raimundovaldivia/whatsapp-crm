@@ -16,10 +16,10 @@ test('customer identity remains consistent across providers, historical phones a
     await engine.exec(`
       CREATE TABLE contacts (id SERIAL PRIMARY KEY, organization_id INT, phone TEXT, name TEXT,
         client_type TEXT, contact_type TEXT, source TEXT, last_seen_at TIMESTAMP, updated_at TIMESTAMP,
-        email TEXT, address TEXT, address1 TEXT, city TEXT, UNIQUE(organization_id, phone));
+        email TEXT, address TEXT, address1 TEXT, city TEXT, notes TEXT, UNIQUE(organization_id, phone));
       CREATE TABLE conversations (id SERIAL PRIMARY KEY, organization_id INT, phone_number TEXT,
         contact_name TEXT, whatsapp_channel_id INT, updated_at TIMESTAMP, last_message_at TIMESTAMP,
-        unread_count INT DEFAULT 0);
+        unread_count INT DEFAULT 0, is_pinned BOOLEAN DEFAULT FALSE, pinned_at TIMESTAMPTZ);
       CREATE TABLE messages (id SERIAL PRIMARY KEY, conversation_id INT);
       CREATE TABLE whatsapp_channels (id INT, name TEXT, phone_number TEXT, provider TEXT);
       CREATE TABLE whatsapp_configs (organization_id INT, provider TEXT, display_phone_number TEXT, twilio_phone_number TEXT);
@@ -37,6 +37,16 @@ test('customer identity remains consistent across providers, historical phones a
     assert.equal((await db.getConversationById(1, 1)).contact_name, 'Roxana Del Rosario Flores');
     assert.equal((await db.getConversationById(4, 2)).contact_name, 'Otra persona');
     assert.equal(await db.getConversationById(4, 1), null);
+    await db.setCustomerNote(1, '+56994073111', 'Entregar después de las 18:00');
+    rows = await db.getAllConversations(1);
+    assert.ok(rows.every(r => r.contact_notes === 'Entregar después de las 18:00'));
+    assert.equal((await db.getConversationById(4, 2)).contact_notes, null);
+    await db.setConversationPinned(3, 1, true);
+    rows = await db.getAllConversations(1);
+    assert.equal(rows[0].id, 3);
+    assert.equal(rows[0].is_pinned, true);
+    assert.equal(await db.setConversationPinned(3, 2, true), null);
+    await db.setConversationPinned(3, 1, false);
     await db.touchLead(1, '+56994073111', 'roxi');
     const evolution = await db.upsertConversation(1, '56994073111', 'roxi', 2);
     const kapso = await db.upsertConversation(1, '56994073111', 'Roxi WhatsApp', 1);

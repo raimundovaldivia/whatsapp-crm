@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2 } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
@@ -41,13 +41,77 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [alternateError, setAlternateError] = useState('');
   const [channelConversations, setChannelConversations] = useState([conversation]);
   const [loadingChannels, setLoadingChannels] = useState(false);
+  const [isPinned, setIsPinned] = useState(!!conversation.is_pinned);
+  const [pinSaving, setPinSaving] = useState(false);
+  const [customerNote, setCustomerNote] = useState(conversation.contact_notes || '');
+  const [showNoteEditor, setShowNoteEditor] = useState(false);
+  const [noteDraft, setNoteDraft] = useState(conversation.contact_notes || '');
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState('');
 
   useEffect(() => {
     setMobileActionsOpen(false);
     setAttachment(null);
     setAlternateSend(null);
     setAlternateError('');
+    setIsPinned(!!conversation.is_pinned);
+    setCustomerNote(conversation.contact_notes || '');
+    setNoteDraft(conversation.contact_notes || '');
+    setShowNoteEditor(false);
+    setNoteError('');
   }, [conversation.id]);
+
+  useEffect(() => {
+    setIsPinned(!!conversation.is_pinned);
+  }, [conversation.is_pinned]);
+
+  useEffect(() => {
+    setCustomerNote(conversation.contact_notes || '');
+    if (!showNoteEditor) setNoteDraft(conversation.contact_notes || '');
+  }, [conversation.contact_notes, showNoteEditor]);
+
+  const handleTogglePin = useCallback(async () => {
+    if (pinSaving) return;
+    const nextPinned = !isPinned;
+    setPinSaving(true);
+    try {
+      const { data } = await api.patch(`/conversations/${conversation.id}/pin`, { pinned: nextPinned });
+      const updated = data?.data || { ...conversation, is_pinned: nextPinned, pinned_at: nextPinned ? new Date().toISOString() : null };
+      setIsPinned(!!updated.is_pinned);
+      onConversationUpdated?.(updated);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo fijar la conversación');
+    } finally {
+      setPinSaving(false);
+    }
+  }, [conversation, isPinned, onConversationUpdated, pinSaving]);
+
+  const openNoteEditor = useCallback(() => {
+    setNoteDraft(customerNote);
+    setNoteError('');
+    setShowNoteEditor(true);
+  }, [customerNote]);
+
+  const handleSaveCustomerNote = useCallback(async () => {
+    if (noteDraft.trim().length > 1000) {
+      setNoteError('La nota no puede superar 1000 caracteres.');
+      return;
+    }
+    setNoteSaving(true);
+    setNoteError('');
+    try {
+      const { data } = await api.patch(`/conversations/${conversation.id}/customer-note`, { note: noteDraft });
+      const saved = data?.note || '';
+      setCustomerNote(saved);
+      setNoteDraft(saved);
+      setShowNoteEditor(false);
+      onConversationUpdated?.(data?.data || { ...conversation, contact_notes: saved });
+    } catch (err) {
+      setNoteError(err.response?.data?.error || 'No se pudo guardar la nota.');
+    } finally {
+      setNoteSaving(false);
+    }
+  }, [conversation, noteDraft, onConversationUpdated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +258,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       label: order.shopify_name || `#${order.id}`,
       address,
       city,
+      note: order.delivery_note || (order._source === 'bot' ? order.notes : '') || '',
       updateContact: true,
       items: items.map((item, index) => ({
         key: `${Date.now()}_${index}`,
@@ -252,6 +317,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         items: cleanItems,
         address,
         city: historyEdit.city.trim(),
+        note: historyEdit.note.trim(),
         updateContact: historyEdit.updateContact,
       });
       alertOrderEditNotification(data.notification);
@@ -313,6 +379,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [orderItems, setOrderItems]           = useState({}); // { productId: quantity }
   const [orderAddress, setOrderAddress]       = useState('');
   const [orderCity, setOrderCity]             = useState('');
+  const [orderNote, setOrderNote]             = useState('');
   const [sendSummary, setSendSummary]         = useState(true);
   const [creatingOrder, setCreatingOrder]     = useState(false);
   const [orderError, setOrderError]           = useState('');
@@ -808,6 +875,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setOrderItems({});
     setOrderAddress('');
     setOrderCity('');
+    setOrderNote(customerNote || '');
     setOrderDiscount('');
     setOrderDiscountType('percent');
     setOrderError('');
@@ -880,11 +948,13 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         items, sendSummary, shippingAddress,
         discount: discountNum,
         discountType: orderDiscountType,
+        note: orderNote.trim(),
       });
       setShowOrderModal(false);
       setOrderItems({});
       setOrderAddress('');
       setOrderCity('');
+      setOrderNote('');
       setOrderDiscount('');
       setOrderDiscountType('percent');
     } catch (err) {
@@ -1099,6 +1169,39 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
         {/* Right: action buttons */}
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '8px', flexShrink: 0, position: 'relative' }}>
+          <button
+            onClick={handleTogglePin}
+            disabled={pinSaving}
+            title={isPinned ? 'Quitar chat de fijados' : 'Fijar chat arriba'}
+            style={{
+              backgroundColor: isPinned ? colors.green + '20' : 'transparent',
+              border: `1px solid ${isPinned ? colors.green : colors.borderStrong}`,
+              borderRadius: '6px', padding: '5px 8px',
+              color: isPinned ? colors.green : colors.textMuted,
+              cursor: pinSaving ? 'wait' : 'pointer',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', fontWeight: isPinned ? 700 : 400,
+            }}
+          >
+            <Pin size={13} fill={isPinned ? 'currentColor' : 'none'} />
+            {isPinned ? 'Fijado' : 'Fijar'}
+          </button>
+          <button
+            onClick={openNoteEditor}
+            title={customerNote ? 'Ver o editar nota del cliente' : 'Agregar nota del cliente'}
+            style={{
+              backgroundColor: customerNote ? '#f59e0b20' : 'transparent',
+              border: `1px solid ${customerNote ? '#f59e0b88' : colors.borderStrong}`,
+              borderRadius: '6px', padding: '5px 8px',
+              color: customerNote ? '#f59e0b' : colors.textMuted,
+              cursor: 'pointer',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', fontWeight: customerNote ? 700 : 400,
+            }}
+          >
+            <StickyNote size={13} />
+            Nota
+          </button>
           {isDevUser && (
             <button
               onClick={handleDeleteMessages}
@@ -1259,6 +1362,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 }}>
                   <MobileHeaderAction icon={<ShoppingCart size={17} />} label="Crear pedido" colors={colors}
                     onClick={() => { setMobileActionsOpen(false); openOrderModal(); }} />
+                  <MobileHeaderAction icon={<Pin size={17} fill={isPinned ? 'currentColor' : 'none'} />}
+                    label={isPinned ? 'Quitar de fijados' : 'Fijar chat arriba'} colors={colors} active={isPinned}
+                    disabled={pinSaving} onClick={() => { setMobileActionsOpen(false); handleTogglePin(); }} />
+                  <MobileHeaderAction icon={<StickyNote size={17} />} label={customerNote ? 'Ver o editar nota' : 'Agregar nota'}
+                    colors={colors} active={!!customerNote}
+                    onClick={() => { setMobileActionsOpen(false); openNoteEditor(); }} />
                   {!conversation.whatsapp_channel_id && <MobileHeaderAction icon={<FileText size={17} />} label="Enviar template" colors={colors}
                     onClick={() => { setMobileActionsOpen(false); openTemplateModal(); }} />}
                   <MobileHeaderAction icon={<History size={17} />} label="Historial de compras" colors={colors}
@@ -1287,6 +1396,25 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           )}
         </div>
       </div>
+
+      {customerNote && (
+        <button
+          onClick={openNoteEditor}
+          title="Editar nota del cliente"
+          style={{
+            width: '100%', border: 'none', borderBottom: '1px solid #f59e0b55',
+            backgroundColor: isDark ? '#33270f' : '#fff7df', color: isDark ? '#fcd58a' : '#7c4a03',
+            padding: isMobile ? '7px 12px' : '8px 16px', cursor: 'pointer', textAlign: 'left',
+            display: 'flex', alignItems: 'flex-start', gap: '8px', flexShrink: 0,
+          }}
+        >
+          <StickyNote size={15} style={{ marginTop: '1px', flexShrink: 0 }} />
+          <span style={{ minWidth: 0, flex: 1, fontSize: '12px', lineHeight: 1.4 }}>
+            <strong>Nota del cliente:</strong>{' '}{customerNote}
+          </span>
+          <span style={{ fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap' }}>Editar</span>
+        </button>
+      )}
 
       {/* Banner modo humano */}
       {isHumanMode && (
@@ -1697,6 +1825,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                                 {items.map(it => `${it.quantity}x ${it.name || it.title}`).join(' · ')}
                               </div>
                             )}
+                            {(o.delivery_note || (!isShopify && o.notes)) && (
+                              <div style={{ fontSize:'11px', color:isDark?'#fcd58a':'#8a5707', backgroundColor:isDark?'#33270f':'#fff7df', border:`1px solid #f59e0b44`, borderRadius:'7px', marginTop:'6px', padding:'5px 7px', display:'flex', alignItems:'flex-start', gap:'5px' }}>
+                                <StickyNote size={12} style={{ marginTop:'1px', flexShrink:0 }} />
+                                <span><strong>Nota de entrega:</strong> {o.delivery_note || o.notes}</span>
+                              </div>
+                            )}
                             {isPaid && (
                               <div style={{ fontSize:'10px', color:colors.green, marginTop:'5px', display:'flex', alignItems:'center', gap:'4px', fontWeight:700 }}>
                                 <CheckCircle2 size={11} /> Pago registrado{o.payment_method ? ` · ${({ efectivo:'Efectivo', transferencia:'Transferencia', mixto:'Mixto', otro:'Otro' })[o.payment_method] || o.payment_method}` : ''}
@@ -1832,6 +1966,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     <ClientAddressFields phone={conversation.phone_number} address={historyEdit.address} city={historyEdit.city}
                       onAddressChange={value => setHistoryEdit(current => ({ ...current, address:value }))}
                       onCityChange={value => setHistoryEdit(current => ({ ...current, city:value }))} colors={colors} />
+                    <div style={{ marginTop:'13px' }}>
+                      <div style={{ fontSize:'11px', fontWeight:800, color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:'6px' }}>Nota para el despacho</div>
+                      <textarea value={historyEdit.note} onChange={e => setHistoryEdit(current => ({ ...current, note:e.target.value }))}
+                        maxLength={1000} rows={3} placeholder="Horario, referencia o instrucción adicional"
+                        style={{ width:'100%', boxSizing:'border-box', resize:'vertical', backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'8px 10px', fontSize:'13px', outline:'none' }} />
+                    </div>
                     <label style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'11px', color:colors.textSecondary, fontSize:'11px', cursor:'pointer' }}>
                       <input type="checkbox" checked={historyEdit.updateContact} onChange={e => setHistoryEdit(current => ({ ...current, updateContact:e.target.checked }))} />
                       Usar también como dirección registrada del cliente
@@ -1850,6 +1990,43 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {showNoteEditor && (
+        <div style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.6)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+          <div style={{ width:'100%', maxWidth:'480px', backgroundColor:colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:'14px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)', overflow:'hidden' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'15px 18px', borderBottom:`1px solid ${colors.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'8px', color:colors.textPrimary, fontWeight:700 }}>
+                <StickyNote size={17} color="#f59e0b" /> Nota del cliente
+              </div>
+              <button onClick={() => setShowNoteEditor(false)} disabled={noteSaving} style={{ border:'none', background:'none', color:colors.textMuted, cursor:'pointer', padding:'3px' }}><X size={18} /></button>
+            </div>
+            <div style={{ padding:'16px 18px' }}>
+              <div style={{ color:colors.textSecondary, fontSize:'12px', lineHeight:1.45, marginBottom:'10px' }}>
+                Información interna que conviene recordar en todos sus chats, por ejemplo horario preferido, referencias de dirección o indicaciones habituales.
+              </div>
+              <textarea
+                autoFocus
+                value={noteDraft}
+                onChange={e => setNoteDraft(e.target.value)}
+                maxLength={1000}
+                rows={5}
+                placeholder="Ej: Entregar después de las 18:00. Llamar al llegar."
+                style={{ width:'100%', boxSizing:'border-box', resize:'vertical', padding:'10px 12px', borderRadius:'9px', border:`1px solid ${colors.borderStrong}`, backgroundColor:colors.bgSub, color:colors.textPrimary, fontSize:'13px', lineHeight:1.5, outline:'none' }}
+              />
+              <div style={{ display:'flex', justifyContent:'space-between', marginTop:'5px', fontSize:'11px', color:colors.textMuted }}>
+                <span>No se envía por WhatsApp.</span><span>{noteDraft.length}/1000</span>
+              </div>
+              {noteError && <div style={{ color:colors.red, fontSize:'12px', marginTop:'8px' }}>{noteError}</div>}
+              <div style={{ display:'flex', justifyContent:'flex-end', gap:'8px', marginTop:'15px' }}>
+                <button onClick={() => setShowNoteEditor(false)} disabled={noteSaving} style={{ padding:'8px 13px', borderRadius:'8px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, cursor:'pointer' }}>Cancelar</button>
+                <button onClick={handleSaveCustomerNote} disabled={noteSaving} style={{ padding:'8px 15px', borderRadius:'8px', border:'none', backgroundColor:colors.green, color:'#fff', fontWeight:700, cursor:noteSaving?'wait':'pointer', opacity:noteSaving?.7:1 }}>
+                  {noteSaving ? 'Guardando…' : noteDraft.trim() ? 'Guardar nota' : 'Eliminar nota'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -2040,6 +2217,21 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 <div style={{ fontSize:'11px', color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección de despacho</div>
                 <ClientAddressFields phone={conversation.phone_number} address={orderAddress} city={orderCity}
                   onAddressChange={setOrderAddress} onCityChange={setOrderCity} colors={colors} compact />
+              </div>
+              <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:'8px', alignItems:'center' }}>
+                  <div style={{ fontSize:'11px', color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'0.5px' }}>Nota para este despacho (opcional)</div>
+                  {customerNote && <span style={{ fontSize:'10px', color:'#f59e0b' }}>Sugerida desde la nota del cliente</span>}
+                </div>
+                <textarea
+                  value={orderNote}
+                  onChange={e => setOrderNote(e.target.value)}
+                  maxLength={1000}
+                  rows={2}
+                  placeholder="Ej: Entregar entre 18:00 y 20:00; llamar al llegar."
+                  style={{ width:'100%', boxSizing:'border-box', resize:'vertical', backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'8px 10px', fontSize:'13px', outline:'none' }}
+                />
+                <div style={{ fontSize:'10px', color:colors.textMuted }}>La verá el equipo de despacho. No se enviará en el resumen de WhatsApp.</div>
               </div>
               {/* Descuento */}
               <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>

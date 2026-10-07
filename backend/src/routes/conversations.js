@@ -200,6 +200,44 @@ router.patch('/:id/read', async (req, res) => {
 });
 
 /**
+ * PATCH /api/conversations/:id/pin
+ * Mantiene una conversación destacada al comienzo de la lista.
+ */
+router.patch('/:id/pin', async (req, res) => {
+  try {
+    if (typeof req.body?.pinned !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'pinned debe ser verdadero o falso' });
+    }
+    const updated = await db.setConversationPinned(Number(req.params.id), req.orgId, req.body.pinned);
+    if (!updated) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/conversations/:id/customer-note
+ * Nota interna persistente, compartida por los canales del mismo cliente.
+ */
+router.patch('/:id/customer-note', async (req, res) => {
+  try {
+    if (typeof req.body?.note !== 'string') {
+      return res.status(400).json({ success: false, error: 'La nota debe ser texto' });
+    }
+    if (req.body.note.trim().length > 1000) {
+      return res.status(400).json({ success: false, error: 'La nota no puede superar 1000 caracteres' });
+    }
+    const conv = await db.getConversationById(Number(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    const note = await db.setCustomerNote(req.orgId, conv.phone_number, req.body.note);
+    res.json({ success: true, note, data: await db.getConversationById(conv.id, req.orgId) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/conversations/start
  * Inicia o reutiliza una conversación con un número y envía el primer mensaje.
  * Body: { phone: "56912345678", name?: "Juan", text: "Hola..." }
@@ -315,8 +353,11 @@ router.post('/:id/orders', async (req, res) => {
     const conv   = await db.getConversationById(convId, req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
-    const { items = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent' } = req.body;
+    const { items = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '' } = req.body;
     if (!items.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
+    if (typeof note !== 'string' || note.trim().length > 1000) {
+      return res.status(400).json({ success: false, error: 'La nota del pedido no puede superar 1000 caracteres' });
+    }
 
     const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
     const discountNum   = parseFloat(discount) || 0;
@@ -352,6 +393,7 @@ router.post('/:id/orders', async (req, res) => {
       customerPhone:   conv.phone_number,
       shippingAddress: finalAddress,
       totalPrice,
+      note: note.trim() || null,
     });
 
     // Guardar mensaje de resumen en el chat y enviarlo al cliente

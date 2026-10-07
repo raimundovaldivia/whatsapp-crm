@@ -113,6 +113,14 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       c.phone_number?.includes(q) ||
       c.last_message?.toLowerCase().includes(q)
     );
+  }).sort((a, b) => {
+    const pinOrder = Number(!!b.is_pinned) - Number(!!a.is_pinned);
+    if (pinOrder) return pinOrder;
+    if (a.is_pinned && b.is_pinned) {
+      const pinnedOrder = new Date(b.pinned_at || 0).getTime() - new Date(a.pinned_at || 0).getTime();
+      if (pinnedOrder) return pinnedOrder;
+    }
+    return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
   });
 
   const [triggering, setTriggering] = useState(false);

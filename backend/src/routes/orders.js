@@ -977,13 +977,14 @@ router.patch('/set-items', async (req, res) => {
 /**
  * PATCH /api/orders/history-edit
  * Edita productos y dirección como una sola operación desde el historial.
- * Body: { source, id, items, address, city, updateContact }
+ * Body: { source, id, items, address, city, note, updateContact }
  */
 router.patch('/history-edit', async (req, res) => {
-  const { source, id, items, address, city, updateContact = false } = req.body;
+  const { source, id, items, address, city, note = '', updateContact = false } = req.body;
   if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
   if (!Array.isArray(items)) return res.status(400).json({ success: false, error: 'items debe ser un array' });
   if (!String(address || '').trim()) return res.status(400).json({ success: false, error: 'La dirección es requerida' });
+  if (typeof note !== 'string' || note.trim().length > 1000) return res.status(400).json({ success: false, error: 'La nota no puede superar 1000 caracteres' });
 
   const clean = items
     .map(item => ({
@@ -1018,11 +1019,12 @@ router.patch('/history-edit', async (req, res) => {
                 total_price = $2,
                 shipping_address1 = $3,
                 shipping_city = $4,
+                delivery_note = $5,
                 delivery_modified = TRUE,
                 synced_at = NOW()
-          WHERE shopify_order_id = $5 AND organization_id = $6
+          WHERE shopify_order_id = $6 AND organization_id = $7
           RETURNING *`,
-        [JSON.stringify(clean), total, address.trim(), String(city || '').trim() || null, String(id), req.orgId]
+        [JSON.stringify(clean), total, address.trim(), String(city || '').trim() || null, note.trim() || null, String(id), req.orgId]
       );
       order = rows[0];
     } else {
@@ -1031,11 +1033,12 @@ router.patch('/history-edit', async (req, res) => {
             SET items = $1,
                 total_price = $2,
                 shipping_address = $3,
+                delivery_note = $4,
                 delivery_modified = TRUE,
                 updated_at = NOW()
-          WHERE id = $4 AND organization_id = $5
+          WHERE id = $5 AND organization_id = $6
           RETURNING *`,
-        [JSON.stringify(clean), String(total), JSON.stringify({ address: address.trim(), city: String(city || '').trim() }), parseInt(id), req.orgId]
+        [JSON.stringify(clean), String(total), JSON.stringify({ address: address.trim(), city: String(city || '').trim() }), note.trim() || null, parseInt(id), req.orgId]
       );
       order = rows[0];
     }

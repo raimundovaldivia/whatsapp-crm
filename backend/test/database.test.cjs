@@ -29,10 +29,13 @@ test('PostgreSQL migrations, tenant payment isolation, rollback and expense idem
     assert.equal(preserved.fulfillment_status,'fulfilled');
     await engine.query("SELECT setval(pg_get_serial_sequence('orders','id'), 2, true)");
     await engine.exec(`UPDATE conversations SET pipeline_state='collecting_order', order_draft='{"items":[{"product_name":"pedido viejo","quantity":1}]}' WHERE id=1`);
-    await db.createOrder({ conversationId:1, organizationId:1, items:[{name:'Pedido real',quantity:1,price:100}], customerName:'Cliente', customerPhone:'111', shippingAddress:{address:'Test'}, totalPrice:100 });
+    await db.createOrder({ conversationId:1, organizationId:1, items:[{name:'Pedido real',quantity:1,price:100}], customerName:'Cliente', customerPhone:'111', shippingAddress:{address:'Test'}, totalPrice:100, note:'Llamar al llegar' });
     const reconciledConversation=(await engine.query('SELECT pipeline_state,order_draft FROM conversations WHERE id=1')).rows[0];
     assert.equal(reconciledConversation.pipeline_state,'done');
     assert.equal(reconciledConversation.order_draft,'{}');
+    const manualOrder=(await engine.query('SELECT notes,delivery_note FROM orders WHERE organization_id=1 ORDER BY id DESC LIMIT 1')).rows[0];
+    assert.equal(manualOrder.notes,'Llamar al llegar');
+    assert.equal(manualOrder.delivery_note,'Llamar al llegar');
     assert.equal(await db.updatePaymentProof(2,{status:'verified'},1),null);
     assert.equal((await engine.query('SELECT status FROM orders WHERE id=2')).rows[0].status,'sent');
     await db.updatePaymentProof(1,{status:'verified'},1);

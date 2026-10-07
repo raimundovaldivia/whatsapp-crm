@@ -138,9 +138,13 @@ async function setupDatabase() {
       );
 
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS whatsapp_channel_id INTEGER REFERENCES whatsapp_channels(id) ON DELETE SET NULL;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
       ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_organization_id_phone_number_key;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_org_channel_phone
         ON conversations(organization_id, COALESCE(whatsapp_channel_id, 0), phone_number);
+      CREATE INDEX IF NOT EXISTS idx_conversations_org_pinned
+        ON conversations(organization_id, is_pinned DESC, pinned_at DESC, last_message_at DESC);
 
       -- ─── MENSAJES ────────────────────────────────────────────────
 
