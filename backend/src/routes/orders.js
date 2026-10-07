@@ -260,6 +260,7 @@ router.get('/history/:phone', async (req, res) => {
     const { rows: contactRows } = await pool.query(`
       SELECT address1, address, city FROM contacts
       WHERE organization_id = $1 AND phone = ANY($2::text[])
+      ORDER BY updated_at DESC NULLS LAST
       LIMIT 1
     `, [req.orgId, variants]);
     const contactAddress = contactRows[0]

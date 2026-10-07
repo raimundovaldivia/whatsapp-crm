@@ -10,7 +10,10 @@ const express = require('express');
 const router  = express.Router();
 const db      = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { consolidateBroadcastContacts } = require('../services/customer-identity');
+const { consolidateBroadcastContacts, resolveCustomerPhones } = require('../services/customer-identity');
+const resolveIdentityPhones = typeof resolveCustomerPhones === 'function'
+  ? resolveCustomerPhones
+  : async (_pool, _orgId, phone) => [phone];
 const productIdentity = require('../services/product-identity');
 const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem === 'function'
   ? productIdentity.canonicalizeProductItem
@@ -774,6 +777,7 @@ router.patch('/:phone', async (req, res) => {
     const { normalizePhone, normalizeName } = require('../db/database');
     const phone = normalizePhone(req.params.phone);
     const customerName = normalizeName(name);
+    const identityPhones = await resolveIdentityPhones(pool, req.orgId, phone);
 
     // Upsert en tabla contacts
     const { rows: [contact] } = await pool.query(
@@ -797,6 +801,23 @@ router.patch('/:phone', async (req, res) => {
         `UPDATE conversations SET contact_name = $1
          WHERE organization_id = $2 AND REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g') = ANY($3::text[])`,
         [customerName, req.orgId, [phone, ...( /^569\d{8}$/.test(phone) ? [phone.slice(2)] : [])]]
+      );
+    }
+
+    // Una misma persona puede conservar teléfonos históricos. La dirección
+    // vigente debe ser consistente en todos sus alias fuertes, sin tocar las
+    // direcciones guardadas dentro de pedidos anteriores.
+    if (Object.hasOwn(req.body, 'address') || Object.hasOwn(req.body, 'city')) {
+      await pool.query(
+        `UPDATE contacts SET
+           address  = CASE WHEN $1::boolean THEN $2 ELSE address END,
+           address1 = CASE WHEN $1::boolean THEN $2 ELSE address1 END,
+           city     = CASE WHEN $3::boolean THEN $4 ELSE city END,
+           updated_at = NOW()
+         WHERE organization_id = $5 AND phone = ANY($6::text[])`,
+        [Object.hasOwn(req.body, 'address'), address?.trim() || null,
+         Object.hasOwn(req.body, 'city'), city?.trim() || null,
+         req.orgId, identityPhones]
       );
     }
 

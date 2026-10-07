@@ -85,6 +85,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [editContactCity, setEditContactCity]     = useState('');
   const [savingContact, setSavingContact]         = useState(false);
   const [localContactName, setLocalContactName]   = useState(null); // override local del nombre
+  const [editContactFromHistory, setEditContactFromHistory] = useState(false);
 
   const openEditContact = useCallback(async () => {
     setEditContactName(conversation.contact_name || '');
@@ -104,7 +105,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   }, [conversation.contact_name, conversation.phone_number]);
 
   const handleSaveContact = useCallback(async () => {
-    if (!editContactName.trim()) return;
+    if (!editContactName.trim() && !editContactAddress.trim()) return;
     setSavingContact(true);
     try {
       await api.patch(`/contacts/${encodeURIComponent(conversation.phone_number)}`, {
@@ -112,15 +113,21 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         address: editContactAddress.trim() || undefined,
         city:    editContactCity.trim() || undefined,
       });
-      setLocalContactName(editContactName.trim());
+      if (editContactName.trim()) setLocalContactName(editContactName.trim());
       setShowEditContact(false);
-      onConversationUpdated?.({ ...conversation, contact_name: editContactName.trim() });
+      if (editContactFromHistory) {
+        const nextAddress = [editContactAddress.trim(), editContactCity.trim()].filter(Boolean).join(', ');
+        setHistoryData(current => current ? { ...current, contactAddress: nextAddress || null } : current);
+        setShowHistory(true);
+        setEditContactFromHistory(false);
+      }
+      onConversationUpdated?.({ ...conversation, contact_name: editContactName.trim() || conversation.contact_name });
     } catch (err) {
       alert('Error guardando: ' + (err.response?.data?.error || err.message));
     } finally {
       setSavingContact(false);
     }
-  }, [conversation, editContactName, editContactAddress, editContactCity, onConversationUpdated]);
+  }, [conversation, editContactName, editContactAddress, editContactCity, editContactFromHistory, onConversationUpdated]);
 
   // Historial de compras
   const [showHistory, setShowHistory]       = useState(false);
@@ -134,6 +141,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [historyPayment, setHistoryPayment] = useState(null);
   const [historyPaymentSaving, setHistoryPaymentSaving] = useState(false);
   const [historyPaymentError, setHistoryPaymentError] = useState('');
+
+  const closeContactEditor = useCallback(() => {
+    setShowEditContact(false);
+    if (editContactFromHistory) {
+      setEditContactFromHistory(false);
+      setShowHistory(true);
+    }
+  }, [editContactFromHistory]);
 
   const openHistory = useCallback(async () => {
     const phone = conversation.phone_number;
@@ -1509,11 +1524,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
       {/* ── Modal Editar Contacto ── */}
       {showEditContact && (
-        <div onClick={() => setShowEditContact(false)} style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.55)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
+        <div onClick={closeContactEditor} style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.55)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
           <div onClick={e => e.stopPropagation()} style={{ backgroundColor: colors.bgPanel, borderRadius:'14px', border:`1px solid ${colors.border}`, width:'100%', maxWidth:'420px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)', padding:'24px' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
               <span style={{ fontWeight:700, fontSize:'16px', color: colors.textPrimary }}>Editar contacto</span>
-              <button onClick={() => setShowEditContact(false)} style={{ background:'none', border:'none', cursor:'pointer', color: colors.textSecondary, padding:'4px' }}><X size={18}/></button>
+              <button onClick={closeContactEditor} style={{ background:'none', border:'none', cursor:'pointer', color: colors.textSecondary, padding:'4px' }}><X size={18}/></button>
             </div>
 
             <div style={{ fontSize:'12px', color: colors.textMuted, marginBottom:'16px' }}>
@@ -1540,13 +1555,13 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             </div>
 
             <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
-              <button onClick={() => setShowEditContact(false)} style={{ padding:'9px 18px', borderRadius:'8px', border:`1px solid ${colors.border}`, background:'none', color: colors.textSecondary, cursor:'pointer', fontSize:'14px' }}>
+              <button onClick={closeContactEditor} style={{ padding:'9px 18px', borderRadius:'8px', border:`1px solid ${colors.border}`, background:'none', color: colors.textSecondary, cursor:'pointer', fontSize:'14px' }}>
                 Cancelar
               </button>
               <button
                 onClick={handleSaveContact}
-                disabled={savingContact || !editContactName.trim()}
-                style={{ padding:'9px 18px', borderRadius:'8px', border:'none', backgroundColor: colors.green, color:'white', cursor: savingContact ? 'wait' : 'pointer', fontSize:'14px', fontWeight:600, opacity: !editContactName.trim() ? 0.5 : 1 }}>
+                disabled={savingContact || (!editContactName.trim() && !editContactAddress.trim())}
+                style={{ padding:'9px 18px', borderRadius:'8px', border:'none', backgroundColor: colors.green, color:'white', cursor: savingContact ? 'wait' : 'pointer', fontSize:'14px', fontWeight:600, opacity: (!editContactName.trim() && !editContactAddress.trim()) ? 0.5 : 1 }}>
                 {savingContact ? 'Guardando...' : 'Guardar'}
               </button>
             </div>
@@ -1602,12 +1617,21 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                             </div>
                           ))}
                         </div>
-                        {historyData.contactAddress && (
-                          <div style={{ display:'flex', alignItems:'center', gap:'6px', backgroundColor:colors.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${colors.border}`, marginBottom:'16px', fontSize:'12px', color:colors.textSecondary }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:'8px', backgroundColor:colors.bg, borderRadius:'8px', padding:'8px 10px 8px 12px', border:`1px solid ${colors.border}`, marginBottom:'16px', fontSize:'12px', color:colors.textSecondary }}>
                             <span style={{ fontSize:'13px' }}>📍</span>
-                            <span><strong style={{ color:colors.textPrimary }}>Dirección registrada:</strong> {historyData.contactAddress}</span>
+                            <span style={{ flex:1, minWidth:0 }}><strong style={{ color:colors.textPrimary }}>Dirección registrada:</strong> {historyData.contactAddress || 'Sin dirección'}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditContactFromHistory(true);
+                                setShowHistory(false);
+                                openEditContact();
+                              }}
+                              style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'5px 8px', borderRadius:'7px', border:`1px solid ${colors.green}66`, backgroundColor:`${colors.green}16`, color:colors.green, cursor:'pointer', fontSize:'10px', fontWeight:800, whiteSpace:'nowrap' }}>
+                              {historyData.contactAddress ? <Pencil size={11} /> : <Plus size={11} />}
+                              {historyData.contactAddress ? 'Cambiar' : 'Agregar'}
+                            </button>
                           </div>
-                        )}
                       </>
                     );
                   })()}
