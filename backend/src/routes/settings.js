@@ -399,6 +399,7 @@ router.get('/whatsapp/channels/:id/qr', async (req, res) => {
   try {
     const channel = await db.getWhatsappChannel(req.orgId, Number(req.params.id));
     if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
+    if (channel.assigned_user_id) return res.status(409).json({ success: false, error: 'Gestiona este WhatsApp desde Equipo' });
     const [connection, qr] = await Promise.all([
       evolution.getConnectionState(channel).catch(() => null),
       evolution.getConnectQr(channel).catch(() => null),
@@ -416,6 +417,7 @@ router.get('/whatsapp/channels/:id/status', async (req, res) => {
   try {
     const channel = await db.getWhatsappChannel(req.orgId, Number(req.params.id));
     if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
+    if (channel.assigned_user_id) return res.status(409).json({ success: false, error: 'Gestiona este WhatsApp desde Equipo' });
     const connection = await evolution.getConnectionState(channel);
     const state = evolution.normalizeConnectionState(connection);
     const updated = await db.updateWhatsappChannelStatus(req.orgId, channel.id, state);
@@ -442,6 +444,7 @@ router.patch('/whatsapp/channels/:id/default', async (req, res) => {
   try {
     const channel = await db.setDefaultWhatsappChannel(req.orgId, Number(req.params.id));
     if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
+    if (channel.assigned_user_id) return res.status(409).json({ success: false, error: 'Gestiona este WhatsApp desde Equipo' });
     res.json({ success: true, data: channel });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

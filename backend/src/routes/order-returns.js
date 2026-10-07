@@ -67,7 +67,7 @@ router.post('/:id/actions',async(req,res)=>{
     else if(action==='cancel'&&['requested','approved','scheduled'].includes(status))status='cancelled';
     else if(action==='schedule'&&['approved','scheduled'].includes(status)){
       if(!dateValid(b.date)||!Number.isInteger(Number(b.driverId)))throw fail('Indica fecha y despachador.');
-      const {rows}=await client.query("SELECT id FROM users WHERE id=$1 AND organization_id=$2 AND role IN ('repartidor','coordinador')",[b.driverId,req.orgId]);
+      const {rows}=await client.query("SELECT id FROM users WHERE id=$1 AND organization_id=$2 AND merged_into_user_id IS NULL AND role IN ('repartidor','coordinador')",[b.driverId,req.orgId]);
       if(!rows.length)throw fail('Despachador inválido.');
       assigned=Number(b.driverId);date=b.date;status='scheduled';
     }else if(action==='start'&&status==='scheduled')status='in_progress';

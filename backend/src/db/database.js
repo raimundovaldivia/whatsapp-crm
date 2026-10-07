@@ -53,7 +53,7 @@ async function getUserByEmail(email) {
 
 async function getUserById(id) {
   return queryOne(
-    'SELECT id, organization_id, email, name, role, auth_version FROM users WHERE id = $1',
+    'SELECT id, organization_id, email, name, role, auth_version FROM users WHERE id = $1 AND merged_into_user_id IS NULL',
     [id]
   );
 }
@@ -62,7 +62,7 @@ async function listOrgUsers(orgId) {
   return query(
     `SELECT id, email, name, role, whatsapp_phone, wa_notifications, created_at
      FROM users
-     WHERE organization_id = $1
+     WHERE organization_id = $1 AND merged_into_user_id IS NULL
      ORDER BY created_at ASC`,
     [orgId]
   );
@@ -73,7 +73,7 @@ async function getUserByWhatsappPhone(orgId, phone) {
   const result = await query(
     `SELECT id, organization_id, email, name, role, whatsapp_phone, wa_notifications
      FROM users
-     WHERE organization_id = $1
+     WHERE organization_id = $1 AND merged_into_user_id IS NULL
        AND (whatsapp_phone = $2 OR whatsapp_phone = $3)`,
     [orgId, phone, normalized]
   );
@@ -103,6 +103,7 @@ async function getAgentsWithNotification(orgId, notifKey) {
      WHERE organization_id = $1
        AND whatsapp_phone IS NOT NULL
        AND whatsapp_phone <> ''
+       AND merged_into_user_id IS NULL
        AND (wa_notifications->>'${notifKey}')::boolean = true`,
     [orgId]
   );
@@ -227,6 +228,9 @@ async function createWhatsappChannel(orgId, channel) {
   return getPool().connect().then(async client => {
     try {
       await client.query('BEGIN');
+      const reserved = await client.query('SELECT assigned_user_id FROM whatsapp_channels WHERE organization_id=$1 AND provider=$2 AND evolution_instance=$3', [orgId, 'evolution', channel.evolutionInstance]);
+      if (reserved.rows[0]?.assigned_user_id) throw Object.assign(new Error('Esta instancia pertenece a un despachador. Gestiona su conexión desde Equipo.'), { status: 409 });
+
       const existingDefault = await client.query(
         'SELECT 1 FROM whatsapp_channels WHERE organization_id = $1 AND is_default = TRUE LIMIT 1',
         [orgId]
@@ -249,6 +253,7 @@ async function createWhatsappChannel(orgId, channel) {
            status = EXCLUDED.status,
            is_default = CASE WHEN EXCLUDED.is_default THEN TRUE ELSE whatsapp_channels.is_default END,
            updated_at = NOW()
+         WHERE whatsapp_channels.assigned_user_id IS NULL
          RETURNING *`,
         [orgId, channel.name, channel.phoneNumber || null, channel.evolutionApiUrl,
           channel.evolutionApiKey, channel.evolutionInstance, channel.webhookToken,
@@ -267,7 +272,7 @@ async function listWhatsappChannels(orgId) {
   return query(
     `SELECT id, organization_id, provider, name, phone_number, evolution_api_url,
             evolution_instance, status, is_default, created_at, updated_at
-       FROM whatsapp_channels WHERE organization_id = $1
+       FROM whatsapp_channels WHERE organization_id = $1 AND assigned_user_id IS NULL
       ORDER BY is_default DESC, id ASC`,
     [orgId]
   );
@@ -279,7 +284,7 @@ async function getWhatsappChannel(orgId, channelId) {
 
 async function getDefaultWhatsappChannel(orgId) {
   return queryOne(
-    'SELECT * FROM whatsapp_channels WHERE organization_id = $1 ORDER BY is_default DESC, id ASC LIMIT 1',
+    'SELECT * FROM whatsapp_channels WHERE organization_id = $1 AND assigned_user_id IS NULL ORDER BY is_default DESC, id ASC LIMIT 1',
     [orgId]
   );
 }
@@ -287,7 +292,7 @@ async function getDefaultWhatsappChannel(orgId) {
 async function getEvolutionWhatsappChannel(orgId) {
   return queryOne(
     `SELECT * FROM whatsapp_channels
-      WHERE organization_id = $1 AND provider = 'evolution'
+      WHERE organization_id = $1 AND provider = 'evolution' AND assigned_user_id IS NULL
         AND evolution_api_url IS NOT NULL
         AND evolution_api_key IS NOT NULL
         AND evolution_instance IS NOT NULL
@@ -301,7 +306,7 @@ async function setDefaultWhatsappChannel(orgId, channelId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const found = await client.query('SELECT id FROM whatsapp_channels WHERE id = $1 AND organization_id = $2 FOR UPDATE', [channelId, orgId]);
+    const found = await client.query('SELECT id FROM whatsapp_channels WHERE id = $1 AND organization_id = $2 AND assigned_user_id IS NULL FOR UPDATE', [channelId, orgId]);
     if (!found.rowCount) {
       await client.query('ROLLBACK');
       return null;
@@ -855,7 +860,7 @@ async function getMessagesByConversation(conversationId, limit = 80) {
   return rows.reverse();
 }
 
-async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80) {
+async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80, excludePersonal = false) {
   const normalized = normalizePhone(phoneNumber);
   if (!normalized) return [];
   const rows = await query(
@@ -871,12 +876,13 @@ async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80) {
          LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
          LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
         WHERE c.organization_id = $1
+          AND (NOT $4::boolean OR wc.assigned_user_id IS NULL)
           AND regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g') = $2
         ORDER BY m.created_at DESC
         LIMIT $3
      ) recent
      ORDER BY recent.created_at ASC`,
-    [orgId, normalized, limit]
+    [orgId, normalized, limit, excludePersonal]
   );
   return rows;
 }

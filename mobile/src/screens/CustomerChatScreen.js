@@ -188,7 +188,7 @@ export default function CustomerChatScreen({ route }) {
           </Text>
           <Text style={s.channelText}>
             {canWrite
-              ? usingEvolution
+              ? windowInfo.personal ? windowInfo.message : usingEvolution
                 ? 'La ventana de Kapso está cerrada. La app enviará automáticamente por Evolution y guardará la conversación.'
                 : 'El mensaje saldrá por Kapso y quedará registrado en el chat central.'
               : (windowInfo.message || 'Kapso está cerrado y Evolution no está disponible.')}

@@ -186,6 +186,15 @@ async function getConnectionState(config) {
   return response.data;
 }
 
+// Only return the connected identity; never expose instance tokens from fetchInstances.
+async function getConnectedPhone(config) {
+  const { instance } = credentials(config);
+  const response = await client(config).get('/instance/fetchInstances', { params: { instanceName: instance } });
+  const entries = Array.isArray(response.data) ? response.data : [response.data];
+  const found = entries.map(row => row?.instance || row).find(row => (row?.name || row?.instanceName) === instance);
+  return String(found?.ownerJid || found?.owner || '').split('@')[0].split(':')[0].replace(/\D/g, '') || null;
+}
+
 async function createInstance(config) {
   const { instance } = credentials(config);
   const response = await client(config).post('/instance/create', {
@@ -220,5 +229,5 @@ module.exports = {
   mediaReference, downloadMessageMedia, downloadMediaReference,
   sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
   parseConnectionUpdate, normalizeConnectionState,
-  getConnectionState, createInstance, getConnectQr, configureWebhook,
+  getConnectionState, getConnectedPhone, createInstance, getConnectQr, configureWebhook,
 };

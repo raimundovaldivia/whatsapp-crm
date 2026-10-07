@@ -1120,7 +1120,7 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
 async function getOwnedActiveStop(req, routeId, stopKey) {
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   const { rows: [route] } = await getPool().query(`
-    SELECT id, status, orders
+    SELECT id, status, orders, driver_user_id
       FROM delivery_routes
      WHERE id = $1 AND organization_id = $2
        AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
@@ -1130,7 +1130,7 @@ async function getOwnedActiveStop(req, routeId, stopKey) {
   const orders = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
   const stop = orders.find(item => `${item.source}_${item.id}` === stopKey);
   if (!stop) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
-  return stop;
+  return { ...stop, driver_user_id: route.driver_user_id || driverScope };
 }
 
 async function conversationForStop(orgId, stop, { create = false } = {}) {
@@ -1169,11 +1169,14 @@ async function evolutionChatRoute(orgId, stop, { create = false, window = null }
 }
 
 async function deliveryChatRoute(orgId, stop, { create = false } = {}) {
+  const personal = await require('../services/driver-whatsapp').route(orgId, stop, create);
+  if (personal) return personal;
+
   const resolved = await conversationForStop(orgId, stop);
   const primaryConversation = resolved.conversation;
   const primaryConfig = await whatsappProvider.configForConversation(orgId, primaryConversation);
 
-  if (primaryConfig && (resolved.window.available || primaryConfig.provider === 'evolution')) {
+  if (primaryConfig && !primaryConfig.assigned_user_id && (resolved.window.available || primaryConfig.provider === 'evolution')) {
     let conversation = primaryConversation;
     if (!conversation && create && primaryConfig) {
       conversation = await db.upsertConversation(
@@ -1218,8 +1221,10 @@ router.get('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor',
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
     if (!String(stop.phone || '').replace(/\D/g, '')) return res.status(400).json({ success: false, error: 'Este pedido no tiene teléfono registrado' });
     const routing = await deliveryChatRoute(req.orgId, stop);
-    const messages = typeof db.getMessagesByCustomerPhone === 'function'
-      ? await db.getMessagesByCustomerPhone(req.orgId, stop.phone, 60)
+    const messages = routing.personal
+      ? routing.conversation ? await db.getMessagesByConversation(routing.conversation.id, 60) : []
+      : typeof db.getMessagesByCustomerPhone === 'function'
+      ? await db.getMessagesByCustomerPhone(req.orgId, stop.phone, 60, true)
       : routing.conversation ? await db.getMessagesByConversation(routing.conversation.id, 60) : [];
     res.json({
       success: true,
@@ -1231,11 +1236,13 @@ router.get('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor',
           available: routing.available,
           channel: routing.channel,
           fallback: routing.fallback,
-          message: routing.available
+          sender: routing.sender || null,
+          personal: !!routing.personal,
+          message: routing.message || (routing.available
             ? routing.fallback
               ? 'La ventana de Kapso está cerrada. Los mensajes se enviarán automáticamente por Evolution.'
               : 'El canal de WhatsApp está disponible.'
-            : 'La ventana de Kapso está cerrada y Evolution no está disponible.',
+            : 'La ventana de Kapso está cerrada y Evolution no está disponible.'),
         },
         customer: { name: stop.customerName || stop.customer_name || 'Cliente', phone: stop.phone },
       },
@@ -1262,7 +1269,7 @@ router.post('/routes/:id/stops/chat', requireRole('owner', 'admin', 'supervisor'
       return res.status(409).json({
         success: false,
         error: 'WINDOW_EXPIRED',
-        message: 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible.',
+        message: routing.message || 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible.',
         window: routing.window,
       });
     }
@@ -1335,7 +1342,7 @@ router.post('/routes/:id/stops/chat/media', requireRole('owner', 'admin', 'super
       return res.status(409).json({
         success: false,
         error: 'WINDOW_EXPIRED',
-        message: 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible para enviar archivos.',
+        message: routing.message || 'La ventana de Kapso está cerrada y no hay un canal Evolution disponible para enviar archivos.',
       });
     }
 
@@ -1448,7 +1455,7 @@ router.get('/drivers', async (req, res) => {
              (SELECT COUNT(*) FROM delivery_routes r
                WHERE r.driver_user_id = u.id AND r.status IN ('sent','in_progress'))::int AS active_routes
         FROM users u
-       WHERE u.organization_id = $1 AND u.role IN ('repartidor', 'coordinador')
+       WHERE u.organization_id = $1 AND u.merged_into_user_id IS NULL AND u.role IN ('repartidor', 'coordinador')
        ORDER BY u.name ASC NULLS LAST, u.email ASC
     `, [req.orgId]);
     res.json({ success: true, drivers: rows });
@@ -1692,7 +1699,7 @@ async function resolveDriver(pool, orgId, { driverUserId, driverName, driverPhon
   if (!driverUserId) return { driverUserId: null, driverName: driverName || null, driverPhone: driverPhone || null };
   const { rows: [u] } = await pool.query(
     `SELECT id, name, email, whatsapp_phone FROM users
-      WHERE id = $1 AND organization_id = $2 AND role IN ('repartidor', 'coordinador')`,
+      WHERE id = $1 AND organization_id = $2 AND merged_into_user_id IS NULL AND role IN ('repartidor', 'coordinador')`,
     [parseInt(driverUserId), orgId]
   );
   if (!u) throw Object.assign(new Error('El usuario seleccionado no existe o no puede repartir'), { status: 400 });

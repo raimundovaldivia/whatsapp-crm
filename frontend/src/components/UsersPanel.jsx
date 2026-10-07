@@ -1,3 +1,4 @@
+import DriverWhatsapp from './DriverWhatsapp';
 import { useState, useEffect } from 'react';
 import { UserCog, Plus, Trash2, X, Smartphone, Bell, BellOff, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTheme } from '../theme.js';
@@ -45,6 +46,23 @@ export default function UsersPanel() {
   const [savingNotif, setSavingNotif] = useState({}); // userId → boolean
   const [changingRole, setChangingRole] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [mergeSource, setMergeSource] = useState('');
+  const [mergeTarget, setMergeTarget] = useState('');
+  const [mergeName, setMergeName] = useState('');
+  const [merging, setMerging] = useState(false);
+  const mergeUsers = async () => {
+    const source = users.find(u => String(u.id) === mergeSource);
+    const target = users.find(u => String(u.id) === mergeTarget);
+    if (!source || !target || source.id === target.id) return;
+    if (!confirm(`Unificar ${source.name} en ${mergeName || target.name}. Sus repartos, devoluciones y gastos quedarán en la cuenta de ${target.name}. El acceso de ${source.name} se desactivará y el historial se conservará. ¿Continuar?`)) return;
+    setMerging(true); setError(null);
+    try {
+      await api.post(`/users/${source.id}/merge`, { targetId: target.id, name: mergeName || target.name });
+      setMergeSource(''); setMergeTarget(''); setMergeName(''); await loadUsers();
+    } catch (e) { setError(e.response?.data?.error || 'No se pudieron unificar los usuarios'); }
+    finally { setMerging(false); }
+  };
+
 
   const loadUsers = async () => {
     setLoading(true);
@@ -308,6 +326,9 @@ export default function UsersPanel() {
                       </p>
                     </div>
 
+                    {['repartidor', 'coordinador'].includes(u.role) && <DriverWhatsapp user={u}
+                      phone={phoneEdits[u.id] ?? u.whatsapp_phone ?? ''} colors={colors} />}
+
                     {/* Notificaciones */}
                     <div>
                       <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: colors.textSecondary, marginBottom: '8px' }}>
@@ -347,6 +368,23 @@ export default function UsersPanel() {
           })
         )}
       </div>
+
+      <section style={{ marginTop: 20, padding: 16, border: `1px solid ${colors.border}`, borderRadius: 10, color: colors.textPrimary }}>
+        <strong>Unificar despachadores duplicados</strong>
+        <p>Conserva los repartos, gastos y devoluciones. Queda activo el acceso de la cuenta que eliges conservar.</p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <select aria-label="Usuario duplicado" value={mergeSource} onChange={e => setMergeSource(e.target.value)}>
+            <option value="">Cuenta duplicada</option>
+            {users.filter(u => ['repartidor', 'coordinador'].includes(u.role)).map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
+          </select>
+          <select aria-label="Usuario a conservar" value={mergeTarget} onChange={e => { setMergeTarget(e.target.value); setMergeName(users.find(u => String(u.id) === e.target.value)?.name || ''); }}>
+            <option value="">Cuenta que queda activa</option>
+            {users.filter(u => ['repartidor', 'coordinador'].includes(u.role) && String(u.id) !== mergeSource).map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
+          </select>
+          <input aria-label="Nombre unificado" placeholder="Nombre final" value={mergeName} onChange={e => setMergeName(e.target.value)} />
+          <button disabled={merging || !mergeSource || !mergeTarget || mergeSource === mergeTarget} onClick={mergeUsers}>{merging ? 'Unificando…' : 'Unificar usuarios'}</button>
+        </div>
+      </section>
 
       {/* Leyenda de roles */}
       <div style={{ marginTop: '20px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>

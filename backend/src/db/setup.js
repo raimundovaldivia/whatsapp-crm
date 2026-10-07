@@ -116,6 +116,11 @@ async function setupDatabase() {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_channels_one_default
         ON whatsapp_channels(organization_id) WHERE is_default;
 
+      ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS assigned_user_id INTEGER REFERENCES users(id) ON DELETE RESTRICT;
+      ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS expected_phone TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_channels_assigned_user
+        ON whatsapp_channels(organization_id, assigned_user_id) WHERE assigned_user_id IS NOT NULL;
+
       -- ─── CONVERSACIONES ─────────────────────────────────────────
 
       CREATE TABLE IF NOT EXISTS conversations (
@@ -1244,6 +1249,14 @@ async function setupDatabase() {
       UPDATE webhook_inbox w SET stream_id=s.id FROM webhook_streams s
         WHERE w.stream_id IS NULL AND s.provider=w.provider AND s.organization_id=w.organization_id AND s.stream_key='organization';
       CREATE INDEX IF NOT EXISTS idx_webhook_stream_status ON webhook_inbox(stream_id,status,id);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS merged_into_user_id INTEGER REFERENCES users(id);
+      CREATE TABLE IF NOT EXISTS user_merge_audit (
+        id SERIAL PRIMARY KEY, organization_id INTEGER NOT NULL,
+        source_user_id INTEGER NOT NULL, target_user_id INTEGER NOT NULL,
+        actor_user_id INTEGER NOT NULL, details JSONB NOT NULL, created_at TIMESTAMP DEFAULT NOW()
+      );
+      ALTER TABLE delivery_routes ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
+      ALTER TABLE delivery_expenses ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE delivery_expenses ADD COLUMN IF NOT EXISTS client_request_id TEXT;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_request
@@ -1321,6 +1334,7 @@ async function setupDatabase() {
         request_key TEXT NOT NULL, UNIQUE(organization_id,request_key)
       );
       CREATE INDEX IF NOT EXISTS order_returns_order ON order_returns(organization_id,source,order_id);
+      ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
       CREATE INDEX IF NOT EXISTS order_returns_driver ON order_returns(organization_id,driver_user_id,status);
       CREATE TABLE IF NOT EXISTS return_money_movements (
         id SERIAL PRIMARY KEY, return_id INTEGER NOT NULL UNIQUE REFERENCES order_returns(id),

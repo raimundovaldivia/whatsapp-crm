@@ -12,7 +12,7 @@ async function fixture() {
   let tail=Promise.resolve();
   const pool={query,async connect(){let release;const previous=tail;tail=new Promise(r=>release=r);await previous;return {query,release};}};
   await engine.exec(`CREATE TABLE organizations(id SERIAL PRIMARY KEY,name TEXT,slug TEXT,created_at TIMESTAMPTZ DEFAULT NOW());
-    CREATE TABLE users(id SERIAL PRIMARY KEY,organization_id INTEGER,email TEXT UNIQUE,password_hash TEXT,name TEXT,role TEXT);
+    CREATE TABLE users(id SERIAL PRIMARY KEY,organization_id INTEGER,email TEXT UNIQUE,password_hash TEXT,name TEXT,role TEXT,merged_into_user_id INTEGER);
     INSERT INTO organizations VALUES(1,'Existing shop','existing',NOW());
     INSERT INTO users VALUES(1,1,'operator@example.test','hash','Operator','owner');`);
   const migration=fs.readFileSync(path.join(__dirname,'../src/db/commercial.sql'),'utf8');

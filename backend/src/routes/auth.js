@@ -71,7 +71,7 @@ router.post('/login', async (req, res) => {
     }
 
     const user = await db.getUserByEmail(email);
-    if (!user) {
+    if (!user || user.merged_into_user_id) {
       return res.status(401).json({ success: false, error: 'Credenciales incorrectas' });
     }
 
