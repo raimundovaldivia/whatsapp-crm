@@ -1853,6 +1853,33 @@ router.post('/journeys', async (req, res) => {
   }
 });
 
+router.patch('/journeys/:id', async (req, res) => {
+  try { res.json(await require('../services/campaign-journeys').updateDraft(req.orgId, req.params.id, req.body)); }
+  catch (error) { res.status(409).json({ error: error.message }); }
+});
+
+router.post('/journeys/:id/preview', async (req, res) => {
+  try {
+    const service = require('../services/campaign-journeys');
+    const journey = await service.journeyDetail(req.orgId, req.params.id);
+    if (!journey) return res.status(404).json({ error: 'Secuencia no encontrada' });
+    const enrollment = journey.enrollments.find(e => String(e.id) === String(req.body.enrollmentId));
+    if (!enrollment) return res.status(404).json({ error: 'Destinatario no encontrado' });
+    const contact = await db.getContact(req.orgId, enrollment.phone);
+    const config = await db.getWhatsappConfig(req.orgId);
+    const templates = await require('../services/kapso-whatsapp').getTemplates(config);
+    const steps = Array.isArray(req.body.steps) ? req.body.steps : journey.steps;
+    if (steps.length > 10) return res.status(400).json({ error: 'Demasiados pasos' });
+    const messages = steps.map(step => {
+      const template = templates.find(t => t.name === step.template_name);
+      if (!template) throw new Error('Template no disponible');
+      const body = template.components?.find(c => String(c.type).toUpperCase() === 'BODY')?.text || '';
+      return service.renderBody(body, service.componentsForStep(step, body, contact, enrollment));
+    });
+    res.json({ messages });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
 router.post('/journeys/:id/activate', async (req, res) => {
   try {
     const journeyDetail = await require('../services/campaign-journeys').journeyDetail(req.orgId, req.params.id);

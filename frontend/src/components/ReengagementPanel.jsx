@@ -1,3 +1,4 @@
+import JourneyDetails from './JourneyDetails.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
@@ -1282,6 +1283,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [sources,        setSources]        = useState(null);
   const [loading,        setLoading]        = useState(true);
   const [search,         setSearch]         = useState('');
+  const [detailJourneyId, setDetailJourneyId] = useState(null);
   const [purchaseAge, setPurchaseAge] = useState('all');
   const [customPurchaseDays, setCustomPurchaseDays] = useState('45');
   const [audienceType, setAudienceType] = useState('all');
@@ -2353,9 +2355,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
               {journeys.length > 0 && <div style={{ marginTop: 18 }}>
                 <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 800, marginBottom: 8 }}>Secuencias existentes</div>
-                <div style={{ display: 'grid', gap: 6 }}>{journeys.slice(0, 6).map(journey => <div key={journey.id} style={{ padding: '9px 11px', borderRadius: 8, backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'grid', gap: 6 }}>{journeys.map(journey => <div key={journey.id} style={{ padding: '9px 11px', borderRadius: 8, backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}><div style={{ color: colors.textPrimary, fontSize: 12, fontWeight: 750 }}>{journey.name}</div><div style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>{journey.step_count} pasos · {journey.audience_count} personas · {journey.active_count} activas · {journey.completed_count} completadas</div></div>
                   <span style={{ fontSize: 10, fontWeight: 800, color: journey.status === 'active' ? colors.green : journey.status === 'paused' ? colors.yellow : colors.textMuted }}>{({ draft: 'Borrador', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', cancelled: 'Cancelada' })[journey.status] || journey.status}</span>
+                  <button onClick={() => setDetailJourneyId(journey.id)} style={{ border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textPrimary, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Ver detalles</button>
                   {journey.status === 'active' && <button onClick={() => changeJourneyStatus(journey, 'pause')} style={{ border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textSecondary, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Pausar</button>}
                   {['draft', 'paused'].includes(journey.status) && <button onClick={() => changeJourneyStatus(journey, 'activate')} style={{ border: `1px solid ${colors.green}55`, background: `${colors.green}15`, color: colors.green, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Activar</button>}
                 </div>)}</div>
@@ -2370,6 +2373,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           </div>
         </div>
       )}
+
+      {detailJourneyId && <JourneyDetails id={detailJourneyId} onClose={() => setDetailJourneyId(null)} onSaved={loadJourneys} />}
 
       {/* Toolbar */}
       <section aria-label="Método de envío" style={{ flexShrink: 0, padding: '12px 20px', color: colors.textPrimary,

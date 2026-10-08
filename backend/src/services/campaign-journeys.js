@@ -87,6 +87,27 @@ async function createJourney(orgId, userId, input, pool = db.getPool()) {
   }
 }
 
+async function updateDraft(orgId, journeyId, input, pool = db.getPool()) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [journey] } = await client.query('SELECT * FROM campaign_journeys WHERE id=$1 AND organization_id=$2 FOR UPDATE', [journeyId, orgId]);
+    if (!journey || journey.status !== 'draft') throw new Error('Solo se pueden editar borradores de tu organización');
+    const { rows: recipients } = await client.query('SELECT phone,contact_name AS name FROM campaign_journey_enrollments WHERE journey_id=$1', [journeyId]);
+    const data = normalizeJourneyInput({ ...input, name: journey.name, recipients });
+    const { rows: steps } = await client.query('SELECT * FROM campaign_journey_steps WHERE journey_id=$1 ORDER BY step_order', [journeyId]);
+    if (steps.length !== data.steps.length) throw new Error('No se puede cambiar la cantidad de pasos desde este editor');
+    for (let i = 0; i < steps.length; i++) {
+      await client.query('UPDATE campaign_journey_steps SET template_name=$1,variable_modes=$2 WHERE id=$3 AND journey_id=$4',
+        [data.steps[i].templateName, JSON.stringify(data.steps[i].variableModes), steps[i].id, journeyId]);
+    }
+    await client.query('UPDATE campaign_journeys SET updated_at=NOW() WHERE id=$1', [journeyId]);
+    await client.query('COMMIT');
+    return { success: true };
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
 async function activateJourney(orgId, journeyId, pool = db.getPool()) {
   const client = await pool.connect();
   try {
@@ -209,11 +230,18 @@ function getTemplateBody(template) {
 function variableValue(mode, contact, enrollment) {
   const config = typeof mode === 'object' && mode ? mode : { mode };
   const key = config.mode || 'first_name';
-  if (key === 'fixed') return String(config.value || '');
-  if (key === 'full_name') return String(contact?.name || enrollment.contact_name || 'Cliente').trim();
-  if (key === 'phone') return enrollment.phone;
-  if (key === 'city') return String(contact?.city || '').trim();
-  return String(contact?.name || enrollment.contact_name || 'Cliente').trim().split(/\s+/)[0] || 'Cliente';
+  let value;
+  if (key === 'fixed') value = String(config.value || '');
+  else if (key === 'full_name') value = String(contact?.name || enrollment.contact_name || 'Cliente').trim();
+  else if (key === 'phone') value = enrollment.phone;
+  else if (key === 'city') value = String(contact?.city || '').trim();
+  else if (key === 'total_orders') value = contact?.total_orders == null ? '' : String(contact.total_orders);
+  else if (key === 'last_order_date') value = contact?.last_order_at ? new Date(contact.last_order_at).toLocaleDateString('es-CL', { timeZone: 'America/Santiago' }) : '';
+  else if (key === 'days_since_order') value = contact?.last_order_at ? String(Math.max(0, Math.floor((Date.now() - new Date(contact.last_order_at).getTime()) / 86400000))) : '';
+  else value = String(contact?.name || enrollment.contact_name || 'Cliente').trim().split(/\s+/)[0] || 'Cliente';
+  value = value || String(config.fallback || '');
+  return value ? `${config.prefix || ''}${value}${config.suffix || ''}` : '';
+
 }
 
 function componentsForStep(step, templateBody, contact, enrollment) {
@@ -459,7 +487,7 @@ function startJourneyRunner(io = null) {
 }
 
 module.exports = {
-  ALLOWED_OBJECTIVES, ALLOWED_TRIGGERS, normalizeJourneyInput, createJourney, activateJourney,
+  ALLOWED_OBJECTIVES, ALLOWED_TRIGGERS, normalizeJourneyInput, createJourney, updateDraft, activateJourney,
   runJourneyEnrollments, listJourneys, journeyDetail, setJourneyStatus, getThreadContext,
   activeJourneyForPhone, registerInbound, componentsForStep, renderBody, startJourneyRunner,
 };
