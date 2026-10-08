@@ -30,3 +30,6 @@
     text-align: right;
   }
 }
+
+.payment-accounts__orders th, .payment-accounts__orders td { padding: 12px; text-align: left; font-size: 12px; }
+.payment-accounts__orders th { white-space: nowrap; font-size: 11px; }
