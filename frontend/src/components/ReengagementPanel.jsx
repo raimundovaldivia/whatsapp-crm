@@ -1578,9 +1578,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } finally { setJourneyBusy(false); }
   }
 
-  async function changeJourneyStatus(journey, action) {
+  async function changeJourneyStatus(journey, action, retryExcluded = false) {
     try {
-      const { data } = await api.post(`/reengagement/journeys/${journey.id}/${action}`, {});
+      const { data } = await api.post(`/reengagement/journeys/${journey.id}/${action}`, { retryExcluded });
       showToast(action === 'pause' ? 'Secuencia pausada' : `Secuencia activada para ${data.active || journey.active_count || 0} contacto(s)`);
       await loadJourneys();
     } catch (error) { showToast(error.response?.data?.error || 'No se pudo cambiar la secuencia', 'error'); }
@@ -2359,6 +2359,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   <div style={{ flex: 1, minWidth: 0 }}><div style={{ color: colors.textPrimary, fontSize: 12, fontWeight: 750 }}>{journey.name}</div><div style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>{journey.step_count} pasos · {journey.audience_count} personas · {journey.active_count} activas · {journey.completed_count} completadas</div></div>
                   <span style={{ fontSize: 10, fontWeight: 800, color: journey.status === 'active' ? colors.green : journey.status === 'paused' ? colors.yellow : colors.textMuted }}>{({ draft: 'Borrador', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', cancelled: 'Cancelada' })[journey.status] || journey.status}</span>
                   <button onClick={() => setDetailJourneyId(journey.id)} style={{ border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textPrimary, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Ver detalles</button>
+                  {journey.status === 'completed' && <button onClick={() => changeJourneyStatus(journey, 'activate', true)} style={{ border: `1px solid ${colors.border}`, color: colors.green, background: 'transparent', padding: '5px 7px', borderRadius: 6 }}>Reprocesar excluidos · descanso 24 h</button>}
                   {journey.status === 'active' && <button onClick={() => changeJourneyStatus(journey, 'pause')} style={{ border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textSecondary, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Pausar</button>}
                   {['draft', 'paused'].includes(journey.status) && <button onClick={() => changeJourneyStatus(journey, 'activate')} style={{ border: `1px solid ${colors.green}55`, background: `${colors.green}15`, color: colors.green, borderRadius: 6, padding: '5px 7px', cursor: 'pointer' }}>Activar</button>}
                 </div>)}</div>

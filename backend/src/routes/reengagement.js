@@ -1894,7 +1894,11 @@ router.post('/journeys/:id/activate', async (req, res) => {
     if (missingTemplates.length) {
       return res.status(409).json({ success: false, error: `Templates no disponibles o no aprobados: ${[...new Set(missingTemplates)].join(', ')}` });
     }
-    const result = await require('../services/campaign-journeys').activateJourney(req.orgId, req.params.id);
+    const result = await require('../services/campaign-journeys').activateJourney(req.orgId, req.params.id, undefined, { retryExcluded: req.body?.retryExcluded === true });
+    if (result.active > 0) {
+      setImmediate(() => require('../services/campaign-journeys').runJourneyEnrollments(io, new Date(), db.getPool(), { orgId: req.orgId, journeyId: Number(req.params.id) })
+        .catch(error => console.error('[CampaignJourneys/activate]', error.message)));
+    }
     res.json({ success: true, ...result });
   } catch (error) {
     res.status(409).json({ success: false, error: error.message });

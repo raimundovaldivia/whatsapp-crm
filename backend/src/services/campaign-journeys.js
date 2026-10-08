@@ -5,7 +5,7 @@ const { isCustomerMessagingHour } = require('./outbound-policy');
 
 const ALLOWED_OBJECTIVES = new Set(['promocion', 'reactivacion', 'seguimiento', 'cobranza', 'despacho', 'informativo']);
 const ALLOWED_TRIGGERS = new Set(['always', 'no_reply', 'read_no_reply', 'delivered_no_reply']);
-const ACTIVE_ORDER_STATUSES = ['nuevo', 'confirmed', 'sent', 'draft', 'pending', 'processing', 'scheduled'];
+const ACTIVE_ORDER_STATUSES = ['nuevo', 'confirmed', 'sent', 'draft', 'pending', 'processing', 'scheduled', 'por_despachar', 'asignado_ruta', 'en_camino', 'no_entregado', 'payment_received'];
 
 function normalizeJourneyInput(input = {}) {
   const name = String(input.name || '').trim();
@@ -108,7 +108,7 @@ async function updateDraft(orgId, journeyId, input, pool = db.getPool()) {
   finally { client.release(); }
 }
 
-async function activateJourney(orgId, journeyId, pool = db.getPool()) {
+async function activateJourney(orgId, journeyId, pool = db.getPool(), options = {}) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -116,7 +116,12 @@ async function activateJourney(orgId, journeyId, pool = db.getPool()) {
       `SELECT * FROM campaign_journeys WHERE id=$1 AND organization_id=$2 FOR UPDATE`, [journeyId, orgId]
     );
     if (!journey) throw new Error('Secuencia no encontrada');
-    if (!['draft', 'paused'].includes(journey.status)) throw new Error('La secuencia no se puede activar desde su estado actual');
+    if (options.retryExcluded && journey.status !== 'completed') throw new Error('Solo se pueden reprocesar excluidos de campañas finalizadas');
+    if (options.retryExcluded) {
+      journey.cooldown_hours = 24;
+      await client.query('UPDATE campaign_journeys SET cooldown_hours=24 WHERE id=$1', [journey.id]);
+    }
+    if (!['draft', 'paused', ...(options.retryExcluded ? ['completed'] : [])].includes(journey.status)) throw new Error('La secuencia no se puede activar desde su estado actual');
     if (journey.status === 'paused') {
       const { rows: [counts] } = await client.query(`
         SELECT COUNT(*) FILTER (WHERE status='active')::int AS active,
@@ -148,9 +153,20 @@ async function activateJourney(orgId, journeyId, pool = db.getPool()) {
             WHEN $4::boolean AND EXISTS (
               SELECT 1 FROM orders o WHERE o.organization_id=e.organization_id AND o.customer_phone=e.phone
                 AND COALESCE(o.status,'')=ANY($5::text[])
+                AND o.delivered_at IS NULL
               UNION ALL
               SELECT 1 FROM shopify_orders so WHERE so.organization_id=e.organization_id AND so.customer_phone=e.phone
-                AND COALESCE(so.crm_status,'')=ANY($5::text[])
+                AND COALESCE(so.crm_status,'nuevo')=ANY($5::text[])
+                AND so.delivered_at IS NULL
+                AND NOT (COALESCE(so.crm_status,'nuevo') IN ('','nuevo') AND (
+                  UPPER(COALESCE(so.fulfillment_status,''))='FULFILLED'
+                  OR UPPER(COALESCE(so.financial_status,'')) IN ('VOIDED','REFUNDED')
+                  OR NULLIF(so.raw_json->>'cancelledAt','') IS NOT NULL
+                  OR (so.shopify_created_at < (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - INTERVAL '60 days'
+                    AND so.delivery_date IS NULL AND COALESCE(so.dispatch_count,0)=0
+                    AND so.last_attempt_at IS NULL AND so.last_attempt_status IS NULL
+                    AND NULLIF(so.delivery_note,'') IS NULL)
+                ))
             ) THEN 'pedido_activo'
             WHEN $6::boolean AND EXISTS (
               SELECT 1 FROM conversations cv WHERE cv.organization_id=e.organization_id AND cv.phone_number=e.phone
@@ -164,6 +180,8 @@ async function activateJourney(orgId, journeyId, pool = db.getPool()) {
           END AS reason
         FROM campaign_journey_enrollments e
         WHERE e.journey_id=$1 AND e.organization_id=$2 AND e.status IN ('draft','excluded')
+          AND e.current_step=0 AND e.last_message_id IS NULL
+          AND (NOT $8::boolean OR e.status='excluded')
       )
       UPDATE campaign_journey_enrollments e
          SET status=CASE WHEN decisions.reason IS NULL THEN 'active' ELSE 'excluded' END,
@@ -175,7 +193,7 @@ async function activateJourney(orgId, journeyId, pool = db.getPool()) {
       RETURNING e.status,e.stop_reason
     `, [journey.id, orgId, journey.cooldown_hours,
       ['promocion', 'reactivacion', 'seguimiento'].includes(journey.objective), ACTIVE_ORDER_STATUSES,
-      journey.stop_on_human, firstStep.wait_hours]);
+      journey.stop_on_human, firstStep.wait_hours, options.retryExcluded === true]);
     const active = evaluated.filter(row => row.status === 'active').length;
     const exclusions = {};
     evaluated.filter(row => row.stop_reason).forEach(row => { exclusions[row.stop_reason] = (exclusions[row.stop_reason] || 0) + 1; });
@@ -277,7 +295,7 @@ async function stopEnrollment(pool, enrollment, reason) {
     [enrollment.journey_id, enrollment.id, enrollment.organization_id, enrollment.current_step, JSON.stringify({ reason })]);
 }
 
-async function runJourneyEnrollments(io = null, now = new Date(), pool = db.getPool()) {
+async function runJourneyEnrollments(io = null, now = new Date(), pool = db.getPool(), scope = {}) {
   if (!isCustomerMessagingHour(now)) return { processed: 0, reason: 'outside_customer_hours' };
   const { rows: due } = await pool.query(`
     UPDATE campaign_journey_enrollments e
@@ -286,10 +304,11 @@ async function runJourneyEnrollments(io = null, now = new Date(), pool = db.getP
        SELECT candidate.id FROM campaign_journey_enrollments candidate
        JOIN campaign_journeys j ON j.id=candidate.journey_id
         WHERE candidate.status='active' AND j.status='active' AND candidate.next_run_at<=NOW()
+          AND ($1::int IS NULL OR j.organization_id=$1) AND ($2::int IS NULL OR j.id=$2)
           AND (candidate.locked_at IS NULL OR candidate.locked_at<NOW()-INTERVAL '15 minutes')
         ORDER BY candidate.next_run_at,candidate.id FOR UPDATE SKIP LOCKED LIMIT 50
      ) RETURNING e.*
-  `);
+  `, [scope.orgId || null, scope.journeyId || null]);
   const templateCache = new Map();
   const campaignCache = new Map();
   let processed = 0;
