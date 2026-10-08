@@ -184,10 +184,12 @@ async function activateJourney(orgId, journeyId, pool = db.getPool(), options = 
           AND (NOT $8::boolean OR e.status='excluded')
       )
       UPDATE campaign_journey_enrollments e
-         SET status=CASE WHEN decisions.reason IS NULL THEN 'active' ELSE 'excluded' END,
-             stop_reason=decisions.reason,
-             next_run_at=CASE WHEN decisions.reason IS NULL THEN NOW()+($7::int*INTERVAL '1 hour') ELSE NULL END,
-             enrolled_at=CASE WHEN decisions.reason IS NULL THEN NOW() ELSE enrolled_at END,
+         SET status=CASE WHEN decisions.reason IS NULL OR ($8::boolean AND decisions.reason='contactado_recientemente') THEN 'active' ELSE 'excluded' END,
+             stop_reason=CASE WHEN $8::boolean AND decisions.reason='contactado_recientemente' THEN NULL ELSE decisions.reason END,
+             next_run_at=CASE WHEN $8::boolean AND decisions.reason='contactado_recientemente' THEN
+               GREATEST(NOW()+($7::int*INTERVAL '1 hour'), (SELECT MAX(c.last_template_sent_at)+($3::int*INTERVAL '1 hour') FROM contacts c WHERE c.organization_id=e.organization_id AND c.phone=e.phone))
+               WHEN decisions.reason IS NULL THEN NOW()+($7::int*INTERVAL '1 hour') ELSE NULL END,
+             enrolled_at=CASE WHEN decisions.reason IS NULL OR ($8::boolean AND decisions.reason='contactado_recientemente') THEN NOW() ELSE enrolled_at END,
              locked_at=NULL,updated_at=NOW()
         FROM decisions WHERE e.id=decisions.id
       RETURNING e.status,e.stop_reason

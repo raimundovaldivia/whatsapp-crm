@@ -120,6 +120,13 @@ test('al activar excluye bajas y contactos recientes antes de reservar el públi
       (1,'history-old','56955555555','nuevo','UNFULFILLED',NOW()-INTERVAL '120 days'),
       (1,'real-retry','56966666666','no_entregado','FULFILLED',NOW()-INTERVAL '40 days'),
       (1,'real-recent','56977777777','nuevo','UNFULFILLED',NOW()-INTERVAL '1 day');`);
+    await query("UPDATE campaign_journey_enrollments SET status='excluded',current_step=0,last_message_id=NULL,stop_reason='contactado_recientemente' WHERE journey_id=$1 AND phone='56933333333'", [journey.id]);
+    await query("UPDATE campaign_journeys SET status='completed' WHERE id=$1", [journey.id]);
+    await query("UPDATE contacts SET last_template_sent_at=NOW()-INTERVAL '2 hours' WHERE phone='56933333333'");
+    const deferred=await journeys.activateJourney(1,journey.id,pool,{retryExcluded:true});
+    assert.equal(deferred.active,1);
+    const queued=(await query("SELECT status,next_run_at>NOW()+INTERVAL '21 hours' AS waits FROM campaign_journey_enrollments WHERE journey_id=$1 AND phone='56933333333'",[journey.id])).rows[0];
+    assert.equal(queued.status,'active'); assert.equal(queued.waits,true);
     const before = (await query('SELECT * FROM shopify_orders ORDER BY id')).rows;
     const historyJourney=await journeys.createJourney(1,1,{name:'Historial',recipients:['56944444444','56955555555','56966666666','56977777777'].map(phone=>({phone,name:'Test'})),steps:[{templateName:'promo'}]},pool);
     const result=await journeys.activateJourney(1,historyJourney.id,pool);
