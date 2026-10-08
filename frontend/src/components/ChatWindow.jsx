@@ -813,7 +813,13 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
     const reader = new FileReader();
     reader.onload = () => {
-      setAttachment({ data: reader.result, mimeType, fileName: file.name, size: file.size });
+      const imageExtension = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+      }[mimeType];
+      const fileName = file.name || (imageExtension ? `imagen-pegada.${imageExtension}` : 'archivo-adjunto');
+      setAttachment({ data: reader.result, mimeType, fileName, size: file.size });
       setError(null);
       inputRef.current?.focus();
     };
@@ -857,6 +863,20 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       return;
     }
     prepareAttachment(files[0]);
+  };
+
+  const handlePaste = (event) => {
+    const imageItems = Array.from(event.clipboardData?.items || [])
+      .filter(item => item.kind === 'file' && ['image/jpeg', 'image/png', 'image/webp'].includes(item.type));
+    if (!imageItems.length) return;
+
+    event.preventDefault();
+    if (imageItems.length > 1) {
+      setError('Pega una imagen por vez para poder revisarla antes de enviarla.');
+      return;
+    }
+
+    prepareAttachment(imageItems[0].getAsFile());
   };
 
   const handleKeyDown = (e) => {
@@ -2514,7 +2534,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           value={inputText}
           onChange={e => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isHumanMode ? 'Escribe un mensaje...' : 'Escribe para responder manualmente...'}
+          onPaste={handlePaste}
+          placeholder={isHumanMode ? 'Escribe un mensaje o pega una imagen...' : 'Escribe o pega una imagen para responder...'}
           rows={1}
           style={{
             flex: 1,
