@@ -2199,21 +2199,19 @@ router.get('/campaigns/:id/follow-up-preview', async (req, res) => {
     const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
     if (campaign.sending_provider === 'evolution') return res.status(409).json({ error: 'El seguimiento programado sólo está disponible para campañas Kapso' });
-    const audience = await require('../services/campaign-follow-up').getFollowUpAudience(req.orgId, req.params.id);
-    const eligible = audience.filter(item => item.eligible);
-    const excluded = audience.filter(item => !item.eligible);
+    const followUpService = require('../services/campaign-follow-up');
+    const audience = await followUpService.getFollowUpAudience(req.orgId, req.params.id);
+    const summary = followUpService.summarizeFollowUpAudience(audience);
     const { rows: [job] } = await getPool().query(
       `SELECT * FROM broadcast_followup_jobs
         WHERE organization_id=$1 AND source_campaign_id=$2 AND status <> 'cancelled'
         ORDER BY created_at DESC LIMIT 1`,
       [req.orgId, campaign.id]
     );
-    const reasonCounts = {};
-    excluded.flatMap(item => item.reasons).forEach(reason => { reasonCounts[reason] = (reasonCounts[reason] || 0) + 1; });
     res.json({
       success: true,
       campaign,
-      summary: { read: audience.length, eligible: eligible.length, excluded: excluded.length, reasons: reasonCounts },
+      summary,
       job: job || null,
       scheduled: Boolean(job && ['scheduled','processing','completed'].includes(job.status)),
       recipients: audience.map(item => ({

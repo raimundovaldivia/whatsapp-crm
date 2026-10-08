@@ -2728,6 +2728,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                               <span>👁 {followUpPreview.summary.read} leyeron</span>
                               <span style={{ color: colors.green, fontWeight: 800 }}>✓ {followUpPreview.summary.eligible} califican</span>
                               <span>⊘ {followUpPreview.summary.excluded} excluidos</span>
+                              <span style={{ color: colors.green, fontWeight: 800 }}>
+                                💰 ${Math.round(Number(followUpPreview.summary.attributedRevenue24h || 0)).toLocaleString('es-CL')} en ventas (24 h)
+                              </span>
                             </div>
                             {Object.entries(followUpPreview.summary.reasons || {}).length > 0 && (
                               <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>
