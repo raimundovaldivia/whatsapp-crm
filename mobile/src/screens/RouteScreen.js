@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import * as ImagePicker from 'expo-image-picker';
 import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute, reorderRouteStops } from '../services/api';
+import { routeStops as stopsOf } from '../utils/routeMap';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
 import { C, R, shadowSoft } from '../theme';
@@ -35,13 +36,6 @@ const STOP_COLORS = {
 };
 
 const PAY_LABEL = { efectivo: '💵 Efectivo', transferencia: '🏦 Transferencia', mixto: '💵🏦 Mixto', otro: 'Otro' };
-
-function stopsOf(route) {
-  const opt = Array.isArray(route?.optimized_route) ? route.optimized_route : [];
-  if (opt.length > 0) return opt;
-  const raw = Array.isArray(route?.orders) ? route.orders : [];
-  return raw.map((o, i) => ({ ...o, stopNumber: i + 1 }));
-}
 
 const stopKeyOf = stop => `${stop.source}_${stop.id}`;
 

@@ -4,20 +4,14 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { getRoute } from '../services/api';
+import { routeStops, stopCoordinates, navigationUrl } from '../utils/routeMap';
 import { stopLabel } from '../utils/stopLabel';
 import { C, R, shadowSoft } from '../theme';
-
-function stopsOf(route) {
-  const optimized = Array.isArray(route?.optimized_route) ? route.optimized_route : [];
-  if (optimized.length) return optimized;
-  return (Array.isArray(route?.orders) ? route.orders : []).map((stop, index) => ({ ...stop, stopNumber: index + 1 }));
-}
 
 function mapHtml(stops, statuses, labelMode) {
   const points = stops
     .map((stop, index) => ({
-      lat: Number(stop.lat),
-      lng: Number(stop.lng),
+      ...stopCoordinates(stop),
       label: String(stopLabel(stop.stopNumber || index + 1, labelMode)),
       name: String(stop.customerName || `Parada ${index + 1}`),
       address: String(stop.fullAddress || 'Sin dirección'),
@@ -45,8 +39,9 @@ points.forEach(p=>{
   const icon=L.divIcon({className:'',html:'<div class="pin '+state+'">'+p.label+'</div>',iconSize:[30,30],iconAnchor:[15,15]});
   L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup('<b>'+escapeHtml(p.label+'. '+p.name)+'</b><br>'+escapeHtml(p.address));
 });
-if(coords.length>1)L.polyline(coords,{color:'#38bdf8',weight:4,opacity:.8,dashArray:'9,7'}).addTo(map);
-if(coords.length)map.fitBounds(coords,{padding:[32,32],maxZoom:15});else map.setView([-29.9027,-71.2519],12);
+window.centerRoute=function(){if(coords.length){map.invalidateSize();map.fitBounds(coords,{padding:[32,32],maxZoom:15});}};
+window.centerRoute();
+window.addEventListener('resize',window.centerRoute);
 function escapeHtml(value){return value.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
 </script></body></html>`;
 }
@@ -71,15 +66,15 @@ export default function RouteMapScreen({ route: navRoute, navigation }) {
   }, [routeId, routeName, navigation]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const stops = stopsOf(deliveryRoute);
+  const stops = routeStops(deliveryRoute);
   const statuses = deliveryRoute?.stop_statuses && typeof deliveryRoute.stop_statuses === 'object' ? deliveryRoute.stop_statuses : {};
-  const located = stops.filter(stop => Number.isFinite(Number(stop.lat)) && Number.isFinite(Number(stop.lng)));
+  const located = stops.filter(stop => stopCoordinates(stop));
   const html = useMemo(() => mapHtml(stops, statuses, labelMode), [JSON.stringify(stops), JSON.stringify(statuses), labelMode]);
   const next = stops.find(stop => !statuses[`${stop.source}_${stop.id}`] || statuses[`${stop.source}_${stop.id}`] === 'pending');
 
   function navigateNext() {
-    if (!next?.fullAddress) return Alert.alert('Sin dirección', 'La siguiente parada no tiene una dirección válida.');
-    const url = PlatformSelectMaps(next.fullAddress);
+    const url = navigationUrl(next);
+    if (!url) return Alert.alert('Sin ubicación', 'La siguiente parada no tiene coordenadas ni una dirección válida.');
     Linking.openURL(url).catch(() => Alert.alert('No se pudo abrir Maps', 'Revisa que Google Maps esté instalado.'));
   }
 
@@ -93,9 +88,13 @@ export default function RouteMapScreen({ route: navRoute, navigation }) {
           <Text style={s.summaryTitle}>{stops.length} paradas en orden</Text>
           <Text style={s.summaryText}>{located.length === stops.length ? 'Todas ubicadas en el mapa' : `${located.length} ubicadas · ${stops.length - located.length} sin coordenadas`}</Text>
         </View>
-        <TouchableOpacity style={s.centerBtn} onPress={() => webRef.current?.reload()}><Text style={s.centerBtnText}>Centrar</Text></TouchableOpacity>
+        <TouchableOpacity style={s.centerBtn} disabled={!located.length} onPress={() => webRef.current?.injectJavaScript('window.centerRoute && window.centerRoute(); true;')}><Text style={s.centerBtnText}>Centrar</Text></TouchableOpacity>
       </View>
-      <WebView
+      <Text style={s.mapHint}>El mapa muestra las paradas. Usa «Abrir navegación» para ver el recorrido por calles.</Text>
+      {!located.length ? <View style={s.center}>
+        <Text style={s.summaryTitle}>Sin ubicaciones para mostrar</Text>
+        <Text style={s.emptyText}>Esta ruta no tiene coordenadas válidas. Puedes abrir la dirección de la siguiente parada en Google Maps.</Text>
+      </View> : <WebView
         ref={webRef}
         source={{ html }}
         originWhitelist={['*']}
@@ -104,7 +103,7 @@ export default function RouteMapScreen({ route: navRoute, navigation }) {
         style={s.map}
         startInLoadingState
         renderLoading={() => <View style={s.mapLoading}><ActivityIndicator color={C.green} /><Text style={s.loadingText}>Cargando mapa…</Text></View>}
-      />
+      />}
       {next && (
         <View style={s.footer}>
           <View style={{ flex: 1 }}>
@@ -119,10 +118,6 @@ export default function RouteMapScreen({ route: navRoute, navigation }) {
   );
 }
 
-function PlatformSelectMaps(address) {
-  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}&travelmode=driving`;
-}
-
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, backgroundColor: C.bg },
@@ -134,6 +129,8 @@ const s = StyleSheet.create({
   summaryText: { color: C.muted, fontSize: 11, marginTop: 3 },
   centerBtn: { borderWidth: 1, borderColor: C.blue + '66', backgroundColor: C.blue + '1f', paddingHorizontal: 13, paddingVertical: 8, borderRadius: R.sm },
   centerBtnText: { color: C.blue, fontSize: 12, fontWeight: '700' },
+  mapHint: { color: C.muted, fontSize: 11, paddingHorizontal: 16, paddingVertical: 7 },
+  emptyText: { color: C.muted, textAlign: 'center', lineHeight: 20 },
   map: { flex: 1, backgroundColor: C.bg },
   mapLoading: { ...StyleSheet.absoluteFillObject, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { color: C.muted, fontSize: 12 },
