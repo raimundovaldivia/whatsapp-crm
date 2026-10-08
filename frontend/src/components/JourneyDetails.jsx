@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { purchaseAgeLabel } from '../utils/broadcast-audience.mjs';
+const reasonLabels = { baja_marketing:'Pidió no recibir promociones', otra_secuencia_activa:'Incluido en otra campaña activa', pedido_activo:'Tiene un pedido marcado como activo', atencion_humana:'Conversación en atención humana', contactado_recientemente:'Recibió una plantilla dentro del descanso entre campañas', respondio:'Respondió al mensaje', secuencia_no_activa:'Campaña no activa', mensaje_anterior_fallido:'Falló el mensaje anterior' };
+const stateLabels = { draft:'Borrador', active:'Pendiente de procesamiento', excluded:'Excluido', completed:'Procesado', failed:'Fallido', stopped:'Detenido' };
 const modes = [['first_name','Primer nombre'],['full_name','Nombre completo'],['city','Ciudad'],['phone','Teléfono'],['last_order_date','Fecha última compra'],['days_since_order','Días sin comprar'],['total_orders','Cantidad de pedidos'],['fixed','Texto fijo']];
 export default function JourneyDetails({ id, onClose, onSaved }) {
   const { colors:c } = useTheme();
@@ -34,13 +36,16 @@ export default function JourneyDetails({ id, onClose, onSaved }) {
             </div>;})}
           </fieldset>
         </section>)}
+        <h3>Estado de los envíos</h3>
+        {Object.entries(journey.enrollments.reduce((counts,e)=>{ const label=e.stop_reason ? (reasonLabels[e.stop_reason] || e.stop_reason) : (stateLabels[e.status] || e.status); counts[label]=(counts[label] || 0)+1; return counts; },{})).map(([label,count])=><p key={label}><strong>{count}</strong> · {label}</p>)}
+        <p style={{fontSize:12}}>Procesado significa que se completó el paso; consulta Historial para confirmar entrega o lectura. Los pendientes se revisan automáticamente cada 10 minutos dentro del horario de envío.</p>
         <h3>Vista previa por destinatario</h3>
         <select aria-label="Destinatario de vista previa" value={recipient} onChange={e=>{setRecipient(e.target.value);setMessages([]);}} style={{...style,maxWidth:'100%'}}>{journey.enrollments.map(e=><option key={e.id} value={e.id}>{e.contact_name} · {e.phone}</option>)}</select>
         <button onClick={preview} disabled={busy || !recipient} style={{...style,marginLeft:8}}>Ver mensaje personalizado</button>
         {messages.map((m,i)=><pre key={i} style={{whiteSpace:'pre-wrap',background:c.bgCard,padding:16,borderRadius:10,fontFamily:'inherit'}}>{m}</pre>)}
         {saved && <p role="status" style={{color:c.green}}>{saved}</p>}
         {journey.status==='draft' && <button disabled={busy} onClick={save} style={{...style,marginTop:16,color:c.green}}>Guardar cambios del borrador</button>}
-        <details style={{marginTop:16}}><summary>Ver destinatarios ({journey.enrollments.length})</summary>{journey.enrollments.map(e=><p key={e.id}>{e.contact_name} · {e.phone} · {e.status}</p>)}</details>
+        <details style={{marginTop:16}}><summary>Ver destinatarios ({journey.enrollments.length})</summary>{journey.enrollments.map(e=><p key={e.id}>{e.contact_name} · {e.phone} · {stateLabels[e.status] || e.status}{e.stop_reason ? ` · ${reasonLabels[e.stop_reason] || e.stop_reason}` : ''}{e.next_run_at ? ` · Programado: ${new Date(e.next_run_at).toLocaleString('es-CL', {timeZone:'America/Santiago'})}` : ''}</p>)}</details>
       </>}
     </div>
   </div>;
