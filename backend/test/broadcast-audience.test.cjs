@@ -28,3 +28,15 @@ test('changing audience cannot send to selected contacts hidden by the filter', 
   selected.delete('40');
   assert.equal(selectedAudience(contacts.filter(c => matchesPurchaseAge(c, '30', now)), selected).length, 0);
 });
+
+test('campaign ranges include boundaries without overlapping or including unknown purchases', async () => {
+  const { matchesPurchaseAge } = await import('../../frontend/src/utils/broadcast-audience.mjs');
+  const now = Date.parse('2026-10-08T12:00:00Z');
+  for (const age of [0, 6.99, 7, 29, 29.99, 30, 60, 60.99, 61, 90]) {
+    const contact = { last_order_at: new Date(now - age * 86400000).toISOString() };
+    assert.equal(matchesPurchaseAge(contact,'range_7_29',now),age >= 7 && age < 30);
+    assert.equal(matchesPurchaseAge(contact,'range_30_60',now),age >= 30 && age < 61);
+  }
+  assert.equal(matchesPurchaseAge({},'range_7_29',now),false);
+  assert.equal(matchesPurchaseAge({last_order_at:'bad'},'range_30_60',now),false);
+});

@@ -8,7 +8,7 @@ import {
 
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
-import { matchesPurchaseAge, selectedAudience } from '../utils/broadcast-audience.mjs';
+import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel } from '../utils/broadcast-audience.mjs';
 
 function consolidateVisibleCandidates(rows = []) {
   const grouped = new Map();
@@ -2005,7 +2005,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       sendingProvider: selectedMethod.provider,
       sendingChannelId: selectedMethod.channelId,
       sendingLabel: selectedMethod.label,
-      audienceLabel: purchaseAge === 'all' ? 'Todos los contactos filtrados' : `Último pedido hace más de ${purchaseDays} días`,
+      audienceLabel: purchaseAgeLabel(purchaseDays),
       ...directPacing,
       testMode,
       testPhone: TEST_PHONE,
@@ -2295,7 +2295,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
               <div style={{ marginTop: 14, padding: '11px 13px', borderRadius: 10, backgroundColor: `${colors.blue}10`, border: `1px solid ${colors.blue}2d`, color: colors.textSecondary, fontSize: 12 }}>
                 <strong style={{ color: colors.textPrimary }}>Público actual: {audience.length} contacto(s).</strong>{' '}
-                Se guarda una fotografía exacta de los seleccionados y de estos filtros: {audienceType === 'natural' ? 'personas naturales' : audienceType === 'empresa' ? 'empresas' : 'personas y empresas'} · {({ all: 'todos los segmentos', lead: 'sin compras', new: '1 pedido', repeat: '2 a 4 pedidos', loyal: '5 o más pedidos' })[audienceSegment]} · {purchaseAge === 'all' ? 'cualquier fecha de compra' : `más de ${purchaseDays} días sin comprar`}{prodTerm.trim() ? ` · producto “${prodTerm.trim()}”` : ''}{deliveryPhones ? ' · no entregados ayer' : ''}.
+                Se guarda una fotografía exacta de los seleccionados y de estos filtros: {audienceType === 'natural' ? 'personas naturales' : audienceType === 'empresa' ? 'empresas' : 'personas y empresas'} · {({ all: 'todos los segmentos', lead: 'sin compras', new: '1 pedido', repeat: '2 a 4 pedidos', loyal: '5 o más pedidos' })[audienceSegment]} · {purchaseAgeLabel(purchaseDays)}{prodTerm.trim() ? ` · producto “${prodTerm.trim()}”` : ''}{deliveryPhones ? ' · no entregados ayer' : ''}.
               </div>
 
               <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
@@ -2491,6 +2491,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             onChange={e => { setPurchaseAge(e.target.value); setPreviewIdx(0); }}
             style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
             <option value="all">Cualquier fecha</option>
+            <option value="range_7_29">Entre 7 y 29 días</option>
+            <option value="range_30_60">Entre 30 y 60 días</option>
             {[7, 15, 30, 60, 90].map(days => <option key={days} value={String(days)}>Hace más de {days} días</option>)}
             <option value="custom">Otra cantidad de días</option>
           </select>
