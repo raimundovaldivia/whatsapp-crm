@@ -337,7 +337,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
   ].sort((a, b) => b.date - a.date);
 
   // Aplicar filtros
-  let filtered = filterByDate(allNormalized, dateFilter, customDate);
+  let filtered = statusFilter === 'upcoming' ? allNormalized : filterByDate(allNormalized, dateFilter, customDate);
   filtered = filterBySource(filtered, sourceFilter);
   if (statusFilter !== 'all') {
     filtered = filtered.filter(o => {
@@ -346,6 +346,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
       // Mapeos legacy bot → CRM (payment_received = pagado pero pendiente envío)
       const legacyMap = { draft: 'nuevo', sent: 'nuevo', payment_received: 'por_despachar' };
       const effective = legacyMap[crmKey] || crmKey;
+      if (statusFilter === 'upcoming') return String(o.raw.delivery_date || '').slice(0, 10) > new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago' }).format(new Date()) && !['cancelled', 'entregado'].includes(effective);
       return effective === statusFilter;
     });
   }
@@ -1096,6 +1097,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
 
           {/* Estado CRM */}
           {[{ key: 'all', label: 'Todos', color: colors.textSecondary, bg: colors.bgPanel },
+            { key: 'upcoming', label: '📅 Próximos', color: '#c4b5fd', bg: '#251a3d' },
             ...CRM_STATUSES.map(s => ({ key: s.key, label: s.label, color: s.color, bg: s.bg })),
           ].map(({ key, label, color, bg }) => (
             <button key={key} onClick={() => setStatusFilterR(key)}
@@ -1391,11 +1393,11 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
           </div>
         )}
         {/* Badge: el cliente pidió que se le entregue otro día */}
-        {order.raw?.delivery_date && (() => {
-          const iso = String(order.raw.delivery_date).slice(0, 10);
+        {order.delivery_date && (() => {
+          const iso = String(order.delivery_date).slice(0, 10);
           const [y, m, d] = iso.split('-');
           return (
-            <div title={order.raw.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: colors.purpleSofter, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid ' + colors.purpleSoft + '55', flexShrink: 0 }}>
+            <div title={order.delivery_note || ''} style={{ backgroundColor: '#251a3d', color: colors.purpleSofter, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid ' + colors.purpleSoft + '55', flexShrink: 0 }}>
               📅 Entregar el {d}/{m}
             </div>
           );
@@ -1550,6 +1552,9 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
                 {syncing ? 'Sincronizando...' : 'Sincronizar'}
               </button>
             )}
+            {!['cancelled', 'entregado', 'en_camino', 'asignado_ruta'].includes(order.status) && (
+              <DeliverySchedule source="bot" id={order.id} currentDate={order.delivery_date} onSaved={onItemsUpdated} />
+            )}
             {/* Botones logísticos en cadena según estado */}
             {['sent', 'nuevo', 'draft', 'payment_received'].includes(order.status) && (
               <button onClick={() => onStatusChange(order.id, 'por_despachar')} style={{ display: 'flex', alignItems: 'center', gap: '5px', backgroundColor: '#2e1500', color: colors.warning, padding: '7px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid ' + colors.warning + '33', cursor: 'pointer' }}>
@@ -1590,6 +1595,37 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
       )}
     </div>
   );
+}
+
+function DeliverySchedule({ source, id, currentDate, onSaved }) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago' }).format(new Date());
+  const style = { padding: '7px 12px', borderRadius: 8, background: colors.bgHover, color: colors.textPrimary, border: `1px solid ${colors.border}` };
+  const save = async () => {
+    setBusy(true); setError('');
+    try {
+      await api.patch('/orders/schedule-delivery', { source, id, date });
+      setOpen(false);
+      await onSaved?.();
+    } catch (err) { setError(err.response?.data?.error || 'No se pudo guardar la fecha.'); }
+    finally { setBusy(false); }
+  };
+  return <div>
+    <button style={{ ...style, cursor: 'pointer', color: '#c4b5fd' }} onClick={() => { setDate(String(currentDate || today).slice(0, 10)); setError(''); setOpen(!open); }}>
+      📅 {currentDate ? 'Cambiar fecha' : 'Programar entrega'}
+    </button>
+    {open && <div style={{ padding: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <label>Entrega el <input aria-label="Fecha de entrega" type="date" min={today} value={date} onChange={e => setDate(e.target.value)} disabled={busy} style={style} /></label>
+      <button style={style} disabled={busy || !date || date < today} onClick={save}>{busy ? 'Guardando…' : 'Guardar fecha'}</button>
+      <button style={style} disabled={busy} onClick={() => setOpen(false)}>Cerrar</button>
+      <small style={{ width: '100%', color: colors.textSecondary }}>Si eliges una fecha futura, quedará en Próximos y estará disponible para despacho desde ese día.</small>
+      {error && <span role="alert" style={{ color: colors.red }}>{error}</span>}
+    </div>}
+  </div>;
 }
 
 // ─── Card pedido Shopify ──────────────────────────────────────────
@@ -1741,6 +1777,9 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
               )}
 
               <div style={{ color: colors.tealSoft }}>🛍️ Canal: Shopify</div>
+              {!['cancelled', 'entregado', 'en_camino', 'asignado_ruta'].includes(order.crmStatus) && order.fulfillmentStatus !== 'FULFILLED' && !order.raw?.cancelled_at && (
+                <DeliverySchedule source="shopify" id={order.rawId} currentDate={order.raw?.delivery_date} onSaved={onAddressUpdated} />
+              )}
             </div>
           </div>
         </div>
