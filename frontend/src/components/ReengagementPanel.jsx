@@ -2667,6 +2667,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             const pending = Number(campaign.pending_count || 0);
             const uncertain = Number(campaign.unknown_count || 0);
             const isOpen = String(expandedCampaign) === String(campaign.id);
+            const repliedRecipients = isOpen ? campaignRecipients.filter(recipient => recipient.replied_at) : [];
             return (
               <div key={campaign.id} style={{ border: `1px solid ${(failed || campaign.status === 'paused_payment') ? colors.red + '55' : colors.border}`, borderRadius: 9, backgroundColor: colors.bgCard, overflow: 'hidden' }}>
                 <button onClick={() => toggleCampaignDetails(campaign)} style={{ width: '100%', border: 'none', background: 'transparent', color: colors.textPrimary, padding: '10px 12px', cursor: 'pointer', textAlign: 'left' }}>
@@ -2679,6 +2680,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, fontWeight: 700 }}>
                       {confirmedSent > 0 && <span title="Mensajes que Meta confirmó como entregados o leídos" style={{ color: colors.textPrimary }}>📤 {confirmedSent} enviados confirmados</span>}
+                      {repliedRecipients.length > 0 && <span title="Clientes que respondieron durante las 24 horas posteriores al envío" style={{ color: colors.blue }}>💬 {repliedRecipients.length} respondieron</span>}
                       {read > 0 && <span style={{ color: colors.green }}>👁 {read} leídos</span>}
                       {delivered > 0 && <span style={{ color: colors.green }}>✓ {delivered} entregados</span>}
                       {accepted > 0 && <span style={{ color: colors.blue }}>↗ {accepted} aceptados</span>}
@@ -2701,6 +2703,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 </div>}
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${colors.border}`, padding: 10, maxHeight: 240, overflowY: 'auto' }}>
+                    {repliedRecipients.length > 0 && (
+                      <div style={{ border: `1px solid ${colors.blue}55`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: `${colors.blue}0d`, color: colors.textSecondary, fontSize: 11, lineHeight: 1.45 }}>
+                        <strong style={{ color: colors.blue }}>💬 Respondieron ({repliedRecipients.length}):</strong>{' '}
+                        {repliedRecipients.map(recipient => recipient.contact_name || recipient.original_phone || recipient.destination_phone).join(' · ')}
+                      </div>
+                    )}
                     {(campaign.reasons || []).some(reason => String(reason.error_code || '') === '131042') && (
                       <div style={{ border: `1px solid ${colors.red}66`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: `${colors.red}0d` }}>
                         <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>Envíos bloqueados por facturación de Meta</div>
@@ -2758,8 +2766,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                           <div style={{ color: colors.textPrimary, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis' }}>{recipient.contact_name || recipient.original_phone || recipient.destination_phone}</div>
                           {(recipient.display_error_message || recipient.error_message || recipient.delivery_error) && <div style={{ color: colors.red, marginTop: 2 }}>{recipient.display_error_message || recipient.error_message || 'WhatsApp informó un fallo de entrega'}{(recipient.display_error_code || recipient.error_code) ? ` (código ${recipient.display_error_code || recipient.error_code})` : ''}</div>}
                         </div>
-                        <div style={{ color: ['read','delivered'].includes(recipient.current_status) ? colors.green : recipient.current_status === 'failed' ? colors.red : colors.textSecondary, fontWeight: 700, textAlign: 'right' }}>
-                          {({ read: 'Leído', delivered: 'Entregado', sent: 'Aceptado', pending: 'Aceptado', accepted: 'Aceptado', failed: 'Fallido', skipped: 'Omitido' })[recipient.current_status] || recipient.current_status}
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ color: ['read','delivered'].includes(recipient.current_status) ? colors.green : recipient.current_status === 'failed' ? colors.red : colors.textSecondary, fontWeight: 700 }}>
+                            {({ read: 'Leído', delivered: 'Entregado', sent: 'Aceptado', pending: 'Aceptado', accepted: 'Aceptado', failed: 'Fallido', skipped: 'Omitido' })[recipient.current_status] || recipient.current_status}
+                          </div>
+                          {recipient.replied_at && <div style={{ color: colors.blue, fontWeight: 800, marginTop: 2 }}>💬 Respondió</div>}
                         </div>
                       </div>
                     ))}

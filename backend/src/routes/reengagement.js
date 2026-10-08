@@ -2096,7 +2096,19 @@ router.get('/campaigns/:id', async (req, res) => {
          COALESCE(r.error_message,
            CASE WHEN m.delivery_error->>'code' = '131042'
                 THEN 'Meta bloqueó el envío por un problema de pago o elegibilidad'
-                ELSE m.delivery_error->>'message' END) AS display_error_message
+                ELSE m.delivery_error->>'message' END) AS display_error_message,
+         (
+           SELECT MIN(mi.created_at)
+             FROM conversations cv
+             JOIN messages mi ON mi.conversation_id = cv.id
+            WHERE cv.organization_id = $2
+              AND RIGHT(regexp_replace(COALESCE(cv.phone_number, ''), '[^0-9]', '', 'g'), 9)
+                  = RIGHT(regexp_replace(COALESCE(r.destination_phone, r.original_phone, ''), '[^0-9]', '', 'g'), 9)
+              AND mi.direction = 'inbound'
+              AND m.created_at IS NOT NULL
+              AND mi.created_at > m.created_at
+              AND mi.created_at <= m.created_at + INTERVAL '24 hours'
+         ) AS replied_at
        FROM broadcast_campaign_recipients r
        LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
        WHERE r.campaign_id = $1 AND r.organization_id = $2
