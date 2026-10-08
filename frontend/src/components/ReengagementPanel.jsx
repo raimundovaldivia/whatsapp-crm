@@ -2661,6 +2661,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             const accepted = Number(campaign.accepted_count || 0);
             const delivered = Number(campaign.delivered_count || 0);
             const read = Number(campaign.read_count || 0);
+            const confirmedSent = read + delivered;
             const failed = Number(campaign.failed_count || 0);
             const skipped = Number(campaign.skipped_count || 0);
             const pending = Number(campaign.pending_count || 0);
@@ -2677,6 +2678,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                       {String(statusCheckCampaign) === String(campaign.id) && <div style={{ color: colors.blue, fontSize: 10, fontWeight: 750, marginTop: 4 }}>↻ Verificando cada envío con Meta…</div>}
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, fontWeight: 700 }}>
+                      {confirmedSent > 0 && <span title="Mensajes que Meta confirmó como entregados o leídos" style={{ color: colors.textPrimary }}>📤 {confirmedSent} enviados confirmados</span>}
                       {read > 0 && <span style={{ color: colors.green }}>👁 {read} leídos</span>}
                       {delivered > 0 && <span style={{ color: colors.green }}>✓ {delivered} entregados</span>}
                       {accepted > 0 && <span style={{ color: colors.blue }}>↗ {accepted} aceptados</span>}
