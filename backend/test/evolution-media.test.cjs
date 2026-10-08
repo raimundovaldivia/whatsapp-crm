@@ -44,7 +44,7 @@ test('media downloads use the configured Evolution endpoint, never untrusted med
   await assert.rejects(service.downloadMessageMedia(parsed, config), /10 MB/);
 });
 
-function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, scheduleResponse = null } = {}) {
+function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, scheduleResponse = null, onProcess = () => {} } = {}) {
   const saved = [], sent = [], pipelineCalls = [], queries = [];
   const conv = { id: 5, agent_mode: mode, agent_mode_changed_at: new Date().toISOString() };
   const service = load('src/services/inbound-text.js', {
@@ -59,12 +59,12 @@ function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, sche
     './conversation-mode': { resumeDivaOnInbound: async () => false },
     './notifications': { notifyAdminHumanPendingReply: async () => {} },
     './commercial': { permitted: async () => permitted },
-    './pipeline': { processMessage: async (...args) => { pipelineCalls.push(args); return { response: 'Anotado', agentType: 'orders' }; } },
+    './pipeline': { processMessage: async (...args) => { pipelineCalls.push(args); onProcess(conv); return { response: 'Anotado', agentType: 'orders' }; } },
     './whatsapp-provider': { sendTextMessage: async (...args) => { sent.push(args); return { messageId: 'OUT1' }; }, messageId: result => result.messageId },
   });
   const invoke = prepareMedia => service.processInboundText({ org: { id: 1 }, whatsappConfig: config, whatsappChannelId: 9,
     parsed: { from: '56911112222', messageId: 'MEDIA1', type: 'audio', text: '🎤 [Audio]', mediaId: evolution.mediaReference(9, 'MEDIA1') }, prepareMedia, scheduleResponse });
-  return { saved, sent, pipelineCalls, queries, invoke };
+  return { saved, sent, pipelineCalls, queries, invoke, conv };
 }
 
 test('voice transcript reaches the sales pipeline and history; reply stays on its Evolution channel', async () => {
@@ -210,4 +210,32 @@ test('Evolution stores every text before producing one combined reply', async ()
   assert.equal(h.pipelineCalls.length,1);
   assert.equal(h.pipelineCalls[0][2],'🎤 [Audio]\n🎤 [Audio]');
   assert.equal(h.sent.length,1);
+});
+
+
+test('phone takeover cancels a queued reply before the pipeline runs', async () => {
+  let queued;
+  const h = inboundHarness({scheduleResponse: fn => { queued = fn; }});
+  await h.invoke(null);
+  h.conv.agent_mode = 'human';
+  await queued();
+  assert.equal(h.pipelineCalls.length, 0);
+  assert.equal(h.sent.length, 0);
+});
+
+test('phone takeover during audio processing suppresses the fallback reply', async () => {
+  const h = inboundHarness();
+  await h.invoke(async () => {
+    h.conv.agent_mode = 'human';
+    return {fallback:'No pude transcribirlo'};
+  });
+  assert.equal(h.sent.length, 0);
+});
+
+
+test('phone takeover while AI prepares text prevents transmission', async () => {
+  const h = inboundHarness({onProcess: conv => { conv.agent_mode = 'human'; }});
+  await h.invoke(null);
+  assert.equal(h.pipelineCalls.length, 1);
+  assert.equal(h.sent.length, 0);
 });

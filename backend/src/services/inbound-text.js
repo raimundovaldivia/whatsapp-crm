@@ -50,6 +50,8 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     }
   }
   const respond = async () => {
+    const beforeResponse = await db.getConversationById(conversation.id);
+    if (!beforeResponse || beforeResponse.agent_mode !== 'ai') return;
     let textToProcess = parsed.text;
     if (scheduleResponse) {
       const messages = await db.getLastMessages(conversation.id, 20);
@@ -70,6 +72,8 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     result.response = 'Para asegurarme de entenderte bien, ¿qué necesitas confirmar?';
   }
 
+  const beforeSend = await db.getConversationById(conversation.id);
+  if (!beforeSend || beforeSend.agent_mode === 'human') return;
   const sentResult = await provider.sendTextMessage(parsed.from, result.response, whatsappConfig);
   const outMsg = await db.saveMessage({
     conversationId: conversation.id,

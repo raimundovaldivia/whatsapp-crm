@@ -80,7 +80,7 @@ test('el webhook de conexión actualiza el canal sin iniciar el pipeline de mens
 
 
 test('phone messages sync to the right conversation without calling AI or duplicating echoes', async () => {
-  const records = new Map(), events = [];
+  const records = new Map(), events = [], modes = [];
   let inboundCalls = 0;
   const router = load('src/routes/evolution-webhook.js', {
     '../db/database': {
@@ -88,6 +88,7 @@ test('phone messages sync to the right conversation without calling AI or duplic
       getWhatsappChannel: async () => ({ id: 9, provider: 'evolution' }),
       upsertConversation: async (org, phone, name, channel) => { assert.equal(phone, '56911112222'); assert.equal(name, null); assert.equal(channel, 9); return {id:77}; },
       saveMessage: async message => { if (records.has(message.whatsappMessageId)) return null; records.set(message.whatsappMessageId,message); return {id:1,...message}; },
+      setAgentMode: async (id, mode) => modes.push([id, mode]),
       updateConversationLastMessage: async () => {}, getConversationById: async () => ({id:77}),
     },
     '../services/evolution-whatsapp': evolution,
@@ -98,7 +99,9 @@ test('phone messages sync to the right conversation without calling AI or duplic
   const req = {params:{orgId:'1',channelId:'9'},body:{event:'messages.upsert',data:{key:{id:'PHONE1',fromMe:true,remoteJid:'56911112222@s.whatsapp.net'},pushName:'Nombre del vendedor',message:{conversation:'Hola Patricia, te ayudo por aquí'}}}};
   await handler(router,'post','/1/9/token')(req,response());
   await handler(router,'post','/1/9/token')(req,response());
-  assert.equal(records.size,1); assert.equal(events.length,1); assert.equal(inboundCalls,0);
+  assert.equal(records.size,1); assert.equal(events.length,2); assert.equal(inboundCalls,0);
+  assert.deepEqual(modes, [[77, 'human']]);
+  assert.equal(events[0][0], 'agent_mode_changed_1');
   assert.equal(records.get('PHONE1').sentBy,'human');
   assert.equal(records.get('PHONE1').direction,'outbound');
 });
@@ -130,4 +133,21 @@ test('response window allows composing without delaying own echoes', () => {
   body.data.key.fromMe = true;
   assert.equal(inbox.streamInfo('evolution',body,'messages.upsert').delay,0);
   assert.equal(inbox.streamInfo('kapso',{message:{text:{body:'Uno porfa'}}},'whatsapp.message.received').delay,8);
+});
+
+
+test('API echo arriving before send acknowledgement is not a phone intervention', async () => {
+  let resolveSend;
+  const service = load('src/services/evolution-whatsapp.js', {
+    axios: { create: () => ({ post: () => new Promise(resolve => { resolveSend = resolve; }) }) },
+  });
+  const config = {id: 9, organization_id: 1, evolution_api_url:'https://example.test', evolution_api_key:'test', evolution_instance:'ventas'};
+  const sending = service.sendTextMessage('56911112222', 'Hola', config);
+  await Promise.resolve();
+  const earlyEcho = service.isApiMessage('API1', config);
+  resolveSend({data:{key:{id:'API1'}}});
+  await sending;
+  assert.equal(await earlyEcho, true);
+  assert.equal(await service.isApiMessage('PHONE1', config), false);
+  assert.equal(await service.isApiMessage('API1', {...config, id:10}), false);
 });
