@@ -1406,7 +1406,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   const loadCampaigns = useCallback(() => {
     setCampaignsLoading(true);
-    return api.get('/reengagement/campaigns?limit=20')
+    return api.get('/reengagement/campaigns?limit=50')
       .then(res => setCampaigns(res.data.campaigns || []))
       .catch(() => setCampaigns([]))
       .finally(() => setCampaignsLoading(false));
