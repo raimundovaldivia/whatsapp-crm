@@ -51,6 +51,8 @@ export const conversationsAPI = {
   getMessages: (id) => api.get(`/conversations/${id}/messages`).then(r => r.data.data),
   sendMessage: (id, text) => api.post(`/conversations/${id}/messages`, { text }).then(r => r.data.data),
   sendMedia: (id, data) => api.post(`/conversations/${id}/media`, data, { timeout: 120000 }).then(r => r.data.data),
+  getPaymentOptions: (id) => api.get(`/conversations/${id}/payment-options`).then(r => r.data.data),
+  sendPaymentOptions: (id) => api.post(`/conversations/${id}/payment-options`).then(r => r.data.data),
   setAgentMode: (id, mode) => api.patch(`/conversations/${id}/agent-mode`, { mode }).then(r => r.data.data),
   markAsRead: (id) => api.patch(`/conversations/${id}/read`),
   getOrders: (id) => api.get(`/conversations/${id}/orders`).then(r => r.data.data),

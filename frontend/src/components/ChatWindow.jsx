@@ -412,6 +412,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [templateVarMap, setTemplateVarMap] = useState({}); // { "1": "name"|"manual" }
   const [templateManualVars, setTemplateManualVars] = useState({}); // { "1": "texto" }
   const [sendingTemplate, setSendingTemplate] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentPreview, setPaymentPreview] = useState('');
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentSending, setPaymentSending] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -680,6 +685,36 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       setTemplatesError(err.response?.data?.error || 'Error enviando template');
     } finally {
       setSendingTemplate(false);
+    }
+  };
+
+  const openPaymentOptions = async () => {
+    setShowPaymentModal(true);
+    setPaymentPreview('');
+    setPaymentError('');
+    setPaymentLoading(true);
+    try {
+      const result = await conversationsAPI.getPaymentOptions(conversation.id);
+      setPaymentPreview(result.text || '');
+    } catch (err) {
+      setPaymentError(err.response?.data?.error || 'No se pudieron cargar las opciones de pago.');
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  const sendPaymentOptions = async () => {
+    if (!paymentPreview || paymentSending) return;
+    setPaymentSending(true);
+    setPaymentError('');
+    try {
+      await conversationsAPI.sendPaymentOptions(conversation.id);
+      setShowPaymentModal(false);
+      setError(null);
+    } catch (err) {
+      setPaymentError(err.response?.data?.message || err.response?.data?.error || 'No se pudieron enviar las opciones de pago.');
+    } finally {
+      setPaymentSending(false);
     }
   };
 
@@ -1268,6 +1303,22 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             <ShoppingCart size={13} />
             {!isMobile && 'Nueva orden'}
           </button>
+          <button
+            onClick={openPaymentOptions}
+            title="Enviar opciones de pago"
+            style={{
+              backgroundColor: 'transparent',
+              border: `1px solid ${colors.borderStrong}`,
+              borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
+              color: colors.green,
+              cursor: 'pointer',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', transition: 'all 0.15s',
+            }}
+          >
+            <CircleDollarSign size={13} />
+            {!isMobile && 'Pago'}
+          </button>
           {!conversation.whatsapp_channel_id && <button
             onClick={openTemplateModal}
             title="Enviar template de WhatsApp"
@@ -1393,6 +1444,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 }}>
                   <MobileHeaderAction icon={<ShoppingCart size={17} />} label="Crear pedido" colors={colors}
                     onClick={() => { setMobileActionsOpen(false); openOrderModal(); }} />
+                  <MobileHeaderAction icon={<CircleDollarSign size={17} />} label="Enviar opciones de pago" colors={colors}
+                    onClick={() => { setMobileActionsOpen(false); openPaymentOptions(); }} />
                   <MobileHeaderAction icon={<Pin size={17} fill={isPinned ? 'currentColor' : 'none'} />}
                     label={isPinned ? 'Quitar de fijados' : 'Fijar chat arriba'} colors={colors} active={isPinned}
                     disabled={pinSaving} onClick={() => { setMobileActionsOpen(false); handleTogglePin(); }} />
@@ -2322,6 +2375,58 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   {creatingOrder ? 'Creando...' : 'Crear orden'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPaymentModal && (
+        <div style={{
+          position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.66)',
+          zIndex: 105, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+        }} onClick={() => !paymentSending && setShowPaymentModal(false)}>
+          <div style={{
+            width: '100%', maxWidth: '500px', backgroundColor: colors.bgPanel,
+            border: `1px solid ${colors.border}`, borderRadius: '14px', overflow: 'hidden',
+            boxShadow: '0 20px 60px rgba(0,0,0,.42)',
+          }} onClick={event => event.stopPropagation()}>
+            <div style={{ padding: '16px 18px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'9px' }}>
+                <CircleDollarSign size={18} color={colors.green} />
+                <div>
+                  <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '15px' }}>Enviar opciones de pago</div>
+                  <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '2px' }}>Revisa el mensaje antes de enviarlo al cliente.</div>
+                </div>
+              </div>
+              <button onClick={() => setShowPaymentModal(false)} disabled={paymentSending}
+                style={{ border:0, background:'none', color:colors.textSecondary, cursor:'pointer', padding:'4px' }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding:'18px' }}>
+              {paymentLoading ? (
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', minHeight:'110px', color:colors.textSecondary, fontSize:'13px' }}>
+                  <Loader size={18} style={{ animation:'spin 1s linear infinite' }} /> Cargando datos configurados…
+                </div>
+              ) : paymentError ? (
+                <div role="alert" style={{ color:colors.red, fontSize:'13px', display:'flex', gap:'7px', alignItems:'flex-start', padding:'12px', backgroundColor:`${colors.red}12`, borderRadius:'8px' }}>
+                  <AlertCircle size={16} style={{ flexShrink:0 }} /> {paymentError}
+                </div>
+              ) : (
+                <div style={{ padding:'14px 16px', backgroundColor:colors.bgSub, border:`1px solid ${colors.border}`, borderRadius:'9px', color:colors.textPrimary, fontSize:'13px', lineHeight:1.55, whiteSpace:'pre-wrap' }}>
+                  {paymentPreview}
+                </div>
+              )}
+            </div>
+            <div style={{ padding:'12px 18px', borderTop:`1px solid ${colors.border}`, display:'flex', justifyContent:'flex-end', gap:'8px' }}>
+              <button onClick={() => setShowPaymentModal(false)} disabled={paymentSending}
+                style={{ padding:'8px 15px', borderRadius:'8px', backgroundColor:'transparent', color:colors.textSecondary, border:`1px solid ${colors.borderStrong}`, cursor:'pointer', fontSize:'13px' }}>
+                Cancelar
+              </button>
+              <button onClick={sendPaymentOptions} disabled={paymentLoading || paymentSending || !paymentPreview || !!paymentError}
+                style={{ padding:'8px 17px', borderRadius:'8px', border:'none', backgroundColor:paymentPreview && !paymentError ? colors.green : colors.bgHover, color:paymentPreview && !paymentError ? '#fff' : colors.textMuted, cursor:paymentPreview && !paymentError ? 'pointer' : 'not-allowed', fontSize:'13px', fontWeight:700, display:'flex', alignItems:'center', gap:'6px' }}>
+                {paymentSending ? <><Loader size={14} style={{ animation:'spin 1s linear infinite' }} /> Enviando…</> : <><Send size={14} /> Enviar</>}
+              </button>
             </div>
           </div>
         </div>
