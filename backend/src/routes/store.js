@@ -64,7 +64,7 @@ router.get('/:slug/info', async (req, res) => {
       logo:         storeLogo  || null,
       color:        storeColor || '#22c55e',
       slug:         org.slug,
-      xlWelcomeTiers: org.slug === xlPricing.STORE_SLUG ? xlPricing.TIERS : null,
+      xlWelcomeTiers: org.slug === xlPricing.STORE_SLUG ? xlPricing.WEB_TIERS : null,
       announcement: announcement || '',
       heroTitle:    heroTitle    || org.name,
       heroSubtitle: heroSubtitle || 'Descubre nuestro catálogo y realiza tu pedido.',
@@ -113,7 +113,7 @@ router.post('/:slug/quote', async (req, res) => {
       return { id, title: p.title, quantity, price: Number(p.price) };
     });
     const ctx = await xlPricing.context(getPool(), org.id, phone);
-    const priced = xlPricing.apply(lines, ctx);
+    const priced = xlPricing.apply(lines, xlPricing.forStore(ctx));
     res.json({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) });
   } catch (err) { res.status(err.status || 503).json({ error: 'No pudimos confirmar los precios. Intenta nuevamente.' }); }
 });

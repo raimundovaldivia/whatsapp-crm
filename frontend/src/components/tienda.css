@@ -203,3 +203,5 @@
 .dr-product-img>.dr-product-weight{width:auto;height:auto;object-fit:initial}
 
 .dr-welcome-scale{max-width:1200px;margin:24px auto;padding:24px;background:#f0f5ea;border-radius:16px;color:#173b2b}.dr-welcome-scale h2{margin:0 0 12px}.dr-welcome-scale p{line-height:1.5}.dr-welcome-scale>div{display:flex;flex-wrap:wrap;gap:12px}.dr-welcome-scale>div>span{display:flex;flex:1;min-width:130px;flex-direction:column;gap:8px;background:white;padding:16px;border-radius:10px}.dr-welcome-scale strong{font-size:24px}
+
+.dr-upsell-layer{position:fixed;inset:0;z-index:3000;display:grid;place-items:center;background:#0008;padding:20px}.dr-upsell{background:#fffdf7;color:#173b2b;border-radius:20px;padding:28px;width:min(100%,420px);box-shadow:0 20px 60px #0003}.dr-upsell h2{font-size:25px;margin:0 0 16px}.dr-upsell p{line-height:1.6}.dr-upsell button{display:block;width:100%;padding:14px;margin-top:12px;border-radius:10px;border:1px solid #173b2b;background:#173b2b;color:white;cursor:pointer}.dr-upsell button:last-child{background:transparent;color:#173b2b}

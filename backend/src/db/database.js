@@ -1051,7 +1051,7 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
       total += price * quantity;
     }
 
-    const adjusted = xlPricing.apply(resolvedItems, xlContext);
+    const adjusted = xlPricing.apply(resolvedItems, xlPricing.forStore(xlContext));
     resolvedItems.splice(0, resolvedItems.length, ...adjusted);
     total = Math.round(resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0));
     if (expectedTotal != null && Number(expectedTotal) !== total) {

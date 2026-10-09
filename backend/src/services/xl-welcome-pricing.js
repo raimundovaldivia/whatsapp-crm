@@ -1,5 +1,7 @@
 // A single commercial rule for the bot and the public checkout. Never changes old orders.
 const TIERS = { 30: 11000, 60: 22000, 100: 36500, 180: 54000 };
+const WEB_TIERS = { ...TIERS, 30: 12000 };
+const forStore = ctx => ({ ...ctx, eligible: ctx.enabled, tiers: WEB_TIERS });
 const STORE_SLUG = 'diez-rios-mrs96z69';
 function packSize(item) {
   const title = String(item.product_name || item.name || item.title || '').toLowerCase();
@@ -8,10 +10,10 @@ function packSize(item) {
   const sizes = title.match(/\b(?:20|30|60|100|180)\b/g) || [];
   return sizes.length === 1 && TIERS[Number(sizes[0])] ? Number(sizes[0]) : 0;
 }
-function scaleTotal(units) {
+function scaleTotal(units, tiers = TIERS) {
   if (!Number.isSafeInteger(units) || units < 1 || units > 180000) return null;
   const dp = Array(units + 1).fill(Infinity); dp[0] = 0;
-  for (let n = 1; n <= units; n++) for (const [pack, price] of Object.entries(TIERS)) {
+  for (let n = 1; n <= units; n++) for (const [pack, price] of Object.entries(tiers)) {
     if (n >= Number(pack)) dp[n] = Math.min(dp[n], dp[n - Number(pack)] + price);
   }
   return Number.isFinite(dp[units]) ? dp[units] : null;
@@ -62,7 +64,7 @@ function apply(items, ctx) {
     && !['especial','promocion','promocion_cantidad'].includes(i.unit_source));
   const units = selected.reduce((s, i) => s + packSize(i) * Number(i.quantity), 0);
   const current = selected.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
-  const target = scaleTotal(units);
+  const target = scaleTotal(units, ctx.tiers || TIERS);
   if (target === null || target > current) return result;
   let allocated = 0;
   selected.forEach((item, index) => {
@@ -87,4 +89,4 @@ function prompt(ctx) {
 No acumules descuentos. Respeta tarifas especiales y ofertas mejores. No uses la antigua escalera de 5%, 7% o 10%. Responde precios directamente; prioriza 30 y 60 XL sin ocultar otros formatos si los pide.
 Pedidos antes de las 13:00 (America/Santiago) se entregan el mismo día de reparto, sujeto a stock y cobertura. Después de esa hora confirma la próxima fecha disponible. No prometas envío gratis adicional. No registres un pedido sin aceptación ni confirmes antes de guardarlo.`;
 }
-module.exports = { TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, prompt };
+module.exports = { WEB_TIERS, forStore, TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, prompt };

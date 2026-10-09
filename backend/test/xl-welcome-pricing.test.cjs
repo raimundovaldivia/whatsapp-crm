@@ -40,3 +40,13 @@ test('eligibility is scoped to store and full purchase history',async()=>{
   assert.equal((await rule.context(db,1,'56911111111')).eligible,true);
   assert.equal((await rule.context({query:async()=>({rows:[{slug:'other'}]})},2,'56911111111')).enabled,false);
 });
+
+require('node:test')('web scale starts at 12000 and applies quantity pricing for returning customers',()=>{
+const assert=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const ctx=p.forStore({enabled:true,eligible:false});
+for(const [quantity,total] of [[1,12000],[2,22000],[6,54000]]){
+const items=p.apply([{title:'Huevos XL 30 unidades',quantity,price:12000}],ctx);
+assert.equal(items[0].price*quantity,total);
+}
+assert.equal(p.scaleTotal(30),11000);
+});
