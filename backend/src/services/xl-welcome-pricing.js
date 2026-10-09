@@ -1,7 +1,7 @@
 // A single commercial rule for the bot and the public checkout. Never changes old orders.
 const TIERS = { 30: 11000, 60: 22000, 100: 36500, 180: 54000 };
-const WEB_TIERS = { ...TIERS, 30: 12000 };
-const forStore = ctx => ({ ...ctx, eligible: ctx.enabled, tiers: WEB_TIERS });
+const WEB_TIERS = { ...TIERS, 30: 12000, 90: 30000 };
+const forStore = ctx => ({ ...ctx, eligible: ctx.enabled, tiers: WEB_TIERS, web: true });
 const STORE_SLUG = 'diez-rios-mrs96z69';
 function packSize(item) {
   const title = String(item.product_name || item.name || item.title || '').toLowerCase();
@@ -49,6 +49,11 @@ async function context(queryable, orgId, phone) {
     AND regexp_replace(phone, '[^0-9]', '', 'g') = ANY($2::text[])`, [orgId, variants]);
   return { enabled: true, eligible: rows.length === 0 || rows.some(historicalScale), overrides };
 }
+function trayTotal(item) {
+  const name=String(item.title||item.name||item.product_name||'').toLowerCase(),q=Number(item.quantity),price=Number(item.price);
+  if(!/huevo/.test(name)||/queso|aceituna|combo|pack|promo|empresa|caja|granel|\b(?:60|100|180)\b/.test(name)||!Number.isSafeInteger(q)||q<1||price<1000)return price*q;
+  return Math.floor(q/3)*Math.round(price*2.5/100)*100+(q%3===2?Math.round(price*11/6/100)*100:(q%3)*price);
+}
 function apply(items, ctx) {
   const result = items.map(i => ({ ...i }));
   if (!ctx?.enabled) return result;
@@ -60,6 +65,10 @@ function apply(items, ctx) {
     }
   }
   if (!ctx.eligible) return result;
+  if(ctx.web)for(const i of result){
+    if(i.locked_quote||i.free_gift||['especial','promocion','promocion_cantidad'].includes(i.unit_source))continue;
+    const total=trayTotal(i);if(total<Number(i.price)*Number(i.quantity)){i.price=total/Number(i.quantity);i.unit_source='escala_bandejas';}
+  }
   const selected = result.filter(i => packSize(i) && !i.locked_quote && !i.free_gift
     && !['especial','promocion','promocion_cantidad'].includes(i.unit_source));
   const units = selected.reduce((s, i) => s + packSize(i) * Number(i.quantity), 0);
@@ -89,4 +98,4 @@ function prompt(ctx) {
 No acumules descuentos. Respeta tarifas especiales y ofertas mejores. No uses la antigua escalera de 5%, 7% o 10%. Responde precios directamente; prioriza 30 y 60 XL sin ocultar otros formatos si los pide.
 Pedidos antes de las 13:00 (America/Santiago) se entregan el mismo día de reparto, sujeto a stock y cobertura. Después de esa hora confirma la próxima fecha disponible. No prometas envío gratis adicional. No registres un pedido sin aceptación ni confirmes antes de guardarlo.`;
 }
-module.exports = { WEB_TIERS, forStore, TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, prompt };
+module.exports = { trayTotal, WEB_TIERS, forStore, TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, prompt };
