@@ -88,12 +88,23 @@ function applyQuote(quote, ctx) {
   const items = apply(quote.items, ctx);
   const total = Math.round(items.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0));
   // Choose the better complete quote; do not stack the welcome price with other discounts.
-  if (!items.some(i => i.unit_source === 'escala_xl') || total > quote.total) return quote;
+  if (!items.some(i => ['escala_xl','escala_bandejas'].includes(i.unit_source)) || total > quote.total) return quote;
   return { ...quote, items, subtotal: total, total, discountPct: 0, discountAmount: 0,
     categoryDiscounts: [], secondUnitDiscounts: [] };
 }
-function prompt(ctx) {
+function prompt(ctx, products = []) {
   if (!ctx.enabled) return '';
+  if(ctx.web){
+    const table=products.filter(p=>p.is_business!==true&&/huevo/i.test(p.title||p.name||'')).map(p=>{
+      const name=p.title||p.name;
+      const totals=[1,2,3].map(quantity=>{const lines=apply([{...p,title:name,quantity,price:Number(p.price)}],ctx);return Math.round(lines[0].price*quantity)});
+      return `- ${name}: 1 unidad de venta $${totals[0]}; 2 $${totals[1]}; 3 $${totals[2]}.`;
+    }).join('\n');
+    return `## Precios de huevos para particulares: misma tabla del ecommerce
+${table}
+Cada unidad de venta es una bandeja o caja según el nombre: nunca confundas cantidad de huevos con cantidad de bandejas. Las promociones son para el mismo producto; las bandejas M no tienen descuento por cantidad. No acumules estos precios con otros descuentos. Respeta precios especiales y promociones ya acordadas si son mejores. No uses la antigua escala de primera compra ni inventes colores, disponibilidad o precios. Si no está definido el color, no prometas blanco, café ni mixto.
+Antes de las 13:00 de America/Santiago: entrega el mismo día de reparto, sujeto a stock y cobertura. Confirma el pedido solamente después de guardarlo.`;
+  }
   return `## Escala XL autorizada\n${ctx.eligible ? 'Cliente elegible por primera compra o compra previa en esta escala. Precios finales: 30 XL $11.000; 60 XL $22.000; 100 XL $36.500; 180 XL $54.000.' : 'Cliente sin beneficio de bienvenida: usa sus tarifas vigentes, no ofrezcas esta escala.'}
 No acumules descuentos. Respeta tarifas especiales y ofertas mejores. No uses la antigua escalera de 5%, 7% o 10%. Responde precios directamente; prioriza 30 y 60 XL sin ocultar otros formatos si los pide.
 Pedidos antes de las 13:00 (America/Santiago) se entregan el mismo día de reparto, sujeto a stock y cobertura. Después de esa hora confirma la próxima fecha disponible. No prometas envío gratis adicional. No registres un pedido sin aceptación ni confirmes antes de guardarlo.`;

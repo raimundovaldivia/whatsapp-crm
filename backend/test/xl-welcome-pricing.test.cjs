@@ -58,3 +58,12 @@ const lines=p.apply([{title,price,quantity}],p.forStore({enabled:true}));a.equal
 }
 a.equal(p.apply([{title:'Huevos XL 30 unidades',price:10000,quantity:3,unit_source:'especial'}],p.forStore({enabled:true}))[0].price,10000);
 });
+
+require('node:test')('bot uses storefront tray totals for natural customers',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const ctx=p.forStore({enabled:true});
+const items=[{title:'Huevos Jumbo 20 unidades',price:10000,quantity:3}];
+a.equal(p.applyQuote({items,total:30000},ctx).total,25000);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo 20 unidades',price:10000}]),/3 \$25000/);
+a.match(p.prompt(ctx,[]),/bandejas M no tienen descuento/);
+});
