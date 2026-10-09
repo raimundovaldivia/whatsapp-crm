@@ -775,7 +775,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         setError('⏰ Ventana de 24h expirada — usa otro WhatsApp conectado o un template aprobado.');
         if (!pendingAttachment) await openExpiredWindowAlternative(text);
       } else {
-        setError('Error enviando el mensaje. Intenta de nuevo.');
+        const serverMessage = err.response?.data?.message;
+        const serverError = err.response?.data?.error;
+        setError(
+          serverMessage && serverMessage !== serverError
+            ? serverMessage
+            : (typeof serverError === 'string' && !/^ERR_/i.test(serverError)
+                ? serverError
+                : 'Error enviando el mensaje. Intenta de nuevo.')
+        );
       }
       setInputText(text);
       setAttachment(pendingAttachment);
