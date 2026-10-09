@@ -37,6 +37,25 @@ function schedulePipeline(orgId, conversationId, fn) {
   require('../services/webhook-inbox').defer(orgId + ':' + conversationId, fn);
 }
 
+async function preserveInboundMedia(orgId, message, parsed, whatsappConfig) {
+  if (!message || (!parsed.mediaUrl && !parsed.mediaId)) return;
+  const mediaRef = parsed.mediaUrl || parsed.mediaId;
+  const cacheKey = `${orgId}:${mediaRef}`;
+  try {
+    let media = mediaCache.get(cacheKey);
+    if (!media) {
+      const url = parsed.mediaUrl || (await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig)).url;
+      media = await kapsoService.downloadMedia(url, whatsappConfig);
+      mediaCache.set(cacheKey, media.data, media.contentType);
+    }
+    await db.saveMessageMediaBlob(orgId, message.id, media.data, media.contentType);
+  } catch (err) {
+    // El webhook debe terminar aunque Meta todavía no tenga listo el archivo.
+    // El proxy vuelve a intentarlo cuando el ejecutivo abra el mensaje.
+    console.warn('[KapsoWebhook] No se pudo conservar el adjunto:', err.message);
+  }
+}
+
 /**
  * POST /kapso-webhook
  * Kapso envía JSON; ya está parseado por express.json() en index.js
@@ -173,7 +192,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     const label     = isVideo ? '🎥 [Video]' : '🎤 [Audio]';
     const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName);
     db.touchLead(org.id, parsed.from, parsed.contactName).catch(() => {});
-    await db.saveMessage({
+    const inboundMediaMessage = await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: parsed.messageId,
       direction:         'inbound',
@@ -182,6 +201,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       sentBy:            'client',
       mediaId:           mediaRef,
     });
+    await preserveInboundMedia(org.id, inboundMediaMessage, parsed, whatsappConfig);
     await db.updateConversationLastMessage(conversation.id, label, true);
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});

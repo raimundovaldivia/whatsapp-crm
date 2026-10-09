@@ -174,6 +174,18 @@ async function setupDatabase() {
       ALTER TABLE messages ADD CONSTRAINT messages_status_check
         CHECK(status IN ('pending','sent','delivered','read','failed'));
 
+      -- Copia durable de adjuntos. Los enlaces de Meta/Kapso expiran y no
+      -- alcanzan para volver a mostrar una imagen o video días después.
+      CREATE TABLE IF NOT EXISTS message_media_blobs (
+        message_id          INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+        organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        content_type        TEXT NOT NULL,
+        data                BYTEA NOT NULL,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_message_media_blobs_org_message
+        ON message_media_blobs(organization_id, message_id);
+
       -- ─── ÓRDENES CREADAS ─────────────────────────────────────────
 
       CREATE TABLE IF NOT EXISTS orders (

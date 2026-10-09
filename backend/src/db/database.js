@@ -841,6 +841,32 @@ async function saveMessage({ conversationId, whatsappMessageId, direction, conte
   }
 }
 
+async function saveMessageMediaBlob(orgId, messageId, data, contentType) {
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data || []);
+  if (!orgId || !messageId || !buffer.length || buffer.length > 16 * 1024 * 1024) return null;
+  return queryOne(
+    `INSERT INTO message_media_blobs (message_id, organization_id, content_type, data)
+     SELECT m.id, c.organization_id, $3, $4
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.id = $2 AND c.organization_id = $1
+     ON CONFLICT (message_id) DO UPDATE SET
+       content_type = EXCLUDED.content_type,
+       data = EXCLUDED.data
+     RETURNING message_id, organization_id, content_type`,
+    [orgId, messageId, String(contentType || 'application/octet-stream'), buffer]
+  );
+}
+
+async function getMessageMediaBlob(orgId, messageId) {
+  return queryOne(
+    `SELECT content_type, data
+       FROM message_media_blobs
+      WHERE organization_id = $1 AND message_id = $2`,
+    [orgId, messageId]
+  );
+}
+
 async function getMessagesByConversation(conversationId, limit = 80) {
   // Traer los N más recientes (DESC) y luego invertir para mostrar en orden cronológico (ASC)
   const rows = await query(
@@ -1950,7 +1976,8 @@ module.exports = {
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
-  saveMessage, getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
+  saveMessage, saveMessageMediaBlob, getMessageMediaBlob,
+  getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Products propios

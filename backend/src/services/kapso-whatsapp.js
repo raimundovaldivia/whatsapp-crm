@@ -296,7 +296,10 @@ function parseWebhookMessage(body, event) {
       return null;
     } else if (message.type === 'video') {
       mediaId  = message.video?.id || null;
-      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.video?.link || null;
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url
+        || message.video?.url || message.video?.link || body.media_url || body.kapso?.media_url
+        || JSON.stringify(body).match(/https:\/\/app\.kapso\.ai\/rails\/active_storage[^"\\]+/)?.[0]
+        || null;
       text = null;
     } else if (message.type === 'contacts') {
       const c = message.contacts?.[0];

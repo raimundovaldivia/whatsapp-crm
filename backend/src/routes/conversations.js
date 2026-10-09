@@ -1192,22 +1192,26 @@ router.get('/media/:mediaRef', async (req, res) => {
     } catch (_) {}
 
     const { rows } = await getPool().query(
-      'SELECT m.type, m.content FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.organization_id = $1 AND m.media_id = $2 LIMIT 1',
+      'SELECT m.id, m.type, m.content FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.organization_id = $1 AND m.media_id = $2 LIMIT 1',
       [req.orgId, ref]);
     if (!rows.length) return res.status(404).json({ error: 'Media no disponible' });
-    const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
-    if (!ref.startsWith('https://') && !ref.startsWith('evolution:') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
     const cacheKey = req.orgId + ':' + ref;
-    const cached = mediaCache.get(cacheKey);
+    const stored = await db.getMessageMediaBlob(req.orgId, rows[0].id);
+    const cached = mediaCache.get(cacheKey) || mediaCache.get(ref);
     let data, contentType;
-    if (cached) ({ data, contentType } = cached);
+    if (stored) ({ data, content_type: contentType } = stored);
+    else if (cached) ({ data, contentType } = cached);
     else if (ref.startsWith('evolution:')) {
       ({ data, contentType } = await require('../services/evolution-whatsapp').downloadMediaReference(req.orgId, ref));
       mediaCache.set(cacheKey, data, contentType);
+      await db.saveMessageMediaBlob(req.orgId, rows[0].id, data, contentType).catch(() => {});
     } else {
+      const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
+      if (!ref.startsWith('https://') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
       const url = ref.startsWith('https://') ? ref : (await kapsoSvc.getMediaUrl(ref, whatsappConfig)).url;
       ({ data, contentType } = await kapsoSvc.downloadMedia(url, whatsappConfig));
       mediaCache.set(cacheKey, data, contentType);
+      await db.saveMessageMediaBlob(req.orgId, rows[0].id, data, contentType).catch(() => {});
     }
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('Content-Type', contentType);
