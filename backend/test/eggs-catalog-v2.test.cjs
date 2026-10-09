@@ -28,6 +28,19 @@ test('new egg catalog preserves old orders, archives products, and runs once',as
  assert.equal((await db.query('SELECT active FROM products WHERE id=5')).rows[0].active,true);
  }finally{await db.close()}
 });
+test('new egg products receive the correct catalog photo without replacing a manual image',async()=>{
+ const db=new PGlite();try{
+  await db.exec(`CREATE TABLE products(id SERIAL PRIMARY KEY,catalog_version TEXT,egg_color TEXT,pack_units INT,image_url TEXT,updated_at TIMESTAMP);
+   INSERT INTO products(catalog_version,egg_color,pack_units,image_url) VALUES
+   ('eggs-v2','blancos',30,NULL),('eggs-v2','cafés',20,''),('eggs-v2','mixtos',30,NULL),('eggs-v2','blancos',20,'https://example.com/manual.jpg'),('legacy','mixtos',30,NULL);`);
+  const sql=fs.readFileSync(path.join(__dirname,'../src/db/egg-product-images.sql'),'utf8');
+  await db.exec(sql);
+  const rows=(await db.query('SELECT image_url FROM products ORDER BY id')).rows;
+  assert.deepEqual(rows.map(row=>row.image_url),[
+   '/store-assets/diez-rios/huevos-blancos-hogar-v3.jpg','/store-assets/diez-rios/huevos-cafe-20-hogar-v4.jpg','/store-assets/diez-rios/huevos-mixtos-hogar-v3.jpg','https://example.com/manual.jpg',null,
+  ]);
+ }finally{await db.close()}
+});
 test('color variants never share the legacy XL ladder and bot asks about ambiguity',()=>{
  const p=require('../src/services/xl-welcome-pricing'),o=require('../src/services/order-pricing');
  const products=['blancos','mixtos','cafés'].map((color,i)=>({id:i+1,title:`Huevos XL ${color} · Bandeja de 30`,price:10990+i*1000}));
