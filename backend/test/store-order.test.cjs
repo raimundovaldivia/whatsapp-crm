@@ -40,6 +40,21 @@ test('store orders calculate server-side, aggregate quantities and update stock 
     assert.equal((await engine.query('SELECT stock FROM products WHERE id = 10')).rows[0].stock, 2);
     assert.equal((await engine.query('SELECT COUNT(*)::int AS count FROM orders')).rows[0].count, 1);
 
+    await engine.exec(`UPDATE organizations SET slug='diez-rios-mrs96z69' WHERE id=1;
+      INSERT INTO products(id,organization_id,title,price,stock,active,is_business)
+      VALUES(11,1,'Huevos XL Bandeja 30 unidades',12000,20,TRUE,FALSE)`);
+    const purchase = { conversationId:1, organizationId:1, items:[{productId:11,quantity:2}],
+      customerName:'Nuevo',customerPhone:'56922222222',shippingAddress:{address:'Prueba',city:'Coquimbo'} };
+    await assert.rejects(()=>db.createStoreOrder({...purchase,expectedTotal:24000}), error=>error.code==='PRICE_CHANGED');
+    assert.equal((await engine.query('SELECT stock FROM products WHERE id=11')).rows[0].stock,20);
+    const welcome = await db.createStoreOrder({...purchase,expectedTotal:22000});
+    assert.equal(welcome.total,22000);
+    const repeat = await db.createStoreOrder({...purchase,customerPhone:'+56 9 2222 2222',expectedTotal:22000});
+    assert.equal(repeat.total,22000);
+    const existing = await db.createStoreOrder({...purchase,customerPhone:'56911111111',expectedTotal:24000});
+    assert.equal(existing.total,24000);
+    assert.equal((await engine.query('SELECT total_price FROM orders WHERE id=$1',[welcome.order.id])).rows[0].total_price,'22000');
+
     await assert.rejects(
       () => db.createStoreOrder({
         conversationId: 1,
@@ -52,7 +67,7 @@ test('store orders calculate server-side, aggregate quantities and update stock 
       error => error.code === 'INSUFFICIENT_STOCK' && error.status === 409
     );
     assert.equal((await engine.query('SELECT stock FROM products WHERE id = 10')).rows[0].stock, 2);
-    assert.equal((await engine.query('SELECT COUNT(*)::int AS count FROM orders')).rows[0].count, 1);
+    assert.equal((await engine.query('SELECT COUNT(*)::int AS count FROM orders')).rows[0].count, 4);
   } finally {
     await engine.close();
   }
