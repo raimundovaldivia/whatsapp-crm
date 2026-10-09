@@ -59,10 +59,10 @@ const importedShopifyClosed = `(COALESCE(crm_status, 'nuevo') IN ('', 'nuevo') A
   )
 ))`;
 
-// La bandeja de reparto no es un espejo del historial de pedidos. Un pedido
-// entra solo cuando hubo una decisión logística local: se marcó por despachar,
-// es un reintento o tiene fecha de entrega vencida/hoy. Esto evita que órdenes
-// Shopify antiguas todavía UNFULFILLED reaparezcan como paradas nuevas.
+// La bandeja de reparto no es un espejo del historial de Shopify. Las órdenes
+// importadas requieren una decisión logística local; los pedidos creados por
+// el bot sí entran mientras estén activos, porque representan la cola operativa
+// real. Los reintentos permanecen visibles hasta completar la entrega.
 const chileTodaySql = `(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date`;
 const shopifyDispatchReady = `(
   COALESCE(crm_status, '') IN ('por_despachar', 'no_entregado')
@@ -72,7 +72,7 @@ const shopifyDispatchReady = `(
   OR last_attempt_status IS NOT NULL
 )`;
 const botDispatchReady = `(
-  COALESCE(status, '') IN ('por_despachar', 'payment_received', 'no_entregado')
+  COALESCE(status, '') IN ('draft', 'sent', 'nuevo', 'por_despachar', 'payment_received', 'no_entregado')
   OR (delivery_date IS NOT NULL AND delivery_date <= ${chileTodaySql})
   OR COALESCE(dispatch_count, 0) > 0
   OR last_attempt_at IS NOT NULL
@@ -559,7 +559,11 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
         ) so ON true
         WHERE o.organization_id = $1
           AND (o.status IS NULL OR o.status NOT IN ('asignado_ruta', 'en_camino', 'entregado', 'cancelled'))
-          AND (o.delivery_date IS NULL OR o.delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
+          AND (
+            o.delivery_date IS NULL
+            OR o.delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+            OR o.status = 'no_entregado'
+          )
           AND o.delivered_at IS NULL   -- ya se repartió (aunque quede en 'paid'): no vuelve a la lista
           AND ${botDispatchReady}
         ORDER BY o.created_at ASC
@@ -1667,7 +1671,8 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
       `SELECT id::text AS id, status, dispatch_count, last_attempt_status, delivery_note,
               (delivered_at IS NOT NULL OR status IN ('en_camino', 'entregado', 'cancelled', 'paid')
                 OR (status = 'asignado_ruta' AND NOT $3::boolean)
-                 OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+                 OR (delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+                     AND status <> 'no_entregado')
                  OR (NOT $3::boolean AND NOT ${botDispatchReady})) AS blocked
          FROM orders
         WHERE organization_id = $1 AND id = ANY($2::int[])`,

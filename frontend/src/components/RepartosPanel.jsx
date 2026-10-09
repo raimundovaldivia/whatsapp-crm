@@ -602,7 +602,7 @@ function NuevoReparto({ colors }) {
         </div>
 
         <div style={{ padding: '8px 16px', color: colors.textMuted, fontSize: '11px', borderBottom: `1px solid ${colors.border}` }}>
-          Solo aparecen pedidos marcados Por despachar, reintentos y pedidos programados para hoy o una fecha anterior.
+          Pedidos nuevos del bot, pedidos marcados Por despachar y reintentos pendientes. Los pedidos nuevos con fecha futura aparecen el día programado.
         </div>
 
         {error && (
