@@ -1695,6 +1695,77 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } finally { setFollowUpBusy(false); }
   }
 
+  function prepareSegmentedFollowUp(campaign, segment, templateName) {
+    const template = templates.find(item => item.name === templateName);
+    if (!template) {
+      showToast(`No está disponible el template aprobado ${templateName}`, 'error');
+      return;
+    }
+    const kapsoMethod = sendingMethods.find(method => method.provider === 'kapso' && method.available);
+    if (!kapsoMethod) {
+      showToast('Kapso no está conectado para revisar esta campaña', 'error');
+      return;
+    }
+    const recipients = (followUpPreview?.recipients || [])
+      .filter(item => item.eligible && item.recencySegment === segment);
+    if (!recipients.length) {
+      showToast('No hay clientes en este grupo', 'error');
+      return;
+    }
+
+    const bodyComp = getBodyComponent(template);
+    const variableNumbers = getTemplateVariables(bodyComp?.text || '');
+    const modes = templateName === 'producto_favorito_repeticion' ? ['name', 'fav'] : ['name'];
+    const entries = recipients.map(recipient => {
+      const contact = contacts.find(item => normPhone(item.phone) === normPhone(recipient.phone)) || {
+        phone: recipient.phone,
+        name: recipient.contactName || 'Cliente',
+        last_order_at: recipient.lastOrderAt,
+      };
+      const values = Object.fromEntries(variableNumbers.map((number, index) => {
+        const mode = modes[index] || 'name';
+        if (mode === 'fav') return [number, favProduct(contact.phone) || 'tu producto habitual'];
+        return [number, toTitleCase((contact.name || recipient.contactName || 'Cliente').split(' ')[0])];
+      }));
+      const components = buildBodyTemplateComponent(bodyComp?.text || '', values);
+      const previewText = renderTemplate(bodyComp?.text || '', values);
+      return {
+        contact,
+        values,
+        previewText,
+        item: {
+          phone: recipient.phone,
+          originalPhone: recipient.phone,
+          templateName: template.name,
+          languageCode: template.language || 'es',
+          components,
+          contactName: contact.name || recipient.contactName || 'Cliente',
+          previewText,
+        },
+      };
+    });
+
+    setSelected(new Set(entries.map(entry => entry.contact.phone)));
+    setReviewIdx(0);
+    setGuidedReview(false);
+    setReviewedItems(new Set());
+    setReviewPlan({
+      templateName: template.name,
+      entries,
+      sendingProvider: 'kapso',
+      sendingChannelId: kapsoMethod.channelId || null,
+      sendingLabel: kapsoMethod.label,
+      audienceLabel: segment === 'over_30'
+        ? 'Leyeron, no respondieron ni compraron · última compra hace 30 días o más'
+        : 'Leyeron, no respondieron ni compraron · última compra hace 7–29 días',
+      sourceCampaignId: campaign.id,
+      testMode: false,
+      testPhone: null,
+      createdAt: Date.now(),
+    });
+    setHistoryOpen(false);
+  }
+
   async function scheduleFollowUp(campaign) {
     setFollowUpBusy(true);
     try {
@@ -2756,10 +2827,37 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                               </div>
                             )}
                             {!followUpPreview.scheduled && followUpPreview.summary.eligible > 0 && (
-                              <button onClick={() => scheduleFollowUp(campaign)} disabled={followUpBusy}
-                                style={{ marginTop: 7, border: 'none', borderRadius: 6, background: colors.green, color: '#fff', padding: '6px 9px', cursor: 'pointer', fontSize: 11, fontWeight: 800 }}>
-                                {followUpBusy ? 'Programando…' : `Programar ${followUpPreview.summary.eligible} para mañana 10:00`}
-                              </button>
+                              <div style={{ display: 'grid', gap: 7, marginTop: 8 }}>
+                                <div style={{ padding: 8, borderRadius: 7, border: `1px solid ${colors.green}55`, backgroundColor: `${colors.green}0d` }}>
+                                  <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>
+                                    {followUpPreview.summary.recency?.over_30 || 0} · 30 días o más sin comprar
+                                  </div>
+                                  <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>
+                                    Template aprobado: oferta_exclusiva_urgencia
+                                  </div>
+                                  <button onClick={() => prepareSegmentedFollowUp(campaign, 'over_30', 'oferta_exclusiva_urgencia')}
+                                    disabled={!followUpPreview.summary.recency?.over_30}
+                                    style={{ marginTop: 6, border: 'none', borderRadius: 6, background: colors.green, color: '#fff', padding: '6px 9px', cursor: 'pointer', fontSize: 11, fontWeight: 800 }}>
+                                    Revisar oferta para este grupo
+                                  </button>
+                                </div>
+                                <div style={{ padding: 8, borderRadius: 7, border: `1px solid ${colors.blue}55`, backgroundColor: `${colors.blue}0d` }}>
+                                  <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>
+                                    {followUpPreview.summary.recency?.days_7_29 || 0} · Compraron hace 7–29 días
+                                  </div>
+                                  <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>
+                                    Template aprobado: producto_favorito_repeticion
+                                  </div>
+                                  <button onClick={() => prepareSegmentedFollowUp(campaign, 'days_7_29', 'producto_favorito_repeticion')}
+                                    disabled={!followUpPreview.summary.recency?.days_7_29}
+                                    style={{ marginTop: 6, border: `1px solid ${colors.blue}`, borderRadius: 6, background: 'transparent', color: colors.blue, padding: '6px 9px', cursor: 'pointer', fontSize: 11, fontWeight: 800 }}>
+                                    Revisar reposición para este grupo
+                                  </button>
+                                </div>
+                                <div style={{ color: colors.textMuted, fontSize: 10 }}>
+                                  Excluidos por seguridad: {followUpPreview.summary.recency?.days_0_6 || 0} compraron hace menos de 7 días · {followUpPreview.summary.recency?.unknown || 0} sin fecha confiable.
+                                </div>
+                              </div>
                             )}
                             {followUpPreview.scheduled && <div style={{ color: colors.green, fontSize: 11, fontWeight: 800, marginTop: 6 }}>✓ Seguimiento programado</div>}
                           </div>

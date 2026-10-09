@@ -5,6 +5,7 @@ const {
   componentsForRecipient,
   summarizeFollowUpAudience,
   DEFAULT_CONDITIONS,
+  classifyPurchaseRecency,
 } = require('../src/services/campaign-follow-up');
 
 test('reutiliza exactamente las variables originales del envío masivo', () => {
@@ -47,6 +48,15 @@ test('resume ventas atribuidas durante las 24 horas posteriores al envío', () =
     eligible: 1,
     excluded: 2,
     reasons: { respondio: 1, hizo_pedido: 2 },
+    recency: { over_30: 0, days_7_29: 0, days_0_6: 0, unknown: 1 },
     attributedRevenue24h: 30000,
   });
+});
+
+test('separa la audiencia según la antigüedad de su última compra', () => {
+  const now = new Date('2026-10-09T12:00:00Z');
+  assert.deepEqual(classifyPurchaseRecency('2026-08-01T12:00:00Z', now), { daysSinceLastOrder: 69, recencySegment: 'over_30' });
+  assert.deepEqual(classifyPurchaseRecency('2026-09-20T12:00:00Z', now), { daysSinceLastOrder: 19, recencySegment: 'days_7_29' });
+  assert.deepEqual(classifyPurchaseRecency('2026-10-06T12:00:00Z', now), { daysSinceLastOrder: 3, recencySegment: 'days_0_6' });
+  assert.deepEqual(classifyPurchaseRecency(null, now), { daysSinceLastOrder: null, recencySegment: 'unknown' });
 });

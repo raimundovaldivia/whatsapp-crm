@@ -2262,6 +2262,9 @@ router.get('/campaigns/:id/follow-up-preview', async (req, res) => {
         contactName: item.contact_name,
         eligible: item.eligible,
         reasons: item.reasons,
+        lastOrderAt: item.lastOrderAt,
+        daysSinceLastOrder: item.daysSinceLastOrder,
+        recencySegment: item.recencySegment,
       })),
     });
   } catch (error) {
