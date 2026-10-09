@@ -85,7 +85,15 @@ test('al activar excluye bajas y contactos recientes antes de reservar el públi
       ],
       steps: [{ templateName: 'promo', waitHours: 0, triggerCondition: 'always' }],
     }, pool);
+    const edit = { steps: [{ templateName: 'promo', variableModes: ['first_name', { mode:'city', prefix:'Desde ', fallback:'tu ciudad' }] }] };
+    await assert.rejects(journeys.updateDraft(2, journey.id, edit, pool), /organización/);
+    await journeys.updateDraft(1, journey.id, edit, pool);
+    const detail = await journeys.journeyDetail(1, journey.id, pool);
+    assert.equal(detail.status, 'draft');
+    assert.equal(detail.enrollments.length, 3);
+    assert.equal(detail.steps[0].variable_modes[1].prefix, 'Desde ');
     const activated = await journeys.activateJourney(1, journey.id, pool);
+    await assert.rejects(journeys.updateDraft(1, journey.id, edit, pool), /borradores/);
     assert.equal(activated.active, 1);
     assert.equal(activated.excluded, 2);
     assert.equal(activated.exclusions.baja_marketing, 1);
@@ -96,5 +104,45 @@ test('al activar excluye bajas y contactos recientes antes de reservar el públi
       ['56922222222', 'excluded', 'baja_marketing'],
       ['56933333333', 'excluded', 'contactado_recientemente'],
     ]);
+
+    // Reprocessing never repeats a completed delivery, and only changes this campaign's cooldown.
+    await query("UPDATE campaign_journey_enrollments SET status='completed',current_step=1,last_message_id='sent-once' WHERE journey_id=$1 AND phone='56911111111'", [journey.id]);
+    await query("UPDATE campaign_journeys SET status='completed' WHERE id=$1", [journey.id]);
+    await query("UPDATE contacts SET last_template_sent_at=NOW()-INTERVAL '25 hours' WHERE phone='56933333333'");
+    const retry = await journeys.activateJourney(1, journey.id, pool, {retryExcluded:true});
+    assert.equal(retry.active,1);
+    const completed = (await query("SELECT status,last_message_id FROM campaign_journey_enrollments WHERE journey_id=$1 AND phone='56911111111'",[journey.id])).rows[0];
+    assert.equal(completed.status,'completed');
+    assert.equal(completed.last_message_id,'sent-once');
+    assert.equal((await query('SELECT cooldown_hours FROM campaign_journeys WHERE id=$1',[journey.id])).rows[0].cooldown_hours,24);
+    await engine.exec(`INSERT INTO shopify_orders(organization_id,shopify_order_id,customer_phone,crm_status,fulfillment_status,shopify_created_at) VALUES
+      (1,'history-finished','56944444444','nuevo','FULFILLED',NOW()-INTERVAL '40 days'),
+      (1,'history-old','56955555555','nuevo','UNFULFILLED',NOW()-INTERVAL '120 days'),
+      (1,'real-retry','56966666666','no_entregado','FULFILLED',NOW()-INTERVAL '40 days'),
+      (1,'real-recent','56977777777','nuevo','UNFULFILLED',NOW()-INTERVAL '1 day');`);
+    await query("UPDATE campaign_journey_enrollments SET status='excluded',current_step=0,last_message_id=NULL,stop_reason='contactado_recientemente' WHERE journey_id=$1 AND phone='56933333333'", [journey.id]);
+    await query("UPDATE campaign_journeys SET status='completed' WHERE id=$1", [journey.id]);
+    await query("UPDATE contacts SET last_template_sent_at=NOW()-INTERVAL '2 hours' WHERE phone='56933333333'");
+    const deferred=await journeys.activateJourney(1,journey.id,pool,{retryExcluded:true});
+    assert.equal(deferred.active,1);
+    const queued=(await query("SELECT status,next_run_at>NOW()+INTERVAL '21 hours' AS waits FROM campaign_journey_enrollments WHERE journey_id=$1 AND phone='56933333333'",[journey.id])).rows[0];
+    assert.equal(queued.status,'active'); assert.equal(queued.waits,true);
+    const before = (await query('SELECT * FROM shopify_orders ORDER BY id')).rows;
+    const historyJourney=await journeys.createJourney(1,1,{name:'Historial',recipients:['56944444444','56955555555','56966666666','56977777777'].map(phone=>({phone,name:'Test'})),steps:[{templateName:'promo'}]},pool);
+    const result=await journeys.activateJourney(1,historyJourney.id,pool);
+    assert.equal(result.active,2);
+    assert.equal(result.exclusions.pedido_activo,2);
+    assert.deepEqual((await query('SELECT * FROM shopify_orders ORDER BY id')).rows,before);
   } finally { await engine.close(); }
+});
+
+test('personalization preserves affixes and fallbacks and resolves customer order data', () => {
+  const components = journeys.componentsForStep({variable_modes:[
+    {mode:'city',prefix:'Entrega en ',fallback:'tu sector',suffix:'.'},
+    {mode:'total_orders',prefix:'Gracias por tus ',suffix:' pedidos.'},
+    {mode:'last_order_date'},
+  ]}, '{{1}} {{2}} {{3}}', {total_orders:4,last_order_at:'2026-10-01T15:00:00Z'}, {phone:'56911111111',contact_name:'Ana'});
+  assert.equal(components[0].parameters[0].text,'Entrega en tu sector.');
+  assert.equal(components[0].parameters[1].text,'Gracias por tus 4 pedidos.');
+  assert.match(components[0].parameters[2].text,/2026/);
 });

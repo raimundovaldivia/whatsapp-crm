@@ -1,5 +1,30 @@
 const axios = require('axios');
 
+// Remember API echoes, including webhooks arriving before the HTTP send returns.
+const outboundRequests = new Map();
+const outboundIds = new Map();
+const outboundKey = config => JSON.stringify([config.organization_id, config.id, config.evolution_api_url, config.evolution_instance]);
+async function trackedSend(config, send) {
+  const key = outboundKey(config);
+  const pending = outboundRequests.get(key) || new Set();
+  outboundRequests.set(key, pending);
+  const request = Promise.resolve().then(send).then(response => {
+    const id = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id;
+    if (id) outboundIds.set(`${key}:${id}`, Date.now());
+    for (const [entry, time] of outboundIds) if (time < Date.now() - 900000) outboundIds.delete(entry);
+    return response;
+  });
+  pending.add(request);
+  try { return await request; }
+  finally { pending.delete(request); if (!pending.size) outboundRequests.delete(key); }
+}
+async function isApiMessage(messageId, config) {
+  const key = outboundKey(config);
+  await Promise.allSettled([...(outboundRequests.get(key) || [])]);
+  return (outboundIds.get(`${key}:${messageId}`) || 0) > Date.now() - 900000;
+}
+
+
 function credentials(config = {}) {
   const baseUrl = String(config.evolution_api_url || '').trim().replace(/\/+$/, '');
   const apiKey = String(config.evolution_api_key || '').trim();
@@ -23,24 +48,24 @@ function client(config) {
 
 async function sendTextMessage(to, text, config) {
   const { instance } = credentials(config);
-  const response = await client(config).post(`/message/sendText/${encodeURIComponent(instance)}`, {
+  const response = await trackedSend(config, () => client(config).post(`/message/sendText/${encodeURIComponent(instance)}`, {
     number: String(to).replace(/\D/g, ''),
     text,
-  });
+  }));
   const messageId = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id || null;
   return { ...response.data, messageId };
 }
 
 async function sendMediaMessage(to, media, config) {
   const { instance } = credentials(config);
-  const response = await client(config).post(`/message/sendMedia/${encodeURIComponent(instance)}`, {
+  const response = await trackedSend(config, () => client(config).post(`/message/sendMedia/${encodeURIComponent(instance)}`, {
     number: String(to).replace(/\D/g, ''),
     mediatype: media.type === 'image' ? 'image' : 'document',
     mimetype: media.mimeType,
     caption: media.caption || '',
     media: media.mediaUrl || media.buffer?.toString('base64'),
     fileName: media.fileName,
-  });
+  }));
   const messageId = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id || null;
   return { ...response.data, messageId };
 }
@@ -226,7 +251,7 @@ async function configureWebhook(config, webhookUrl) {
 }
 
 module.exports = {
-  mediaReference, downloadMessageMedia, downloadMediaReference,
+  isApiMessage, mediaReference, downloadMessageMedia, downloadMediaReference,
   sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
   parseConnectionUpdate, normalizeConnectionState,
   getConnectionState, getConnectedPhone, createInstance, getConnectQr, configureWebhook,

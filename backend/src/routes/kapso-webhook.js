@@ -762,6 +762,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       const imgLog = createBotLogger(org.name, parsed.from);
       imgLog.in(imageContext);
       eventIo?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: conversation.id, typing: true });
+      if (channelId && (await db.getConversationById(conversation.id))?.agent_mode === 'human') return;
       let imgResult;
       try {
         imgResult = await pipeline.processMessage(org.id, conversation.id, imageContext, imgLog);
@@ -770,6 +771,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       }
 
       if (imgResult && !imgResult.duplicate && !imgResult.skipped && imgResult.response) {
+        if (channelId && (await db.getConversationById(conversation.id))?.agent_mode === 'human') return;
         const sentMsg = await service.sendTextMessage(parsed.from, imgResult.response, whatsappConfig).catch(() => null);
         if (!sentMsg) return;
         const outMsg = await db.saveMessage({
@@ -879,6 +881,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       firstName,
     });
 
+    if (channelId && (await db.getConversationById(conversation.id))?.agent_mode === 'human') return;
     const sentMsg = await service.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
     if (sentMsg) {
       await db.saveMessage({

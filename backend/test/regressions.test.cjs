@@ -584,3 +584,35 @@ test('delivery retries are placed first and remain explicit in the saved route',
   } finally { await f.engine.close(); }
 });
 
+
+
+test('schedule delivery preserves payments and attempts, validates dates and isolates organizations', async () => {
+  const f = await fixture();
+  try {
+    await f.query("UPDATE orders SET status='paid',last_attempt_status='no_entregado' WHERE id=1");
+    let notified = false;
+    const router = load('src/routes/orders.js', {
+      '../db/database': f.db,
+      '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+      '../services/delivery-notifications': { sendOrderEditNotification: async () => { notified = true; } },
+    });
+    const call = async (body, orgId=1) => {
+      const res = response();
+      await handler(router, 'patch', '/schedule-delivery')({ orgId, body }, res);
+      return res;
+    };
+    assert.equal((await call({source:'bot',id:1,date:'2030-02-30'})).code,400);
+    assert.equal((await call({source:'bot',id:1,date:'2000-01-01'})).code,400);
+    assert.equal((await call({source:'bot',id:1,date:'2030-02-03'},2)).code,404);
+    assert.equal((await call({source:'bot',id:1,date:'2030-02-03'})).code,200);
+    const order = (await f.query("SELECT status,last_attempt_status,to_char(delivery_date,'YYYY-MM-DD') date FROM orders WHERE id=1")).rows[0];
+    assert.equal(order.status,'paid');
+    assert.equal(order.last_attempt_status,'no_entregado');
+    assert.equal(order.date,'2030-02-03');
+    assert.equal(notified,false);
+    assert.equal((await f.query('SELECT stop_statuses FROM delivery_routes WHERE id=1')).rows[0].stop_statuses.bot_1,'postponed');
+    await f.query("UPDATE orders SET status='entregado' WHERE id=2");
+    assert.equal((await call({source:'bot',id:2,date:'2030-02-03'})).code,409);
+    assert.equal((await call({source:'shopify',id:'gid://shopify/Order/42',date:'2030-02-03'})).code,200);
+  } finally { await f.engine.close(); }
+});

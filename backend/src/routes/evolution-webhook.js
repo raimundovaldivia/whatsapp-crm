@@ -81,12 +81,15 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
       continue;
     }
     if (parsed.fromMe) {
+      if (await evolution.isApiMessage(parsed.messageId, channel)) continue;
       const conversation = await db.upsertConversation(org.id, parsed.from, null, channel.id);
       const content = parsed.text || (parsed.type === 'audio' ? '🎤 [Audio enviado]' : '📎 [Archivo enviado]');
       const message = await db.saveMessage({ conversationId: conversation.id, whatsappMessageId: parsed.messageId,
         direction: 'outbound', content, type: parsed.type, sentBy: 'human',
         mediaId: parsed.type === 'text' ? null : evolution.mediaReference(channel.id, parsed.messageId) });
       if (message) {
+        await require('../services/conversation-mode').keepHumanAfterReply(conversation.id, db);
+        io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'human' });
         await db.updateConversationLastMessage(conversation.id, content);
         io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message, conversation: await db.getConversationById(conversation.id, org.id) });
       }

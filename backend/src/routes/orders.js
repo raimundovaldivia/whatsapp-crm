@@ -38,7 +38,7 @@ function setSocketIO(socketIO) { io = socketIO; }
 router.use(requireAuth);
 router.use((req, res, next) => {
   if (req.method === 'GET') return next();
-  const deliveryEdit = req.method === 'PATCH' && (/^\/(set-items|history-edit|reschedule)$/.test(req.path) || /^\/(?:shopify\/)?\d+\/address$/.test(req.path));
+  const deliveryEdit = req.method === 'PATCH' && (/^\/(set-items|history-edit|reschedule|schedule-delivery)$/.test(req.path) || /^\/(?:shopify\/)?\d+\/address$/.test(req.path));
   return requireRole('owner', 'admin', 'supervisor', ...(deliveryEdit ? ['coordinador'] : []))(req, res, next);
 });
 
@@ -829,6 +829,46 @@ router.patch('/adjust-total', async (req, res) => {
  * otro día). Fija delivery_date, lo mantiene/vuelve a dejar despachable y anota
  * el motivo. Body: { source, id, date: 'YYYY-MM-DD', note? }
  */
+// Planificar una entrega conserva el pago y no envía mensajes al cliente.
+router.patch('/schedule-delivery', async (req, res) => {
+  const { source, id, date } = req.body;
+  const parsed = new Date(`${date}T12:00:00Z`);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago' }).format(new Date());
+  if (!['bot', 'shopify'].includes(source) || !String(id || '').trim() ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ||
+      !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date || date < today) {
+    return res.status(400).json({ error: 'Selecciona una fecha válida desde hoy.' });
+  }
+  const table = source === 'bot' ? 'orders' : 'shopify_orders';
+  const key = source === 'bot' ? 'id' : 'shopify_order_id';
+  let client;
+  try {
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    const { rows: [order] } = await client.query(
+      `SELECT * FROM ${table} WHERE ${key}=$1 AND organization_id=$2 FOR UPDATE`, [id, req.orgId]);
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Pedido no encontrado.' });
+    }
+    const status = source === 'bot' ? order.status : order.crm_status;
+    if (['cancelled', 'entregado', 'en_camino', 'asignado_ruta'].includes(status) ||
+        order.cancelled_at || order.fulfillment_status === 'fulfilled') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'El pedido está cerrado o asignado a despacho. Reprográmalo desde Repartos.' });
+    }
+    await client.query(`UPDATE ${table} SET delivery_date=$1::date WHERE ${key}=$2 AND organization_id=$3`, [date, id, req.orgId]);
+    // Retirar de rutas preparadas conservando su historial, sin registrar un intento fallido.
+    await recordRouteOutcome(client, req.orgId, source, id, 'postponed', `Entrega programada para ${date}`);
+    await client.query('COMMIT');
+    res.json({ success: true, date });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    console.error('[Orders/schedule-delivery]', err.message);
+    res.status(500).json({ error: 'No se pudo programar la entrega.' });
+  } finally { client?.release(); }
+});
+
 router.patch('/reschedule', async (req, res) => {
   const { source, id, date, note } = req.body;
   if (!['bot', 'shopify'].includes(source)) {

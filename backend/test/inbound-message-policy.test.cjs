@@ -77,3 +77,25 @@ test('el pipeline pide contexto por un enlace solo sin escalar ni cambiar la baj
   assert.equal(classifierCalled, false);
   assert.equal(stateChanged, false);
 });
+
+
+const { isClosingAcknowledgement, isInternalSilenceResponse } = require('../src/services/inbound-message-policy');
+test('approval emoji after the scheduled order acknowledgement stays silent', async () => {
+  const history = [{direction:'outbound', content:'Anotado, 30 huevos XL para el viernes 9. ¡Listo! 👍'}, {direction:'inbound', content:'👌🏼'}];
+  assert.equal(isClosingAcknowledgement('👌🏼', history, 'scheduled'), true);
+  for (const message of ['30 XL, gracias!', '👌🏼 pero cambia la dirección', '❓', '😡']) assert.equal(isClosingAcknowledgement(message, history, 'scheduled'), false);
+  assert.equal(isClosingAcknowledgement('👍', [{direction:'outbound',content:'¿Confirmas el pedido?'}], 'scheduled'), false);
+  assert.equal(isClosingAcknowledgement('👍', history, 'collecting_order'), false);
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': {getConversationById:async()=>({pipeline_state:'scheduled'}), getLastMessages:async()=>history},
+    './inbound-message-policy': require('../src/services/inbound-message-policy'),
+    './commercial': {consumeBotTurn:async()=>{}},
+  });
+  const result = await pipeline.processMessage(1, 1, '👌🏼');
+  assert.equal(result.response, null);
+  assert.equal(result.reason, 'CLOSING_ACKNOWLEDGEMENT');
+});
+test('internal silence explanations never become customer responses', () => {
+  for (const text of ['No respondo. El cliente solo confirmó con un emoji de aprobación. La conversación está cerrada correctamente y cualquier mensaje adicional sería forzado.', '[NO_RESPONSE]', 'No es necesario responder: solo agradeció.', 'El último mensaje está incompleto. Espero el resto para responder apropiadamente.']) assert.equal(isInternalSilenceResponse(text), true, text);
+  for (const text of ['No puedo confirmar la entrega todavía.', 'Anotado, 30 XL.', '¿Quieres que te avise?']) assert.equal(isInternalSilenceResponse(text), false, text);
+});

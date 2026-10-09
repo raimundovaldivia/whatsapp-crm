@@ -3,6 +3,7 @@ import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loade
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
+import OrderProductEditor from './OrderProductEditor.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { buildBodyTemplateComponent, getBodyComponent, getTemplateVariables, renderTemplate } from '../utils/template-renderer.js';
@@ -374,6 +375,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   // Order modal state
   const [showOrderModal, setShowOrderModal]   = useState(false);
+  const [editingOrderProduct, setEditingOrderProduct] = useState(null);
   const [products, setProducts]               = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [orderItems, setOrderItems]           = useState({}); // { productId: quantity }
@@ -811,7 +813,13 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
     const reader = new FileReader();
     reader.onload = () => {
-      setAttachment({ data: reader.result, mimeType, fileName: file.name, size: file.size });
+      const imageExtension = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+      }[mimeType];
+      const fileName = file.name || (imageExtension ? `imagen-pegada.${imageExtension}` : 'archivo-adjunto');
+      setAttachment({ data: reader.result, mimeType, fileName, size: file.size });
       setError(null);
       inputRef.current?.focus();
     };
@@ -857,6 +865,20 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     prepareAttachment(files[0]);
   };
 
+  const handlePaste = (event) => {
+    const imageItems = Array.from(event.clipboardData?.items || [])
+      .filter(item => item.kind === 'file' && ['image/jpeg', 'image/png', 'image/webp'].includes(item.type));
+    if (!imageItems.length) return;
+
+    event.preventDefault();
+    if (imageItems.length > 1) {
+      setError('Pega una imagen por vez para poder revisarla antes de enviarla.');
+      return;
+    }
+
+    prepareAttachment(imageItems[0].getAsFile());
+  };
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -872,6 +894,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   // ── Order modal handlers ────────────────────────────────────────
   const openOrderModal = async () => {
     setShowOrderModal(true);
+    setEditingOrderProduct(null);
     setOrderItems({});
     setOrderAddress('');
     setOrderCity('');
@@ -2032,6 +2055,17 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       )}
 
       {/* Modal de templates */}
+      {showOrderModal && editingOrderProduct && <OrderProductEditor
+        key={editingOrderProduct.id}
+        product={editingOrderProduct} colors={colors}
+        onClose={() => setEditingOrderProduct(null)}
+        onSaved={updated => {
+          setProducts(previous => previous.map(p => String(p.id) === String(updated.id)
+            ? { ...p, ...updated, ...(p._specialPrice ? { price:p.price, _specialPrice:true } : {}) }
+            : p));
+          setEditingOrderProduct(null);
+        }}
+      />}
       {/* ── Modal Nueva Orden ── */}
       {showOrderModal && (
         <div style={{ position:'fixed', inset:0, backgroundColor:'rgba(0,0,0,0.6)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'16px' }}>
@@ -2071,6 +2105,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     {p.image_url && <img src={p.image_url} alt={p.title} style={{ width:'44px', height:'44px', borderRadius:'8px', objectFit:'cover', flexShrink:0 }} />}
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontWeight:600, fontSize:'13px', color:colors.textPrimary }}>{p.title}</div>
+                      <button type="button" aria-label={`Editar ${p.title}`} disabled={creatingOrder} onClick={() => setEditingOrderProduct(p)} style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'5px 0', background:'none', border:0, color:colors.green, cursor:'pointer', fontSize:'12px' }}><Pencil size={12} /> Editar</button>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <span style={{ fontSize:'12px', color:colors.green, fontWeight:700 }}>${parseFloat(p.price).toLocaleString('es-CL')}</span>
                         {p._specialPrice && <span style={{ fontSize:'10px', backgroundColor:'#05966922', color:'#059669', borderRadius:'4px', padding:'1px 5px', fontWeight:700 }}>precio especial</span>}
@@ -2499,7 +2534,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           value={inputText}
           onChange={e => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isHumanMode ? 'Escribe un mensaje...' : 'Escribe para responder manualmente...'}
+          onPaste={handlePaste}
+          placeholder={isHumanMode ? 'Escribe un mensaje o pega una imagen...' : 'Escribe o pega una imagen para responder...'}
           rows={1}
           style={{
             flex: 1,

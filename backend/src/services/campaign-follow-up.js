@@ -11,6 +11,20 @@ const DEFAULT_CONDITIONS = Object.freeze({
   respectOptOut: true,
 });
 
+function classifyPurchaseRecency(lastOrderAt, now = new Date()) {
+  if (!lastOrderAt) return { daysSinceLastOrder: null, recencySegment: 'unknown' };
+  const orderTime = new Date(lastOrderAt).getTime();
+  const nowTime = new Date(now).getTime();
+  if (!Number.isFinite(orderTime) || !Number.isFinite(nowTime)) {
+    return { daysSinceLastOrder: null, recencySegment: 'unknown' };
+  }
+  const daysSinceLastOrder = Math.max(0, Math.floor((nowTime - orderTime) / 86400000));
+  return {
+    daysSinceLastOrder,
+    recencySegment: daysSinceLastOrder >= 30 ? 'over_30' : daysSinceLastOrder >= 7 ? 'days_7_29' : 'days_0_6',
+  };
+}
+
 function normalizedPhoneSql(column) {
   return `RIGHT(regexp_replace(COALESCE(${column}, ''), '[^0-9]', '', 'g'), 9)`;
 }
@@ -62,16 +76,91 @@ async function getFollowUpAudience(orgId, campaignId, pool = db.getPool()) {
              AND ${normalizedPhoneSql('cv.phone_number')}=${normalizedPhoneSql('$2')}
              AND mo.direction='outbound' AND mo.type='template' AND mo.created_at>$3
              AND mo.whatsapp_message_id IS DISTINCT FROM $4
-        ) AS later_template
+        ) AS later_template,
+        COALESCE((
+          SELECT SUM(attributed.total_price)
+            FROM (
+              SELECT NULLIF(o.total_price, '')::numeric AS total_price
+                FROM orders o
+               WHERE o.organization_id=$1
+                 AND ${normalizedPhoneSql('o.customer_phone')}=${normalizedPhoneSql('$2')}
+                 AND o.created_at>$3 AND o.created_at<=$3 + INTERVAL '24 hours'
+                 AND COALESCE(o.status,'') <> 'cancelled'
+                 AND NULLIF(o.total_price, '') IS NOT NULL
+              UNION ALL
+              SELECT so.total_price::numeric AS total_price
+                FROM shopify_orders so
+               WHERE so.organization_id=$1
+                 AND ${normalizedPhoneSql('so.customer_phone')}=${normalizedPhoneSql('$2')}
+                 AND COALESCE(so.shopify_created_at,so.synced_at)>$3
+                 AND COALESCE(so.shopify_created_at,so.synced_at)<=$3 + INTERVAL '24 hours'
+                 AND COALESCE(so.crm_status,'') <> 'cancelled'
+                 AND UPPER(COALESCE(so.financial_status,'')) NOT IN ('VOIDED','REFUNDED')
+            ) attributed
+        ), 0) AS order_revenue,
+        (
+          SELECT MAX(purchase_date)
+            FROM (
+              SELECT ct.last_order_at AS purchase_date
+                FROM contacts ct
+               WHERE ct.organization_id=$1
+                 AND ${normalizedPhoneSql('ct.phone')}=${normalizedPhoneSql('$2')}
+              UNION ALL
+              SELECT o.created_at AS purchase_date
+                FROM orders o
+               WHERE o.organization_id=$1
+                 AND ${normalizedPhoneSql('o.customer_phone')}=${normalizedPhoneSql('$2')}
+                 AND COALESCE(o.status,'') <> 'cancelled'
+              UNION ALL
+              SELECT COALESCE(so.shopify_created_at,so.synced_at) AS purchase_date
+                FROM shopify_orders so
+               WHERE so.organization_id=$1
+                 AND ${normalizedPhoneSql('so.customer_phone')}=${normalizedPhoneSql('$2')}
+                 AND COALESCE(so.crm_status,'') <> 'cancelled'
+            ) purchases
+        ) AS last_order_at
     `, [orgId, phone, sentAt, row.whatsapp_message_id]);
     const reasons = [];
     if (checks.opted_out) reasons.push('opt_out');
     if (checks.replied) reasons.push('respondio');
     if (checks.ordered) reasons.push('hizo_pedido');
     if (checks.later_template) reasons.push('recibio_otro_template');
-    evaluated.push({ ...row, phone, eligible: reasons.length === 0, reasons });
+    const recency = classifyPurchaseRecency(checks.last_order_at);
+    evaluated.push({
+      ...row,
+      phone,
+      eligible: reasons.length === 0,
+      reasons,
+      orderRevenue: Number(checks.order_revenue) || 0,
+      lastOrderAt: checks.last_order_at || null,
+      ...recency,
+    });
   }
   return evaluated;
+}
+
+function summarizeFollowUpAudience(audience = []) {
+  const eligible = audience.filter(item => item.eligible);
+  const excluded = audience.filter(item => !item.eligible);
+  const reasons = {};
+  excluded.flatMap(item => item.reasons || []).forEach(reason => {
+    reasons[reason] = (reasons[reason] || 0) + 1;
+  });
+  const recency = { over_30: 0, days_7_29: 0, days_0_6: 0, unknown: 0 };
+  eligible.forEach(item => {
+    const segment = Object.prototype.hasOwnProperty.call(recency, item.recencySegment)
+      ? item.recencySegment
+      : 'unknown';
+    recency[segment] += 1;
+  });
+  return {
+    read: audience.length,
+    eligible: eligible.length,
+    excluded: excluded.length,
+    reasons,
+    recency,
+    attributedRevenue24h: audience.reduce((sum, item) => sum + (Number(item.orderRevenue) || 0), 0),
+  };
 }
 
 function componentsForRecipient(recipient, templateBody) {
@@ -189,4 +278,12 @@ function startCampaignFollowUpJob(io = null) {
   setInterval(() => runCampaignFollowUps(io), 10 * 60 * 1000);
 }
 
-module.exports = { DEFAULT_CONDITIONS, getFollowUpAudience, runCampaignFollowUps, startCampaignFollowUpJob, componentsForRecipient };
+module.exports = {
+  DEFAULT_CONDITIONS,
+  getFollowUpAudience,
+  summarizeFollowUpAudience,
+  runCampaignFollowUps,
+  startCampaignFollowUpJob,
+  componentsForRecipient,
+  classifyPurchaseRecency,
+};

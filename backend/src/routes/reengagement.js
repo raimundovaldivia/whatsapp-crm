@@ -1853,6 +1853,33 @@ router.post('/journeys', async (req, res) => {
   }
 });
 
+router.patch('/journeys/:id', async (req, res) => {
+  try { res.json(await require('../services/campaign-journeys').updateDraft(req.orgId, req.params.id, req.body)); }
+  catch (error) { res.status(409).json({ error: error.message }); }
+});
+
+router.post('/journeys/:id/preview', async (req, res) => {
+  try {
+    const service = require('../services/campaign-journeys');
+    const journey = await service.journeyDetail(req.orgId, req.params.id);
+    if (!journey) return res.status(404).json({ error: 'Secuencia no encontrada' });
+    const enrollment = journey.enrollments.find(e => String(e.id) === String(req.body.enrollmentId));
+    if (!enrollment) return res.status(404).json({ error: 'Destinatario no encontrado' });
+    const contact = await db.getContact(req.orgId, enrollment.phone);
+    const config = await db.getWhatsappConfig(req.orgId);
+    const templates = await require('../services/kapso-whatsapp').getTemplates(config);
+    const steps = Array.isArray(req.body.steps) ? req.body.steps : journey.steps;
+    if (steps.length > 10) return res.status(400).json({ error: 'Demasiados pasos' });
+    const messages = steps.map(step => {
+      const template = templates.find(t => t.name === step.template_name);
+      if (!template) throw new Error('Template no disponible');
+      const body = template.components?.find(c => String(c.type).toUpperCase() === 'BODY')?.text || '';
+      return service.renderBody(body, service.componentsForStep(step, body, contact, enrollment));
+    });
+    res.json({ messages });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
 router.post('/journeys/:id/activate', async (req, res) => {
   try {
     const journeyDetail = await require('../services/campaign-journeys').journeyDetail(req.orgId, req.params.id);
@@ -1867,7 +1894,11 @@ router.post('/journeys/:id/activate', async (req, res) => {
     if (missingTemplates.length) {
       return res.status(409).json({ success: false, error: `Templates no disponibles o no aprobados: ${[...new Set(missingTemplates)].join(', ')}` });
     }
-    const result = await require('../services/campaign-journeys').activateJourney(req.orgId, req.params.id);
+    const result = await require('../services/campaign-journeys').activateJourney(req.orgId, req.params.id, undefined, { retryExcluded: req.body?.retryExcluded === true });
+    if (result.active > 0) {
+      setImmediate(() => require('../services/campaign-journeys').runJourneyEnrollments(io, new Date(), db.getPool(), { orgId: req.orgId, journeyId: Number(req.params.id) })
+        .catch(error => console.error('[CampaignJourneys/activate]', error.message)));
+    }
     res.json({ success: true, ...result });
   } catch (error) {
     res.status(409).json({ success: false, error: error.message });
@@ -2096,7 +2127,19 @@ router.get('/campaigns/:id', async (req, res) => {
          COALESCE(r.error_message,
            CASE WHEN m.delivery_error->>'code' = '131042'
                 THEN 'Meta bloqueó el envío por un problema de pago o elegibilidad'
-                ELSE m.delivery_error->>'message' END) AS display_error_message
+                ELSE m.delivery_error->>'message' END) AS display_error_message,
+         (
+           SELECT MIN(mi.created_at)
+             FROM conversations cv
+             JOIN messages mi ON mi.conversation_id = cv.id
+            WHERE cv.organization_id = $2
+              AND RIGHT(regexp_replace(COALESCE(cv.phone_number, ''), '[^0-9]', '', 'g'), 9)
+                  = RIGHT(regexp_replace(COALESCE(r.destination_phone, r.original_phone, ''), '[^0-9]', '', 'g'), 9)
+              AND mi.direction = 'inbound'
+              AND m.created_at IS NOT NULL
+              AND mi.created_at > m.created_at
+              AND mi.created_at <= m.created_at + INTERVAL '24 hours'
+         ) AS replied_at
        FROM broadcast_campaign_recipients r
        LEFT JOIN messages m ON m.whatsapp_message_id = r.whatsapp_message_id
        WHERE r.campaign_id = $1 AND r.organization_id = $2
@@ -2199,21 +2242,19 @@ router.get('/campaigns/:id/follow-up-preview', async (req, res) => {
     const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
     if (campaign.sending_provider === 'evolution') return res.status(409).json({ error: 'El seguimiento programado sólo está disponible para campañas Kapso' });
-    const audience = await require('../services/campaign-follow-up').getFollowUpAudience(req.orgId, req.params.id);
-    const eligible = audience.filter(item => item.eligible);
-    const excluded = audience.filter(item => !item.eligible);
+    const followUpService = require('../services/campaign-follow-up');
+    const audience = await followUpService.getFollowUpAudience(req.orgId, req.params.id);
+    const summary = followUpService.summarizeFollowUpAudience(audience);
     const { rows: [job] } = await getPool().query(
       `SELECT * FROM broadcast_followup_jobs
         WHERE organization_id=$1 AND source_campaign_id=$2 AND status <> 'cancelled'
         ORDER BY created_at DESC LIMIT 1`,
       [req.orgId, campaign.id]
     );
-    const reasonCounts = {};
-    excluded.flatMap(item => item.reasons).forEach(reason => { reasonCounts[reason] = (reasonCounts[reason] || 0) + 1; });
     res.json({
       success: true,
       campaign,
-      summary: { read: audience.length, eligible: eligible.length, excluded: excluded.length, reasons: reasonCounts },
+      summary,
       job: job || null,
       scheduled: Boolean(job && ['scheduled','processing','completed'].includes(job.status)),
       recipients: audience.map(item => ({
@@ -2221,6 +2262,9 @@ router.get('/campaigns/:id/follow-up-preview', async (req, res) => {
         contactName: item.contact_name,
         eligible: item.eligible,
         reasons: item.reasons,
+        lastOrderAt: item.lastOrderAt,
+        daysSinceLastOrder: item.daysSinceLastOrder,
+        recencySegment: item.recencySegment,
       })),
     });
   } catch (error) {

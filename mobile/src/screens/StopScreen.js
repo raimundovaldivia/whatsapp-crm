@@ -1,3 +1,4 @@
+import { navigationDestination, navigationUrl } from '../utils/routeMap';
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
@@ -185,12 +186,14 @@ export default function StopScreen({ route: navRoute, navigation }) {
   }
 
   function openMaps() {
-    const addr = encodeURIComponent(stop.fullAddress);
+    const destination = navigationDestination(stop);
+    if (!destination) return Alert.alert('Sin ubicación', 'Este pedido no tiene coordenadas ni una dirección válida.');
+    const addr = encodeURIComponent(destination);
     const url  = Platform.OS === 'ios'
       ? `maps://maps.apple.com/?daddr=${addr}&dirflg=d`
       : `google.navigation:q=${addr}&mode=d`;
     Linking.openURL(url).catch(() =>
-      Linking.openURL(`https://maps.google.com/maps?daddr=${addr}`)
+      Linking.openURL(navigationUrl(stop)).catch(() => Alert.alert('No se pudo abrir el mapa', 'Revisa la conexión e intenta nuevamente.'))
     );
   }
 

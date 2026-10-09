@@ -106,6 +106,15 @@ function effectiveOrderNote(draft = {}) {
  * @returns {{ response: string, agentType: string, newState: string }}
  */
 async function processMessage(orgId, conversationId, userMessage, log = null) {
+  const result = await processMessageInternal(orgId, conversationId, userMessage, log);
+  if (inboundPolicy.isInternalSilenceResponse?.(result?.response)) {
+    log?.step?.('silent_response', 'Se descarta explicación interna de silencio');
+    return { ...result, response: null, reason: 'INTERNAL_SILENCE' };
+  }
+  return result;
+}
+
+async function processMessageInternal(orgId, conversationId, userMessage, log = null) {
   try { await require('./commercial').consumeBotTurn(orgId); }
   catch(error) {
     if (![403,429].includes(error.status)) throw error;
@@ -139,6 +148,9 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     };
   }
   const history = await db.getLastMessages(conversationId, 16);
+  if (inboundPolicy.isClosingAcknowledgement?.(userMessage, history, conversation?.pipeline_state)) {
+    return { response: null, skipped: true, reason: 'CLOSING_ACKNOWLEDGEMENT' };
+  }
   const deliveryEnabled = await require('./commercial').permitted(orgId, 'delivery').catch(() => false);
 
   // URL pública de la tienda integrada (para links en catálogo y system prompt)
@@ -755,7 +767,7 @@ Tu objetivo es continuar la conversación con naturalidad y cuidar el acuerdo ya
 REGLAS ABSOLUTAS:
 - NO pidas dirección, horario de entrega, pago ni ningún dato adicional — eso se coordina el día del pedido.
 - Lee primero el último mensaje y responde a ESO; no recites de nuevo todos los datos del pedido.
-- Si solo agradece, confirma brevemente y cierra sin preguntas.
+- Si solo agradece, confirma brevemente y cierra sin preguntas. Si ya cerraste y solo envía un emoji de aprobación, devuelve únicamente [NO_RESPONSE]. No expliques por qué guardas silencio.
 - Si saluda, responde el saludo sin sonar como mensaje automático.
 - Si da información de horario/turno ("durante la mañana", "en la tarde") → acusa recibo sin prometer una hora de entrega.
 - Si el cliente da o corrige una dirección → acusa recibo y mantén la fecha agendada. NUNCA conviertas el pedido en inmediato solo por recibir una dirección.
