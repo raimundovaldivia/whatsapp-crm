@@ -36,6 +36,7 @@ const STOPWORDS = new Set([
 
 // Singular tosco: bandejas → bandeja, huevos → huevo, cajas → caja
 function stem(t) {
+  if(t==='cafes')return 'cafe';
   if (t.length > 4 && t.endsWith('es') && !/[aeiou]es$/.test(t)) return t.slice(0, -2);
   if (t.length > 3 && t.endsWith('s')) return t.slice(0, -1);
   return t;
@@ -135,6 +136,7 @@ function matchProduct(name, catalog) {
   const qt = new Set(tokens(name));
   if (!qt.size) return null;
   let best = null;
+  let ties = [];
   for (const c of catalog) {
     const ct = new Set(tokens(c.title));
     if (!ct.size) continue;
@@ -145,8 +147,10 @@ function matchProduct(name, catalog) {
     // Bonus si todos los tokens de la consulta están en el título (consulta corta: "xl", "caja 180")
     const coverage = inter / qt.size;
     const score = Math.max(jaccard, coverage * 0.75);
-    if (score >= 0.5 && (!best || score > best.score)) best = { candidate: c, score };
+    if (score >= 0.5 && (!best || score > best.score)) { best = { candidate: c, score }; ties = [c.title]; }
+    else if(best && Math.abs(score-best.score)<0.000001) ties.push(c.title);
   }
+  if(best && ties.length>1 && ties.every(t=>/^Huevos (M|L|XL|Jumbo) (blancos|mixtos|cafés) · Bandeja de/.test(t)))return {...best,ambiguous:true,alternatives:ties};
   return best;
 }
 

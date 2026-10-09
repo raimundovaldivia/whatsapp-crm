@@ -85,8 +85,8 @@ router.get('/:slug/products', async (req, res) => {
     const org = await getOrgBySlug(req.params.slug);
     if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
 
-    const products = (await db.getProducts(org.id, true))
-      .filter(product => product.is_business !== true); // nunca exponer catálogo mayorista
+    const allProducts = await db.getProducts(org.id);
+    const products = allProducts.filter(p => p.active === true && p.is_business !== true).map(p => ({...p,replaces_ids:allProducts.filter(old=>old.deprecated_at && old.replacement_product_id===p.id).map(old=>old.id)})); // nunca exponer catálogo mayorista
     res.json({ products });
   } catch (err) {
     res.status(500).json({ error: err.message });

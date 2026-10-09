@@ -5,6 +5,7 @@ const forStore = ctx => ({ ...ctx, eligible: ctx.enabled, tiers: WEB_TIERS, web:
 const STORE_SLUG = 'diez-rios-mrs96z69';
 function packSize(item) {
   const title = String(item.product_name || item.name || item.title || '').toLowerCase();
+  if (/^huevos (m|l|xl|jumbo) (blancos|mixtos|cafés) · bandeja de/.test(title)) return 0;
   if (!/\bxl\b/.test(title) || /queso|aceituna|combo|especial|empresa/.test(title)) return 0;
   if (!/huevo|bandeja|caja|promo/.test(title)) return 0;
   const sizes = title.match(/\b(?:20|30|60|100|180)\b/g) || [];
@@ -97,11 +98,13 @@ function prompt(ctx, products = []) {
   if(ctx.web){
     const table=products.filter(p=>p.is_business!==true&&/huevo/i.test(p.title||p.name||'')).map(p=>{
       const name=p.title||p.name;
-      const totals=[1,2,3].map(quantity=>{const lines=apply([{...p,title:name,quantity,price:Number(p.price)}],ctx);return Math.round(lines[0].price*quantity)});
+      const totals=[1,2,3].map(quantity=>{const lines=apply([{...p,title:name,quantity,price:Number(p.price ?? p.priceMin)}],ctx);return Math.round(lines[0].price*quantity)});
       return `- ${name}: 1 unidad de venta $${totals[0]}; 2 $${totals[1]}; 3 $${totals[2]}.`;
     }).join('\n');
     return `## Precios de huevos para particulares: misma tabla del ecommerce
 ${table}
+Nueva metodología comercial vigente desde el 9 de octubre de 2026: en la primera consulta de precios o inicio de pedido, da contexto breve: "Ahora tenemos descuentos por llevar 2 o 3 bandejas de la misma variedad". Explica el total y ahorro exactos del producto elegido, y que las M no participan. Revisa el historial y no repitas esta introducción si ya se explicó en la conversación. No interrumpas una consulta de pago, reclamo o despacho con publicidad. No digas "desde hoy" en fechas posteriores ni sugieras que cambió un pedido anterior ya confirmado.
+Ofrece activamente la promoción: si pide 1 bandeja, indica cuánto cuesta sumar la segunda y el total; si pide 2, ofrece la tercera con su total. Solo ofrece productos con stock. Nunca agregues cantidades sin aceptación. Si el cliente rechaza, continúa sin insistir. No ofrezcas descuento para M. Si falta color o cantidad por bandeja, pregunta antes de escoger un producto.
 Cada unidad de venta es una bandeja o caja según el nombre: nunca confundas cantidad de huevos con cantidad de bandejas. Las promociones son para el mismo producto; las bandejas M no tienen descuento por cantidad. No acumules estos precios con otros descuentos. Respeta precios especiales y promociones ya acordadas si son mejores. No uses la antigua escala de primera compra ni inventes colores, disponibilidad o precios. Si no está definido el color, no prometas blanco, café ni mixto.
 Antes de las 13:00 de America/Santiago: entrega el mismo día de reparto, sujeto a stock y cobertura. Confirma el pedido solamente después de guardarlo.`;
   }

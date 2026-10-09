@@ -21,7 +21,7 @@ const localImages = { 1:'huevos-bandeja.png',2:'huevos-bandeja.png',3:'huevos-ba
 const category = p => { const s = norm(`${p?.category} ${p?.title}`); return s.includes('queso')?'Quesos':s.includes('aceituna')?'Aceitunas':(s.includes('promo')||s.includes('pack'))?'Promociones':'Huevos'; };
 const fallback = { Huevos:'huevos-bandeja.png',Quesos:'queso-cabra.png',Aceitunas:'aceitunas-verdes.jpg',Promociones:'promo-60-xl.jpg' };
 const summary = p => String(p?.description||'').replace(/\s+/g,' ').replace(/✔️.*$/u,'').trim();
-const unitsFor = p => { const match=String(p?.title||'').match(/(\d+)\s*(?:huevos|unidades|un\b)/i); return match?Number(match[1]):null; };
+const unitsFor = p => { if(p?.pack_units)return Number(p.pack_units);const standard=String(p?.title||'').match(/bandeja de (\d+)/i);if(standard)return Number(standard[1]);const match=String(p?.title||'').match(/(\d+)\s*(?:huevos|unidades|un\b)/i); return match?Number(match[1]):null; };
 const eggColor = p => { const name=norm(p?.title); return name.includes('blanco')?'blancos':name.includes('cafe')?'cafe':'mixtos'; };
 const eggTone = p => ({blancos:'Huevos blancos',cafe:'Huevos cafés',mixtos:'Huevos mixtos'})[eggColor(p)];
 const eggCaliber = p => {
@@ -29,7 +29,7 @@ const eggCaliber = p => {
   if(name.includes('especial'))return{name:'Especial',weight:'68–74 g'};
   if(name.includes('jumbo'))return{name:'Jumbo',weight:'Más de 74 g'};
   if(name.includes('xl'))return{name:'XL',weight:'61–67,9 g'};
-  if(/tamano l\b/.test(name))return{name:'Primera',weight:'54–60,9 g'};
+  if(/(?:tamano|huevos) l\b/.test(name))return{name:'Primera',weight:'54–60,9 g'};
   return{name:'Segunda',weight:'47–53,9 g'};
 };
 const eggImage = p => {
@@ -53,7 +53,7 @@ const previewLines = (lines, tiers) => {
   const result=lines.map(i=>({...i}));
   if(!tiers)return result;
   for(const i of result){const total=trayTotal(i);if(total<i.price*i.quantity)i.price=total/i.quantity;}
-  const selected=result.filter(i=>{const t=String(i.title||'').toLowerCase(), sizes=t.match(/\b(?:20|30|60|100|180)\b/g)||[];i.units=sizes.length===1&&tiers[Number(sizes[0])]?Number(sizes[0]):0;return /\bxl\b/.test(t)&&/huevo|bandeja|caja|promo/.test(t)&&!/queso|aceituna|combo|especial|empresa/.test(t)&&i.units;});
+  const selected=result.filter(i=>{const t=String(i.title||'').toLowerCase(), sizes=t.match(/\b(?:20|30|60|100|180)\b/g)||[];i.units=sizes.length===1&&tiers[Number(sizes[0])]?Number(sizes[0]):0;return !/^huevos (m|l|xl|jumbo) (blancos|mixtos|cafés) · bandeja de/.test(t)&&/\bxl\b/.test(t)&&/huevo|bandeja|caja|promo/.test(t)&&!/queso|aceituna|combo|especial|empresa/.test(t)&&i.units;});
   const units=selected.reduce((s,i)=>s+i.units*i.quantity,0),current=selected.reduce((s,i)=>s+i.price*i.quantity,0);
   if(!Number.isSafeInteger(units)||units<1||units>180000)return result;
   const dp=Array(units+1).fill(Infinity);dp[0]=0;
@@ -98,7 +98,7 @@ export default function Tienda({slug}){
   const go=useCallback((path,r)=>{history.pushState({},'',`${base}${path}`||'/');setRoute(r);setMenu(false);setSearchOpen(false);setCheckout(false);shellRef.current?.scrollTo({top:0,behavior:'smooth'})},[base]);
   const cats=useMemo(()=>['Huevos','Quesos','Aceitunas','Promociones'].filter(c=>products.some(p=>category(p)===c)),[products]);
   const shown=useMemo(()=>{let a=[...products];if(route.cat)a=a.filter(p=>slugify(category(p))===route.cat);if(colorFilter!=='all')a=a.filter(p=>category(p)==='Huevos'&&eggColor(p)===colorFilter);if(search)a=a.filter(p=>norm(p.title).includes(norm(search)));if(sort==='low')a.sort((x,y)=>x.price-y.price);if(sort==='high')a.sort((x,y)=>y.price-x.price);if(sort==='name')a.sort((x,y)=>title(x.title).localeCompare(title(y.title),'es'));return a},[products,route.cat,colorFilter,search,sort]);
-  const selected=products.find(p=>p.id===route.id),free=Number(store?.freeShipping??10000),wa=String(store?.whatsappPhone||'56942876413').replace(/\D/g,''),count=cart.reduce((s,i)=>s+i.q,0),total=currentQuote?.total??displayedLines.reduce((s,i)=>s+i.quantity*Number(i.price),0);
+  const selected=products.find(p=>p.id===route.id)||products.find(p=>p.replaces_ids?.includes(route.id)),free=Number(store?.freeShipping??10000),wa=String(store?.whatsappPhone||'56942876413').replace(/\D/g,''),count=cart.reduce((s,i)=>s+i.q,0),total=currentQuote?.total??displayedLines.reduce((s,i)=>s+i.quantity*Number(i.price),0);
   const recommendations=useMemo(()=>{const purchased=new Set(success?.purchasedCategories||[]);if(!purchased.size)return[];return products.filter(p=>Number(p.stock)>0&&!purchased.has(category(p))).sort((a,b)=>{const rank={Quesos:0,Aceitunas:1,Promociones:2,Huevos:3};return(rank[category(a)]??9)-(rank[category(b)]??9)}).slice(0,3)},[products,success]);
   const add=useCallback((p,n=1)=>{if(Number(p.stock)<=0)return;setCart(a=>{const e=a.find(i=>i.p.id===p.id);return e?a.map(i=>i.p.id===p.id?{...i,q:i.q+n}:i):[...a,{p,q:n}]});setCartOpen(true);const after=(cart.find(i=>i.p.id===p.id)?.q||0)+n;if(after<=2&&previewPrice(p,store?.xlWelcomeTiers,after+1)<previewPrice(p,store?.xlWelcomeTiers,after)+Number(p.price)&&Number(p.stock)>=after+1)setUpsell({...p,offerQuantity:after+1})},[cart,store]);
   const change=(id,d)=>setCart(a=>a.map(i=>i.p.id===id?{...i,q:i.q+d}:i).filter(i=>i.q>0));
