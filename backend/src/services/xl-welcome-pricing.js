@@ -51,7 +51,7 @@ async function context(queryable, orgId, phone) {
 }
 function trayTotal(item) {
   const name=String(item.title||item.name||item.product_name||'').toLowerCase(),q=Number(item.quantity),price=Number(item.price);
-  if(!/huevo/.test(name)||/queso|aceituna|combo|pack|promo|empresa|caja|granel|\b(?:60|100|180)\b/.test(name)||!Number.isSafeInteger(q)||q<1||price<1000)return price*q;
+  if(/\bm\b/.test(name)||!/huevo/.test(name)||/queso|aceituna|combo|pack|promo|empresa|caja|granel|\b(?:60|100|180)\b/.test(name)||!Number.isSafeInteger(q)||q<1||price<1000)return price*q;
   return Math.floor(q/3)*Math.round(price*2.5/100)*100+(q%3===2?Math.round(price*11/6/100)*100:(q%3)*price);
 }
 function apply(items, ctx) {

@@ -53,7 +53,7 @@ assert.equal(p.scaleTotal(30),11000);
 
 require('node:test')('quantity promotion covers egg trays and preserves bulk and special prices',()=>{
 const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
-for(const [title,price,quantity,total] of [['Huevos XL 30 unidades',12000,3,30000],['Huevos M 30 unidades',9000,2,16500],['Huevos M 30 unidades',9000,3,22500],['Huevos Jumbo 20 unidades',10000,3,25000],['Huevos L CAFE',11000,3,27500],['Huevos XL 180 unidades',54000,1,54000],['Queso',15000,3,45000]]){
+for(const [title,price,quantity,total] of [['Huevos XL 30 unidades',12000,3,30000],['Huevos M 30 unidades',9000,2,18000],['Huevos M 30 unidades',9000,3,27000],['Huevos de Campo Tamaño M Blancos – Bandeja 30 Unidades',9000,3,27000],['Huevos Jumbo 20 unidades',10000,3,25000],['Huevos L CAFE',11000,3,27500],['Huevos XL 180 unidades',54000,1,54000],['Queso',15000,3,45000]]){
 const lines=p.apply([{title,price,quantity}],p.forStore({enabled:true}));a.equal(Math.round(lines[0].price*quantity),total);
 }
 a.equal(p.apply([{title:'Huevos XL 30 unidades',price:10000,quantity:3,unit_source:'especial'}],p.forStore({enabled:true}))[0].price,10000);
