@@ -59,6 +59,7 @@ function buildManifest(stops, statuses = {}) {
   for (const st of (stops || [])) {
     if ((statuses[stopKeyOf(st)] || 'pending') !== 'pending') continue;
     for (const it of (st.items || [])) {
+      if (it?.loadItem === false) continue;
       const name = (it.name || it.title || it.product_name || 'Sin nombre').toString().trim() || 'Sin nombre';
       const qty  = Number(it.quantity) || 0;
       if (!qty) continue;
@@ -205,6 +206,10 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const nextPending = stops.find(st => stateOf(st) === 'pending');
 
   function openStopDetail(stop) {
+    if (stop?.source === 'return' || stop?.isReturn) {
+      navigation.navigate('Returns');
+      return;
+    }
     const notes = route?.stop_notes && typeof route.stop_notes === 'object' ? route.stop_notes : {};
     navigation.navigate('Stop', {
       stop: { ...stop, note: notes[stopKeyOf(stop)] || '' },
@@ -447,6 +452,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                       {stop.customerName}
                     </Text>
                     <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || 'Sin dirección'}</Text>
+                    {stop.isReturn ? <Text style={s.stopHistory}>↩️ Cambio/devolución · abre para confirmar retiro y reemplazo</Text> : null}
                     {isPriorityRetry(stop) && (
                       <View style={s.retryChip}>
                         <Text style={s.retryChipTitle}>⚠ PRIORIDAD · REINTENTO</Text>

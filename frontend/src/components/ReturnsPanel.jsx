@@ -21,7 +21,7 @@ export default function ReturnsPanel({colors,order,dispatch=false}) {
     if(['complete','resolve'].includes(action)&&!window.confirm(`Confirma que las operaciones y el movimiento de dinero indicados en la solicitud #${row.id} ya se realizaron.`))return;
     setBusy(true);setError('');try{await api.post(`/delivery/returns/${row.id}/actions`,{action,...extra});await load();}catch(e){setError(e.response?.data?.error||e.message);}finally{setBusy(false);}
   }
-  const visibleCases=dispatch?cases.filter(row=>!['resolved','rejected','cancelled'].includes(row.status)):cases;
+  const visibleCases=dispatch?cases.filter(row=>row.inventory_status==='pending_review'||!['resolved','rejected','cancelled'].includes(row.status)):cases;
   return <div style={{padding:16,color:colors.textPrimary,height:dispatch?'auto':'100%',flexShrink:0,overflowY:dispatch?'visible':'auto',boxSizing:'border-box',border:dispatch?`1px solid ${colors.border}`:undefined,borderRadius:12}}>
     <h3>{dispatch?'Retiros y cambios pendientes':'Devoluciones y cambios'}{order?' · '+(order.shopifyName||'#'+order.rawId):''}</h3>
     <p style={{color:colors.textSecondary,fontSize:13}}>Cada solicitud conserva el pedido original. El retiro queda pendiente de revisión de inventario; no aumenta automáticamente el stock.</p>
@@ -41,7 +41,7 @@ export default function ReturnsPanel({colors,order,dispatch=false}) {
     </fieldset>}
     {!visibleCases.length&&<p>{dispatch?'No hay retiros ni cambios pendientes.':'No hay solicitudes registradas.'}</p>}
     {visibleCases.map(row=>{const plan=plans[row.id]||{date:String(row.scheduled_date||'').slice(0,10),driverId:row.driver_user_id||''};const patch=v=>setPlans({...plans,[row.id]:{...plan,...v}});return <div key={row.id} style={{border:`1px solid ${colors.border}`,borderRadius:12,padding:16,marginTop:12,background:colors.bgCard}}>
-      <strong>#{row.id} · {row.customer.name} · {RETURN_STATES[row.status]}</strong>
+      <strong>#{row.id} · {row.customer.name} · {RETURN_STATES[row.status]}{row.inventory_status==='pending_review'?' · Inventario pendiente':''}</strong>
       <p>Pedido {row.order_id} · {row.kind==='exchange'?'Cambio':row.kind==='issue'?'Problema':'Devolución'}</p>
       <p>{row.reason}</p><ul>{row.items.map(item=><li key={item.index}>{item.quantity} × {item.name}</li>)}</ul>
       <p>{row.pickup_required?'Retirar los productos indicados.':'No requiere retiro.'} {row.replacement_description&&`Entregar: ${row.replacement_description}`}</p>

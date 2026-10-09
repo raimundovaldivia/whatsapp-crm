@@ -61,10 +61,10 @@ router.post('/:id/actions',async(req,res)=>{
     if(!row)throw fail('Solicitud no encontrada.',404);
     const driver=req.role==='repartidor', b=req.body, action=b.action;
     if(driver&&(row.driver_user_id!==req.userId||!['start','complete','incident'].includes(action)))throw fail('No autorizado para esta solicitud.',403);
-    let status=row.status,inventory=row.inventory_status,assigned=row.driver_user_id,date=row.scheduled_date,confirmMoney=false;
+    let status=row.status,inventory=row.inventory_status,assigned=row.driver_user_id,date=row.scheduled_date,confirmMoney=false,routeId=row.route_id;
     if(action==='approve'&&status==='requested')status='approved';
     else if(action==='reject'&&status==='requested')status='rejected';
-    else if(action==='cancel'&&['requested','approved','scheduled'].includes(status))status='cancelled';
+    else if(action==='cancel'&&['requested','approved','scheduled'].includes(status)){status='cancelled';routeId=null;}
     else if(action==='schedule'&&['approved','scheduled'].includes(status)){
       if(!dateValid(b.date)||!Number.isInteger(Number(b.driverId)))throw fail('Indica fecha y despachador.');
       const {rows}=await client.query("SELECT id FROM users WHERE id=$1 AND organization_id=$2 AND merged_into_user_id IS NULL AND role IN ('repartidor','coordinador')",[b.driverId,req.orgId]);
@@ -73,7 +73,7 @@ router.post('/:id/actions',async(req,res)=>{
     }else if(action==='start'&&status==='scheduled')status='in_progress';
     else if(action==='incident'&&status==='in_progress'){
       if(!String(b.note||'').trim())throw fail('Describe por qué no se pudo completar.');
-      status='approved';assigned=null;date=null;
+      status='approved';assigned=null;date=null;routeId=null;
     }else if(action==='complete'&&status==='in_progress'){
       if(row.pickup_required&&b.pickedUp!==true)throw fail('Confirma que retiraste los productos.');
       if(row.replacement_description&&b.replaced!==true)throw fail('Confirma la entrega del reemplazo.');
@@ -94,7 +94,20 @@ router.post('/:id/actions',async(req,res)=>{
     }
     const event={action,status,userId:req.userId,at:new Date().toISOString(),note:String(b.note||'').slice(0,2000),driverId:assigned,scheduledDate:date,inventoryStatus:inventory,pickedUp:b.pickedUp===true,replaced:b.replaced===true,moneyConfirmed:confirmMoney};
     const {rows:[updated]}=await client.query(`UPDATE order_returns SET status=$3,inventory_status=$4,driver_user_id=$5,scheduled_date=$6,
-      money_confirmed=money_confirmed OR $7,events=events || $8::jsonb,updated_at=NOW() WHERE id=$1 AND organization_id=$2 RETURNING *`,[row.id,req.orgId,status,inventory,assigned,date,confirmMoney,JSON.stringify([event])]);
+      money_confirmed=money_confirmed OR $7,events=events || $8::jsonb,route_id=$9,updated_at=NOW() WHERE id=$1 AND organization_id=$2 RETURNING *`,[row.id,req.orgId,status,inventory,assigned,date,confirmMoney,JSON.stringify([event]),routeId]);
+    if(row.route_id&&['complete','incident','cancel'].includes(action)){
+      const stopKey=`return_${row.id}`,routeStopStatus=action==='complete'?'entregado':action==='cancel'?'cancelled':'not_delivered';
+      const {rows:[linked]}=await client.query(`UPDATE delivery_routes SET
+        stop_statuses=COALESCE(stop_statuses,'{}'::jsonb)||jsonb_build_object($1::text,$2::text),
+        stop_notes=COALESCE(stop_notes,'{}'::jsonb)||CASE WHEN $3::text='' THEN '{}'::jsonb ELSE jsonb_build_object($1::text,$3::text) END,
+        stop_times=COALESCE(stop_times,'{}'::jsonb)||jsonb_build_object($1::text,to_jsonb(NOW()))
+        WHERE id=$4 AND organization_id=$5 RETURNING orders,stop_statuses`,[stopKey,routeStopStatus,String(b.note||'').slice(0,500),row.route_id,req.orgId]);
+      if(linked){
+        const orders=Array.isArray(linked.orders)?linked.orders:JSON.parse(linked.orders||'[]'),terminal=['entregado','cancelled','postponed','not_delivered'];
+        const allDone=orders.length>0&&orders.every(stop=>terminal.includes((linked.stop_statuses||{})[`${stop.source}_${stop.id}`]));
+        if(allDone)await client.query("UPDATE delivery_routes SET status='completed',completed_at=NOW() WHERE id=$1 AND organization_id=$2",[row.route_id,req.orgId]);
+      }
+    }
     await client.query('COMMIT');res.json({case:updated});
   }catch(err){if(client)await client.query('ROLLBACK');res.status(err.status||500).json({error:err.status?err.message:'No se pudo registrar la acción.'});}finally{client?.release();}
 });

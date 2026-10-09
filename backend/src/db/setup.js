@@ -1487,7 +1487,9 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS order_returns_order ON order_returns(organization_id,source,order_id);
       ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
+      ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS route_id INTEGER REFERENCES delivery_routes(id);
       CREATE INDEX IF NOT EXISTS order_returns_driver ON order_returns(organization_id,driver_user_id,status);
+      CREATE INDEX IF NOT EXISTS order_returns_route ON order_returns(organization_id,route_id);
       CREATE TABLE IF NOT EXISTS return_money_movements (
         id SERIAL PRIMARY KEY, return_id INTEGER NOT NULL UNIQUE REFERENCES order_returns(id),
         organization_id INTEGER NOT NULL REFERENCES organizations(id), method TEXT NOT NULL,
