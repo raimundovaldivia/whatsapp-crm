@@ -11,6 +11,7 @@ const router        = express.Router();
 const db            = require('../db/database');
 const whatsapp      = require('../services/whatsapp-provider');
 const { getPool }   = require('../db/database');
+const xlPricing = require('../services/xl-welcome-pricing');
 
 // ── Helper: obtener org por slug ────────────────────────────────────
 async function getOrgBySlug(slug) {
@@ -63,6 +64,7 @@ router.get('/:slug/info', async (req, res) => {
       logo:         storeLogo  || null,
       color:        storeColor || '#22c55e',
       slug:         org.slug,
+      xlWelcomeTiers: org.slug === xlPricing.STORE_SLUG ? xlPricing.TIERS : null,
       announcement: announcement || '',
       heroTitle:    heroTitle    || org.name,
       heroSubtitle: heroSubtitle || 'Descubre nuestro catálogo y realiza tu pedido.',
@@ -93,6 +95,29 @@ router.get('/:slug/products', async (req, res) => {
 
 // ── POST /store/:slug/orders ────────────────────────────────────────
 // Body: { name, phone, address, city, items: [{productId, quantity}] }
+router.post('/:slug/quote', async (req, res) => {
+  try {
+    const org = await getOrgBySlug(req.params.slug);
+    if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
+    const { phone, items } = req.body;
+    if (typeof phone !== 'string' || phone.length > 30 || !/^\d{8,15}$/.test(phone.replace(/\D/g, '')) ||
+      !Array.isArray(items) || !items.length || items.length > 100 || items.some(i => !Number.isSafeInteger(i.productId) || !Number.isSafeInteger(i.quantity) || i.quantity < 1 || i.quantity > 1000)) {
+      return res.status(400).json({ error: 'Ingresa un WhatsApp chileno válido y los productos.' });
+    }
+    const products = await db.getProducts(org.id, true);
+    const merged = new Map();
+    for (const i of items) merged.set(i.productId, (merged.get(i.productId) || 0) + i.quantity);
+    const lines = [...merged].map(([id, quantity]) => {
+      const p = products.find(p => Number(p.id) === id && p.is_business !== true);
+      if (!p || quantity > 1000) throw Object.assign(new Error('Producto o cantidad no disponible'), { status: 400 });
+      return { id, title: p.title, quantity, price: Number(p.price) };
+    });
+    const ctx = await xlPricing.context(getPool(), org.id, phone);
+    const priced = xlPricing.apply(lines, ctx);
+    res.json({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) });
+  } catch (err) { res.status(err.status || 503).json({ error: 'No pudimos confirmar los precios. Intenta nuevamente.' }); }
+});
+
 router.post('/:slug/orders', async (req, res) => {
   try {
     const org = await getOrgBySlug(req.params.slug);
@@ -133,6 +158,7 @@ router.post('/:slug/orders', async (req, res) => {
       customerPhone:   phoneClean,
       shippingAddress: { address, city },
       items,
+      expectedTotal: req.body.expectedTotal,
     });
 
     // Guardar contacto

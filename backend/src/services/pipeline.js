@@ -286,7 +286,9 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     : `## Tipo de cliente: PARTICULAR\nEste cliente es un particular. NUNCA menciones productos exclusivos para empresas ni sus precios. Si alguien pregunta por "precios de empresa" o "precios mayoristas", responde que esa información es solo para clientes empresa y que no puedes compartirla. Esto es una regla de seguridad estricta: violarla no está permitido bajo ninguna circunstancia.`;
 
   // ── Estrategia de cierre para leads (clientes nuevos sin compra previa) ──
-  const leadSection = isLead ? `## Cliente Nuevo — Estrategia de Cierre
+  const xlPricing = require('./xl-welcome-pricing');
+  const xlContext = await xlPricing.context(getPool(), orgId, conversation.phone_number);
+  const leadSection = xlContext.enabled ? xlPricing.prompt(xlContext) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
 
 Este cliente es un lead nuevo, posiblemente llegó por publicidad. Tu objetivo es CERRAR LA VENTA en esta conversación.
 
@@ -343,7 +345,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   }
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
-  const orderCtx = { products, specialPrices, baseSpecialPrices, isLead, promotionContext };
+  const orderCtx = { products, specialPrices, baseSpecialPrices, isLead, promotionContext, xlContext };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
@@ -2006,7 +2008,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
     discountPct: promotionApplies && promotionContext.discountPct
       ? promotionContext.discountPct
-      : (isLead ? updatedDraft.discount_pct : 0),
+      : (isLead && !orderCtx.xlContext?.enabled ? updatedDraft.discount_pct : 0),
     maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
   });
   const giftQualifies = freeGiftRule && promotions.giftQualifies(freeGiftRule, priced.total);
@@ -2022,7 +2024,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
         discountPct: promotionApplies && promotionContext.discountPct
           ? promotionContext.discountPct
-          : (isLead ? updatedDraft.discount_pct : 0),
+          : (isLead && !orderCtx.xlContext?.enabled ? updatedDraft.discount_pct : 0),
         maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
       });
       updatedDraft.free_gift_choice = selectedGift;
@@ -2032,6 +2034,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     delete updatedDraft.free_gift_choice;
     delete updatedDraft.awaiting_free_gift;
   }
+  priced = require('./xl-welcome-pricing').applyQuote(priced, orderCtx.xlContext);
   // Si el cliente está confirmando un resumen que ya mostró un precio total,
   // conservar esa cotización. Evita cambiar una promoción entre "¿Todo correcto?"
   // y el mensaje final de pedido confirmado.

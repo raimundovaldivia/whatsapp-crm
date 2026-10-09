@@ -1001,7 +1001,7 @@ async function createOrder({ conversationId, organizationId, items, customerName
   return order;
 }
 
-async function createStoreOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress }) {
+async function createStoreOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, expectedTotal }) {
   const requested = new Map();
   for (const item of items || []) {
     const productId = Number(item?.productId);
@@ -1018,6 +1018,9 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`store:${organizationId}:${String(customerPhone).replace(/\D/g, '').slice(-9)}`]);
+    const xlPricing = require('../services/xl-welcome-pricing');
+    const xlContext = await xlPricing.context(client, organizationId, customerPhone);
     const ids = [...requested.keys()];
     const { rows: products } = await client.query(
       `SELECT id, title, price, stock, active, is_business
@@ -1048,6 +1051,12 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
       total += price * quantity;
     }
 
+    const adjusted = xlPricing.apply(resolvedItems, xlContext);
+    resolvedItems.splice(0, resolvedItems.length, ...adjusted);
+    total = Math.round(resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0));
+    if (expectedTotal != null && Number(expectedTotal) !== total) {
+      throw Object.assign(new Error('El precio cambió. Revisa el total actualizado antes de confirmar.'), { status: 409, code: 'PRICE_CHANGED' });
+    }
     for (const [productId, quantity] of requested) {
       await client.query(
         `UPDATE products

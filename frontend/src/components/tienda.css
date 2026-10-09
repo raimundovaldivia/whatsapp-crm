@@ -201,3 +201,5 @@
 
 /* La etiqueta de calibre no debe heredar el tamaño completo de la fotografía. */
 .dr-product-img>.dr-product-weight{width:auto;height:auto;object-fit:initial}
+
+.dr-welcome-scale{max-width:1200px;margin:24px auto;padding:24px;background:#f0f5ea;border-radius:16px;color:#173b2b}.dr-welcome-scale h2{margin:0 0 12px}.dr-welcome-scale p{line-height:1.5}.dr-welcome-scale>div{display:flex;flex-wrap:wrap;gap:12px}.dr-welcome-scale>div>span{display:flex;flex:1;min-width:130px;flex-direction:column;gap:8px;background:white;padding:16px;border-radius:10px}.dr-welcome-scale strong{font-size:24px}
