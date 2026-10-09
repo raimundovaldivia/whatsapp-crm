@@ -1437,6 +1437,7 @@ function DespachosRepartos({ colors }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, height: '100%', overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <ReturnsPanel colors={colors} dispatch/>
       {/* Vista y período sugerido */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '12px', color: colors.textSecondary, fontWeight: 700 }}>Ver por</span>
