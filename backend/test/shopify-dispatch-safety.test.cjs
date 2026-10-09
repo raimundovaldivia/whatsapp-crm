@@ -31,6 +31,8 @@ test('history sync preserves local logistics and does not recreate historical di
     await engine.exec(`
       UPDATE shopify_orders SET shopify_created_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - INTERVAL '1 day'
         WHERE shopify_order_id IN ('pending','partial');
+      UPDATE shopify_orders SET customer_name='Ana Maria Leiva', customer_phone='56911111111'
+        WHERE shopify_order_id IN ('pending','partial','old-open');
       UPDATE shopify_orders SET delivery_date=CURRENT_DATE - 1 WHERE shopify_order_id='old-scheduled';
       UPDATE shopify_orders SET dispatch_count=1,last_attempt_at=NOW() WHERE shopify_order_id='old-attempt';
       UPDATE shopify_orders SET crm_status='no_entregado', dispatch_count=2,
@@ -57,9 +59,11 @@ test('history sync preserves local logistics and does not recreate historical di
     const res = response();
     await handler(router, 'get', '/orders')({ orgId: 1 }, res);
     assert.equal(res.code, 200, JSON.stringify(res.body));
-    assert.deepEqual(Array.from(res.body.orders, o => o.id).sort(), ['old-attempt','old-scheduled','partial','pending','rescheduled','retry']);
+    assert.deepEqual(Array.from(res.body.orders, o => o.id).sort(), ['old-attempt','old-scheduled','rescheduled','retry']);
+    assert.equal(res.body.orders.filter(o => o.customerName === 'Ana Maria Leiva').length <= 1, true,
+      'historical Shopify purchases must not create repeated delivery stops');
     // Reject a stale browser selection on the server as well.
-    for (const id of ['history', 'old-open', 'old-partial']) {
+    for (const id of ['history', 'pending', 'partial', 'old-open', 'old-partial']) {
       const send = response();
       await handler(router, 'post', '/routes')({ orgId: 1, body: {
         send: true, orders: [{ id, source: 'shopify', items: [] }],

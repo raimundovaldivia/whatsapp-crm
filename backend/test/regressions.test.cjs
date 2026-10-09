@@ -442,7 +442,7 @@ test('Meta signature checks whole batch and persists every message/status under 
     const bad=response();await auth.verifyWebhook('meta')({...req,rawBody:Buffer.from('{}')},bad,()=>assert.fail('invalid signature'));assert.equal(bad.code,401);
   } finally {await f.engine.close();}
 });
-test('dispatch excludes future bot and Shopify deliveries and rechecks stale routes', async () => {
+test('dispatch includes only explicit, due or retried deliveries and rechecks stale routes', async () => {
   const f = await fixture();
   try {
     await f.engine.exec(`
@@ -457,7 +457,10 @@ test('dispatch excludes future bot and Shopify deliveries and rechecks stale rou
         (1,'overdue',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date - 1),
         (1,'undated',NULL);
     `);
-    const router = load('src/routes/delivery.js', {'../db/database': f.db, '../middleware/auth': {requireAuth: noop, requireRole: () => noop}});
+    const router = load('src/routes/delivery.js', {
+      '../db/database': {...f.db, getSetting: async () => null},
+      '../middleware/auth': {requireAuth: noop, requireRole: () => noop},
+    });
     const call = async (method, path, body={}, params={}) => {
       const res=response();
       await handler(router,method,path)({orgId:1,role:'owner',body,params},res);
@@ -466,7 +469,16 @@ test('dispatch excludes future bot and Shopify deliveries and rechecks stale rou
     const list=await call('get','/orders');
     assert.equal(list.code,200);
     assert.deepEqual(Array.from(list.body.orders,o=>`${o.source}_${o.id}`).sort(),
-      ['bot_2','bot_3','bot_4','shopify_overdue','shopify_today','shopify_undated'].sort());
+      ['bot_2','bot_4','shopify_overdue','shopify_today'].sort());
+    // Una pestaña que conservó una selección antigua tampoco puede volver a
+    // introducirla al optimizar: el servidor arma la ruta solo con lo vigente.
+    const optimized=await call('post','/optimize',{orders:[
+      {source:'bot',id:3,customerName:'Histórico'},
+      {source:'bot',id:2,customerName:'Hoy'},
+    ],vehicles:1});
+    assert.equal(optimized.code,200,JSON.stringify(optimized.body));
+    assert.deepEqual(Array.from(optimized.body.routes[0].stops,o=>`${o.source}_${o.id}`),['bot_2']);
+    assert.deepEqual(Array.from(optimized.body.skipped,o=>`${o.source}_${o.id}`),['bot_3']);
     // Ignore stale or forged dates from the browser; use the database date.
     const future=[{source:'bot',id:1,deliveryDate:'2000-01-01'},{source:'shopify',id:'gid://shopify/Order/42'}];
     assert.equal((await call('post','/routes',{orders:future,send:true})).code,400);
@@ -543,6 +555,7 @@ test('sending a route reserves its orders and cancelling releases them', async (
 test('delivery retries are placed first and remain explicit in the saved route', async () => {
   const f = await fixture();
   try {
+    await f.query("UPDATE orders SET status='por_despachar' WHERE id=1");
     await f.query("UPDATE orders SET dispatch_count=2,last_attempt_status='no_entregado',delivery_note='Cliente no estaba' WHERE id=2");
     const database = { ...f.db, getSetting: async () => null };
     const router = load('src/routes/delivery.js', {

@@ -362,7 +362,12 @@ function NuevoReparto({ colors }) {
   function reloadOrders() {
     setLoadingOrders(true);
     api.get('/delivery/orders')
-      .then(r => setOrders(uniqueOrders(r.data.orders)))
+      .then(r => {
+        const clean = uniqueOrders(r.data.orders);
+        const available = new Set(clean.map(o => `${o.source}_${o.id}`));
+        setOrders(clean);
+        setSelected(prev => new Set([...prev].filter(key => available.has(key))));
+      })
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoadingOrders(false));
   }
@@ -592,12 +597,12 @@ function NuevoReparto({ colors }) {
             Pedidos pendientes {loadingOrders ? '' : `(${orders.length})`}
           </span>
           <span style={{ color: colors.textMuted, fontSize: '12px' }}>
-            {selected.size} seleccionados
+            {selectedOrders.length} seleccionados
           </span>
         </div>
 
         <div style={{ padding: '8px 16px', color: colors.textMuted, fontSize: '11px', borderBottom: `1px solid ${colors.border}` }}>
-          Shopify: últimos 60 días y pedidos anteriores con gestión de despacho. El historial completo sigue disponible en Clientes.
+          Solo aparecen pedidos marcados Por despachar, reintentos y pedidos programados para hoy o una fecha anterior.
         </div>
 
         {error && (
@@ -804,9 +809,9 @@ function NuevoReparto({ colors }) {
         {step === 'assign' && optRoutes.length > 0 && (
           <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
 
-            {optimizedRoute?.optimized === false && (
+            {optimizedRoute?.warning && (
               <div style={{ fontSize: '12px', color: '#fbbf24', backgroundColor: '#2a1f08', border: '1px solid #78350f', borderRadius: '8px', padding: '10px 12px', marginBottom: '16px', lineHeight: 1.4 }}>
-                {optimizedRoute.warning || 'Rutas sin optimizar (revisa la configuración de Google Maps y la bodega).'}
+                {optimizedRoute.warning}
               </div>
             )}
 

@@ -59,6 +59,26 @@ const importedShopifyClosed = `(COALESCE(crm_status, 'nuevo') IN ('', 'nuevo') A
   )
 ))`;
 
+// La bandeja de reparto no es un espejo del historial de pedidos. Un pedido
+// entra solo cuando hubo una decisión logística local: se marcó por despachar,
+// es un reintento o tiene fecha de entrega vencida/hoy. Esto evita que órdenes
+// Shopify antiguas todavía UNFULFILLED reaparezcan como paradas nuevas.
+const chileTodaySql = `(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date`;
+const shopifyDispatchReady = `(
+  COALESCE(crm_status, '') IN ('por_despachar', 'no_entregado')
+  OR (delivery_date IS NOT NULL AND delivery_date <= ${chileTodaySql})
+  OR COALESCE(dispatch_count, 0) > 0
+  OR last_attempt_at IS NOT NULL
+  OR last_attempt_status IS NOT NULL
+)`;
+const botDispatchReady = `(
+  COALESCE(status, '') IN ('por_despachar', 'payment_received', 'no_entregado')
+  OR (delivery_date IS NOT NULL AND delivery_date <= ${chileTodaySql})
+  OR COALESCE(dispatch_count, 0) > 0
+  OR last_attempt_at IS NOT NULL
+  OR last_attempt_status IS NOT NULL
+)`;
+
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
@@ -200,6 +220,7 @@ async function reserveOrdersForRoute(client, orgId, orders) {
            AND delivered_at IS NULL
            AND COALESCE(crm_status, '') NOT IN ('asignado_ruta','en_camino','entregado','cancelled')
            AND NOT ${importedShopifyClosed}
+           AND ${shopifyDispatchReady}
        RETURNING shopify_order_id`,
       [orgId, shopifyIds]
     ) : null,
@@ -208,6 +229,7 @@ async function reserveOrdersForRoute(client, orgId, orders) {
          WHERE organization_id = $1 AND id = ANY($2::int[])
            AND delivered_at IS NULL
            AND status NOT IN ('asignado_ruta','en_camino','entregado','paid','cancelled')
+           AND ${botDispatchReady}
        RETURNING id`,
       [orgId, botIds]
     ) : null,
@@ -486,6 +508,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
           AND (delivery_date IS NULL OR delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
           AND delivered_at IS NULL   -- ya se repartió: no vuelve a la lista
           AND NOT ${importedShopifyClosed}
+          AND ${shopifyDispatchReady}
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
@@ -538,6 +561,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
           AND (o.status IS NULL OR o.status NOT IN ('asignado_ruta', 'en_camino', 'entregado', 'cancelled'))
           AND (o.delivery_date IS NULL OR o.delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
           AND o.delivered_at IS NULL   -- ya se repartió (aunque quede en 'paid'): no vuelve a la lista
+          AND ${botDispatchReady}
         ORDER BY o.created_at ASC
       `, [req.orgId]),
     ]);
@@ -709,10 +733,22 @@ async function optimizeOneRoute(stops, warehouse, apiKey) {
 
 router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const { orders: rawOrders, vehicles: vehiclesRaw } = req.body;
-  const orders = prioritizeOrders(rawOrders);
+  let availability;
+  try {
+    availability = await partitionDispatchable(getPool(), req.orgId, rawOrders || []);
+  } catch (err) {
+    console.error('[Delivery/optimize availability]', err.message);
+    return res.status(500).json({ success: false, error: 'No se pudo validar la lista de pedidos' });
+  }
+  const orders = availability.keep;
+  const skipped = availability.skip;
   const vehicles = Math.max(1, Math.min(parseInt(vehiclesRaw) || 1, 10));
   if (!orders || orders.length === 0)
-    return res.status(400).json({ success: false, error: 'No hay pedidos para optimizar' });
+    return res.status(400).json({
+      success: false,
+      error: 'No hay pedidos pendientes de despacho para optimizar. Actualiza la lista.',
+      skipped,
+    });
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -737,11 +773,11 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinado
       });
     }
     return res.json({
-      success: true, optimized: false, warehouse, routes,
+      success: true, optimized: false, warehouse, routes, skipped,
       route: routes[0]?.stops || [],   // compat con clientes viejos
-      warning: !warehouse
+      warning: `${skipped.length ? `${skipped.length} pedido${skipped.length === 1 ? '' : 's'} antiguo${skipped.length === 1 ? '' : 's'} o no disponible${skipped.length === 1 ? '' : 's'} se omitieron. ` : ''}${!warehouse
         ? 'Configura la dirección de la bodega en Ajustes para optimizar las rutas.'
-        : 'Sin GOOGLE_MAPS_API_KEY — orden sin optimizar.',
+        : 'Sin GOOGLE_MAPS_API_KEY - orden sin optimizar.'}`,
     });
   }
 
@@ -777,8 +813,11 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinado
     }
 
     res.json({
-      success: true, optimized: true, warehouse, vehicles: routes.length, routes,
+      success: true, optimized: true, warehouse, vehicles: routes.length, routes, skipped,
       route: routes[0]?.stops || [],   // compat con clientes viejos
+      warning: skipped.length
+        ? `${skipped.length} pedido${skipped.length === 1 ? '' : 's'} antiguo${skipped.length === 1 ? '' : 's'} o no disponible${skipped.length === 1 ? '' : 's'} se omitieron.`
+        : null,
     });
   } catch (err) {
     console.error('[Delivery/optimize]', err.message);
@@ -1628,7 +1667,8 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
       `SELECT id::text AS id, status, dispatch_count, last_attempt_status, delivery_note,
               (delivered_at IS NOT NULL OR status IN ('en_camino', 'entregado', 'cancelled', 'paid')
                 OR (status = 'asignado_ruta' AND NOT $3::boolean)
-                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
+                 OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+                 OR (NOT $3::boolean AND NOT ${botDispatchReady})) AS blocked
          FROM orders
         WHERE organization_id = $1 AND id = ANY($2::int[])`,
       [orgId, botIds, allowAssigned]
@@ -1651,7 +1691,8 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
               (delivered_at IS NOT NULL OR ${importedShopifyClosed}
                 OR crm_status IN ('en_camino', 'entregado', 'cancelled')
                 OR (crm_status = 'asignado_ruta' AND NOT $3::boolean)
-                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
+                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+                OR (NOT $3::boolean AND NOT ${shopifyDispatchReady})) AS blocked
          FROM shopify_orders
         WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])`,
       [orgId, shopIds, allowAssigned]
@@ -1666,6 +1707,12 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
         deliveryNote: row.delivery_note || null,
       });
     });
+  }
+  // Un id inexistente o perteneciente a otra organización nunca debe viajar
+  // confiando solo en la copia que conserva el navegador.
+  for (const order of list) {
+    const key = orderKey(order);
+    if (!key || !fresh.has(key)) done.add(key);
   }
   const keep = [], skip = [];
   for (const order of list) {
