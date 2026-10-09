@@ -51,3 +51,23 @@ test('Diez Ríos catalog migration removes promotions and sets the requested sto
     ]);
   }finally{await engine.close();}
 });
+
+test('olive stock migration sets every Diez Ríos olive source to zero only once', async () => {
+  const {PGlite}=require('@electric-sql/pglite');const fs=require('node:fs');const path=require('node:path');
+  const engine=new PGlite();try {
+    await engine.exec(`CREATE TABLE organizations(id INT,slug TEXT); INSERT INTO organizations VALUES(1,'diez-rios-mrs96z69'),(2,'otra');
+      CREATE TABLE settings(organization_id INT,key TEXT,value TEXT,UNIQUE(organization_id,key));
+      CREATE TABLE products(id INT,organization_id INT,title TEXT,stock INT,updated_at TIMESTAMPTZ);
+      CREATE TABLE products_cache(id INT,organization_id INT,title TEXT,inventory_quantity INT,cached_at TIMESTAMPTZ);
+      INSERT INTO products VALUES (1,1,'Aceitunas verdes 500 g',12,NULL),(2,1,'Huevos XL',100,NULL),(3,2,'Aceitunas ajenas',7,NULL);
+      INSERT INTO products_cache VALUES (1,1,'Aceitunas moradas 500 g',8,NULL),(2,1,'Queso de cabra',5,NULL),(3,2,'Aceitunas ajenas',9,NULL);`);
+    const source=fs.readFileSync(path.join(__dirname,'../src/db/setup.js'),'utf8');
+    const sql=source.match(/UPDATE products p SET stock = 0[\s\S]*?ON CONFLICT \(organization_id, key\) DO NOTHING;/)[0];
+    await engine.exec(sql);
+    assert.deepEqual((await engine.query('SELECT id,stock FROM products ORDER BY id')).rows.map(row=>[row.id,row.stock]),[[1,0],[2,100],[3,7]]);
+    assert.deepEqual((await engine.query('SELECT id,inventory_quantity FROM products_cache ORDER BY id')).rows.map(row=>[row.id,row.inventory_quantity]),[[1,0],[2,5],[3,9]]);
+    await engine.exec('UPDATE products SET stock=4 WHERE id=1');
+    await engine.exec(sql);
+    assert.equal((await engine.query('SELECT stock FROM products WHERE id=1')).rows[0].stock,4);
+  }finally{await engine.close();}
+});

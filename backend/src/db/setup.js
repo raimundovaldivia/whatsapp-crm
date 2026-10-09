@@ -764,6 +764,31 @@ async function setupDatabase() {
       SELECT id, 'promotions_enabled', 'false' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
       ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value;
 
+      -- Inventario confirmado de Diez Ríos (09-10-2026): no quedan
+      -- aceitunas disponibles. Actualizamos tanto el catálogo local —fuente
+      -- autoritativa del bot— como la copia de Shopify para que ninguna vista
+      -- ni automatización siga ofreciéndolas por un stock cacheado anterior.
+      UPDATE products p SET stock = 0, updated_at = NOW()
+      FROM organizations o
+      WHERE p.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND COALESCE(p.title, '') ILIKE '%aceitun%'
+        AND NOT EXISTS (
+          SELECT 1 FROM settings s WHERE s.organization_id = o.id
+            AND s.key = 'olive_stock_zero_2026_10_09_applied' AND s.value = 'true'
+        );
+      UPDATE products_cache pc SET inventory_quantity = 0, cached_at = NOW()
+      FROM organizations o
+      WHERE pc.organization_id = o.id AND o.slug = 'diez-rios-mrs96z69'
+        AND COALESCE(pc.title, '') ILIKE '%aceitun%'
+        AND NOT EXISTS (
+          SELECT 1 FROM settings s WHERE s.organization_id = o.id
+            AND s.key = 'olive_stock_zero_2026_10_09_applied' AND s.value = 'true'
+        );
+      INSERT INTO settings (organization_id, key, value)
+      SELECT id, 'olive_stock_zero_2026_10_09_applied', 'true'
+      FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      ON CONFLICT (organization_id, key) DO NOTHING;
+
 
       -- Migración: normalizar contacts.phone (quitar '+', agregar '56' a móviles chilenos)
       -- Eliminar primero los que quedarían duplicados tras normalizar
