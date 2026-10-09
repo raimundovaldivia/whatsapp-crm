@@ -14,9 +14,16 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       agent_mode: 'ai',
     }),
     getLastMessages: async () => options.history || [],
-    getSetting: async (_orgId, key) => key === 'delivery_info' && options.deliveryEnabled
-      ? JSON.stringify({ schedule: options.schedule || 'Lunes a Sábado de 15:00 a 21:00' })
-      : null,
+    getSetting: async (_orgId, key) => {
+      if (key === 'delivery_info' && options.deliveryEnabled) {
+        return JSON.stringify({ schedule: options.schedule || 'Lunes a Sábado de 15:00 a 21:00' });
+      }
+      if (key === 'payment_info') return options.paymentInfo || null;
+      if (key === 'charge_settings' && options.bankDetails) {
+        return JSON.stringify({ bankDetails: options.bankDetails });
+      }
+      return null;
+    },
     getContact: async () => ({ name: 'Katherine Andrea Bravo Becerra', contact_type: 'customer', client_type: 'personal' }),
     getPrimaryDataSource: async () => null,
     getCachedProducts: async () => [],
@@ -30,6 +37,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       total_price: 45000,
       items: [{ quantity: 1, name: 'Caja 100 Huevos Jumbo' }],
       shipping_address: { address: 'Gobernador Demetrio Reygada 4005', city: 'Coquimbo' },
+      ...(options.activeOrder || {}),
     }),
     updatePipelineState: async (_id, state, draft) => stateUpdates.push({ state, draft }),
     getPool: () => ({
@@ -180,4 +188,46 @@ test('si el cliente aclara que el pedido futuro era para hoy se pide revisar el 
   assert.match(result.escalationReason, /pedido #88/i);
   assert.match(result.escalationReason, /cambio de fecha/i);
   assert.doesNotMatch(result.response, /Esto lo tiene que ver alguien/i);
+});
+
+test('un cliente con pedido confirmado recibe los datos de transferencia aunque escriba la consulta en dos mensajes', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    pipelineState: 'confirmed',
+    paymentInfo: 'Agrícola Valdivia Spa\nBanco Santander\nCuenta Corriente 123456',
+    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje ambiguo' },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'Te deposito\nMandan link o. Como es');
+
+  assert.equal(result.agentType, 'orchestrator');
+  assert.match(result.response, /puedes pagar por transferencia/i);
+  assert.match(result.response, /no necesitas un link/i);
+  assert.match(result.response, /Banco Santander/);
+  assert.match(result.response, /env[ií]ame el comprobante/i);
+  assert.equal(result.switchToHuman, undefined);
+});
+
+test('si el pedido tiene link de pago responde con ese link y no con datos genéricos', async () => {
+  const pipeline = buildPipeline(null, 'sent', {
+    pipelineState: 'awaiting_payment',
+    paymentInfo: 'Banco Santander\nCuenta 123',
+    activeOrder: { invoice_url: 'https://pago.example/pedido-88' },
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿Me mandan un link de pago?');
+
+  assert.match(result.response, /https:\/\/pago\.example\/pedido-88/);
+  assert.doesNotMatch(result.response, /Banco Santander/);
+});
+
+test('los datos de cobranza respaldan la respuesta si payment_info está vacío', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    pipelineState: 'confirmed',
+    bankDetails: 'Agrícola Valdivia Spa\nCuenta Corriente 987654',
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'Prefiero pagar por transferencia');
+
+  assert.match(result.response, /Cuenta Corriente 987654/);
+  assert.match(result.response, /comprobante/i);
 });

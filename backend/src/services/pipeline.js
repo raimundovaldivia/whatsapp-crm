@@ -56,6 +56,20 @@ function deliveryWindowEnded(schedule, now = new Date()) {
   return chileClock(now).totalMinutes > endMinutes;
 }
 
+function asksForPaymentInstructions(message) {
+  const text = String(message || '').trim();
+  if (!text || text.length > 500) return false;
+  const patterns = [
+    /\b(mandan?|env[ií]an?|tienen?|hay)\s+(un\s+)?link(?:\s+de\s+pago)?\b/iu,
+    /\b(c[oó]mo|d[oó]nde)\s+(se\s+)?(paga|pago|deposito|transfiero|transferir|depositar)\b/iu,
+    /\b(te|les|le)\s+(deposito|transfiero)(?!\p{L})/iu,
+    /\b(datos?|cuenta)\b.{0,30}\b(bancari[oa]s?|transferencia|transferir|dep[oó]sito)\b/iu,
+    /\b(pagar|pago)\s+(por|con)\s+(transferencia|dep[oó]sito|link)\b/iu,
+    /\b(quiero|puedo|prefiero)\s+(pagar|transferir|depositar)\b/iu,
+  ];
+  return patterns.some(pattern => pattern.test(text));
+}
+
 // Un pedido al que todavía tiene sentido anotarle una preferencia de entrega:
 // registrado y no cancelado/entregado. Incluye los que ya salieron a reparto
 // (por_despachar / en_camino) porque ahí la nota es aún más útil.
@@ -364,7 +378,17 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   const deliveryHoursEnded = deliveryWindowEnded(deliverySchedule, nowCl);
 
   // Instrucciones de pago — sección EXPLÍCITA para que el bot las comparta cuando el cliente pregunte
-  const paymentInfoRaw = await db.getSetting(orgId, 'payment_info') || '';
+  let paymentInfoRaw = await db.getSetting(orgId, 'payment_info') || '';
+  // La pantalla de Cobranza guarda los mismos datos en charge_settings. Usarlos
+  // como respaldo evita que el bot quede sin instrucciones si Ajustes generales
+  // todavía no tiene payment_info configurado.
+  if (!paymentInfoRaw.trim()) {
+    try {
+      const chargeRaw = await db.getSetting(orgId, 'charge_settings');
+      const chargeSettings = chargeRaw ? JSON.parse(chargeRaw) : null;
+      paymentInfoRaw = String(chargeSettings?.bankDetails || '');
+    } catch { /* configuración ausente o inválida */ }
+  }
   const paymentSection = paymentInfoRaw.trim()
     ? `## Instrucciones de Pago ⚠️ IMPORTANTE\nCuando el cliente pregunte cómo pagar, dónde transferir, los datos bancarios, o cualquier duda sobre el pago → copia y pega EXACTAMENTE esta información:\n\n${paymentInfoRaw.trim()}\n\nNO inventes ni modifiques esta información.`
     : '';
@@ -813,6 +837,31 @@ REGLAS ABSOLUTAS:
       L.agent('sales', 0);
       return { response: '¡Gracias a ti! 😊 Cualquier cosa me escribes por aquí.', agentType: 'sales', newState: 'exploring' };
     }
+  }
+
+  // ── Cómo pagar un pedido ya confirmado ────────────────────────────────
+  // Esta pregunta suele llegar dividida en varios mensajes ("Te deposito" +
+  // "¿mandan link o cómo es?"). Responderla de forma determinística evita que
+  // el clasificador la trate como ambigua o que el modelo guarde silencio.
+  // Kapso y Evolution pasan por este mismo pipeline compartido.
+  if (activeOrder && asksForPaymentInstructions(userMessage)) {
+    const invoiceUrl = String(activeOrder.invoice_url || '').trim();
+    const firstName = String(conversation.contact_name || activeOrder.customer_name || '')
+      .trim().split(/\s+/)[0];
+    const hi = firstName ? ` ${firstName}` : '';
+    let response;
+
+    if (invoiceUrl) {
+      response = `Claro${hi} 😊 Puedes pagar en este enlace:\n${invoiceUrl}\n\nCuando esté listo, el pago quedará asociado a tu pedido.`;
+    } else if (paymentInfoRaw.trim()) {
+      response = `Claro${hi} 😊 Puedes pagar por transferencia; no necesitas un link. Estos son los datos:\n\n${paymentInfoRaw.trim()}\n\nCuando transfieras, envíame el comprobante por este chat para dejarlo registrado.`;
+    } else {
+      response = `Claro${hi} 😊 Puedes pagar por transferencia o en efectivo al momento del despacho. No tengo datos bancarios publicados en el sistema todavía, así que no quiero inventártelos; si prefieres transferencia, el equipo te los confirma por este chat.`;
+    }
+
+    L.agent('orchestrator', 0);
+    L.step('payment_instructions', invoiceUrl ? 'link del pedido' : paymentInfoRaw.trim() ? 'datos bancarios configurados' : 'configuración incompleta');
+    return { response, agentType: 'orchestrator', newState: currentState };
   }
 
   // ── Detectar respuesta a template de re-engagement ─────────────────
