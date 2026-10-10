@@ -41,6 +41,27 @@ test('new egg products receive the correct catalog photo without replacing a man
   ]);
  }finally{await db.close()}
 });
+test('promotional egg boxes are active for retail, keep their agreed prices, and never duplicate',async()=>{
+ const db=new PGlite();try{
+  await db.exec(`CREATE TABLE organizations(id INT PRIMARY KEY,slug TEXT);INSERT INTO organizations VALUES(1,'diez-rios-mrs96z69'),(2,'other');
+   CREATE TABLE products(id SERIAL PRIMARY KEY,organization_id INT,title TEXT,description TEXT,price NUMERIC,sku TEXT,stock INT,active BOOLEAN,position INT,category TEXT,is_business BOOLEAN,egg_size TEXT,egg_color TEXT,pack_units INT,catalog_version TEXT);
+   INSERT INTO products(organization_id,title,price,sku,stock,active,is_business) VALUES(1,'Caja historica XL',54000,'LEGACY-XL',4,FALSE,FALSE);`);
+  const sql=fs.readFileSync(path.join(__dirname,'../src/db/egg-boxes-promotional.sql'),'utf8');
+  await db.exec(sql);
+  const created=(await db.query("SELECT * FROM products WHERE catalog_version='eggs-v2-boxes' ORDER BY position")).rows;
+  assert.equal(created.length,2);
+  assert.deepEqual(created.map(p=>[p.title,p.price,p.pack_units,p.egg_size]),[
+   ['Huevos XL · Caja de 180','55000',180,'XL'],
+   ['Huevos Jumbo · Caja de 100','37000',100,'Jumbo'],
+  ]);
+  assert.ok(created.every(p=>p.active&&p.stock===100&&p.is_business===false&&p.category==='Huevos'));
+  await db.exec("UPDATE products SET stock=7,price=56000 WHERE sku='DR-EGG-BOX-XL-180'");
+  await db.exec(sql);
+  const after=(await db.query("SELECT count(*)::int n,max(stock)::int stock,max(price)::text price FROM products WHERE sku='DR-EGG-BOX-XL-180'")).rows[0];
+  assert.deepEqual(after,{n:1,stock:7,price:'56000'});
+  assert.equal((await db.query("SELECT count(*)::int n FROM products WHERE organization_id=2 AND catalog_version='eggs-v2-boxes'")).rows[0].n,0);
+ }finally{await db.close()}
+});
 test('color variants never share the legacy XL ladder and bot asks about ambiguity',()=>{
  const p=require('../src/services/xl-welcome-pricing'),o=require('../src/services/order-pricing');
  const products=['blancos','mixtos','cafés'].map((color,i)=>({id:i+1,title:`Huevos XL ${color} · Bandeja de 30`,price:10990+i*1000}));
