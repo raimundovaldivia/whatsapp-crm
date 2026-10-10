@@ -7,6 +7,7 @@ const twilioService   = require('../services/twilio-whatsapp');
 const kapsoService    = require('../services/kapso-whatsapp');
 const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
+const paymentOptions = require('../services/payment-options');
 const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
@@ -75,6 +76,63 @@ router.get('/:id/messages', async (req, res) => {
     await db.markConversationAsRead(conv.id);
     res.json({ success: true, data: { conversation: conv, messages } });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** GET /api/conversations/:id/payment-options — vista previa sin enviar. */
+router.get('/:id/payment-options', async (req, res) => {
+  try {
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    const text = await paymentOptions.buildPaymentOptionsMessage(req.orgId);
+    if (!text) return res.status(409).json({ success: false, error: 'Configura primero los métodos y datos de pago en Ajustes.' });
+    res.json({ success: true, data: { text } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** POST /api/conversations/:id/payment-options — envía la versión oficial configurada. */
+router.post('/:id/payment-options', async (req, res) => {
+  try {
+    const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
+    if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    const text = await paymentOptions.buildPaymentOptionsMessage(req.orgId);
+    if (!text) return res.status(409).json({ success: false, error: 'Configura primero los métodos y datos de pago en Ajustes.' });
+    const wc = await outboundConfig(req.orgId, conv);
+    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    let sentResult;
+    try {
+      sentResult = await whatsappProvider.sendTextMessage(conv.phone_number, text, wc);
+    } catch (sendErr) {
+      if (sendErr.is24hWindow) {
+        return res.status(409).json({
+          success: false,
+          error: 'WINDOW_EXPIRED',
+          message: 'La ventana de 24 horas expiró. Usa un template aprobado para volver a contactar al cliente.',
+        });
+      }
+      throw sendErr;
+    }
+
+    const message = await db.saveMessage({
+      conversationId: conv.id,
+      whatsappMessageId: whatsappProvider.messageId(sentResult),
+      direction: 'outbound',
+      content: text,
+      sentBy: 'human',
+      agentType: 'payment_options',
+    });
+    await db.updateConversationLastMessage(conv.id, text);
+    await db.setAgentMode(conv.id, 'human');
+    const updated = await db.getConversationById(conv.id, req.orgId);
+    io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode: 'human' });
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation: updated });
+    res.json({ success: true, data: message });
+  } catch (err) {
+    console.error('[Conv] Error enviando opciones de pago:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1192,22 +1250,26 @@ router.get('/media/:mediaRef', async (req, res) => {
     } catch (_) {}
 
     const { rows } = await getPool().query(
-      'SELECT m.type, m.content FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.organization_id = $1 AND m.media_id = $2 LIMIT 1',
+      'SELECT m.id, m.type, m.content FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.organization_id = $1 AND m.media_id = $2 LIMIT 1',
       [req.orgId, ref]);
     if (!rows.length) return res.status(404).json({ error: 'Media no disponible' });
-    const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
-    if (!ref.startsWith('https://') && !ref.startsWith('evolution:') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
     const cacheKey = req.orgId + ':' + ref;
-    const cached = mediaCache.get(cacheKey);
+    const stored = await db.getMessageMediaBlob(req.orgId, rows[0].id);
+    const cached = mediaCache.get(cacheKey) || mediaCache.get(ref);
     let data, contentType;
-    if (cached) ({ data, contentType } = cached);
+    if (stored) ({ data, content_type: contentType } = stored);
+    else if (cached) ({ data, contentType } = cached);
     else if (ref.startsWith('evolution:')) {
       ({ data, contentType } = await require('../services/evolution-whatsapp').downloadMediaReference(req.orgId, ref));
       mediaCache.set(cacheKey, data, contentType);
+      await db.saveMessageMediaBlob(req.orgId, rows[0].id, data, contentType).catch(() => {});
     } else {
+      const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
+      if (!ref.startsWith('https://') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
       const url = ref.startsWith('https://') ? ref : (await kapsoSvc.getMediaUrl(ref, whatsappConfig)).url;
       ({ data, contentType } = await kapsoSvc.downloadMedia(url, whatsappConfig));
       mediaCache.set(cacheKey, data, contentType);
+      await db.saveMessageMediaBlob(req.orgId, rows[0].id, data, contentType).catch(() => {});
     }
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('Content-Type', contentType);

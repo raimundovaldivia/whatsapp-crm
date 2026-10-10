@@ -109,6 +109,15 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
       });
     }
 
+    if (parsed.adReferral && db.saveAdAttribution) {
+      await db.saveAdAttribution({
+        organizationId: org.id,
+        conversationId: conversation.id,
+        messageId: savedMsg.id,
+        referral: parsed.adReferral,
+      });
+    }
+
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await whatsappService.markAsRead(parsed.messageId, whatsappConfig);
 

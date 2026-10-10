@@ -51,8 +51,8 @@ test('store orders calculate server-side, aggregate quantities and update stock 
     assert.equal(welcome.total,22000);
     const repeat = await db.createStoreOrder({...purchase,customerPhone:'+56 9 2222 2222',expectedTotal:22000});
     assert.equal(repeat.total,22000);
-    const existing = await db.createStoreOrder({...purchase,customerPhone:'56911111111',expectedTotal:24000});
-    assert.equal(existing.total,24000);
+    const existing = await db.createStoreOrder({...purchase,customerPhone:'56911111111',expectedTotal:22000});
+    assert.equal(existing.total,22000);
     assert.equal((await engine.query('SELECT total_price FROM orders WHERE id=$1',[welcome.order.id])).rows[0].total_price,'22000');
 
     await assert.rejects(

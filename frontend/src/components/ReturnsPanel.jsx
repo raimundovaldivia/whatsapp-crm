@@ -3,7 +3,7 @@ import { api } from '../utils/api.js';
 export const RETURN_STATES = {requested:'Solicitado',approved:'Aprobado',scheduled:'Programado',in_progress:'En retiro/cambio',review:'Pendiente de resolución',resolved:'Resuelto',rejected:'Rechazado',cancelled:'Cancelado'};
 const money = n => '$'+Number(n||0).toLocaleString('es-CL');
 const address = value => typeof value === 'string' ? value : Object.values(value||{}).filter(v=>typeof v==='string').join(', ');
-export default function ReturnsPanel({colors,order}) {
+export default function ReturnsPanel({colors,order,dispatch=false}) {
   const [cases,setCases]=useState([]),[drivers,setDrivers]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const [form,setForm]=useState({kind:'return',reason:'',replacementDescription:'',pickupRequired:true,moneyDirection:'none',moneyMethod:'none',moneyAmount:0});
   const [quantities,setQuantities]=useState({}),[plans,setPlans]=useState({});
@@ -21,9 +21,11 @@ export default function ReturnsPanel({colors,order}) {
     if(['complete','resolve'].includes(action)&&!window.confirm(`Confirma que las operaciones y el movimiento de dinero indicados en la solicitud #${row.id} ya se realizaron.`))return;
     setBusy(true);setError('');try{await api.post(`/delivery/returns/${row.id}/actions`,{action,...extra});await load();}catch(e){setError(e.response?.data?.error||e.message);}finally{setBusy(false);}
   }
-  return <div style={{padding:16,color:colors.textPrimary,height:'100%',overflowY:'auto',boxSizing:'border-box'}}>
-    <h3>Devoluciones y cambios{order?' · '+(order.shopifyName||'#'+order.rawId):''}</h3>
+  const visibleCases=dispatch?cases.filter(row=>row.inventory_status==='pending_review'||!['resolved','rejected','cancelled'].includes(row.status)):cases;
+  return <div style={{padding:16,color:colors.textPrimary,height:dispatch?'auto':'100%',flexShrink:0,overflowY:dispatch?'visible':'auto',boxSizing:'border-box',border:dispatch?`1px solid ${colors.border}`:undefined,borderRadius:12}}>
+    <h3>{dispatch?'Retiros y cambios pendientes':'Devoluciones y cambios'}{order?' · '+(order.shopifyName||'#'+order.rawId):''}</h3>
     <p style={{color:colors.textSecondary,fontSize:13}}>Cada solicitud conserva el pedido original. El retiro queda pendiente de revisión de inventario; no aumenta automáticamente el stock.</p>
+    {dispatch&&<p style={{color:colors.textSecondary,fontSize:13}}>Todas las tareas pendientes, incluidas futuras y sin programar. Esta sección tiene su propio estado y no usa los filtros de ventas de abajo. Al programarlas, aparecen en Cambios y devoluciones de la app del despachador asignado.</p>}
     {error&&<p role="alert" style={{color:colors.red}}>{error}</p>}
     <button style={button} disabled={busy} onClick={load}>Actualizar</button>
     {order&&<fieldset style={{border:`1px solid ${colors.border}`,margin:'14px 0',borderRadius:10}}><legend>Registrar solicitud</legend>
@@ -37,14 +39,15 @@ export default function ReturnsPanel({colors,order}) {
         {form.moneyDirection!=='none'&&<><select aria-label="Medio de pago" style={style} value={form.moneyMethod} onChange={e=>field('moneyMethod',e.target.value)}><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option>{form.moneyDirection==='refund'&&<option value="credit">Saldo a favor</option>}</select><input aria-label="Monto" style={style} type="number" min="1" step="1" value={form.moneyAmount} onChange={e=>field('moneyAmount',e.target.value)}/></>}
       </div><button style={{...button,background:colors.green}} disabled={busy} onClick={create}>Registrar solicitud</button>
     </fieldset>}
-    {!cases.length&&<p>No hay solicitudes registradas.</p>}
-    {cases.map(row=>{const plan=plans[row.id]||{};const patch=v=>setPlans({...plans,[row.id]:{...plan,...v}});return <div key={row.id} style={{border:`1px solid ${colors.border}`,borderRadius:12,padding:16,marginTop:12,background:colors.bgCard}}>
-      <strong>#{row.id} · {row.customer.name} · {RETURN_STATES[row.status]}</strong>
+    {!visibleCases.length&&<p>{dispatch?'No hay retiros ni cambios pendientes.':'No hay solicitudes registradas.'}</p>}
+    {visibleCases.map(row=>{const plan=plans[row.id]||{date:String(row.scheduled_date||'').slice(0,10),driverId:row.driver_user_id||''};const patch=v=>setPlans({...plans,[row.id]:{...plan,...v}});return <div key={row.id} style={{border:`1px solid ${colors.border}`,borderRadius:12,padding:16,marginTop:12,background:colors.bgCard}}>
+      <strong>#{row.id} · {row.customer.name} · {RETURN_STATES[row.status]}{row.inventory_status==='pending_review'?' · Inventario pendiente':''}</strong>
       <p>Pedido {row.order_id} · {row.kind==='exchange'?'Cambio':row.kind==='issue'?'Problema':'Devolución'}</p>
       <p>{row.reason}</p><ul>{row.items.map(item=><li key={item.index}>{item.quantity} × {item.name}</li>)}</ul>
       <p>{row.pickup_required?'Retirar los productos indicados.':'No requiere retiro.'} {row.replacement_description&&`Entregar: ${row.replacement_description}`}</p>
       <p>{address(row.customer.address)} · {row.customer.phone}</p>
       <p>{row.money_direction==='none'?'Sin movimiento de dinero':`${row.money_direction==='refund'?'Devolver':'Cobrar'} ${money(row.money_amount)} · ${row.money_method==='credit'?'Saldo a favor':row.money_method} · ${row.money_confirmed?'Registrado':'Pendiente'}`}</p>
+      {!row.scheduled_date&&<p style={{color:colors.red}}>Pendiente de asignar fecha y despachador{row.status==='requested'?' · primero aprueba la solicitud':''}.</p>}
       {row.scheduled_date&&<p>Programado: {String(row.scheduled_date).slice(0,10)} · {drivers.find(d=>d.id===row.driver_user_id)?.name||'Despachador asignado'}</p>}
       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         {row.status==='requested'&&<><button style={button} disabled={busy} onClick={()=>act(row,'approve')}>Aprobar</button><button style={button} disabled={busy} onClick={()=>act(row,'reject')}>Rechazar</button></>}

@@ -670,8 +670,9 @@ export default function ProductsPanel({ orgSlug }) {
                     )}
                   </div>
                 )}
+                {p.deprecated_at&&<p style={{fontSize:12,color:colors.textMuted}}>Deprecado · conservado para pedidos anteriores</p>}
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => handleToggle(p)} title={p.active ? 'Desactivar' : 'Activar'}
+                  <button disabled={!!p.deprecated_at} onClick={() => handleToggle(p)} title={p.active ? 'Desactivar' : 'Activar'}
                     style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
                       backgroundColor: 'transparent', cursor: 'pointer', color: p.active ? colors.green : colors.textMuted }}>
                     {p.active ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
@@ -682,7 +683,7 @@ export default function ProductsPanel({ orgSlug }) {
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', fontSize: '13px' }}>
                     <Edit2 size={13} /> Editar
                   </button>
-                  <button onClick={() => handleDelete(p.id, p.title)} title="Eliminar"
+                  <button disabled={!!p.deprecated_at} onClick={() => handleDelete(p.id, p.title)} title="Eliminar"
                     style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${colors.border}`,
                       backgroundColor: 'transparent', cursor: 'pointer', color: colors.red }}>
                     <Trash2 size={14} />

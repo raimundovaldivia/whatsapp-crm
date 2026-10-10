@@ -358,8 +358,9 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
 
   // ── Estrategia de cierre para leads (clientes nuevos sin compra previa) ──
   const xlPricing = require('./xl-welcome-pricing');
-  const xlContext = await xlPricing.context(getPool(), orgId, conversation.phone_number);
-  const leadSection = xlContext.enabled ? xlPricing.prompt(xlContext) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
+  const previousXlContext = await xlPricing.context(getPool(), orgId, conversation.phone_number);
+  const xlContext = isEmpresa ? previousXlContext : xlPricing.forStore(previousXlContext);
+  const leadSection = xlContext.enabled ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
 
 Este cliente es un lead nuevo, posiblemente llegó por publicidad. Tu objetivo es CERRAR LA VENTA en esta conversación.
 

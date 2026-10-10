@@ -94,6 +94,16 @@ async function sendTextMessage(to, text, config) {
   }
 }
 
+function normalizeMediaError(err) {
+  const providerError = err.response?.data?.error;
+  if (providerError) {
+    const code = providerError.code;
+    const detail = providerError.error_data?.details || providerError.message || 'Archivo rechazado';
+    err.message = `${code ? `WhatsApp (${code}): ` : 'WhatsApp: '}${detail}`;
+  }
+  return err;
+}
+
 async function sendMediaMessage(to, media, config) {
   const { phone_number_id } = config;
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
@@ -104,9 +114,16 @@ async function sendMediaMessage(to, media, config) {
     const form = new FormData();
     form.append('messaging_product', 'whatsapp');
     form.append('file', new Blob([media.buffer], { type: media.mimeType }), media.fileName);
-    const upload = await axios.post(`${BASE_URL}/${API_VER}/${phone_number_id}/media`, form, {
-      headers: { 'X-API-Key': apiKey },
-    });
+    let upload;
+    try {
+      upload = await axios.post(`${BASE_URL}/${API_VER}/${phone_number_id}/media`, form, {
+        headers: { 'X-API-Key': apiKey },
+        timeout: KAPSO_REQUEST_TIMEOUT_MS,
+        maxBodyLength: 8 * 1024 * 1024,
+      });
+    } catch (err) {
+      throw normalizeMediaError(err);
+    }
     uploadedMediaId = upload.data?.id;
     if (!uploadedMediaId) throw new Error('WhatsApp no devolvió el identificador del archivo');
   }
@@ -117,7 +134,10 @@ async function sendMediaMessage(to, media, config) {
     const response = await axios.post(
       `${BASE_URL}/${API_VER}/${phone_number_id}/messages`,
       { messaging_product: 'whatsapp', recipient_type: 'individual', to, type, [type]: content },
-      { headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } }
+      {
+        headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+        timeout: KAPSO_REQUEST_TIMEOUT_MS,
+      }
     );
     return { ...response.data, uploadedMediaId };
   } catch (err) {
@@ -126,7 +146,7 @@ async function sendMediaMessage(to, media, config) {
       windowErr.is24hWindow = true;
       throw windowErr;
     }
-    throw err;
+    throw normalizeMediaError(err);
   }
 }
 
@@ -276,7 +296,10 @@ function parseWebhookMessage(body, event) {
       return null;
     } else if (message.type === 'video') {
       mediaId  = message.video?.id || null;
-      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url || message.video?.link || null;
+      mediaUrl = message.kapso?.media_url || message.kapso?.media_data?.url
+        || message.video?.url || message.video?.link || body.media_url || body.kapso?.media_url
+        || JSON.stringify(body).match(/https:\/\/app\.kapso\.ai\/rails\/active_storage[^"\\]+/)?.[0]
+        || null;
       text = null;
     } else if (message.type === 'contacts') {
       const c = message.contacts?.[0];
@@ -296,6 +319,10 @@ function parseWebhookMessage(body, event) {
 
     const attributionService = require('./whatsapp-attribution');
     const attribution = attributionService.fromKapso?.(body, message, conv) || null;
+    const adReferral = require('./ad-attribution').normalizeAdReferral?.(
+      message.referral || message.kapso?.referral || body.referral || body.data?.referral,
+      'kapso'
+    ) || null;
     return {
       messageId:   message.id,
       from,
@@ -308,6 +335,7 @@ function parseWebhookMessage(body, event) {
       location,
       interactiveId,
       ...(attribution ? { attribution } : {}),
+      ...(adReferral ? { adReferral } : {}),
     };
   } catch { return null; }
 }

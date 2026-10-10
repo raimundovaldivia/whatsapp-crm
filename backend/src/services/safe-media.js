@@ -2,7 +2,7 @@ const axios = require('axios');
 const dns = require('node:dns').promises;
 const ipaddr = require('ipaddr.js');
 
-const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_BYTES = 16 * 1024 * 1024;
 const KEY_HOSTS = new Set(['api.kapso.ai', 'app.kapso.ai']);
 // Resolve once and pin the connection to a public address, including redirects.
 async function publicTarget(value) {

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { formatTime } from '../utils/dates.js';
 import { Bot, User, Check, CheckCheck, AlertCircle, Clock, FileText, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
@@ -26,6 +27,7 @@ function parseTemplateContent(content) {
 
 export default function MessageBubble({ message, conversation }) {
   const { colors, isDark } = useTheme();
+  const [mediaFailed, setMediaFailed] = useState(false);
   const isOutbound = message.direction === 'outbound';
   const isAI = message.sent_by === 'ai';
   const driverName = message.agent_type?.startsWith('driver:')
@@ -110,13 +112,19 @@ export default function MessageBubble({ message, conversation }) {
           {message.type === 'image' && message.media_id && message.content !== '📸 [Comprobante de pago]' ? (
             /* ── Imagen real ── */
             <div style={{ padding: '4px 4px 0' }}>
-              <img
-                src={mediaUrl(message.media_id)}
-                alt="Imagen"
-                style={{ maxWidth: '240px', maxHeight: '280px', borderRadius: '8px', display: 'block', cursor: 'pointer', objectFit: 'cover' }}
-                onClick={() => window.open(mediaUrl(message.media_id), '_blank')}
-                onError={e => { e.target.style.display='none'; }}
-              />
+              {mediaFailed ? (
+                <div role="alert" style={{ padding:'12px', color:colors.textSecondary, fontSize:'12px', maxWidth:'220px' }}>
+                  Esta imagen antigua ya no está disponible.
+                </div>
+              ) : (
+                <img
+                  src={mediaUrl(message.media_id)}
+                  alt="Imagen enviada por WhatsApp"
+                  style={{ maxWidth: '240px', maxHeight: '280px', borderRadius: '8px', display: 'block', cursor: 'pointer', objectFit: 'cover' }}
+                  onClick={() => window.open(mediaUrl(message.media_id), '_blank')}
+                  onError={() => setMediaFailed(true)}
+                />
+              )}
               {message.content && !['📷 [Imagen]', '📷 Imagen', '📷 Foto'].includes(message.content) && (
                 <p style={{ fontSize:'13px', lineHeight:1.4, margin:'6px 7px 2px', color:colors.textPrimary, whiteSpace:'pre-wrap' }}>{message.content}</p>
               )}
@@ -133,6 +141,33 @@ export default function MessageBubble({ message, conversation }) {
               </a>
               {String(message.content || '').includes('\n') && <p style={{ margin:'6px 3px 0', fontSize:'12px', color:colors.textSecondary, whiteSpace:'pre-wrap' }}>{String(message.content).split('\n').slice(1).join('\n')}</p>}
               <div style={{ display:'flex', alignItems:'center', gap:'3px', justifyContent:'flex-end', marginTop:'5px' }}><span style={{ fontSize:'11px', color:colors.textSecondary }}>{time}</span>{isOutbound && <StatusIcon status={message.status} />}</div>
+            </div>
+          ) : message.type === 'video' && message.media_id ? (
+            /* ── Video recibido ── */
+            <div style={{ padding:'6px 6px 4px', minWidth:'220px' }}>
+              {mediaFailed ? (
+                <div role="alert" style={{ padding:'12px', color:colors.textSecondary, fontSize:'12px' }}>
+                  Este video antiguo ya no está disponible.
+                </div>
+              ) : (
+                <video
+                  controls
+                  playsInline
+                  preload="metadata"
+                  src={mediaUrl(message.media_id)}
+                  onError={() => setMediaFailed(true)}
+                  style={{ width:'100%', maxWidth:'360px', maxHeight:'420px', display:'block', borderRadius:'8px', backgroundColor:'#000' }}
+                >
+                  Tu navegador no puede reproducir este video.
+                </video>
+              )}
+              {message.content && message.content !== '🎥 [Video]' && (
+                <p style={{ fontSize:'12px', margin:'6px 3px 0', color:colors.textSecondary, whiteSpace:'pre-wrap' }}>{message.content}</p>
+              )}
+              <div style={{ display:'flex', alignItems:'center', gap:'3px', justifyContent:'flex-end', marginTop:'4px' }}>
+                <span style={{ fontSize:'11px', color:colors.textSecondary }}>{time}</span>
+                {isOutbound && <StatusIcon status={message.status} />}
+              </div>
             </div>
           ) : message.type === 'audio' && message.media_id ? (
             /* ── Audio con player ── */

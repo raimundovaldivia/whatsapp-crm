@@ -6,6 +6,7 @@ const db = require('../db/database');
 const { getPool } = db;
 const { requireAuth, requireRole, JWT_SECRET } = require('../middleware/auth');
 const meta = require('../services/meta-platform');
+const { summarizeInsights } = require('../services/ad-attribution');
 
 const router = express.Router();
 const SCOPES = [
@@ -317,6 +318,143 @@ router.get('/ads/insights', async (req, res) => {
     });
     res.json({ since, until, insights: data.data?.[0] || null });
   } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
+});
+
+function validDate(value, fallback) {
+  const text = String(value || '');
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : fallback;
+}
+
+router.get('/ads/analytics', async (req, res) => {
+  try {
+    const connection = await getConnection(req.orgId, true);
+    if (!connection?.ad_account_id) return res.status(400).json({ error: 'Selecciona una cuenta publicitaria' });
+    const token = meta.decryptToken(connection.user_access_token);
+    const today = new Date().toISOString().slice(0, 10);
+    const defaultSince = new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+    const since = validDate(req.query.since, defaultSince);
+    const until = validDate(req.query.until, today);
+    if (since > until) return res.status(400).json({ error: 'El rango de fechas no es válido' });
+
+    const insightFields = 'spend,impressions,reach,clicks,inline_link_clicks,ctr,cpc,cpm,actions,date_start,date_stop';
+    const [account, accountResult, campaignResult, campaignList, adList] = await Promise.all([
+      meta.graphGet(connection.ad_account_id, token, {
+        fields: 'id,account_id,name,currency,timezone_name,account_status',
+      }),
+      meta.graphGet(`${connection.ad_account_id}/insights`, token, {
+        fields: insightFields,
+        time_range: JSON.stringify({ since, until }), level: 'account',
+      }),
+      meta.graphGet(`${connection.ad_account_id}/insights`, token, {
+        fields: `campaign_id,campaign_name,${insightFields}`,
+        time_range: JSON.stringify({ since, until }), level: 'campaign', limit: 200,
+      }),
+      meta.graphGet(`${connection.ad_account_id}/campaigns`, token, {
+        fields: 'id,name,status,effective_status,objective,daily_budget,lifetime_budget', limit: 200,
+      }),
+      meta.graphGet(`${connection.ad_account_id}/ads`, token, {
+        fields: 'id,name,status,effective_status,campaign_id,adset_id', limit: 500,
+      }),
+    ]);
+
+    const campaignState = new Map((campaignList.data || []).map(item => [String(item.id), item]));
+    const campaigns = (campaignResult.data || []).map(row => ({
+      id: String(row.campaign_id),
+      name: row.campaign_name || campaignState.get(String(row.campaign_id))?.name || row.campaign_id,
+      status: campaignState.get(String(row.campaign_id))?.status || null,
+      effectiveStatus: campaignState.get(String(row.campaign_id))?.effective_status || null,
+      objective: campaignState.get(String(row.campaign_id))?.objective || null,
+      metrics: summarizeInsights(row),
+    }));
+
+    const { rows: attributionRows } = await getPool().query(`
+      WITH first_attribution AS (
+        SELECT DISTINCT ON (a.conversation_id)
+          a.id,a.conversation_id,a.source_id,a.source_type,a.ctwa_clid,a.headline,a.attributed_at
+        FROM ad_conversation_attributions a
+        WHERE a.organization_id=$1
+          AND (a.source_type='ad' OR a.source_type IS NULL)
+          AND a.attributed_at >= $2::date
+          AND a.attributed_at < ($3::date + INTERVAL '1 day')
+        ORDER BY a.conversation_id,a.attributed_at ASC
+      )
+      SELECT a.*,c.contact_name,c.phone_number,
+             first_message.content AS first_message,
+             ord.id AS order_id,ord.status AS order_status,ord.total_price AS order_total,
+             ord.created_at AS order_created_at
+      FROM first_attribution a
+      JOIN conversations c ON c.id=a.conversation_id AND c.organization_id=$1
+      LEFT JOIN LATERAL (
+        SELECT m.content FROM messages m
+        WHERE m.conversation_id=a.conversation_id AND m.direction='inbound'
+          AND m.created_at >= (a.attributed_at AT TIME ZONE 'UTC')
+        ORDER BY m.created_at ASC LIMIT 1
+      ) first_message ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT o.id,o.status,o.total_price,o.created_at FROM orders o
+        WHERE o.organization_id=$1 AND o.conversation_id=a.conversation_id
+          AND o.status <> 'cancelled'
+          AND o.created_at >= (a.attributed_at AT TIME ZONE 'UTC')
+          AND o.created_at < (a.attributed_at AT TIME ZONE 'UTC') + INTERVAL '30 days'
+        ORDER BY o.created_at ASC LIMIT 1
+      ) ord ON TRUE
+      ORDER BY a.attributed_at DESC
+      LIMIT 500`, [req.orgId, since, until]);
+
+    const ads = adList.data || [];
+    const adsById = new Map(ads.map(item => [String(item.id), item]));
+    const campaignNames = new Map([
+      ...(campaignList.data || []).map(item => [String(item.id), item.name]),
+      ...(campaignResult.data || []).map(item => [String(item.campaign_id), item.campaign_name]),
+    ]);
+    const conversations = attributionRows.map(row => {
+      const ad = adsById.get(String(row.source_id));
+      return {
+        conversationId: row.conversation_id,
+        contactName: row.contact_name,
+        phoneNumber: row.phone_number,
+        firstMessage: row.first_message,
+        attributedAt: row.attributed_at,
+        sourceId: row.source_id,
+        adName: ad?.name || row.headline || null,
+        campaignId: ad?.campaign_id || null,
+        campaignName: ad?.campaign_id ? campaignNames.get(String(ad.campaign_id)) || null : null,
+        orderId: row.order_id,
+        orderStatus: row.order_status,
+        orderTotal: row.order_total,
+        orderCreatedAt: row.order_created_at,
+      };
+    });
+    const orders = conversations.filter(item => item.orderId);
+    const revenue = orders.reduce((sum, item) => sum + Number(String(item.orderTotal || '0').replace(',', '.')) || sum, 0);
+    const { rows: [tracking] } = await getPool().query(
+      'SELECT MIN(attributed_at) AS since FROM ad_conversation_attributions WHERE organization_id=$1',
+      [req.orgId]
+    );
+
+    res.json({
+      since, until,
+      account: {
+        id: account.id || connection.ad_account_id,
+        accountId: account.account_id || String(connection.ad_account_id).replace(/^act_/, ''),
+        name: account.name || connection.ad_account_name,
+        currency: account.currency || 'CLP',
+        timezone: account.timezone_name || null,
+      },
+      summary: summarizeInsights(accountResult.data?.[0] || {}),
+      campaigns,
+      crm: {
+        conversations: conversations.length,
+        orders: orders.length,
+        revenue,
+        conversionRate: conversations.length ? (orders.length / conversations.length) * 100 : 0,
+        trackingSince: tracking?.since || null,
+        rows: conversations,
+      },
+    });
+  } catch (error) {
+    res.status(502).json({ error: meta.graphError(error) });
+  }
 });
 
 router.get('/ads/campaigns', async (req, res) => {

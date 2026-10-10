@@ -64,7 +64,7 @@ router.get('/:slug/info', async (req, res) => {
       logo:         storeLogo  || null,
       color:        storeColor || '#22c55e',
       slug:         org.slug,
-      xlWelcomeTiers: org.slug === xlPricing.STORE_SLUG ? xlPricing.TIERS : null,
+      xlWelcomeTiers: org.slug === xlPricing.STORE_SLUG ? xlPricing.WEB_TIERS : null,
       announcement: announcement || '',
       heroTitle:    heroTitle    || org.name,
       heroSubtitle: heroSubtitle || 'Descubre nuestro catálogo y realiza tu pedido.',
@@ -85,8 +85,8 @@ router.get('/:slug/products', async (req, res) => {
     const org = await getOrgBySlug(req.params.slug);
     if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
 
-    const products = (await db.getProducts(org.id, true))
-      .filter(product => product.is_business !== true); // nunca exponer catálogo mayorista
+    const allProducts = await db.getProducts(org.id);
+    const products = allProducts.filter(p => p.active === true && p.is_business !== true).map(p => ({...p,replaces_ids:allProducts.filter(old=>old.deprecated_at && old.replacement_product_id===p.id).map(old=>old.id)})); // nunca exponer catálogo mayorista
     res.json({ products });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -113,7 +113,7 @@ router.post('/:slug/quote', async (req, res) => {
       return { id, title: p.title, quantity, price: Number(p.price) };
     });
     const ctx = await xlPricing.context(getPool(), org.id, phone);
-    const priced = xlPricing.apply(lines, ctx);
+    const priced = xlPricing.apply(lines, xlPricing.forStore(ctx));
     res.json({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) });
   } catch (err) { res.status(err.status || 503).json({ error: 'No pudimos confirmar los precios. Intenta nuevamente.' }); }
 });

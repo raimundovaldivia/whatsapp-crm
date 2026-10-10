@@ -12,7 +12,9 @@ const settings = {
 function syntheticOrder(id, coords = null) {
   return {
     source: id % 2 ? 'bot' : 'shopify',
-    id: `synthetic-${id}`,
+    // Identificador enteramente ficticio, pero con el mismo formato que la
+    // API valida antes de permitir que un pedido entre a una ruta.
+    id: String(id),
     customerName: `Punto de prueba ${id}`,
     fullAddress: `Dirección de prueba ${id}, La Serena`,
     ...(coords || {}),
@@ -41,7 +43,15 @@ function routerWithDirections({ failAt = null } = {}) {
   } };
   const database = {
     getSetting: async (_orgId, key) => settings[key] || null,
-    getPool: () => ({ query: async () => ({ rows: [] }) }),
+    getPool: () => ({ query: async (sql, params = []) => {
+      if (/FROM\s+orders\b/i.test(sql)) {
+        return { rows: (params[1] || []).map(id => ({ id: String(id), status: 'pending', blocked: false })) };
+      }
+      if (/FROM\s+shopify_orders\b/i.test(sql)) {
+        return { rows: (params[1] || []).map(id => ({ id: String(id), status: 'pending', blocked: false })) };
+      }
+      return { rows: [] };
+    } }),
   };
   return load('src/routes/delivery.js', {
     axios,

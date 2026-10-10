@@ -54,13 +54,26 @@ function decodePayload({ data, mimeType, fileName, caption }) {
 
 async function send({ orgId, conversation, payload, config, sentBy = 'human', agentType = null }) {
   const media = decodePayload(payload);
-  const mediaUrl = r2.isConfigured()
-    ? await r2.uploadBuffer(media.buffer, media.fileName, media.mimeType, `chat/${orgId}`)
-    : null;
-  const result = await whatsappProvider.sendMediaMessage(conversation.phone_number, { ...media, mediaUrl }, config);
+  const directUpload = ['kapso', 'meta'].includes(String(config?.provider || 'meta').toLowerCase());
+  let mediaUrl = null;
+  if (r2.isConfigured()) {
+    try {
+      mediaUrl = await r2.uploadBuffer(media.buffer, media.fileName, media.mimeType, `chat/${orgId}`);
+    } catch (err) {
+      // Kapso y Meta aceptan el archivo directamente. La copia para el CRM no
+      // debe impedir que la foto llegue al cliente.
+      if (!directUpload) throw err;
+      console.warn('[OutboundMedia] No se pudo guardar la copia pública; se usará la carga directa:', err.message);
+    }
+  }
+  const result = await whatsappProvider.sendMediaMessage(
+    conversation.phone_number,
+    { ...media, mediaUrl: directUpload ? null : mediaUrl },
+    config,
+  );
   const mediaReference = mediaUrl || result?.uploadedMediaId;
   if (!mediaReference) throw new Error('No se pudo registrar el archivo enviado');
-  if (!mediaUrl) mediaCache.set(mediaReference, media.buffer, media.mimeType);
+  if (!mediaUrl) mediaCache.set(`${orgId}:${mediaReference}`, media.buffer, media.mimeType);
   const content = media.type === 'image'
     ? (media.caption || '📷 Foto')
     : `📎 ${media.fileName}${media.caption ? `\n${media.caption}` : ''}`;
@@ -75,6 +88,13 @@ async function send({ orgId, conversation, payload, config, sentBy = 'human', ag
     agentType,
     mediaId: mediaReference,
   });
+  if (message) {
+    await db.saveMessageMediaBlob(orgId, message.id, media.buffer, media.mimeType).catch(err => {
+      // El archivo ya fue aceptado por WhatsApp: una falla de la copia local
+      // nunca debe hacer que la interfaz sugiera reenviarlo y lo duplique.
+      console.warn('[OutboundMedia] No se pudo conservar la copia:', err.message);
+    });
+  }
   await db.updateConversationLastMessage(conversation.id, content);
   return { message, mediaUrl: mediaReference, media };
 }

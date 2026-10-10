@@ -67,7 +67,7 @@ test('media blocks private IPs and strips credential on untrusted/redirect targe
   assert.equal(calls[0].opts.headers['X-API-Key'],undefined);
   await service.downloadMedia('https://api.kapso.ai/image',{kapso_api_key:'fake'});
   assert.equal(calls[1].opts.headers['X-API-Key'],'fake');
-  assert.equal(calls[1].opts.maxRedirects,0);assert.equal(calls[1].opts.maxContentLength,10485760);
+  assert.equal(calls[1].opts.maxRedirects,0);assert.equal(calls[1].opts.maxContentLength,16777216);
   privateIp=true;await assert.rejects(()=>service.downloadMedia('https://localhost/image'),/no público/);
   assert.equal(calls.length,2);
 });

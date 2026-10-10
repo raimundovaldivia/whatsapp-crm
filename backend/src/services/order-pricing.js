@@ -36,6 +36,7 @@ const STOPWORDS = new Set([
 
 // Singular tosco: bandejas → bandeja, huevos → huevo, cajas → caja
 function stem(t) {
+  if(t==='cafes')return 'cafe';
   if (t.length > 4 && t.endsWith('es') && !/[aeiou]es$/.test(t)) return t.slice(0, -2);
   if (t.length > 3 && t.endsWith('s')) return t.slice(0, -1);
   return t;
@@ -43,6 +44,30 @@ function stem(t) {
 
 function tokens(s) {
   return norm(s).split(' ').filter(t => t && !STOPWORDS.has(t)).map(stem);
+}
+
+const PACKAGE_TOKENS = new Set(['caja', 'bandeja']);
+
+function explicitPackageType(value) {
+  const text = norm(value);
+  if (/\bcaja\b/.test(text)) return 'caja';
+  if (/\bbandeja\b/.test(text)) return 'bandeja';
+  return null;
+}
+
+function candidatePackageType(candidate) {
+  const explicit = explicitPackageType(candidate?.title);
+  if (explicit) return explicit;
+
+  // Los nombres históricos de cajas de Diez Ríos no siempre incluían la
+  // palabra "caja", pero sí la presentación completa de 100 o 180 huevos.
+  // Una bandeja actual siempre la declara en su título, así que no se infiere
+  // una caja a partir de cantidades pequeñas o promociones agrupadas.
+  const title = norm(candidate?.title);
+  const units = [...title.matchAll(/\b(\d{2,3})\s*(?:huevos?|unidades?)\b/g)]
+    .map(match => Number(match[1]));
+  if (units.some(amount => amount >= 100)) return 'caja';
+  return null;
 }
 
 // ─── Catálogo plano ──────────────────────────────────────────────────────────
@@ -109,13 +134,38 @@ function matchProduct(name, catalog) {
   const q = norm(name);
   if (!q || !catalog?.length) return null;
 
+  const requestedPackage = explicitPackageType(q);
+  let candidates = requestedPackage
+    ? catalog.filter(candidate => candidatePackageType(candidate) === requestedPackage)
+    : catalog;
+  // "Caja" y "bandeja" son presentaciones distintas. Si el catálogo no
+  // contiene el formato pedido, no se permite que la similitud de calibre o
+  // cantidad lo convierta silenciosamente en el otro formato.
+  if (!candidates.length) return null;
+
+  if (requestedPackage === 'caja') {
+    // "La caja" no identifica una presentación: para Diez Ríos la cantidad
+    // de huevos es el dato que distingue el formato. No se deduce del calibre,
+    // del historial ni de un número que podría ser un precio.
+    const unitMatch = q.match(/\bcaja\s*(?:de\s*)?(\d{2,3})\b/)
+      || q.match(/\b(\d{2,3})\s*(?:huevos?|unidades?)\b/);
+    if (!unitMatch) return null;
+    const requestedUnits = Number(unitMatch[1]);
+    candidates = candidates.filter(candidate => {
+      const title = norm(candidate.title);
+      return new RegExp(`\\b${requestedUnits}\\s*(?:huevos?|unidades?)\\b`).test(title)
+        || new RegExp(`\\bcaja\\s*(?:de\\s*)?${requestedUnits}\\b`).test(title);
+    });
+    if (!candidates.length) return null;
+  }
+
   // 1. exacto
-  const exact = catalog.find(c => norm(c.title) === q);
+  const exact = candidates.find(c => norm(c.title) === q);
   if (exact) return { candidate: exact, score: 1 };
 
   // 2a. El título cabe dentro de lo que dijo el cliente → específico, sin ambigüedad
   //     ("quiero huevos xl bandeja 30 porfa" contiene "huevos xl bandeja 30")
-  const titleInQuery = catalog
+  const titleInQuery = candidates
     .filter(c => { const t = norm(c.title); return t && q.includes(t); })
     .sort((a, b) => norm(b.title).length - norm(a.title).length);
   if (titleInQuery.length) return { candidate: titleInQuery[0], score: 0.95 };
@@ -123,7 +173,7 @@ function matchProduct(name, catalog) {
   // 2b. Lo que dijo cabe dentro de varios títulos ("huevos xl" → Bandeja 30 / Caja 180)
   //     → hay que preguntar, no adivinar. Se devuelve el más corto como
   //     candidato pero marcado como ambiguo con las alternativas.
-  const queryInTitle = catalog
+  const queryInTitle = candidates
     .filter(c => { const t = norm(c.title); return t && t.includes(q); })
     .sort((a, b) => norm(a.title).length - norm(b.title).length);
   if (queryInTitle.length === 1) return { candidate: queryInTitle[0], score: 0.9 };
@@ -132,11 +182,12 @@ function matchProduct(name, catalog) {
   }
 
   // 3. tokens
-  const qt = new Set(tokens(name));
+  const qt = new Set(tokens(name).filter(token => !PACKAGE_TOKENS.has(token)));
   if (!qt.size) return null;
   let best = null;
-  for (const c of catalog) {
-    const ct = new Set(tokens(c.title));
+  let ties = [];
+  for (const c of candidates) {
+    const ct = new Set(tokens(c.title).filter(token => !PACKAGE_TOKENS.has(token)));
     if (!ct.size) continue;
     let inter = 0;
     for (const t of qt) if (ct.has(t)) inter++;
@@ -145,8 +196,10 @@ function matchProduct(name, catalog) {
     // Bonus si todos los tokens de la consulta están en el título (consulta corta: "xl", "caja 180")
     const coverage = inter / qt.size;
     const score = Math.max(jaccard, coverage * 0.75);
-    if (score >= 0.5 && (!best || score > best.score)) best = { candidate: c, score };
+    if (score >= 0.5 && (!best || score > best.score)) { best = { candidate: c, score }; ties = [c.title]; }
+    else if(best && Math.abs(score-best.score)<0.000001) ties.push(c.title);
   }
+  if(best && ties.length>1 && ties.every(t=>/^Huevos (M|L|XL|Jumbo) (blancos|mixtos|cafés) · Bandeja de/.test(t)))return {...best,ambiguous:true,alternatives:ties};
   return best;
 }
 

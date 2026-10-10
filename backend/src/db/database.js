@@ -1006,6 +1006,50 @@ async function getWhatsappAttributionReport(orgId, { from = null, to = null, pro
   return { summary, records, totals };
 }
 
+async function saveAdAttribution({ organizationId, conversationId, messageId, referral }) {
+  if (!organizationId || !conversationId || !messageId || !referral) return null;
+  return queryOne(
+    `INSERT INTO ad_conversation_attributions
+       (organization_id, conversation_id, message_id, provider, source_type, source_id,
+        ctwa_clid, source_url, headline, body, raw_payload, attributed_at)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,m.created_at AT TIME ZONE 'UTC'
+       FROM messages m
+       JOIN conversations c ON c.id=m.conversation_id
+      WHERE m.id=$3 AND c.id=$2 AND c.organization_id=$1
+     ON CONFLICT (message_id) DO NOTHING
+     RETURNING *`,
+    [organizationId, conversationId, messageId, referral.provider || 'meta', referral.sourceType || null,
+      referral.sourceId || null, referral.ctwaClid || null, referral.sourceUrl || null,
+      referral.headline || null, referral.body || null, JSON.stringify(referral.raw || {})]
+  );
+}
+
+async function saveMessageMediaBlob(orgId, messageId, data, contentType) {
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data || []);
+  if (!orgId || !messageId || !buffer.length || buffer.length > 16 * 1024 * 1024) return null;
+  return queryOne(
+    `INSERT INTO message_media_blobs (message_id, organization_id, content_type, data)
+     SELECT m.id, c.organization_id, $3, $4
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.id = $2 AND c.organization_id = $1
+     ON CONFLICT (message_id) DO UPDATE SET
+       content_type = EXCLUDED.content_type,
+       data = EXCLUDED.data
+     RETURNING message_id, organization_id, content_type`,
+    [orgId, messageId, String(contentType || 'application/octet-stream'), buffer]
+  );
+}
+
+async function getMessageMediaBlob(orgId, messageId) {
+  return queryOne(
+    `SELECT content_type, data
+       FROM message_media_blobs
+      WHERE organization_id = $1 AND message_id = $2`,
+    [orgId, messageId]
+  );
+}
+
 async function getMessagesByConversation(conversationId, limit = 80) {
   // Traer los N más recientes (DESC) y luego invertir para mostrar en orden cronológico (ASC)
   const rows = await query(
@@ -1216,7 +1260,7 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
       total += price * quantity;
     }
 
-    const adjusted = xlPricing.apply(resolvedItems, xlContext);
+    const adjusted = xlPricing.apply(resolvedItems, xlPricing.forStore(xlContext));
     resolvedItems.splice(0, resolvedItems.length, ...adjusted);
     total = Math.round(resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0));
     if (expectedTotal != null && Number(expectedTotal) !== total) {
@@ -2115,7 +2159,8 @@ module.exports = {
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
-  saveMessage, getMessageByWhatsappId, getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
+  saveMessage, getMessageByWhatsappId, saveAdAttribution, saveMessageMediaBlob, getMessageMediaBlob,
+  getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   saveWhatsappAttribution, getLatestWhatsappAttribution, getWhatsappAttributionReport,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,

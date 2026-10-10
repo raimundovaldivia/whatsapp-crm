@@ -161,12 +161,65 @@ function ContentTab({ connected, connect, colors }) {
 }
 
 function AdsTab({ connected, connect, colors }) {
-  const [data, setData] = useState(null); const [campaigns, setCampaigns] = useState([]); const [error, setError] = useState(''); const [loading, setLoading] = useState(false);
-  const load = async () => { setLoading(true); setError(''); try { const [summary, rows] = await Promise.all([metaAPI.insights(), metaAPI.campaigns()]); setData(summary); setCampaigns(rows); } catch (e) { setError(e.response?.data?.error || e.message); } finally { setLoading(false); } };
-  useEffect(() => { if (connected) load(); }, [connected]);
-  const values = useMemo(() => { const i = data?.insights || {}; return [['Inversión', i.spend], ['Impresiones', i.impressions], ['Alcance', i.reach], ['Clics', i.clicks], ['CTR', i.ctr ? `${Number(i.ctr).toFixed(2)}%` : null], ['CPC', i.cpc]]; }, [data]);
+  const [data, setData] = useState(null); const [error, setError] = useState(''); const [loading, setLoading] = useState(false); const [days, setDays] = useState(30);
+  const dateRange = useMemo(() => {
+    const until = new Date();
+    const since = new Date(); since.setDate(since.getDate() - days + 1);
+    const iso = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    return { since: iso(since), until: iso(until) };
+  }, [days]);
+  const load = async () => { setLoading(true); setError(''); try { setData(await metaAPI.adsAnalytics(dateRange)); } catch (e) { setError(e.response?.data?.error || e.message); } finally { setLoading(false); } };
+  useEffect(() => { if (connected) load(); }, [connected, dateRange.since, dateRange.until]);
   if (!connected) return <ConnectNeeded connect={connect} colors={colors} />;
-  return <div style={{ display: 'grid', gap: 12 }}><div style={{ display: 'flex', justifyContent: 'space-between', color: colors.textSecondary, fontSize: 12 }}><span>Últimos 30 días{data ? ` · ${data.since} a ${data.until}` : ''}</span><button onClick={load} style={secondary(colors)}><RefreshCw size={14} /> Actualizar</button></div><ErrorBox>{error}</ErrorBox>{loading ? <div style={{ color: colors.textMuted }}>Cargando métricas…</div> : <><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>{values.map(([k, v]) => <Card key={k} colors={colors}><div style={{ color: colors.textMuted, fontSize: 11 }}>{k}</div><strong style={{ color: colors.textPrimary, fontSize: 21 }}>{v ?? '—'}</strong></Card>)}</div><Card colors={colors} style={{ overflowX: 'auto' }}><strong style={{ color: colors.textPrimary, fontSize: 13 }}>Campañas</strong><table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10, fontSize: 12 }}><thead><tr>{['Campaña','Estado','Objetivo','Inversión','Clics','CTR'].map(h => <th key={h} style={{ textAlign: 'left', color: colors.textMuted, padding: 8, borderBottom: `1px solid ${colors.border}` }}>{h}</th>)}</tr></thead><tbody>{campaigns.map(c => { const i = c.insights?.data?.[0] || {}; return <tr key={c.id}><td style={cell(colors)}>{c.name}</td><td style={cell(colors)}>{c.effective_status || c.status}</td><td style={cell(colors)}>{c.objective || '—'}</td><td style={cell(colors)}>{i.spend || '—'}</td><td style={cell(colors)}>{i.clicks || '—'}</td><td style={cell(colors)}>{i.ctr ? `${Number(i.ctr).toFixed(2)}%` : '—'}</td></tr>; })}{campaigns.length === 0 && <tr><td colSpan="6" style={{ ...cell(colors), color: colors.textMuted }}>No hay campañas disponibles.</td></tr>}</tbody></table></Card></>}</div>;
+  const currency = data?.account?.currency || 'CLP';
+  const money = value => new Intl.NumberFormat('es-CL', { style: 'currency', currency, maximumFractionDigits: currency === 'CLP' ? 0 : 2 }).format(Number(value || 0));
+  const number = value => Number(value || 0).toLocaleString('es-CL');
+  const pct = value => `${Number(value || 0).toFixed(1).replace('.', ',')}%`;
+  const status = value => ({ ACTIVE: 'Activa', PAUSED: 'Pausada', ARCHIVED: 'Archivada', DELETED: 'Eliminada' }[value] || value || '—');
+  const summary = data?.summary || {};
+  const crm = data?.crm || {};
+  const roas = summary.spend > 0 ? Number(crm.revenue || 0) / Number(summary.spend) : 0;
+  const metric = (label, value, help) => <Card key={label} colors={colors}><div style={{ color: colors.textMuted, fontSize: 11 }}>{label}</div><strong style={{ color: colors.textPrimary, fontSize: 21, display: 'block', marginTop: 5 }}>{value}</strong>{help && <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 5, lineHeight: 1.35 }}>{help}</div>}</Card>;
+  return <div style={{ display: 'grid', gap: 14 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', color: colors.textSecondary, fontSize: 12 }}>
+      <div><strong style={{ color: colors.textPrimary }}>{data?.account?.name || 'Cuenta publicitaria'}</strong>{data?.account?.accountId && ` · ${data.account.accountId}`}<div style={{ color: colors.textMuted, marginTop: 3 }}>{data ? `${data.since} al ${data.until} · ${currency}` : 'Cargando período…'}</div></div>
+      <div style={{ display: 'flex', gap: 6 }}>{[7, 30, 90].map(value => <button key={value} onClick={() => setDays(value)} style={{ ...secondary(colors), borderColor: days === value ? colors.green : colors.border, color: days === value ? colors.green : colors.textSecondary }}>{value} días</button>)}<button onClick={load} style={secondary(colors)}><RefreshCw size={14} /> Actualizar</button></div>
+    </div>
+    <ErrorBox>{error}</ErrorBox>
+    {loading ? <div style={{ color: colors.textMuted }}>Cargando resultados de Meta y del CRM…</div> : data && <>
+      <div>
+        <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 700, marginBottom: 9 }}>Resultados informados por Meta</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
+          {metric('Inversión', money(summary.spend))}
+          {metric('Conversaciones iniciadas', number(summary.conversations), 'Resultado atribuido por Meta; no equivale necesariamente a personas únicas.')}
+          {metric('Costo por conversación', summary.costPerConversation == null ? '—' : money(summary.costPerConversation))}
+          {metric('Clics', number(summary.clicks))}
+          {metric('CTR', pct(summary.ctr))}
+          {metric('Alcance', number(summary.reach))}
+        </div>
+      </div>
+      <div>
+        <div style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 700, marginBottom: 9 }}>Conversión comprobada dentro del CRM</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
+          {metric('Chats identificados', number(crm.conversations), 'Contactos cuyo primer mensaje incluyó la referencia del anuncio.')}
+          {metric('Pedidos atribuidos', number(crm.orders))}
+          {metric('Conversión a pedido', pct(crm.conversionRate))}
+          {metric('Ventas atribuidas', money(crm.revenue))}
+          {metric('Retorno observado', `${roas.toFixed(2).replace('.', ',')}x`, 'Ventas atribuidas / inversión. No incluye pedidos sin referencia de anuncio.')}
+        </div>
+        {!crm.trackingSince && <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 8, lineHeight: 1.45 }}>La identificación individual comienza con esta actualización. Las conversaciones históricas siguen visibles en el total de Meta, pero Meta no entrega retroactivamente sus nombres.</div>}
+      </div>
+      <Card colors={colors} style={{ overflowX: 'auto' }}>
+        <strong style={{ color: colors.textPrimary, fontSize: 13 }}>Rendimiento por campaña</strong>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10, fontSize: 12 }}><thead><tr>{['Campaña','Estado','Inversión','Conversaciones','Costo / conversación','Clics','CTR'].map(h => <th key={h} style={{ textAlign: 'left', color: colors.textMuted, padding: 8, borderBottom: `1px solid ${colors.border}` }}>{h}</th>)}</tr></thead><tbody>{(data.campaigns || []).map(c => <tr key={c.id}><td style={{ ...cell(colors), color: colors.textPrimary, whiteSpace: 'normal', minWidth: 220 }}>{c.name}</td><td style={cell(colors)}>{status(c.effectiveStatus || c.status)}</td><td style={cell(colors)}>{money(c.metrics?.spend)}</td><td style={cell(colors)}>{number(c.metrics?.conversations)}</td><td style={cell(colors)}>{c.metrics?.costPerConversation == null ? '—' : money(c.metrics.costPerConversation)}</td><td style={cell(colors)}>{number(c.metrics?.clicks)}</td><td style={cell(colors)}>{pct(c.metrics?.ctr)}</td></tr>)}{(data.campaigns || []).length === 0 && <tr><td colSpan="7" style={{ ...cell(colors), color: colors.textMuted }}>Sin actividad de campañas en este período.</td></tr>}</tbody></table>
+      </Card>
+      <Card colors={colors} style={{ overflowX: 'auto' }}>
+        <strong style={{ color: colors.textPrimary, fontSize: 13 }}>Conversaciones identificadas</strong>
+        <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>Este listado permite revisar qué chat y qué pedido provino de cada anuncio.</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10, fontSize: 12 }}><thead><tr>{['Fecha','Contacto','Campaña / anuncio','Primer mensaje','Pedido'].map(h => <th key={h} style={{ textAlign: 'left', color: colors.textMuted, padding: 8, borderBottom: `1px solid ${colors.border}` }}>{h}</th>)}</tr></thead><tbody>{(crm.rows || []).map(row => <tr key={`${row.conversationId}-${row.attributedAt}`}><td style={cell(colors)}>{new Date(row.attributedAt).toLocaleString('es-CL')}</td><td style={{ ...cell(colors), color: colors.textPrimary }}>{row.contactName || row.phoneNumber}<div style={{ color: colors.textMuted, fontSize: 10 }}>{row.phoneNumber}</div></td><td style={{ ...cell(colors), whiteSpace: 'normal', minWidth: 180 }}>{row.campaignName || 'Campaña no resuelta'}<div style={{ color: colors.textMuted, fontSize: 10 }}>{row.adName || row.sourceId || '—'}</div></td><td style={{ ...cell(colors), whiteSpace: 'normal', minWidth: 180 }}>{row.firstMessage || '—'}</td><td style={cell(colors)}>{row.orderId ? `#${row.orderId} · ${money(row.orderTotal)}` : 'Sin pedido'}</td></tr>)}{(crm.rows || []).length === 0 && <tr><td colSpan="5" style={{ ...cell(colors), color: colors.textMuted }}>Aún no hay conversaciones con atribución individual guardada en este período.</td></tr>}</tbody></table>
+      </Card>
+    </>}
+  </div>;
 }
 
 function ConnectNeeded({ connect, colors }) { return <Card colors={colors} style={{ textAlign: 'center', padding: 42 }}><p style={{ color: colors.textSecondary }}>Conecta Meta para habilitar esta función.</p><button onClick={connect} style={primary(colors)}><Link2 size={15} /> Conectar Meta</button></Card>; }

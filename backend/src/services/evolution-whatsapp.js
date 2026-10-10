@@ -142,6 +142,7 @@ function parseWebhookMessage(body, { includeOwn = false, ownPhone = null } = {})
   const text = textFromMessage(message);
   const attributionService = require('./whatsapp-attribution');
   const attribution = attributionService.fromEvolution?.(message, data, body) || null;
+  const adReferral = require('./ad-attribution').evolutionReferral(message, data);
   if (!from || (!text && type === 'text')) return null;
   return {
     messageId: key.id,
@@ -153,6 +154,7 @@ function parseWebhookMessage(body, { includeOwn = false, ownPhone = null } = {})
     type,
     text: text || '',
     ...(attribution ? { attribution } : {}),
+    ...(adReferral ? { adReferral } : {}),
     ...(type !== 'text' ? {
       mimeType: message[`${type}Message`]?.mimetype || null,
       fileName: message[`${type}Message`]?.fileName || null,

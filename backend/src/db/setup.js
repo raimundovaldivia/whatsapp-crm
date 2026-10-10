@@ -219,6 +219,41 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_wa_attr_campaign
         ON whatsapp_attributions(organization_id, campaign_id, source_id);
 
+      -- Copia durable de adjuntos. Los enlaces de Meta/Kapso expiran y no
+      -- alcanzan para volver a mostrar una imagen o video días después.
+      CREATE TABLE IF NOT EXISTS message_media_blobs (
+        message_id          INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+        organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        content_type        TEXT NOT NULL,
+        data                BYTEA NOT NULL,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_message_media_blobs_org_message
+        ON message_media_blobs(organization_id, message_id);
+
+      -- Atribución de conversaciones iniciadas desde anuncios Click-to-WhatsApp.
+      -- Meta sólo envía estos datos en el primer mensaje referido; se conservan
+      -- aparte para poder unir anuncio → conversación → pedido.
+      CREATE TABLE IF NOT EXISTS ad_conversation_attributions (
+        id                  BIGSERIAL PRIMARY KEY,
+        organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id     INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        message_id          INTEGER UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+        provider            TEXT NOT NULL,
+        source_type         TEXT,
+        source_id           TEXT,
+        ctwa_clid           TEXT,
+        source_url          TEXT,
+        headline            TEXT,
+        body                TEXT,
+        raw_payload         JSONB NOT NULL DEFAULT '{}'::jsonb,
+        attributed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ad_attribution_org_date
+        ON ad_conversation_attributions(organization_id, attributed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ad_attribution_org_source
+        ON ad_conversation_attributions(organization_id, source_id);
+
       -- ─── ÓRDENES CREADAS ─────────────────────────────────────────
 
       CREATE TABLE IF NOT EXISTS orders (
@@ -1522,7 +1557,9 @@ async function setupDatabase() {
       );
       CREATE INDEX IF NOT EXISTS order_returns_order ON order_returns(organization_id,source,order_id);
       ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS original_driver_user_id INTEGER;
+      ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS route_id INTEGER REFERENCES delivery_routes(id);
       CREATE INDEX IF NOT EXISTS order_returns_driver ON order_returns(organization_id,driver_user_id,status);
+      CREATE INDEX IF NOT EXISTS order_returns_route ON order_returns(organization_id,route_id);
       CREATE TABLE IF NOT EXISTS return_money_movements (
         id SERIAL PRIMARY KEY, return_id INTEGER NOT NULL UNIQUE REFERENCES order_returns(id),
         organization_id INTEGER NOT NULL REFERENCES organizations(id), method TEXT NOT NULL,
@@ -1530,6 +1567,8 @@ async function setupDatabase() {
       );
     `);
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'eggs-catalog-v2.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-product-images.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

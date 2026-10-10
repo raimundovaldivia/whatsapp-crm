@@ -174,6 +174,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
   const [selected,       setSelected]      = useState(new Set()); // Set de _key
   const [bulkStatus,     setBulkStatus]    = useState('');
   const [applyingBulk,   setApplyingBulk]  = useState(false);
+  const [exportingDispatch, setExportingDispatch] = useState(false);
 
   // Drawer de conversación
   const [convDrawer,     setConvDrawer]     = useState(null); // { convId, name, phone }
@@ -458,68 +459,59 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
 
   // ─── Export para despacho ─────────────────────────────────────────
   const handleExportXlsx = async () => {
-    const selOrders = getSelOrders();
-    if (selOrders.length === 0) return;
-    const XLSX = await import('xlsx');
-
-    const HEADERS = [
-      'Título* Requerido', 'Dirección completa* Requerida', 'Carga',
-      'Hora inicial', 'Hora final', 'Tiempo de servicio', 'Notas',
-      'Latitud', 'Longitud', 'ID de referencia', 'Habilidades requeridas',
-      'Habilidades opcionales', 'Persona de contacto', 'Teléfono de contacto',
-      'Hora inicial 2', 'Hora final 2', 'Carga 2', 'Carga 3', 'Prioridad',
-      'SMS', 'Correo electrónico de contacto', 'Carga pick', 'Carga pick 2',
-      'Carga pick 3', 'Fecha programada', 'Tipo de visita',
-    ];
-
-    const dataRows = selOrders.map(order => {
-      const row = new Array(26).fill('');
-
-      // Col A: Título — #IDNombre (sin espacio)
-      const id = order.source === 'shopify'
-        ? (order.shopifyName || `#${order.rawId}`)
-        : `#${order.rawId}`;
-      row[0] = `${id}${order.customerName}`;
-
-      // Col B: Dirección completa
-      const parseAddr = (raw) => {
-        if (!raw) return {};
-        if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return {}; } }
-        return raw;
-      };
-      if (order.source === 'bot') {
-        // Bot: shipping_address es JSONB con { address, city } o { address1, city, zip }
-        const addr = parseAddr(order.raw?.shipping_address);
-        row[1] = [addr.address || addr.address1, addr.city, addr.zip].filter(Boolean).join(', ');
-      } else {
-        // Shopify: el API ya auto-completa shipping_address1 y shipping_city
-        // desde el contacto cuando la orden no tiene dirección propia
-        row[1] = [order.raw?.shipping_address1, order.raw?.shipping_city].filter(Boolean).join(', ');
+    setExportingDispatch(true);
+    try {
+      // La selección del listado general puede incluir historial. El archivo de
+      // despacho siempre usa la misma cola validada que el módulo de Rutas.
+      const { data } = await api.get('/delivery/orders');
+      const dispatchOrders = Array.isArray(data?.orders) ? data.orders : [];
+      if (dispatchOrders.length === 0) {
+        showToast('No hay pedidos pendientes de despacho', 'error');
+        return;
       }
 
-      // Col G: Notas — items + total
-      const itemsText = (order.items || []).map(i => {
-        const price = i.price ? ` - $${Number(i.price).toLocaleString('es-CL')}` : '';
-        return `${i.quantity}x ${i.title || '?'}${price}`;
-      }).join(', ');
-      const total = order.total ?? order.raw?.total_price ?? 0;
-      const totalText = total ? ` | Total: $${Number(total).toLocaleString('es-CL')}` : '';
-      row[6] = itemsText + totalText;
+      const XLSX = await import('xlsx');
+      const HEADERS = [
+        'Título* Requerido', 'Dirección completa* Requerida', 'Carga',
+        'Hora inicial', 'Hora final', 'Tiempo de servicio', 'Notas',
+        'Latitud', 'Longitud', 'ID de referencia', 'Habilidades requeridas',
+        'Habilidades opcionales', 'Persona de contacto', 'Teléfono de contacto',
+        'Hora inicial 2', 'Hora final 2', 'Carga 2', 'Carga 3', 'Prioridad',
+        'SMS', 'Correo electrónico de contacto', 'Carga pick', 'Carga pick 2',
+        'Carga pick 3', 'Fecha programada', 'Tipo de visita',
+      ];
 
-      // Col N: Teléfono (fórmula =+56...)
-      const phone = (order.phone || '').replace(/\D/g, '');
-      const phoneClean = phone.replace(/^56/, '');
-      if (phoneClean) row[13] = Number(phoneClean);
+      const dataRows = dispatchOrders.map(order => {
+        const row = new Array(26).fill('');
+        row[0] = `${order.orderName || `#${order.id}`}${order.customerName || 'Cliente'}`;
+        row[1] = order.fullAddress || '';
 
-      return row;
-    });
+        const itemsText = (order.items || []).map(i => {
+          const name = i.name || i.title || i.product_name || '?';
+          const price = i.price ? ` - $${Number(i.price).toLocaleString('es-CL')}` : '';
+          return `${i.quantity}x ${name}${price}`;
+        }).join(', ');
+        const total = Number(order.totalPrice) || 0;
+        row[6] = itemsText + (total ? ` | Total: $${total.toLocaleString('es-CL')}` : '');
 
-    const wsData = [HEADERS, ...dataRows];
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Hoja 91');
-    const fecha = new Date().toISOString().slice(0, 10);
-    XLSX.writeFile(wb, `despacho_${fecha}.xlsx`);
+        const phone = (order.phone || '').replace(/\D/g, '').replace(/^56/, '');
+        if (phone) row[13] = Number(phone);
+        return row;
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet([HEADERS, ...dataRows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Hoja 91');
+      const fecha = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date());
+      XLSX.writeFile(wb, `despacho_${fecha}.xlsx`);
+      showToast(`Despacho exportado: ${dispatchOrders.length} pedidos`);
+    } catch (err) {
+      showToast(err.response?.data?.error || 'No se pudo exportar el despacho', 'error');
+    } finally {
+      setExportingDispatch(false);
+    }
   };
 
   const handleStatusChange = async (orderId, newStatus) => {
@@ -1145,14 +1137,14 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
                 🗑️ Eliminar
               </button>
 
-              <div style={{ width: 1, height: 20, backgroundColor: colors.border }} />
-
-              <button onClick={handleExportXlsx}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: '1px solid ' + colors.success + '44', backgroundColor: '#052010', color: colors.successSoft, cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
-                <Download size={12} /> Exportar despacho
-              </button>
             </>
           )}
+
+          <button onClick={handleExportXlsx} disabled={exportingDispatch}
+            title="Exporta la misma lista pendiente que aparece en Rutas"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', border: '1px solid ' + colors.success + '44', backgroundColor: '#052010', color: colors.successSoft, cursor: exportingDispatch ? 'wait' : 'pointer', fontSize: '12px', fontWeight: 500, opacity: exportingDispatch ? 0.65 : 1 }}>
+            <Download size={12} /> {exportingDispatch ? 'Preparando despacho...' : 'Exportar pedidos en despacho'}
+          </button>
         </div>
 
         {returnOrder && <div style={{position:'fixed',inset:0,zIndex:100,background:'#0009',display:'flex',justifyContent:'center',padding:24}}><div style={{background:colors.bgPanel,width:'min(900px,100%)',borderRadius:14,overflow:'hidden',display:'flex',flexDirection:'column'}}><button onClick={()=>setReturnOrder(null)} style={{alignSelf:'end',padding:12,cursor:'pointer'}}>Cerrar</button><ReturnsPanel colors={colors} order={returnOrder}/></div></div>}

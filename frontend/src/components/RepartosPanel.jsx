@@ -214,6 +214,7 @@ function buildManifest(stops) {
   const totals = new Map();
   for (const st of (stops || [])) {
     for (const it of (st.items || [])) {
+      if (it?.loadItem === false) continue;
       const name = (it.name || it.title || it.product_name || 'Sin nombre').trim() || 'Sin nombre';
       const key = it.product_key || `raw:${name.toLocaleLowerCase('es')}`;
       const label = it.product_label || name;
@@ -238,6 +239,7 @@ function buildManifestDetails(stops) {
   for (const [stopIndex, st] of (stops || []).entries()) {
     const customer = st.customerName || st.customer_name || `Parada ${stopIndex + 1}`;
     for (const it of (st.items || [])) {
+      if (it?.loadItem === false) continue;
       const name = String(it.name || it.title || it.product_name || 'Sin nombre').trim() || 'Sin nombre';
       const qty = Number(it.quantity) || 0;
       if (qty <= 0) continue;
@@ -369,7 +371,12 @@ function NuevoReparto({ colors }) {
   function reloadOrders() {
     setLoadingOrders(true);
     api.get('/delivery/orders')
-      .then(r => setOrders(uniqueOrders(r.data.orders)))
+      .then(r => {
+        const clean = uniqueOrders(r.data.orders);
+        const available = new Set(clean.map(o => `${o.source}_${o.id}`));
+        setOrders(clean);
+        setSelected(prev => new Set([...prev].filter(key => available.has(key))));
+      })
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoadingOrders(false));
   }
@@ -608,12 +615,12 @@ function NuevoReparto({ colors }) {
             Pedidos pendientes {loadingOrders ? '' : `(${orders.length})`}
           </span>
           <span style={{ color: colors.textMuted, fontSize: '12px' }}>
-            {selected.size} seleccionados
+            {selectedOrders.length} seleccionados
           </span>
         </div>
 
         <div style={{ padding: '8px 16px', color: colors.textMuted, fontSize: '11px', borderBottom: `1px solid ${colors.border}` }}>
-          Shopify: últimos 60 días y pedidos anteriores con gestión de despacho. El historial completo sigue disponible en Clientes.
+          Pedidos nuevos del bot, pedidos marcados Por despachar y reintentos pendientes. Los pedidos nuevos con fecha futura aparecen el día programado.
         </div>
 
         {error && (
@@ -691,6 +698,11 @@ function NuevoReparto({ colors }) {
                       )}
                     </div>
                     <span style={{ color: colors.textMuted, fontSize: '11px' }}>{o.orderName}</span>
+                    {o.isReturn && (
+                      <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 800, color: '#c4b5fd' }}>
+                        ↩ Parada de cambio/devolución
+                      </span>
+                    )}
                     {o.dispatchCount > 0 && (
                       <span
                         title={o.lastAttemptStatus === 'fallido' ? 'Ya salió antes y no se pudo entregar' : o.lastAttemptStatus === 'reprogramado' ? 'Reprogramado por el cliente' : 'Ya salió a reparto antes'}
@@ -698,7 +710,7 @@ function NuevoReparto({ colors }) {
                         🔁 {o.dispatchCount + 1}º intento{o.lastAttemptStatus === 'fallido' ? ' · falló' : ''}
                       </span>
                     )}
-                    {o.deliveryDate && (() => {
+                    {!o.isReturn && o.deliveryDate && (() => {
                       const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
                       const future = o.deliveryDate > today;
                       const [y, m, d] = o.deliveryDate.split('-');
@@ -708,7 +720,7 @@ function NuevoReparto({ colors }) {
                         </span>
                       );
                     })()}
-                    <div onClick={e => e.stopPropagation()} style={{ marginTop: '4px' }}>
+                    {!o.isReturn && <div onClick={e => e.stopPropagation()} style={{ marginTop: '4px' }}>
                       {reschedId === `${o.source}_${o.id}` ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <input
@@ -731,7 +743,7 @@ function NuevoReparto({ colors }) {
                           📅 Reprogramar a otro día
                         </button>
                       )}
-                    </div>
+                    </div>}
                   </div>
                 </div>
               );
@@ -820,9 +832,9 @@ function NuevoReparto({ colors }) {
         {step === 'assign' && optRoutes.length > 0 && (
           <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
 
-            {optimizedRoute?.optimized === false && (
+            {optimizedRoute?.warning && (
               <div style={{ fontSize: '12px', color: '#fbbf24', backgroundColor: '#2a1f08', border: '1px solid #78350f', borderRadius: '8px', padding: '10px 12px', marginBottom: '16px', lineHeight: 1.4 }}>
-                {optimizedRoute.warning || 'Rutas sin optimizar (revisa la configuración de Google Maps y la bodega).'}
+                {optimizedRoute.warning}
               </div>
             )}
 
@@ -1454,6 +1466,7 @@ function DespachosRepartos({ colors }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, height: '100%', overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <ReturnsPanel colors={colors} dispatch/>
       {/* Vista y período sugerido */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '12px', color: colors.textSecondary, fontWeight: 700 }}>Ver por</span>

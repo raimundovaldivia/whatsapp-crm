@@ -124,6 +124,7 @@ router.post('/import-shopify', async (req, res) => {
       }
 
       const existingProduct = existingTitles.get(title.toLowerCase());
+      if (existingProduct?.deprecated_at) continue;
       if (existingProduct) {
         await db.updateProduct(req.orgId, existingProduct.id, {
           price, compare_price: comparePrice, image_url: imageUrl,

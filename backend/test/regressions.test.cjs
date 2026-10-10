@@ -442,7 +442,7 @@ test('Meta signature checks whole batch and persists every message/status under 
     const bad=response();await auth.verifyWebhook('meta')({...req,rawBody:Buffer.from('{}')},bad,()=>assert.fail('invalid signature'));assert.equal(bad.code,401);
   } finally {await f.engine.close();}
 });
-test('dispatch excludes future bot and Shopify deliveries and rechecks stale routes', async () => {
+test('dispatch includes active bot orders, due Shopify orders and retries while rechecking stale routes', async () => {
   const f = await fixture();
   try {
     await f.engine.exec(`
@@ -450,14 +450,20 @@ test('dispatch excludes future bot and Shopify deliveries and rechecks stale rou
       UPDATE orders SET status='sent', delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date WHERE id=2;
       INSERT INTO orders(id,organization_id,items,total_price,status,delivery_date) VALUES
         (3,1,'[]',100,'sent',NULL),
-        (4,1,'[]',100,'sent',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date - 1);
+        (4,1,'[]',100,'sent',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date - 1),
+        (5,1,'[]',100,'nuevo',NULL),
+        (6,1,'[]',100,'no_entregado',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date + 4);
+      UPDATE orders SET dispatch_count=1,last_attempt_status='no_entregado' WHERE id=6;
       UPDATE shopify_orders SET delivery_date=(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date + 4;
       INSERT INTO shopify_orders(organization_id,shopify_order_id,delivery_date) VALUES
         (1,'today',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date),
         (1,'overdue',(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date - 1),
         (1,'undated',NULL);
     `);
-    const router = load('src/routes/delivery.js', {'../db/database': f.db, '../middleware/auth': {requireAuth: noop, requireRole: () => noop}});
+    const router = load('src/routes/delivery.js', {
+      '../db/database': {...f.db, getSetting: async () => null},
+      '../middleware/auth': {requireAuth: noop, requireRole: () => noop},
+    });
     const call = async (method, path, body={}, params={}) => {
       const res=response();
       await handler(router,method,path)({orgId:1,role:'owner',body,params},res);
@@ -466,7 +472,17 @@ test('dispatch excludes future bot and Shopify deliveries and rechecks stale rou
     const list=await call('get','/orders');
     assert.equal(list.code,200);
     assert.deepEqual(Array.from(list.body.orders,o=>`${o.source}_${o.id}`).sort(),
-      ['bot_2','bot_3','bot_4','shopify_overdue','shopify_today','shopify_undated'].sort());
+      ['bot_2','bot_3','bot_4','bot_5','bot_6','shopify_overdue','shopify_today'].sort());
+    // Una pestaña que conservó una selección antigua tampoco puede volver a
+    // introducirla al optimizar: el servidor arma la ruta solo con lo vigente.
+    const optimized=await call('post','/optimize',{orders:[
+      {source:'bot',id:1,customerName:'Programado a futuro'},
+      {source:'bot',id:2,customerName:'Hoy'},
+      {source:'bot',id:6,customerName:'Reintento programado'},
+    ],vehicles:1});
+    assert.equal(optimized.code,200,JSON.stringify(optimized.body));
+    assert.deepEqual(Array.from(optimized.body.routes[0].stops,o=>`${o.source}_${o.id}`),['bot_6','bot_2']);
+    assert.deepEqual(Array.from(optimized.body.skipped,o=>`${o.source}_${o.id}`),['bot_1']);
     // Ignore stale or forged dates from the browser; use the database date.
     const future=[{source:'bot',id:1,deliveryDate:'2000-01-01'},{source:'shopify',id:'gid://shopify/Order/42'}];
     assert.equal((await call('post','/routes',{orders:future,send:true})).code,400);
@@ -543,6 +559,7 @@ test('sending a route reserves its orders and cancelling releases them', async (
 test('delivery retries are placed first and remain explicit in the saved route', async () => {
   const f = await fixture();
   try {
+    await f.query("UPDATE orders SET status='por_despachar' WHERE id=1");
     await f.query("UPDATE orders SET dispatch_count=2,last_attempt_status='no_entregado',delivery_note='Cliente no estaba' WHERE id=2");
     const database = { ...f.db, getSetting: async () => null };
     const router = load('src/routes/delivery.js', {

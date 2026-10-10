@@ -40,3 +40,33 @@ test('eligibility is scoped to store and full purchase history',async()=>{
   assert.equal((await rule.context(db,1,'56911111111')).eligible,true);
   assert.equal((await rule.context({query:async()=>({rows:[{slug:'other'}]})},2,'56911111111')).enabled,false);
 });
+
+require('node:test')('web scale starts at 12000 and applies quantity pricing for returning customers',()=>{
+const assert=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const ctx=p.forStore({enabled:true,eligible:false});
+for(const [quantity,total] of [[1,12000],[2,22000],[6,54000]]){
+const items=p.apply([{title:'Huevos XL 30 unidades',quantity,price:12000}],ctx);
+assert.equal(items[0].price*quantity,total);
+}
+assert.equal(p.scaleTotal(30),11000);
+});
+
+require('node:test')('quantity promotion covers egg trays and preserves bulk and special prices',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+for(const [title,price,quantity,total] of [['Huevos XL 30 unidades',12000,3,30000],['Huevos M 30 unidades',9000,2,18000],['Huevos M 30 unidades',9000,3,27000],['Huevos de Campo Tamaño M Blancos – Bandeja 30 Unidades',9000,3,27000],['Huevos Jumbo 20 unidades',10000,3,25000],['Huevos L CAFE',11000,3,27500],['Huevos XL 180 unidades',54000,1,54000],['Queso',15000,3,45000]]){
+const lines=p.apply([{title,price,quantity}],p.forStore({enabled:true}));a.equal(Math.round(lines[0].price*quantity),total);
+}
+a.equal(p.apply([{title:'Huevos XL 30 unidades',price:10000,quantity:3,unit_source:'especial'}],p.forStore({enabled:true}))[0].price,10000);
+});
+
+require('node:test')('bot uses storefront tray totals for natural customers',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const ctx=p.forStore({enabled:true});
+const items=[{title:'Huevos Jumbo 20 unidades',price:10000,quantity:3}];
+a.equal(p.applyQuote({items,total:30000},ctx).total,25000);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/presentación exacta = 1 bandeja de 20 huevos/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/3 bandejas \$25000/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/Una caja NO es sinónimo de una bandeja/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/¿De cuántos huevos necesitas la caja\?/);
+a.match(p.prompt(ctx,[]),/bandejas M no tienen descuento/);
+});

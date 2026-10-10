@@ -59,6 +59,26 @@ const importedShopifyClosed = `(COALESCE(crm_status, 'nuevo') IN ('', 'nuevo') A
   )
 ))`;
 
+// La bandeja de reparto no es un espejo del historial de Shopify. Las órdenes
+// importadas requieren una decisión logística local; los pedidos creados por
+// el bot sí entran mientras estén activos, porque representan la cola operativa
+// real. Los reintentos permanecen visibles hasta completar la entrega.
+const chileTodaySql = `(CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date`;
+const shopifyDispatchReady = `(
+  COALESCE(crm_status, '') IN ('por_despachar', 'no_entregado')
+  OR (delivery_date IS NOT NULL AND delivery_date <= ${chileTodaySql})
+  OR COALESCE(dispatch_count, 0) > 0
+  OR last_attempt_at IS NOT NULL
+  OR last_attempt_status IS NOT NULL
+)`;
+const botDispatchReady = `(
+  COALESCE(status, '') IN ('draft', 'sent', 'nuevo', 'por_despachar', 'payment_received', 'no_entregado')
+  OR (delivery_date IS NOT NULL AND delivery_date <= ${chileTodaySql})
+  OR COALESCE(dispatch_count, 0) > 0
+  OR last_attempt_at IS NOT NULL
+  OR last_attempt_status IS NOT NULL
+)`;
+
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
@@ -153,6 +173,7 @@ function buildLoadManifest(route) {
     const status = (route.stop_statuses || {})[orderKey(stop)] || 'pending';
     if (status !== 'pending') continue;
     for (const item of (stop.items || [])) {
+      if (item?.loadItem === false) continue;
       const name = String(item.name || item.title || item.product_name || '').trim();
       const quantity = Number(item.quantity) || 0;
       if (!name || quantity <= 0) continue;
@@ -166,6 +187,7 @@ async function markOrdersEnRoute(client, orgId, orders) {
   const list = Array.isArray(orders) ? orders : JSON.parse(orders || '[]');
   const shopifyIds = list.filter(o => o.source === 'shopify').map(o => o.id);
   const botIds = list.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isFinite);
+  const returnIds = list.filter(o => o.source === 'return').map(o => parseInt(o.id)).filter(Number.isFinite);
   await Promise.all([
     shopifyIds.length && client.query(
       `UPDATE shopify_orders SET crm_status = 'en_camino',
@@ -181,6 +203,12 @@ async function markOrdersEnRoute(client, orgId, orders) {
            AND delivered_at IS NULL AND status NOT IN ('en_camino', 'entregado', 'paid', 'cancelled')`,
       [orgId, botIds]
     ),
+    returnIds.length && client.query(
+      `UPDATE order_returns SET status = 'in_progress', updated_at = NOW()
+         WHERE organization_id = $1 AND id = ANY($2::int[])
+           AND status = 'scheduled'`,
+      [orgId, returnIds]
+    ),
   ].filter(Boolean));
 }
 
@@ -189,17 +217,19 @@ async function markOrdersEnRoute(client, orgId, orders) {
  * a aparecer en el selector mientras el chofer consolida la carga.
  * Si otra solicitud alcanzó a reservar uno, se aborta para evitar duplicados.
  */
-async function reserveOrdersForRoute(client, orgId, orders) {
+async function reserveOrdersForRoute(client, orgId, orders, routeId = null, driverUserId = null) {
   const list = dedupeOrders(Array.isArray(orders) ? orders : JSON.parse(orders || '[]'));
   const shopifyIds = list.filter(o => o.source === 'shopify').map(o => String(o.id));
   const botIds = list.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isFinite);
-  const [shopifyResult, botResult] = await Promise.all([
+  const returnIds = list.filter(o => o.source === 'return').map(o => parseInt(o.id)).filter(Number.isFinite);
+  const [shopifyResult, botResult, returnResult] = await Promise.all([
     shopifyIds.length ? client.query(
       `UPDATE shopify_orders SET crm_status = 'asignado_ruta'
          WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])
            AND delivered_at IS NULL
            AND COALESCE(crm_status, '') NOT IN ('asignado_ruta','en_camino','entregado','cancelled')
            AND NOT ${importedShopifyClosed}
+           AND ${shopifyDispatchReady}
        RETURNING shopify_order_id`,
       [orgId, shopifyIds]
     ) : null,
@@ -208,13 +238,26 @@ async function reserveOrdersForRoute(client, orgId, orders) {
          WHERE organization_id = $1 AND id = ANY($2::int[])
            AND delivered_at IS NULL
            AND status NOT IN ('asignado_ruta','en_camino','entregado','paid','cancelled')
+           AND ${botDispatchReady}
        RETURNING id`,
       [orgId, botIds]
     ) : null,
+    returnIds.length ? client.query(
+      `UPDATE order_returns
+          SET route_id = $3,
+              driver_user_id = COALESCE($4::int, driver_user_id),
+              scheduled_date = COALESCE(scheduled_date, ${chileTodaySql}),
+              status = 'scheduled', updated_at = NOW()
+        WHERE organization_id = $1 AND id = ANY($2::int[])
+          AND route_id IS NULL AND status IN ('approved','scheduled')
+          AND (scheduled_date IS NULL OR scheduled_date <= ${chileTodaySql})
+      RETURNING id`,
+      [orgId, returnIds, routeId, driverUserId]
+    ) : null,
   ]);
-  const reserved = (shopifyResult?.rowCount || 0) + (botResult?.rowCount || 0);
-  if (reserved !== shopifyIds.length + botIds.length) {
-    throw Object.assign(new Error('Uno o más pedidos ya están asignados a otra ruta. Actualiza la lista e intenta nuevamente.'), { status: 409 });
+  const reserved = (shopifyResult?.rowCount || 0) + (botResult?.rowCount || 0) + (returnResult?.rowCount || 0);
+  if (reserved !== shopifyIds.length + botIds.length + returnIds.length) {
+    throw Object.assign(new Error('Uno o más pedidos o devoluciones ya están asignados a otra ruta. Actualiza la lista e intenta nuevamente.'), { status: 409 });
   }
 }
 
@@ -223,6 +266,7 @@ async function releaseOrdersFromRoute(client, orgId, orders) {
   const list = dedupeOrders(Array.isArray(orders) ? orders : JSON.parse(orders || '[]'));
   const shopifyIds = list.filter(o => o.source === 'shopify').map(o => String(o.id));
   const botIds = list.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isFinite);
+  const returnIds = list.filter(o => o.source === 'return').map(o => parseInt(o.id)).filter(Number.isFinite);
   const results = await Promise.all([
     shopifyIds.length && client.query(
       `UPDATE shopify_orders SET crm_status = 'por_despachar'
@@ -237,6 +281,16 @@ async function releaseOrdersFromRoute(client, orgId, orders) {
            AND status IN ('asignado_ruta','en_camino') AND delivered_at IS NULL
        RETURNING id`,
       [orgId, botIds]
+    ),
+    returnIds.length && client.query(
+      `UPDATE order_returns
+          SET route_id = NULL,
+              status = CASE WHEN status = 'in_progress' THEN 'scheduled' ELSE status END,
+              updated_at = NOW()
+        WHERE organization_id = $1 AND id = ANY($2::int[])
+          AND route_id IS NOT NULL AND status IN ('scheduled','in_progress')
+      RETURNING id`,
+      [orgId, returnIds]
     ),
   ].filter(Boolean));
   return results.reduce((total, result) => total + (result?.rowCount || 0), 0);
@@ -469,12 +523,60 @@ function normalizeBotOrder(row) {
   };
 }
 
+function normalizeReturnTask(row) {
+  const customer = row.customer && typeof row.customer === 'object' ? row.customer : {};
+  const rawAddress = customer.address;
+  const fullAddress = typeof rawAddress === 'string'
+    ? rawAddress
+    : Object.values(rawAddress || {}).filter(value => typeof value === 'string' && value.trim()).join(', ');
+  const affected = jsonList(row.items).map(item => ({
+    ...item,
+    name: `Retirar: ${item.name || item.title || 'Producto'}`,
+    title: `Retirar: ${item.name || item.title || 'Producto'}`,
+    price: 0,
+    loadItem: false,
+  }));
+  const routeItems = [...affected];
+  if (row.replacement_description) routeItems.push({
+    name: `Entregar: ${row.replacement_description}`,
+    title: `Entregar: ${row.replacement_description}`,
+    quantity: 1,
+    price: 0,
+    loadItem: true,
+  });
+  if (row.money_direction !== 'none' && Number(row.money_amount) > 0) routeItems.push({
+    name: `${row.money_direction === 'refund' ? 'Devolver' : 'Cobrar'} $${Number(row.money_amount).toLocaleString('es-CL')} · ${row.money_method}`,
+    title: `${row.money_direction === 'refund' ? 'Devolver' : 'Cobrar'} $${Number(row.money_amount).toLocaleString('es-CL')} · ${row.money_method}`,
+    quantity: 1,
+    price: 0,
+    loadItem: false,
+  });
+  const kindLabel = row.kind === 'exchange' ? 'CAMBIO' : row.kind === 'issue' ? 'PROBLEMA' : 'DEVOLUCIÓN';
+  return {
+    id: String(row.id), source: 'return', isReturn: true,
+    orderName: `↩ ${kindLabel} #${row.id} · Pedido ${row.order_id}`,
+    customerName: `↩ ${kindLabel} · ${customer.name || 'Cliente'}`,
+    phone: customer.phone || '', address: fullAddress, city: '', fullAddress,
+    items: routeItems, totalPrice: 0, status: row.status,
+    deliveryDate: dateOnly(row.scheduled_date), deliveryNote: row.reason || null,
+    returnTask: {
+      kind: row.kind,
+      reason: row.reason,
+      pickupRequired: row.pickup_required,
+      replacementDescription: row.replacement_description,
+      moneyDirection: row.money_direction,
+      moneyMethod: row.money_method,
+      moneyAmount: Number(row.money_amount) || 0,
+    },
+  };
+}
+
 // ─── ADMIN: Pedidos pendientes para seleccionar ──────────────────────────────
 
 router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const pool = getPool();
   try {
-    const [shopifyRes, botRes] = await Promise.all([
+    const [shopifyRes, botRes, returnRes] = await Promise.all([
       pool.query(`
         SELECT shopify_order_id      AS id,
                shopify_name          AS order_name,
@@ -495,6 +597,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
           AND (delivery_date IS NULL OR delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
           AND delivered_at IS NULL   -- ya se repartió: no vuelve a la lista
           AND NOT ${importedShopifyClosed}
+          AND ${shopifyDispatchReady}
         ORDER BY synced_at ASC
       `, [req.orgId]),
       pool.query(`
@@ -545,14 +648,31 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
         ) so ON true
         WHERE o.organization_id = $1
           AND (o.status IS NULL OR o.status NOT IN ('asignado_ruta', 'en_camino', 'entregado', 'cancelled'))
-          AND (o.delivery_date IS NULL OR o.delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date)
+          AND (
+            o.delivery_date IS NULL
+            OR o.delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+            OR o.status = 'no_entregado'
+          )
           AND o.delivered_at IS NULL   -- ya se repartió (aunque quede en 'paid'): no vuelve a la lista
+          AND ${botDispatchReady}
         ORDER BY o.created_at ASC
+      `, [req.orgId]),
+      pool.query(`
+        SELECT id, order_id, kind, status, items, customer, reason,
+               replacement_description, pickup_required, money_direction,
+               money_method, money_amount, scheduled_date
+          FROM order_returns
+         WHERE organization_id = $1
+           AND route_id IS NULL
+           AND status IN ('approved','scheduled')
+           AND (scheduled_date IS NULL OR scheduled_date <= ${chileTodaySql})
+         ORDER BY scheduled_date NULLS FIRST, created_at ASC
       `, [req.orgId]),
     ]);
     const shopifyOrders = shopifyRes.rows.map(normalizeShopifyOrder);
     const botOrders     = botRes.rows.map(normalizeBotOrder);
-    const orders        = prioritizeOrders([...shopifyOrders, ...botOrders]);
+    const returnTasks   = returnRes.rows.map(normalizeReturnTask);
+    const orders        = prioritizeOrders([...returnTasks, ...shopifyOrders, ...botOrders]);
 
     // Geocodificar direcciones para el mapa del panel (cacheado).
     // Si no hay GOOGLE_MAPS_API_KEY, cada pedido queda con lat/lng en null y el
@@ -572,7 +692,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
       success: true,
       orders,
       total: orders.length,
-      _debug: { shopify: shopifyOrders.length, bot: botOrders.length, botDetail: botDebug },
+      _debug: { shopify: shopifyOrders.length, bot: botOrders.length, returns: returnTasks.length, botDetail: botDebug },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -726,10 +846,22 @@ async function optimizeOneRoute(stops, warehouse, apiKey) {
 
 router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
   const { orders: rawOrders, vehicles: vehiclesRaw } = req.body;
-  const orders = prioritizeOrders(rawOrders);
+  let availability;
+  try {
+    availability = await partitionDispatchable(getPool(), req.orgId, rawOrders || []);
+  } catch (err) {
+    console.error('[Delivery/optimize availability]', err.message);
+    return res.status(500).json({ success: false, error: 'No se pudo validar la lista de pedidos' });
+  }
+  const orders = availability.keep;
+  const skipped = availability.skip;
   const vehicles = Math.max(1, Math.min(parseInt(vehiclesRaw) || 1, 10));
   if (!orders || orders.length === 0)
-    return res.status(400).json({ success: false, error: 'No hay pedidos para optimizar' });
+    return res.status(400).json({
+      success: false,
+      error: 'No hay pedidos pendientes de despacho para optimizar. Actualiza la lista.',
+      skipped,
+    });
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -754,11 +886,11 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinado
       });
     }
     return res.json({
-      success: true, optimized: false, warehouse, routes,
+      success: true, optimized: false, warehouse, routes, skipped,
       route: routes[0]?.stops || [],   // compat con clientes viejos
-      warning: !warehouse
+      warning: `${skipped.length ? `${skipped.length} pedido${skipped.length === 1 ? '' : 's'} antiguo${skipped.length === 1 ? '' : 's'} o no disponible${skipped.length === 1 ? '' : 's'} se omitieron. ` : ''}${!warehouse
         ? 'Configura la dirección de la bodega en Ajustes para optimizar las rutas.'
-        : 'Sin GOOGLE_MAPS_API_KEY — orden sin optimizar.',
+        : 'Sin GOOGLE_MAPS_API_KEY - orden sin optimizar.'}`,
     });
   }
 
@@ -799,10 +931,17 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinado
     }
 
     const failedRoutes = routes.filter(route => route.error).length;
+    const warnings = [];
+    if (skipped.length) {
+      warnings.push(`${skipped.length} pedido${skipped.length === 1 ? '' : 's'} antiguo${skipped.length === 1 ? '' : 's'} o no disponible${skipped.length === 1 ? '' : 's'} se omitieron.`);
+    }
+    if (failedRoutes) {
+      warnings.push(`${failedRoutes} ruta(s) conservaron todas sus paradas, pero Google no pudo optimizar su orden.`);
+    }
     res.json({
-      success: true, optimized: failedRoutes === 0, warehouse, vehicles: routes.length, routes,
+      success: true, optimized: failedRoutes === 0, warehouse, vehicles: routes.length, routes, skipped,
       route: routes[0]?.stops || [],   // compat con clientes viejos
-      ...(failedRoutes ? { warning: `${failedRoutes} ruta(s) conservaron todas sus paradas, pero Google no pudo optimizar su orden.` } : {}),
+      warning: warnings.join(' ') || null,
     });
   } catch (err) {
     console.error('[Delivery/optimize]', err.message);
@@ -1645,6 +1784,7 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
   const list = dedupeOrders(orders);
   const botIds  = list.filter(o => o.source === 'bot').map(o => parseInt(o.id)).filter(Number.isFinite);
   const shopIds = list.filter(o => o.source === 'shopify').map(o => String(o.id));
+  const returnIds = list.filter(o => o.source === 'return').map(o => parseInt(o.id)).filter(Number.isFinite);
   const done = new Set();
   const fresh = new Map();
   if (botIds.length) {
@@ -1652,7 +1792,9 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
       `SELECT id::text AS id, status, dispatch_count, last_attempt_status, delivery_note,
               (delivered_at IS NOT NULL OR status IN ('en_camino', 'entregado', 'cancelled', 'paid')
                 OR (status = 'asignado_ruta' AND NOT $3::boolean)
-                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
+                 OR (delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+                     AND status <> 'no_entregado')
+                 OR (NOT $3::boolean AND NOT ${botDispatchReady})) AS blocked
          FROM orders
         WHERE organization_id = $1 AND id = ANY($2::int[])`,
       [orgId, botIds, allowAssigned]
@@ -1675,7 +1817,8 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
               (delivered_at IS NOT NULL OR ${importedShopifyClosed}
                 OR crm_status IN ('en_camino', 'entregado', 'cancelled')
                 OR (crm_status = 'asignado_ruta' AND NOT $3::boolean)
-                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date) AS blocked
+                OR delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
+                OR (NOT $3::boolean AND NOT ${shopifyDispatchReady})) AS blocked
          FROM shopify_orders
         WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])`,
       [orgId, shopIds, allowAssigned]
@@ -1690,6 +1833,30 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
         deliveryNote: row.delivery_note || null,
       });
     });
+  }
+  if (returnIds.length) {
+    const { rows } = await pool.query(
+      `SELECT id, order_id, kind, status, items, customer, reason,
+              replacement_description, pickup_required, money_direction,
+              money_method, money_amount, scheduled_date,
+              (status NOT IN ('approved','scheduled')
+                OR (route_id IS NOT NULL AND NOT $3::boolean)
+                OR scheduled_date > ${chileTodaySql}) AS blocked
+         FROM order_returns
+        WHERE organization_id = $1 AND id = ANY($2::int[])`,
+      [orgId, returnIds, allowAssigned]
+    );
+    rows.forEach(row => {
+      const key = 'return_' + row.id;
+      if (row.blocked) done.add(key);
+      fresh.set(key, normalizeReturnTask(row));
+    });
+  }
+  // Un id inexistente o perteneciente a otra organización nunca debe viajar
+  // confiando solo en la copia que conserva el navegador.
+  for (const order of list) {
+    const key = orderKey(order);
+    if (!key || !fresh.has(key)) done.add(key);
   }
   const keep = [], skip = [];
   for (const order of list) {
@@ -1797,7 +1964,7 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
       send ? new Date().toISOString() : null,
     ]);
 
-    if (send) await reserveOrdersForRoute(client, req.orgId, finalOrders);
+    if (send) await reserveOrdersForRoute(client, req.orgId, finalOrders, route.id, driver.driverUserId);
     await client.query('COMMIT');
 
     if (skipped.length) console.log(`[Delivery/routes POST] ⏭️ ${skipped.length} pedido(s) ya entregados omitidos al enviar`);
@@ -1880,7 +2047,7 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
     );
     if (!route) throw Object.assign(new Error('Ruta no encontrada'), { status: 404 });
 
-    if (status === 'sent') await reserveOrdersForRoute(client, req.orgId, route.orders);
+    if (status === 'sent') await reserveOrdersForRoute(client, req.orgId, route.orders, route.id, route.driver_user_id);
 
     // Al cancelar la ruta: los pedidos que iban EN CAMINO y no alcanzaron a
     // entregarse vuelven a 'por_despachar' para poder salir en otra ruta. No se
@@ -1983,7 +2150,7 @@ router.post('/routes/:id/orders', requireRole('owner', 'admin', 'supervisor', 'c
       [route.id, req.orgId, JSON.stringify(newOrders), JSON.stringify(newStops), JSON.stringify(nextChecklist)]
     );
 
-    if (route.status === 'sent') await reserveOrdersForRoute(client, req.orgId, hydratedToAdd);
+    if (route.status === 'sent') await reserveOrdersForRoute(client, req.orgId, hydratedToAdd, route.id, route.driver_user_id);
     if (routeStarted) await markOrdersEnRoute(client, req.orgId, hydratedToAdd);
 
     const { rows: [updated] } = await client.query(
@@ -2107,6 +2274,99 @@ async function applyExtraToOrder(pool, source, orderId, orgId, extras) {
   }
 }
 
+async function applyReturnRouteStop(client, { owned, routeId, stopKey, returnId, orgId, userId, status, paymentMethod, note, deliverDate }) {
+  const { rows: [row] } = await client.query(
+    'SELECT * FROM order_returns WHERE id = $1 AND organization_id = $2 FOR UPDATE',
+    [Number(returnId), orgId]
+  );
+  if (!row || Number(row.route_id) !== Number(routeId)) {
+    throw Object.assign(new Error('La devolución ya no pertenece a esta ruta'), { status: 409 });
+  }
+
+  let returnStatus = row.status;
+  let inventoryStatus = row.inventory_status;
+  let assigned = row.driver_user_id;
+  let scheduledDate = row.scheduled_date;
+  let linkedRouteId = row.route_id;
+  let confirmMoney = false;
+  let action = 'route_update';
+
+  if (status === 'entregado') {
+    if (!['scheduled', 'in_progress'].includes(row.status)) {
+      throw Object.assign(new Error('La devolución cambió de estado. Actualiza la ruta.'), { status: 409 });
+    }
+    if (row.money_method === 'efectivo' && paymentMethod !== 'efectivo') {
+      const verb = row.money_direction === 'refund' ? 'devolución' : 'cobro';
+      throw Object.assign(new Error(`Confirma el ${verb} en efectivo seleccionando Efectivo.`), { status: 400 });
+    }
+    confirmMoney = row.money_method === 'efectivo';
+    inventoryStatus = row.pickup_required ? 'pending_review' : 'not_received';
+    returnStatus = row.money_amount > 0 && !confirmMoney ? 'review' : 'resolved';
+    action = 'complete';
+  } else if (status === 'postponed') {
+    if (!deliverDate) throw Object.assign(new Error('Indica la nueva fecha del cambio o devolución.'), { status: 400 });
+    returnStatus = 'scheduled';
+    scheduledDate = deliverDate;
+    linkedRouteId = null;
+    action = 'postpone';
+  } else if (status === 'cancelled') {
+    returnStatus = 'cancelled';
+    linkedRouteId = null;
+    action = 'cancel';
+  } else if (status === 'not_delivered') {
+    returnStatus = 'approved';
+    assigned = null;
+    scheduledDate = null;
+    linkedRouteId = null;
+    action = 'incident';
+  }
+
+  if (confirmMoney && row.money_amount > 0) {
+    await client.query(
+      `INSERT INTO return_money_movements(return_id,organization_id,method,amount,recorded_by)
+       VALUES($1,$2,$3,$4,$5) ON CONFLICT(return_id) DO NOTHING`,
+      [row.id, orgId, row.money_method, row.money_direction === 'refund' ? -row.money_amount : row.money_amount, userId]
+    );
+  }
+
+  const event = {
+    action, status: returnStatus, userId, at: new Date().toISOString(), note,
+    driverId: assigned, scheduledDate, inventoryStatus,
+    pickedUp: status === 'entregado' && row.pickup_required,
+    replaced: status === 'entregado' && !!row.replacement_description,
+    moneyConfirmed: confirmMoney,
+    routeId: Number(routeId),
+  };
+  await client.query(
+    `UPDATE order_returns
+        SET status=$3, inventory_status=$4, driver_user_id=$5, scheduled_date=$6,
+            route_id=$7, money_confirmed=money_confirmed OR $8,
+            events=events || $9::jsonb, updated_at=NOW()
+      WHERE id=$1 AND organization_id=$2`,
+    [row.id, orgId, returnStatus, inventoryStatus, assigned, scheduledDate, linkedRouteId, confirmMoney, JSON.stringify([event])]
+  );
+
+  const noteJson = note ? JSON.stringify({ [stopKey]: note }) : '{}';
+  const { rows: [route] } = await client.query(
+    `UPDATE delivery_routes
+        SET stop_statuses = stop_statuses || jsonb_build_object($1::text, $2::text),
+            stop_notes = COALESCE(stop_notes, '{}'::jsonb) || $3::jsonb,
+            stop_times = COALESCE(stop_times, '{}'::jsonb) || jsonb_build_object($1::text, to_jsonb(NOW()))
+      WHERE id=$4 AND organization_id=$5
+      RETURNING stop_statuses, orders`,
+    [stopKey, status, noteJson, Number(routeId), orgId]
+  );
+  if (!route) throw new Error('Ruta no encontrada');
+  const statuses = route.stop_statuses || {};
+  const terminal = ['entregado', 'cancelled', 'postponed', 'not_delivered'];
+  const members = jsonList(route.orders);
+  const allDone = members.length > 0 && members.every(stop => terminal.includes(statuses[orderKey(stop)]));
+  if (allDone) {
+    await client.query('UPDATE delivery_routes SET status = $2, completed_at = NOW() WHERE id = $1', [Number(routeId), 'completed']);
+  }
+  return { route, allDone };
+}
+
 async function applyStopUpdate(req, res, id, stopKey) {
   const { status, paymentMethod, paymentCashAmount, paymentTransferAmount, note, extras, deliverAfter } = req.body;  // status: 'entregado' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
   let cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
@@ -2155,6 +2415,24 @@ async function applyStopUpdate(req, res, id, stopKey) {
     const members = Array.isArray(owned.orders) ? owned.orders : JSON.parse(owned.orders || '[]');
     if (!members.some(o => String(o.source) + '_' + String(o.id) === stopKey)) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
     const [kind, orderKey] = splitStopKey(stopKey);
+    if (kind === 'return') {
+      const outcome = await applyReturnRouteStop(pool, {
+        owned, routeId: id, stopKey, returnId: orderKey, orgId: req.orgId, userId: req.userId,
+        status, paymentMethod, note: cleanNote, deliverDate,
+      });
+      await pool.query('COMMIT');
+      committed = true;
+      pool.release();
+      pool = null;
+      return res.json({
+        success: true,
+        stopStatuses: outcome.route.stop_statuses,
+        stopPayments: {},
+        stopPaymentAmounts: {},
+        routeStatus: outcome.allDone ? 'completed' : 'in_progress',
+        autoCharge: null,
+      });
+    }
     if (!['bot', 'shopify'].includes(kind)) throw Object.assign(new Error('Pedido inválido'), { status: 400 });
     const table = kind === 'bot' ? 'orders' : 'shopify_orders';
     const column = kind === 'bot' ? 'id' : 'shopify_order_id';

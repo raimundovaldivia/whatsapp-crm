@@ -66,6 +66,7 @@ function parseWebhookMessage(body) {
     const contact = value?.contacts?.[0];
     const attributionService = require('./whatsapp-attribution');
     const attribution = attributionService.fromMeta?.(message) || null;
+    const adReferral = require('./ad-attribution').normalizeAdReferral?.(message.referral, 'meta') || null;
     return {
       messageId: message.id,
       from: message.from,
@@ -74,6 +75,7 @@ function parseWebhookMessage(body) {
       type: message.type,
       text: message.type === 'text' ? message.text?.body : null,
       ...(attribution ? { attribution } : {}),
+      ...(adReferral ? { adReferral } : {}),
     };
   } catch { return null; }
 }

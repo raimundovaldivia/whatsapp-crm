@@ -46,7 +46,12 @@ test('dos bandejas corrige el resumen, recalcula y no escala a una persona', asy
     './order-pricing': require('../src/services/order-pricing'),
     './order-quote': require('../src/services/order-quote'),
     './promotion-context': require('../src/services/promotion-context'),
-    './xl-welcome-pricing': { context: async () => ({ enabled: false, eligible: false }), prompt: () => '', applyQuote: quote => quote },
+    './xl-welcome-pricing': {
+      context: async () => ({ enabled: false, eligible: false }),
+      forStore: context => context,
+      prompt: () => '',
+      applyQuote: quote => quote,
+    },
     './scheduled-orders': { isFutureOrderIntent: () => false, isSoftFutureIntent: () => false, extractScheduledOrderData: async () => ({}), formatDateEs: value => value },
   });
 

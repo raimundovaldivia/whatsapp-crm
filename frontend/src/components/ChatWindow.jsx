@@ -27,6 +27,12 @@ const channelLabel = (item) => {
   return `${provider} · ${channel}`;
 };
 
+const normalizeProductSearch = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .trim();
+
 export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted, onSelectConversation }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
@@ -378,6 +384,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [editingOrderProduct, setEditingOrderProduct] = useState(null);
   const [products, setProducts]               = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
+  const [orderProductSearch, setOrderProductSearch] = useState('');
   const [orderItems, setOrderItems]           = useState({}); // { productId: quantity }
   const [orderAddress, setOrderAddress]       = useState('');
   const [orderCity, setOrderCity]             = useState('');
@@ -412,6 +419,11 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const [templateVarMap, setTemplateVarMap] = useState({}); // { "1": "name"|"manual" }
   const [templateManualVars, setTemplateManualVars] = useState({}); // { "1": "texto" }
   const [sendingTemplate, setSendingTemplate] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentPreview, setPaymentPreview] = useState('');
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentSending, setPaymentSending] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -683,6 +695,36 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
   };
 
+  const openPaymentOptions = async () => {
+    setShowPaymentModal(true);
+    setPaymentPreview('');
+    setPaymentError('');
+    setPaymentLoading(true);
+    try {
+      const result = await conversationsAPI.getPaymentOptions(conversation.id);
+      setPaymentPreview(result.text || '');
+    } catch (err) {
+      setPaymentError(err.response?.data?.error || 'No se pudieron cargar las opciones de pago.');
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  const sendPaymentOptions = async () => {
+    if (!paymentPreview || paymentSending) return;
+    setPaymentSending(true);
+    setPaymentError('');
+    try {
+      await conversationsAPI.sendPaymentOptions(conversation.id);
+      setShowPaymentModal(false);
+      setError(null);
+    } catch (err) {
+      setPaymentError(err.response?.data?.message || err.response?.data?.error || 'No se pudieron enviar las opciones de pago.');
+    } finally {
+      setPaymentSending(false);
+    }
+  };
+
   const openExpiredWindowAlternative = async (draftText = '') => {
     const preservedText = draftText || inputText;
 
@@ -775,7 +817,15 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
         setError('⏰ Ventana de 24h expirada — usa otro WhatsApp conectado o un template aprobado.');
         if (!pendingAttachment) await openExpiredWindowAlternative(text);
       } else {
-        setError('Error enviando el mensaje. Intenta de nuevo.');
+        const serverMessage = err.response?.data?.message;
+        const serverError = err.response?.data?.error;
+        setError(
+          serverMessage && serverMessage !== serverError
+            ? serverMessage
+            : (typeof serverError === 'string' && !/^ERR_/i.test(serverError)
+                ? serverError
+                : 'Error enviando el mensaje. Intenta de nuevo.')
+        );
       }
       setInputText(text);
       setAttachment(pendingAttachment);
@@ -896,6 +946,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setShowOrderModal(true);
     setEditingOrderProduct(null);
     setOrderItems({});
+    setOrderProductSearch('');
     setOrderAddress('');
     setOrderCity('');
     setOrderNote(customerNote || '');
@@ -1025,6 +1076,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const discountAmount = discountNum > 0
     ? (orderDiscountType === 'percent' ? orderSubtotal * (discountNum / 100) : Math.min(discountNum, orderSubtotal))
     : 0;
+  const productSearchTerm = normalizeProductSearch(orderProductSearch);
+  const filteredOrderProducts = productSearchTerm
+    ? products.filter(product => normalizeProductSearch([
+        product.title, product.description, product.sku, product.category,
+      ].filter(Boolean).join(' ')).includes(productSearchTerm))
+    : products;
   const orderTotal = Math.max(0, orderSubtotal - discountAmount);
 
   // ── Merge modal handlers ────────────────────────────────────────
@@ -1260,6 +1317,22 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             <ShoppingCart size={13} />
             {!isMobile && 'Nueva orden'}
           </button>
+          <button
+            onClick={openPaymentOptions}
+            title="Enviar opciones de pago"
+            style={{
+              backgroundColor: 'transparent',
+              border: `1px solid ${colors.borderStrong}`,
+              borderRadius: '6px', padding: isMobile ? '5px' : '5px 8px',
+              color: colors.green,
+              cursor: 'pointer',
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '11px', transition: 'all 0.15s',
+            }}
+          >
+            <CircleDollarSign size={13} />
+            {!isMobile && 'Pago'}
+          </button>
           {!conversation.whatsapp_channel_id && <button
             onClick={openTemplateModal}
             title="Enviar template de WhatsApp"
@@ -1385,6 +1458,8 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                 }}>
                   <MobileHeaderAction icon={<ShoppingCart size={17} />} label="Crear pedido" colors={colors}
                     onClick={() => { setMobileActionsOpen(false); openOrderModal(); }} />
+                  <MobileHeaderAction icon={<CircleDollarSign size={17} />} label="Enviar opciones de pago" colors={colors}
+                    onClick={() => { setMobileActionsOpen(false); openPaymentOptions(); }} />
                   <MobileHeaderAction icon={<Pin size={17} fill={isPinned ? 'currentColor' : 'none'} />}
                     label={isPinned ? 'Quitar de fijados' : 'Fijar chat arriba'} colors={colors} active={isPinned}
                     disabled={pinSaving} onClick={() => { setMobileActionsOpen(false); handleTogglePin(); }} />
@@ -2105,6 +2180,27 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               </button>
             </div>
 
+            {/* Buscador de productos */}
+            <div style={{ padding:'10px 16px', borderBottom:`1px solid ${colors.border}`, backgroundColor:colors.bgPanel }}>
+              <div style={{ position:'relative' }}>
+                <Search size={15} color={colors.textMuted} style={{ position:'absolute', left:'11px', top:'50%', transform:'translateY(-50%)', pointerEvents:'none' }} />
+                <input
+                  value={orderProductSearch}
+                  onChange={event => setOrderProductSearch(event.target.value)}
+                  placeholder="Buscar por nombre, calibre, color o presentación…"
+                  aria-label="Buscar productos para la nueva orden"
+                  style={{ width:'100%', boxSizing:'border-box', padding:'9px 34px 9px 34px', borderRadius:'9px', border:`1px solid ${colors.borderStrong}`, backgroundColor:colors.bgInput, color:colors.textPrimary, fontSize:'13px', outline:'none' }}
+                />
+                {orderProductSearch && (
+                  <button onClick={() => setOrderProductSearch('')} aria-label="Limpiar búsqueda"
+                    style={{ position:'absolute', right:'8px', top:'50%', transform:'translateY(-50%)', border:0, background:'none', color:colors.textMuted, cursor:'pointer', padding:'3px', display:'flex' }}>
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              {orderProductSearch && <div style={{ marginTop:'5px', fontSize:'11px', color:colors.textMuted }}>{filteredOrderProducts.length} producto{filteredOrderProducts.length === 1 ? '' : 's'} encontrado{filteredOrderProducts.length === 1 ? '' : 's'}</div>}
+            </div>
+
             {/* Product list */}
             <div style={{ flex:1, overflowY:'auto', padding:'12px 16px' }}>
               {productsLoading ? (
@@ -2115,11 +2211,18 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     ? '⚠️ No hay productos marcados como empresa. Ve a Productos → editar → activar "Solo para empresas (B2B)".'
                     : 'No hay productos en el catálogo'}
                 </div>
-              ) : products.map(p => {
+              ) : filteredOrderProducts.length === 0 ? (
+                <div style={{ textAlign:'center', padding:'36px 18px', color:colors.textMuted }}>
+                  No encontramos productos con “{orderProductSearch}”.
+                </div>
+              ) : filteredOrderProducts.map(p => {
                 const qty = orderItems[p.id] || 0;
                 return (
                   <div key={p.id} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'10px 0', borderBottom:`1px solid ${colors.border}` }}>
-                    {p.image_url && <img src={p.image_url} alt={p.title} style={{ width:'44px', height:'44px', borderRadius:'8px', objectFit:'cover', flexShrink:0 }} />}
+                    <div style={{ width:'48px', height:'48px', borderRadius:'9px', flexShrink:0, overflow:'hidden', position:'relative', display:'flex', alignItems:'center', justifyContent:'center', backgroundColor:colors.bgSub, border:`1px solid ${colors.border}` }}>
+                      <span aria-hidden="true" style={{ fontSize:'20px', opacity:.55 }}>{String(p.category || '').toLowerCase().includes('huevo') ? '🥚' : '📦'}</span>
+                      {p.image_url && <img src={p.image_url} alt={p.title} loading="lazy" onError={event => { event.currentTarget.style.display='none'; }} style={{ position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover' }} />}
+                    </div>
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontWeight:600, fontSize:'13px', color:colors.textPrimary }}>{p.title}</div>
                       <button type="button" aria-label={`Editar ${p.title}`} disabled={creatingOrder} onClick={() => setEditingOrderProduct(p)} style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'5px 0', background:'none', border:0, color:colors.green, cursor:'pointer', fontSize:'12px' }}><Pencil size={12} /> Editar</button>
@@ -2331,6 +2434,58 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                   {creatingOrder ? 'Creando...' : 'Crear orden'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPaymentModal && (
+        <div style={{
+          position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.66)',
+          zIndex: 105, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+        }} onClick={() => !paymentSending && setShowPaymentModal(false)}>
+          <div style={{
+            width: '100%', maxWidth: '500px', backgroundColor: colors.bgPanel,
+            border: `1px solid ${colors.border}`, borderRadius: '14px', overflow: 'hidden',
+            boxShadow: '0 20px 60px rgba(0,0,0,.42)',
+          }} onClick={event => event.stopPropagation()}>
+            <div style={{ padding: '16px 18px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'9px' }}>
+                <CircleDollarSign size={18} color={colors.green} />
+                <div>
+                  <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '15px' }}>Enviar opciones de pago</div>
+                  <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '2px' }}>Revisa el mensaje antes de enviarlo al cliente.</div>
+                </div>
+              </div>
+              <button onClick={() => setShowPaymentModal(false)} disabled={paymentSending}
+                style={{ border:0, background:'none', color:colors.textSecondary, cursor:'pointer', padding:'4px' }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding:'18px' }}>
+              {paymentLoading ? (
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', minHeight:'110px', color:colors.textSecondary, fontSize:'13px' }}>
+                  <Loader size={18} style={{ animation:'spin 1s linear infinite' }} /> Cargando datos configurados…
+                </div>
+              ) : paymentError ? (
+                <div role="alert" style={{ color:colors.red, fontSize:'13px', display:'flex', gap:'7px', alignItems:'flex-start', padding:'12px', backgroundColor:`${colors.red}12`, borderRadius:'8px' }}>
+                  <AlertCircle size={16} style={{ flexShrink:0 }} /> {paymentError}
+                </div>
+              ) : (
+                <div style={{ padding:'14px 16px', backgroundColor:colors.bgSub, border:`1px solid ${colors.border}`, borderRadius:'9px', color:colors.textPrimary, fontSize:'13px', lineHeight:1.55, whiteSpace:'pre-wrap' }}>
+                  {paymentPreview}
+                </div>
+              )}
+            </div>
+            <div style={{ padding:'12px 18px', borderTop:`1px solid ${colors.border}`, display:'flex', justifyContent:'flex-end', gap:'8px' }}>
+              <button onClick={() => setShowPaymentModal(false)} disabled={paymentSending}
+                style={{ padding:'8px 15px', borderRadius:'8px', backgroundColor:'transparent', color:colors.textSecondary, border:`1px solid ${colors.borderStrong}`, cursor:'pointer', fontSize:'13px' }}>
+                Cancelar
+              </button>
+              <button onClick={sendPaymentOptions} disabled={paymentLoading || paymentSending || !paymentPreview || !!paymentError}
+                style={{ padding:'8px 17px', borderRadius:'8px', border:'none', backgroundColor:paymentPreview && !paymentError ? colors.green : colors.bgHover, color:paymentPreview && !paymentError ? '#fff' : colors.textMuted, cursor:paymentPreview && !paymentError ? 'pointer' : 'not-allowed', fontSize:'13px', fontWeight:700, display:'flex', alignItems:'center', gap:'6px' }}>
+                {paymentSending ? <><Loader size={14} style={{ animation:'spin 1s linear infinite' }} /> Enviando…</> : <><Send size={14} /> Enviar</>}
+              </button>
             </div>
           </div>
         </div>
