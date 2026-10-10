@@ -1943,6 +1943,7 @@ function HistorialRepartos({ colors }) {
   const [addBusy,  setAddBusy]  = useState(false);
   const [loadBusy, setLoadBusy] = useState('');
   const [loadBreakdown, setLoadBreakdown] = useState({});
+  const [cloneBusy, setCloneBusy] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -2008,6 +2009,21 @@ function HistorialRepartos({ colors }) {
       load();
     } catch (e) {
       alert(e.response?.data?.error || e.message);
+    }
+  }
+
+  async function handleTestClone(route) {
+    if (!window.confirm(`Se creará una ruta activa de prueba con las ${route.order_count || 0} direcciones y productos, sin nombres ni teléfonos de clientes. ¿Continuar?`)) return;
+    setCloneBusy(route.id);
+    try {
+      const { data } = await api.post(`/delivery/routes/${route.id}/test-clone`);
+      await load();
+      setExpanded(data.route?.id || null);
+      alert(`✅ Ruta de prueba creada para la app móvil.${data.warning ? `\n\n${data.warning}` : ''}`);
+    } catch (e) {
+      alert(e.response?.data?.error || e.message);
+    } finally {
+      setCloneBusy(null);
     }
   }
 
@@ -2090,6 +2106,14 @@ function HistorialRepartos({ colors }) {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                  {route.status === 'completed' && (
+                    <button onClick={e => { e.stopPropagation(); handleTestClone(route); }}
+                      disabled={cloneBusy === route.id}
+                      title="Copia direcciones y productos con clientes ficticios para probar la app móvil"
+                      style={{ background: '#38bdf818', border: '1px solid #38bdf866', borderRadius: '6px', padding: '4px 8px', cursor: cloneBusy === route.id ? 'wait' : 'pointer', color: '#38bdf8', fontSize: '12px', whiteSpace: 'nowrap', opacity: cloneBusy === route.id ? 0.6 : 1 }}>
+                      {cloneBusy === route.id ? 'Creando…' : '🧪 Probar en móvil'}
+                    </button>
+                  )}
                   {route.status === 'draft' && (
                     <button onClick={e => { e.stopPropagation(); handleDelete(route.id); }}
                       title="Eliminar borrador"

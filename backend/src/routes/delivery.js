@@ -1979,6 +1979,99 @@ router.post('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador'
   }
 });
 
+// ─── ADMIN: Duplicar una ruta como prueba segura para la app móvil ──────────
+// Copia solamente la geometría y la carga. Nunca conserva nombres, teléfonos,
+// conversaciones, ids de pedidos ni datos de pago de clientes reales.
+router.post('/routes/:id/test-clone', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  const pool = getPool();
+  const sourceId = parseInt(req.params.id);
+  if (!Number.isFinite(sourceId)) return res.status(400).json({ success: false, error: 'Ruta inválida' });
+
+  try {
+    const { rows: [source] } = await pool.query(
+      `SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2`,
+      [sourceId, req.orgId]
+    );
+    if (!source) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+
+    const sourceOrders = jsonList(source.orders);
+    const sourceStops = jsonList(source.optimized_route);
+    const geometry = new Map(sourceStops.map(stop => [orderKey(stop), stop]));
+    const base = (sourceOrders.length ? sourceOrders : sourceStops);
+    if (!base.length) return res.status(400).json({ success: false, error: 'La ruta original no tiene paradas' });
+
+    const testOrders = base.map((order, index) => {
+      const geo = geometry.get(orderKey(order)) || order;
+      const safeItems = jsonList(order.items || geo.items).map(item => ({
+        name: item?.name || item?.title || item?.product_name || 'Producto de prueba',
+        title: item?.title || item?.name || item?.product_name || 'Producto de prueba',
+        quantity: Math.max(1, Number(item?.quantity) || 1),
+        price: Number(item?.price) || 0,
+        ...(item?.sku ? { sku: String(item.sku) } : {}),
+      }));
+      return {
+        source: 'test',
+        id: `route-${source.id}-stop-${index + 1}`,
+        customerName: `Cliente prueba ${String(index + 1).padStart(2, '0')}`,
+        fullAddress: order.fullAddress || geo.fullAddress || order.shippingAddress || order.address || '',
+        lat: validGeoPoint(geo) ? Number(geo.lat) : null,
+        lng: validGeoPoint(geo) ? Number(geo.lng) : null,
+        items: safeItems,
+        totalPrice: safeItems.reduce((sum, item) => sum + item.price * item.quantity, 0),
+        stopNumber: index + 1,
+        isTest: true,
+        testSourceRouteId: source.id,
+        dispatchCount: 0,
+        deliveryPriority: 'normal',
+      };
+    });
+
+    let optimized = testOrders;
+    let totalDistance = source.total_distance || null;
+    let totalDuration = source.total_duration || null;
+    let mapsUrl = source.maps_url || null;
+    let path = [];
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    const whAddress = await db.getSetting(req.orgId, 'warehouse_address').catch(() => null);
+    const whLat = parseFloat(await db.getSetting(req.orgId, 'warehouse_lat').catch(() => null));
+    const whLng = parseFloat(await db.getSetting(req.orgId, 'warehouse_lng').catch(() => null));
+    const warehouse = whAddress && Number.isFinite(whLat) && Number.isFinite(whLng)
+      ? { address: whAddress, lat: whLat, lng: whLng } : null;
+    let optimizationWarning = null;
+    if (apiKey && warehouse) {
+      try {
+        const result = await optimizeOneRoute(testOrders, warehouse, apiKey);
+        optimized = result.stops;
+        totalDistance = result.totalDistance;
+        totalDuration = result.totalDuration;
+        mapsUrl = result.mapsUrl;
+        path = result.path || [];
+      } catch (error) {
+        optimizationWarning = `La prueba conserva todas las paradas, pero Google no pudo reordenarlas: ${error.message}`;
+      }
+    }
+
+    const suffix = new Intl.DateTimeFormat('es-CL', {
+      timeZone: 'America/Santiago', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date());
+    const name = `[PRUEBA MÓVIL] ${source.name} · ${suffix}`;
+    const { rows: [route] } = await pool.query(
+      `INSERT INTO delivery_routes
+        (organization_id, name, status, driver_name, driver_user_id,
+         orders, optimized_route, total_distance, total_duration, maps_url, sent_at)
+       VALUES ($1, $2, 'sent', $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, NOW())
+       RETURNING *`,
+      [req.orgId, name, source.driver_name, source.driver_user_id,
+        JSON.stringify(testOrders), JSON.stringify(optimized), totalDistance, totalDuration, mapsUrl]
+    );
+    route.path = path;
+    res.status(201).json({ success: true, route, warning: optimizationWarning });
+  } catch (err) {
+    console.error('[Delivery/test-clone]', err.message);
+    res.status(500).json({ success: false, error: 'No se pudo crear la ruta de prueba' });
+  }
+});
+
 // ─── ADMIN: Actualizar ruta (enviar, cancelar, cambiar datos) ────────────────
 
 router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
