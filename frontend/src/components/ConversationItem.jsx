@@ -136,6 +136,12 @@ export default function ConversationItem({ conversation, selected, onClick }) {
           )}
         </div>
         <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+          {conversation.attribution_first_seen_at && (
+            <span title={conversation.attribution_campaign_name || conversation.attribution_headline || 'Llegó desde un anuncio'} style={{
+              fontSize: '10px', fontWeight: 750, padding: '2px 6px', borderRadius: '10px',
+              color: '#c4b5fd', backgroundColor: '#7c3aed22', border: '1px solid #8b5cf655',
+            }}>📣 Ads</span>
+          )}
           <span style={{
             fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '10px',
             color: conversation.whatsapp_provider === 'evolution' ? '#60a5fa' : colors.green,

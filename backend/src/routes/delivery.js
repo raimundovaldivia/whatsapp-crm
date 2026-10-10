@@ -251,6 +251,15 @@ function addressKey(addr) {
   return (addr || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 300);
 }
 
+function validGeoPoint(point) {
+  const lat = Number(point?.lat);
+  const lng = Number(point?.lng);
+  return point?.lat !== null && point?.lat !== '' && point?.lng !== null && point?.lng !== ''
+    && Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+    && !(lat === 0 && lng === 0);
+}
+
 async function geocodeMany(orgId, addresses) {
   const pool   = getPool();
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -606,51 +615,41 @@ function kmeansBalanced(points, k) {
   }
   let centers = seeds.map(i => ({ lat: points[i].lat, lng: points[i].lng }));
 
-  let assign = new Array(n).fill(0);
+  // Cada centro recibe una capacidad exacta. Esto evita grupos vacíos cuando
+  // varias direcciones tienen las mismas coordenadas y garantiza que cada
+  // punto quede asignado exactamente una vez.
+  const targetSizes = Array.from({ length: k }, (_, index) =>
+    Math.floor(n / k) + (index < (n % k) ? 1 : 0));
+  let groups = Array.from({ length: k }, () => []);
   for (let iter = 0; iter < 20; iter++) {
-    // Asignar cada punto a su centro más cercano
-    for (let i = 0; i < n; i++) {
-      let best = 0, bestD = Infinity;
-      for (let c = 0; c < k; c++) {
-        const d = dist2(points[i], centers[c]);
-        if (d < bestD) { bestD = d; best = c; }
-      }
-      assign[i] = best;
+    groups = Array.from({ length: k }, () => []);
+    const assigned = new Set();
+    const pairs = [];
+    for (let i = 0; i < n; i++) for (let c = 0; c < k; c++) {
+      pairs.push({ i, c, distance: dist2(points[i], centers[c]) });
+    }
+    pairs.sort((a, b) => a.distance - b.distance || a.i - b.i || a.c - b.c);
+    for (const pair of pairs) {
+      if (assigned.has(pair.i) || groups[pair.c].length >= targetSizes[pair.c]) continue;
+      groups[pair.c].push(pair.i);
+      assigned.add(pair.i);
     }
     // Recalcular centros
-    const sum = Array.from({ length: k }, () => ({ lat: 0, lng: 0, n: 0 }));
-    for (let i = 0; i < n; i++) { const c = assign[i]; sum[c].lat += points[i].lat; sum[c].lng += points[i].lng; sum[c].n++; }
-    for (let c = 0; c < k; c++) if (sum[c].n > 0) centers[c] = { lat: sum[c].lat / sum[c].n, lng: sum[c].lng / sum[c].n };
-  }
-
-  // Balanceo: si un grupo supera el tamaño ideal (ceil(n/k)+1), mover sus puntos
-  // más lejanos a grupos con espacio y centro cercano.
-  const cap = Math.ceil(n / k) + 1;
-  const groups = Array.from({ length: k }, () => []);
-  for (let i = 0; i < n; i++) groups[assign[i]].push(i);
-  for (let c = 0; c < k; c++) {
-    while (groups[c].length > cap) {
-      // punto más lejano del centro c
-      groups[c].sort((a, b) => dist2(points[b], centers[c]) - dist2(points[a], centers[c]));
-      const moved = groups[c].shift();
-      // grupo con espacio y centro más cercano a ese punto
-      let target = -1, tD = Infinity;
-      for (let d = 0; d < k; d++) {
-        if (d === c || groups[d].length >= cap) continue;
-        const dd = dist2(points[moved], centers[d]);
-        if (dd < tD) { tD = dd; target = d; }
-      }
-      if (target === -1) { groups[c].push(moved); break; } // no hay dónde, dejarlo
-      groups[target].push(moved);
+    for (let c = 0; c < k; c++) {
+      const group = groups[c];
+      centers[c] = {
+        lat: group.reduce((sum, index) => sum + points[index].lat, 0) / group.length,
+        lng: group.reduce((sum, index) => sum + points[index].lng, 0) / group.length,
+      };
     }
   }
-  return groups.filter(g => g.length > 0);
+  return groups;
 }
 
 async function fetchDirections(stops, warehouse, apiKey, optimize) {
   const originStr = `${warehouse.lat},${warehouse.lng}`;
   const waypoints = stops.map(s =>
-    (typeof s.lat === 'number' && typeof s.lng === 'number') ? `${s.lat},${s.lng}` : s.fullAddress
+    validGeoPoint(s) ? `${Number(s.lat)},${Number(s.lng)}` : s.fullAddress
   );
   const { data } = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
     params: {
@@ -664,15 +663,32 @@ async function fetchDirections(stops, warehouse, apiKey, optimize) {
   return data.routes[0];
 }
 
-function buildOptimizedRoute(ordered, legs, warehouse) {
+function decodePolyline(encoded) {
+  if (!encoded) return [];
+  const path = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let shift = 0, result = 0, byte;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20 && index <= encoded.length);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20 && index <= encoded.length);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    path.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return path.filter(point => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+}
+
+function buildOptimizedRoute(ordered, directions, warehouse) {
+  const legs = directions?.legs || [];
   const originStr = `${warehouse.lat},${warehouse.lng}`;
   const routeStops = ordered.map((stop, idx) => ({
     ...decorateDeliveryPriority(stop),
     stopNumber: idx + 1,
     distanceText: legs[idx]?.distance?.text || '',
     durationText: legs[idx]?.duration?.text || '',
-    lat: (typeof stop.lat === 'number' ? stop.lat : legs[idx]?.end_location?.lat) ?? null,
-    lng: (typeof stop.lng === 'number' ? stop.lng : legs[idx]?.end_location?.lng) ?? null,
+    lat: (validGeoPoint(stop) ? Number(stop.lat) : legs[idx]?.end_location?.lat) ?? null,
+    lng: (validGeoPoint(stop) ? Number(stop.lng) : legs[idx]?.end_location?.lng) ?? null,
   }));
   const distM = legs.reduce((sum, leg) => sum + (leg.distance?.value || 0), 0);
   const durS = legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
@@ -680,7 +696,8 @@ function buildOptimizedRoute(ordered, legs, warehouse) {
     stops: routeStops,
     totalDistance: `${(distM / 1000).toFixed(1)} km`,
     totalDuration: `${Math.round(durS / 60)} min`,
-    mapsUrl: `https://www.google.com/maps/dir/${encodeURIComponent(originStr)}/${routeStops.map(s => encodeURIComponent(s.fullAddress)).join('/')}/${encodeURIComponent(originStr)}`,
+    mapsUrl: `https://www.google.com/maps/dir/${encodeURIComponent(originStr)}/${routeStops.map(s => encodeURIComponent(s.fullAddress || `${s.lat},${s.lng}`)).join('/')}/${encodeURIComponent(originStr)}`,
+    path: decodePolyline(directions?.overview_polyline?.points),
   };
 }
 
@@ -696,9 +713,9 @@ async function optimizeOneRoute(stops, warehouse, apiKey) {
   // en el orden prioritario exacto para que tiempos, tramos y mapa sean reales.
   if (changed) {
     const exact = await fetchDirections(prioritized, warehouse, apiKey, false);
-    return buildOptimizedRoute(prioritized, exact.legs, warehouse);
+    return buildOptimizedRoute(prioritized, exact, warehouse);
   }
-  return buildOptimizedRoute(prioritized, first.legs, warehouse);
+  return buildOptimizedRoute(prioritized, first, warehouse);
 }
 
 // ─── ADMIN: Optimizar ruta(s) con Google Maps ────────────────────────────────
@@ -747,26 +764,31 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinado
 
   try {
     // Agrupar por cercanía. Solo se pueden clusterizar los que tienen coords.
-    const located   = orders.filter(o => typeof o.lat === 'number' && typeof o.lng === 'number');
-    const unlocated  = orders.filter(o => !(typeof o.lat === 'number' && typeof o.lng === 'number'));
-    const k = Math.min(vehicles, Math.max(1, located.length));
-    const groups = located.length ? kmeansBalanced(located, k) : [[]];
-
-    // Repartir los sin-coords entre los grupos (round-robin) para no perderlos
-    unlocated.forEach((o, i) => { (groups[i % groups.length] || groups[0]).push(orders.indexOf(o)); });
-    // Nota: kmeansBalanced devuelve índices sobre `located`; normalizamos a objetos
-    const groupsAsObjs = groups.map(g =>
-      g.map(idx => (typeof idx === 'number' && idx < located.length ? located[idx] : orders[idx])).filter(Boolean)
-    );
+    const located   = orders.filter(validGeoPoint).map(order => ({ ...order, lat: Number(order.lat), lng: Number(order.lng) }));
+    const locatedKeys = new Set(located.map(orderKey));
+    const unlocated  = orders.filter(order => !locatedKeys.has(orderKey(order)));
+    const wantedGroups = Math.min(vehicles, orders.length);
+    const locatedGroupCount = Math.min(wantedGroups, located.length);
+    // kmeansBalanced devuelve índices EXCLUSIVAMENTE sobre `located`. Convertir
+    // primero a objetos evita mezclar esos índices con posiciones de `orders`.
+    const groupsAsObjs = locatedGroupCount
+      ? kmeansBalanced(located, locatedGroupCount).map(group => group.map(index => located[index]))
+      : [];
+    while (groupsAsObjs.length < wantedGroups) groupsAsObjs.push([]);
+    // Las direcciones aún sin coordenadas también deben aparecer una sola vez.
+    // Se incorporan siempre al grupo menos cargado, sin reutilizar índices.
+    for (const order of unlocated) {
+      let target = 0;
+      for (let i = 1; i < groupsAsObjs.length; i++) {
+        if (groupsAsObjs[i].length < groupsAsObjs[target].length) target = i;
+      }
+      groupsAsObjs[target].push(order);
+    }
 
     const routes = [];
     for (let v = 0; v < groupsAsObjs.length; v++) {
       const stops = groupsAsObjs[v];
       if (!stops.length) continue;
-      if (stops.length === 1) {
-        routes.push({ vehicle: v + 1, stops: [{ ...stops[0], stopNumber: 1 }], totalDistance: '', totalDuration: '', mapsUrl: null });
-        continue;
-      }
       try {
         const r = await optimizeOneRoute(stops, warehouse, apiKey);
         routes.push({ vehicle: v + 1, ...r });
@@ -776,9 +798,11 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinado
       }
     }
 
+    const failedRoutes = routes.filter(route => route.error).length;
     res.json({
-      success: true, optimized: true, warehouse, vehicles: routes.length, routes,
+      success: true, optimized: failedRoutes === 0, warehouse, vehicles: routes.length, routes,
       route: routes[0]?.stops || [],   // compat con clientes viejos
+      ...(failedRoutes ? { warning: `${failedRoutes} ruta(s) conservaron todas sus paradas, pero Google no pudo optimizar su orden.` } : {}),
     });
   } catch (err) {
     console.error('[Delivery/optimize]', err.message);
@@ -1687,7 +1711,20 @@ function filterStops(stops, keepOrders) {
       seen.add(key);
       return true;
     })
-    .map(stop => ({ ...stop, ...keepMap.get(orderKey(stop)) }));
+    .map(stop => {
+      const fresh = keepMap.get(orderKey(stop));
+      // Los datos operacionales se refrescan desde BD, pero la geometría fue
+      // calculada por Directions y no debe perderse si el pedido original aún
+      // tenía lat/lng nulos.
+      return {
+        ...stop,
+        ...fresh,
+        lat: validGeoPoint(stop) ? Number(stop.lat) : (fresh.lat ?? null),
+        lng: validGeoPoint(stop) ? Number(stop.lng) : (fresh.lng ?? null),
+        distanceText: stop.distanceText || fresh.distanceText || '',
+        durationText: stop.durationText || fresh.durationText || '',
+      };
+    });
   return prioritizeOrders(filtered).map((stop, index) => ({ ...stop, stopNumber: index + 1 }));
 }
 

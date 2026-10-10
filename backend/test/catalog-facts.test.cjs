@@ -39,7 +39,7 @@ test('Diez Ríos catalog migration removes promotions and sets the requested sto
         (5,1,'Huevos Especiales','Huevos',0,NULL),
         (6,2,'PROMO ajena','Promociones',7,NULL);`);
     const source=fs.readFileSync(path.join(__dirname,'../src/db/setup.js'),'utf8');
-    const sql=source.match(/DELETE FROM products p USING organizations o[\s\S]*?SELECT id, 'promotions_enabled', 'false'[\s\S]*?EXCLUDED\.value;/)[0];
+    const sql=source.match(/DELETE FROM products p USING organizations o[\s\S]*?SELECT id, 'promotions_enabled', 'true'[\s\S]*?EXCLUDED\.value;/)[0];
     await engine.exec(sql);await engine.exec(sql);
     const rows=(await engine.query('SELECT id,stock FROM products ORDER BY id')).rows;
     assert.deepEqual(rows.map(r=>[r.id,r.stock]),[[1,100],[2,0],[5,100],[6,7]]);
@@ -47,7 +47,7 @@ test('Diez Ríos catalog migration removes promotions and sets the requested sto
     assert.deepEqual(settings,[
       {key:'catalog_reset_2026_10_07_applied',value:'true'},
       {key:'catalog_source',value:'local'},
-      {key:'promotions_enabled',value:'false'},
+      {key:'promotions_enabled',value:'true'},
     ]);
   }finally{await engine.close();}
 });

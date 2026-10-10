@@ -61,6 +61,7 @@ const botEvalRouter        = require('./routes/bot-eval');          // Evaluaci�
 const metaRouter           = require('./routes/meta');              // Facebook, Instagram y Ads
 const metaWebhookRouter    = require('./routes/meta-webhook');      // Webhooks Messenger / Instagram
 const legalRouter          = require('./routes/legal');             // Privacidad y eliminación de datos (público)
+const marketingAttributionRouter = require('./routes/marketing-attribution'); // Rendimiento Click-to-WhatsApp
 
 const app    = express();
 const server = http.createServer(app);
@@ -148,6 +149,7 @@ app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-
 app.use('/api/push',          pushRouter);           // Registro de tokens push (app Central)
 app.use('/api/bot-eval',      botEvalRouter);        // Evaluación del bot y ciclo de mejora
 app.use('/api/meta',          metaRouter);            // Conexión, mensajería, Ads y publicaciones Meta
+app.use('/api/marketing-attribution', marketingAttributionRouter); // Ads → WhatsApp → pedidos
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
 app.get('/api/webhook-inbox', require('./middleware/auth').requireAuth,
@@ -179,6 +181,8 @@ setupDatabase().then(() => {
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
     require('./services/webhook-inbox').startWebhookWorker();
+    require('./services/attribution-backfill').backfillWhatsappAttributions()
+      .catch(error => console.warn('[Attribution] No se pudo recuperar el histórico:', error.message));
     startFollowUpJob(io);
     startScheduledFollowUpJob(io);
     startCampaignFollowUpJob(io);

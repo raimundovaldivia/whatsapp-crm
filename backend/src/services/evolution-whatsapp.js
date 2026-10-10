@@ -101,7 +101,21 @@ function textFromMessage(message = {}) {
     || null;
 }
 
-function parseWebhookMessage(body, { includeOwn = false } = {}) {
+function phoneFromJid(value) {
+  const raw = String(value || '').trim();
+  if (!raw || /@(g\.us|broadcast|lid)$/i.test(raw)) return null;
+  if (raw.includes('@') && !/@s\.whatsapp\.net$/i.test(raw)) return null;
+  const phone = raw.split('@')[0].split(':')[0].replace(/\D/g, '');
+  return /^\d{8,15}$/.test(phone) ? phone : null;
+}
+
+function cleanContactName(value) {
+  const name = String(value || '').trim();
+  if (!name || /@(s\.whatsapp\.net|lid)$/i.test(name) || /^\+?[\d\s()-]+$/.test(name)) return null;
+  return name;
+}
+
+function parseWebhookMessage(body, { includeOwn = false, ownPhone = null } = {}) {
   const event = eventName(body);
   if (event && event !== 'messages.upsert') return null;
   const data = unwrapData(body);
@@ -109,8 +123,13 @@ function parseWebhookMessage(body, { includeOwn = false } = {}) {
   if (!key?.id || (key.fromMe && !includeOwn)) return null;
   const remoteJid = key.remoteJid || data.remoteJid;
   if (!remoteJid || /@(g\.us|broadcast)$/i.test(remoteJid)) return null;
-  const source = key.fromMe ? (key.remoteJidAlt || remoteJid) : (key.senderPn || data.senderPn || remoteJid);
-  const from = String(source).split('@')[0].replace(/\D/g, '');
+  const own = String(ownPhone || '').replace(/\D/g, '');
+  // Evolution/Baileys can emit a private LID as remoteJid. Prefer the paired
+  // phone-number JID and never turn the business' own number into a customer.
+  const candidates = key.fromMe
+    ? [key.remoteJidAlt, data.remoteJidAlt, remoteJid, key.participant, data.participant, data.destination, data.recipient]
+    : [key.senderPn, data.senderPn, key.remoteJidAlt, data.remoteJidAlt, remoteJid, key.participant, data.participant];
+  const from = candidates.map(phoneFromJid).find(phone => phone && (!own || phone !== own)) || null;
   let message = data.message || {};
   for (let depth = 0; depth < 5; depth++) {
     const nested = message.ephemeralMessage?.message || message.viewOnceMessage?.message
@@ -121,16 +140,19 @@ function parseWebhookMessage(body, { includeOwn = false } = {}) {
   const type = message.imageMessage ? 'image' : message.audioMessage ? 'audio'
     : message.documentMessage ? 'document' : message.videoMessage ? 'video' : 'text';
   const text = textFromMessage(message);
+  const attributionService = require('./whatsapp-attribution');
+  const attribution = attributionService.fromEvolution?.(message, data, body) || null;
   if (!from || (!text && type === 'text')) return null;
   return {
     messageId: key.id,
     from,
     remoteJid,
-    contactName: key.fromMe ? null : data.pushName || body.sender || null,
+    contactName: key.fromMe ? null : cleanContactName(data.pushName || body.sender),
     ...(key.fromMe ? { fromMe: true } : {}),
     timestamp: data.messageTimestamp || null,
     type,
     text: text || '',
+    ...(attribution ? { attribution } : {}),
     ...(type !== 'text' ? {
       mimeType: message[`${type}Message`]?.mimetype || null,
       fileName: message[`${type}Message`]?.fileName || null,

@@ -145,6 +145,15 @@ async function setupDatabase() {
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS whatsapp_channel_id INTEGER REFERENCES whatsapp_channels(id) ON DELETE SET NULL;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_source_type TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_source_id TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_source_url TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_headline TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_campaign_id TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_campaign_name TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_ad_id TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_ad_name TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_first_seen_at TIMESTAMPTZ;
       ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_organization_id_phone_number_key;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_org_channel_phone
         ON conversations(organization_id, COALESCE(whatsapp_channel_id, 0), phone_number);
@@ -173,6 +182,42 @@ async function setupDatabase() {
       ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_status_check;
       ALTER TABLE messages ADD CONSTRAINT messages_status_check
         CHECK(status IN ('pending','sent','delivered','read','failed'));
+
+      -- ─── ATRIBUCIÓN DE CAMPAÑAS CLICK-TO-WHATSAPP ──────────────
+
+      CREATE TABLE IF NOT EXISTS whatsapp_attributions (
+        id                    BIGSERIAL PRIMARY KEY,
+        organization_id       INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id       INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        message_id            INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+        whatsapp_message_id   TEXT,
+        provider              TEXT NOT NULL,
+        source_type           TEXT,
+        source_id             TEXT,
+        source_url            TEXT,
+        ctwa_clid              TEXT,
+        headline              TEXT,
+        body                  TEXT,
+        media_type            TEXT,
+        media_url             TEXT,
+        campaign_id           TEXT,
+        campaign_name         TEXT,
+        adset_id              TEXT,
+        adset_name            TEXT,
+        ad_id                 TEXT,
+        ad_name               TEXT,
+        raw_json              JSONB NOT NULL DEFAULT '{}'::jsonb,
+        first_seen_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, provider, whatsapp_message_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wa_attr_org_seen
+        ON whatsapp_attributions(organization_id, first_seen_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_wa_attr_conversation
+        ON whatsapp_attributions(conversation_id, first_seen_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_wa_attr_campaign
+        ON whatsapp_attributions(organization_id, campaign_id, source_id);
 
       -- ─── ÓRDENES CREADAS ─────────────────────────────────────────
 
@@ -760,8 +805,10 @@ async function setupDatabase() {
       INSERT INTO settings (organization_id, key, value)
       SELECT id, 'catalog_source', 'local' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
       ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value;
+      -- Retirar packs antiguos del catálogo no debe desactivar promociones
+      -- nuevas recibidas mediante templates o anuncios Click-to-WhatsApp.
       INSERT INTO settings (organization_id, key, value)
-      SELECT id, 'promotions_enabled', 'false' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
+      SELECT id, 'promotions_enabled', 'true' FROM organizations WHERE slug = 'diez-rios-mrs96z69'
       ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value;
 
       -- Inventario confirmado de Diez Ríos (09-10-2026): no quedan

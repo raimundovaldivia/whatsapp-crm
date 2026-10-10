@@ -28,7 +28,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
     getPrimaryDataSource: async () => null,
     getCachedProducts: async () => [],
     getProducts: async () => [],
-    getOrderDraft: async () => ({}),
+    getOrderDraft: async () => options.orderDraft || {},
     getActiveOrderForBot: async () => options.activeOrder === false ? null : ({
       id: 88,
       status,
@@ -155,6 +155,58 @@ test('una solicitud de entrega para hoy toma el pedido sin prometer un cupo de r
   assert.match(result.response, /stock y cupo en la ruta de hoy/i);
   assert.match(result.response, /qué tamaño y cuántos huevos necesitas/i);
   assert.doesNotMatch(result.response, /consulta(rlo)? directamente con el equipo/i);
+});
+
+test('durante un pedido responde primero si reparten mañana y luego retoma los datos faltantes', async () => {
+  const stateUpdates = [];
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    deliveryEnabled: true,
+    stateUpdates,
+    orderDraft: {
+      customer_name: 'Carolina',
+      items: [{ product_name: 'Huevos M mixtos – Bandeja 30', quantity: 1 }],
+    },
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿Reparten mañana?\n¿Y hasta qué hora?');
+
+  assert.equal(result.agentType, 'orders');
+  assert.equal(result.newState, 'collecting_order');
+  assert.match(result.response, /reparto habitual/i);
+  assert.match(result.response, /15:00 a 21:00/i);
+  assert.match(result.response, /direcci[oó]n/i);
+  assert.match(result.response, /ciudad/i);
+  assert.doesNotMatch(result.response, /solo me falta/i);
+  assert.ok(stateUpdates.at(-1).draft.pending_delivery_date);
+});
+
+test('un sí posterior confirma la fecha consultada sin confirmar prematuramente todo el pedido', async () => {
+  const stateUpdates = [];
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    deliveryEnabled: true,
+    stateUpdates,
+    orderDraft: {
+      customer_name: 'Carolina',
+      items: [{ product_name: 'Huevos M mixtos – Bandeja 30', quantity: 1 }],
+      pending_delivery_date: tomorrow,
+      pending_delivery_label: 'sábado',
+    },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'Sí');
+
+  assert.equal(result.newState, 'collecting_order');
+  assert.match(result.response, new RegExp(`fecha ${tomorrow}`, 'i'));
+  assert.match(result.response, /direcci[oó]n/i);
+  assert.match(result.response, /ciudad/i);
+  assert.doesNotMatch(result.response, /pedido confirmado/i);
+  assert.equal(stateUpdates.at(-1).draft.delivery_date, tomorrow);
+  assert.equal(stateUpdates.at(-1).draft.pending_delivery_date, undefined);
 });
 
 test('una abreviación pregunta por el pedido activo sin caer en escalación genérica', async () => {

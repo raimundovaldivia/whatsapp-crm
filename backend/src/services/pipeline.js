@@ -39,6 +39,65 @@ const ROUTE_TODAY_PATTERNS = [
   /\b(repartieron|despacharon)\s+hoy\b/i,
 ];
 
+const DELIVERY_AVAILABILITY_PATTERNS = [
+  /\b(reparten?|despachan?|entregan?|env[ií]an?)\b.{0,35}\b(hoy|ma[ñn]ana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/iu,
+  /\b(hoy|ma[ñn]ana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b.{0,35}\b(reparten?|despachan?|entregan?|env[ií]an?)\b/iu,
+  /\b(hasta\s+qu[eé]\s+hora|horario\s+de\s+(?:reparto|entrega|despacho))\b/iu,
+];
+
+const DELIVERY_DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+function folded(value) {
+  return String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function requestedDeliveryDay(message, now = new Date()) {
+  const text = folded(message);
+  let date = null;
+  if (/\bmanana\b/.test(text)) date = new Date(now.getTime() + 86400000);
+  else if (/\bhoy\b/.test(text)) date = new Date(now);
+  if (!date) return null;
+  const weekday = new Intl.DateTimeFormat('es-CL', { timeZone: 'America/Santiago', weekday: 'long' }).format(date);
+  return { date: date.toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' }), weekday };
+}
+
+function scheduleCoversWeekday(schedule, weekday) {
+  const text = folded(schedule);
+  const wanted = folded(weekday);
+  if (!text || !wanted) return null;
+  const index = DELIVERY_DAYS.map(folded).indexOf(wanted);
+  const range = text.match(/\b(domingo|lunes|martes|miercoles|jueves|viernes|sabado)\s+a\s+(domingo|lunes|martes|miercoles|jueves|viernes|sabado)\b/);
+  if (range) {
+    const start = DELIVERY_DAYS.map(folded).indexOf(range[1]);
+    const end = DELIVERY_DAYS.map(folded).indexOf(range[2]);
+    if (start >= 0 && end >= 0) return start <= end ? index >= start && index <= end : index >= start || index <= end;
+  }
+  return new RegExp(`\\b${wanted}\\b`).test(text) ? true : null;
+}
+
+function missingOrderData(draft = {}, conversation = {}) {
+  const missing = [];
+  if (!draft.customer_name && !conversation.contact_name) missing.push('tu nombre');
+  if (!draft.address) missing.push('tu dirección');
+  if (!draft.city) missing.push('la ciudad');
+  return missing;
+}
+
+function joinNatural(values = []) {
+  if (values.length < 2) return values[0] || '';
+  return `${values.slice(0, -1).join(', ')} y ${values.at(-1)}`;
+}
+
+function orderQuantityCorrection(message, draft = {}) {
+  if (!Array.isArray(draft.items) || draft.items.length !== 1) return null;
+  const text = folded(message).replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = { un: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
+  const match = text.match(/^(?:(?:mejor|serian|son|quiero|necesito|dejame)\s+)?(\d{1,2}|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(bandejas?|cajas?|packs?|unidades?)(?:\s+(?:por\s+favor|porfa))?$/);
+  if (!match) return null;
+  const quantity = Number(match[1]) || words[match[1]] || 0;
+  return quantity >= 1 && quantity <= 99 ? quantity : null;
+}
+
 function chileClock(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Santiago', hour: '2-digit', minute: '2-digit', hour12: false,
@@ -125,6 +184,16 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     log?.step?.('silent_response', 'Se descarta explicación interna de silencio');
     return { ...result, response: null, reason: 'INTERNAL_SILENCE' };
   }
+  if (result?.response && !result.skipped && !result.duplicate && !result.switchToHuman) {
+    try {
+      const productMedia = await require('./product-media').suggest({
+        orgId, conversationId, userMessage, response: result.response,
+      });
+      if (productMedia) return { ...result, productMedia };
+    } catch (error) {
+      console.warn('[Pipeline] No se pudo preparar la foto del producto:', error.message);
+    }
+  }
   return result;
 }
 
@@ -199,6 +268,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
         bulk_price: p.bulk_price ?? null,
         bulk_min_qty: p.bulk_min_qty ?? null,
         inventoryQuantity: p.stock ?? null,
+        imageUrl: p.image_url || null,
         handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
         productType: p.category || '',
       }));
@@ -234,6 +304,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
             bulk_price: p.bulk_price ?? null,
             bulk_min_qty: p.bulk_min_qty ?? null,
             inventoryQuantity: p.stock ?? null,
+            imageUrl: p.image_url || null,
             handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
             productType: p.category || '',
           }));
@@ -321,8 +392,24 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   // se extraen del mensaje efectivamente enviado, no se dejan a interpretación
   // del modelo. La promoción activa prevalece sobre el precio de catálogo.
   const promotionsEnabled = (await db.getSetting(orgId, 'promotions_enabled')) !== 'false';
+  let promotionHistory = history;
+  if (promotionsEnabled && db.getLatestWhatsappAttribution) {
+    try {
+      const ad = await db.getLatestWhatsappAttribution(orgId, conversationId);
+      const adCopy = [ad?.headline, ad?.body].filter(Boolean).join('\n').trim();
+      if (adCopy) {
+        promotionHistory = [...history, {
+          direction: 'outbound',
+          content: `[Template: promocion_anuncio_whatsapp]\n${adCopy}`,
+          created_at: ad.first_seen_at || ad.last_seen_at,
+        }];
+      }
+    } catch (error) {
+      console.warn('[Pipeline] No se pudo leer la oferta del anuncio:', error.message);
+    }
+  }
   const promotionContext = promotionsEnabled
-    ? promotions.fromHistory(history, products) || promotions.restore(orderDraft?.promotion)
+    ? promotions.fromHistory(promotionHistory, products) || promotions.restore(orderDraft?.promotion)
     : null;
   if (!promotionsEnabled && orderDraft?.promotion) {
     orderDraft = { ...orderDraft };
@@ -905,6 +992,23 @@ REGLAS ABSOLUTAS:
     };
   }
 
+  // Una consulta de precio no debe saltarse una oferta vigente y mostrar
+  // primero importes normales. La promoción recibida por template o por el
+  // anuncio es la fuente comercial prioritaria.
+  if (promotionContext?.active
+      && promotionContext.offers?.length
+      && promotions.isCurrentPriceQuestion(userMessage)) {
+    const nextDraft = { ...(orderDraft || {}), promotion: promotions.snapshot(promotionContext) };
+    await db.updatePipelineState(conversationId, 'interested', nextDraft);
+    L.agent('sales', 0);
+    L.step('promotion_price_question', `${promotionContext.templateName} (${promotionContext.offers.length} opciones)`);
+    return {
+      response: promotions.priceReply(promotionContext),
+      agentType: 'sales',
+      newState: 'interested',
+    };
+  }
+
   // Preguntar si una promo sirve para mañana no es todavía un pedido agendado:
   // primero se aclara la regla y se pide elegir una presentación. Evita guardar
   // "cantidad a confirmar" y separa precio promocional de entrega mismo día.
@@ -952,6 +1056,26 @@ REGLAS ABSOLUTAS:
       agentType: 'sales',
       newState: 'interested',
     };
+  }
+
+  // Tras mostrar "¿Todo correcto?", respuestas breves como "2 bandejas"
+  // corrigen la cantidad del único producto; no son una ambigüedad ni un caso
+  // para derivar al equipo. El flujo de pedidos recalcula aquí precio, promo y
+  // descuento y vuelve a presentar el resumen actualizado.
+  const correctedQuantity = currentState === 'collecting_order'
+    ? orderQuantityCorrection(userMessage, orderDraft)
+    : null;
+  if (correctedQuantity) {
+    const correctedDraft = {
+      ...(orderDraft || {}),
+      items: orderDraft.items.map(item => ({ ...item, quantity: correctedQuantity })),
+    };
+    L.agent('orders', 0);
+    L.step('order_quantity_correction', `${orderDraft.items[0]?.product_name || orderDraft.items[0]?.name || 'producto'} x${correctedQuantity}`);
+    return handleOrderCollection(
+      orgId, conversationId, conversation, userMessage, history,
+      correctedDraft, productosTexto, orderCtx
+    );
   }
 
   // Una presentación exacta de una promoción activa es una intención de
@@ -1246,6 +1370,70 @@ REGLAS ABSOLUTAS:
   const isDeliveryStatusInquiry = !!activeOrder
     && userMessage.length <= 160
     && DELIVERY_STATUS_PATTERNS.some(pattern => pattern.test(userMessage));
+
+  // Durante la toma del pedido, una pregunta nueva sobre día u horario debe
+  // responderse antes de volver a solicitar dirección. Guardamos la fecha como
+  // pendiente para que un "sí" posterior confirme mañana, no todo el pedido.
+  const confirmsPendingDeliveryDay = currentState === 'collecting_order'
+    && orderDraft?.pending_delivery_date
+    && /^(?:s[ií]+|s[ií]\s+por\s+favor|claro|dale|ok(?:ey)?|bueno)$/iu.test(String(userMessage || '').trim());
+  if (confirmsPendingDeliveryDay) {
+    const confirmedDraft = {
+      ...(orderDraft || {}),
+      delivery_date: orderDraft.pending_delivery_date,
+    };
+    delete confirmedDraft.pending_delivery_date;
+    delete confirmedDraft.pending_delivery_label;
+    await db.updatePipelineState(conversationId, 'collecting_order', confirmedDraft);
+    const missing = missingOrderData(confirmedDraft, conversation);
+    const suffix = missing.length
+      ? ` Para completar el pedido me falta ${joinNatural(missing)}.`
+      : ' Con eso ya puedo continuar con el resumen del pedido.';
+    L.agent('orders', 0);
+    L.step('delivery_day_confirmed_during_order', confirmedDraft.delivery_date);
+    return {
+      response: `Perfecto, dejo solicitada la entrega para el ${formatDateEs(confirmedDraft.delivery_date)}.${suffix}`,
+      agentType: 'orders',
+      newState: 'collecting_order',
+    };
+  }
+
+  const asksDeliveryAvailabilityDuringOrder = currentState === 'collecting_order'
+    && userMessage.length <= 240
+    && DELIVERY_AVAILABILITY_PATTERNS.some(pattern => pattern.test(userMessage));
+  if (asksDeliveryAvailabilityDuringOrder) {
+    const requested = requestedDeliveryDay(userMessage, nowCl);
+    const covered = requested ? scheduleCoversWeekday(deliverySchedule, requested.weekday) : null;
+    const nextDraft = { ...(orderDraft || {}) };
+    if (requested) {
+      nextDraft.pending_delivery_date = requested.date;
+      nextDraft.pending_delivery_label = requested.weekday;
+    }
+    await db.updatePipelineState(conversationId, 'collecting_order', nextDraft);
+    const scheduleText = deliverySchedule
+      ? `El horario habitual es ${deliverySchedule}.`
+      : 'Todavía no tengo un horario general publicado para confirmarte una franja exacta.';
+    let availability = scheduleText;
+    if (requested && covered === true) {
+      availability = `Sí, ${requested.weekday} está dentro de nuestro reparto habitual. ${scheduleText}`;
+    } else if (requested && covered === false) {
+      availability = `${requested.weekday[0].toUpperCase()}${requested.weekday.slice(1)} no está dentro de nuestro reparto habitual. ${scheduleText}`;
+    }
+    const datePrompt = requested && covered !== false
+      ? ` ¿Quieres que registre la entrega para el ${requested.weekday}?`
+      : '';
+    const missing = missingOrderData(nextDraft, conversation);
+    const missingPrompt = missing.length
+      ? ` Para completar el pedido también me falta ${joinNatural(missing)}.`
+      : '';
+    L.agent('orders', 0);
+    L.step('delivery_availability_during_order', `${requested?.weekday || 'horario general'}; ${deliverySchedule || 'sin horario'}`);
+    return {
+      response: `${availability}${datePrompt}${missingPrompt}`,
+      agentType: 'orders',
+      newState: 'collecting_order',
+    };
+  }
 
   // Si el agente de escalación detecta que se necesita humano
   if (escalationResult.escalate && !isDeliveryStatusInquiry) {

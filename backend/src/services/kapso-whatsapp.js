@@ -294,6 +294,8 @@ function parseWebhookMessage(body, event) {
     const fromRaw = conv?.phone_number || message.from || null;
     const from    = fromRaw?.replace(/^\+/, ''); // sin "+" para consistencia interna
 
+    const attributionService = require('./whatsapp-attribution');
+    const attribution = attributionService.fromKapso?.(body, message, conv) || null;
     return {
       messageId:   message.id,
       from,
@@ -305,6 +307,7 @@ function parseWebhookMessage(body, event) {
       mediaUrl,   // URL directa de descarga (usar esta cuando esté disponible)
       location,
       interactiveId,
+      ...(attribution ? { attribution } : {}),
     };
   } catch { return null; }
 }

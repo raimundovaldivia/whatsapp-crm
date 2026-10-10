@@ -35,6 +35,51 @@ test('ignora mensajes propios y grupos', () => {
   }), null);
 });
 
+test('resuelve JID alternativo y no crea clientes con LID ni con el número propio', () => {
+  const inbound = evolution.parseWebhookMessage({
+    event: 'messages.upsert',
+    data: {
+      key: { id: 'LID1', remoteJid: '227732168388781@lid', remoteJidAlt: '56999998888@s.whatsapp.net', fromMe: false },
+      pushName: '56942876413@s.whatsapp.net',
+      message: { conversation: 'Hola' },
+    },
+  }, { ownPhone: '56942876413' });
+  assert.equal(inbound.from, '56999998888');
+  assert.equal(inbound.contactName, null);
+
+  assert.equal(evolution.parseWebhookMessage({
+    event: 'messages.upsert',
+    data: {
+      key: { id: 'OWN1', remoteJid: '243833933660247@lid', remoteJidAlt: '56942876413@s.whatsapp.net', fromMe: true },
+      message: { conversation: 'Mensaje técnico' },
+    },
+  }, { includeOwn: true, ownPhone: '56942876413' }), null);
+});
+
+test('el webhook descarta el eco técnico de la propia línea antes de crear una conversación', async () => {
+  let upserts = 0;
+  const channel = { id: 9, provider: 'evolution', phone_number: '56942876413' };
+  const router = load('src/routes/evolution-webhook.js', {
+    '../db/database': {
+      getWhatsappChannel: async () => channel,
+      getOrgById: async () => ({ id: 1, name: 'Prueba' }),
+      getMessageByWhatsappId: async () => null,
+      upsertConversation: async () => { upserts++; return { id: 1 }; },
+    },
+    '../services/evolution-whatsapp': evolution,
+    '../services/inbound-text': { processInboundText: async () => {} },
+    '../services/webhook-inbox': { durableWebhook: (_provider, fn) => fn },
+  });
+  await handler(router, 'post', '/1/9/token')({
+    params: { orgId: '1', channelId: '9', token: 'token' },
+    body: { event: 'messages.upsert', data: {
+      key: { id: 'GHOST1', remoteJid: '243833933660247@lid', remoteJidAlt: '56942876413@s.whatsapp.net', fromMe: true },
+      message: { conversation: 'eco' },
+    } },
+  }, response());
+  assert.equal(upserts, 0);
+});
+
 test('normaliza estados de entrega de Evolution', () => {
   assert.deepEqual(evolution.parseStatusUpdate({
     event: 'MESSAGES_UPDATE',
@@ -86,6 +131,7 @@ test('phone messages sync to the right conversation without calling AI or duplic
     '../db/database': {
       getOrgById: async () => ({ id: 1 }),
       getWhatsappChannel: async () => ({ id: 9, provider: 'evolution' }),
+      getMessageByWhatsappId: async (_org, id) => records.get(id) || null,
       upsertConversation: async (org, phone, name, channel) => { assert.equal(phone, '56911112222'); assert.equal(name, null); assert.equal(channel, 9); return {id:77}; },
       saveMessage: async message => { if (records.has(message.whatsappMessageId)) return null; records.set(message.whatsappMessageId,message); return {id:1,...message}; },
       setAgentMode: async (id, mode) => modes.push([id, mode]),

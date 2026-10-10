@@ -7,8 +7,8 @@ import {
 import { useTheme } from '../theme.js';
 
 const ROLE_VIEWS = {
-  owner:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'social', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
-  admin:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'social', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
+  owner:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
+  admin:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
   supervisor:  ['chats', 'orders', 'repartos', 'pagos'],
   coordinador: ['repartos'],
   agent:       ['chats'],
@@ -24,6 +24,7 @@ const MAIN_NAV_ITEMS = [
 
 const MORE_NAV_ITEMS = [
   { key: 'mensajeria', icon: Megaphone, label: 'Mensajería' },
+  { key: 'campaigns',  icon: BarChart2, label: 'Campañas a WhatsApp' },
   { key: 'social',     icon: Facebook,   label: 'Facebook e Instagram' },
   { key: 'productos',  icon: Store,     label: 'Mi tienda' },
   { key: 'stats',      icon: BarChart2, label: 'Estadísticas' },

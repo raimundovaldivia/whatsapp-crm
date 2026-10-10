@@ -98,6 +98,17 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
     });
     if (!savedMsg) return; // Duplicado
 
+    if (parsed.attribution) {
+      await db.saveWhatsappAttribution({
+        organizationId: org.id,
+        conversationId: conversation.id,
+        messageId: savedMsg.id,
+        whatsappMessageId: parsed.messageId,
+        provider: whatsappConfig?.provider || 'meta',
+        attribution: parsed.attribution,
+      });
+    }
+
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await whatsappService.markAsRead(parsed.messageId, whatsappConfig);
 
@@ -152,6 +163,17 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
 
     const finalConv = await db.getConversationById(conversation.id);
     io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+
+    if (result.productMedia) {
+      await require('../services/product-media-delivery').sendSuggested({
+        suggestion: result.productMedia,
+        orgId: org.id,
+        conversation: finalConv || conversation,
+        config: whatsappConfig,
+        io,
+        agentType: result.agentType,
+      });
+    }
 
     // 9. Si se creó una orden, notificar al CRM
     if (result.orderCreated) {

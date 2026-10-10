@@ -249,6 +249,17 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       return;
     }
 
+    if (parsed.attribution) {
+      await db.saveWhatsappAttribution({
+        organizationId: org.id,
+        conversationId: conversation.id,
+        messageId: savedMsg.id,
+        whatsappMessageId: parsed.messageId,
+        provider: whatsappConfig?.provider || 'kapso',
+        attribution: parsed.attribution,
+      });
+    }
+
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await db.updateLastInbound(conversation.id);
     await kapsoService.markAsRead(parsed.messageId, whatsappConfig);
@@ -468,6 +479,17 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
 
         const finalConv = await db.getConversationById(capturedConvId);
         io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+
+        if (!windowExpired && result.productMedia) {
+          await require('../services/product-media-delivery').sendSuggested({
+            suggestion: result.productMedia,
+            orgId: org.id,
+            conversation: finalConv || conversation,
+            config: whatsappConfig,
+            io,
+            agentType: result.agentType,
+          });
+        }
 
         log.done();
 

@@ -48,6 +48,25 @@ test('congela Jumbo y no lo sustituye por XL después de que el cliente confirma
   assert.equal(result.total, 23500);
 });
 
+test('una corrección de cantidad invalida el resumen anterior y conserva el recálculo nuevo', () => {
+  const history = [{
+    direction: 'outbound',
+    content: '📦 1x Huevos XL cafés · Bandeja de 30 — $12.990\n💰 Total: $12.990\n¿Todo correcto?',
+  }];
+  const priced = {
+    items: [{ name: 'Huevos XL cafés · Bandeja de 30', quantity: 2, price: 12990, subtotal: 25980, matched: true }],
+    subtotal: 25980, total: 23980, discountPct: 0, discountAmount: 2000,
+  };
+
+  const result = preserveConfirmedQuote(priced, history);
+
+  assert.equal(result.items[0].quantity, 2);
+  assert.equal(result.subtotal, 25980);
+  assert.equal(result.discountAmount, 2000);
+  assert.equal(result.total, 23980);
+  assert.equal(result.preservedQuote, undefined);
+});
+
 test('conserva cada producto y su precio en una confirmación de varios ítems', () => {
   const history = [{
     direction: 'outbound',

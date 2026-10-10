@@ -63,8 +63,14 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
 
   const messages = Array.isArray(req.body.data) ? req.body.data : [req.body.data];
   for (const data of messages) {
-    const parsed = evolution.parseWebhookMessage({ ...req.body, data }, { includeOwn: true });
+    const parsed = evolution.parseWebhookMessage({ ...req.body, data }, {
+      includeOwn: true,
+      ownPhone: channel.phone_number || channel.expected_phone,
+    });
     if (!parsed) continue;
+    // Evolution can replay the same phone message after reconnecting. Check it
+    // before upserting the conversation so a stale echo cannot leave an empty chat.
+    if (db.getMessageByWhatsappId && await db.getMessageByWhatsappId(org.id, parsed.messageId)) continue;
     if (channel.assigned_user_id) {
       // Dispatcher messages are human conversations: no sales bot, payment parser or scheduled response.
       const conversation = await db.upsertConversation(org.id, parsed.from, parsed.contactName, channel.id);

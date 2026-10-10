@@ -64,6 +64,8 @@ function parseWebhookMessage(body) {
     if (!value?.messages?.length) return null;
     const message = value.messages[0];
     const contact = value?.contacts?.[0];
+    const attributionService = require('./whatsapp-attribution');
+    const attribution = attributionService.fromMeta?.(message) || null;
     return {
       messageId: message.id,
       from: message.from,
@@ -71,6 +73,7 @@ function parseWebhookMessage(body) {
       timestamp: message.timestamp,
       type: message.type,
       text: message.type === 'text' ? message.text?.body : null,
+      ...(attribution ? { attribution } : {}),
     };
   } catch { return null; }
 }

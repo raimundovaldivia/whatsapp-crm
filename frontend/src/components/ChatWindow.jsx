@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote, Megaphone } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
@@ -1419,6 +1419,23 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           )}
         </div>
       </div>
+
+      {conversation.attribution_first_seen_at && (
+        <div style={{
+          padding: isMobile ? '7px 12px' : '8px 16px', flexShrink: 0,
+          display: 'flex', alignItems: 'center', gap: 8,
+          background: isDark ? '#231d38' : '#f3efff',
+          borderBottom: '1px solid #8b5cf644', color: isDark ? '#ddd6fe' : '#5b21b6',
+          fontSize: 12,
+        }}>
+          <Megaphone size={14} />
+          <strong>Llegó desde un anuncio:</strong>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {conversation.attribution_campaign_name || conversation.attribution_ad_name || conversation.attribution_headline || 'Campaña de WhatsApp'}
+          </span>
+          {conversation.attribution_source_url && <a href={conversation.attribution_source_url} target="_blank" rel="noreferrer" style={{ marginLeft: 'auto', color: 'inherit', fontWeight: 750 }}>Ver anuncio</a>}
+        </div>
+      )}
 
       {customerNote && (
         <button

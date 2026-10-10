@@ -25,6 +25,14 @@ test('extrae precios, vigencia y condiciones del template promocional', () => {
   assert.deepEqual(promo.offers.map(o => [o.units, o.price]), [[40,16000],[60,23500],[100,35000]]);
 });
 
+test('una consulta de precio muestra primero las promociones vigentes', () => {
+  const promo = promotion.fromHistory([template], products, new Date('2026-09-29T14:00:00.000Z'));
+  assert.equal(promotion.isCurrentPriceQuestion('¿Cuánto cuestan los huevos?'), true);
+  assert.equal(promotion.isCurrentPriceQuestion('¿Me respetan la oferta para mañana?'), false);
+  assert.match(promotion.priceReply(promo), /40 Jumbo.*\$16\.000/is);
+  assert.match(promotion.priceReply(promo), /Antes del precio normal/i);
+});
+
 test('el pedido usa el precio promocional exacto y no el catálogo normal', () => {
   const promo = promotion.fromHistory([template], products, new Date('2026-09-29T14:00:00.000Z'));
   const result = pricing.priceItems(

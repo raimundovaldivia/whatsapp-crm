@@ -406,7 +406,7 @@ async function createDefaultAgents(orgId, dataSourceId) {
 //       "56961899016"  → "56961899016" (sin cambio)
 function normalizePhone(phoneNumber) {
   if (!phoneNumber) return '';
-  let phone = String(phoneNumber).replace(/^\+/, '').trim();
+  let phone = String(phoneNumber).trim().split('@')[0].split(':')[0].replace(/\D/g, '');
   // Móvil chileno sin código de país: 9 dígitos empezando en 9
   if (/^9\d{8}$/.test(phone)) phone = '56' + phone;
   return phone;
@@ -563,6 +563,14 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
        LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
        ${customerIdentityJoin()}
        WHERE ${where}
+         AND NOT (
+           COALESCE(wc.provider, cfg.provider, '') = 'evolution'
+           AND NOT EXISTS (SELECT 1 FROM messages ghost_message WHERE ghost_message.conversation_id = c.id)
+           AND (
+             c.contact_name ~* '@(s\\.whatsapp\\.net|lid)$'
+             OR ${identityPhoneSql('c.phone_number')} = ${identityPhoneSql('wc.phone_number')}
+           )
+         )
        ORDER BY c.id, c.last_message_at DESC
      ) sub
      ORDER BY is_pinned DESC, pinned_at DESC NULLS LAST, last_message_at DESC`,
@@ -839,6 +847,163 @@ async function saveMessage({ conversationId, whatsappMessageId, direction, conte
     if (err.code === '23505') return null; // fallback por si acaso
     throw err;
   }
+}
+
+async function getMessageByWhatsappId(orgId, whatsappMessageId) {
+  if (!orgId || !whatsappMessageId) return null;
+  return queryOne(
+    `SELECT m.* FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.organization_id = $1 AND m.whatsapp_message_id = $2
+      LIMIT 1`,
+    [orgId, whatsappMessageId]
+  );
+}
+
+async function saveWhatsappAttribution({ organizationId, conversationId, messageId = null, whatsappMessageId, provider, attribution, receivedAt = null }) {
+  if (!organizationId || !conversationId || !whatsappMessageId || !provider || !attribution) return null;
+  const saved = await queryOne(
+    `INSERT INTO whatsapp_attributions (
+       organization_id, conversation_id, message_id, whatsapp_message_id, provider,
+       source_type, source_id, source_url, ctwa_clid, headline, body, media_type, media_url,
+       campaign_id, campaign_name, adset_id, adset_name, ad_id, ad_name, raw_json,
+       first_seen_at, last_seen_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$21)
+     ON CONFLICT (organization_id, provider, whatsapp_message_id) DO UPDATE SET
+       conversation_id = EXCLUDED.conversation_id,
+       message_id = COALESCE(EXCLUDED.message_id, whatsapp_attributions.message_id),
+       source_type = COALESCE(EXCLUDED.source_type, whatsapp_attributions.source_type),
+       source_id = COALESCE(EXCLUDED.source_id, whatsapp_attributions.source_id),
+       source_url = COALESCE(EXCLUDED.source_url, whatsapp_attributions.source_url),
+       ctwa_clid = COALESCE(EXCLUDED.ctwa_clid, whatsapp_attributions.ctwa_clid),
+       headline = COALESCE(EXCLUDED.headline, whatsapp_attributions.headline),
+       body = COALESCE(EXCLUDED.body, whatsapp_attributions.body),
+       media_type = COALESCE(EXCLUDED.media_type, whatsapp_attributions.media_type),
+       media_url = COALESCE(EXCLUDED.media_url, whatsapp_attributions.media_url),
+       campaign_id = COALESCE(EXCLUDED.campaign_id, whatsapp_attributions.campaign_id),
+       campaign_name = COALESCE(EXCLUDED.campaign_name, whatsapp_attributions.campaign_name),
+       adset_id = COALESCE(EXCLUDED.adset_id, whatsapp_attributions.adset_id),
+       adset_name = COALESCE(EXCLUDED.adset_name, whatsapp_attributions.adset_name),
+       ad_id = COALESCE(EXCLUDED.ad_id, whatsapp_attributions.ad_id),
+       ad_name = COALESCE(EXCLUDED.ad_name, whatsapp_attributions.ad_name),
+       raw_json = EXCLUDED.raw_json,
+       first_seen_at = LEAST(whatsapp_attributions.first_seen_at, EXCLUDED.first_seen_at),
+       last_seen_at = GREATEST(whatsapp_attributions.last_seen_at, EXCLUDED.last_seen_at)
+     RETURNING *`,
+    [organizationId, conversationId, messageId, whatsappMessageId, provider,
+      attribution.sourceType, attribution.sourceId, attribution.sourceUrl, attribution.ctwaClid,
+      attribution.headline, attribution.body, attribution.mediaType, attribution.mediaUrl,
+      attribution.campaignId, attribution.campaignName, attribution.adsetId, attribution.adsetName,
+      attribution.adId, attribution.adName, JSON.stringify(attribution.raw || attribution), receivedAt || new Date()]
+  );
+  await pool.query(
+    `UPDATE conversations SET
+       attribution_source_type = $3, attribution_source_id = $4,
+       attribution_source_url = $5, attribution_headline = $6,
+       attribution_campaign_id = $7, attribution_campaign_name = $8,
+       attribution_ad_id = $9, attribution_ad_name = $10,
+       attribution_first_seen_at = COALESCE(attribution_first_seen_at, $11),
+       updated_at = NOW()
+     WHERE id = $1 AND organization_id = $2`,
+    [conversationId, organizationId, attribution.sourceType, attribution.sourceId,
+      attribution.sourceUrl, attribution.headline, attribution.campaignId,
+      attribution.campaignName, attribution.adId, attribution.adName, receivedAt || new Date()]
+  );
+  return saved;
+}
+
+async function getLatestWhatsappAttribution(orgId, conversationId) {
+  return queryOne(
+    `SELECT * FROM whatsapp_attributions
+      WHERE organization_id = $1 AND conversation_id = $2
+      ORDER BY last_seen_at DESC, id DESC LIMIT 1`,
+    [orgId, conversationId]
+  );
+}
+
+async function getWhatsappAttributionReport(orgId, { from = null, to = null, provider = null } = {}) {
+  const params = [orgId];
+  const where = ['wa.organization_id = $1'];
+  if (from) { params.push(from); where.push(`wa.first_seen_at >= $${params.length}::date`); }
+  if (to) { params.push(to); where.push(`wa.first_seen_at < ($${params.length}::date + INTERVAL '1 day')`); }
+  if (provider) { params.push(provider); where.push(`wa.provider = $${params.length}`); }
+  const filtered = `
+    SELECT wa.*, c.contact_name, c.phone_number,
+           COALESCE(wa.campaign_id, wa.source_id, wa.source_url, wa.headline, 'whatsapp') AS campaign_key,
+           CASE WHEN wa.campaign_id IS NOT NULL OR wa.ad_id IS NOT NULL OR wa.ctwa_clid IS NOT NULL
+                THEN 'exacta' ELSE 'parcial' END AS precision
+      FROM whatsapp_attributions wa
+      JOIN conversations c ON c.id = wa.conversation_id
+     WHERE ${where.join(' AND ')}`;
+  const orderAmount = `CASE
+    WHEN TRIM(o.total_price) ~ '^[^0-9]*[0-9]{1,3}([.][0-9]{3})+[^0-9]*$'
+      THEN COALESCE(NULLIF(regexp_replace(o.total_price, '[^0-9-]', '', 'g'), '')::numeric, 0)
+    ELSE COALESCE(NULLIF(regexp_replace(o.total_price, '[^0-9.-]', '', 'g'), '')::numeric, 0)
+  END`;
+  const summary = await query(
+    `WITH filtered AS (${filtered}),
+     campaigns AS (
+       SELECT provider, campaign_key,
+              MAX(COALESCE(campaign_name, ad_name, headline, 'Campaña de WhatsApp')) AS campaign_name,
+              MAX(adset_name) AS adset_name, MAX(ad_name) AS ad_name,
+              MAX(source_url) AS source_url,
+              CASE WHEN BOOL_OR(precision = 'exacta') THEN 'exacta' ELSE 'parcial' END AS precision,
+              COUNT(DISTINCT conversation_id)::int AS contacts,
+              MIN(first_seen_at) AS first_seen_at, MAX(last_seen_at) AS last_seen_at
+         FROM filtered GROUP BY provider, campaign_key
+     ), order_matches AS (
+       SELECT DISTINCT ON (o.id) f.provider, f.campaign_key, o.id,
+              ${orderAmount} AS amount
+         FROM filtered f JOIN orders o ON o.conversation_id = f.conversation_id
+          AND o.created_at >= f.first_seen_at AND COALESCE(o.status, '') <> 'cancelled'
+        ORDER BY o.id, f.first_seen_at DESC
+     )
+     SELECT c.*, COUNT(om.id)::int AS orders,
+            COALESCE(SUM(om.amount), 0)::numeric AS revenue,
+            ROUND(CASE WHEN c.contacts > 0 THEN COUNT(om.id)::numeric * 100 / c.contacts ELSE 0 END, 1) AS conversion_rate
+       FROM campaigns c LEFT JOIN order_matches om
+         ON om.provider = c.provider AND om.campaign_key = c.campaign_key
+      GROUP BY c.provider, c.campaign_key, c.campaign_name, c.adset_name, c.ad_name,
+               c.source_url, c.precision, c.contacts, c.first_seen_at, c.last_seen_at
+      ORDER BY c.last_seen_at DESC`, params);
+  const records = await query(
+    `WITH filtered AS (${filtered}), latest AS (
+       SELECT DISTINCT ON (conversation_id, campaign_key)
+              * FROM filtered ORDER BY conversation_id, campaign_key, first_seen_at DESC
+     ), order_matches AS (
+       SELECT DISTINCT ON (o.id) f.conversation_id, f.campaign_key, o.id,
+              ${orderAmount} AS amount
+         FROM filtered f JOIN orders o ON o.conversation_id = f.conversation_id
+          AND o.created_at >= f.first_seen_at AND COALESCE(o.status, '') <> 'cancelled'
+        ORDER BY o.id, f.first_seen_at DESC
+     )
+     SELECT l.id, l.conversation_id, l.contact_name, l.phone_number, l.provider,
+            l.source_type, l.source_id, l.source_url, l.headline, l.body,
+            l.campaign_id, l.campaign_name, l.adset_name, l.ad_id, l.ad_name,
+            l.precision, l.first_seen_at, l.last_seen_at,
+            COUNT(DISTINCT o.id)::int AS orders,
+            COALESCE(SUM(o.amount), 0)::numeric AS revenue
+       FROM latest l LEFT JOIN order_matches o ON o.conversation_id = l.conversation_id
+        AND o.campaign_key = l.campaign_key
+      GROUP BY l.id, l.conversation_id, l.contact_name, l.phone_number, l.provider,
+               l.source_type, l.source_id, l.source_url, l.headline, l.body,
+               l.campaign_id, l.campaign_name, l.adset_name, l.ad_id, l.ad_name,
+               l.precision, l.first_seen_at, l.last_seen_at
+      ORDER BY l.first_seen_at DESC`, params);
+  const totals = await queryOne(
+    `WITH filtered AS (${filtered}), order_matches AS (
+       SELECT DISTINCT ON (o.id) o.id,
+              ${orderAmount} AS amount
+         FROM filtered f JOIN orders o ON o.conversation_id = f.conversation_id
+          AND o.created_at >= f.first_seen_at AND COALESCE(o.status, '') <> 'cancelled'
+        ORDER BY o.id, f.first_seen_at DESC
+     )
+     SELECT (SELECT COUNT(DISTINCT conversation_id) FROM filtered)::int AS contacts,
+            COUNT(order_matches.id)::int AS orders,
+            COALESCE(SUM(order_matches.amount), 0)::numeric AS revenue
+       FROM order_matches`, params);
+  totals.conversionRate = totals.contacts ? Math.round(Number(totals.orders) * 1000 / Number(totals.contacts)) / 10 : 0;
+  return { summary, records, totals };
 }
 
 async function getMessagesByConversation(conversationId, limit = 80) {
@@ -1950,7 +2115,8 @@ module.exports = {
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
-  saveMessage, getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
+  saveMessage, getMessageByWhatsappId, getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
+  saveWhatsappAttribution, getLatestWhatsappAttribution, getWhatsappAttributionReport,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Products propios

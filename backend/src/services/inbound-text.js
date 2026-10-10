@@ -19,6 +19,17 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
   });
   if (!savedMsg) return;
 
+  if (parsed.attribution) {
+    await db.saveWhatsappAttribution({
+      organizationId: org.id,
+      conversationId: conversation.id,
+      messageId: savedMsg.id,
+      whatsappMessageId: parsed.messageId,
+      provider: whatsappConfig?.provider || (whatsappChannelId ? 'evolution' : 'meta'),
+      attribution: parsed.attribution,
+    });
+  }
+
   await db.updateConversationLastMessage(conversation.id, parsed.text, true);
   if (db.updateLastInbound) await db.updateLastInbound(conversation.id);
   if (markAsRead) await markAsRead().catch(() => {});
@@ -90,6 +101,17 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
   }
   updatedConv = await db.getConversationById(conversation.id);
   io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
+
+  if (result.productMedia) {
+    await require('./product-media-delivery').sendSuggested({
+      suggestion: result.productMedia,
+      orgId: org.id,
+      conversation: updatedConv || conversation,
+      config: whatsappConfig,
+      io,
+      agentType: result.agentType,
+    });
+  }
 
   if (result.orderCreated) {
     io?.to(`org_${org.id}`).emit(`order_created_${org.id}`, {

@@ -608,6 +608,20 @@ function choiceReply(promotion) {
   return `Claro 😊 ¿Cuál de estas promociones quieres?\n\n${choices}\n\nPuedes responder con el número o escribir la promoción.`;
 }
 
+function isCurrentPriceQuestion(message) {
+  const text = String(message || '');
+  if (isFuturePromotionQuestion(text)) return false;
+  return /(?:cu[aá]nto\s+(?:cuestan?|valen?)|qu[eé]\s+precios?|precio\s+de|tienen\s+(?:alguna\s+)?promo|promociones?\s+(?:de|en|para))/iu.test(text);
+}
+
+function priceReply(promotion) {
+  const choices = (promotion?.offers || []).map((offer, index) =>
+    `${index + 1}) ${offer.label} — $${Number(offer.price).toLocaleString('es-CL')}`
+  ).join('\n');
+  if (!choices) return null;
+  return `Sí 😊 Antes del precio normal, tenemos estas promociones vigentes:\n\n${choices}\n\n¿Cuál te interesa? Puedes responder con el número o escribir la opción.`;
+}
+
 function isFuturePromotionQuestion(message) {
   const text = String(message || '');
   return /(promo|promoci[oó]n|oferta|precio|respetan?|aplica|vigente|vale)/iu.test(text)
@@ -686,4 +700,4 @@ function freeGiftChoiceReply(freeGift) {
   return `¡Tu compra califica para ${freeGift.quantity} ${freeGift.target} gratis! 🎁\n\nElige una variedad disponible:\n${choices}\n\nPuedes responder con el número o el nombre.`;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseFreeGift, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, offerOrderItems, isBareAffirmative, choiceReply, isFuturePromotionQuestion, futureReply, appliesToDelivery, giftQualifies, selectedFreeGift, freeGiftOrderItem, freeGiftChoiceReply, norm, chileDay };
+module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseFreeGift, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, offerOrderItems, isBareAffirmative, choiceReply, isCurrentPriceQuestion, priceReply, isFuturePromotionQuestion, futureReply, appliesToDelivery, giftQualifies, selectedFreeGift, freeGiftOrderItem, freeGiftChoiceReply, norm, chileDay };

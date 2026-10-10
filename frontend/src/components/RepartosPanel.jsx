@@ -23,6 +23,14 @@ function uniqueOrders(list) {
   });
 }
 
+function mapCoordinates(point) {
+  if (point?.lat === null || point?.lat === '' || point?.lng === null || point?.lng === '') return null;
+  const lat = Number(point?.lat);
+  const lng = Number(point?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat === 0 && lng === 0)) return null;
+  return [lat, lng];
+}
+
 // ─── Mapa (Leaflet + OpenStreetMap, cargado desde index.html vía window.L) ────
 //
 // Pinta los puntos de reparto. `ordered` dibuja además la línea de la ruta en
@@ -56,24 +64,22 @@ function RouteMap({ routes, points = [], ordered = false, warehouse, colors, hei
     const allLatLngs = [];
 
     // Bodega (origen/destino) con un pin distinto
-    if (warehouse && typeof warehouse.lat === 'number' && typeof warehouse.lng === 'number') {
+    const warehouseCoords = mapCoordinates(warehouse);
+    if (warehouseCoords) {
       const wIcon = L.divIcon({
         className: '',
         html: `<div style="background:#1e293b;color:#fff;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)">🏠</div>`,
         iconSize: [30, 30], iconAnchor: [15, 15],
       });
-      L.marker([warehouse.lat, warehouse.lng], { icon: wIcon }).addTo(layer).bindPopup('<b>Bodega</b>');
-      allLatLngs.push([warehouse.lat, warehouse.lng]);
+      L.marker(warehouseCoords, { icon: wIcon }).addTo(layer).bindPopup('<b>Bodega</b>');
+      allLatLngs.push(warehouseCoords);
     }
 
     routeList.forEach(rt => {
       const color = rt.color || '#22c55e';
-      const pts = (rt.points || []).filter(p => typeof p.lat === 'number' && typeof p.lng === 'number');
-      const line = [];
-      if (warehouse && typeof warehouse.lat === 'number') line.push([warehouse.lat, warehouse.lng]);
-      pts.forEach((p) => {
-        const ll = [p.lat, p.lng];
-        line.push(ll); allLatLngs.push(ll);
+      const pts = (rt.points || []).map(point => ({ point, coords: mapCoordinates(point) })).filter(entry => entry.coords);
+      pts.forEach(({ point: p, coords: ll }) => {
+        allLatLngs.push(ll);
         const label = p.label != null ? String(p.label) : '';
         const icon = L.divIcon({
           className: '',
@@ -83,10 +89,11 @@ function RouteMap({ routes, points = [], ordered = false, warehouse, colors, hei
         L.marker(ll, { icon }).addTo(layer)
           .bindPopup(`<b>${(p.name || '').replace(/</g, '')}</b><br>${(p.address || '').replace(/</g, '')}`);
       });
-      // Cerrar el círculo de vuelta a la bodega (round trip)
-      if (rt.ordered && warehouse && typeof warehouse.lat === 'number' && pts.length) line.push([warehouse.lat, warehouse.lng]);
-      if (rt.ordered && line.length >= 2) {
-        L.polyline(line, { color, weight: 3, dashArray: '8,6' }).addTo(layer);
+      // Mostrar el trazado real devuelto por Google. Si no existe, dejamos
+      // solamente los puntos: una línea recta entre domicilios sería engañosa.
+      const roadPath = (rt.path || []).map(mapCoordinates).filter(Boolean);
+      if (rt.ordered && roadPath.length >= 2) {
+        L.polyline(roadPath, { color, weight: 4, opacity: 0.8 }).addTo(layer);
       }
     });
 
@@ -417,6 +424,7 @@ function NuevoReparto({ colors }) {
   async function handleSend() {
     setSending(true);
     setError(null);
+    const sentVehicles = [];
     try {
       let sentCount = 0;
       let skippedAll = [];
@@ -440,12 +448,20 @@ function NuevoReparto({ colors }) {
         }, { timeout: 60000 });
         if (Array.isArray(data?.skipped)) skippedAll = skippedAll.concat(data.skipped);
         sentCount++;
+        sentVehicles.push(rt.vehicle);
       }
       // Avisar si el backend omitió pedidos ya entregados/pagados/cancelados
       setSentRoute({ count: sentCount, skipped: skippedAll });
       setStep('done');
     } catch (e) {
-      setError(e.response?.data?.error || e.message);
+      if (sentVehicles.length) {
+        // Las rutas anteriores ya existen y sus pedidos quedaron reservados.
+        // Quitarlas de este intento evita repetirlas al presionar nuevamente.
+        setOptRoutes(previous => previous.filter(route => !sentVehicles.includes(route.vehicle)));
+        setError(`${sentVehicles.length} ruta${sentVehicles.length === 1 ? '' : 's'} ya ${sentVehicles.length === 1 ? 'fue enviada' : 'fueron enviadas'} y no se repetirá${sentVehicles.length === 1 ? '' : 'n'}. Quedaron solamente las rutas pendientes: ${e.response?.data?.error || e.message}`);
+      } else {
+        setError(e.response?.data?.error || e.message);
+      }
     } finally {
       setSending(false);
     }
@@ -776,7 +792,7 @@ function NuevoReparto({ colors }) {
           const pts = selectedOrders.map(o => ({
             lat: o.lat, lng: o.lng, name: o.customerName, address: o.fullAddress,
           }));
-          const withCoords   = pts.filter(p => typeof p.lat === 'number' && typeof p.lng === 'number');
+          const withCoords   = pts.filter(p => mapCoordinates(p));
           const sinUbicar    = selectedOrders.length - withCoords.length;
           return (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -845,6 +861,7 @@ function NuevoReparto({ colors }) {
                   routes={optRoutes.map((rt, i) => ({
                     color: vehicleColor(i),
                     ordered: true,
+                    path: rt.path || [],
                     points: (rt.stops || []).map(s => ({
                       lat: s.lat, lng: s.lng, label: s.stopNumber, name: s.customerName, address: s.fullAddress,
                     })),

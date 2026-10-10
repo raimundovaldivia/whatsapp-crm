@@ -50,7 +50,10 @@ function preserveConfirmedQuote(priced, history = []) {
   // la fuente de verdad para presentación, variante y precio. Se eliminan los
   // IDs inferidos porque podrían corresponder al producto equivocado; en modo
   // Shopify se guardará como línea personalizada en vez de enlazar otra variante.
-  if (confirmed.items.length > 0 && confirmed.items.length === priced.items.length) {
+  const sameConfirmedQuantities = confirmed.items.length > 0
+    && confirmed.items.length === priced.items.length
+    && confirmed.items.every((accepted, index) => Number(accepted.quantity) === Number(priced.items[index]?.quantity));
+  if (sameConfirmedQuantities) {
     const items = priced.items.map((item, index) => {
       const accepted = confirmed.items[index];
       return {
@@ -80,6 +83,10 @@ function preserveConfirmedQuote(priced, history = []) {
       preservedQuote: true,
     };
   }
+
+  // El cliente corrigió cantidad o composición después del resumen. Ese
+  // resumen ya no es una cotización aceptada y no puede pisar el recálculo.
+  if (confirmed.items.length > 0) return priced;
 
   // Compatibilidad con resúmenes antiguos que sólo incluían el total.
   if (priced.items.length !== 1 || Number(priced.total) === confirmed.total) return priced;
