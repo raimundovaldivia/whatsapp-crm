@@ -64,6 +64,9 @@ const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pric
 const ctx=p.forStore({enabled:true});
 const items=[{title:'Huevos Jumbo 20 unidades',price:10000,quantity:3}];
 a.equal(p.applyQuote({items,total:30000},ctx).total,25000);
-a.match(p.prompt(ctx,[{title:'Huevos Jumbo 20 unidades',price:10000}]),/3 \$25000/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/presentación exacta = 1 bandeja de 20 huevos/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/3 bandejas \$25000/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/Una caja NO es sinónimo de una bandeja/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/¿De cuántos huevos necesitas la caja\?/);
 a.match(p.prompt(ctx,[]),/bandejas M no tienen descuento/);
 });

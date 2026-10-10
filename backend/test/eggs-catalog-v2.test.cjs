@@ -51,3 +51,15 @@ test('color variants never share the legacy XL ladder and bot asks about ambigui
  assert.match(p.prompt(p.forStore({enabled:true}),products.map(p=>({...p,price:undefined,priceMin:p.price}))),/11990/);
  assert.doesNotMatch(p.prompt(p.forStore({enabled:true}),products),/NaN/);
 });
+test('caja y bandeja nunca se emparejan como si fueran la misma presentación',()=>{
+ const o=require('../src/services/order-pricing');
+ const trays=[{id:1,title:'Huevos XL blancos · Bandeja de 30',price:10990}];
+ assert.equal(o.matchProduct('caja XL de 30',o.flattenCatalog(trays)),null);
+ assert.equal(o.priceItems([{product_name:'caja XL de 30',quantity:1}],trays).unmatched[0],'caja XL de 30');
+ assert.equal(o.matchProduct('bandeja XL de 30',o.flattenCatalog(trays)).candidate.price,10990);
+
+ const legacyBoxes=[{id:2,title:'Huevos de Gallina de Campo – Tamaño XL (100 huevos)',price:40000}];
+ assert.equal(o.matchProduct('caja XL de 100 huevos',o.flattenCatalog(legacyBoxes)).candidate.price,40000);
+ assert.equal(o.matchProduct('caja XL',o.flattenCatalog(legacyBoxes)),null);
+ assert.equal(o.matchProduct('caja',o.flattenCatalog(legacyBoxes)),null);
+});
