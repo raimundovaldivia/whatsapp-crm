@@ -5,6 +5,9 @@ const forStore = ctx => ({ ...ctx, eligible: ctx.enabled, tiers: WEB_TIERS, web:
 const STORE_SLUG = 'diez-rios-mrs96z69';
 function packSize(item) {
   const title = String(item.product_name || item.name || item.title || '').toLowerCase();
+  // Una caja activa ya tiene un precio final de catálogo. No debe volver a
+  // pasar por la escala que combina presentaciones XL sueltas.
+  if (/\bcaja\b/.test(title)) return 0;
   if (/^huevos (m|l|xl|jumbo) (blancos|mixtos|cafés) · bandeja de/.test(title)) return 0;
   if (!/\bxl\b/.test(title) || /queso|aceituna|combo|especial|empresa/.test(title)) return 0;
   if (!/huevo|bandeja|caja|promo/.test(title)) return 0;

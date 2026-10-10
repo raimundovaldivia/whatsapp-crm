@@ -17,6 +17,8 @@ test('no changes to other calibers, combinations, quotes or special tariffs', ()
   assert.deepEqual(rule.apply(items,ctx),items);
   assert.equal(rule.apply([line(30,10000)],ctx)[0].price,10000);
   assert.equal(rule.apply([line(30,12000)],{enabled:true,eligible:false})[0].price,12000);
+  assert.equal(rule.apply([{title:'Huevos XL · Caja de 180',price:55000,quantity:1}],rule.forStore({enabled:true}))[0].price,55000);
+  assert.equal(rule.apply([{title:'Huevos Jumbo · Caja de 100',price:37000,quantity:1}],rule.forStore({enabled:true}))[0].price,37000);
 });
 test('previous purchases qualify by actual scale price, not just an XL title', () => {
   assert.equal(rule.historicalScale({items:JSON.stringify([line(30,11000)])}),true);
