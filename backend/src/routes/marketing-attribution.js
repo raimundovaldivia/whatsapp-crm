@@ -10,7 +10,11 @@ router.get('/', async (req, res) => {
     const from = datePattern.test(String(req.query.from || '')) ? req.query.from : null;
     const to = datePattern.test(String(req.query.to || '')) ? req.query.to : null;
     const provider = ['evolution', 'kapso', 'meta'].includes(req.query.provider) ? req.query.provider : null;
-    const data = await db.getWhatsappAttributionReport(req.orgId, { from, to, provider });
+    const basis = req.query.basis === 'purchase' ? 'purchase' : 'contact';
+    const data = basis === 'purchase'
+      ? await db.getWhatsappBuyerReport(req.orgId, { from, to, provider })
+      : await db.getWhatsappAttributionReport(req.orgId, { from, to, provider });
+    data.basis = basis;
     res.json({ success: true, data });
   } catch (error) {
     console.error('[MarketingAttribution]', error.message);

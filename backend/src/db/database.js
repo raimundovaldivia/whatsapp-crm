@@ -1006,6 +1006,97 @@ async function getWhatsappAttributionReport(orgId, { from = null, to = null, pro
   return { summary, records, totals };
 }
 
+async function getWhatsappBuyerReport(orgId, { from = null, to = null, provider = null } = {}) {
+  const params = [orgId];
+  const attributionWhere = ['wa.organization_id = $1'];
+  if (provider) {
+    params.push(provider);
+    attributionWhere.push(`wa.provider = $${params.length}`);
+  }
+  const orderWhere = ["COALESCE(o.status, '') <> 'cancelled'"];
+  const localOrderDate = `(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date`;
+  if (from) {
+    params.push(from);
+    orderWhere.push(`${localOrderDate} >= $${params.length}::date`);
+  }
+  if (to) {
+    params.push(to);
+    orderWhere.push(`${localOrderDate} <= $${params.length}::date`);
+  }
+  const orderAmount = `CASE
+    WHEN TRIM(o.total_price) ~ '^[^0-9]*[0-9]{1,3}([.][0-9]{3})+[^0-9]*$'
+      THEN COALESCE(NULLIF(regexp_replace(o.total_price, '[^0-9-]', '', 'g'), '')::numeric, 0)
+    ELSE COALESCE(NULLIF(regexp_replace(o.total_price, '[^0-9.-]', '', 'g'), '')::numeric, 0)
+  END`;
+  const matched = `
+    SELECT DISTINCT ON (o.id)
+           wa.id AS attribution_id, wa.conversation_id, wa.provider, wa.source_type,
+           wa.source_id, wa.source_url, wa.ctwa_clid, wa.headline, wa.body,
+           wa.campaign_id, wa.campaign_name, wa.adset_name, wa.ad_id, wa.ad_name,
+           wa.first_seen_at, wa.last_seen_at,
+           c.contact_name, c.phone_number,
+           COALESCE(wa.campaign_id, wa.source_id, wa.source_url, wa.headline, 'whatsapp') AS campaign_key,
+           CASE WHEN wa.campaign_id IS NOT NULL OR wa.ad_id IS NOT NULL OR wa.ctwa_clid IS NOT NULL
+                THEN 'exacta' ELSE 'parcial' END AS precision,
+           o.id AS order_id, o.created_at AS order_created_at, o.status AS order_status,
+           o.items AS order_items, ${orderAmount} AS amount
+      FROM whatsapp_attributions wa
+      JOIN conversations c ON c.id = wa.conversation_id AND c.organization_id = wa.organization_id
+      JOIN orders o ON o.organization_id = wa.organization_id
+                   AND o.conversation_id = wa.conversation_id
+                   AND (o.created_at AT TIME ZONE 'UTC') >= wa.first_seen_at
+     WHERE ${attributionWhere.join(' AND ')} AND ${orderWhere.join(' AND ')}
+     ORDER BY o.id, wa.first_seen_at DESC, wa.id DESC`;
+
+  const summary = await query(
+    `WITH matched AS (${matched})
+     SELECT provider, campaign_key,
+            MAX(COALESCE(campaign_name, ad_name, headline, 'Campaña de WhatsApp')) AS campaign_name,
+            MAX(adset_name) AS adset_name, MAX(ad_name) AS ad_name, MAX(source_url) AS source_url,
+            CASE WHEN BOOL_OR(precision = 'exacta') THEN 'exacta' ELSE 'parcial' END AS precision,
+            COUNT(DISTINCT conversation_id)::int AS contacts,
+            COUNT(DISTINCT order_id)::int AS orders,
+            COALESCE(SUM(amount), 0)::numeric AS revenue,
+            MIN(first_seen_at) AS first_seen_at, MAX(order_created_at) AS last_order_at,
+            ROUND(CASE WHEN COUNT(DISTINCT conversation_id) > 0
+              THEN COUNT(DISTINCT order_id)::numeric / COUNT(DISTINCT conversation_id) ELSE 0 END, 1) AS orders_per_buyer
+       FROM matched
+      GROUP BY provider, campaign_key
+      ORDER BY last_order_at DESC`, params);
+
+  const records = await query(
+    `WITH matched AS (${matched})
+     SELECT MIN(attribution_id) AS id, conversation_id, provider, campaign_key,
+            MAX(contact_name) AS contact_name, MAX(phone_number) AS phone_number,
+            MAX(source_type) AS source_type, MAX(source_id) AS source_id,
+            MAX(source_url) AS source_url, MAX(headline) AS headline, MAX(body) AS body,
+            MAX(campaign_id) AS campaign_id,
+            MAX(COALESCE(campaign_name, ad_name, headline, 'Campaña de WhatsApp')) AS campaign_name,
+            MAX(adset_name) AS adset_name, MAX(ad_id) AS ad_id, MAX(ad_name) AS ad_name,
+            CASE WHEN BOOL_OR(precision = 'exacta') THEN 'exacta' ELSE 'parcial' END AS precision,
+            MIN(first_seen_at) AS first_seen_at, MAX(last_seen_at) AS last_seen_at,
+            COUNT(DISTINCT order_id)::int AS orders,
+            COALESCE(SUM(amount), 0)::numeric AS revenue,
+            MAX(order_created_at) AS last_order_at,
+            (ARRAY_AGG(order_status ORDER BY order_created_at DESC, order_id DESC))[1] AS last_order_status,
+            (ARRAY_AGG(order_items ORDER BY order_created_at DESC, order_id DESC))[1] AS latest_order_items
+       FROM matched
+      GROUP BY conversation_id, provider, campaign_key
+      ORDER BY last_order_at DESC`, params);
+
+  const totals = await queryOne(
+    `WITH matched AS (${matched})
+     SELECT COUNT(DISTINCT conversation_id)::int AS contacts,
+            COUNT(DISTINCT order_id)::int AS orders,
+            COALESCE(SUM(amount), 0)::numeric AS revenue
+       FROM matched`, params);
+  totals.buyers = totals.contacts;
+  totals.ordersPerBuyer = totals.contacts
+    ? Math.round(Number(totals.orders) * 10 / Number(totals.contacts)) / 10
+    : 0;
+  return { summary, records, totals, basis: 'purchase' };
+}
+
 async function saveAdAttribution({ organizationId, conversationId, messageId, referral }) {
   if (!organizationId || !conversationId || !messageId || !referral) return null;
   return queryOne(
@@ -2161,7 +2252,7 @@ module.exports = {
   // Messages
   saveMessage, getMessageByWhatsappId, saveAdAttribution, saveMessageMediaBlob, getMessageMediaBlob,
   getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
-  saveWhatsappAttribution, getLatestWhatsappAttribution, getWhatsappAttributionReport,
+  saveWhatsappAttribution, getLatestWhatsappAttribution, getWhatsappAttributionReport, getWhatsappBuyerReport,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Products propios

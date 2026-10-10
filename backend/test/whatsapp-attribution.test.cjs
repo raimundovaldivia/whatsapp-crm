@@ -68,7 +68,7 @@ test('el reporte asigna cada pedido solo a la última campaña que lo precede', 
       );
       CREATE TABLE orders (
         id SERIAL PRIMARY KEY, organization_id INT, conversation_id INT, total_price TEXT,
-        status TEXT, created_at TIMESTAMPTZ
+        status TEXT, items TEXT, created_at TIMESTAMP
       );
       CREATE TABLE whatsapp_attributions (
         id SERIAL PRIMARY KEY, organization_id INT NOT NULL, conversation_id INT NOT NULL,
@@ -101,6 +101,24 @@ test('el reporte asigna cada pedido solo a la última campaña que lo precede', 
     assert.equal(report.summary.find(row => row.campaign_key === 'campaign-2').orders, 1);
     assert.equal(report.records.find(row => row.campaign_id === 'campaign-1').orders, 0);
     assert.equal(report.records.find(row => row.campaign_id === 'campaign-2').orders, 1);
+
+    await engine.exec(`
+      INSERT INTO orders (organization_id, conversation_id, total_price, status, items, created_at)
+      VALUES
+        (1, 1, '$27.000', 'entregado', '[{"name":"Huevos XL","quantity":2}]', '2026-10-03 01:00:00'),
+        (1, 1, '$99.000', 'cancelled', '[]', '2026-10-02 18:00:00')
+    `);
+    const buyers = await db.getWhatsappBuyerReport(1, { from: '2026-10-02', to: '2026-10-02' });
+    assert.equal(buyers.basis, 'purchase');
+    assert.equal(buyers.totals.contacts, 1);
+    assert.equal(buyers.totals.orders, 2);
+    assert.equal(Number(buyers.totals.revenue), 54000);
+    assert.equal(buyers.totals.ordersPerBuyer, 2);
+    assert.equal(buyers.summary.length, 1);
+    assert.equal(buyers.summary[0].campaign_key, 'campaign-2');
+    assert.equal(buyers.records.length, 1);
+    assert.equal(buyers.records[0].orders, 2);
+    assert.match(buyers.records[0].latest_order_items, /Huevos XL/);
   } finally {
     await engine.close();
   }
