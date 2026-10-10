@@ -146,6 +146,7 @@ export const metaAPI = {
   threads:      () => api.get('/meta/threads').then(r => r.data.threads),
   messages:     id => api.get(`/meta/threads/${id}/messages`).then(r => r.data.messages),
   sendMessage:  (id, text) => api.post(`/meta/threads/${id}/messages`, { text }).then(r => r.data.message),
+  adsAnalytics: params => api.get('/meta/ads/analytics', { params }).then(r => r.data),
   insights:     params => api.get('/meta/ads/insights', { params }).then(r => r.data),
   campaigns:    () => api.get('/meta/ads/campaigns').then(r => r.data.campaigns),
   publish:      data => api.post('/meta/publish', data, { timeout: 45000 }).then(r => r.data),

@@ -64,6 +64,7 @@ function parseWebhookMessage(body) {
     if (!value?.messages?.length) return null;
     const message = value.messages[0];
     const contact = value?.contacts?.[0];
+    const adReferral = require('./ad-attribution').normalizeAdReferral?.(message.referral, 'meta') || null;
     return {
       messageId: message.id,
       from: message.from,
@@ -71,6 +72,7 @@ function parseWebhookMessage(body) {
       timestamp: message.timestamp,
       type: message.type,
       text: message.type === 'text' ? message.text?.body : null,
+      ...(adReferral ? { adReferral } : {}),
     };
   } catch { return null; }
 }

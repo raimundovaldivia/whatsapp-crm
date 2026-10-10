@@ -19,6 +19,15 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
   });
   if (!savedMsg) return;
 
+  if (parsed.adReferral) {
+    await db.saveAdAttribution({
+      organizationId: org.id,
+      conversationId: conversation.id,
+      messageId: savedMsg.id,
+      referral: parsed.adReferral,
+    }).catch(error => console.warn('[Ads] No se pudo guardar la atribución:', error.message));
+  }
+
   await db.updateConversationLastMessage(conversation.id, parsed.text, true);
   if (db.updateLastInbound) await db.updateLastInbound(conversation.id);
   if (markAsRead) await markAsRead().catch(() => {});

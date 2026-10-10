@@ -841,6 +841,24 @@ async function saveMessage({ conversationId, whatsappMessageId, direction, conte
   }
 }
 
+async function saveAdAttribution({ organizationId, conversationId, messageId, referral }) {
+  if (!organizationId || !conversationId || !messageId || !referral) return null;
+  return queryOne(
+    `INSERT INTO ad_conversation_attributions
+       (organization_id, conversation_id, message_id, provider, source_type, source_id,
+        ctwa_clid, source_url, headline, body, raw_payload, attributed_at)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,m.created_at AT TIME ZONE 'UTC'
+       FROM messages m
+       JOIN conversations c ON c.id=m.conversation_id
+      WHERE m.id=$3 AND c.id=$2 AND c.organization_id=$1
+     ON CONFLICT (message_id) DO NOTHING
+     RETURNING *`,
+    [organizationId, conversationId, messageId, referral.provider || 'meta', referral.sourceType || null,
+      referral.sourceId || null, referral.ctwaClid || null, referral.sourceUrl || null,
+      referral.headline || null, referral.body || null, JSON.stringify(referral.raw || {})]
+  );
+}
+
 async function saveMessageMediaBlob(orgId, messageId, data, contentType) {
   const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data || []);
   if (!orgId || !messageId || !buffer.length || buffer.length > 16 * 1024 * 1024) return null;
@@ -1976,7 +1994,7 @@ module.exports = {
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
   // Messages
-  saveMessage, saveMessageMediaBlob, getMessageMediaBlob,
+  saveMessage, saveAdAttribution, saveMessageMediaBlob, getMessageMediaBlob,
   getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,

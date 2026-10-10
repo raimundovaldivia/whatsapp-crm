@@ -186,6 +186,29 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_message_media_blobs_org_message
         ON message_media_blobs(organization_id, message_id);
 
+      -- Atribución de conversaciones iniciadas desde anuncios Click-to-WhatsApp.
+      -- Meta sólo envía estos datos en el primer mensaje referido; se conservan
+      -- aparte para poder unir anuncio → conversación → pedido.
+      CREATE TABLE IF NOT EXISTS ad_conversation_attributions (
+        id                  BIGSERIAL PRIMARY KEY,
+        organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id     INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        message_id          INTEGER UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+        provider            TEXT NOT NULL,
+        source_type         TEXT,
+        source_id           TEXT,
+        ctwa_clid           TEXT,
+        source_url          TEXT,
+        headline            TEXT,
+        body                TEXT,
+        raw_payload         JSONB NOT NULL DEFAULT '{}'::jsonb,
+        attributed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ad_attribution_org_date
+        ON ad_conversation_attributions(organization_id, attributed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ad_attribution_org_source
+        ON ad_conversation_attributions(organization_id, source_id);
+
       -- ─── ÓRDENES CREADAS ─────────────────────────────────────────
 
       CREATE TABLE IF NOT EXISTS orders (

@@ -317,6 +317,10 @@ function parseWebhookMessage(body, event) {
     const fromRaw = conv?.phone_number || message.from || null;
     const from    = fromRaw?.replace(/^\+/, ''); // sin "+" para consistencia interna
 
+    const adReferral = require('./ad-attribution').normalizeAdReferral?.(
+      message.referral || message.kapso?.referral || body.referral || body.data?.referral,
+      'kapso'
+    ) || null;
     return {
       messageId:   message.id,
       from,
@@ -328,6 +332,7 @@ function parseWebhookMessage(body, event) {
       mediaUrl,   // URL directa de descarga (usar esta cuando esté disponible)
       location,
       interactiveId,
+      ...(adReferral ? { adReferral } : {}),
     };
   } catch { return null; }
 }

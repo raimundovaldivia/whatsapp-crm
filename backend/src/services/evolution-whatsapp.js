@@ -121,6 +121,7 @@ function parseWebhookMessage(body, { includeOwn = false } = {}) {
   const type = message.imageMessage ? 'image' : message.audioMessage ? 'audio'
     : message.documentMessage ? 'document' : message.videoMessage ? 'video' : 'text';
   const text = textFromMessage(message);
+  const adReferral = require('./ad-attribution').evolutionReferral(message, data);
   if (!from || (!text && type === 'text')) return null;
   return {
     messageId: key.id,
@@ -131,6 +132,7 @@ function parseWebhookMessage(body, { includeOwn = false } = {}) {
     timestamp: data.messageTimestamp || null,
     type,
     text: text || '',
+    ...(adReferral ? { adReferral } : {}),
     ...(type !== 'text' ? {
       mimeType: message[`${type}Message`]?.mimetype || null,
       fileName: message[`${type}Message`]?.fileName || null,
