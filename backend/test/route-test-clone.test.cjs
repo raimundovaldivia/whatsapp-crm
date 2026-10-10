@@ -12,12 +12,18 @@ test('mobile test clone keeps addresses and products but removes every customer 
     orders: [{
       source: 'bot', id: '900', customerName: 'Nombre real', customerPhone: '56911112222',
       conversationId: 55, fullAddress: 'Dirección sintética 123, La Serena',
-      items: [{ name: 'Huevos XL', quantity: 2, price: 12000 }],
+      items: [
+        { name: 'Huevos XL', quantity: 2, price: 12000 },
+        { name: 'Retirar: producto anterior', quantity: 1, price: 0, loadItem: false },
+      ],
     }],
     optimized_route: [{
       source: 'bot', id: '900', customerName: 'Nombre real', phone: '56911112222',
       fullAddress: 'Dirección sintética 123, La Serena', lat: -29.91, lng: -71.25,
-      items: [{ name: 'Huevos XL', quantity: 2, price: 12000 }],
+      items: [
+        { name: 'Huevos XL', quantity: 2, price: 12000 },
+        { name: 'Retirar: producto anterior', quantity: 1, price: 0, loadItem: false },
+      ],
     }],
     total_distance: '10 km', total_duration: '30 min', maps_url: 'https://maps.example/test',
   };
@@ -50,7 +56,12 @@ test('mobile test clone keeps addresses and products but removes every customer 
   assert.equal(inserted.orders[0].customerName, 'Cliente prueba 01');
   assert.equal(inserted.orders[0].fullAddress, source.orders[0].fullAddress);
   assert.deepEqual(inserted.orders[0].items.map(({ name, quantity, price }) => ({ name, quantity, price })),
-    [{ name: 'Huevos XL', quantity: 2, price: 12000 }]);
+    [
+      { name: 'Huevos XL', quantity: 2, price: 12000 },
+      { name: 'Retirar: producto anterior', quantity: 1, price: 0 },
+    ]);
+  assert.equal(inserted.orders[0].items[0].loadItem, true);
+  assert.equal(inserted.orders[0].items[1].loadItem, false);
   assert.equal(inserted.orders[0].source, 'test');
   assert.equal(inserted.orders[0].isTest, true);
   const serialized = JSON.stringify(inserted);

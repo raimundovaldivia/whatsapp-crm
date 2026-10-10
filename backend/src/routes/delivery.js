@@ -2005,8 +2005,11 @@ router.post('/routes/:id/test-clone', requireRole('owner', 'admin', 'supervisor'
       const safeItems = jsonList(order.items || geo.items).map(item => ({
         name: item?.name || item?.title || item?.product_name || 'Producto de prueba',
         title: item?.title || item?.name || item?.product_name || 'Producto de prueba',
-        quantity: Math.max(1, Number(item?.quantity) || 1),
+        quantity: Math.max(0, Number(item?.quantity) || 0),
         price: Number(item?.price) || 0,
+        // Los retiros de cambios/devoluciones deben seguir visibles en la
+        // parada, pero nunca sumarse a la carga que sale desde la bodega.
+        loadItem: item?.loadItem !== false,
         ...(item?.sku ? { sku: String(item.sku) } : {}),
       }));
       return {
