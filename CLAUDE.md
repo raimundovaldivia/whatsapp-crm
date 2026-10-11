@@ -44,6 +44,8 @@ backend/           → Node.js + Express + Socket.io (servicio backend en Railwa
     services/      → lógica de negocio
       agents/      → orchestrator.js, sales.js, orders.js
       pipeline.js  → orquesta los 3 agentes
+      outbound-text-policy.js → bloquea instrucciones internas antes de cualquier envío
+      business-date.js → normaliza y resuelve fechas en America/Santiago
       shopify-api.js → GraphQL directo a Shopify Admin API
       scheduled-orders.js  → detección y extracción de pedidos futuros
       scheduled-follow-up.js → cron job diario para follow-up con template
@@ -365,6 +367,12 @@ kapsoService.sendTemplate(to, templateName, languageCode, components, wc)
 - Requiere `botResponses >= 2` antes de llamar a la IA
 - Requiere `history.length >= 8` y `botResponses >= 3` para la IA
 - El umbral es conservador — Haiku tiende a sobre-escalar con umbrales bajos
+- Solicitudes comerciales concretas se resuelven antes de consultar a la IA de escalación
+- Durante `collecting_order` solo escalan reglas duras o un flujo realmente atascado
+
+**Supervisión del CRM:** `unread_count` conserva su significado de lectura humana. `attention_state` se calcula desde el modo del agente y el último mensaje (`requires_human`, `waiting_bot`, `bot_unanswered`, `handled_by_bot`, `waiting_customer`) para que la bandeja de atención no mezcle conversaciones ya resueltas por Diva. Un inbound tiene dos minutos de gracia como `waiting_bot` antes de considerarse sin respuesta.
+
+**Seguridad de salida:** toda respuesta del pipeline pasa por `outbound-text-policy.js`. Si parece una instrucción interna, no se envía; la conversación queda marcada para revisión humana con un acuse seguro.
 
 **Auto-reset modo humano:** si pasaron >= 120 min sin respuesta humana, la conversación vuelve a modo IA automáticamente.
 

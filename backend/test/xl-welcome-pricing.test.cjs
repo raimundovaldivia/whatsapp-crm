@@ -68,7 +68,37 @@ const items=[{title:'Huevos Jumbo 20 unidades',price:10000,quantity:3}];
 a.equal(p.applyQuote({items,total:30000},ctx).total,25000);
 a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/presentación exacta = 1 bandeja de 20 huevos/);
 a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/3 bandejas \$25000/);
+a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/5 bandejas \$43300/);
 a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/Una caja NO es sinónimo de una bandeja/);
 a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/¿De cuántos huevos necesitas la caja\?/);
+a.match(p.prompt(ctx,[]),/misma talla, mismo color y misma cantidad de huevos por bandeja/);
 a.match(p.prompt(ctx,[]),/bandejas M no tienen descuento/);
+});
+
+require('node:test')('quotes 100 XL as five active 20-egg trays and explains the discount boundary',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const products=[
+  {id:1,title:'Huevos XL blancos · Bandeja de 20',egg_size:'XL',egg_color:'blancos',pack_units:20,price:8490,stock:10,active:true},
+  {id:2,title:'Huevos XL mixtos · Bandeja de 20',egg_size:'XL',egg_color:'mixtos',pack_units:20,price:8990,stock:10,active:true},
+  {id:3,title:'Huevos XL cafés · Bandeja de 20',egg_size:'XL',egg_color:'cafés',pack_units:20,price:9990,stock:10,active:true},
+  {id:4,title:'Huevos XL blancos · Bandeja de 30',egg_size:'XL',egg_color:'blancos',pack_units:30,price:10990,stock:10,active:true},
+];
+const reply=p.quantityPriceReply('¿Qué valor tendrían los 100?',[
+  {direction:'inbound',content:'Hola, ¿cuánto sale la caja?'},
+  {direction:'inbound',content:'¿XL no tiene?'},
+],products,p.forStore({enabled:true}));
+a.match(reply,/No tenemos una caja activa de 100 huevos XL/);
+a.match(reply,/Blancos: 5 bandejas de 20 — \$36\.800/);
+a.match(reply,/Mixtos: 5 bandejas de 20 — \$39\.000/);
+a.match(reply,/Cafés: 5 bandejas de 20 — \$43\.300/);
+a.match(reply,/no se mezclan colores ni formatos/);
+});
+
+require('node:test')('does not replace an active exact box with tray math',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const products=[
+  {id:1,title:'Huevos XL blancos · Bandeja de 20',price:8490,stock:10,active:true},
+  {id:2,title:'Caja de 100 huevos XL',price:37000,stock:3,active:true},
+];
+a.equal(p.quantityPriceReply('¿Cuánto sale la caja de 100 XL?',[],products,p.forStore({enabled:true})),null);
 });

@@ -6,6 +6,7 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const businessDate = require('./business-date');
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Patrones en español que indican pedido futuro
@@ -56,7 +57,8 @@ function isFutureOrderIntent(message) {
  * @param {string} todayISO - fecha de hoy en formato YYYY-MM-DD
  */
 async function extractScheduledOrderData(userMessage, recentMessages = [], todayISO) {
-  const today = todayISO || new Date().toISOString().split('T')[0];
+  const today = businessDate.toISODate(todayISO) || businessDate.todayISOChile();
+  const explicitDate = businessDate.resolveExplicitDeliveryDate(userMessage, today);
 
   const context = recentMessages.slice(-6).join('\n');
   const SYSTEM = `Hoy es ${today}. Extrae de la conversación:
@@ -74,10 +76,13 @@ Responde SOLO JSON: {"desiredDate":"YYYY-MM-DD","productNotes":"texto","confiden
     });
     const text = response.content[0]?.text || '{}';
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
+    const modelDate = businessDate.toISODate(json.desiredDate);
     return {
-      desiredDate:  json.desiredDate || null,
+      desiredDate:  explicitDate.conflict ? null : (explicitDate.date || modelDate),
       productNotes: json.productNotes || null,
       confidence:   Number(json.confidence) || 0,
+      dateConflict: explicitDate.conflict,
+      dateConflictReason: explicitDate.reason || null,
     };
   } catch (err) {
     console.warn('[ScheduledOrders] Error extrayendo datos:', err.message);
@@ -90,24 +95,12 @@ Responde SOLO JSON: {"desiredDate":"YYYY-MM-DD","productNotes":"texto","confiden
 }
 
 function addDays(isoDate, days) {
-  const str = isoDate instanceof Date
-    ? isoDate.toISOString().slice(0, 10)
-    : String(isoDate).slice(0, 10);
-  const d = new Date(str + 'T12:00:00Z');
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().split('T')[0];
+  return businessDate.addDays(isoDate, days);
 }
 
 /** Formatea fecha (string ISO o Date) a texto legible en español */
 function formatDateEs(isoDate) {
-  // pg puede devolver DATE como objeto Date o como string — normalizar siempre a YYYY-MM-DD
-  const str = isoDate instanceof Date
-    ? isoDate.toISOString().slice(0, 10)
-    : String(isoDate).slice(0, 10);
-  const d = new Date(str + 'T12:00:00Z');
-  return d.toLocaleDateString('es-CL', {
-    weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC',
-  });
+  return businessDate.formatDateEs(isoDate);
 }
 
 // Patrones de intención futura SUAVE: el cliente no se compromete con fecha
@@ -151,4 +144,4 @@ function isSoftFutureIntent(message) {
   return SOFT_FUTURE_PATTERNS.some(p => p.test(message));
 }
 
-module.exports = { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs };
+module.exports = { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs, addDays };

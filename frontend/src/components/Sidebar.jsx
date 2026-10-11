@@ -89,6 +89,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
+  const attentionCount = conversations.filter(c => ['requires_human', 'bot_unanswered'].includes(c.attention_state)).length;
   const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state) && !c.hot_lead_excluded).length;
   const stalledCount = conversations.filter(isStalled).length;
   const isEvolution = c => c?.whatsapp_provider === 'evolution';
@@ -105,6 +106,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     if (activeTab === 'coordinating' && c.agent_mode !== 'coordinating') return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
     if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
+    if (activeTab === 'attention' && !['requires_human', 'bot_unanswered'].includes(c.attention_state)) return false;
     if (activeTab === 'hot'     && (!HOT_STATES.includes(c.pipeline_state) || c.hot_lead_excluded)) return false;
     if (activeTab === 'stalled' && !isStalled(c))                          return false;
     const q = search.toLowerCase();
@@ -489,6 +491,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       }}>
         {[
           { key: 'all',     label: 'Todos',      count: conversations.length, color: colors.green,   dot: null },
+          { key: 'attention', label: '⚠️ Requiere atención', count: attentionCount, color: '#dc2626', dot: attentionCount > 0 },
           { key: 'unread',  label: 'No leídos',  count: unreadCount,          color: colors.dangerSoft,      dot: null },
           { key: 'hot',     label: '🔥 Hot',     count: hotCount,             color: '#f97316',      dot: null },
           { key: 'stalled', label: '⏳ Sin cierre', count: stalledCount,      color: colors.purpleSoft,      dot: null },

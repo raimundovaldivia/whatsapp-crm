@@ -122,6 +122,22 @@ test('al editar un pedido avisa únicamente los datos que realmente cambiaron', 
   assert.equal(fixture.saved[0].agentType, 'order_edit');
 });
 
+test('una fecha DATE de PostgreSQL se notifica en formato chileno sin undefined', async () => {
+  const fixture = serviceWith({ lastInboundAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+  const base = {
+    customer_name: 'Rosa', customer_phone: '56911112222',
+    items: [{ name: '30 XL', quantity: 1, price: 12000 }], total_price: '12000',
+  };
+  const result = await fixture.service.sendOrderEditNotification(3, {
+    source: 'bot', id: 19,
+    before: { ...base, delivery_date: new Date('2026-10-13T00:00:00.000Z') },
+    after: { ...base, delivery_date: new Date('2026-10-14T00:00:00.000Z') },
+  });
+  assert.equal(result.sent, true);
+  assert.match(result.text, /Fecha de entrega: 14-10-2026/);
+  assert.doesNotMatch(result.text, /undefined|Wed Oct/i);
+});
+
 test('una edición sin cambios no envía y una ventana cerrada queda informada', async () => {
   const closed = serviceWith({ lastInboundAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() });
   const order = {

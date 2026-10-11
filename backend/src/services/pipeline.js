@@ -18,6 +18,8 @@ const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 const inboundPolicy = require('./inbound-message-policy');
+const outboundPolicy = require('./outbound-text-policy');
+const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
@@ -184,6 +186,22 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
     log?.step?.('silent_response', 'Se descarta explicación interna de silencio');
     return { ...result, response: null, reason: 'INTERNAL_SILENCE' };
   }
+  const outboundCheck = outboundPolicy.checkOutboundText(result?.response);
+  if (!outboundCheck.ok) {
+    const reason = `Respuesta interna bloqueada: ${outboundCheck.detail}`;
+    log?.step?.('outbound_policy_block', outboundCheck.reason);
+    console.error(`[Pipeline] Respuesta interna bloqueada en conversación ${conversationId}`);
+    await db.setAgentMode(conversationId, 'coordinating');
+    await db.setLastEscalation(conversationId, String(userMessage || ''), reason);
+    return {
+      ...result,
+      response: 'Necesito que el equipo revise esto antes de responderte. Ya dejé el caso marcado para revisión 🙏',
+      agentType: 'orchestrator',
+      switchToHuman: true,
+      escalationReason: reason,
+      reason: 'OUTBOUND_POLICY_BLOCK',
+    };
+  }
   if (result?.response && !result.skipped && !result.duplicate && !result.switchToHuman) {
     try {
       const productMedia = await require('./product-media').suggest({
@@ -206,7 +224,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   }
   const noop = { step:()=>{}, context:()=>{}, intent:()=>{}, escalation:()=>{}, agent:()=>{}, error:()=>{} };
   const L = log || noop;
-  const conversation = await db.getConversationById(conversationId);
+  const conversation = await db.getConversationById(conversationId, orgId);
 
   // Una autorespuesta comercial no es intención de compra. Conservamos
   // template_sent para que la próxima respuesta humana active el flujo real.
@@ -1245,6 +1263,13 @@ REGLAS ABSOLUTAS:
     const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
     const recentTexts = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
     const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
+    if (extracted.dateConflict) {
+      return {
+        response: 'Quiero confirmar bien la fecha: el día de la semana y la fecha indicada no coinciden. ¿Para qué fecha exacta necesitas el pedido?',
+        agentType: 'orchestrator',
+        newState: currentState,
+      };
+    }
     if (!extracted.desiredDate || !extracted.productNotes || /su pedido habitual/i.test(extracted.productNotes)) {
       return { response: !extracted.productNotes ? '¿Qué producto y cantidad quieres pedir?' : '¿Para qué día necesitas el pedido?', agentType: 'orchestrator', newState: currentState };
     }
@@ -1479,6 +1504,19 @@ REGLAS ABSOLUTAS:
   const customerName = knownCustomerData?.name?.split(' ')[0] || '';
 
   const salesOpts = { isWarmLead: isTemplateReply, templateName, customerName, intent };
+
+  // Consultas como "¿qué valor tendrían los 100?" se cotizan en código con
+  // el catálogo activo. Así Diva no confunde una caja legacy con 5 bandejas
+  // de 20 ni se limita a decir que existe un descuento sin mostrar el total.
+  if (!promotionContext?.active && !activeOrder && xlContext?.web) {
+    const quantityPriceReply = xlPricing.quantityPriceReply(userMessage, history, products, xlContext);
+    if (quantityPriceReply) {
+      await db.updatePipelineState(conversationId, 'interested', undefined);
+      L.agent('sales', 0);
+      L.step('quantity_price_quote', 'cotización exacta desde catálogo activo');
+      return { response: quantityPriceReply, agentType: 'sales', newState: 'interested' };
+    }
+  }
 
   // ── "¿A qué hora llega mi pedido?" / "¿ya viene?" ──────────────────────
   // Con un pedido activo, el bot responde con el DATO REAL (estado del pedido +
@@ -2141,9 +2179,25 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
   );
+  const explicitDelivery = resolveExplicitDeliveryDate(userMessage, todayISOChile());
+  if (explicitDelivery.conflict) {
+    return {
+      response: 'Quiero confirmar bien la fecha: el día de la semana y la fecha que indicas no coinciden. ¿Para qué fecha exacta necesitas el pedido?',
+      agentType: 'orders',
+      newState: 'collecting_order',
+    };
+  }
+  // Una fecha relativa o de calendario escrita ahora siempre gana. Un día de
+  // semana aislado no reemplaza una fecha ya acordada en turnos anteriores.
+  if (explicitDelivery.date && (!updatedDraft.delivery_date || explicitDelivery.source !== 'weekday')) {
+    updatedDraft.delivery_date = explicitDelivery.date;
+  }
   const orderNote = effectiveOrderNote(updatedDraft);
-  if (updatedDraft.delivery_date && !/^\d{4}-\d{2}-\d{2}$/.test(String(updatedDraft.delivery_date))) {
+  const normalizedDeliveryDate = toISODate(updatedDraft.delivery_date);
+  if (updatedDraft.delivery_date && !normalizedDeliveryDate) {
     delete updatedDraft.delivery_date;
+  } else if (normalizedDeliveryDate) {
+    updatedDraft.delivery_date = normalizedDeliveryDate;
   }
 
   // Si el cliente eligió una opción de un template promocional, esa línea
@@ -2486,7 +2540,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
   const ds = await db.getPrimaryDataSource(orgId);
   if (!ds?.config?.accessToken) throw new Error('No hay tienda Shopify conectada. Reconecta desde Ajustes.');
 
-  const conversation = await db.getConversationById(conversationId);
+  const conversation = await db.getConversationById(conversationId, orgId);
   const customerPhone = draft.customer_phone || conversation.phone_number;
 
   const items = Array.isArray(draft.items) && draft.items.length

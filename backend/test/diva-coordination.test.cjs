@@ -63,6 +63,54 @@ test('una pregunta de precio usa el catálogo aunque exista contexto antiguo pen
   assert.equal(modelCalls, 0);
 });
 
+test('una continuación de compra no escala por contexto antiguo y los casos duros sí', async () => {
+  let modelCalls = 0;
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async () => {
+        modelCalls++;
+        return { content: [{ text: '{"escalate":true,"reason":"contexto viejo","urgency":"medium"}' }] };
+      } };
+    }
+  }
+  const orchestrator = load('src/services/agents/orchestrator.js', {
+    '@anthropic-ai/sdk': Anthropic,
+    '../inbound-message-policy': { isBareLinkMessage: () => false },
+  });
+  const longHistory = Array.from({ length: 10 }, (_, index) => ({
+    direction: index % 2 ? 'outbound' : 'inbound',
+    content: index === 0 ? 'Tuve un problema antiguo' : `Mensaje anterior ${index}`,
+  }));
+
+  const purchase = await orchestrator.checkEscalation('quiero dos bandejas XL', longHistory, 'interested', 1);
+  assert.equal(purchase.escalate, false);
+  assert.equal(purchase.reason, 'Continuación comercial estándar');
+  assert.equal(modelCalls, 0);
+
+  assert.equal((await orchestrator.checkEscalation('quiero hablar con una persona', longHistory, 'interested', 1)).escalate, true);
+  assert.equal((await orchestrator.checkEscalation('me llegó el pedido equivocado', longHistory, 'interested', 1)).escalate, true);
+});
+
+test('un pedido en recopilación evita IA salvo que supere el umbral de atasco', async () => {
+  let modelCalls = 0;
+  class Anthropic {
+    constructor() { this.messages = { create: async () => { modelCalls++; return { content: [{ text: '{}' }] }; } }; }
+  }
+  const orchestrator = load('src/services/agents/orchestrator.js', {
+    '@anthropic-ai/sdk': Anthropic,
+    '../inbound-message-policy': { isBareLinkMessage: () => false },
+  });
+  const normal = Array.from({ length: 10 }, (_, index) => ({ direction: index % 2 ? 'outbound' : 'inbound', content: `Paso ${index}` }));
+  assert.equal((await orchestrator.checkEscalation('Avenida del Mar 1234', normal, 'collecting_order', 1)).escalate, false);
+  assert.equal(modelCalls, 0);
+
+  const stuck = [
+    ...Array.from({ length: 14 }, (_, index) => ({ direction: 'inbound', content: `Dato ${index}` })),
+    ...Array.from({ length: 7 }, (_, index) => ({ direction: 'outbound', content: `Pregunta ${index}` })),
+  ];
+  assert.equal((await orchestrator.checkEscalation('No sé qué falta', stuck, 'collecting_order', 1)).escalate, true);
+});
+
 test('Diva coordinates safely and never sends an ambiguous admin instruction', async () => {
   let systemPrompt = '';
   class Anthropic {
