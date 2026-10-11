@@ -15,6 +15,8 @@ function load(file, deps = {}, extra = {}) {
       if (name === '../middleware/commercial-access') return load('src/middleware/commercial-access.js', deps, extra);
       if (name === './scheduled-orders') return load('src/services/scheduled-orders.js', { ...deps, '@anthropic-ai/sdk': class { constructor() { this.messages = { create: async () => { throw new Error('AI not mocked'); } }; } } }, extra);
       if (name === './response-guardrail') return load('src/services/response-guardrail.js', deps, extra);
+      if (name === './business-date') return require(path.join(root, 'src/services/business-date.js'));
+      if (name === './outbound-text-policy') return require(path.join(root, 'src/services/outbound-text-policy.js'));
       if (name === './promotion-context') return require(path.join(root, 'src/services/promotion-context.js'));
       if (name.endsWith('/xl-welcome-pricing')) return require(path.join(root, 'src/services/xl-welcome-pricing.js'));
       if (name === '../utils/payment-breakdown') return require(path.join(root, 'src/utils/payment-breakdown.js'));

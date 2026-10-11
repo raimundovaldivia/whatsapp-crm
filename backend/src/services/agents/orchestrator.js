@@ -191,6 +191,18 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     return { escalate: true, reason: 'Situación de posventa compleja detectada', urgency: 'medium' };
   }
 
+  // Una continuación comercial concreta no hereda problemas antiguos del
+  // historial. Los reclamos, la frustración y las solicitudes de humano ya se
+  // resolvieron arriba y por eso conservan prioridad.
+  const standardPurchasePatterns = [
+    /\b(quiero|necesito|dame|m[aá]ndame|env[ií]ame|agr[eé]game|an[oó]tame|gu[aá]rdame|llevar[ií]a)\b.{0,70}\b(\d+|un[ao]?|dos|tres|cuatro|xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
+    /^\s*\d+\s*(?:x\s*)?(?:xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
+    /\b(agr[eé]game|s[uú]mame|ponme)\s+\d+\s+m[aá]s\b/iu,
+  ];
+  if (standardPurchasePatterns.some(pattern => pattern.test(userMessage))) {
+    return { escalate: false, reason: 'Continuación comercial estándar', urgency: 'low' };
+  }
+
   // ── 5. Solo usar IA si hay suficiente historial ─────────────────
   const botResponses  = conversationHistory.filter(m => m.direction === 'outbound').length;
   const clientMessages = conversationHistory.filter(m => m.direction === 'inbound').length;
@@ -202,6 +214,13 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
   // Proceso de pedido muy largo sin completarse
   if (pipelineState === 'collecting_order' && clientMessages >= 14 && botResponses >= 7) {
     return { escalate: true, reason: 'Proceso de pedido muy largo sin completarse', urgency: 'medium' };
+  }
+
+  // Mientras se recopila un pedido, las respuestas normales (dirección,
+  // cantidad, nombre) pertenecen al agente de órdenes. Solo las reglas duras
+  // de arriba o el umbral de atasco justifican supervisión.
+  if (pipelineState === 'collecting_order') {
+    return { escalate: false, reason: 'Pedido en recopilación normal', urgency: 'low' };
   }
 
   if (conversationHistory.length < 8 || botResponses < 3) {

@@ -21,6 +21,7 @@
  */
 
 const { getPool } = require('../db/database');
+const { checkOutboundText } = require('./outbound-text-policy');
 
 // Un pedido "por despachar" o "en camino" que no se mueve en este tiempo
 // dejó de ser información: o se entregó sin registrarse, o se perdió.
@@ -156,23 +157,23 @@ function findPastDatesInFutureClaims(text) {
 
 // ─── Estado en la DB ─────────────────────────────────────────────────────────
 
-async function loadConversationFacts(conversationId) {
+async function loadConversationFacts(orgId, conversationId) {
   const pool = getPool();
 
   const [scheduled, orders] = await Promise.all([
     pool.query(
       `SELECT id, desired_date FROM scheduled_orders
-        WHERE conversation_id = $1 AND status = 'pending'
+        WHERE organization_id = $1 AND conversation_id = $2 AND status = 'pending'
         ORDER BY desired_date DESC LIMIT 1`,
-      [conversationId]
+      [orgId, conversationId]
     ),
     pool.query(
       `SELECT id, status, created_at,
               COALESCE(updated_at, created_at) AS touched_at
          FROM orders
-        WHERE conversation_id = $1
+        WHERE organization_id = $1 AND conversation_id = $2
         ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
-      [conversationId]
+      [orgId, conversationId]
     ),
   ]);
 
@@ -215,9 +216,8 @@ async function loadConversationFacts(conversationId) {
  */
 async function checkResponseFreshness(orgId, conversationId, response, turn = {}) {
   if (!response || typeof response !== 'string') return { ok: true };
-  if (/el (último|ultimo) mensaje est[aá] incompleto|responde (únicamente|unicamente|solo) a lo que|si el cliente (completa|est[aá] a punto)|lee todo antes de responder|para responder apropiadamente|mant[eé]n la calma/i.test(response)) {
-    return { ok: false, reason: 'instrucciones_internas', detail: 'El texto contiene instrucciones para el agente, no una respuesta al cliente.' };
-  }
+  const outboundPolicy = checkOutboundText(response);
+  if (!outboundPolicy.ok) return outboundPolicy;
 
 
   try {
@@ -236,7 +236,7 @@ async function checkResponseFreshness(orgId, conversationId, response, turn = {}
     const claims = STATE_CLAIMS.filter(c => c.pattern.test(response));
     if (claims.length === 0) return { ok: true };
 
-    const facts = await loadConversationFacts(conversationId);
+    const facts = await loadConversationFacts(orgId, conversationId);
 
     for (const claim of claims) {
       if (claim.requires === 'scheduled_vigente') {

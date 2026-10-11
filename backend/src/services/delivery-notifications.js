@@ -4,6 +4,7 @@ const twilioService = require('./twilio-whatsapp');
 const kapsoService = require('./kapso-whatsapp');
 const evolutionService = require('./evolution-whatsapp');
 const templateAutomation = require('./template-automation');
+const { toISODate } = require('./business-date');
 
 const CUSTOMER_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -89,13 +90,13 @@ function orderEditChanges(before = {}, after = {}) {
   const currentAddress = normalizedAddress(after);
   const previousTotal = Math.round(Number(before.total_price) || 0);
   const currentTotal = Math.round(Number(after.total_price) || 0);
-  const previousDate = String(before.delivery_date || '').slice(0, 10);
-  const currentDate = String(after.delivery_date || '').slice(0, 10);
+  const previousDate = toISODate(before.delivery_date);
+  const currentDate = toISODate(after.delivery_date);
   const changes = {};
   if (JSON.stringify(previousItems) !== JSON.stringify(currentItems)) changes.items = currentItems;
   if (JSON.stringify(previousAddress) !== JSON.stringify(currentAddress)) changes.address = currentAddress;
   if (previousTotal !== currentTotal) changes.total = currentTotal;
-  if (previousDate !== currentDate) changes.deliveryDate = currentDate;
+  if (previousDate !== currentDate && currentDate) changes.deliveryDate = currentDate;
   return changes;
 }
 

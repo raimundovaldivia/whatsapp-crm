@@ -21,6 +21,9 @@ mobile-admin/.expo/
 *.log
 npm-debug.log*
 
+# Artefactos locales de auditoría
+product-audit-public.json
+
 # Sistema operativo
 .DS_Store
 Thumbs.db

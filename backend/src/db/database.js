@@ -538,6 +538,17 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
          ${customerNameSql} AS contact_name,
          co.notes AS contact_notes,
          (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count,
+         last_msg.direction AS last_message_direction,
+         last_msg.sent_by AS last_message_sent_by,
+         last_msg.created_at AS last_message_created_at,
+         CASE
+           WHEN c.agent_mode IN ('coordinating', 'human') THEN 'requires_human'
+           WHEN last_msg.direction = 'inbound'
+             AND last_msg.created_at <= NOW() - INTERVAL '2 minutes' THEN 'bot_unanswered'
+           WHEN last_msg.direction = 'inbound' THEN 'waiting_bot'
+           WHEN last_msg.direction = 'outbound' AND last_msg.sent_by = 'ai' THEN 'handled_by_bot'
+           ELSE 'waiting_customer'
+         END AS attention_state,
          CASE
            WHEN EXISTS (
              SELECT 1 FROM contacts co_type
@@ -561,6 +572,13 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
        FROM conversations c
        LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
        LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
+       LEFT JOIN LATERAL (
+         SELECT m.direction, m.sent_by, m.created_at
+           FROM messages m
+          WHERE m.conversation_id = c.id
+          ORDER BY m.created_at DESC NULLS LAST, m.id DESC
+          LIMIT 1
+       ) last_msg ON TRUE
        ${customerIdentityJoin()}
        WHERE ${where}
          AND NOT (
@@ -580,12 +598,30 @@ async function getAllConversations(orgId, { unreadOnly = false } = {}) {
 
 async function getConversationById(id, orgId = null) {
   const select = `SELECT c.*, ${customerNameSql} AS contact_name, co.notes AS contact_notes,
+      last_msg.direction AS last_message_direction,
+      last_msg.sent_by AS last_message_sent_by,
+      last_msg.created_at AS last_message_created_at,
+      CASE
+        WHEN c.agent_mode IN ('coordinating', 'human') THEN 'requires_human'
+        WHEN last_msg.direction = 'inbound'
+          AND last_msg.created_at <= NOW() - INTERVAL '2 minutes' THEN 'bot_unanswered'
+        WHEN last_msg.direction = 'inbound' THEN 'waiting_bot'
+        WHEN last_msg.direction = 'outbound' AND last_msg.sent_by = 'ai' THEN 'handled_by_bot'
+        ELSE 'waiting_customer'
+      END AS attention_state,
       COALESCE(wc.name, CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END) AS whatsapp_channel_name,
       COALESCE(wc.phone_number, cfg.display_phone_number, cfg.twilio_phone_number) AS whatsapp_channel_phone,
       COALESCE(wc.provider, cfg.provider, 'meta') AS whatsapp_provider
     FROM conversations c
     LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
     LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
+    LEFT JOIN LATERAL (
+      SELECT m.direction, m.sent_by, m.created_at
+        FROM messages m
+       WHERE m.conversation_id = c.id
+       ORDER BY m.created_at DESC NULLS LAST, m.id DESC
+       LIMIT 1
+    ) last_msg ON TRUE
     ${customerIdentityJoin()}`;
   if (orgId) {
     return queryOne(`${select} WHERE c.id = $1 AND c.organization_id = $2`, [id, orgId]);

@@ -19,8 +19,10 @@ test('customer identity remains consistent across providers, historical phones a
         email TEXT, address TEXT, address1 TEXT, city TEXT, notes TEXT, UNIQUE(organization_id, phone));
       CREATE TABLE conversations (id SERIAL PRIMARY KEY, organization_id INT, phone_number TEXT,
         contact_name TEXT, whatsapp_channel_id INT, updated_at TIMESTAMP, last_message_at TIMESTAMP,
-        unread_count INT DEFAULT 0, is_pinned BOOLEAN DEFAULT FALSE, pinned_at TIMESTAMPTZ);
-      CREATE TABLE messages (id SERIAL PRIMARY KEY, conversation_id INT);
+        unread_count INT DEFAULT 0, is_pinned BOOLEAN DEFAULT FALSE, pinned_at TIMESTAMPTZ,
+        agent_mode TEXT DEFAULT 'ai');
+      CREATE TABLE messages (id SERIAL PRIMARY KEY, conversation_id INT, direction TEXT,
+        sent_by TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
       CREATE TABLE whatsapp_channels (id INT, name TEXT, phone_number TEXT, provider TEXT);
       CREATE TABLE whatsapp_configs (organization_id INT, provider TEXT, display_phone_number TEXT, twilio_phone_number TEXT);
       INSERT INTO whatsapp_channels VALUES (1,'Kapso','111','kapso'), (2,'Evolution','222','evolution');
@@ -37,6 +39,10 @@ test('customer identity remains consistent across providers, historical phones a
     assert.equal((await db.getConversationById(1, 1)).contact_name, 'Roxana Del Rosario Flores');
     assert.equal((await db.getConversationById(4, 2)).contact_name, 'Otra persona');
     assert.equal(await db.getConversationById(4, 1), null);
+    await engine.exec("INSERT INTO messages(conversation_id,direction,sent_by,created_at) VALUES (1,'inbound',NULL,NOW() - INTERVAL '5 minutes'), (2,'outbound','ai',NOW())");
+    rows = await db.getAllConversations(1);
+    assert.equal(rows.find(row => row.id === 1).attention_state, 'bot_unanswered');
+    assert.equal(rows.find(row => row.id === 2).attention_state, 'handled_by_bot');
     await db.setCustomerNote(1, '+56994073111', 'Entregar después de las 18:00');
     rows = await db.getAllConversations(1);
     assert.ok(rows.every(r => r.contact_notes === 'Entregar después de las 18:00'));

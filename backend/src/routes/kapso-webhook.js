@@ -351,22 +351,6 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
 
         log.response(result.response, Date.now() - tPipeline);
 
-        // ── Guardrail: detectar razonamiento interno filtrado al exterior ──
-        // El modelo a veces genera meta-comentarios como "El último mensaje fue una reacción..."
-        // Si esto ocurre, NO enviar — loggear como error silencioso.
-        const INTERNAL_REASONING_PATTERNS = [
-          /^el [úu]ltimo mensaje/i,
-          /^el cliente (acaba|escribió|dijo|envió)/i,
-          /^debería (esperar|responder|ignorar)/i,
-          /^no (debería|hay que|corresponde)/i,
-          /sin embargo, si el cliente/i,
-          /la respuesta sería:/i,
-        ];
-        if (INTERNAL_REASONING_PATTERNS.some(p => p.test(result.response.trim()))) {
-          console.error(`[KapsoWebhook] ⛔ Respuesta con razonamiento interno bloqueada para ${capturedFrom}:`, result.response.slice(0, 100));
-          return;
-        }
-
         // ── Guardrail de frescura ──────────────────────────────────────────
         // Último filtro antes de enviar: si el mensaje le afirma al cliente algo
         // que la DB no respalda (una fecha que ya pasó, un pedido cerrado o

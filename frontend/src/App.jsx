@@ -237,7 +237,19 @@ export default function App() {
   }, []);
 
   const handleAgentModeChanged = useCallback(({ conversationId, mode }) => {
-    setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, agent_mode: mode } : c));
+    setConversations(prev => prev.map(c => {
+      if (c.id !== conversationId) return c;
+      const attentionState = ['coordinating', 'human'].includes(mode)
+        ? 'requires_human'
+        : c.last_message_direction === 'inbound'
+          ? (Date.now() - new Date(c.last_message_created_at || c.last_message_at || 0).getTime() >= 2 * 60 * 1000
+              ? 'bot_unanswered'
+              : 'waiting_bot')
+          : c.last_message_direction === 'outbound' && c.last_message_sent_by === 'ai'
+            ? 'handled_by_bot'
+            : 'waiting_customer';
+      return { ...c, agent_mode: mode, attention_state: attentionState };
+    }));
   }, []);
 
   const handleMessageStatus = useCallback(({ messageId, status, error }) => {
