@@ -111,10 +111,12 @@ const STORE_DOMAINS = {
   'diezrios.com':     'diez-rios-mrs96z69',
 };
 
-// Detectar si la URL es /tienda/:slug O si el hostname es un dominio de tienda
+// En dominios de tienda, /admin reserva el acceso al CRM. El resto del
+// dominio sigue mostrando la tienda publica.
 const pathParts  = window.location.pathname.split('/').filter(Boolean);
 const domainSlug = STORE_DOMAINS[window.location.hostname];
-const isTienda   = domainSlug || (pathParts[0] === 'tienda' && pathParts[1]);
+const isAdmin    = pathParts[0] === 'admin';
+const isTienda   = !isAdmin && (domainSlug || (pathParts[0] === 'tienda' && pathParts[1]));
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
