@@ -6,6 +6,7 @@
  *   POST /api/delivery/optimize         → Optimiza una lista de pedidos con Google Maps
  *   GET  /api/delivery/routes           → Lista de rutas creadas (historial)
  *   POST /api/delivery/routes           → Crea y guarda una ruta (con pedidos + ruta optimizada)
+ *   POST /api/delivery/routes/:id/reoptimize → Recalcula solo las paradas pendientes de una ruta activa
  *   PATCH /api/delivery/routes/:id      → Actualiza ruta (enviar, cancelar, cambiar datos)
  *   DELETE /api/delivery/routes/:id     → Elimina ruta en borrador
  *
@@ -1185,6 +1186,166 @@ router.patch('/routes/:id/reorder', requireRole('owner', 'admin', 'supervisor', 
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
     res.status(err.status || 500).json({ success: false, error: err.message });
+  } finally {
+    client?.release();
+  }
+});
+
+/**
+ * Vuelve a calcular una ruta ya enviada sin perder el avance del repartidor.
+ * Las paradas terminales conservan su orden relativo al inicio y Google solo
+ * recibe las pendientes. El guardado usa una comprobacion optimista para no
+ * sobrescribir cambios hechos mientras Directions estaba respondiendo.
+ */
+router.post('/routes/:id/reoptimize', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const routeId = Number(req.params.id);
+  if (!Number.isInteger(routeId) || routeId <= 0) {
+    return res.status(400).json({ success: false, error: 'La ruta indicada no es válida' });
+  }
+
+  const pool = getPool();
+  const terminalStatuses = new Set(['entregado', 'cancelled', 'postponed', 'not_delivered']);
+  let originalRoute;
+  try {
+    const { rows: [route] } = await pool.query(
+      `SELECT id, status, orders, optimized_route, stop_statuses,
+              total_distance, total_duration, maps_url
+         FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2`,
+      [routeId, req.orgId]
+    );
+    originalRoute = await hydrateRouteItems(pool, route, req.orgId);
+  } catch (err) {
+    console.error('[Delivery/reoptimize read]', err.message);
+    return res.status(500).json({ success: false, error: 'No se pudo leer la ruta' });
+  }
+
+  if (!originalRoute) return res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+  if (!['sent', 'in_progress'].includes(originalRoute.status)) {
+    return res.status(409).json({ success: false, error: 'Solo se puede reoptimizar una ruta enviada o en reparto' });
+  }
+
+  const originalStops = routeStops(originalRoute);
+  const originalKeys = originalStops.map(orderKey);
+  if (originalKeys.some(key => !key) || new Set(originalKeys).size !== originalKeys.length) {
+    return res.status(409).json({ success: false, error: 'La ruta contiene paradas inválidas o repetidas. El orden anterior se mantuvo.' });
+  }
+  const originalStatuses = originalRoute.stop_statuses || {};
+  const pendingStops = originalStops.filter(stop => !terminalStatuses.has(originalStatuses[orderKey(stop)]));
+  const handledStops = originalStops.filter(stop => terminalStatuses.has(originalStatuses[orderKey(stop)]));
+  const originalPendingKeys = pendingStops.map(orderKey);
+  if (!pendingStops.length) {
+    return res.status(409).json({ success: false, error: 'Esta ruta ya no tiene paradas pendientes para reoptimizar' });
+  }
+
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  const whAddress = await db.getSetting(req.orgId, 'warehouse_address').catch(() => null);
+  const whLat = parseFloat(await db.getSetting(req.orgId, 'warehouse_lat').catch(() => null));
+  const whLng = parseFloat(await db.getSetting(req.orgId, 'warehouse_lng').catch(() => null));
+  const warehouse = (whAddress && Number.isFinite(whLat) && Number.isFinite(whLng))
+    ? { address: whAddress, lat: whLat, lng: whLng }
+    : null;
+  if (!apiKey || !warehouse) {
+    return res.status(503).json({
+      success: false,
+      error: !warehouse
+        ? 'No se pudo reoptimizar: falta configurar la dirección de la bodega. El orden anterior se mantuvo.'
+        : 'No se pudo reoptimizar: Google Maps no está configurado. El orden anterior se mantuvo.',
+    });
+  }
+
+  let optimizedPending;
+  try {
+    optimizedPending = await optimizeOneRoute(pendingStops, warehouse, apiKey);
+  } catch (err) {
+    console.error(`[Delivery/reoptimize] ruta ${routeId}:`, err.message);
+    return res.status(502).json({
+      success: false,
+      error: 'Google Maps no pudo reoptimizar la ruta. El orden anterior se mantuvo.',
+    });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const { rows: [latestRoute] } = await client.query(
+      `SELECT id, status, orders, optimized_route, stop_statuses
+         FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2
+        FOR UPDATE`,
+      [routeId, req.orgId]
+    );
+    if (!latestRoute) throw Object.assign(new Error('Ruta no encontrada'), { status: 404 });
+    if (!['sent', 'in_progress'].includes(latestRoute.status)) {
+      throw Object.assign(new Error('La ruta cambió de estado mientras se optimizaba. El orden anterior se mantuvo.'), { status: 409 });
+    }
+
+    const latestStops = routeStops(latestRoute);
+    const latestStatuses = latestRoute.stop_statuses || {};
+    const latestKeys = latestStops.map(orderKey);
+    const latestPendingKeys = latestStops
+      .filter(stop => !terminalStatuses.has(latestStatuses[orderKey(stop)]))
+      .map(orderKey);
+    const routeUnchanged = latestKeys.length === originalKeys.length
+      && latestKeys.every((key, index) => key === originalKeys[index])
+      && latestPendingKeys.length === originalPendingKeys.length
+      && latestPendingKeys.every((key, index) => key === originalPendingKeys[index]);
+    if (!routeUnchanged) {
+      throw Object.assign(new Error('La ruta cambió mientras se optimizaba. Actualízala e intenta nuevamente.'), { status: 409 });
+    }
+
+    const optimizedKeys = optimizedPending.stops.map(orderKey);
+    if (optimizedKeys.length !== originalPendingKeys.length
+      || new Set(optimizedKeys).size !== optimizedKeys.length
+      || optimizedKeys.some(key => !originalPendingKeys.includes(key))) {
+      throw Object.assign(new Error('Google devolvió un recorrido incompleto. El orden anterior se mantuvo.'), { status: 502 });
+    }
+
+    const optimizedRoute = [...handledStops, ...optimizedPending.stops]
+      .map((stop, index) => ({ ...stop, stopNumber: index + 1 }));
+    const ordersByKey = new Map(jsonList(latestRoute.orders).map(stop => [orderKey(stop), stop]));
+    const orders = optimizedRoute.map((stop, index) => ({
+      ...(ordersByKey.get(orderKey(stop)) || stop),
+      stopNumber: index + 1,
+    }));
+    const { rows: [updated] } = await client.query(
+      `UPDATE delivery_routes
+          SET orders = $3::jsonb,
+              optimized_route = $4::jsonb,
+              total_distance = $5,
+              total_duration = $6,
+              maps_url = $7
+        WHERE id = $1 AND organization_id = $2
+        RETURNING orders, optimized_route, total_distance, total_duration, maps_url`,
+      [
+        routeId,
+        req.orgId,
+        JSON.stringify(orders),
+        JSON.stringify(optimizedRoute),
+        optimizedPending.totalDistance || null,
+        optimizedPending.totalDuration || null,
+        optimizedPending.mapsUrl || null,
+      ]
+    );
+    await client.query('COMMIT');
+
+    const changed = originalPendingKeys.some((key, index) => key !== optimizedKeys[index]);
+    return res.json({
+      success: true,
+      optimized: true,
+      changed,
+      pendingStops: pendingStops.length,
+      preservedStops: handledStops.length,
+      route: updated,
+    });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    console.error('[Delivery/reoptimize save]', err.message);
+    return res.status(err.status || 500).json({
+      success: false,
+      error: err.status ? err.message : 'No se pudo guardar la ruta reoptimizada. El orden anterior se mantuvo.',
+    });
   } finally {
     client?.release();
   }

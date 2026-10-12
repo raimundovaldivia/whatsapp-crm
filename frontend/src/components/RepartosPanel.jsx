@@ -1944,6 +1944,8 @@ function HistorialRepartos({ colors }) {
   const [loadBusy, setLoadBusy] = useState('');
   const [loadBreakdown, setLoadBreakdown] = useState({});
   const [cloneBusy, setCloneBusy] = useState(null);
+  const [reoptimizeBusy, setReoptimizeBusy] = useState(null);
+  const [reoptimizeResult, setReoptimizeResult] = useState({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -2024,6 +2026,49 @@ function HistorialRepartos({ colors }) {
       alert(e.response?.data?.error || e.message);
     } finally {
       setCloneBusy(null);
+    }
+  }
+
+  async function handleReoptimize(route) {
+    const inProgress = route.status === 'in_progress';
+    const prompt = inProgress
+      ? 'La ruta ya comenzó. Se conservarán las paradas atendidas y solo se reordenarán las pendientes. ¿Reoptimizar ahora?'
+      : 'Se volverá a calcular el orden de todas las paradas pendientes. ¿Continuar?';
+    if (!window.confirm(prompt)) return;
+
+    setExpanded(route.id);
+    setReoptimizeBusy(route.id);
+    setReoptimizeResult(current => ({ ...current, [route.id]: { kind: 'working', message: 'Calculando una nueva ruta…' } }));
+    try {
+      const { data } = await api.post(`/delivery/routes/${route.id}/reoptimize`, {}, { timeout: 90000 });
+      const updated = data.route || {};
+      setRoutes(current => current.map(item => item.id === route.id ? {
+        ...item,
+        orders: updated.orders || item.orders,
+        optimized_route: updated.optimized_route || item.optimized_route,
+        total_distance: updated.total_distance,
+        total_duration: updated.total_duration,
+        maps_url: updated.maps_url,
+      } : item));
+      const detail = data.changed
+        ? `${data.pendingStops} parada${data.pendingStops === 1 ? '' : 's'} pendiente${data.pendingStops === 1 ? '' : 's'} reordenada${data.pendingStops === 1 ? '' : 's'}`
+        : data.pendingStops === 1
+          ? 'La única parada pendiente ya estaba correctamente ubicada'
+          : `El orden de las ${data.pendingStops} paradas pendientes ya era el óptimo`;
+      const preserved = data.preservedStops
+        ? ` · ${data.preservedStops} atendida${data.preservedStops === 1 ? '' : 's'} sin cambios`
+        : '';
+      setReoptimizeResult(current => ({
+        ...current,
+        [route.id]: { kind: 'success', message: `Optimización correcta: ${detail}${preserved}.` },
+      }));
+    } catch (e) {
+      setReoptimizeResult(current => ({
+        ...current,
+        [route.id]: { kind: 'error', message: e.response?.data?.error || 'No se pudo reoptimizar la ruta. El orden anterior se mantuvo.' },
+      }));
+    } finally {
+      setReoptimizeBusy(null);
     }
   }
 
@@ -2122,11 +2167,19 @@ function HistorialRepartos({ colors }) {
                     </button>
                   )}
                   {(route.status === 'sent' || route.status === 'in_progress') && (
-                    <button onClick={e => { e.stopPropagation(); handleCancel(route.id); }}
-                      title="Cancelar ruta"
-                      style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', color: colors.red, fontSize: '12px' }}>
-                      Cancelar
-                    </button>
+                    <>
+                      <button onClick={e => { e.stopPropagation(); handleReoptimize(route); }}
+                        disabled={reoptimizeBusy !== null}
+                        title={route.status === 'in_progress' ? 'Conserva las paradas atendidas y reordena solamente las pendientes' : 'Vuelve a calcular el orden de las paradas'}
+                        style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#38bdf818', border: '1px solid #38bdf866', borderRadius: '6px', padding: '4px 8px', cursor: reoptimizeBusy !== null ? 'wait' : 'pointer', color: '#38bdf8', fontSize: '12px', whiteSpace: 'nowrap', opacity: reoptimizeBusy !== null ? 0.65 : 1 }}>
+                        <RotateCcw size={12} /> {reoptimizeBusy === route.id ? 'Reoptimizando…' : 'Reoptimizar'}
+                      </button>
+                      <button onClick={e => { e.stopPropagation(); handleCancel(route.id); }}
+                        title="Cancelar ruta"
+                        style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', color: colors.red, fontSize: '12px' }}>
+                        Cancelar
+                      </button>
+                    </>
                   )}
                   {route.status === 'cancelled' && (
                     <button onClick={e => { e.stopPropagation(); handleRelease(route.id); }}
@@ -2148,6 +2201,16 @@ function HistorialRepartos({ colors }) {
                     {route.started_at && <span>Iniciada: {new Date(route.started_at).toLocaleString('es-CL')}</span>}
                     {route.completed_at && <span>Completada: {new Date(route.completed_at).toLocaleString('es-CL')}</span>}
                   </div>
+                  {reoptimizeResult[route.id] && (
+                    <div role="status" style={{
+                      marginBottom: '12px', padding: '9px 11px', borderRadius: '8px', fontSize: '12px', lineHeight: 1.4,
+                      color: reoptimizeResult[route.id].kind === 'error' ? '#fca5a5' : reoptimizeResult[route.id].kind === 'success' ? '#86efac' : colors.textSecondary,
+                      backgroundColor: reoptimizeResult[route.id].kind === 'error' ? '#ef444418' : reoptimizeResult[route.id].kind === 'success' ? '#22c55e18' : colors.bg,
+                      border: `1px solid ${reoptimizeResult[route.id].kind === 'error' ? '#ef444455' : reoptimizeResult[route.id].kind === 'success' ? '#22c55e55' : colors.border}`,
+                    }}>
+                      {reoptimizeResult[route.id].message}
+                    </div>
+                  )}
                   {/* Repartidor */}
                   {(route.driver_name || route.driver_phone) && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', color: colors.textSecondary, fontSize: '13px' }}>
