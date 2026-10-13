@@ -801,8 +801,8 @@ async function createScheduledOrder({ orgId, conversationId, phone, customerName
   // antes de crear uno nuevo (evita que el cron dispare el viejo y el nuevo)
   await pool.query(
     `UPDATE scheduled_orders SET status = 'cancelled'
-     WHERE conversation_id = $1 AND status = 'pending'`,
-    [conversationId]
+     WHERE conversation_id = $1 AND organization_id = $2 AND status = 'pending'`,
+    [conversationId, orgId]
   );
   const { rows: [row] } = await pool.query(
     `INSERT INTO scheduled_orders
@@ -835,17 +835,21 @@ async function getPendingScheduledOrders(orgId = null) {
   return rows;
 }
 
-async function markScheduledOrderSent(id) {
+async function markScheduledOrderSent(id, orgId) {
+  if (!orgId) throw new Error('organization_id requerido para actualizar un pedido agendado');
   await pool.query(
-    `UPDATE scheduled_orders SET status = 'sent', sent_at = NOW() WHERE id = $1`,
-    [id]
+    `UPDATE scheduled_orders SET status = 'sent', sent_at = NOW()
+     WHERE id = $1 AND organization_id = $2`,
+    [id, orgId]
   );
 }
 
-async function cancelScheduledOrder(id) {
+async function cancelScheduledOrder(id, orgId) {
+  if (!orgId) throw new Error('organization_id requerido para cancelar un pedido agendado');
   await pool.query(
-    `UPDATE scheduled_orders SET status = 'cancelled' WHERE id = $1`,
-    [id]
+    `UPDATE scheduled_orders SET status = 'cancelled'
+     WHERE id = $1 AND organization_id = $2`,
+    [id, orgId]
   );
 }
 
@@ -1117,6 +1121,161 @@ async function getWhatsappBuyerReport(orgId, { from = null, to = null, provider 
     ? Math.round(Number(totals.orders) * 10 / Number(totals.contacts)) / 10
     : 0;
   return { summary, records, totals, basis: 'purchase' };
+}
+
+async function getLeadJourneyRows(orgId, { from = null, to = null, provider = null } = {}) {
+  const params = [orgId];
+  const where = ['wa.organization_id = $1'];
+  if (from) { params.push(from); where.push(`wa.first_seen_at >= $${params.length}::date`); }
+  if (to) { params.push(to); where.push(`wa.first_seen_at < ($${params.length}::date + INTERVAL '1 day')`); }
+  if (provider) { params.push(provider); where.push(`wa.provider = $${params.length}`); }
+  return query(
+    `WITH attributed AS (
+       SELECT DISTINCT ON (wa.conversation_id)
+              wa.conversation_id, wa.provider, wa.source_url, wa.headline,
+              wa.campaign_id, wa.campaign_name, wa.adset_name, wa.ad_id, wa.ad_name,
+              wa.first_seen_at
+         FROM whatsapp_attributions wa
+        WHERE ${where.join(' AND ')}
+        ORDER BY wa.conversation_id, wa.first_seen_at ASC, wa.id ASC
+     )
+     SELECT c.id AS conversation_id, c.contact_name, c.phone_number, c.pipeline_state,
+            c.order_draft, c.limbo_reason_code, c.limbo_reason_note,
+            a.provider, a.source_url, a.headline, a.campaign_id,
+            a.campaign_name, a.adset_name, a.ad_id, a.ad_name, a.first_seen_at,
+            first_inbound.created_at AS first_inbound_at,
+            first_response.created_at AS first_response_at,
+            next_inbound.created_at AS first_customer_reply_at,
+            ROUND(EXTRACT(EPOCH FROM ((first_response.created_at AT TIME ZONE 'UTC') - (first_inbound.created_at AT TIME ZONE 'UTC'))) / 60.0, 1) AS first_response_minutes,
+            ROUND(EXTRACT(EPOCH FROM ((next_inbound.created_at AT TIME ZONE 'UTC') - (first_response.created_at AT TIME ZONE 'UTC'))) / 60.0, 1) AS customer_reply_minutes,
+            ROUND(EXTRACT(EPOCH FROM (NOW() - (last_message.created_at AT TIME ZONE 'UTC'))) / 3600.0, 1) AS silent_hours,
+            COALESCE(message_stats.messages_count, 0)::int AS messages_count,
+            COALESCE(message_stats.inbound_count, 0)::int AS inbound_count,
+            COALESCE(message_stats.outbound_count, 0)::int AS outbound_count,
+            COALESCE(message_stats.has_outbound_url, FALSE) AS has_outbound_url,
+            COALESCE(NULLIF(c.order_draft, '{}'), '') <> '' AS has_product_draft,
+            COALESCE(order_stats.orders_count, 0)::int AS orders_count,
+            order_stats.first_order_at,
+            COALESCE(link_stats.tracked_links, 0)::int AS tracked_links,
+            COALESCE(link_stats.tracked_clicks, 0)::int AS tracked_clicks,
+            link_stats.first_clicked_at,
+            recent_inbound.recent_inbound_text,
+            last_message.direction AS last_message_direction,
+            last_message.created_at AS last_message_at
+       FROM attributed a
+       JOIN conversations c ON c.id = a.conversation_id AND c.organization_id = $1
+       LEFT JOIN LATERAL (
+         SELECT m.created_at FROM messages m
+          WHERE m.conversation_id = c.id AND m.direction = 'inbound'
+            AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+          ORDER BY m.created_at ASC, m.id ASC LIMIT 1
+       ) first_inbound ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT m.created_at FROM messages m
+          WHERE m.conversation_id = c.id AND m.direction = 'outbound'
+            AND first_inbound.created_at IS NOT NULL AND m.created_at >= first_inbound.created_at
+          ORDER BY m.created_at ASC, m.id ASC LIMIT 1
+       ) first_response ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT m.created_at FROM messages m
+          WHERE m.conversation_id = c.id AND m.direction = 'inbound'
+            AND first_response.created_at IS NOT NULL AND m.created_at > first_response.created_at
+          ORDER BY m.created_at ASC, m.id ASC LIMIT 1
+       ) next_inbound ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS messages_count,
+                COUNT(*) FILTER (WHERE m.direction = 'inbound')::int AS inbound_count,
+                COUNT(*) FILTER (WHERE m.direction = 'outbound')::int AS outbound_count,
+                BOOL_OR(m.direction = 'outbound' AND m.content ~* 'https?://') AS has_outbound_url
+           FROM messages m WHERE m.conversation_id = c.id
+            AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+       ) message_stats ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS orders_count, MIN(o.created_at) AS first_order_at
+           FROM orders o WHERE o.organization_id = $1 AND o.conversation_id = c.id
+            AND COALESCE(o.status, '') <> 'cancelled'
+            AND (o.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+       ) order_stats ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS tracked_links,
+                COALESCE(SUM(t.click_count), 0)::int AS tracked_clicks,
+                MIN(t.first_clicked_at) AS first_clicked_at
+           FROM conversation_tracking_links t
+          WHERE t.organization_id = $1 AND t.conversation_id = c.id
+            AND t.message_id IS NOT NULL
+            AND t.created_at >= a.first_seen_at
+       ) link_stats ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT STRING_AGG(recent.content, E'\n' ORDER BY recent.created_at) AS recent_inbound_text
+           FROM (
+             SELECT m.content, m.created_at FROM messages m
+              WHERE m.conversation_id = c.id AND m.direction = 'inbound'
+                AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+              ORDER BY m.created_at DESC, m.id DESC LIMIT 8
+           ) recent
+       ) recent_inbound ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT m.direction, m.created_at FROM messages m
+          WHERE m.conversation_id = c.id
+            AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+          ORDER BY m.created_at DESC, m.id DESC LIMIT 1
+       ) last_message ON TRUE
+      ORDER BY a.first_seen_at DESC`,
+    params
+  );
+}
+
+async function createConversationTrackingLink({ organizationId, conversationId, token, destinationUrl, linkKind, createdBy }) {
+  return queryOne(
+    `INSERT INTO conversation_tracking_links
+       (organization_id, conversation_id, token, destination_url, link_kind, created_by)
+     SELECT $1, c.id, $3, $4, $5, $6
+       FROM conversations c
+      WHERE c.id = $2 AND c.organization_id = $1
+     RETURNING *`,
+    [organizationId, conversationId, token, destinationUrl, linkKind, createdBy || null]
+  );
+}
+
+async function setConversationLimboReason(organizationId, conversationId, reasonCode, note = null) {
+  return queryOne(
+    `UPDATE conversations SET limbo_reason_code = $3, limbo_reason_note = $4,
+       limbo_reason_updated_at = NOW(), updated_at = NOW()
+      WHERE id = $2 AND organization_id = $1
+      RETURNING id, limbo_reason_code, limbo_reason_note, limbo_reason_updated_at`,
+    [organizationId, conversationId, reasonCode, note]
+  );
+}
+
+async function getConversationTrackingLinkByToken(token) {
+  return queryOne(
+    `SELECT id, destination_url FROM conversation_tracking_links WHERE token = $1`,
+    [token]
+  );
+}
+
+async function attachConversationTrackingLinksToMessage(organizationId, conversationId, messageId, tokens) {
+  if (!tokens?.length || !messageId) return [];
+  return query(
+    `UPDATE conversation_tracking_links
+        SET message_id = $3
+      WHERE organization_id = $1 AND conversation_id = $2
+        AND token = ANY($4::text[]) AND message_id IS NULL
+      RETURNING id, token`,
+    [organizationId, conversationId, messageId, tokens]
+  );
+}
+
+async function recordConversationTrackingClick(id) {
+  return queryOne(
+    `UPDATE conversation_tracking_links
+        SET click_count = click_count + 1,
+            first_clicked_at = COALESCE(first_clicked_at, NOW()),
+            last_clicked_at = NOW()
+      WHERE id = $1
+      RETURNING id, click_count, first_clicked_at, last_clicked_at`,
+    [id]
+  );
 }
 
 async function saveAdAttribution({ organizationId, conversationId, messageId, referral }) {
@@ -2275,6 +2434,7 @@ module.exports = {
   saveMessage, getMessageByWhatsappId, saveAdAttribution, saveMessageMediaBlob, getMessageMediaBlob,
   getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,
   saveWhatsappAttribution, getLatestWhatsappAttribution, getWhatsappAttributionReport, getWhatsappBuyerReport,
+  getLeadJourneyRows, setConversationLimboReason, createConversationTrackingLink, getConversationTrackingLinkByToken, attachConversationTrackingLinksToMessage, recordConversationTrackingClick,
   // Products
   cacheProducts, getCachedProducts, getProductsCacheAge,
   // Products propios

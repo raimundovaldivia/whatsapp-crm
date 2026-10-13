@@ -62,6 +62,7 @@ const metaRouter           = require('./routes/meta');              // Facebook,
 const metaWebhookRouter    = require('./routes/meta-webhook');      // Webhooks Messenger / Instagram
 const legalRouter          = require('./routes/legal');             // Privacidad y eliminación de datos (público)
 const marketingAttributionRouter = require('./routes/marketing-attribution'); // Rendimiento Click-to-WhatsApp
+const trackingLinksRouter   = require('./routes/tracking-links');     // Redirección pública con medición de clics
 
 const app    = express();
 const server = http.createServer(app);
@@ -98,6 +99,7 @@ app.use(express.urlencoded({ extended: false, limit: '1mb', verify: captureRaw }
 const { rateLimit } = require('express-rate-limit');
 app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use('/store', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.use('/r', rateLimit({ windowMs: 60 * 1000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.post('/store/:slug/orders', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false }));
 
 // ─── HEALTH CHECK ────────────────────────────────────────────────
@@ -112,6 +114,7 @@ app.get('/ready', async (_req, res) => {
 });
 
 app.use('/', legalRouter);
+app.use('/r', trackingLinksRouter);
 
 app.use('/api/commercial', require('./routes/commercial'));
 app.use('/api', require('./middleware/commercial-access').commercialAccess);

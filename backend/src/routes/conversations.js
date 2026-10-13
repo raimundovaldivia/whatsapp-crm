@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = require('express').Router();
 const db = require('../db/database');
 const { getPool } = require('../db/database');
@@ -13,6 +14,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
 const { isCustomerMessagingHour, shouldSkipAutomatedFollowUp } = require('../services/outbound-policy');
 const { reconcilePendingMessages } = require('../services/message-status-recovery');
+const { isTrackableDestination, extractTrackingTokens } = require('../services/lead-journey');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -77,6 +79,70 @@ router.get('/:id/messages', async (req, res) => {
     res.json({ success: true, data: { conversation: conv, messages } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** POST /api/conversations/:id/tracking-links — crea un enlace corto sin PII. */
+router.post('/:id/tracking-links', async (req, res) => {
+  try {
+    const conversationId = Number(req.params.id);
+    const destinationUrl = String(req.body?.url || '').trim();
+    const linkKind = ['product', 'catalog', 'checkout', 'payment', 'other'].includes(req.body?.kind)
+      ? req.body.kind
+      : 'other';
+    if (!Number.isInteger(conversationId) || conversationId < 1) {
+      return res.status(400).json({ success: false, error: 'Conversación inválida' });
+    }
+    if (!isTrackableDestination(destinationUrl)) {
+      return res.status(400).json({ success: false, error: 'El enlace debe comenzar con http:// o https:// y no puede contener credenciales.' });
+    }
+    const publicUrl = String(process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL || '').replace(/\/$/, '');
+    if (!publicUrl) return res.status(503).json({ success: false, error: 'Falta configurar CRM_PUBLIC_URL para crear enlaces rastreables.' });
+
+    let saved = null;
+    for (let attempt = 0; attempt < 3 && !saved; attempt += 1) {
+      const token = crypto.randomBytes(9).toString('base64url');
+      try {
+        saved = await db.createConversationTrackingLink({
+          organizationId: req.orgId,
+          conversationId,
+          token,
+          destinationUrl,
+          linkKind,
+          createdBy: req.userId,
+        });
+      } catch (error) {
+        if (error.code !== '23505') throw error;
+      }
+    }
+    if (!saved) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    res.status(201).json({
+      success: true,
+      data: { id: saved.id, shortUrl: `${publicUrl}/r/${saved.token}`, destinationUrl: saved.destination_url, kind: saved.link_kind },
+    });
+  } catch (error) {
+    console.error('[Conv] Error creando enlace rastreable:', error.message);
+    res.status(500).json({ success: false, error: 'No se pudo crear el enlace rastreable' });
+  }
+});
+
+/** PATCH /api/conversations/:id/limbo-reason — confirmación humana del motivo. */
+router.patch('/:id/limbo-reason', async (req, res) => {
+  try {
+    const conversationId = Number(req.params.id);
+    const allowed = new Set(['price', 'delivery', 'payment', 'later', 'stock', 'declined', 'competitor', 'no_reply', 'unknown']);
+    const reasonCode = String(req.body?.reason || '');
+    const note = String(req.body?.note || '').trim();
+    if (!Number.isInteger(conversationId) || conversationId < 1 || !allowed.has(reasonCode)) {
+      return res.status(400).json({ success: false, error: 'Motivo inválido' });
+    }
+    if (note.length > 500) return res.status(400).json({ success: false, error: 'La nota no puede superar 500 caracteres' });
+    const updated = await db.setConversationLimboReason(req.orgId, conversationId, reasonCode, note || null);
+    if (!updated) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    res.json({ success: true, data: updated });
+  } catch (error) {
+    console.error('[Conv] Error guardando motivo de limbo:', error.message);
+    res.status(500).json({ success: false, error: 'No se pudo guardar el motivo' });
   }
 });
 
@@ -173,6 +239,9 @@ router.post('/:id/messages', async (req, res) => {
       content: text.trim(),
       sentBy: 'human',
     });
+    if (message?.id) {
+      await db.attachConversationTrackingLinksToMessage(req.orgId, conv.id, message.id, extractTrackingTokens(text.trim()));
+    }
 
     await db.updateConversationLastMessage(conv.id, text.trim());
     // Una respuesta escrita desde el CRM significa que una persona tomó el hilo.

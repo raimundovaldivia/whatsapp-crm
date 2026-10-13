@@ -50,6 +50,8 @@ export const conversationsAPI = {
   getByPhone: (phone) => api.get('/conversations/search-by-phone', { params: { phone } }).then(r => r.data.conversations || []),
   getMessages: (id) => api.get(`/conversations/${id}/messages`, { timeout: 30000 }).then(r => r.data.data),
   sendMessage: (id, text) => api.post(`/conversations/${id}/messages`, { text }).then(r => r.data.data),
+  createTrackingLink: (id, url, kind = 'other') => api.post(`/conversations/${id}/tracking-links`, { url, kind }).then(r => r.data.data),
+  setLimboReason: (id, reason, note = '') => api.patch(`/conversations/${id}/limbo-reason`, { reason, note }).then(r => r.data.data),
   sendMedia: (id, data) => api.post(`/conversations/${id}/media`, data, { timeout: 120000 }).then(r => r.data.data),
   getPaymentOptions: (id) => api.get(`/conversations/${id}/payment-options`).then(r => r.data.data),
   sendPaymentOptions: (id) => api.post(`/conversations/${id}/payment-options`).then(r => r.data.data),

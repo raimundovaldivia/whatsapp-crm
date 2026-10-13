@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BarChart3, ExternalLink, Megaphone, MessageCircle, RefreshCw, ShoppingBag, Users } from 'lucide-react';
+import { AlertTriangle, BarChart3, CheckCircle2, Clock3, ExternalLink, Megaphone, MessageCircle, MousePointerClick, RefreshCw, ShoppingBag, Users } from 'lucide-react';
 import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
@@ -32,7 +32,8 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      const response = await api.get('/marketing-attribution', { params: { from, to, basis, provider: provider || undefined } });
+      const endpoint = basis === 'journey' ? '/marketing-attribution/funnel' : '/marketing-attribution';
+      const response = await api.get(endpoint, { params: { from, to, basis, provider: provider || undefined } });
       setData(response.data?.data || { totals: {}, summary: [], records: [] });
     } catch (err) {
       setError(err.response?.data?.error || 'No se pudo cargar el rendimiento de campañas.');
@@ -42,6 +43,7 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
   useEffect(() => { load(); }, [load]);
   const totals = data.totals || {};
   const purchaseMode = basis === 'purchase';
+  const journeyMode = basis === 'journey';
   const setRange = (startOffset, endOffset = 0) => { setFrom(shiftedDate(startOffset)); setTo(shiftedDate(endOffset)); };
 
   return (
@@ -56,7 +58,7 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
         </header>
 
         <section style={{ ...card(colors), display: 'flex', gap: 12, alignItems: 'end', flexWrap: 'wrap', marginBottom: 16 }}>
-          <Field label="Analizar"><select value={basis} onChange={event => setBasis(event.target.value)} style={input(colors)}><option value="purchase">Compras realizadas</option><option value="contact">Contactos recibidos</option></select></Field>
+          <Field label="Analizar"><select value={basis} onChange={event => setBasis(event.target.value)} style={input(colors)}><option value="journey">Embudo y clientes en limbo</option><option value="purchase">Compras realizadas</option><option value="contact">Contactos recibidos</option></select></Field>
           <Field label="Desde"><input type="date" value={from} onChange={event => setFrom(event.target.value)} style={input(colors)} /></Field>
           <Field label="Hasta"><input type="date" value={to} onChange={event => setTo(event.target.value)} style={input(colors)} /></Field>
           <Field label="Canal"><select value={provider} onChange={event => setProvider(event.target.value)} style={input(colors)}><option value="">Todos</option><option value="evolution">Evolution</option><option value="kapso">Kapso</option><option value="meta">Meta directo</option></select></Field>
@@ -66,11 +68,12 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
             <button onClick={() => setRange(-6, 0)} style={button(colors)}>7 días</button>
             <button onClick={() => setRange(-29, 0)} style={button(colors)}>30 días</button>
           </div>
-          <div style={{ color: colors.textMuted, fontSize: 11, flexBasis: '100%' }}>{purchaseMode ? 'Se muestran pedidos creados en el período y se asignan al último anuncio que inició el chat antes de la compra.' : 'Se muestran los contactos que iniciaron el chat desde un anuncio en el período y sus compras posteriores.'}</div>
+          <div style={{ color: colors.textMuted, fontSize: 11, flexBasis: '100%' }}>{journeyMode ? 'Sigue cada contacto desde el anuncio hasta el pedido y muestra el punto donde dejó de avanzar.' : purchaseMode ? 'Se muestran pedidos creados en el período y se asignan al último anuncio que inició el chat antes de la compra.' : 'Se muestran los contactos que iniciaron el chat desde un anuncio en el período y sus compras posteriores.'}</div>
         </section>
 
         {error && <div style={{ ...card(colors), borderColor: `${colors.red}77`, color: colors.red, marginBottom: 16 }}>{error}</div>}
 
+        {journeyMode ? <JourneyAnalysis data={data} loading={loading} colors={colors} onOpenConversation={onOpenConversation} onRefresh={load} /> : <>
         <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12, marginBottom: 20 }}>
           <Metric icon={Users} label={purchaseMode ? 'Compradores únicos' : 'Contactos desde anuncios'} value={totals.contacts || 0} colors={colors} />
           <Metric icon={ShoppingBag} label="Pedidos atribuidos" value={totals.orders || 0} colors={colors} />
@@ -117,9 +120,85 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
             </article>
           )) : !loading && <Empty purchaseMode={purchaseMode} colors={colors} />}
         </div>
+        </>}
       </div>
     </main>
   );
+}
+
+function JourneyAnalysis({ data, loading, colors, onOpenConversation, onRefresh }) {
+  const [filter, setFilter] = useState('limbo');
+  const [savingReason, setSavingReason] = useState(null);
+  const totals = data.totals || {};
+  const funnel = data.funnel || {};
+  const cohorts = data.cohorts || {};
+  const records = (data.records || []).filter(record => filter === 'all' || record.outcome === filter);
+  const steps = [
+    ['Contactos Ads', funnel.contacts],
+    ['Recibieron respuesta', funnel.answered],
+    ['Interés definido', funnel.qualified],
+    ['Enlace enviado', funnel.links_sent],
+    ['Abrieron enlace', funnel.links_clicked],
+    ['Pedido creado', funnel.converted],
+  ];
+  const minutes = value => value === null || value === undefined ? 'Sin datos' : `${Number(value).toLocaleString('es-CL')} min`;
+  const saveReason = async (conversationId, reason) => {
+    if (!reason) return;
+    setSavingReason(conversationId);
+    try { await api.patch(`/conversations/${conversationId}/limbo-reason`, { reason }); await onRefresh?.(); }
+    finally { setSavingReason(null); }
+  };
+
+  if (loading) return <div style={{ ...card(colors), textAlign: 'center', color: colors.textMuted }}>Calculando el recorrido de las conversaciones…</div>;
+  return <>
+    <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 20 }}>
+      <Metric icon={Users} label="Contactos desde Ads" value={totals.contacts || 0} colors={colors} />
+      <Metric icon={CheckCircle2} label="Con pedidos" value={totals.converted || 0} colors={colors} accent />
+      <Metric icon={AlertTriangle} label="En limbo" value={totals.limbo || 0} colors={colors} />
+      <Metric icon={BarChart3} label="Conversión" value={`${Number(totals.conversion_rate || 0).toLocaleString('es-CL')}%`} colors={colors} />
+    </section>
+
+    <SectionTitle title="Árbol de avance" subtitle="Cada número muestra cuántas personas alcanzaron ese punto del recorrido." colors={colors} />
+    <section style={{ ...card(colors), display: 'flex', alignItems: 'stretch', gap: 8, overflowX: 'auto', marginBottom: 20 }}>
+      {steps.map(([label, value], index) => <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 0 130px' }}>
+        <div style={{ flex: 1, minHeight: 74, borderRadius: 10, border: `1px solid ${colors.border}`, background: colors.bgSub, padding: 11, display: 'grid', alignContent: 'center' }}>
+          <strong style={{ fontSize: 20 }}>{value || 0}</strong><span style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4 }}>{label}</span>
+        </div>
+        {index < steps.length - 1 && <span style={{ color: colors.textMuted, fontWeight: 800 }}>›</span>}
+      </div>)}
+    </section>
+
+    <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginBottom: 20 }}>
+      <CohortCard title="Quienes compraron" icon={CheckCircle2} data={cohorts.converted} colors={colors} accent />
+      <CohortCard title="Quienes quedaron en limbo" icon={Clock3} data={cohorts.limbo} colors={colors} />
+      <div style={card(colors)}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 750, fontSize: 13 }}><MousePointerClick size={16} color={colors.infoSoft} />Motivos principales</div>
+        <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+          {(data.reasons || []).slice(0, 5).map(reason => <div key={reason.code} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 }}><span style={{ color: colors.textSecondary }}>{reason.label}</span><strong>{reason.count}</strong></div>)}
+          {!data.reasons?.length && <span style={{ color: colors.textMuted, fontSize: 12 }}>Todavía no hay abandonos clasificables.</span>}
+        </div>
+      </div>
+    </section>
+
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'end', flexWrap: 'wrap', marginBottom: 10 }}>
+      <SectionTitle title="Detalle por persona" subtitle="Observado significa que el cliente expresó el motivo; inferido indica una conclusión por su último paso." colors={colors} />
+      <Field label="Mostrar"><select value={filter} onChange={event => setFilter(event.target.value)} style={input(colors)}><option value="limbo">En limbo</option><option value="converted">Con pedido</option><option value="active">Todavía activos</option><option value="all">Todos</option></select></Field>
+    </div>
+    <div style={{ display: 'grid', gap: 10 }}>
+      {records.map(record => <article key={record.conversation_id} style={{ ...card(colors), display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 14, alignItems: 'center' }}>
+        <div><strong style={{ display: 'block', fontSize: 14 }}>{record.contact_name || record.phone_number}</strong><span style={{ color: colors.textSecondary, fontSize: 11 }}>{record.campaign_name || record.ad_name || record.headline || 'Anuncio de WhatsApp'} · {record.provider}</span></div>
+        <div><div style={{ fontSize: 12, fontWeight: 750 }}>{record.stage_label}</div><div style={{ color: colors.textSecondary, fontSize: 11, marginTop: 5 }}>{record.reason_label}</div><div style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>{record.reason_source === 'manual' ? 'Motivo confirmado manualmente' : record.reason_source === 'observed' ? 'Motivo observado' : record.reason_source === 'inferred' ? `Motivo inferido · ${Math.round(Number(record.reason_confidence || 0) * 100)}%` : 'Motivo desconocido'}</div><select aria-label="Confirmar motivo" disabled={savingReason === record.conversation_id} value={record.limbo_reason_code || ''} onChange={event => saveReason(record.conversation_id, event.target.value)} style={{ ...input(colors), height: 32, width: '100%', marginTop: 8, fontSize: 11 }}><option value="">Confirmar o corregir motivo…</option><option value="price">Precio</option><option value="delivery">Despacho o ubicación</option><option value="payment">Medio de pago</option><option value="later">Comprará después</option><option value="stock">Producto o stock</option><option value="competitor">Compró en otro lugar</option><option value="declined">No le interesa</option><option value="no_reply">No respondió</option><option value="unknown">Desconocido</option></select></div>
+        <div style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 1.7 }}>Primera respuesta: <strong>{minutes(record.first_response_minutes)}</strong><br />Respuesta del cliente: <strong>{minutes(record.customer_reply_minutes)}</strong><br />Sin responder: <strong>{record.silent_hours == null ? '—' : `${record.silent_hours} h`}</strong></div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button onClick={() => onOpenConversation?.(record.conversation_id)} style={button(colors)}>Ver conversación</button></div>
+      </article>)}
+      {!records.length && <Empty colors={colors} />}
+    </div>
+  </>;
+}
+
+function CohortCard({ title, icon: Icon, data = {}, colors, accent }) {
+  const response = data.median_first_response_minutes == null ? 'Sin datos' : `${Number(data.median_first_response_minutes).toLocaleString('es-CL')} min`;
+  return <div style={card(colors)}><div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 750, fontSize: 13 }}><Icon size={16} color={accent ? colors.green : colors.warning} />{title}</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginTop: 14 }}><SmallMetric label="Personas" value={data.contacts || 0} colors={colors} /><SmallMetric label="1ª respuesta" value={response} colors={colors} /><SmallMetric label="Mensajes" value={data.average_messages || 0} colors={colors} /></div></div>;
 }
 
 function Field({ label, children }) { return <label style={{ display: 'grid', gap: 5, fontSize: 11, fontWeight: 700, minWidth: 150 }}>{label}{children}</label>; }

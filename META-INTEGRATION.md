@@ -43,3 +43,11 @@ FRONTEND_URL=https://whatsapp-crm-production-c76b.up.railway.app
 7. Hacer una publicación de prueba y revisar las métricas en **Anuncios**.
 
 Instagram debe ser una cuenta profesional (Business o Creator) vinculada a la página de Facebook. Meta no permite iniciar conversaciones frías: la persona debe haber escrito primero a la cuenta profesional.
+
+## Embudo de conversaciones y enlaces rastreables
+
+La vista **Campañas a WhatsApp → Embudo y clientes en limbo** une la atribución del anuncio con los mensajes, los enlaces enviados y los pedidos. Muestra el tiempo hasta la primera respuesta, el avance alcanzado y separa motivos observados de inferencias del sistema.
+
+Desde el redactor de un chat se puede crear un enlace rastreable. El backend genera un token aleatorio sin teléfono ni otros datos personales, lo asocia a la conversación solo cuando el mensaje se envía y registra los clics reales. Las solicitudes conocidas de previsualización de Meta, WhatsApp y otros robots no aumentan el contador.
+
+Los enlaces usan `CRM_PUBLIC_URL` y redirigen desde `/r/:token`; esta variable debe apuntar al backend público con HTTPS.

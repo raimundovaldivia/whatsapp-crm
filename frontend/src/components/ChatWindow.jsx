@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote, Megaphone } from 'lucide-react';
+import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote, Megaphone, Link2 } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
 import ClientAddressFields from './ClientAddressFields.jsx';
@@ -37,6 +37,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
+  const [creatingTrackingLink, setCreatingTrackingLink] = useState(false);
   const [attachment, setAttachment] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState(null);
@@ -832,6 +833,22 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     } finally {
       setSending(false);
       inputRef.current?.focus();
+    }
+  };
+
+  const handleCreateTrackingLink = async () => {
+    const destination = window.prompt('Pega el enlace del producto, catálogo o pago:');
+    if (!destination?.trim() || creatingTrackingLink) return;
+    setCreatingTrackingLink(true);
+    setError(null);
+    try {
+      const tracked = await conversationsAPI.createTrackingLink(conversation.id, destination.trim());
+      setInputText(current => `${current}${current && !current.endsWith(' ') ? ' ' : ''}${tracked.shortUrl}`);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo crear el enlace rastreable.');
+    } finally {
+      setCreatingTrackingLink(false);
     }
   };
 
@@ -2700,6 +2717,14 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
             title="Adjuntar foto o archivo (máx. 6 MB)"
             style={{ width:'42px', height:'42px', borderRadius:'50%', border:`1px solid ${colors.border}`, backgroundColor:colors.bgInput, color:colors.textSecondary, cursor:sending?'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
             <Paperclip size={18} />
+          </button>
+          <button
+            onClick={handleCreateTrackingLink}
+            disabled={sending || creatingTrackingLink}
+            aria-label="Crear enlace rastreable"
+            title="Crear enlace rastreable para saber si el cliente lo abrió"
+            style={{ width:'42px', height:'42px', borderRadius:'50%', border:`1px solid ${colors.border}`, backgroundColor:colors.bgInput, color:colors.infoSoft, cursor:(sending || creatingTrackingLink)?'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            {creatingTrackingLink ? <Loader size={17} style={{ animation:'spin 1s linear infinite' }} /> : <Link2 size={18} />}
           </button>
           <textarea
           ref={inputRef}

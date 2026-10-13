@@ -154,6 +154,9 @@ async function setupDatabase() {
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_ad_id TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_ad_name TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS attribution_first_seen_at TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS limbo_reason_code TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS limbo_reason_note TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS limbo_reason_updated_at TIMESTAMPTZ;
       ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_organization_id_phone_number_key;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_org_channel_phone
         ON conversations(organization_id, COALESCE(whatsapp_channel_id, 0), phone_number);
@@ -218,6 +221,26 @@ async function setupDatabase() {
         ON whatsapp_attributions(conversation_id, first_seen_at DESC);
       CREATE INDEX IF NOT EXISTS idx_wa_attr_campaign
         ON whatsapp_attributions(organization_id, campaign_id, source_id);
+
+      -- Enlaces cortos por conversación. El token público no contiene teléfono ni PII;
+      -- la relación con el cliente permanece protegida dentro de la base de datos.
+      CREATE TABLE IF NOT EXISTS conversation_tracking_links (
+        id                  BIGSERIAL PRIMARY KEY,
+        organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id     INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        message_id          INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+        token               TEXT NOT NULL UNIQUE,
+        destination_url     TEXT NOT NULL,
+        link_kind           TEXT NOT NULL DEFAULT 'other'
+                            CHECK(link_kind IN ('product','catalog','checkout','payment','other')),
+        created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        click_count         INTEGER NOT NULL DEFAULT 0,
+        first_clicked_at    TIMESTAMPTZ,
+        last_clicked_at     TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_tracking_links_org_conversation
+        ON conversation_tracking_links(organization_id, conversation_id, created_at DESC);
 
       -- Copia durable de adjuntos. Los enlaces de Meta/Kapso expiran y no
       -- alcanzan para volver a mostrar una imagen o video días después.
