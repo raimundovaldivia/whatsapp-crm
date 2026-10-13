@@ -1216,7 +1216,6 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
                       syncing={syncing === order.rawId}
                       selected={selected.has(order._key)}
                       onToggleSelect={() => toggleSelect(order._key)}
-                      products={products}
                       onItemsUpdated={load}
                     />
                   : <ShopifyOrderCard key={order._key} order={order}
@@ -1327,11 +1326,13 @@ function SelectBox({ checked, onChange, colors }) {
 }
 
 // ─── Card pedido Bot ──────────────────────────────────────────────
-function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGoToConversation, syncing, selected, onToggleSelect, products = [], onItemsUpdated }) {
+function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGoToConversation, syncing, selected, onToggleSelect, onItemsUpdated }) {
   const { colors } = useTheme();
   const [expanded,   setExpanded]   = useState(false);
   const [editMode,   setEditMode]   = useState(false);
   const [editItems,  setEditItems]  = useState([]);
+  const [products,   setProducts]   = useState([]);
+  const [productsLoading, setProductsLoading] = useState(false);
   const [saving,     setSaving]     = useState(false);
   const [editErr,    setEditErr]    = useState('');
   const [addrEdit,   setAddrEdit]   = useState(false);
@@ -1343,6 +1344,26 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
   const status = getBotStatusStyle(order.status, colors);
   const items  = Array.isArray(order.items) ? order.items : [];
   const addr   = order.shipping_address || {};
+
+  useEffect(() => {
+    if (!editMode) return undefined;
+
+    let cancelled = false;
+    const phone = String(order.customer_phone || order.phone_number || '').trim();
+    setProductsLoading(true);
+    api.get('/products/order-options', { params: { phone } })
+      .then(({ data }) => {
+        if (!cancelled) setProducts(data?.products || []);
+      })
+      .catch(() => {
+        if (!cancelled) setProducts([]);
+      })
+      .finally(() => {
+        if (!cancelled) setProductsLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [editMode, order.customer_phone, order.phone_number]);
 
   const startAddrEdit = (e) => {
     e.stopPropagation();
@@ -1484,7 +1505,9 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
                   {editItems.map((item, idx) => (
                     <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgSub }}>
                       {/* Selector de producto */}
-                      {products.length > 0 && (
+                      {productsLoading ? (
+                        <div style={{ color: colors.textSecondary, fontSize: '11px' }}>Cargando productos del cliente…</div>
+                      ) : products.length > 0 && (
                         <select onChange={e => selectProduct(idx, e.target.value)}
                           style={{ backgroundColor: colors.bgPanel, color: colors.textSecondary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '4px 6px', fontSize: '11px' }}>
                           <option value="">— Elegir producto —</option>
