@@ -123,3 +123,80 @@ test('el reporte asigna cada pedido solo a la última campaña que lo precede', 
     await engine.close();
   }
 });
+
+test('recupera pedidos manuales de una incidencia por canal sin cruzar organizaciones', async () => {
+  const engine = new PGlite();
+  class Pool {
+    async query(sql, params) {
+      const result = params?.length ? await engine.query(sql, params) : (await engine.exec(sql)).at(-1);
+      return { ...result, rowCount: result.affectedRows ?? result.rows?.length ?? 0 };
+    }
+  }
+  const db = load('src/db/database.js', { pg: { Pool } });
+  try {
+    await engine.exec(`
+      CREATE TABLE whatsapp_channels (
+        id INT PRIMARY KEY, organization_id INT NOT NULL, provider TEXT NOT NULL
+      );
+      CREATE TABLE conversations (
+        id INT PRIMARY KEY, organization_id INT NOT NULL, whatsapp_channel_id INT,
+        contact_name TEXT, phone_number TEXT
+      );
+      CREATE TABLE orders (
+        id INT PRIMARY KEY, organization_id INT NOT NULL, conversation_id INT NOT NULL,
+        customer_phone TEXT, total_price TEXT, status TEXT, items TEXT, created_at TIMESTAMP
+      );
+      CREATE TABLE shopify_orders (
+        id INT PRIMARY KEY, organization_id INT NOT NULL, customer_phone TEXT,
+        financial_status TEXT, shopify_created_at TIMESTAMP
+      );
+      CREATE TABLE whatsapp_attributions (
+        id SERIAL PRIMARY KEY, organization_id INT NOT NULL, conversation_id INT NOT NULL,
+        message_id INT, whatsapp_message_id TEXT NOT NULL, provider TEXT NOT NULL,
+        source_type TEXT, source_id TEXT, source_url TEXT, ctwa_clid TEXT,
+        headline TEXT, body TEXT, media_type TEXT, media_url TEXT,
+        campaign_id TEXT, campaign_name TEXT, adset_id TEXT, adset_name TEXT,
+        ad_id TEXT, ad_name TEXT, raw_json JSONB,
+        first_seen_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ,
+        UNIQUE (organization_id, provider, whatsapp_message_id)
+      );
+      INSERT INTO whatsapp_channels VALUES (10, 1, 'evolution'), (20, 2, 'evolution');
+      INSERT INTO conversations VALUES
+        (1, 1, 10, 'Primera compra', '56911112222'),
+        (2, 1, 10, 'Cliente anterior', '56933334444'),
+        (3, 2, 20, 'Otra empresa', '56911112222');
+      INSERT INTO orders VALUES
+        (1, 1, 1, '56911112222', '$12.000', 'entregado', '[]', '2026-10-12 15:00:00'),
+        (2, 1, 2, '56933334444', '$10.000', 'entregado', '[]', '2026-10-11 12:00:00'),
+        (3, 1, 2, '56933334444', '$11.000', 'entregado', '[]', '2026-10-12 16:00:00'),
+        (4, 2, 3, '56911112222', '$99.000', 'entregado', '[]', '2026-10-12 17:00:00');
+    `);
+
+    const recovered = await db.recoverWhatsappAttributionsFromOrders(1, 7, {
+      from: '2026-10-12', to: '2026-10-13', provider: 'evolution',
+      campaignName: 'Recuperación Evolution', firstPurchaseOnly: true,
+    });
+    assert.equal(recovered.recovered, 1);
+    assert.equal(recovered.revenue, 12000);
+    assert.equal(recovered.records[0].order_id, 1);
+
+    const repeated = await db.recoverWhatsappAttributionsFromOrders(1, 7, {
+      from: '2026-10-12', to: '2026-10-13', provider: 'evolution',
+      campaignName: 'Recuperación Evolution', firstPurchaseOnly: true,
+    });
+    assert.equal(repeated.recovered, 0);
+
+    const report = await db.getWhatsappBuyerReport(1, {
+      from: '2026-10-12', to: '2026-10-13', provider: 'evolution',
+    });
+    assert.equal(report.totals.buyers, 1);
+    assert.equal(report.totals.orders, 1);
+    assert.equal(Number(report.totals.revenue), 12000);
+    assert.equal(report.records[0].precision, 'recuperada');
+
+    const crossTenant = await engine.query('SELECT COUNT(*)::int AS count FROM whatsapp_attributions WHERE organization_id = 2');
+    assert.equal(crossTenant.rows[0].count, 0);
+  } finally {
+    await engine.close();
+  }
+});

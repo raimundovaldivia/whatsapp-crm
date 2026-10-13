@@ -28,6 +28,9 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
   const [data, setData] = useState({ totals: {}, summary: [], records: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [recovering, setRecovering] = useState(false);
+  const [firstPurchaseOnly, setFirstPurchaseOnly] = useState(false);
+  const [recoveryResult, setRecoveryResult] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -45,6 +48,26 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
   const purchaseMode = basis === 'purchase';
   const journeyMode = basis === 'journey';
   const setRange = (startOffset, endOffset = 0) => { setFrom(shiftedDate(startOffset)); setTo(shiftedDate(endOffset)); };
+  const recoverOrders = async () => {
+    if (!provider) return;
+    setRecovering(true); setError(''); setRecoveryResult('');
+    try {
+      const response = await api.post('/marketing-attribution/recover-orders', {
+        from,
+        to,
+        provider,
+        firstPurchaseOnly,
+        campaignName: `Hacienda Diez Ríos · recuperación ${provider}`,
+      });
+      const recovered = Number(response.data?.data?.recovered || 0);
+      setRecoveryResult(recovered
+        ? `${recovered} pedido(s) recuperado(s) y agregado(s) a Ads.`
+        : 'No se encontraron pedidos nuevos para recuperar en este período.');
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudieron recuperar los pedidos manuales.');
+    } finally { setRecovering(false); }
+  };
 
   return (
     <main style={{ flex: 1, minWidth: 0, height: '100%', overflow: 'auto', background: colors.bgApp, color: colors.textPrimary }}>
@@ -65,9 +88,19 @@ export default function CampaignAttributionPanel({ onOpenConversation }) {
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button onClick={() => setRange(-1, -1)} style={button(colors)}>Ayer</button>
             <button onClick={() => setRange(0, 0)} style={button(colors)}>Hoy</button>
+            <button onClick={() => setRange(-1, 0)} style={button(colors)}>Ayer y hoy</button>
             <button onClick={() => setRange(-6, 0)} style={button(colors)}>7 días</button>
             <button onClick={() => setRange(-29, 0)} style={button(colors)}>30 días</button>
           </div>
+          {purchaseMode && provider && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flexBasis: '100%', paddingTop: 4 }}>
+            <button onClick={recoverOrders} disabled={recovering} style={button(colors)}>{recovering ? 'Recuperando…' : 'Recuperar pedidos manuales'}</button>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: colors.textSecondary, fontSize: 11 }}>
+              <input type="checkbox" checked={firstPurchaseOnly} onChange={event => setFirstPurchaseOnly(event.target.checked)} />
+              Solo primera compra
+            </label>
+            <span style={{ color: colors.textMuted, fontSize: 11 }}>Úsalo solo para fechas en que el canal estuvo inhabilitado; máximo 7 días.</span>
+          </div>}
+          {recoveryResult && <div style={{ color: colors.green, fontSize: 11, flexBasis: '100%' }}>{recoveryResult}</div>}
           <div style={{ color: colors.textMuted, fontSize: 11, flexBasis: '100%' }}>{journeyMode ? 'Sigue cada contacto desde el anuncio hasta el pedido y muestra el punto donde dejó de avanzar.' : purchaseMode ? 'Se muestran pedidos creados en el período y se asignan al último anuncio que inició el chat antes de la compra.' : 'Se muestran los contactos que iniciaron el chat desde un anuncio en el período y sus compras posteriores.'}</div>
         </section>
 

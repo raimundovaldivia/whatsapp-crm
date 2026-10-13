@@ -5,6 +5,37 @@ const { summarizeJourneys } = require('../services/lead-journey');
 
 router.use(requireAuth, requireRole('owner', 'admin'));
 
+router.post('/recover-orders', async (req, res) => {
+  try {
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    const from = String(req.body?.from || '');
+    const to = String(req.body?.to || '');
+    const provider = String(req.body?.provider || '');
+    if (!datePattern.test(from) || !datePattern.test(to) || !['evolution', 'kapso', 'meta'].includes(provider)) {
+      return res.status(400).json({ success: false, error: 'Indica fechas válidas y el canal que tuvo la incidencia' });
+    }
+    const start = new Date(`${from}T00:00:00Z`);
+    const end = new Date(`${to}T00:00:00Z`);
+    const days = Math.round((end - start) / 86400000);
+    if (!Number.isFinite(days) || days < 0 || days > 6) {
+      return res.status(400).json({ success: false, error: 'La recuperación debe abarcar entre 1 y 7 días' });
+    }
+    const campaignName = String(req.body?.campaignName || `Hacienda Diez Ríos · recuperación ${provider}`)
+      .trim().slice(0, 120);
+    const data = await db.recoverWhatsappAttributionsFromOrders(req.orgId, req.userId, {
+      from,
+      to,
+      provider,
+      campaignName,
+      firstPurchaseOnly: req.body?.firstPurchaseOnly === true,
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('[MarketingAttribution:RecoverOrders]', error.message);
+    res.status(500).json({ success: false, error: 'No se pudieron recuperar los pedidos manuales' });
+  }
+});
+
 router.get('/funnel', async (req, res) => {
   try {
     const datePattern = /^\d{4}-\d{2}-\d{2}$/;

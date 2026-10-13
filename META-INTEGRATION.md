@@ -51,3 +51,7 @@ La vista **Campañas a WhatsApp → Embudo y clientes en limbo** une la atribuci
 Desde el redactor de un chat se puede crear un enlace rastreable. El backend genera un token aleatorio sin teléfono ni otros datos personales, lo asocia a la conversación solo cuando el mensaje se envía y registra los clics reales. Las solicitudes conocidas de previsualización de Meta, WhatsApp y otros robots no aumentan el contador.
 
 Los enlaces usan `CRM_PUBLIC_URL` y redirigen desde `/r/:token`; esta variable debe apuntar al backend público con HTTPS.
+
+## Recuperación de pedidos durante una incidencia
+
+Cuando un canal queda inhabilitado y se pierde la referencia Click-to-WhatsApp, un owner o admin puede recuperar los pedidos manuales desde **Campañas a WhatsApp → Compras realizadas**. Debe seleccionar el canal y un período de hasta siete días; opcionalmente puede limitar el proceso a primeras compras. La recuperación solo considera pedidos no cancelados pertenecientes a ese canal y organización, es idempotente y deja la atribución marcada como `recuperada`, distinta de una atribución `exacta` entregada por Meta.
