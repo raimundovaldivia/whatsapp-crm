@@ -27,6 +27,7 @@ const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify')
 const { resumeDivaOnInbound, keepHumanAfterReply } = require('../services/conversation-mode');
 const { isDeliveredOrder, buildPaymentProofReply } = require('../services/payment-proof-reply');
 const campaignGuard = require('../services/broadcast-campaign-guard');
+const { isTerminalConversationReply } = require('../services/inbound-message-policy');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -295,6 +296,13 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     //    durante ese hilo. Cuando la intervención ya venció, este nuevo mensaje
     //    inicia una atención activa con Diva y no se pierde.
     if (updatedConv.agent_mode !== 'ai') {
+      const recentHistory = await db.getLastMessages(conversation.id, 20).catch(() => []);
+      if (isTerminalConversationReply(parsed.text, recentHistory)) {
+        await db.setAgentMode(conversation.id, 'ai');
+        if (typeof db.clearLastEscalation === 'function') await db.clearLastEscalation(conversation.id).catch(() => {});
+        io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
+        return;
+      }
       const resumed = await resumeDivaOnInbound(conversation, db);
       if (!resumed) {
         await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
@@ -309,6 +317,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     const capturedText  = parsed.text;
     const capturedFrom  = parsed.from;
     const capturedConvId = conversation.id;
+    const capturedUnsupported = parsed.unsupported === true;
 
     schedulePipeline(org.id, capturedConvId, async () => {
       const log = createBotLogger(org.name, capturedFrom);
@@ -339,7 +348,9 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       try {
         io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: true });
         const tPipeline = Date.now();
-        const result = await pipeline.processMessage(org.id, capturedConvId, textToProcess, log);
+        const result = capturedUnsupported
+          ? { response: 'Recibí un mensaje que WhatsApp no pudo interpretar. ¿Puedes reenviarlo como texto, foto o audio?', agentType: 'system' }
+          : await pipeline.processMessage(org.id, capturedConvId, textToProcess, log);
         io?.to(`org_${org.id}`).emit(`bot_typing_${org.id}`, { conversationId: capturedConvId, typing: false });
 
         if (result.skipped) { log.done(); return; }

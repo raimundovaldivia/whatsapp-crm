@@ -9,6 +9,39 @@ test('collection messages identify the order, delivery date and amount',()=>{
  assert.equal(collection.orderReference(order),'#1042 (entregado el 24 de septiembre de 2026)');
  const message=collection.buildChargeMessage(order,{template:'Hola {nombre}: pedido {pedido}, total {total}, entrega {fecha_entrega}.',bankDetails:''});
  assert.equal(message,'Hola María: pedido #1042 (entregado el 24 de septiembre de 2026), total $40.000, entrega 24 de septiembre de 2026.');
+ const grouped=collection.buildGroupedOrder([
+  order,
+  {id:'1043',source:'bot',order_label:'#1043',customer_name:'MARÍA INÉS',total_price:20000,delivered_at:'2026-09-25T15:00:00.000Z'},
+ ]);
+ assert.equal(grouped.total_price,60000);
+ assert.match(collection.buildVoucherRequestMessage(grouped),/#1042.*#1043.*\$60\.000/s);
+ assert.doesNotMatch(collection.buildVoucherRequestMessage(grouped),/datos bancarios/i);
+ assert.match(collection.buildChargeMessage(grouped,{template:'Pedidos {pedido}; total {total}.',bankDetails:'Banco de prueba'}),/#1042.*#1043.*\$60\.000.*Banco de prueba/s);
+ const range=collection.normalizeChargeDateRange({from:'2026-10-01',to:'2026-10-31'});
+ assert.equal(range.from,'2026-10-01');assert.equal(range.to,'2026-10-31');
+ assert.throws(()=>collection.normalizeChargeDateRange({from:'2026-02-30'}),/fecha válida/);
+ assert.throws(()=>collection.normalizeChargeDateRange({from:'2026-10-02',to:'2026-10-01'}),/posterior/);
+});
+
+test('pending charges apply the business date range and organization isolation',async()=>{
+ const engine=new PGlite();
+ const query=async(sql,params)=>{const r=params?.length?await engine.query(sql,params):(await engine.exec(sql)).at(-1);return {...r,rowCount:r.affectedRows??r.rows?.length??0};};
+ class Pool{query(...args){return query(...args)} async connect(){return {query,release(){}}} async end(){}}
+ try{
+  const setup=load('src/db/setup.js',{pg:{Pool}});await setup.setupDatabase();
+  await engine.exec(`
+   INSERT INTO organizations(id,name,slug) VALUES(1,'A','a'),(2,'B','b');
+   INSERT INTO conversations(id,organization_id,phone_number) VALUES(1,1,'111'),(2,2,'222');
+   INSERT INTO orders(id,organization_id,conversation_id,customer_phone,items,total_price,status,payment_method,delivered_at) VALUES
+    (1,1,1,'111','[]',100,'entregado','transferencia','2026-10-01T02:30:00Z'),
+    (2,1,1,'111','[]',200,'entregado','transferencia','2026-10-01T04:00:00Z'),
+    (3,2,2,'222','[]',300,'entregado','transferencia','2026-10-01T04:00:00Z');
+  `);
+  const db=load('src/db/database.js',{pg:{Pool}});
+  const collection=load('src/services/payment-collection.js',{'../db/database':db});
+  const charges=await collection.getPendingCharges(1,{from:'2026-10-01',to:'2026-10-01'});
+  assert.deepEqual(charges.map(order=>order.id),['2']);
+ }finally{await engine.close()}
 });
 
 test('template acceptance is pending, failure details survive reload and stale receipts cannot hide failure',async()=>{
@@ -169,4 +202,48 @@ test('collection retries confirmed failures and blocks pending, unknown and conc
  assert.equal(saved.status,'pending');assert.equal(registered[2],'wamid.charge');assert.equal(sends,1);
  assert.equal((await service.sendChargeRequest(1,stale)).reason,'envio_pendiente');assert.equal(sends,1);
  locked=false;assert.equal((await service.sendChargeRequest(1,current)).reason,'envio_en_curso');
+});
+
+test('collection sends one voucher request per customer and links every selected order',async()=>{
+ const current=[
+  {source:'bot',id:'1',customer_phone:'+56 9 1111 2222',customer_name:'Ana Pérez',total_price:10000,order_label:'#1',order_status:'entregado',charge_requested_at:null,charge_status:null,proof_status:null},
+  {source:'bot',id:'2',customer_phone:'911112222',customer_name:'Ana Pérez',total_price:15000,order_label:'#2',order_status:'entregado',charge_requested_at:null,charge_status:null,proof_status:null},
+ ];
+ let sends=0;const registered=[];let saved;
+ const pool={
+  connect:async()=>({query:async sql=>sql.includes('pg_try_advisory_lock')?{rows:[{locked:true}]}:{rows:[]},release(){}}),
+  query:async(sql,args)=>{
+   if(sql.includes('UNION ALL'))return {rows:current};
+   if(sql.includes('UPDATE orders')){registered.push(args);return {rows:[]}};
+   throw Error(`Unexpected query: ${sql.slice(0,40)}`);
+  },
+ };
+ const db={
+  getPool:()=>pool,
+  normalizePhone:value=>{const digits=String(value||'').replace(/\D/g,'');return /^9\d{8}$/.test(digits)?`56${digits}`:digits},
+  getWhatsappConfig:async()=>({provider:'kapso'}),
+  getSetting:async()=>null,
+  upsertConversation:async()=>({id:8}),
+  saveMessage:async message=>{saved=message;return message},
+  updateConversationLastMessage:async()=>{},
+ };
+ const service=load('src/services/payment-collection.js',{
+  '../db/database':db,
+  './commercial':{permitted:async()=>true},
+  './kapso-whatsapp':{sendTextMessage:async()=>{sends++;return {messages:[{id:'wamid.voucher'}]}}},
+ });
+ const result=await service.sendChargeGroupRequest(1,current,{mode:'voucher'});
+ assert.equal(result.ok,true);
+ assert.equal(result.mode,'voucher');
+ assert.equal(result.orders.length,2);
+ assert.equal(sends,1);
+ assert.equal(registered.length,2);
+ assert.ok(registered.every(args=>args[1]===1&&args[2]==='wamid.voucher'));
+ assert.equal(saved.agentType,'solicitud_comprobante');
+ assert.equal(saved.status,'pending');
+ assert.match(saved.content,/#1.*#2.*\$25\.000/s);
+ assert.equal((await service.sendChargeGroupRequest(1,[current[0],{...current[1],customer_phone:'56999999999'}],{mode:'voucher'})).reason,'clientes_mezclados');
+ current[0].proof_status='pending';
+ assert.equal((await service.sendChargeGroupRequest(1,current,{mode:'charge'})).reason,'voucher_por_revisar');
+ assert.equal(sends,1);
 });

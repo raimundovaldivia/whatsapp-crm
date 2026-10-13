@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Building2, CalendarDays, CheckCircle2, ChevronDown, CircleDollarSign, RefreshCw, UserRound, WalletCards } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Building2, CalendarDays, CheckCircle2, ChevronDown, CircleDollarSign, RefreshCw, UserRound, WalletCards, X } from 'lucide-react';
 import { paymentProofsAPI } from '../utils/api.js';
+import { fetchPaymentProofImage } from '../utils/payment-proof-image.js';
 import { useTheme } from '../theme.js';
 import './PaymentAccountsPanel.css';
 import { collectionOrders } from '../utils/account-collection.mjs';
@@ -23,7 +24,7 @@ function evidenceLabel(order) {
   return { text:'Sin respaldo de pago', color:'#94a3b8' };
 }
 
-export default function PaymentAccountsPanel({ onOpenProof }) {
+export default function PaymentAccountsPanel() {
   const { colors } = useTheme();
   const [month, setMonth] = useState(todayMonth());
   const [data, setData] = useState(null);
@@ -34,6 +35,53 @@ export default function PaymentAccountsPanel({ onOpenProof }) {
   const [view, setView] = useState('accounts');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [voucherId, setVoucherId] = useState(null);
+  const [voucherImageUrl, setVoucherImageUrl] = useState(null);
+  const [voucherLoading, setVoucherLoading] = useState(false);
+  const [voucherError, setVoucherError] = useState('');
+  const voucherRequestRef = useRef(0);
+
+  const closeVoucher = useCallback(() => {
+    voucherRequestRef.current += 1;
+    setVoucherId(null);
+    setVoucherImageUrl(null);
+    setVoucherLoading(false);
+    setVoucherError('');
+  }, []);
+
+  const openVoucher = useCallback(async id => {
+    const requestId = ++voucherRequestRef.current;
+    setVoucherId(id);
+    setVoucherImageUrl(null);
+    setVoucherError('');
+    setVoucherLoading(true);
+    try {
+      const blob = await fetchPaymentProofImage(id);
+      const url = URL.createObjectURL(blob);
+      if (requestId !== voucherRequestRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      setVoucherImageUrl(url);
+    } catch (err) {
+      if (requestId === voucherRequestRef.current) {
+        setVoucherError(err.message || 'No se pudo cargar la imagen');
+      }
+    } finally {
+      if (requestId === voucherRequestRef.current) setVoucherLoading(false);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (voucherImageUrl) URL.revokeObjectURL(voucherImageUrl);
+  }, [voucherImageUrl]);
+
+  useEffect(() => {
+    if (!voucherId) return undefined;
+    const closeOnEscape = event => { if (event.key === 'Escape') closeVoucher(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [voucherId, closeVoucher]);
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -117,7 +165,7 @@ export default function PaymentAccountsPanel({ onOpenProof }) {
             <td>{order.label}<div style={{ color:colors.textMuted, fontSize:10 }}>{order.source === 'bot' ? 'CRM' : 'Shopify'}</div></td>
             <td>{fmtDate(order.charge_date)}</td><td>{CLP(order.amount)}</td><td>{CLP(order.closing_paid)}</td>
             <td style={{ color:order.closing_due > 0 ? colors.amber : colors.success, fontWeight:800 }}>{CLP(order.closing_due)}</td>
-            <td><span style={{ color:ev.color }}>{ev.text}</span>{order.evidence?.voucher_id && onOpenProof && <button style={{ ...inputStyle, marginLeft:8, cursor:'pointer' }} onClick={() => onOpenProof(order.evidence.voucher_id)}>Ver voucher</button>}</td>
+            <td><span style={{ color:ev.color }}>{ev.text}</span>{order.evidence?.voucher_id && <button style={{ ...inputStyle, marginLeft:8, cursor:'pointer' }} onClick={() => openVoucher(order.evidence.voucher_id)}>Ver voucher</button>}</td>
           </tr>; })}</tbody>
         </table></div>
       </section>)) : accounts.length === 0 ? (
@@ -144,13 +192,34 @@ export default function PaymentAccountsPanel({ onOpenProof }) {
                   <CircleDollarSign size={16} color={order.paid ? colors.success : colors.amber} />
                   <div style={{ flex:'1 1 240px' }}><strong style={{ color:colors.textPrimary, fontSize:'12px' }}>{order.label}</strong><div style={{ color:colors.textMuted, fontSize:'10px' }}>Cargo {fmtDate(order.charge_date)}{order.payment_date ? ` · pago ${fmtDate(order.payment_date)}` : ''}{order.cash_amount > 0 ? ` · efectivo ${CLP(order.cash_amount)}` : ''}{order.transfer_amount > 0 ? ` · transferencia ${CLP(order.transfer_amount)}` : ''}</div></div>
                   <span style={{ fontSize:'10px', color:ev.color, border:`1px solid ${ev.color}55`, borderRadius:'999px', padding:'3px 7px', display:'flex', gap:'4px', alignItems:'center' }}>{order.paid && <CheckCircle2 size={11} />}{ev.text}{order.evidence?.score != null ? ` · ${order.evidence.score}/100` : ''}</span>
-                  {order.evidence?.voucher_id && onOpenProof && <button onClick={() => onOpenProof(order.evidence.voucher_id)} style={{ border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, borderRadius:'6px', padding:'4px 7px', cursor:'pointer', fontSize:'10px' }}>Ver voucher</button>}
+                  {order.evidence?.voucher_id && <button onClick={() => openVoucher(order.evidence.voucher_id)} style={{ border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, borderRadius:'6px', padding:'4px 7px', cursor:'pointer', fontSize:'10px' }}>Ver voucher</button>}
                   <strong style={{ color:order.balance > 0 ? colors.amber : colors.success, minWidth:'105px', textAlign:'right' }}>{order.balance > 0 ? 'Saldo' : 'Pagado'} {CLP(order.balance > 0 ? order.balance : order.amount)}</strong>
                 </div>;
               })}
             </div>
           </details>;
         })}
+      </div>}
+
+      {voucherId && <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Comprobante de pago ${voucherId}`}
+        onMouseDown={event => { if (event.target === event.currentTarget) closeVoucher(); }}
+        style={{ position:'fixed', inset:0, zIndex:3000, backgroundColor:'rgba(0,0,0,.72)', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}
+      >
+        <div style={{ width:'min(760px, 96vw)', maxHeight:'92vh', overflow:'auto', backgroundColor:colors.bgPanel, border:`1px solid ${colors.border}`, borderRadius:14, boxShadow:'0 24px 70px rgba(0,0,0,.5)' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, padding:'13px 16px', borderBottom:`1px solid ${colors.border}` }}>
+            <strong style={{ color:colors.textPrimary }}>Comprobante de pago</strong>
+            <button aria-label="Cerrar comprobante" onClick={closeVoucher} style={{ border:'none', background:'none', color:colors.textSecondary, cursor:'pointer', display:'flex', padding:5 }}><X size={18} /></button>
+          </div>
+          <div style={{ minHeight:260, padding:16, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            {voucherLoading ? <div style={{ color:colors.textMuted }}>Cargando comprobante…</div>
+              : voucherError ? <div style={{ color:colors.dangerSoft, textAlign:'center' }}>{voucherError}<br /><button onClick={() => openVoucher(voucherId)} style={{ ...inputStyle, marginTop:12, cursor:'pointer' }}>Reintentar</button></div>
+              : voucherImageUrl ? <img src={voucherImageUrl} alt="Comprobante de pago" style={{ display:'block', maxWidth:'100%', maxHeight:'72vh', objectFit:'contain', borderRadius:8 }} />
+              : null}
+          </div>
+        </div>
       </div>}
     </div>
   );

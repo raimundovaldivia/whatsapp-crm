@@ -10,6 +10,7 @@ import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 import { paymentProofsAPI } from '../utils/api.js';
 import { formatDateTime } from '../utils/dates.js';
+import { fetchPaymentProofImage } from '../utils/payment-proof-image.js';
 
 const STATUS_LABELS = {
   pending:       { label: 'Pendiente',      color: '#f59e0b', Icon: Clock },
@@ -85,16 +86,7 @@ export default function PaymentProofsPanel({ onOpenConversation, openProofId = n
     setImageError('');
     setImageLoading(true);
     try {
-      // Obtener imagen con el token del usuario
-      const token = localStorage.getItem('crm_token');
-      const url = paymentProofsAPI.imageUrl(proof.id);
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!resp.ok) {
-        const payload = await resp.json().catch(() => null);
-        throw new Error(payload?.error || 'No se pudo cargar la imagen');
-      }
-      const blob = await resp.blob();
-      if (!blob.type.startsWith('image/')) throw new Error('El archivo recibido no es una imagen válida');
+      const blob = await fetchPaymentProofImage(proof.id);
       setImageUrl(URL.createObjectURL(blob));
     } catch (err) {
       setImageUrl(null);

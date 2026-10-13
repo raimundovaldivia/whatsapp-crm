@@ -23,6 +23,7 @@ npm-debug.log*
 
 # Artefactos locales de auditoría
 product-audit-public.json
+artifacts/
 
 # Sistema operativo
 .DS_Store

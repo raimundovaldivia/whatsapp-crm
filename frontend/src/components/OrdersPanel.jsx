@@ -17,6 +17,11 @@ import * as ui from '../ui.js';
 import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
 
 // ─── Normalización ────────────────────────────────────────────────
+function normalizeChargePhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return /^9\d{8}$/.test(digits) ? `56${digits}` : digits;
+}
+
 function normalizeBotOrder(o) {
   return {
     _key:         `bot-${o.id}`,
@@ -151,7 +156,6 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
   const [toast,            setToast]            = useState(null);
   const [syncing,          setSyncing]          = useState(null);
   const [activeTab,        setActiveTab]        = useState(paymentsMode ? 'accounts' : 'orders');
-  const [proofToOpen,      setProofToOpen]      = useState(null);
   const [syncingAll,    setSyncingAll]    = useState(false);
   const [lastSync,      setLastSync]      = useState(null);
 
@@ -165,6 +169,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
   const [chargeSearch,   setChargeSearch]   = useState('');
   const [chargeFilter,   setChargeFilter]   = useState('all');     // all | urgent | proof | uncontacted
   const [chargeClientType, setChargeClientType] = useState('all'); // all | empresa | personal
+  const [chargeFrom,     setChargeFrom]     = useState('');
+  const [chargeTo,       setChargeTo]       = useState('');
 
   // Nuevo pedido manual
   const [showNewOrder,   setShowNewOrder]  = useState(false);
@@ -239,8 +245,18 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
   const hasReviewableProof = o => ['pending', 'pre_verified'].includes(o?.proof_status);
 
   const loadCharges = useCallback(async () => {
+    if (chargeFrom && chargeTo && chargeFrom > chargeTo) {
+      setCharges([]);
+      showToast('La fecha Desde no puede ser posterior a Hasta', 'error');
+      return;
+    }
     try {
-      const res = await api.get('/orders/pending-charge');
+      const res = await api.get('/orders/pending-charge', {
+        params: {
+          ...(chargeFrom ? { from: chargeFrom } : {}),
+          ...(chargeTo ? { to: chargeTo } : {}),
+        },
+      });
       setCharges(res.data?.orders || []);
       setChargeSettings(res.data?.settings || null);
       // Limpiar de la selección lo que ya no está por cobrar
@@ -251,7 +267,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
     } catch {
       setCharges([]);
     }
-  }, []);
+  }, [chargeFrom, chargeTo]);
 
   useEffect(() => { loadCharges(); }, [loadCharges]);
 
@@ -274,24 +290,26 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
     );
   };
 
-  const sendCharges = async () => {
+  const sendCharges = async (mode = 'charge') => {
     const selection = charges
       .filter(o => chargeSel.has(chargeKey(o)) && !hasReviewableProof(o))
       .map(o => ({ source: o.source, id: o.id }));
     if (selection.length === 0) return;
 
-    const label = selection.length === 1 ? 'este pedido' : `estos ${selection.length} pedidos`;
-    if (!window.confirm(`¿Enviar el mensaje de cobro de ${label} por WhatsApp?`)) return;
+    const selectedOrders = charges.filter(o => chargeSel.has(chargeKey(o)) && !hasReviewableProof(o));
+    const clients = new Set(selectedOrders.map(o => normalizeChargePhone(o.customer_phone) || `${o.source}:${o.id}`)).size;
+    const action = mode === 'voucher' ? 'solicitud de comprobante' : 'cobro';
+    if (!window.confirm(`¿Enviar ${action} por WhatsApp a ${clients} cliente${clients === 1 ? '' : 's'} por ${selection.length} pedido${selection.length === 1 ? '' : 's'}? Cada cliente recibirá un solo mensaje.`)) return;
 
     setSendingCharge(true);
     setChargeResults(null);
     try {
-      const res = await api.post('/orders/send-charge', { orders: selection });
-      const { sent = 0, failed = 0, results = [] } = res.data || {};
+      const res = await api.post('/orders/send-charge', { orders: selection, mode });
+      const { sent = 0, sentOrders = 0, failed = 0, results = [] } = res.data || {};
       setChargeResults(results);
-      if (failed === 0) showToast(`${sent} solicitudes aceptadas; pendientes de entrega`);
+      if (failed === 0) showToast(`${sent} cliente${sent === 1 ? '' : 's'} · ${sentOrders} pedido${sentOrders === 1 ? '' : 's'} aceptados; pendientes de entrega`);
       else if (sent === 0) showToast(`No se pudo enviar ninguno de los ${failed}`, 'error');
-      else showToast(`${sent} aceptados, ${failed} sin enviar`, 'error');
+      else showToast(`${sent} cliente${sent === 1 ? '' : 's'} aceptados, ${failed} sin enviar`, 'error');
       setChargeSel(new Set());
       await loadCharges();
     } catch (err) {
@@ -610,8 +628,8 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
         </button>}
       </div>
 
-      {activeTab === 'proofs' && <PaymentProofsPanel onOpenConversation={onSelectConversation} openProofId={proofToOpen} onProofOpened={() => setProofToOpen(null)} onProofUpdated={loadCharges} />}
-      {activeTab === 'accounts' && <PaymentAccountsPanel onOpenProof={id => { setProofToOpen(id); setActiveTab('proofs'); }} />}
+      {activeTab === 'proofs' && <PaymentProofsPanel onOpenConversation={onSelectConversation} onProofUpdated={loadCharges} />}
+      {activeTab === 'accounts' && <PaymentAccountsPanel />}
 
       {/* ── Vista Agendados ── */}
       {activeTab === 'recon' && <ConciliacionPanel colors={colors} />}
@@ -690,7 +708,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
                                      .reduce((s, o) => s + (o.total_price || 0), 0);
         const fmt = n => `$${Math.round(n || 0).toLocaleString('es-CL')}`;
         const customerKey = o => {
-          const phone = String(o.customer_phone || '').replace(/\D/g, '');
+          const phone = normalizeChargePhone(o.customer_phone);
           return phone ? `phone:${phone}` : `name:${String(o.customer_name || o.id).trim().toLowerCase()}`;
         };
         const groupMap = new Map();
@@ -759,7 +777,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
               )}
 
               <button
-                onClick={sendCharges}
+                onClick={() => sendCharges('charge')}
                 disabled={selCount === 0 || sendingCharge}
                 style={{
                   display:'flex', alignItems:'center', gap:'7px',
@@ -769,13 +787,47 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
                   border:'none', cursor: selCount === 0 || sendingCharge ? 'not-allowed' : 'pointer',
                 }}>
                 <Send size={14} />
-                {sendingCharge ? 'Enviando...' : selCount > 1 ? `Enviar cobro a ${selCount}` : 'Enviar cobro'}
+                {sendingCharge ? 'Enviando...' : 'Enviar cobro'}
+              </button>
+
+              <button
+                onClick={() => sendCharges('voucher')}
+                disabled={selCount === 0 || sendingCharge}
+                style={{
+                  display:'flex', alignItems:'center', gap:'7px',
+                  backgroundColor: selCount === 0 ? colors.bgHover : colors.bgSecondary,
+                  color: selCount === 0 ? colors.textMuted : colors.textPrimary,
+                  padding:'9px 16px', borderRadius:'8px', fontSize:'13px', fontWeight:700,
+                  border:`1px solid ${selCount === 0 ? colors.border : colors.tealSoft}`,
+                  cursor: selCount === 0 || sendingCharge ? 'not-allowed' : 'pointer',
+                }}>
+                <MessageSquare size={14} />
+                Pedir voucher
               </button>
 
               <button onClick={loadCharges} title="Recargar"
                 style={{ background:'none', color: colors.textSecondary, padding:'7px', borderRadius:'50%', display:'flex', border:'none', cursor:'pointer' }}>
                 <RefreshCw size={15} />
               </button>
+            </div>
+
+            <div style={{ display:'flex', alignItems:'end', gap:'9px', flexWrap:'wrap', padding:'11px 12px', backgroundColor:colors.bgSecondary, border:`1px solid ${colors.border}`, borderRadius:'10px' }}>
+              <label style={{ display:'flex', flexDirection:'column', gap:'4px', color:colors.textMuted, fontSize:'10px', fontWeight:700, textTransform:'uppercase' }}>
+                Desde
+                <input type="date" value={chargeFrom} max={chargeTo || undefined} onChange={e => setChargeFrom(e.target.value)}
+                  style={{ padding:'8px 10px', borderRadius:'7px', border:`1px solid ${colors.border}`, backgroundColor:colors.bgPanel, color:colors.textPrimary, colorScheme:'dark' }} />
+              </label>
+              <label style={{ display:'flex', flexDirection:'column', gap:'4px', color:colors.textMuted, fontSize:'10px', fontWeight:700, textTransform:'uppercase' }}>
+                Hasta
+                <input type="date" value={chargeTo} min={chargeFrom || undefined} onChange={e => setChargeTo(e.target.value)}
+                  style={{ padding:'8px 10px', borderRadius:'7px', border:`1px solid ${colors.border}`, backgroundColor:colors.bgPanel, color:colors.textPrimary, colorScheme:'dark' }} />
+              </label>
+              {(chargeFrom || chargeTo) && <button onClick={() => { setChargeFrom(''); setChargeTo(''); }} style={{ padding:'8px 10px', borderRadius:'7px', border:`1px solid ${colors.border}`, background:'none', color:colors.textSecondary, cursor:'pointer', fontSize:'11px' }}>
+                Limpiar fechas
+              </button>}
+              <span style={{ color:colors.textMuted, fontSize:'11px', marginLeft:'auto' }}>
+                Se usa la fecha de entrega del pedido en America/Santiago.
+              </span>
             </div>
 
             {/* Resumen de cartera: la unidad principal es el cliente, no el pedido. */}
@@ -942,6 +994,9 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
                                 <div style={{ flex:'1 1 260px', minWidth:0 }}>
                                   <div style={{ display:'flex', gap:'7px', alignItems:'center', flexWrap:'wrap' }}>
                                     <strong style={{ color:colors.textPrimary, fontSize:'12px' }}>{o.order_label}</strong>
+                                    <span style={{ color:getCrmStatusStyle(o.order_status).color, fontSize:'10px', fontWeight:700 }}>
+                                      Estado: {getCrmStatusStyle(o.order_status).label}
+                                    </span>
                                     <span style={{ color:o.charge_status === 'failed' || !o.charge_requested_at ? colors.amber : colors.textMuted, fontSize:'10px' }}>{chargeLabel}</span>
                                     {reviewProof && <span style={{ color:'#60a5fa', fontSize:'10px', fontWeight:700 }}>📎 {o.proof_status === 'pre_verified' ? 'Voucher pre-verificado: falta aprobar' : 'Voucher recibido: revisar'}</span>}
                                     {o.proofs_rejected > 0 && <span style={{ color:colors.dangerSoft, fontSize:'10px' }}>Comprobante rechazado</span>}
@@ -952,7 +1007,6 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
                                 <button onClick={e => {
                                   e.stopPropagation();
                                   if (reviewProof) {
-                                    setProofToOpen(o.proof_id);
                                     setActiveTab('proofs');
                                   } else {
                                     setChargePreview(o);

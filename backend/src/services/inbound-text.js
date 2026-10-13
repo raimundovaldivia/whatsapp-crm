@@ -3,6 +3,7 @@ const pipeline = require('./pipeline');
 const { resumeDivaOnInbound } = require('./conversation-mode');
 const { notifyAdminHumanPendingReply } = require('./notifications');
 const provider = require('./whatsapp-provider');
+const { isTerminalConversationReply } = require('./inbound-message-policy');
 
 async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead, whatsappChannelId = null, prepareMedia = null, scheduleResponse = null }) {
   if (!parsed?.from || !parsed?.text) return;
@@ -47,6 +48,13 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
   io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
 
   if (updatedConv.agent_mode !== 'ai') {
+    const recentHistory = await db.getLastMessages(conversation.id, 20).catch(() => []);
+    if (isTerminalConversationReply(parsed.text, recentHistory)) {
+      await db.setAgentMode(conversation.id, 'ai');
+      if (typeof db.clearLastEscalation === 'function') await db.clearLastEscalation(conversation.id).catch(() => {});
+      io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });
+      return;
+    }
     const resumed = await resumeDivaOnInbound(conversation, db);
     if (!resumed) {
       if (updatedConv.agent_mode === 'human') {

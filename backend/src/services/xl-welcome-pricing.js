@@ -140,6 +140,78 @@ function quantityTargets(text) {
   return result;
 }
 
+function trayCountFromText(value) {
+  const text = normalize(value);
+  const words = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6 };
+  const match = text.match(/\b(\d{1,2}|un|una|uno|dos|tres|cuatro|cinco|seis)\s+bandejas?\b/);
+  const count = match ? (words[match[1]] || Number(match[1])) : null;
+  return Number.isSafeInteger(count) && count >= 2 && count <= 10 ? count : null;
+}
+
+/**
+ * Resuelve en código las consultas de 2+ bandejas. Es el caso que más se
+ * presta a que un modelo multiplique el precio unitario y omita la escala.
+ */
+function trayCountPriceReply(userMessage, history = [], products = [], ctx = {}) {
+  if (!ctx?.web) return null;
+  const current = String(userMessage || '');
+  const lastOutbound = [...history].reverse().find(message => message?.direction === 'outbound');
+  const bareCountMatch = normalize(current).match(/^(\d{1,2}|dos|tres|cuatro|cinco|seis)$/);
+  const followsTrayQuestion = bareCountMatch && /[?¿]/.test(lastOutbound?.content || '')
+    && /\b(?:cuantas?|cantidad de)\s+bandejas?\b/.test(normalize(lastOutbound.content));
+  const count = trayCountFromText(current)
+    || (followsTrayQuestion ? trayCountFromText(`${bareCountMatch[1]} bandejas`) : null);
+  if (!count) return null;
+
+  // El catálogo completo suele aparecer en mensajes salientes; inferir sólo
+  // desde lo que el cliente dijo evita escoger talla o color por accidente.
+  const inboundContext = [current, ...history.slice().reverse()
+    .filter(message => message?.direction === 'inbound')
+    .map(message => String(message.content || ''))].slice(0, 6);
+  const size = inboundContext.map(eggSize).find(Boolean);
+  if (!size) return null;
+  const requestedColor = inboundContext.map(text => eggColor({ title: text })).find(Boolean);
+  const requestedUnits = inboundContext.map(text => presentationUnits({ title: text })).find(units => units === 20 || units === 30) || null;
+
+  const choices = new Map();
+  for (const product of products) {
+    const title = product?.title || product?.name || '';
+    const price = Number(product?.price ?? product?.priceMin);
+    const units = presentationUnits(product);
+    const color = eggColor(product);
+    if (product?.active === false || product?.available === false || Number(product?.stock ?? 1) === 0 || price <= 0) continue;
+    if (eggSize(product?.egg_size || title) !== size || !/\bbandeja\b/.test(normalize(title))) continue;
+    if (!color || (requestedColor && color !== requestedColor) || (requestedUnits && units !== requestedUnits)) continue;
+    if (![20, 30].includes(units)) continue;
+    const [priced] = apply([{ ...product, title, price, quantity: count }], ctx);
+    const total = Math.round(Number(priced.price) * count);
+    const regular = Math.round(price * count);
+    const option = { color, units, total, saving: Math.max(0, regular - total) };
+    const key = `${color}:${units}`;
+    const previous = choices.get(key);
+    if (!previous || option.total < previous.total) choices.set(key, option);
+  }
+  const options = [...choices.values()].sort((a, b) => ['blancos', 'mixtos', 'cafés'].indexOf(a.color) - ['blancos', 'mixtos', 'cafés'].indexOf(b.color));
+  if (!options.length) return null;
+
+  const format = option => {
+    const label = `${option.color[0].toUpperCase()}${option.color.slice(1)}, bandeja de ${option.units}`;
+    return `${label}: ${money(option.total)}${option.saving ? ` (ahorras ${money(option.saving)})` : ''}`;
+  };
+  const condition = size === 'M'
+    ? 'Las bandejas M mantienen su precio normal y no tienen descuento por cantidad.'
+    : 'El total ya aplica el descuento por repetir exactamente la misma bandeja; no se mezclan colores ni formatos.';
+  const close = requestedColor ? '¿Confirmamos esa opción?' : '¿Qué color prefieres?';
+  return `Para ${count} bandejas ${size}${requestedUnits ? ` de ${requestedUnits} huevos cada una` : ''}:\n${options.map(format).join('\n')}\n\n${condition} ${close}`;
+}
+
+function deliveryPriceLine(ctx, rawThreshold) {
+  if (!ctx?.web) return '';
+  const parsed = Number(String(rawThreshold ?? '').replace(/[^0-9]/g, ''));
+  const threshold = Number.isFinite(parsed) && parsed > 0 ? parsed : 10000;
+  return `🚚 Costo de despacho: $1.500 en pedidos menores a ${money(threshold)}; gratis desde ${money(threshold)}.`;
+}
+
 /**
  * Cotiza en código cantidades expresadas como número de huevos (p. ej. 100 XL).
  * Evita que el modelo confunda una caja eliminada con las bandejas activas o
@@ -244,4 +316,4 @@ Antes de las 13:00 de America/Santiago: entrega el mismo día de reparto, sujeto
 No acumules descuentos. Respeta tarifas especiales y ofertas mejores. No uses la antigua escalera de 5%, 7% o 10%. Responde precios directamente; prioriza 30 y 60 XL sin ocultar otros formatos si los pide.
 Pedidos antes de las 13:00 (America/Santiago) se entregan el mismo día de reparto, sujeto a stock y cobertura. Después de esa hora confirma la próxima fecha disponible. No prometas envío gratis adicional. No registres un pedido sin aceptación ni confirmes antes de guardarlo.`;
 }
-module.exports = { trayTotal, WEB_TIERS, forStore, TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, quantityPriceReply, prompt };
+module.exports = { trayTotal, WEB_TIERS, forStore, TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, quantityPriceReply, trayCountPriceReply, deliveryPriceLine, prompt };

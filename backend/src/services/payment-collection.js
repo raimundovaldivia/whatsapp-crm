@@ -212,9 +212,32 @@ function formatDeliveryDate(order) {
 }
 
 function orderReference(order) {
+  if (Array.isArray(order?.group_orders) && order.group_orders.length > 0) {
+    return order.group_orders.map(item => orderReference(item)).join(', ');
+  }
   const label = order?.order_label || `#${order?.id}`;
   const delivered = formatDeliveryDate(order);
   return delivered ? `${label} (entregado el ${delivered})` : label;
+}
+
+function buildVoucherRequestMessage(order) {
+  const name = firstName(order?.customer_name);
+  const greeting = name ? `Hola ${name}` : 'Hola';
+  const plural = Array.isArray(order?.group_orders) && order.group_orders.length > 1;
+  return `${greeting} 👋 Queremos confirmar el pago de ${plural ? 'tus pedidos' : 'tu pedido'} ${orderReference(order)}, por un total de ${formatCLP(order?.total_price)}.\n\n` +
+    'Si ya pagaste por transferencia, mándanos el comprobante por acá. Si pagaste por otro medio, avísanos para revisarlo. ¡Gracias!';
+}
+
+function buildGroupedOrder(orders) {
+  const list = Array.isArray(orders) ? orders.filter(Boolean) : [];
+  if (!list.length) return null;
+  return {
+    ...list[0],
+    id: list.map(order => `${order.source}:${order.id}`).join(','),
+    order_label: list.length === 1 ? list[0].order_label : `${list.length} pedidos`,
+    total_price: list.reduce((sum, order) => sum + (Number(order.total_price) || 0), 0),
+    group_orders: list,
+  };
 }
 
 /**
@@ -304,18 +327,26 @@ async function sendChargeRequest(orgId, order, opts = {}) {
 
 async function sendChargeRequestLocked(orgId, order, opts = {}) {
   if (!await require('./commercial').permitted(orgId,'payments')) return { ok:false, reason:'modulo_no_contratado' };
-  const { force = false, io = null, templateOverride = null } = opts;
+  const { force = false, io = null, templateOverride = null, mode = 'charge' } = opts;
+  const trackingOrders = Array.isArray(opts.trackingOrders) && opts.trackingOrders.length
+    ? opts.trackingOrders
+    : [order];
+
+  if (!['charge', 'voucher'].includes(mode)) return { ok: false, reason: 'modo_invalido' };
 
   if (!order?.customer_phone) {
     return { ok: false, reason: 'sin_telefono' };
   }
 
   // Do not resend unconfirmed attempts. A confirmed failure may retry immediately.
-  if (order.charge_status === 'pending' || order.charge_status === 'sent') return { ok: false, reason: 'envio_pendiente', error: 'El envío anterior espera confirmación. No se duplicó.' };
-  if (order.charge_requested_at && !order.charge_status) return { ok: false, reason: 'envio_sin_verificar', error: 'El cobro anterior no tiene confirmación verificable. Revisa su historial antes de reenviar.' };
+  if (trackingOrders.some(item => item.charge_status === 'pending' || item.charge_status === 'sent')) return { ok: false, reason: 'envio_pendiente', error: 'Un envío anterior espera confirmación. No se duplicó.' };
+  if (trackingOrders.some(item => item.charge_requested_at && !item.charge_status)) return { ok: false, reason: 'envio_sin_verificar', error: 'Un envío anterior no tiene confirmación verificable. Revisa su historial antes de reenviar.' };
   // Anti-duplicado: no volver a cobrar si se cobró hace poco.
-  if (!force && order.charge_status !== 'failed' && order.charge_requested_at) {
-    const hours = (Date.now() - new Date(order.charge_requested_at).getTime()) / 3600000;
+  const recentAttempt = trackingOrders
+    .filter(item => item.charge_status !== 'failed' && item.charge_requested_at)
+    .sort((a, b) => new Date(b.charge_requested_at) - new Date(a.charge_requested_at))[0];
+  if (!force && recentAttempt) {
+    const hours = (Date.now() - new Date(recentAttempt.charge_requested_at).getTime()) / 3600000;
     if (hours < MIN_HOURS_BETWEEN_CHARGES) {
       return { ok: false, reason: 'cobrado_recien', hoursAgo: Math.round(hours * 10) / 10 };
     }
@@ -340,7 +371,9 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
   const settings = await getChargeSettings(orgId);
   // Template puntual elegido en Despachos para este envío (sobrescribe el de Ajustes).
   if (templateOverride) { settings.waTemplate = templateOverride; settings.waTemplateStatus = 'APPROVED'; }
-  const text     = buildChargeMessage(order, settings);
+  const text = mode === 'voucher'
+    ? buildVoucherRequestMessage(order)
+    : buildChargeMessage(order, settings);
 
   let sent = null;
   let via  = 'texto';
@@ -381,7 +414,7 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
         direction:         'outbound',
         content:           via.startsWith('template:') ? `[Template: ${settings.waTemplate}] ${text}` : text,
         sentBy:            'system',
-        agentType:         'cobranza',
+        agentType:         mode === 'voucher' ? 'solicitud_comprobante' : 'cobranza',
         status:            'pending',
       });
       await db.updateConversationLastMessage(conv.id, text);
@@ -394,10 +427,64 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
     console.error('[Cobranza] Mensaje enviado pero no se pudo guardar en el hilo:', err.message);
   }
 
-  await registerChargeSent(order.source, order.id, orgId, messageId);
-  console.log(`[Cobranza] 💸 Cobro enviado a ${order.customer_phone} — pedido ${order.order_label} (${via})`);
+  for (const tracked of trackingOrders) {
+    await registerChargeSent(tracked.source, tracked.id, orgId, messageId);
+  }
+  console.log(`[Cobranza] 💸 ${mode === 'voucher' ? 'Solicitud de voucher' : 'Cobro'} enviado a ${order.customer_phone} — ${trackingOrders.length} pedido(s) (${via})`);
 
-  return { ok: true, status: 'pending', message: text, via };
+  return {
+    ok: true,
+    status: 'pending',
+    message: text,
+    via,
+    mode,
+    orders: trackingOrders.map(item => ({ source: item.source, id: item.id, label: item.order_label })),
+  };
+}
+
+/**
+ * Envía un único mensaje a un cliente por uno o varios pedidos pendientes.
+ * Vuelve a consultar la deuda bajo un lock por cliente antes de enviar para
+ * evitar cruces entre operadores, organizaciones o reintentos simultáneos.
+ */
+async function sendChargeGroupRequest(orgId, requestedOrders, opts = {}) {
+  const requested = Array.isArray(requestedOrders) ? requestedOrders : [];
+  if (!requested.length) return { ok: false, reason: 'sin_pedidos' };
+
+  const normalizeCustomerPhone = value => db.normalizePhone
+    ? db.normalizePhone(value || '')
+    : String(value || '').replace(/\D/g, '');
+  const phone = normalizeCustomerPhone(requested[0]?.customer_phone);
+  if (!phone) return { ok: false, reason: 'sin_telefono' };
+  if (requested.some(order => normalizeCustomerPhone(order.customer_phone) !== phone)) {
+    return { ok: false, reason: 'clientes_mezclados' };
+  }
+
+  const client = await getPool().connect();
+  const lockKey = `charge:${orgId}:customer:${phone}`;
+  let locked = false;
+  try {
+    const { rows: [lock] } = await client.query('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked', [lockKey]);
+    locked = !!lock.locked;
+    if (!locked) return { ok: false, reason: 'envio_en_curso' };
+
+    const pending = await getPendingCharges(orgId);
+    const keys = new Set(requested.map(order => `${order.source}:${order.id}`));
+    const current = pending.filter(order => keys.has(`${order.source}:${order.id}`));
+    if (current.length !== keys.size) return { ok: false, reason: 'no_por_cobrar' };
+    if (current.some(order => ['pending', 'pre_verified'].includes(order.proof_status))) {
+      return { ok: false, reason: 'voucher_por_revisar' };
+    }
+    if (current.some(order => normalizeCustomerPhone(order.customer_phone) !== phone)) {
+      return { ok: false, reason: 'cliente_cambio' };
+    }
+
+    const grouped = buildGroupedOrder(current);
+    return await sendChargeRequestLocked(orgId, grouped, { ...opts, trackingOrders: current });
+  } finally {
+    if (locked) await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]);
+    client.release();
+  }
 }
 
 /**
@@ -440,7 +527,29 @@ async function sendChargeTemplate(order, settings, wc) {
  * 'pre_verified' siguen por cobrar, pero se exponen para que el equipo revise
  * el voucher en vez de volver a enviarle un cobro al cliente.
  */
-async function getPendingCharges(orgId) {
+function normalizeChargeDateRange({ from = null, to = null } = {}) {
+  const normalize = (value, label) => {
+    if (value == null || value === '') return null;
+    const text = String(value).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      throw Object.assign(new Error(`${label} debe usar formato YYYY-MM-DD`), { status: 400 });
+    }
+    const [year, month, day] = text.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      throw Object.assign(new Error(`${label} no es una fecha válida`), { status: 400 });
+    }
+    return text;
+  };
+  const range = { from: normalize(from, 'Desde'), to: normalize(to, 'Hasta') };
+  if (range.from && range.to && range.from > range.to) {
+    throw Object.assign(new Error('La fecha Desde no puede ser posterior a Hasta'), { status: 400 });
+  }
+  return range;
+}
+
+async function getPendingCharges(orgId, dateRange = {}) {
+  const range = normalizeChargeDateRange(dateRange);
   const pool = getPool();
   const { rows } = await pool.query(
     `SELECT 'bot'                        AS source,
@@ -457,6 +566,7 @@ async function getPendingCharges(orgId) {
             o.status                     AS order_status,
             o.created_at                 AS created_at,
             o.delivered_at               AS delivered_at,
+            COALESCE(o.delivered_at, o.payment_marked_at, o.created_at) AS reference_date,
             o.items::text                AS items,
             o.payment_marked_at          AS payment_marked_at,
             o.charge_requested_at        AS charge_requested_at,
@@ -497,6 +607,8 @@ async function getPendingCharges(orgId) {
         AND o.payment_method IN ('transferencia', 'mixto')
         AND o.status = 'entregado'
         AND COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric > 0
+        AND ($2::date IS NULL OR (COALESCE(o.delivered_at, o.payment_marked_at, o.created_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date >= $2::date)
+        AND ($3::date IS NULL OR (COALESCE(o.delivered_at, o.payment_marked_at, o.created_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date <= $3::date)
         AND NOT EXISTS (
           SELECT 1 FROM payment_proofs pp
            WHERE pp.organization_id = o.organization_id
@@ -523,6 +635,7 @@ async function getPendingCharges(orgId) {
             s.crm_status                 AS order_status,
             s.shopify_created_at         AS created_at,
             s.delivered_at               AS delivered_at,
+            COALESCE(s.delivered_at, s.payment_marked_at, s.shopify_created_at, s.synced_at) AS reference_date,
             s.items::text                AS items,
             s.payment_marked_at          AS payment_marked_at,
             s.charge_requested_at        AS charge_requested_at,
@@ -548,9 +661,11 @@ async function getPendingCharges(orgId) {
         AND s.crm_status = 'entregado'
         AND s.financial_status IS DISTINCT FROM 'paid'
         AND COALESCE(NULLIF(s.total_price::text, ''), '0')::numeric > 0
+        AND ($2::date IS NULL OR (COALESCE(s.delivered_at, s.payment_marked_at, s.shopify_created_at, s.synced_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date >= $2::date)
+        AND ($3::date IS NULL OR (COALESCE(s.delivered_at, s.payment_marked_at, s.shopify_created_at, s.synced_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date <= $3::date)
 
       ORDER BY payment_marked_at DESC NULLS LAST, created_at DESC`,
-    [orgId]
+    [orgId, range.from, range.to]
   );
 
   return rows.map(r => ({
@@ -635,11 +750,15 @@ module.exports = {
   getChargeSettings,
   saveChargeSettings,
   buildChargeMessage,
+  buildVoucherRequestMessage,
+  buildGroupedOrder,
   formatDeliveryDate,
   orderReference,
   sendChargeRequest,
+  sendChargeGroupRequest,
   getPendingCharges,
   getOrderForCharge,
+  normalizeChargeDateRange,
   MIN_HOURS_BETWEEN_CHARGES,
   DEFAULT_TEMPLATE,
 };

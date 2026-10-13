@@ -551,8 +551,9 @@ router.patch('/scheduled/:id/cancel', async (req, res) => {
  */
 router.get('/pending-charge', async (req, res) => {
   try {
+    const dateRange = collection.normalizeChargeDateRange({ from: req.query.from, to: req.query.to });
     const [orders, settings] = await Promise.all([
-      collection.getPendingCharges(req.orgId),
+      collection.getPendingCharges(req.orgId, dateRange),
       collection.getChargeSettings(req.orgId),
     ]);
     // Preview del mensaje tal como le llegaría a cada cliente
@@ -568,7 +569,7 @@ router.get('/pending-charge', async (req, res) => {
     });
   } catch (err) {
     console.error('[Orders/pending-charge]', err.message);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 
@@ -590,12 +591,18 @@ router.post('/verify-charges', async (req, res) => {
 });
 
 router.post('/send-charge', async (req, res) => {
-  const { orders: selection = [], force = false, template = null } = req.body;
+  const { orders: selection = [], force = false, template = null, mode = 'charge' } = req.body;
+  if (!['charge', 'voucher'].includes(mode)) {
+    return res.status(400).json({ success: false, error: "mode debe ser 'charge' o 'voucher'" });
+  }
   if (template && template !== collection.CHARGE_TEMPLATE_NAME) {
     return res.status(400).json({ success: false, error: `El template "${template}" no es compatible con cobranza. Usa ${collection.CHARGE_TEMPLATE_NAME}.` });
   }
   if (!Array.isArray(selection) || selection.length === 0) {
     return res.status(400).json({ success: false, error: 'Selecciona al menos un pedido' });
+  }
+  if (selection.some(item => !item || !['bot', 'shopify'].includes(item.source) || item.id == null || String(item.id).length > 100)) {
+    return res.status(400).json({ success: false, error: 'La selección contiene pedidos inválidos' });
   }
   if (selection.length > 100) {
     return res.status(400).json({ success: false, error: 'Máximo 100 pedidos por envío' });
@@ -603,9 +610,11 @@ router.post('/send-charge', async (req, res) => {
 
   try {
     const pending = await collection.getPendingCharges(req.orgId);
+    const uniqueSelection = [...new Map(selection.map(sel => [`${sel?.source}:${sel?.id}`, sel])).values()];
+    const selected = [];
     const results = [];
 
-    for (const sel of selection) {
+    for (const sel of uniqueSelection) {
       const order = pending.find(
         o => o.source === sel.source && String(o.id) === String(sel.id)
       );
@@ -617,18 +626,33 @@ router.post('/send-charge', async (req, res) => {
         results.push({ ...sel, ok: false, reason: 'voucher_por_revisar', proofId: order.proof_id });
         continue;
       }
-      const r = await collection.sendChargeRequest(req.orgId, order, { force, io, templateOverride: template });
+      selected.push(order);
+    }
+
+    const grouped = new Map();
+    selected.forEach(order => {
+      const phone = db.normalizePhone(order.customer_phone || '');
+      const key = phone || `${order.source}:${order.id}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(order);
+    });
+
+    for (const orders of grouped.values()) {
+      const lead = orders[0];
+      const r = await collection.sendChargeGroupRequest(req.orgId, orders, { force, io, templateOverride: template, mode });
       results.push({
-        source: order.source,
-        id:     order.id,
-        label:  order.order_label,
-        name:   order.customer_name,
+        source: lead.source,
+        id:     lead.id,
+        label:  orders.map(order => order.order_label).join(', '),
+        name:   lead.customer_name,
+        orderCount: orders.length,
         ...r,
       });
     }
 
     const sent = results.filter(r => r.ok).length;
-    res.json({ success: true, sent, failed: results.length - sent, results });
+    const sentOrders = results.filter(r => r.ok).reduce((sum, result) => sum + (result.orderCount || 0), 0);
+    res.json({ success: true, sent, sentOrders, failed: results.length - sent, mode, results });
   } catch (err) {
     console.error('[Orders/send-charge]', err.message);
     res.status(500).json({ success: false, error: err.message });

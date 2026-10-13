@@ -99,3 +99,16 @@ test('internal silence explanations never become customer responses', () => {
   for (const text of ['No respondo. El cliente solo confirmó con un emoji de aprobación. La conversación está cerrada correctamente y cualquier mensaje adicional sería forzado.', '[NO_RESPONSE]', 'No es necesario responder: solo agradeció.', 'El último mensaje está incompleto. Espero el resto para responder apropiadamente.']) assert.equal(isInternalSilenceResponse(text), true, text);
   for (const text of ['No puedo confirmar la entrega todavía.', 'Anotado, 30 XL.', '¿Quieres que te avise?']) assert.equal(isInternalSilenceResponse(text), false, text);
 });
+
+test('distingue cierres reales de mensajes que todavía requieren atención', () => {
+  const { isNoResponseNeeded, isTerminalConversationReply } = require('../src/services/inbound-message-policy');
+  for (const text of ['Gracias', 'ok gracias', 'No gracias', 'Por ahora no necesito, gracias', 'Yo aviso', '👍']) {
+    assert.equal(isNoResponseNeeded(text), true, text);
+  }
+  for (const text of ['Sí porfa', 'Buen día', 'Los Aromos 123', '¿Cuál es el precio?', 'Necesito 2 bandejas']) {
+    assert.equal(isNoResponseNeeded(text), false, text);
+  }
+  assert.equal(isTerminalConversationReply('Gracias', [{ direction: 'outbound', content: 'Listo, quedó registrado.' }]), true);
+  assert.equal(isTerminalConversationReply('Gracias', [{ direction: 'outbound', content: '¿Confirmas la dirección?' }]), false);
+  assert.equal(isTerminalConversationReply('No gracias', [{ direction: 'outbound', content: '¿Quieres comprar?' }]), true);
+});

@@ -44,16 +44,18 @@ test('media downloads use the configured Evolution endpoint, never untrusted med
   await assert.rejects(service.downloadMessageMedia(parsed, config), /10 MB/);
 });
 
-function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, scheduleResponse = null, onProcess = () => {} } = {}) {
+function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, scheduleResponse = null, onProcess = () => {}, history = [] } = {}) {
   const saved = [], sent = [], pipelineCalls = [], queries = [];
   const conv = { id: 5, agent_mode: mode, agent_mode_changed_at: new Date().toISOString() };
   const service = load('src/services/inbound-text.js', {
     '../db/database': {
       upsertConversation: async (...args) => { assert.equal(args[3], 9); return conv; },
       getConversationById: async () => conv,
-      getLastMessages: async () => saved,
+      getLastMessages: async () => [...history, ...saved],
       saveMessage: async message => { saved.push(message); return duplicate ? null : { ...message, id: saved.length }; },
       updateConversationLastMessage: async () => {}, updateLastInbound: async () => {},
+      setAgentMode: async (_id, nextMode) => { conv.agent_mode = nextMode; },
+      clearLastEscalation: async () => {},
       getPool: () => ({ query: async (...args) => { queries.push(args); } }),
     },
     './conversation-mode': { resumeDivaOnInbound: async () => false },
@@ -62,8 +64,8 @@ function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, sche
     './pipeline': { processMessage: async (...args) => { pipelineCalls.push(args); onProcess(conv); return { response: 'Anotado', agentType: 'orders' }; } },
     './whatsapp-provider': { sendTextMessage: async (...args) => { sent.push(args); return { messageId: 'OUT1' }; }, messageId: result => result.messageId },
   });
-  const invoke = prepareMedia => service.processInboundText({ org: { id: 1 }, whatsappConfig: config, whatsappChannelId: 9,
-    parsed: { from: '56911112222', messageId: 'MEDIA1', type: 'audio', text: '🎤 [Audio]', mediaId: evolution.mediaReference(9, 'MEDIA1') }, prepareMedia, scheduleResponse });
+  const invoke = (prepareMedia, text = '🎤 [Audio]') => service.processInboundText({ org: { id: 1 }, whatsappConfig: config, whatsappChannelId: 9,
+    parsed: { from: '56911112222', messageId: 'MEDIA1', type: 'audio', text, mediaId: evolution.mediaReference(9, 'MEDIA1') }, prepareMedia, scheduleResponse });
   return { saved, sent, pipelineCalls, queries, invoke, conv };
 }
 
@@ -85,6 +87,17 @@ test('duplicate, human-controlled and unsubscribed audio messages do not invoke 
     assert.equal(h.pipelineCalls.length, 0);
     assert.equal(h.sent.length, 0);
   }
+});
+
+test('a terminal reply closes human mode silently so the next message can return to the bot', async () => {
+  const h = inboundHarness({
+    mode: 'human',
+    history: [{ direction: 'outbound', content: 'Listo, tu pedido quedó confirmado.' }],
+  });
+  await h.invoke(null, 'Gracias');
+  assert.equal(h.conv.agent_mode, 'ai');
+  assert.equal(h.pipelineCalls.length, 0);
+  assert.equal(h.sent.length, 0);
 });
 
 test('failed transcription gives an honest fallback without inventing audio content', async () => {

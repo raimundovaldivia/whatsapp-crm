@@ -23,6 +23,7 @@ import AdminAlertsBanner    from './components/AdminAlertsBanner.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
+import { deriveAttentionState } from './utils/conversation-attention.js';
 
 export default function App() {
   const [appState, setAppState] = useState('loading');
@@ -239,16 +240,8 @@ export default function App() {
   const handleAgentModeChanged = useCallback(({ conversationId, mode }) => {
     setConversations(prev => prev.map(c => {
       if (c.id !== conversationId) return c;
-      const attentionState = ['coordinating', 'human'].includes(mode)
-        ? 'requires_human'
-        : c.last_message_direction === 'inbound'
-          ? (Date.now() - new Date(c.last_message_created_at || c.last_message_at || 0).getTime() >= 2 * 60 * 1000
-              ? 'bot_unanswered'
-              : 'waiting_bot')
-          : c.last_message_direction === 'outbound' && c.last_message_sent_by === 'ai'
-            ? 'handled_by_bot'
-            : 'waiting_customer';
-      return { ...c, agent_mode: mode, attention_state: attentionState };
+      const next = { ...c, agent_mode: mode };
+      return { ...next, attention_state: deriveAttentionState(next) };
     }));
   }, []);
 
@@ -288,7 +281,7 @@ export default function App() {
     const syncWhenVisible = () => {
       if (document.visibilityState === 'visible') syncConversations();
     };
-    const timer = window.setInterval(syncWhenVisible, 15000);
+    const timer = window.setInterval(syncWhenVisible, 60000);
     window.addEventListener('focus', syncWhenVisible);
     window.addEventListener('online', syncWhenVisible);
     document.addEventListener('visibilitychange', syncWhenVisible);

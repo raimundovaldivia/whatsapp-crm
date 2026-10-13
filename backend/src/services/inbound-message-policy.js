@@ -46,6 +46,48 @@ function isBareLinkMessage(value) {
   return remainder.length === 0;
 }
 
+const TERMINAL_DECLINE_PATTERNS = [
+  /^(?:no|nop|nope)[, .!]*(?:muchas )?gracias[.!]*$/,
+  /^por ahora no(?: necesito| gracias|, gracias| necesito, gracias)?[.!]*$/,
+  /^no (?:voy a querer|agendare nada|necesito por ahora)[.!]*$/,
+  /^(?:yo|te|les?) aviso[.!]*$/,
+];
+
+const TERMINAL_ACKNOWLEDGEMENT_PATTERNS = [
+  /^(?:gracias|gracias!+|muchas gracias|mil gracias|grs|gracias gracias|grssias)[.!]*$/,
+  /^(?:ok|okay|oki|listo|perfecto|super|excelente)[, .!]*(?:muchas )?gracias[.!]*$/,
+  /^(?:de nada|buena|vale)[.!]*$/,
+];
+
+function isEmojiAcknowledgement(value) {
+  const compact = String(value || '').replace(/[\uFE0F\u200D\u{1F3FB}-\u{1F3FF}\s]/gu, '');
+  return /^(?:👌|👍|🙏|✅|🙌|😊|🙂|❤️|❤)+$/u.test(compact);
+}
+
+/**
+ * Mensajes que cierran el hilo y no requieren que otra persona responda.
+ * Es intencionalmente estricto: no incluye saludos, direcciones, preguntas ni
+ * aceptaciones como "sí porfa".
+ */
+function isNoResponseNeeded(value) {
+  const text = normalizeInboundText(value).replace(/[¿?]/g, '').trim();
+  if (!text || text.length > 100) return false;
+  return isEmojiAcknowledgement(value)
+    || isLikelyAutomaticReply(value)
+    || TERMINAL_DECLINE_PATTERNS.some(pattern => pattern.test(text))
+    || TERMINAL_ACKNOWLEDGEMENT_PATTERNS.some(pattern => pattern.test(text));
+}
+
+// Al cambiar de modo humano a Diva exigimos además que el último mensaje del
+// equipo no sea una pregunta. Así un "gracias" no corta una aclaración abierta.
+function isTerminalConversationReply(value, history = []) {
+  const text = normalizeInboundText(value).replace(/[¿?]/g, '').trim();
+  if (TERMINAL_DECLINE_PATTERNS.some(pattern => pattern.test(text)) || isLikelyAutomaticReply(value)) return true;
+  if (!isNoResponseNeeded(value)) return false;
+  const lastOutbound = [...history].reverse().find(message => message.direction === 'outbound');
+  return Boolean(lastOutbound?.content) && !/[?¿]/.test(lastOutbound.content);
+}
+
 // Only acknowledgements after a closed statement, never answers to questions.
 function isClosingAcknowledgement(value, history = [], state) {
   if (!['scheduled', 'confirmed', 'awaiting_payment', 'delivered'].includes(state)) return false;
@@ -72,4 +114,6 @@ module.exports = {
   isLikelyAutomaticReply,
   isGiftedStockReply,
   isBareLinkMessage,
+  isNoResponseNeeded,
+  isTerminalConversationReply,
 };

@@ -102,3 +102,44 @@ const products=[
 ];
 a.equal(p.quantityPriceReply('¿Cuánto sale la caja de 100 XL?',[],products,p.forStore({enabled:true})),null);
 });
+
+require('node:test')('quotes two trays deterministically with exact totals and savings',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const products=[
+  {id:1,title:'Huevos XL blancos · Bandeja de 30',price:10990,stock:10,active:true},
+  {id:2,title:'Huevos XL mixtos · Bandeja de 30',price:11990,stock:10,active:true},
+  {id:3,title:'Huevos XL cafés · Bandeja de 30',price:12990,stock:10,active:true},
+];
+const reply=p.trayCountPriceReply('Quiero 2 bandejas XL de 30',[],products,p.forStore({enabled:true}));
+a.match(reply,/Blancos, bandeja de 30: \$20\.100 \(ahorras \$1\.880\)/);
+a.match(reply,/Mixtos, bandeja de 30: \$22\.000 \(ahorras \$1\.980\)/);
+a.match(reply,/Cafés, bandeja de 30: \$23\.800 \(ahorras \$2\.180\)/);
+a.match(reply,/no se mezclan colores ni formatos/);
+});
+
+require('node:test')('infers a concise tray count only from the customer context',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const products=[{title:'Huevos XL cafés · Bandeja de 30',price:12990,stock:10,active:true}];
+const history=[
+  {direction:'inbound',content:'Quiero XL cafés de 30'},
+  {direction:'outbound',content:'¿Cuántas bandejas necesitas?'},
+];
+a.match(p.trayCountPriceReply('2',history,products,p.forStore({enabled:true})),/\$23\.800/);
+a.equal(p.trayCountPriceReply('2',[],products,p.forStore({enabled:true})),null);
+a.equal(p.trayCountPriceReply('2 bandejas',[],products,p.forStore({enabled:true})),null);
+});
+
+require('node:test')('explains that M trays keep their regular total',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+const products=[{title:'Huevos M mixtos · Bandeja de 30',price:8990,stock:10,active:true}];
+const reply=p.trayCountPriceReply('2 bandejas M de 30',[],products,p.forStore({enabled:true}));
+a.match(reply,/\$17\.980/);
+a.match(reply,/no tienen descuento por cantidad/);
+});
+
+require('node:test')('delivery fee matches the public storefront rule',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
+a.equal(p.deliveryPriceLine({},10000),'');
+a.match(p.deliveryPriceLine(p.forStore({enabled:true}),'15000'),/\$1\.500.*gratis desde \$15\.000/);
+a.match(p.deliveryPriceLine(p.forStore({enabled:true}),null),/gratis desde \$10\.000/);
+});

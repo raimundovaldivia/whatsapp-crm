@@ -468,6 +468,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
     }
   } catch { /* JSON inválido — ignorar */ }
   const deliveryRaw   = deliveryEnabled ? await db.getSetting(orgId, 'delivery_info') : null;
+  const freeShippingRaw = deliveryEnabled && xlContext.web ? await db.getSetting(orgId, 'store_free_shipping') : null;
   let deliverySection = '';
   let deliverySchedule = '';   // el horario tal cual, para responder "¿a qué hora llega?" con dato real
   if (deliveryRaw) {
@@ -479,8 +480,14 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
       if (d.zone)           lines.push(`📍 Zona de reparto: ${d.zone}`);
       if (d.minimum)        lines.push(`💰 Pedido mínimo: ${d.minimum}`);
       if (d.paymentMethods) lines.push(`💳 Métodos de pago: ${d.paymentMethods}`);
+      const priceLine = deliveryEnabled ? xlPricing.deliveryPriceLine(xlContext, freeShippingRaw) : '';
+      if (priceLine) lines.push(priceLine);
       if (lines.length) deliverySection = `## Información de Entrega\n${lines.join('\n')}`;
     } catch { /* JSON inválido — ignorar */ }
+  }
+  if (!deliverySection) {
+    const priceLine = deliveryEnabled ? xlPricing.deliveryPriceLine(xlContext, freeShippingRaw) : '';
+    if (priceLine) deliverySection = `## Información de Entrega\n${priceLine}`;
   }
   const nowCl = new Date();
   const deliveryHoursEnded = deliveryWindowEnded(deliverySchedule, nowCl);
@@ -1509,6 +1516,13 @@ REGLAS ABSOLUTAS:
   // el catálogo activo. Así Diva no confunde una caja legacy con 5 bandejas
   // de 20 ni se limita a decir que existe un descuento sin mostrar el total.
   if (!promotionContext?.active && !activeOrder && xlContext?.web) {
+    const trayCountPriceReply = xlPricing.trayCountPriceReply(userMessage, history, products, xlContext);
+    if (trayCountPriceReply) {
+      await db.updatePipelineState(conversationId, 'interested', undefined);
+      L.agent('sales', 0);
+      L.step('tray_count_price_quote', 'total exacto por cantidad desde catálogo activo');
+      return { response: trayCountPriceReply, agentType: 'sales', newState: 'interested' };
+    }
     const quantityPriceReply = xlPricing.quantityPriceReply(userMessage, history, products, xlContext);
     if (quantityPriceReply) {
       await db.updatePipelineState(conversationId, 'interested', undefined);

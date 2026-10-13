@@ -77,20 +77,22 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   }, [search]);
 
   const HOT_STATES   = ['interested', 'collecting_order'];
+  const CLOSED_STATES = new Set(['done', 'delivered', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out', 'template_sent']);
   const now          = Date.now();
   const h24          = 24 * 60 * 60 * 1000;
   const isStalled    = c => {
     const last = new Date(c.last_message_at).getTime();
-    return c.pipeline_state !== 'done' && (now - last) > h24;
+    return Boolean(c.last_message) && !CLOSED_STATES.has(c.pipeline_state)
+      && c.attention_state !== 'no_response_needed' && (now - last) > h24;
   };
 
   const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
-  const coordinatingCount = conversations.filter(c => c.agent_mode === 'coordinating').length;
+  const coordinatingCount = conversations.filter(c => c.agent_mode === 'coordinating' && c.attention_state === 'requires_human').length;
   const humanCount = conversations.filter(c => c.agent_mode === 'human').length;
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
   const attentionCount = conversations.filter(c => ['requires_human', 'bot_unanswered'].includes(c.attention_state)).length;
-  const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state) && !c.hot_lead_excluded).length;
+  const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state) && !c.hot_lead_excluded && c.attention_state !== 'no_response_needed').length;
   const stalledCount = conversations.filter(isStalled).length;
   const isEvolution = c => c?.whatsapp_provider === 'evolution';
   const isMeta = c => c?.whatsapp_provider === 'meta' || c?.whatsapp_provider === 'kapso';
@@ -103,11 +105,11 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const filtered = conversations.filter(c => {
     if (!matchesProvider(c)) return false;
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
-    if (activeTab === 'coordinating' && c.agent_mode !== 'coordinating') return false;
+    if (activeTab === 'coordinating' && (c.agent_mode !== 'coordinating' || c.attention_state !== 'requires_human')) return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
     if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
     if (activeTab === 'attention' && !['requires_human', 'bot_unanswered'].includes(c.attention_state)) return false;
-    if (activeTab === 'hot'     && (!HOT_STATES.includes(c.pipeline_state) || c.hot_lead_excluded)) return false;
+    if (activeTab === 'hot'     && (!HOT_STATES.includes(c.pipeline_state) || c.hot_lead_excluded || c.attention_state === 'no_response_needed')) return false;
     if (activeTab === 'stalled' && !isStalled(c))                          return false;
     const q = search.toLowerCase();
     return (

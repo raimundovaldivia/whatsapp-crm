@@ -219,6 +219,7 @@ function parseWebhookMessage(body, event) {
     let mediaUrl = null; // URL directa de Kapso (disponible en message.kapso.media_url)
     let location = null;      // { lat, lng, name, address } para type 'location'
     let interactiveId = null; // id del botón / opción elegida (interactive)
+    let unsupported = false;
 
     if (message.type === 'text') {
       text = message.text?.body;
@@ -308,6 +309,10 @@ function parseWebhookMessage(body, event) {
       text = (cname || cphone) ? `[Contacto compartido: ${[cname, cphone].filter(Boolean).join(' ')}]` : null;
     } else {
       text = message.kapso?.content || null;
+      if (/^\[Unsupported message\b/i.test(String(text || '')) || /\bError\s*131051\b/i.test(String(text || ''))) {
+        unsupported = true;
+        text = '📎 [Mensaje no compatible de WhatsApp]';
+      }
     }
     // Solo retornar null si no hay texto NI media NI ubicación
     if (!text && !mediaId && !mediaUrl && !location) return null;
@@ -334,6 +339,7 @@ function parseWebhookMessage(body, event) {
       mediaUrl,   // URL directa de descarga (usar esta cuando esté disponible)
       location,
       interactiveId,
+      unsupported,
       ...(attribution ? { attribution } : {}),
       ...(adReferral ? { adReferral } : {}),
     };
