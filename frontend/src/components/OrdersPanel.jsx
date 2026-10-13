@@ -174,7 +174,6 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
 
   // Nuevo pedido manual
   const [showNewOrder,   setShowNewOrder]  = useState(false);
-  const [products,       setProducts]      = useState([]);
 
   // Selección masiva
   const [selected,       setSelected]      = useState(new Set()); // Set de _key
@@ -344,10 +343,6 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
   };
 
   useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    api.get('/products').then(r => setProducts(r.data?.products || [])).catch(() => {});
-  }, []);
 
   // Normalizar y mezclar
   const allNormalized = [
@@ -1262,7 +1257,6 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
       {showNewOrder && (
         <NewOrderModal
           colors={colors}
-          products={products}
           onClose={() => setShowNewOrder(false)}
           onSaved={() => { setShowNewOrder(false); load(); showToast('✅ Pedido creado'); }}
         />
@@ -1835,10 +1829,12 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
 }
 
 // ─── Modal nuevo pedido manual ────────────────────────────────────
-function NewOrderModal({ colors, products, onClose, onSaved }) {
+function NewOrderModal({ colors, onClose, onSaved }) {
   const EMPTY_ITEM = { name: '', quantity: 1, price: '' };
   const [form, setForm] = useState({ customerName: '', phone: '', address: '', city: '', status: 'nuevo' });
   const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
+  const [products, setProducts] = useState([]);
+  const [productsLoading, setProductsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
@@ -1847,8 +1843,27 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
   const [suggestFor, setSuggestFor]   = useState(null); // 'customerName' | 'phone' | null
   const suggestTimer = useRef(null);
   const suggestSeq   = useRef(0);
+  const productsSeq  = useRef(0);
 
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    const seq = ++productsSeq.current;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setProductsLoading(true);
+      try {
+        const phone = form.phone.replace(/\D/g, '').length >= 9 ? form.phone.trim() : '';
+        const res = await api.get('/products/order-options', { params: { phone } });
+        if (!cancelled && seq === productsSeq.current) setProducts(res.data?.products || []);
+      } catch (_) {
+        if (!cancelled && seq === productsSeq.current) setProducts([]);
+      } finally {
+        if (!cancelled && seq === productsSeq.current) setProductsLoading(false);
+      }
+    }, form.phone.trim() ? 250 : 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [form.phone]);
 
   const fetchSuggestions = (field, text) => {
     clearTimeout(suggestTimer.current);
@@ -2010,12 +2025,14 @@ function NewOrderModal({ colors, products, onClose, onSaved }) {
                 <div key={idx} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                   {/* Selector de producto */}
                   <div style={{ flex: 2, minWidth: 0 }}>
-                    {products.length > 0 ? (
+                    {productsLoading ? (
+                      <div style={{ ...inp, color: colors.textSecondary, fontSize: '12px' }}>Cargando productos del cliente…</div>
+                    ) : products.length > 0 ? (
                       <select style={{ ...inp, width: '100%' }}
                         onChange={e => { selectProduct(idx, e.target.value); }}
                         defaultValue="">
                         <option value="">— Seleccionar o escribir —</option>
-                        {products.filter(p => p.active !== false).map(p => (
+                        {products.map(p => (
                           <option key={p.id} value={String(p.id)}>{p.title} · ${Number(p.price).toLocaleString('es-CL')}</option>
                         ))}
                       </select>

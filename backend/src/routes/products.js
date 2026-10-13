@@ -13,9 +13,22 @@ const router     = express.Router();
 const db         = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
 const r2         = require('../services/r2-storage');
+const { getOrderProductCatalog } = require('../services/order-product-catalog');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
+
+// Catálogo contextual para operaciones: misma organización del usuario,
+// cliente seleccionado y sin productos históricos/deprecados.
+router.get('/order-options', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  try {
+    const products = await getOrderProductCatalog(db.getPool(), req.orgId, req.query.phone);
+    res.json({ products });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 router.use(requireRole('owner', 'admin'));
 
 // ── GET /api/products ──────────────────────────────────────────────
