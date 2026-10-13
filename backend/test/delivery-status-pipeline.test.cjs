@@ -26,8 +26,8 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
     },
     getContact: async () => ({ name: 'Katherine Andrea Bravo Becerra', contact_type: 'customer', client_type: 'personal' }),
     getPrimaryDataSource: async () => null,
-    getCachedProducts: async () => [],
-    getProducts: async () => [],
+    getCachedProducts: async () => options.products || [],
+    getProducts: async () => options.products || [],
     getOrderDraft: async () => options.orderDraft || {},
     getActiveOrderForBot: async () => options.activeOrder === false ? null : ({
       id: 88,
@@ -39,6 +39,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       shipping_address: { address: 'Gobernador Demetrio Reygada 4005', city: 'Coquimbo' },
       ...(options.activeOrder || {}),
     }),
+    updateOrder: async (id, values) => { options.updatedOrder?.({ id, values }); return { id, ...values }; },
     updatePipelineState: async (_id, state, draft) => stateUpdates.push({ state, draft }),
     getPool: () => ({
       query: async sql => ({
@@ -59,12 +60,16 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       isBareLinkMessage: () => false,
     },
     './shopify-api': { formatProductsForAI: () => '' },
+    './order-pricing': require('../src/services/order-pricing'),
+    './order-quote': require('../src/services/order-quote'),
     './promotion-context': {
       fromHistory: () => null,
       restore: () => null,
       promptSection: () => '',
       alignPromotedAvailability: text => text,
       selectedOffer: () => null,
+      selectedFreeGift: () => null,
+      appliesToDelivery: () => false,
     },
     './payment-collection': { getPendingCharges: async () => [] },
     './scheduled-orders': {
@@ -75,8 +80,9 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
     },
     './agents/orchestrator': {
       checkEscalation: async () => options.escalation || ({ escalate: false, urgency: 'low', reason: '' }),
-      classifyIntent: async () => ({ intent: 'post_sale', confidence: 1, reason: 'consulta de reparto' }),
+      classifyIntent: async () => ({ intent: options.intent || 'post_sale', confidence: 1, reason: 'consulta de reparto' }),
     },
+    ...(options.ordersAgent ? { './agents/orders': options.ordersAgent } : {}),
   });
 }
 
@@ -282,4 +288,30 @@ test('los datos de cobranza respaldan la respuesta si payment_info está vacío'
 
   assert.match(result.response, /Cuenta Corriente 987654/);
   assert.match(result.response, /comprobante/i);
+});
+
+test('un pedido por despachar todavía acepta cambios de productos', async () => {
+  const stateUpdates = [];
+  const pipeline = buildPipeline(null, 'por_despachar', {
+    intent: 'modify_order',
+    stateUpdates,
+    products: [{ id: 'p1', title: 'Queso maduro', priceMin: 12000, inventoryQuantity: 10 }],
+    ordersAgent: {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => ({ ...draft, items: [{ product_name: 'Queso maduro', quantity: 1 }] }),
+      generateOrderResponse: async () => 'Cambié el producto a queso maduro. ¿Confirmas?',
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => false,
+      missingFields: () => [],
+    },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'Cambia los huevos por un queso maduro');
+
+  assert.equal(result.switchToHuman, undefined);
+  assert.equal(result.newState, 'collecting_order');
+  assert.match(result.response, /Cambi[eé] el producto/i);
+  assert.equal(stateUpdates.at(-1).draft.editing_order_id, 88);
+  assert.equal(stateUpdates.at(-1).draft.items[0].name, 'Queso maduro');
 });

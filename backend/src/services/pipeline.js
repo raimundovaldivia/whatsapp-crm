@@ -132,6 +132,31 @@ function asksForPaymentInstructions(message) {
   return patterns.some(pattern => pattern.test(text));
 }
 
+function isScheduledCancellationRequest(message, history = []) {
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 160) return false;
+
+  // No tratar una corrección de producto ("no quiero XL, quiero L") como la
+  // cancelación completa del agendamiento.
+  if (/\bno\s+quiero\b.{0,40}\b(?:pero|sino|mejor)\b/iu.test(text)) return false;
+  if (/\bno\s+quiero\b.{0,40}\bquiero\b/iu.test(text)) return false;
+
+  const explicitCancellation = [
+    /^(?:no(?:,?\s*no)?(?:\s+(?:gracias|quiero|necesito))?|mejor\s+no|no\s+quiero\s+nada)[\s!.]*$/iu,
+    /\b(?:cancela(?:r|lo)?|cancelemos|anula(?:r|lo)?|anulemos)\b/iu,
+    /\b(?:yo\s+)?no\s+(?:he\s+)?pedido\s+nada\b/iu,
+    /\bya\s+no\s+(?:lo\s+)?(?:quiero|necesito)\b/iu,
+  ];
+  if (explicitCancellation.some(pattern => pattern.test(text))) return true;
+
+  // Un "sí" solo cancela cuando responde a la pregunta explícita e inmediata
+  // del bot sobre cancelar; nunca se interpreta aislado como cancelación.
+  if (!/^(?:s[ií]+|claro|correcto|confirmo|dale|ok(?:ay)?)[\s!.]*$/iu.test(text)) return false;
+  const lastOutbound = history.slice().reverse().find(item => item?.direction === 'outbound');
+  const previous = String(lastOutbound?.content || '');
+  return /(?:quieres|deseas|confirmas|confirmar)[^?]{0,50}\b(?:cancel|anul)|\b(?:lo\s+)?(?:cancelo|cancelamos|anulamos)\b[^?]{0,20}\?/iu.test(previous);
+}
+
 // Un pedido al que todavía tiene sentido anotarle una preferencia de entrega:
 // registrado y no cancelado/entregado. Incluye los que ya salieron a reparto
 // (por_despachar / en_camino) porque ahí la nota es aún más útil.
@@ -826,7 +851,7 @@ Reglas estrictas:
 
   const storeCustomPrompt = [dateSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts].filter(Boolean).join('\n\n---\n\n');
 
-  if (isSoftFutureIntent(userMessage) && !['collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
+  if (isSoftFutureIntent(userMessage) && !['scheduled', 'collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
     if (currentState !== 'scheduled') await db.updatePipelineState(conversationId, 'future_interest');
     return { response: 'Claro, avísame cuando lo tengas decidido 😊', agentType: 'orchestrator', newState: currentState === 'scheduled' ? 'scheduled' : 'future_interest' };
   }
@@ -842,10 +867,10 @@ Reglas estrictas:
       const pool = getPool();
       const { rows } = await pool.query(
         `SELECT id, desired_date, product_notes FROM scheduled_orders
-         WHERE conversation_id = $1 AND status = 'pending'
+         WHERE conversation_id = $1 AND organization_id = $2 AND status = 'pending'
            AND desired_date >= CURRENT_DATE
          ORDER BY desired_date ASC LIMIT 1`,
-        [conversationId]
+        [conversationId, orgId]
       );
       activeScheduled = rows[0] || null;
 
@@ -854,8 +879,9 @@ Reglas estrictas:
         // devolver la conversación al flujo normal.
         const { rowCount } = await pool.query(
           `UPDATE scheduled_orders SET status = 'sent', sent_at = COALESCE(sent_at, NOW())
-           WHERE conversation_id = $1 AND status = 'pending' AND desired_date < CURRENT_DATE`,
-          [conversationId]
+           WHERE conversation_id = $1 AND organization_id = $2
+             AND status = 'pending' AND desired_date < CURRENT_DATE`,
+          [conversationId, orgId]
         );
         console.log(`[Pipeline] 📅 Agendado vencido en conv ${conversationId} (${rowCount} cerrado${rowCount === 1 ? '' : 's'}) — volviendo a exploring`);
         await db.updatePipelineState(conversationId, 'exploring').catch(() => {});
@@ -878,6 +904,19 @@ Reglas estrictas:
     const producto  = activeScheduled.product_notes || 'tu pedido';
     const scheduledProductNotes = activeScheduled.product_notes;
 
+    if (isScheduledCancellationRequest(userMessage, history)) {
+      await db.cancelScheduledOrder(activeScheduled.id, orgId);
+      await db.updatePipelineState(conversationId, 'exploring', {});
+      L.agent('orchestrator', 0);
+      L.step('cancel_scheduled_order', `agendamiento ${activeScheduled.id} cancelado por el cliente`);
+      return {
+        response: 'Listo, cancelé el pedido agendado ✅ No se generará ningún pedido. Si más adelante necesitas algo, aquí estoy 😊',
+        agentType: 'orchestrator',
+        newState: 'exploring',
+        scheduledOrderCancelled: { scheduledOrderId: activeScheduled.id },
+      };
+    }
+
     // ── Detectar si el cliente está llegando para recibir ahora ──
     // Una dirección por sí sola NO adelanta el pedido: puede estar completando
     // los datos del despacho futuro. Solo una señal explícita de llegada activa
@@ -898,8 +937,9 @@ Reglas estrictas:
       try {
         const pool = getPool();
         await pool.query(
-          `UPDATE scheduled_orders SET status = 'sent' WHERE conversation_id = $1 AND status = 'pending'`,
-          [conversationId]
+          `UPDATE scheduled_orders SET status = 'sent'
+           WHERE conversation_id = $1 AND organization_id = $2 AND status = 'pending'`,
+          [conversationId, orgId]
         );
       } catch { /* continuar aunque falle */ }
       L.agent('orders', 0);
@@ -1714,9 +1754,9 @@ REGLAS ABSOLUTAS:
   }
 
   // ── Modificar / cancelar un pedido ya registrado ───────────────────
-  // Editable mientras no salió a reparto. Si ya está por despachar o en
-  // camino, se avisa al equipo (con acuse al cliente) en vez de tocarlo.
-  const EDITABLE = ['draft', 'nuevo', 'sent', 'payment_received'];
+  // "por_despachar" significa que todavía no salió a reparto y sigue siendo
+  // editable. Al incorporarlo a una ruta, Logística lo cambia a "en_camino".
+  const EDITABLE = ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar'];
   if ((intent === 'cancel_order' || intent === 'modify_order') && activeOrder) {
     const editable = EDITABLE.includes(activeOrder.status);
     const orderItemsText = (() => {
@@ -1729,8 +1769,11 @@ REGLAS ABSOLUTAS:
     if (!editable) {
       const verb = intent === 'cancel_order' ? 'cancelar' : 'cambiar';
       L.step(intent, `pedido ${activeOrder.id} en estado ${activeOrder.status} — no editable, se avisa al equipo`);
+      const alreadyDispatched = activeOrder.status === 'en_camino' || activeDeliveryRoute?.status === 'in_progress';
       return {
-        response: `Tu pedido ya salió a reparto, así que no lo puedo ${verb} desde aquí 😕 Le aviso al equipo ahora mismo para ver qué se puede hacer y te confirman por este chat 🙏`,
+        response: alreadyDispatched
+          ? `Tu pedido ya salió a reparto, así que no lo puedo ${verb} desde aquí 😕 Le aviso al equipo ahora mismo para ver qué se puede hacer y te confirman por este chat 🙏`
+          : `Tu pedido ya está en una etapa que no permite ${verb}lo automáticamente 😕 Le aviso al equipo ahora mismo para que lo revisen y te confirman por este chat 🙏`,
         agentType: 'orders',
         newState: currentState,
         switchToHuman: true,
@@ -2636,6 +2679,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
 
 module.exports = {
   processMessage,
+  _isScheduledCancellationRequest: isScheduledCancellationRequest,
   _getKnownCustomerData: getKnownCustomerData,
   _customerNoteContext: customerNoteContext,
   _effectiveOrderNote: effectiveOrderNote,

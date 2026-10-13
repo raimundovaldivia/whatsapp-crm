@@ -1,7 +1,7 @@
 /**
  * scheduled-follow-up.js — Envía templates de WhatsApp a clientes con pedidos agendados
  *
- * Corre una vez al día (a las 9:00 AM hora de Chile).
+ * Revisa periódicamente dentro del horario permitido de Chile.
  * Busca pedidos agendados cuya desired_date ya llegó y les envía un template
  * de WhatsApp (necesario porque la ventana de 24h habrá expirado).
  *
@@ -61,46 +61,21 @@ async function processScheduledOrder(order, io) {
 
   if (!await require('./commercial').permitted(orgId,'orders')) return;
   const name    = customer_name || 'Cliente';
-  const product = product_notes || 'tu pedido';
+  const hasSpecificProduct = Boolean(product_notes)
+    && !/^(?:(?:su|tu|el)\s+)?pedido(?:\s+habitual)?$/iu.test(String(product_notes).trim());
+  const product = hasSpecificProduct ? String(product_notes).trim() : 'tu pedido';
+  const confirmationDraft = hasSpecificProduct ? { product_name: product_notes } : {};
+  const confirmationQuestion = hasSpecificProduct
+    ? `Ya llegó la fecha que coordinamos para ${product}. ¿Confirmamos el pedido?`
+    : 'Ya llegó la fecha que coordinamos. ¿Qué te gustaría pedir?';
 
   // 1. Obtener config de WhatsApp de la org
   const conversation = await db.getConversationById(convId, orgId);
   const wc = await whatsappProvider.configForConversation(orgId, conversation);
 
-  // ─── PASO A: Crear pedido real en la tabla orders ───────────────────────
-  // Siempre hacemos esto cuando llega el día, independientemente del template.
-  // Verificamos primero que no exista ya un pedido activo para esta conversación.
-  try {
-    const existing = await db.getActiveOrderForBot(convId);
-    if (!existing) {
-      // Intentar obtener dirección del contacto
-      const contact = await db.getContact(orgId, phone).catch(() => null);
-      const shippingAddress = (contact?.address1 || contact?.address)
-        ? { address1: contact.address1 || contact.address, city: contact.city || '' }
-        : null;
-
-      const newOrder = await db.createOrder({
-        conversationId:  convId,
-        organizationId:  orgId,
-        items:           [{ name: product, quantity: 1 }],
-        customerName:    name,
-        customerPhone:   phone,
-        shippingAddress: shippingAddress,
-        totalPrice:      null,
-        status:          'por_despachar',
-      });
-      console.log(`[ScheduledFollowUp] 📦 Orden real creada: id=${newOrder?.id} para scheduled_order #${id}`);
-    } else {
-      console.log(`[ScheduledFollowUp] 📦 Ya existe orden activa (id=${existing.id}) para conv ${convId} — no se duplica`);
-    }
-  } catch (orderErr) {
-    console.error(`[ScheduledFollowUp] ⚠️ Error creando orden real para scheduled_order #${id}:`, orderErr.message);
-    // No interrumpimos — seguimos con el template
-  }
-
   // Evolution no depende de la ventana de 24 horas de Meta.
   if (wc?.provider === 'evolution') {
-    const content = `Hola ${name} 👋 Ya llegó la fecha que coordinamos para ${product}. ¿Confirmamos el pedido?`;
+    const content = `Hola ${name} 👋 ${confirmationQuestion}`;
     const sent = await whatsappProvider.sendTextMessage(phone, content, wc);
     const savedMessage = await db.saveMessage({
       conversationId: convId,
@@ -109,8 +84,8 @@ async function processScheduledOrder(order, io) {
     });
     await db.updateConversationLastMessage(convId, content);
     await activateDivaForAutomatedMessage(convId, db);
-    await db.updatePipelineState(convId, 'interested');
-    await db.markScheduledOrderSent(id);
+    await db.updatePipelineState(convId, 'collecting_order', confirmationDraft);
+    await db.markScheduledOrderSent(id, orgId);
     if (savedMessage) io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMessage, conversation: await db.getConversationById(convId) });
     return;
   }
@@ -120,7 +95,7 @@ async function processScheduledOrder(order, io) {
   // ventana terminó. Así no se incurre en el costo de template innecesariamente.
   if (!wc) {
     console.warn(`[ScheduledFollowUp] Org ${orgId}: sin WhatsApp — saltando aviso #${id}`);
-    await db.markScheduledOrderSent(id);
+    await db.markScheduledOrderSent(id, orgId);
     return;
   }
 
@@ -144,7 +119,7 @@ async function processScheduledOrder(order, io) {
   }];
 
   const window = await deliveryNotifications.getCustomerServiceWindow(orgId, phone);
-  const freeText = `Hola ${String(name).trim().split(/\s+/)[0] || 'Cliente'} 👋 Tu pedido agendado de ${product} ya está preparado para despacho. Te avisaremos cuando vaya en camino.`;
+  const freeText = `Hola ${String(name).trim().split(/\s+/)[0] || 'Cliente'} 👋 ${confirmationQuestion}`;
   let sentResult;
   let via = 'text';
   const sendTemplate = async () => {
@@ -177,7 +152,7 @@ async function processScheduledOrder(order, io) {
 
   // 5. Guardar mensaje en DB y actualizar pipeline_state.
   const content = via === 'template'
-    ? `[Template: ${tplName}]\n\n📅 Despacho de pedido agendado: ${product}`
+    ? `[Template: ${tplName}]\n\n📅 Confirmación de pedido agendado: ${product}`
     : freeText;
   const savedMessage = await db.saveMessage({
     conversationId:    convId,
@@ -191,10 +166,10 @@ async function processScheduledOrder(order, io) {
 
   await db.updateConversationLastMessage(convId, content);
   await activateDivaForAutomatedMessage(convId, db);
-  await db.updatePipelineState(convId, via === 'template' ? 'template_sent' : 'exploring');
+  await db.updatePipelineState(convId, 'collecting_order', confirmationDraft);
 
   // 6. Marcar como enviado
-  await db.markScheduledOrderSent(id);
+  await db.markScheduledOrderSent(id, orgId);
 
   // 7. Notificar al CRM en tiempo real
   const updatedConv = await db.getConversationById(convId).catch(() => null);
@@ -222,4 +197,4 @@ function startScheduledFollowUpJob(io = null) {
   setInterval(() => runScheduledFollowUp(io), CHECK_EVERY_MS);
 }
 
-module.exports = { startScheduledFollowUpJob, runScheduledFollowUp };
+module.exports = { startScheduledFollowUpJob, runScheduledFollowUp, _processScheduledOrder: processScheduledOrder };

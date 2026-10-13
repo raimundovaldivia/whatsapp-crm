@@ -7,6 +7,7 @@ class FakeAnthropic {
 }
 
 const scheduled = load('src/services/scheduled-orders.js', { '@anthropic-ai/sdk': FakeAnthropic });
+const ordersAgent = load('src/services/agents/orders.js', { '@anthropic-ai/sdk': FakeAnthropic });
 
 test('detecta la fecha aunque el cliente también diga que todavía le queda stock', () => {
   assert.equal(scheduled.isFutureOrderIntent('Hola buenas noches, si se pudiera para miércoles. Aún me quedan unos poquitos'), true);
@@ -533,6 +534,60 @@ test('tentative interest never becomes a scheduled order even with a date', asyn
   const extracted = await scheduled.extractScheduledOrderData('Para la próxima semana', [], '2026-10-06');
   assert.equal(extracted.desiredDate, null);
   assert.equal(extracted.productNotes, null);
+});
+
+test('rechazos explícitos cancelan también durante la recopilación del pedido', () => {
+  for (const message of ['No gracias', 'No, no quiero', 'No quiero', 'Yo no he pedido nada']) {
+    assert.equal(ordersAgent.isCancelDuringCollection(message), true, message);
+  }
+  assert.equal(ordersAgent.isCancelDuringCollection('No quiero XL, quiero L'), false);
+});
+
+test('un pedido agendado se cancela realmente y sale del estado scheduled', async () => {
+  let cancelled = null;
+  let stateUpdate = null;
+  const history = [
+    { direction: 'inbound', content: 'No, no quiero' },
+    { direction: 'outbound', content: '¿Quieres que cancele el pedido agendado?' },
+  ];
+  const db = {
+    getConversationById: async () => ({ id: 40, organization_id: 7, phone_number: '56940404040', contact_name: 'Cliente', pipeline_state: 'scheduled', agent_mode: 'ai' }),
+    getLastMessages: async () => history,
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Cliente', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => [],
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    cancelScheduledOrder: async (id, orgId) => { cancelled = { id, orgId }; },
+    updatePipelineState: async (_id, state, draft) => { stateUpdate = { state, draft }; },
+    getPool: () => ({ query: async sql => String(sql).includes('FROM scheduled_orders')
+      ? { rows: [{ id: 294, desired_date: '2026-10-20', product_notes: '30 huevos XL' }] }
+      : { rows: [], rowCount: 0 } }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': require('../src/services/inbound-message-policy'),
+    './scheduled-orders': {
+      isFutureOrderIntent: () => false,
+      isSoftFutureIntent: () => false,
+      extractScheduledOrderData: async () => ({}),
+      formatDateEs: () => 'martes 20 de octubre',
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  assert.equal(pipeline._isScheduledCancellationRequest('Siii', history), true);
+  assert.equal(pipeline._isScheduledCancellationRequest('Sí', [{ direction: 'outbound', content: '¿Confirmamos tu pedido?' }]), false);
+
+  const result = await pipeline.processMessage(7, 40, 'Siii');
+  assert.deepEqual(cancelled, { id: 294, orgId: 7 });
+  assert.equal(stateUpdate.state, 'exploring');
+  assert.equal(Object.keys(stateUpdate.draft).length, 0);
+  assert.equal(result.newState, 'exploring');
+  assert.match(result.response, /cancel[eé].*no se generar[aá] ning[uú]n pedido/i);
 });
 
 test('internal instructions are blocked before reaching the customer', async () => {
