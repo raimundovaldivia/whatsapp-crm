@@ -14,6 +14,7 @@ const db         = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
 const r2         = require('../services/r2-storage');
 const { getOrderProductCatalog } = require('../services/order-product-catalog');
+const { getFavoriteCounts } = require('../services/product-favorites');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -35,7 +36,8 @@ router.use(requireRole('owner', 'admin'));
 router.get('/', async (req, res) => {
   try {
     const products = await db.getProducts(req.orgId);
-    res.json({ products });
+    const counts = await getFavoriteCounts(db.getPool(), req.orgId);
+    res.json({ products: products.map(product => ({ ...product, favorite_count: counts.get(Number(product.id)) || 0 })) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

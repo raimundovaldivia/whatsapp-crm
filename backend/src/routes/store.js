@@ -3,6 +3,7 @@
  *
  * GET  /store/:slug/info     → nombre, logo y configuración de la tienda
  * GET  /store/:slug/products → catálogo activo
+ * PUT  /store/:slug/products/:productId/favorite → registrar favorito anónimo
  * POST /store/:slug/orders   → crear pedido COD + confirmación por WhatsApp
  */
 
@@ -12,6 +13,7 @@ const db            = require('../db/database');
 const whatsapp      = require('../services/whatsapp-provider');
 const { getPool }   = require('../db/database');
 const xlPricing = require('../services/xl-welcome-pricing');
+const { setProductFavorite } = require('../services/product-favorites');
 
 // ── Helper: obtener org por slug ────────────────────────────────────
 async function getOrgBySlug(slug) {
@@ -90,6 +92,23 @@ router.get('/:slug/products', async (req, res) => {
     res.json({ products });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/:slug/products/:productId/favorite', async (req, res) => {
+  try {
+    const org = await getOrgBySlug(req.params.slug);
+    if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
+    const result = await setProductFavorite(getPool(), {
+      organizationId: org.id,
+      productId: req.params.productId,
+      visitorId: req.body?.visitorId,
+      favorite: req.body?.favorite,
+    });
+    if (!result) return res.status(404).json({ error: 'Producto no encontrado' });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'No pudimos guardar el favorito' });
   }
 });
 

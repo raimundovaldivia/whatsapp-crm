@@ -214,6 +214,8 @@ PUT /api/settings
 | GET | `/api/settings` | Configuración del sistema |
 | PUT | `/api/settings` | Actualizar configuración |
 | POST | `/api/settings/refresh-products` | Refrescar cache Shopify |
+| GET | `/api/products` | Lista productos e incluye `favorite_count` para medir favoritos |
+| PUT | `/store/:slug/products/:productId/favorite` | Marca o desmarca un producto favorito para un visitante anónimo |
 | GET | `/webhook` | Verificación webhook Meta |
 | POST | `/webhook` | Recibir mensajes de WhatsApp |
 

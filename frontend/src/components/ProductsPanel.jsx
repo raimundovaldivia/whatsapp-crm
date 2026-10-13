@@ -5,7 +5,7 @@
  * Botón "Importar desde Shopify" para migración con un clic.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink, Copy, Check, Settings, Store, Phone, Sparkles, Save, Loader, Tag, Building2 } from 'lucide-react';
+import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, ExternalLink, Copy, Check, Settings, Store, Phone, Sparkles, Save, Loader, Tag, Building2, Heart } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
@@ -642,6 +642,9 @@ export default function ProductsPanel({ orgSlug }) {
                       ${Number(p.compare_price).toLocaleString('es-CL')}
                     </span>
                   )}
+                  <span title="Marcas de favorito de visitantes" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: Number(p.favorite_count) > 0 ? '#a7423c' : colors.textMuted }}>
+                    <Heart size={13} fill={Number(p.favorite_count) > 0 ? 'currentColor' : 'none'} /> {Number(p.favorite_count) || 0}
+                  </span>
                   {p.stock >= 0 && (
                     <span style={{ fontSize: '11px', color: p.stock > 0 ? colors.green : colors.red, marginLeft: 'auto' }}>
                       {p.stock > 0 ? `${p.stock} en stock` : 'Sin stock'}
