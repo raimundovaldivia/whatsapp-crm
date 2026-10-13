@@ -18,6 +18,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './business-date') return require(path.join(root, 'src/services/business-date.js'));
       if (name === './outbound-text-policy') return require(path.join(root, 'src/services/outbound-text-policy.js'));
       if (name === './inbound-message-policy') return require(path.join(root, 'src/services/inbound-message-policy.js'));
+      if (name === './delivery-coverage') return require(path.join(root, 'src/services/delivery-coverage.js'));
       if (name === '../services/conversation-attention') return require(path.join(root, 'src/services/conversation-attention.js'));
       if (name === './promotion-context') return require(path.join(root, 'src/services/promotion-context.js'));
       if (name.endsWith('/xl-welcome-pricing')) return require(path.join(root, 'src/services/xl-welcome-pricing.js'));

@@ -19,6 +19,7 @@ const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 const inboundPolicy = require('./inbound-message-policy');
 const outboundPolicy = require('./outbound-text-policy');
+const deliveryCoverage = require('./delivery-coverage');
 const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
@@ -181,7 +182,20 @@ function effectiveOrderNote(draft = {}) {
  * @returns {{ response: string, agentType: string, newState: string }}
  */
 async function processMessage(orgId, conversationId, userMessage, log = null) {
-  const result = await processMessageInternal(orgId, conversationId, userMessage, log);
+  let result = await processMessageInternal(orgId, conversationId, userMessage, log);
+  if (deliveryCoverage.isCoverageRejection(result?.response)) {
+    try {
+      const raw = await db.getSetting(orgId, 'delivery_info');
+      const zone = raw ? JSON.parse(raw)?.zone : '';
+      const guarded = deliveryCoverage.guardResponse({ message: userMessage, response: result.response, zone });
+      if (guarded !== result.response) {
+        log?.step?.('delivery_coverage_guard', `Se evitó rechazar una zona sin confirmación: ${zone}`);
+        result = { ...result, response: guarded };
+      }
+    } catch (error) {
+      console.warn('[Pipeline] No se pudo aplicar la protección de cobertura:', error.message);
+    }
+  }
   if (inboundPolicy.isInternalSilenceResponse?.(result?.response)) {
     log?.step?.('silent_response', 'Se descarta explicación interna de silencio');
     return { ...result, response: null, reason: 'INTERNAL_SILENCE' };
@@ -483,6 +497,8 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
       const priceLine = deliveryEnabled ? xlPricing.deliveryPriceLine(xlContext, freeShippingRaw) : '';
       if (priceLine) lines.push(priceLine);
       if (lines.length) deliverySection = `## Información de Entrega\n${lines.join('\n')}`;
+      const coverageRules = deliveryCoverage.promptSection(d.zone);
+      if (coverageRules) deliverySection = [deliverySection, coverageRules].filter(Boolean).join('\n\n');
     } catch { /* JSON inválido — ignorar */ }
   }
   if (!deliverySection) {
