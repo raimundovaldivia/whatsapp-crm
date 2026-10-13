@@ -601,6 +601,49 @@ test('delivery retries are placed first and remain explicit in the saved route',
   } finally { await f.engine.close(); }
 });
 
+test('pending deliveries tolerate null-like addresses and item lists', async () => {
+  const query = async sql => {
+    if (sql.includes('FROM orders o')) {
+      return { rows: [{
+        id: 7,
+        customer_name: 'Pedido bot',
+        shipping_address: 'null',
+        shopify_shipping: 'null',
+        items: 'null',
+        total_price: '1000',
+        crm_status: 'por_despachar',
+      }] };
+    }
+    if (sql.includes('FROM order_returns')) return { rows: [] };
+    if (sql.includes('FROM shopify_orders')) {
+      return { rows: [{
+        id: 'shopify-null-address',
+        order_name: '#NULL',
+        customer_name: 'Pedido Shopify',
+        shipping_address: 'null',
+        items: 'null',
+        total_price: '2000',
+        crm_status: 'por_despachar',
+      }] };
+    }
+    throw new Error(`Unexpected query: ${sql.slice(0, 80)}`);
+  };
+  const router = load('src/routes/delivery.js', {
+    '../db/database': { getPool: () => ({ query }) },
+    '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+  });
+  const res = response();
+  await handler(router, 'get', '/orders')({ orgId: 1 }, res);
+
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  assert.equal(res.body.total, 2);
+  for (const order of res.body.orders) {
+    assert.equal(order.address, '');
+    assert.equal(order.city, '');
+    assert.deepEqual(Array.from(order.items), []);
+  }
+});
+
 
 
 test('schedule delivery preserves payments and attempts, validates dates and isolates organizations', async () => {

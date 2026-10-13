@@ -116,7 +116,23 @@ function routeStops(route) {
 
 function jsonList(value) {
   if (Array.isArray(value)) return value;
-  try { return JSON.parse(value || '[]'); } catch { return []; }
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function jsonObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -462,16 +478,10 @@ function prioritizeOrders(orders) {
 
 function normalizeShopifyOrder(row) {
   // shipping_address viene de raw_json JSONB (puede ser objeto o null)
-  let addr = {};
-  try {
-    const raw = row.shipping_address;
-    addr = raw && typeof raw === 'object' ? raw : (raw ? JSON.parse(raw) : {});
-  } catch (_) {}
+  const addr = jsonObject(row.shipping_address);
   const street = addr.address1 || addr.address || '';
   const city   = addr.city || row.shipping_city || '';
-  let items = [];
-  try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
-  items = items.map(canonicalizeProductItem);
+  const items = jsonList(row.items).map(canonicalizeProductItem);
   return {
     id: row.id, source: 'shopify',
     orderName: row.order_name || `#${row.id}`,      // shopify_name aliaseado como order_name
@@ -487,12 +497,10 @@ function normalizeShopifyOrder(row) {
 }
 
 function normalizeBotOrder(row) {
-  let addr = {};
-  try { addr = typeof row.shipping_address === 'string' ? JSON.parse(row.shipping_address) : (row.shipping_address || {}); } catch (_) {}
+  const addr = jsonObject(row.shipping_address);
   // Fallback 1: contacts table (local DB)
   // Fallback 2: shopify_orders shipping address (más completo)
-  let shopifyAddr = {};
-  try { shopifyAddr = typeof row.shopify_shipping === 'string' ? JSON.parse(row.shopify_shipping) : (row.shopify_shipping || {}); } catch (_) {}
+  const shopifyAddr = jsonObject(row.shopify_shipping);
 
   const street = addr.address || addr.address1
     || row.contact_address
@@ -507,9 +515,7 @@ function normalizeBotOrder(row) {
   const customerName = isGeneric(row.customer_name)
     ? (row.contact_name || row.customer_name || 'Sin nombre')
     : row.customer_name;
-  let items = [];
-  try { items = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []); } catch (_) {}
-  items = items.map(canonicalizeProductItem);
+  const items = jsonList(row.items).map(canonicalizeProductItem);
   return {
     id: String(row.id), source: 'bot',
     orderName: `#BOT-${row.id}`,
