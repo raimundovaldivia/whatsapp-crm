@@ -32,7 +32,7 @@ export default function AuthPage({ onAuth }) {
   };
 
   const features = [
-    { icon: <Bot size={18} />, title: 'Agente IA con Claude', desc: 'Responde clientes, sugiere productos y cierra ventas automáticamente' },
+    { icon: <Bot size={18} />, title: 'Agente de IA', desc: 'Responde clientes, sugiere productos y cierra ventas automáticamente' },
     { icon: <ShoppingBag size={18} />, title: 'Integración Shopify', desc: 'Sincroniza pedidos, catálogo y clientes en tiempo real' },
     { icon: <TrendingUp size={18} />, title: 'Re-enganche predictivo', desc: 'La IA predice cuándo un cliente volverá a comprar' },
     { icon: <Zap size={18} />, title: 'Pipeline automatizado', desc: 'Recopila datos del pedido y lo gestiona sin intervención' },
@@ -333,7 +333,7 @@ export default function AuthPage({ onAuth }) {
           {/* Features móvil */}
           <div style={{ display: 'flex', gap: '16px', marginTop: '28px', justifyContent: 'center', flexWrap: 'wrap' }} className="auth-mobile-features">
             {[
-              { icon: <Bot size={14} color={colors.green} />, text: 'Agente IA Claude' },
+              { icon: <Bot size={14} color={colors.green} />, text: 'Agente de IA conversacional' },
               { icon: <ShoppingBag size={14} color={colors.green} />, text: 'Shopify sync' },
               { icon: <MessageSquare size={14} color={colors.green} />, text: 'CRM real-time' },
             ].map(({ icon, text }) => (

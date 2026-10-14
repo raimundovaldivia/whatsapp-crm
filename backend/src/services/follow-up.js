@@ -2,14 +2,14 @@
  * follow-up.js — Recupera conversaciones abandonadas dentro de la ventana de 24h
  *
  * Corre cada 30 minutos. Detecta clientes que mostraron interés pero dejaron
- * de responder. Genera mensajes humanos y contextuales con Claude Haiku y los
+ * de responder. Genera mensajes humanos con el proveedor conversacional y los
  * envía gratis (dentro de la ventana de 24h de WhatsApp).
  *
  * NUNCA menciona "ventana", "bot", "sistema" ni nada técnico al cliente.
  * Suena como alguien de la tienda que se acordó del cliente.
  */
 
-const Anthropic        = require('@anthropic-ai/sdk');
+const { client, modelFor } = require('./ai-provider');
 const db               = require('../db/database');
 const whatsappProvider = require('./whatsapp-provider');
 const {
@@ -17,8 +17,6 @@ const {
   shouldSkipAutomatedFollowUp,
 } = require('./outbound-policy');
 const salesClosing = require('./sales-closing');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const FOLLOW_UP_PROMPT = `Eres alguien que trabaja en una tienda y vas a escribirle a un cliente que estaba interesado pero dejó de responder.
 
@@ -67,7 +65,7 @@ async function generateFollowUpMessage(conv, history, storeContext) {
     .replace('{HORA}', hora);
 
   const response = await client.messages.create({
-    model:      'claude-haiku-4-5-20251001',
+    model:      modelFor('fast'),
     max_tokens: 120,
     system,
     messages:   [{ role: 'user', content: 'Genera el mensaje de seguimiento.' }],

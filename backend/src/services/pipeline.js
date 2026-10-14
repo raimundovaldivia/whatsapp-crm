@@ -14,6 +14,7 @@ const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
+const { client: conversationalAI, modelFor: conversationalModelFor } = require('./ai-provider');
 const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
@@ -967,9 +968,7 @@ Reglas estrictas:
       return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, preDraft, productosTexto, orderCtx);
     }
 
-    // Responder contextualmente con Haiku — nunca el mismo texto repetido
-    const Anthropic = require('@anthropic-ai/sdk');
-    const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    // Responder contextualmente con el modelo rápido configurado.
     const recentHistory = history.slice(-6).map(m =>
       `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`
     ).join('\n');
@@ -994,8 +993,8 @@ REGLAS ABSOLUTAS:
 - Varía la redacción según el historial. Máximo 2 frases y un emoji como máximo.`;
 
     try {
-      const aiResp = await aiClient.messages.create({
-        model: 'claude-haiku-4-5-20251001',
+      const aiResp = await conversationalAI.messages.create({
+        model: conversationalModelFor('fast'),
         max_tokens: 120,
         system: scheduledSystemPrompt,
         messages: [
@@ -2129,15 +2128,13 @@ async function handlePartialDelivery(orgId, conversationId, conversation, userMe
   } catch { deliveredItems = []; }
   if (!deliveredItems.length) return null;
 
-  // 1. Entender cantidades con Haiku
-  const Anthropic = require('@anthropic-ai/sdk');
-  const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  // 1. Entender cantidades con el proveedor conversacional configurado.
   const recent = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`).join('\n');
   const deliveredText = deliveredItems.map(i => `${i.quantity}x ${i.name}`).join(', ');
   let claim = null;
   try {
-    const resp = await aiClient.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const resp = await conversationalAI.messages.create({
+      model: conversationalModelFor('fast'),
       max_tokens: 200,
       system: `El cliente reclama que su entrega llegó incompleta. Lo que el sistema registra como ENTREGADO: ${deliveredText}.
 Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre del producto tal como está en lo entregado>","ordered":N,"received":N}],"confident":true|false}

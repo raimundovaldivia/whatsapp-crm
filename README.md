@@ -72,7 +72,11 @@ WHATSAPP_TOKEN=tu_access_token_permanente
 WHATSAPP_PHONE_NUMBER_ID=tu_phone_number_id
 WHATSAPP_BUSINESS_ACCOUNT_ID=tu_business_account_id
 WEBHOOK_VERIFY_TOKEN=cualquier_palabra_secreta_que_eliges
-ANTHROPIC_API_KEY=sk-ant-...
+# Elige anthropic (predeterminado) o deepseek para las respuestas del bot
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=tu_clave_de_anthropic
+# Si AI_PROVIDER=deepseek:
+DEEPSEEK_API_KEY=tu_clave_de_deepseek
 SHOPIFY_STORE_URL=tu-tienda.myshopify.com
 SHOPIFY_ACCESS_TOKEN=shpat_...
 FRONTEND_URL=http://localhost:5173
@@ -114,10 +118,20 @@ VITE_BACKEND_URL=http://localhost:3001
 
 ---
 
-### Paso 5 — Obtener API Key de Anthropic
+### Paso 5 — Elegir proveedor de IA conversacional
 
-1. Ve a [console.anthropic.com](https://console.anthropic.com)
-2. Crea una API Key → `ANTHROPIC_API_KEY`
+Claude sigue siendo el proveedor predeterminado:
+
+1. Define `AI_PROVIDER=anthropic`.
+2. Crea una clave en [console.anthropic.com](https://console.anthropic.com) y guárdala en `ANTHROPIC_API_KEY`.
+
+Para usar DeepSeek en las respuestas del bot:
+
+1. Define `AI_PROVIDER=deepseek`.
+2. Crea una clave en [platform.deepseek.com](https://platform.deepseek.com) y guárdala en `DEEPSEEK_API_KEY`.
+3. Opcionalmente define `DEEPSEEK_MODEL`, `DEEPSEEK_FAST_MODEL` o `DEEPSEEK_SMART_MODEL`. Sin overrides se usa `deepseek-flash`.
+
+Las funciones auxiliares que todavía usan Claude, como análisis visual, campañas y el asistente administrativo, siguen requiriendo `ANTHROPIC_API_KEY` cuando están habilitadas.
 
 ---
 

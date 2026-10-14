@@ -23,6 +23,26 @@ function load(file, deps = {}, extra = {}) {
       if (name === '../services/conversation-attention') return require(path.join(root, 'src/services/conversation-attention.js'));
       if (name === '../services/sales-closing' || name === './sales-closing') return require(path.join(root, 'src/services/sales-closing.js'));
       if (name === './promotion-context') return require(path.join(root, 'src/services/promotion-context.js'));
+      if (name === './ai-provider' || name === '../ai-provider') {
+        const providerDeps = Object.hasOwn(deps, '@anthropic-ai/sdk')
+          ? deps
+          : {
+              ...deps,
+              '@anthropic-ai/sdk': class {
+                constructor() {
+                  this.messages = { create: async () => { throw new Error('AI not mocked'); } };
+                }
+              },
+            };
+        const providerExtra = {
+          ...extra,
+          process: {
+            ...(extra.process || {}),
+            env: { ANTHROPIC_API_KEY: 'test-key', ...(extra.process?.env || {}) },
+          },
+        };
+        return load('src/services/ai-provider.js', providerDeps, providerExtra);
+      }
       if (name.endsWith('/xl-welcome-pricing')) return require(path.join(root, 'src/services/xl-welcome-pricing.js'));
       if (name === '../utils/payment-breakdown') return require(path.join(root, 'src/utils/payment-breakdown.js'));
       if (['../services/delivery-items','../services/delivery-attempts','./delivery-attempts','../services/merge-conversations','../services/meta-events'].includes(name)) return load('src/services/' + name.split('/').at(-1) + '.js', deps, extra);

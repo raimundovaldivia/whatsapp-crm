@@ -1,6 +1,4 @@
-const Anthropic = require('@anthropic-ai/sdk');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const { client, modelFor } = require('../ai-provider');
 
 const SALES_SYSTEM = `Eres un vendedor experto de una tienda online. Llevas años vendiendo por WhatsApp y conoces bien a los clientes. Tu personalidad: directo, cálido, como un amigo que conoce bien los productos — no un robot de ventas.
 
@@ -140,7 +138,7 @@ async function generateSalesResponse(conversationHistory, userMessage, productos
   const messages = buildMessages(conversationHistory, userMessage, 12);
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: modelFor('smart'),
     max_tokens: 450,
     system,
     messages,
