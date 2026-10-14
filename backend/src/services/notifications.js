@@ -11,7 +11,7 @@
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
-const { notifyAdmin } = require('./admin-notify');
+const { notifyAdmin, isWindowOpen } = require('./admin-notify');
 const { client: aiClient, modelFor, responseText } = require('./ai-provider');
 
 function cleanContextText(value, max = 220) {
@@ -83,10 +83,10 @@ function fallbackConversationBrief(contextLines, reason = '') {
  * Analiza el historial para el administrador. No copia todo el chat: explica
  * qué ocurrió, qué parece necesitar el cliente y cuál es el siguiente paso.
  */
-async function getAdminConversationBrief(conversationId, reason = '') {
+async function getAdminConversationBrief(conversationId, reason = '', { allowAi = true } = {}) {
   const contextLines = await getRecentConversationContext(conversationId, 10);
   const fallback = fallbackConversationBrief(contextLines, reason);
-  if (!contextLines.length) return fallback;
+  if (!allowAi || !contextLines.length) return fallback;
 
   try {
     const response = await aiClient.messages.create({
@@ -160,7 +160,8 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
 
-    const brief = await getAdminConversationBrief(conversation.id, reason);
+    const adminWindowOpen = await isWindowOpen(orgId);
+    const brief = await getAdminConversationBrief(conversation.id, reason, { allowAi: adminWindowOpen });
     const briefText = formatConversationBrief(brief);
 
     // Crear registro pendiente para el admin relay
@@ -263,11 +264,13 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
     const clientName = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
     const text = String(messageText || '').slice(0, 300);
+    const adminWindowOpen = await isWindowOpen(orgId);
     const brief = await getAdminConversationBrief(
       conversation.id,
       mode === 'coordinating'
         ? `Diva está esperando una gestión del equipo y el cliente acaba de enviar: “${cleanContextText(text, 220)}”. Revisa si el mensaje resuelve el caso o requiere una respuesta.`
-        : `El chat está en modo humano y el cliente acaba de enviar: “${cleanContextText(text, 220)}”.`
+        : `El chat está en modo humano y el cliente acaba de enviar: “${cleanContextText(text, 220)}”.`,
+      { allowAi: adminWindowOpen }
     );
     if (mode === 'human' && brief.requiresAction === false) return { sent: false, reason: 'sin_accion' };
     const briefText = formatConversationBrief(brief);
@@ -359,7 +362,8 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
 
-    const brief = await getAdminConversationBrief(conversation.id, reason);
+    const adminWindowOpen = await isWindowOpen(orgId);
+    const brief = await getAdminConversationBrief(conversation.id, reason, { allowAi: adminWindowOpen });
     const briefText = formatConversationBrief(brief);
 
     // createAdminPendingReply actualiza el contexto si ya existía un pendiente

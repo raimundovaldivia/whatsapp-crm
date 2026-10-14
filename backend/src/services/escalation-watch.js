@@ -15,7 +15,7 @@
 const { getPool } = require('../db/database');
 const db          = require('../db/database');
 const whatsappProvider = require('./whatsapp-provider');
-const { notifyAdmin } = require('./admin-notify');
+const { notifyAdmin, isWindowOpen } = require('./admin-notify');
 const { getAdminConversationBrief, formatConversationBrief } = require('./notifications');
 const { isCustomerMessagingHour } = require('./outbound-policy');
 
@@ -82,7 +82,12 @@ async function sweepEscalations(now = new Date()) {
         await pool.query('UPDATE conversations SET escalation_reminder_at = NOW() WHERE id = $1', [c.id]);
 
         const who = c.contact_name || c.phone_number;
-        const brief = await getAdminConversationBrief(c.id, c.last_escalation_reason || 'Diva pidió apoyo del equipo');
+        const adminWindowOpen = await isWindowOpen(c.organization_id);
+        const brief = await getAdminConversationBrief(
+          c.id,
+          c.last_escalation_reason || 'Diva pidió apoyo del equipo',
+          { allowAi: adminWindowOpen }
+        );
         await notifyAdmin(c.organization_id, {
           body: [
             `⏰ *${who} sigue esperando hace ${waited} min*`,
