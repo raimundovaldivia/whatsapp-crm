@@ -48,6 +48,7 @@ test('DeepSeek usa su clave, endpoint Anthropic oficial y modelos configurables'
   assert.equal(constructorOptions[0].timeout, 30000);
   assert.equal(constructorOptions[0].maxRetries, 1);
   assert.equal(requests[0].reasoning.effort, 'none');
+  assert.equal(requests[0].max_tokens, 1024);
   assert.equal(provider.modelFor('fast'), 'deepseek-fast-test');
   assert.equal(provider.modelFor('smart'), 'deepseek-smart-test');
   assert.equal(provider.modelFor('vision'), 'deepseek-vision-test');
@@ -97,6 +98,7 @@ test('el agente de ventas envía la respuesta por DeepSeek cuando está seleccio
   assert.equal(constructorOptions[0].baseURL, 'https://api.deepseek.com/anthropic');
   assert.equal(requests[0].model, 'deepseek-flash');
   assert.equal(requests[0].reasoning.effort, 'none');
+  assert.equal(requests[0].max_tokens, 1024);
 });
 
 test('el análisis visual usa DeepSeek y conserva el bloque de imagen Anthropic-compatible', async () => {

@@ -36,6 +36,17 @@ function hasUsableResponse(response) {
     && response.content.some(block => block?.type === 'tool_use');
 }
 
+function responseSummary(response) {
+  return {
+    contentType: Array.isArray(response?.content) ? 'array' : typeof response?.content,
+    blockTypes: Array.isArray(response?.content)
+      ? response.content.map(block => block?.type || typeof block)
+      : [],
+    stopReason: response?.stop_reason || null,
+    outputTokens: response?.usage?.output_tokens ?? null,
+  };
+}
+
 function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
   const provider = normalizeProvider(env.AI_PROVIDER);
   const isDeepSeek = provider === 'deepseek';
@@ -58,15 +69,27 @@ function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
         }
         if (!sdkClient) sdkClient = new AnthropicClient(clientOptions);
         const providerRequest = isDeepSeek
-          ? { reasoning: { effort: 'none' }, ...request }
+          ? {
+              ...request,
+              max_tokens: Math.max(
+                positiveInteger(request?.max_tokens, 1),
+                positiveInteger(env.DEEPSEEK_MIN_OUTPUT_TOKENS, 1024),
+              ),
+              reasoning: { effort: 'none' },
+            }
           : request;
         const response = await sdkClient.messages.create(providerRequest);
         if (!isDeepSeek || hasUsableResponse(response)) return response;
 
         // DeepSeek can occasionally complete a request without a visible text
         // block. A successful-but-empty response must never reach WhatsApp.
-        const retry = await sdkClient.messages.create(providerRequest);
+        console.warn('[DeepSeekEmptyResponse] primer intento', JSON.stringify(responseSummary(response)));
+        const retry = await sdkClient.messages.create({
+          ...providerRequest,
+          max_tokens: Math.max(providerRequest.max_tokens, 2048),
+        });
         if (!hasUsableResponse(retry)) {
+          console.warn('[DeepSeekEmptyResponse] segundo intento', JSON.stringify(responseSummary(retry)));
           throw new Error('DeepSeek devolvió una respuesta vacía después de reintentar');
         }
         return retry;
