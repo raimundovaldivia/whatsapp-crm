@@ -12,7 +12,7 @@ const paymentOptions = require('../services/payment-options');
 const { notifyAdminHandoff } = require('../services/notifications');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
-const { isCustomerMessagingHour, shouldSkipAutomatedFollowUp } = require('../services/outbound-policy');
+const followUp = require('../services/follow-up');
 const { reconcilePendingMessages } = require('../services/message-status-recovery');
 const { isTrackableDestination, extractTrackingTokens } = require('../services/lead-journey');
 
@@ -974,96 +974,21 @@ router.post('/merge-into/:targetId', requireRole('owner', 'admin', 'supervisor')
  * Dispara el follow-up bot ahora mismo para conversaciones abandonadas de esta org.
  * El cron corre automáticamente cada 30min pero este endpoint lo activa a demanda.
  */
-router.post('/trigger-follow-up', async (req, res) => {
-  const pool = getPool();
+router.post('/trigger-follow-up', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   try {
-    if (!isCustomerMessagingHour()) {
+    const result = await followUp.runFollowUp(io, new Date(), {
+      organizationId: req.orgId,
+      minIdleHours: 2,
+      maxIdleHours: 22,
+    });
+    if (result.reason === 'outside_customer_hours') {
       return res.status(409).json({
         success: false,
         error: 'OUTSIDE_CUSTOMER_HOURS',
         message: 'Los seguimientos automáticos solo se envían entre las 09:00 y las 20:59, hora de Chile.',
       });
     }
-
-    const Anthropic    = require('@anthropic-ai/sdk');
-    const kapsoService = require('../services/kapso-whatsapp');
-    const client       = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-    // Conversaciones abandonadas: sin respuesta >2h, <22h, modo IA, no cerradas
-    // Ampliamos a cualquier pipeline_state activo (no solo interested/collecting)
-    const { rows: stalled } = await pool.query(
-      `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.order_draft,
-              c.follow_up_sent_at, c.last_inbound_at
-       FROM conversations c
-       WHERE c.organization_id = $1
-         AND c.agent_mode = 'ai'
-         AND c.pipeline_state NOT IN ('done', 'future_interest', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out')
-         AND c.last_message_at < NOW() - INTERVAL '2 hours'
-         AND c.last_message_at > NOW() - INTERVAL '22 hours'
-         AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '6 hours')
-       ORDER BY c.last_message_at ASC
-       LIMIT 30`,
-      [req.orgId]
-    );
-
-    const wc = await db.getWhatsappConfig(req.orgId);
-    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
-
-    const storeContext = await db.getSetting(req.orgId, 'store_context') || '';
-    let sent = 0;
-
-    const PROMPT = `Eres alguien que trabaja en una tienda y escribes a un cliente que no respondió.
-CONTEXTO TIENDA: ${storeContext}
-ÚLTIMOS MENSAJES:
-{HISTORIAL}
-Escribe UN mensaje de 1-2 líneas para retomar. Tono cálido y casual. Referencia algo específico.
-Si el cliente dijo que no necesita por ahora, que comprará cuando pueda o la conversación ya se cerró, escribe: SKIP.
-Sin comillas. Solo el mensaje.`;
-
-    const hora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
-
-    for (const conv of stalled) {
-      try {
-        const msgs = await db.getLastMessages(conv.id, 8);
-        if (!msgs.length) continue;
-        if (shouldSkipAutomatedFollowUp(msgs)) {
-          await db.updatePipelineState(conv.id, 'future_interest').catch(() => {});
-          await pool.query('UPDATE conversations SET follow_up_sent_at = NOW() WHERE id = $1', [conv.id]);
-          continue;
-        }
-
-        const historial = msgs.map(m =>
-          `${m.direction === 'inbound' ? (conv.contact_name || 'Cliente') : 'Nosotros'}: ${(m.content || '').slice(0, 200)}`
-        ).join('\n');
-
-        const response = await client.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 120,
-          system: PROMPT.replace('{HISTORIAL}', historial),
-          messages: [{ role: 'user', content: `Hora actual: ${hora}. Genera el mensaje.` }],
-        });
-
-        const text = (response.content[0]?.text || '').trim();
-        if (!text || text === 'SKIP') continue;
-
-        await kapsoService.sendTextMessage(conv.phone_number, text, wc);
-        const savedMsg = await db.saveMessage({
-          conversationId: conv.id, whatsappMessageId: null,
-          direction: 'outbound', content: text, sentBy: 'ai', agentType: 'follow_up',
-        });
-        await db.updateConversationLastMessage(conv.id, text, false);
-        await pool.query('UPDATE conversations SET follow_up_sent_at = NOW() WHERE id = $1', [conv.id]);
-
-        const updatedConv = await db.getConversationById(conv.id);
-        io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
-        sent++;
-        await new Promise(r => setTimeout(r, 1200));
-      } catch (e) {
-        console.error(`[trigger-follow-up] conv ${conv.id}:`, e.message);
-      }
-    }
-
-    res.json({ success: true, checked: stalled.length, sent });
+    res.json({ success: true, ...result });
   } catch (err) {
     console.error('[trigger-follow-up]', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -1075,7 +1000,7 @@ Sin comillas. Solo el mensaje.`;
  * Analiza conversaciones con actividad en las últimas 48h usando IA (Haiku)
  * y actualiza su pipeline_state a 'interested' si detecta intención de compra hoy.
  */
-router.post('/scan-hot-leads', async (req, res) => {
+router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
   try {
     const Anthropic = require('@anthropic-ai/sdk');
@@ -1086,9 +1011,23 @@ router.post('/scan-hot-leads', async (req, res) => {
       `SELECT c.id, c.contact_name, c.phone_number, c.pipeline_state
        FROM conversations c
        WHERE c.organization_id = $1
+         AND c.agent_mode = 'ai'
          AND c.last_message_at > NOW() - INTERVAL '48 hours'
-         AND c.pipeline_state NOT IN ('done', 'interested', 'collecting_order')
+         AND c.pipeline_state NOT IN ('done', 'interested', 'collecting_order', 'future_interest', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out', 'template_sent')
          AND (c.hot_lead_excluded IS NULL OR c.hot_lead_excluded = FALSE)
+         AND NOT EXISTS (
+           SELECT 1 FROM contacts ct
+            WHERE ct.organization_id = c.organization_id
+              AND RIGHT(regexp_replace(COALESCE(ct.phone, ''), '[^0-9]', '', 'g'), 9)
+                = RIGHT(regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g'), 9)
+              AND ct.opt_out = TRUE
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM orders o
+            WHERE o.organization_id = c.organization_id
+              AND o.conversation_id = c.id
+              AND COALESCE(o.status, '') <> 'cancelled'
+         )
        ORDER BY c.last_message_at DESC
        LIMIT 60`,
       [req.orgId]

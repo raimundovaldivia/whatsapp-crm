@@ -188,6 +188,13 @@ docker-compose up --build -d
 - **Botón "Activar IA"** → El agente vuelve a responder automáticamente
 - Si el cliente escribe "quiero hablar con una persona" el bot se pausa automáticamente
 
+### Cierre y seguimiento comercial
+- Los pedidos iniciados antes de las **12:50** mantienen la opción de despacho del día hasta las **13:00**, sujeta a stock y cupo.
+- Desde las 12:50, los pedidos nuevos reciben como alternativa el próximo día de despacho. Si un pedido protegido termina después de las 13:00, se deriva al equipo sin contradecir ni rechazar al cliente.
+- Los cierres en curso reciben seguimiento breve a los **5 minutos**; otros interesados, a los **15 minutos**. Se permiten como máximo dos intentos y nunca dos en la misma etapa.
+- No se envían seguimientos cuando el cliente ya respondió, pidió no recibir mensajes, tiene un pedido o pago activo, o la conversación está en atención humana.
+- La pestaña **Calientes** prioriza pedidos en curso y muestra la vigencia del despacho; **Seguimiento** reúne conversaciones aún recuperables.
+
 ---
 
 ## ⚙️ Personalizar el agente

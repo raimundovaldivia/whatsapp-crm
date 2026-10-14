@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const { withAttentionState } = require('../services/conversation-attention');
+const salesClosing = require('../services/sales-closing');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -698,7 +699,11 @@ async function updateLastInbound(id) {
 
 async function updateFollowUpSent(id) {
   await pool.query(
-    'UPDATE conversations SET follow_up_sent_at = CURRENT_TIMESTAMP WHERE id = $1',
+    `UPDATE conversations
+        SET follow_up_sent_at = CURRENT_TIMESTAMP,
+            follow_up_count = COALESCE(follow_up_count, 0) + 1,
+            follow_up_stage = pipeline_state
+      WHERE id = $1`,
     [id]
   );
 }
@@ -707,7 +712,9 @@ async function updateFollowUpSent(id) {
  * Busca conversaciones abandonadas dentro de la ventana de 24h.
  * Criterios: cliente escribió hace 2-22h, bot estaba activo, sin follow-up reciente.
  */
-async function getStalledConversations() {
+async function getStalledConversations({ organizationId = null, minIdleHours = 4, maxIdleHours = 20 } = {}) {
+  const minIdle = Math.max(1, Math.min(22, Number.parseInt(minIdleHours, 10) || 4));
+  const maxIdle = Math.max(minIdle + 1, Math.min(23, Number.parseInt(maxIdleHours, 10) || 20));
   const { rows } = await pool.query(`
     SELECT
       c.id, c.organization_id, c.phone_number, c.contact_name,
@@ -717,14 +724,31 @@ async function getStalledConversations() {
     FROM conversations c
     JOIN organizations o ON o.id = c.organization_id
     WHERE
-      c.source_channel = 'whatsapp'
-      AND
-      c.agent_mode    = 'ai'
+      ($1::int IS NULL OR c.organization_id = $1)
+      AND c.source_channel = 'whatsapp'
+      AND c.agent_mode = 'ai'
       AND c.pipeline_state IN ('interested', 'collecting_order')
       AND c.last_inbound_at IS NOT NULL
-      AND c.last_inbound_at < NOW() - INTERVAL '4 hours'
-      AND c.last_inbound_at > NOW() - INTERVAL '20 hours'
+      AND c.last_inbound_at < NOW() - ($2::int * INTERVAL '1 hour')
+      AND c.last_inbound_at > NOW() - ($3::int * INTERVAL '1 hour')
       AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '16 hours')
+      AND COALESCE(c.follow_up_count, 0) < 2
+      AND (c.follow_up_stage IS NULL OR c.follow_up_stage IS DISTINCT FROM c.pipeline_state)
+      AND NOT EXISTS (
+        SELECT 1 FROM contacts ct
+        WHERE ct.organization_id = c.organization_id
+          AND ${identityPhoneSql('ct.phone')} = ${identityPhoneSql('c.phone_number')}
+          AND ct.opt_out = TRUE
+      )
+      AND EXISTS (
+        SELECT 1 FROM messages lm
+        WHERE lm.id = (
+          SELECT lm2.id FROM messages lm2
+          WHERE lm2.conversation_id = c.id
+          ORDER BY lm2.created_at DESC NULLS LAST, lm2.id DESC LIMIT 1
+        )
+          AND lm.direction = 'outbound' AND lm.sent_by = 'ai'
+      )
       -- No mandar follow-up si ya existe un pedido activo (no cancelado) en las últimas 48h
       AND NOT EXISTS (
         SELECT 1 FROM orders o2
@@ -738,8 +762,147 @@ async function getStalledConversations() {
         WHERE pp.conversation_id = c.id
           AND pp.created_at > NOW() - INTERVAL '48 hours'
       )
-  `);
+  `, [organizationId, minIdle, maxIdle]);
   return rows;
+}
+
+/**
+ * Registra el inicio real del cierre y crea una reserva hasta las 13:00 si el
+ * pedido comenzó antes de las 12:50 de un día de reparto (lunes a sábado).
+ */
+async function beginSalesClosing(organizationId, conversationId) {
+  return queryOne(`
+    UPDATE conversations
+       SET sales_started_at = COALESCE(sales_started_at, NOW()),
+           same_day_hold_until = COALESCE(
+             same_day_hold_until,
+             CASE
+               WHEN EXTRACT(ISODOW FROM NOW() AT TIME ZONE 'America/Santiago') BETWEEN 1 AND 6
+                AND (NOW() AT TIME ZONE 'America/Santiago')::time < TIME '12:50'
+               THEN (((NOW() AT TIME ZONE 'America/Santiago')::date + TIME '13:00') AT TIME ZONE 'America/Santiago')
+               ELSE NULL
+             END
+           ),
+           updated_at = NOW()
+     WHERE id = $1 AND organization_id = $2
+     RETURNING sales_started_at, same_day_hold_until,
+               hot_follow_up_sent_at, hot_follow_up_count, hot_follow_up_stage
+  `, [conversationId, organizationId]);
+}
+
+async function clearSameDayHold(organizationId, conversationId) {
+  return queryOne(`
+    UPDATE conversations
+       SET sales_started_at = NULL,
+           same_day_hold_until = NULL,
+           updated_at = NOW()
+     WHERE id = $1 AND organization_id = $2
+     RETURNING sales_started_at, same_day_hold_until
+  `, [conversationId, organizationId]);
+}
+
+async function getHotClosingCandidates(now = new Date()) {
+  const { rows } = await pool.query(`
+    SELECT c.id, c.organization_id, c.phone_number, c.contact_name,
+           c.pipeline_state, c.order_draft, c.agent_mode,
+           c.sales_started_at, c.same_day_hold_until,
+           c.hot_follow_up_sent_at, c.hot_follow_up_count, c.hot_follow_up_stage,
+           c.last_inbound_at, c.last_message_at
+      FROM conversations c
+     WHERE c.agent_mode = 'ai'
+       AND c.pipeline_state IN ('interested','collecting_order')
+       AND COALESCE(c.hot_lead_excluded, FALSE) = FALSE
+       AND COALESCE(c.hot_follow_up_count, 0) < $2
+       AND c.last_inbound_at IS NOT NULL
+       AND c.last_inbound_at > $1::timestamptz - INTERVAL '23 hours'
+       AND c.last_message_at > $1::timestamptz - INTERVAL '23 hours'
+       AND c.last_message_at <= $1::timestamptz - CASE
+             WHEN c.pipeline_state = 'collecting_order' THEN INTERVAL '5 minutes'
+             ELSE INTERVAL '15 minutes'
+           END
+       AND EXISTS (
+         SELECT 1 FROM messages lm
+          WHERE lm.id = (
+            SELECT lm2.id FROM messages lm2
+             WHERE lm2.conversation_id = c.id
+             ORDER BY lm2.created_at DESC NULLS LAST, lm2.id DESC LIMIT 1
+          )
+            AND lm.direction = 'outbound' AND lm.sent_by = 'ai'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM contacts ct
+          WHERE ct.organization_id = c.organization_id
+            AND ${identityPhoneSql('ct.phone')} = ${identityPhoneSql('c.phone_number')}
+            AND ct.opt_out = TRUE
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM orders o
+          WHERE o.organization_id = c.organization_id
+            AND o.conversation_id = c.id
+            AND COALESCE(o.status, '') <> 'cancelled'
+            AND o.created_at > $1::timestamptz - INTERVAL '48 hours'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM payment_proofs pp
+          WHERE pp.organization_id = c.organization_id
+            AND pp.conversation_id = c.id
+            AND pp.created_at > $1::timestamptz - INTERVAL '48 hours'
+       )
+     ORDER BY (c.pipeline_state = 'collecting_order') DESC,
+              c.same_day_hold_until ASC NULLS LAST,
+              c.last_message_at ASC
+     LIMIT 100
+  `, [now, salesClosing.MAX_HOT_FOLLOW_UPS]);
+  return rows;
+}
+
+async function claimHotClosingFollowUp(organizationId, conversationId, stage) {
+  return queryOne(`
+    UPDATE conversations
+       SET hot_follow_up_sent_at = NOW(),
+           hot_follow_up_count = COALESCE(hot_follow_up_count, 0) + 1,
+           hot_follow_up_stage = $3,
+           updated_at = NOW()
+     WHERE id = $1 AND organization_id = $2
+       AND agent_mode = 'ai'
+       AND pipeline_state IN ('interested','collecting_order')
+       AND COALESCE(hot_lead_excluded, FALSE) = FALSE
+       AND COALESCE(hot_follow_up_count, 0) < $4
+       AND (hot_follow_up_stage IS NULL OR hot_follow_up_stage IS DISTINCT FROM $3)
+       AND last_message_at <= NOW() - CASE
+             WHEN pipeline_state = 'collecting_order' THEN INTERVAL '5 minutes'
+             ELSE INTERVAL '15 minutes'
+           END
+       AND EXISTS (
+         SELECT 1 FROM messages lm
+          WHERE lm.id = (
+            SELECT lm2.id FROM messages lm2
+             WHERE lm2.conversation_id = conversations.id
+             ORDER BY lm2.created_at DESC NULLS LAST, lm2.id DESC LIMIT 1
+          )
+            AND lm.direction = 'outbound' AND lm.sent_by = 'ai'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM contacts ct
+          WHERE ct.organization_id = conversations.organization_id
+            AND ${identityPhoneSql('ct.phone')} = ${identityPhoneSql('conversations.phone_number')}
+            AND ct.opt_out = TRUE
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM orders o
+          WHERE o.organization_id = conversations.organization_id
+            AND o.conversation_id = conversations.id
+            AND COALESCE(o.status, '') <> 'cancelled'
+            AND o.created_at > NOW() - INTERVAL '48 hours'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM payment_proofs pp
+          WHERE pp.organization_id = conversations.organization_id
+            AND pp.conversation_id = conversations.id
+            AND pp.created_at > NOW() - INTERVAL '48 hours'
+       )
+     RETURNING *
+  `, [conversationId, organizationId, stage, salesClosing.MAX_HOT_FOLLOW_UPS]);
 }
 
 async function markConversationAsRead(id) {
@@ -775,14 +938,43 @@ async function claimHumanPendingNotification(conversationId, cooldownMinutes = 5
 }
 
 async function updatePipelineState(id, state, orderDraft = null) {
+  const lifecycleSql = `,
+    sales_started_at = CASE
+      WHEN $1 IN ('exploring','future_interest','opted_out','done','confirmed','awaiting_payment','scheduled') THEN NULL
+      ELSE sales_started_at END,
+    same_day_hold_until = CASE
+      WHEN $1 IN ('exploring','future_interest','opted_out','done','confirmed','awaiting_payment','scheduled') THEN NULL
+      ELSE same_day_hold_until END,
+    hot_follow_up_count = CASE
+      WHEN $1 = 'interested' AND pipeline_state NOT IN ('interested','collecting_order') THEN 0
+      WHEN $1 IN ('exploring','future_interest','opted_out','done','confirmed','awaiting_payment','scheduled') THEN 0
+      ELSE hot_follow_up_count END,
+    hot_follow_up_sent_at = CASE
+      WHEN $1 = 'interested' AND pipeline_state NOT IN ('interested','collecting_order') THEN NULL
+      WHEN $1 IN ('exploring','future_interest','opted_out','done','confirmed','awaiting_payment','scheduled') THEN NULL
+      ELSE hot_follow_up_sent_at END,
+    hot_follow_up_stage = CASE
+      WHEN $1 = 'interested' AND pipeline_state NOT IN ('interested','collecting_order') THEN NULL
+      WHEN $1 IN ('exploring','future_interest','opted_out','done','confirmed','awaiting_payment','scheduled') THEN NULL
+      ELSE hot_follow_up_stage END,
+    follow_up_count = CASE
+      WHEN $1 = 'interested' AND pipeline_state NOT IN ('interested','collecting_order') THEN 0
+      WHEN $1 IN ('exploring','future_interest','opted_out','done','confirmed','awaiting_payment','scheduled') THEN 0
+      ELSE follow_up_count END,
+    follow_up_stage = CASE
+      WHEN $1 = 'interested' AND pipeline_state NOT IN ('interested','collecting_order') THEN NULL
+      WHEN $1 IN ('exploring','future_interest','opted_out','done','confirmed','awaiting_payment','scheduled') THEN NULL
+      ELSE follow_up_stage END`;
   if (orderDraft !== null) {
     await pool.query(
-      'UPDATE conversations SET pipeline_state = $1, order_draft = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+      `UPDATE conversations SET pipeline_state = $1, order_draft = $2,
+       updated_at = CURRENT_TIMESTAMP ${lifecycleSql} WHERE id = $3`,
       [state, JSON.stringify(orderDraft), id]
     );
   } else {
     await pool.query(
-      'UPDATE conversations SET pipeline_state = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      `UPDATE conversations SET pipeline_state = $1,
+       updated_at = CURRENT_TIMESTAMP ${lifecycleSql} WHERE id = $2`,
       [state, id]
     );
   }
@@ -1784,7 +1976,7 @@ async function getActiveOrderForBot(conversationId) {
   return queryOne(
     `SELECT * FROM orders
      WHERE conversation_id = $1
-       AND status IN ('draft','nuevo','sent','payment_received','por_despachar','en_camino')
+       AND status IN ('draft','nuevo','sent','payment_received','por_despachar','asignado_ruta','en_camino','no_entregado')
        AND (COALESCE(updated_at, created_at) > NOW() - INTERVAL '7 days'
             OR (delivery_date IS NOT NULL AND delivery_date >= CURRENT_DATE))
      ORDER BY created_at DESC LIMIT 1`,
@@ -2560,6 +2752,7 @@ module.exports = {
   // Scheduled orders
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,
+  beginSalesClosing, clearSameDayHold, getHotClosingCandidates, claimHotClosingFollowUp,
   // Messages
   saveMessage, getMessageByWhatsappId, saveAdAttribution, saveMessageMediaBlob, getMessageMediaBlob,
   getMessagesByConversation, getMessagesByCustomerPhone, getLastMessages, updateMessageStatus, minutesSinceLastHumanReply,

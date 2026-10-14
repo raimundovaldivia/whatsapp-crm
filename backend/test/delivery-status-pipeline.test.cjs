@@ -12,6 +12,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       contact_name: 'Katherine',
       pipeline_state: options.pipelineState || 'exploring',
       agent_mode: 'ai',
+      ...(options.conversation || {}),
     }),
     getLastMessages: async () => options.history || [],
     getSetting: async (_orgId, key) => {
@@ -41,6 +42,12 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
     }),
     updateOrder: async (id, values) => { options.updatedOrder?.({ id, values }); return { id, ...values }; },
     updatePipelineState: async (_id, state, draft) => stateUpdates.push({ state, draft }),
+    beginSalesClosing: options.beginSalesClosing
+      ? async () => options.beginSalesClosing
+      : undefined,
+    clearSameDayHold: options.clearSameDayHold
+      ? async (...args) => options.clearSameDayHold(...args)
+      : undefined,
     getPool: () => ({
       query: async sql => ({
         rows: String(sql).includes("COALESCE(r.started_at") && options.todayRoute
@@ -119,6 +126,60 @@ test('"cuándo me traen el pedido" consulta el pedido real y no retoma un borrad
   assert.doesNotMatch(result.response, /pedido confirmado/i);
 });
 
+test('la pregunta exacta de Gloria entra al embudo de estado y no repite la confirmación', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    deliveryEnabled: true,
+    schedule: 'Lunes a Sábado de 00:00 a 23:59',
+    pipelineState: 'confirmed',
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'a qué hora traen mi pedido?');
+
+  assert.equal(result.agentType, 'orchestrator');
+  assert.match(result.response, /pedido está en preparación/i);
+  assert.match(result.response, /00:00 a 23:59/i);
+  assert.doesNotMatch(result.response, /pedido confirmado/i);
+  assert.doesNotMatch(result.response, /todo correcto/i);
+});
+
+test('por despachar sin ruta informa que todavía no existe hora confirmada', async () => {
+  const pipeline = buildPipeline(null, 'por_despachar', {
+    deliveryEnabled: true,
+    schedule: 'Lunes a Sábado de 00:00 a 23:59',
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿A qué hora llega mi pedido?');
+
+  assert.match(result.response, /listo para despachar/i);
+  assert.match(result.response, /todavía no aparece en una ruta/i);
+  assert.match(result.response, /no hay una hora de entrega confirmada/i);
+  assert.doesNotMatch(result.response, /considerado para el reparto de hoy/i);
+});
+
+test('asignado a ruta distingue preparación de salida efectiva', async () => {
+  const pipeline = buildPipeline(null, 'asignado_ruta', {
+    deliveryEnabled: true,
+    schedule: 'Lunes a Sábado de 00:00 a 23:59',
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿Cómo va mi pedido?');
+
+  assert.match(result.response, /asignado a una ruta/i);
+  assert.match(result.response, /todavía no figura iniciada/i);
+  assert.match(result.response, /no hay una hora exacta confirmada/i);
+});
+
+test('no entregado deriva la reprogramación con el estado real', async () => {
+  const pipeline = buildPipeline(null, 'no_entregado');
+
+  const result = await pipeline.processMessage(1, 71, '¿Cuándo me traen el pedido?');
+
+  assert.equal(result.switchToHuman, true);
+  assert.match(result.response, /último intento de entrega.+no se pudo completar/i);
+  assert.match(result.response, /próximo intento/i);
+  assert.match(result.escalationReason, /no entregado/i);
+});
+
 test('un comprobante de pedido manual cierra también un borrador antiguo ya existente', async () => {
   const stateUpdates = [];
   const pipeline = buildPipeline(null, 'draft', {
@@ -153,7 +214,10 @@ test('una consulta sobre el reparto usa la ruta real y no cae en una escalación
 test('una solicitud de entrega para hoy toma el pedido sin prometer un cupo de ruta', async () => {
   const pipeline = buildPipeline(null, 'draft', { activeOrder: false });
 
-  const result = await pipeline.processMessage(1, 71, '¿Alguna posibilidad de traerme huevos hoy? Olvidé pedirlos ayer');
+  const result = await pipeline.processMessage(
+    1, 71, '¿Alguna posibilidad de traerme huevos hoy? Olvidé pedirlos ayer', null,
+    { now: new Date('2026-10-14T15:49:00.000Z') }
+  );
 
   assert.equal(result.newState, 'collecting_order');
   assert.equal(result.agentType, 'orders');
@@ -161,6 +225,92 @@ test('una solicitud de entrega para hoy toma el pedido sin prometer un cupo de r
   assert.match(result.response, /stock y cupo en la ruta de hoy/i);
   assert.match(result.response, /qué tamaño y cuántos huevos necesitas/i);
   assert.doesNotMatch(result.response, /consulta(rlo)? directamente con el equipo/i);
+});
+
+test('a las 12:50 un pedido nuevo ofrece el próximo despacho y no hoy', async () => {
+  const pipeline = buildPipeline(null, 'draft', { activeOrder: false });
+  const result = await pipeline.processMessage(
+    1, 71, '¿Me lo pueden entregar hoy?', null,
+    { now: new Date('2026-10-14T15:50:00.000Z') }
+  );
+  assert.equal(result.newState, 'collecting_order');
+  assert.match(result.response, /próximo día de despacho/i);
+  assert.doesNotMatch(result.response, /mantendr[ée] la opción de despacho para hoy/i);
+});
+
+test('a las 12:55 conserva hoy si el pedido comenzó a las 12:49', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    orderDraft: { items: [{ product_name: 'Huevos XL', quantity: 2 }], customer_name: 'Katherine' },
+    conversation: {
+      sales_started_at: '2026-10-14T15:49:00.000Z',
+      same_day_hold_until: '2026-10-14T16:00:00.000Z',
+    },
+  });
+  const result = await pipeline.processMessage(
+    1, 71, '¿Entregan hoy?', null,
+    { now: new Date('2026-10-14T15:55:00.000Z') }
+  );
+  assert.match(result.response, /mantengo la opción de despacho para hoy/i);
+  assert.doesNotMatch(result.response, /hora.+cerró/i);
+});
+
+test('a las 13:00 un pedido protegido pide confirmación humana sin rechazar el despacho', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    orderDraft: { items: [{ product_name: 'Huevos XL', quantity: 2 }], customer_name: 'Katherine' },
+    conversation: {
+      sales_started_at: '2026-10-14T15:49:00.000Z',
+      same_day_hold_until: '2026-10-14T16:00:00.000Z',
+    },
+  });
+  const result = await pipeline.processMessage(
+    1, 71, '¿Entregan hoy?', null,
+    { now: new Date('2026-10-14T16:00:00.000Z') }
+  );
+  assert.equal(result.switchToHuman, true);
+  assert.match(result.response, /estoy confirmando con el equipo/i);
+  assert.doesNotMatch(result.response, /no se podr[aá]|no alcanzará/i);
+});
+
+test('un pedido explícitamente para mañana no se cambia a despacho de hoy aunque haya reserva', async () => {
+  let draftSeen = null;
+  let holdCleared = false;
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    orderDraft: { items: [{ product_name: 'Huevos XL', quantity: 2 }] },
+    beginSalesClosing: {
+      sales_started_at: '2026-10-14T15:40:00.000Z',
+      same_day_hold_until: '2026-10-14T16:00:00.000Z',
+    },
+    clearSameDayHold: async () => { holdCleared = true; },
+    ordersAgent: {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => ({ ...draft, delivery_date: '2026-10-15' }),
+      generateOrderResponse: async (_history, _message, draft) => {
+        draftSeen = { ...draft };
+        return 'Perfecto. ¿Me indicas tu dirección?';
+      },
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => false,
+      missingFields: () => ['dirección'],
+    },
+  });
+
+  const result = await pipeline.processMessage(
+    1, 71, 'Lo quiero para mañana', null,
+    { now: new Date('2026-10-14T15:40:00.000Z') }
+  );
+
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(draftSeen.delivery_date, '2026-10-15');
+  assert.equal(draftSeen.delivery_requested_today, undefined);
+  assert.equal(draftSeen.pending_same_day_review, undefined);
+  assert.equal(holdCleared, true);
 });
 
 test('durante un pedido responde primero si reparten mañana y luego retoma los datos faltantes', async () => {

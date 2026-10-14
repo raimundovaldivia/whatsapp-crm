@@ -16,6 +16,7 @@ const {
   isCustomerMessagingHour,
   shouldSkipAutomatedFollowUp,
 } = require('./outbound-policy');
+const salesClosing = require('./sales-closing');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -76,7 +77,7 @@ async function generateFollowUpMessage(conv, history, storeContext) {
   return text;
 }
 
-async function runFollowUp(io = null, now = new Date()) {
+async function runFollowUp(io = null, now = new Date(), options = {}) {
   let sent = 0, skipped = 0;
 
   try {
@@ -85,7 +86,11 @@ async function runFollowUp(io = null, now = new Date()) {
       return { sent, skipped, reason: 'outside_customer_hours' };
     }
 
-    const stalled = await db.getStalledConversations();
+    const stalled = await db.getStalledConversations({
+      organizationId: options.organizationId || null,
+      minIdleHours: options.minIdleHours || 4,
+      maxIdleHours: options.maxIdleHours || 20,
+    });
     if (!stalled.length) return { sent, skipped };
 
     console.log(`[FollowUp] 🔍 ${stalled.length} conversación(es) abandonada(s) encontradas`);
@@ -123,12 +128,12 @@ async function runFollowUp(io = null, now = new Date()) {
         }
 
         // Enviar el mensaje
-        const sent = await whatsappProvider.sendTextMessage(conv.phone_number, message, whatsappConfig);
+        const providerResult = await whatsappProvider.sendTextMessage(conv.phone_number, message, whatsappConfig);
 
         // Guardar en DB y marcar follow-up enviado
         await db.saveMessage({
           conversationId:    conv.id,
-          whatsappMessageId: whatsappProvider.messageId(sent),
+          whatsappMessageId: whatsappProvider.messageId(providerResult),
           direction:         'outbound',
           content:           message,
           sentBy:            'ai',
@@ -169,6 +174,88 @@ async function runFollowUp(io = null, now = new Date()) {
 }
 
 /**
+ * Seguimiento corto y determinístico para conversaciones con intención real de
+ * compra. Solo opera antes de las 13:00, dentro de la ventana de 24 horas, y
+ * reclama cada etapa atómicamente para no duplicar mensajes entre instancias.
+ */
+async function runHotClosingFollowUp(io = null, now = new Date()) {
+  let sent = 0, skipped = 0;
+  if (!salesClosing.isHotClosingHour(now)) {
+    return { sent, skipped, reason: 'outside_hot_closing_hours' };
+  }
+
+  const candidates = await db.getHotClosingCandidates(now);
+  for (const candidate of candidates) {
+    try {
+      if (!await require('./commercial').permitted(candidate.organization_id, 'marketing')) {
+        skipped++;
+        continue;
+      }
+      const policy = salesClosing.sameDayPolicy({
+        now,
+        startedAt: candidate.sales_started_at,
+        holdUntil: candidate.same_day_hold_until,
+      });
+      // Desde las 12:50 solo continuamos cierres que ya tenían reserva.
+      if (!policy.offerOpen && !policy.canContinueSameDay) {
+        skipped++;
+        continue;
+      }
+
+      const history = await db.getLastMessages(candidate.id, 10);
+      if (shouldSkipAutomatedFollowUp(history)) {
+        await db.updatePipelineState(candidate.id, 'future_interest').catch(() => {});
+        skipped++;
+        continue;
+      }
+
+      const contact = await db.getContact(candidate.organization_id, candidate.phone_number).catch(() => null);
+      if (contact?.opt_out) {
+        skipped++;
+        continue;
+      }
+
+      const whatsappConfig = await whatsappProvider.configForConversation(candidate.organization_id, candidate);
+      if (!whatsappConfig) {
+        skipped++;
+        continue;
+      }
+
+      const stage = salesClosing.closingStage(candidate);
+      const claimed = await db.claimHotClosingFollowUp(candidate.organization_id, candidate.id, stage);
+      if (!claimed) {
+        skipped++;
+        continue;
+      }
+
+      const message = salesClosing.buildHotFollowUpMessage({ ...candidate, ...claimed }, now);
+      const providerResult = await whatsappProvider.sendTextMessage(candidate.phone_number, message, whatsappConfig);
+      const saved = await db.saveMessage({
+        conversationId: candidate.id,
+        whatsappMessageId: whatsappProvider.messageId(providerResult),
+        direction: 'outbound',
+        content: message,
+        sentBy: 'ai',
+        agentType: 'hot_closing_follow_up',
+      });
+      await db.updateConversationLastMessage(candidate.id, message, false);
+      sent++;
+
+      if (io) {
+        const updatedConversation = await db.getConversationById(candidate.id, candidate.organization_id);
+        io.to(`org_${candidate.organization_id}`).emit(`new_message_${candidate.organization_id}`, {
+          message: saved || { conversationId: candidate.id, direction: 'outbound', content: message, agentType: 'hot_closing_follow_up' },
+          conversation: updatedConversation,
+        });
+      }
+    } catch (error) {
+      console.error(`[HotClosing] Error en conversación ${candidate.id}:`, error.message);
+    }
+  }
+  return { sent, skipped };
+}
+
+/**
  * Inicia el job de follow-up con intervalo de 30 minutos.
  * @param {object} io - instancia de Socket.IO (opcional)
  */
@@ -184,4 +271,15 @@ function startFollowUpJob(io = null) {
   }, 5 * 60 * 1000);
 }
 
-module.exports = { startFollowUpJob, runFollowUp };
+function startHotClosingJob(io = null) {
+  const INTERVAL_MS = 60 * 1000;
+  console.log('[HotClosing] 🚀 Seguimiento de cierres iniciado — revisa cada minuto hasta las 13:00 (Chile)');
+  setTimeout(() => {
+    runHotClosingFollowUp(io).catch(error => console.error('[HotClosing] Error general:', error.message));
+    setInterval(() => {
+      runHotClosingFollowUp(io).catch(error => console.error('[HotClosing] Error general:', error.message));
+    }, INTERVAL_MS);
+  }, 30 * 1000);
+}
+
+module.exports = { startFollowUpJob, runFollowUp, startHotClosingJob, runHotClosingFollowUp };

@@ -823,6 +823,19 @@ async function setupDatabase() {
       -- Migración: bandera para excluir manualmente de Hot Leads
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
 
+      -- Cierre comercial asistido. La reserva se toma al comenzar realmente
+      -- un pedido; no depende de que el modelo recuerde la hora del primer mensaje.
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS sales_started_at TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS same_day_hold_until TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_follow_up_sent_at TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_follow_up_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_follow_up_stage TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS follow_up_stage TEXT;
+      CREATE INDEX IF NOT EXISTS idx_conversations_hot_closing_due
+        ON conversations(agent_mode, pipeline_state, last_message_at)
+        WHERE pipeline_state IN ('interested','collecting_order');
+
       -- Migración: tipo de cliente en contactos (personal / empresa)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS client_type TEXT DEFAULT 'personal';
 
