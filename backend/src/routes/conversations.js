@@ -1339,6 +1339,7 @@ router.post('/retry-unanswered', async (req, res) => {
       SELECT
         c.id,
         c.phone_number,
+        c.whatsapp_channel_id,
         m.content AS last_inbound
       FROM conversations c
       JOIN LATERAL (
@@ -1359,8 +1360,8 @@ router.post('/retry-unanswered', async (req, res) => {
       return res.json({ success: true, retried: 0, results: [] });
     }
 
-    // 2. Obtener config de WhatsApp y pipeline
-    const wc       = await db.getWhatsappConfig(req.orgId);
+    // 2. Obtener pipeline. La configuración de salida se resuelve por conversación
+    // para no responder un chat de Evolution desde el número oficial de Kapso.
     const pipeline = require('../services/pipeline');
 
     const results = [];
@@ -1371,10 +1372,12 @@ router.post('/retry-unanswered', async (req, res) => {
 
         if (result?.response && !result?.duplicate) {
           // Enviar y guardar en DB
-          const sent = await kapsoService.sendTextMessage(conv.phone_number, result.response, wc).catch(() => null);
+          const sendConfig = await outboundConfig(req.orgId, conv);
+          if (!sendConfig) throw new Error('WhatsApp no configurado para la conversación');
+          const sent = await whatsappProvider.sendTextMessage(conv.phone_number, result.response, sendConfig);
           await db.saveMessage({
             conversationId: conv.id,
-            whatsappMessageId: sent?.messages?.[0]?.id,
+            whatsappMessageId: whatsappProvider.messageId(sent),
             direction: 'outbound',
             content: result.response,
             sentBy: 'ai',

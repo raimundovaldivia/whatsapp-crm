@@ -4,14 +4,18 @@ const { load } = require('./helpers.cjs');
 
 function loadProvider(env) {
   const constructorOptions = [];
+  const requests = [];
   class Anthropic {
     constructor(options) {
       constructorOptions.push(options);
-      this.messages = { create: async () => ({ content: [{ text: 'ok' }] }) };
+      this.messages = { create: async request => {
+        requests.push(request);
+        return { content: [{ text: 'ok' }] };
+      } };
     }
   }
   const provider = load('src/services/ai-provider.js', { '@anthropic-ai/sdk': Anthropic }, { process: { env } });
-  return { provider, constructorOptions };
+  return { provider, constructorOptions, requests };
 }
 
 test('Claude sigue siendo el proveedor de IA predeterminado', async () => {
@@ -28,7 +32,7 @@ test('Claude sigue siendo el proveedor de IA predeterminado', async () => {
 });
 
 test('DeepSeek usa su clave, endpoint Anthropic oficial y modelos configurables', async () => {
-  const { provider, constructorOptions } = loadProvider({
+  const { provider, constructorOptions, requests } = loadProvider({
     AI_PROVIDER: 'deepseek',
     DEEPSEEK_API_KEY: 'deepseek-test-key',
     DEEPSEEK_FAST_MODEL: 'deepseek-fast-test',
@@ -41,6 +45,9 @@ test('DeepSeek usa su clave, endpoint Anthropic oficial y modelos configurables'
   assert.equal(constructorOptions.length, 1);
   assert.equal(constructorOptions[0].apiKey, 'deepseek-test-key');
   assert.equal(constructorOptions[0].baseURL, 'https://api.deepseek.com/anthropic');
+  assert.equal(constructorOptions[0].timeout, 30000);
+  assert.equal(constructorOptions[0].maxRetries, 1);
+  assert.equal(requests[0].reasoning.effort, 'none');
   assert.equal(provider.modelFor('fast'), 'deepseek-fast-test');
   assert.equal(provider.modelFor('smart'), 'deepseek-smart-test');
   assert.equal(provider.modelFor('vision'), 'deepseek-vision-test');
@@ -89,6 +96,7 @@ test('el agente de ventas envía la respuesta por DeepSeek cuando está seleccio
   assert.equal(response, 'Respuesta desde el proveedor configurado');
   assert.equal(constructorOptions[0].baseURL, 'https://api.deepseek.com/anthropic');
   assert.equal(requests[0].model, 'deepseek-flash');
+  assert.equal(requests[0].reasoning.effort, 'none');
 });
 
 test('el análisis visual usa DeepSeek y conserva el bloque de imagen Anthropic-compatible', async () => {

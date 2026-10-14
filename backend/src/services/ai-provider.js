@@ -7,6 +7,11 @@ const PROVIDER_ALIASES = Object.freeze({
   deepseek: 'deepseek',
 });
 
+function positiveInteger(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function normalizeProvider(value = 'anthropic') {
   const provider = PROVIDER_ALIASES[String(value || 'anthropic').trim().toLowerCase()];
   if (!provider) {
@@ -21,7 +26,11 @@ function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
   const apiKey = isDeepSeek ? env.DEEPSEEK_API_KEY : env.ANTHROPIC_API_KEY;
   const clientOptions = { apiKey };
 
-  if (isDeepSeek) clientOptions.baseURL = DEEPSEEK_ANTHROPIC_BASE_URL;
+  if (isDeepSeek) {
+    clientOptions.baseURL = DEEPSEEK_ANTHROPIC_BASE_URL;
+    clientOptions.timeout = positiveInteger(env.DEEPSEEK_TIMEOUT_MS, 30000);
+    clientOptions.maxRetries = positiveInteger(env.DEEPSEEK_MAX_RETRIES, 1);
+  }
 
   let sdkClient = null;
   const client = {
@@ -32,7 +41,10 @@ function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
           throw new Error(`${variable} no está configurada para AI_PROVIDER=${provider}`);
         }
         if (!sdkClient) sdkClient = new AnthropicClient(clientOptions);
-        return sdkClient.messages.create(request);
+        const providerRequest = isDeepSeek
+          ? { reasoning: { effort: 'none' }, ...request }
+          : request;
+        return sdkClient.messages.create(providerRequest);
       },
     },
   };
