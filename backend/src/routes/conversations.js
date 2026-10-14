@@ -16,6 +16,7 @@ const followUp = require('../services/follow-up');
 const { reconcilePendingMessages } = require('../services/message-status-recovery');
 const { isTrackableDestination, extractTrackingTokens } = require('../services/lead-journey');
 const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
+const inboundPolicy = require('../services/inbound-message-policy');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -1368,6 +1369,10 @@ router.post('/retry-unanswered', async (req, res) => {
     const results = [];
     for (const conv of rows) {
       try {
+        if (inboundPolicy.isNoResponseNeeded(conv.last_inbound)) {
+          results.push({ phone: conv.phone_number, success: false, reason: 'no_response_needed' });
+          continue;
+        }
         const result = await pipeline.processMessage(req.orgId, conv.id, conv.last_inbound);
         if (result.skipped || !result.response) continue;
 
