@@ -1072,22 +1072,45 @@ async function cancelScheduledOrder(id, orgId) {
 
 // ─── MESSAGES ─────────────────────────────────────────────────────
 
-async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = null, sentBy = 'ai', agentType = null, mediaId = null }) {
+async function saveMessage({ conversationId, whatsappMessageId, direction, content, type = 'text', status = null, sentBy = 'ai', agentType = null, mediaId = null, aiProvider = null, aiModel = null, promptVersion = null }) {
   status = status || (direction === 'outbound' && (type === 'template' || content?.startsWith('[Template:')) ? 'pending' : 'sent');
   try {
     return await queryOne(
-      `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type, media_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type, media_id, ai_provider, ai_model, prompt_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (whatsapp_message_id) DO UPDATE SET
-         sent_by = EXCLUDED.sent_by, agent_type = EXCLUDED.agent_type
+         sent_by = EXCLUDED.sent_by, agent_type = EXCLUDED.agent_type,
+         ai_provider = EXCLUDED.ai_provider, ai_model = EXCLUDED.ai_model,
+         prompt_version = EXCLUDED.prompt_version
        WHERE messages.conversation_id = EXCLUDED.conversation_id
          AND messages.direction = 'outbound' AND EXCLUDED.direction = 'outbound'
          AND messages.sent_by = 'human' AND EXCLUDED.sent_by = 'ai'
        RETURNING *`,
-      [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType, mediaId || null]
+      [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType, mediaId || null, aiProvider, aiModel, promptVersion]
     );
   } catch (err) {
     if (err.code === '23505') return null; // fallback por si acaso
+    // Compatibilidad durante despliegues graduales: si una instancia empieza
+    // a atender antes de que setup.js agregue la trazabilidad, no se pierde el
+    // mensaje. La siguiente inicialización crea las columnas nuevas.
+    if (err.code === '42703' && /ai_provider|ai_model|prompt_version/.test(err.message || '')) {
+      try {
+        return await queryOne(
+          `INSERT INTO messages (conversation_id, whatsapp_message_id, direction, content, type, status, sent_by, agent_type, media_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (whatsapp_message_id) DO UPDATE SET
+             sent_by = EXCLUDED.sent_by, agent_type = EXCLUDED.agent_type
+           WHERE messages.conversation_id = EXCLUDED.conversation_id
+             AND messages.direction = 'outbound' AND EXCLUDED.direction = 'outbound'
+             AND messages.sent_by = 'human' AND EXCLUDED.sent_by = 'ai'
+           RETURNING *`,
+          [conversationId, whatsappMessageId || null, direction, content, type, status, sentBy, agentType, mediaId || null]
+        );
+      } catch (legacyErr) {
+        if (legacyErr.code === '23505') return null;
+        throw legacyErr;
+      }
+    }
     throw err;
   }
 }

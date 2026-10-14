@@ -16,19 +16,19 @@ const router         = express.Router();
 const db             = require('../db/database');
 const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
-const { notifyAdminHandoff, notifyAdminHelp, notifyAdminHumanPendingReply, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
+const { notifyAdminHandoff, notifyAdminHumanPendingReply, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
 const secretary = require('../services/admin-secretary');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
 const mediaCache                = require('../services/media-cache');
 const { handleAgentCommand, hasActiveCampaign } = require('../services/agent-commands');
-const guardrail                 = require('../services/response-guardrail');
+const pipelineOutbound          = require('../services/pipeline-outbound');
 const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
 const { resumeDivaOnInbound, keepHumanAfterReply } = require('../services/conversation-mode');
 const { isDeliveredOrder, buildPaymentProofReply } = require('../services/payment-proof-reply');
 const campaignGuard = require('../services/broadcast-campaign-guard');
 const { isTerminalConversationReply } = require('../services/inbound-message-policy');
-const { client: aiClient, modelFor } = require('../services/ai-provider');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
 const audioTranscription = require('../services/audio-transcription');
 
 let io;
@@ -374,10 +374,15 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         // así para siempre. Ahora: acuse inmediato + recordatorio si el equipo
         // tarda (escalation-watch.js) + vuelta al bot a las 24 h.
         const escalateWithAck = async (ackText, reason, botWasGoingToSay) => {
-          await db.setAgentMode(capturedConvId, 'coordinating');
-          await db.setLastEscalation(capturedConvId, textToProcess, reason).catch(() => {});
-          io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'coordinating' });
-          notifyAdminHelp(org.id, updatedConv || conversation, botWasGoingToSay, reason).catch(() => {});
+          await pipelineOutbound.coordinateConversation({
+            orgId: org.id,
+            conversationId: capturedConvId,
+            conversation: updatedConv || conversation,
+            userMessage: textToProcess,
+            reason,
+            botWasGoingToSay,
+            io,
+          });
 
           let ackSent = null;
           try {
@@ -399,43 +404,19 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: ackMsg, conversation: convNow });
         };
 
-        if (!result.switchToHuman) {
-          const fresh = await guardrail.checkResponseFreshness(org.id, capturedConvId, result.response, {
-            orderCreated: result.orderCreated, orderUpdated: result.orderUpdated,
-          });
-          if (!fresh.ok) {
-            console.error(`[KapsoWebhook] ⛔ Dato rancio (${fresh.reason}) para ${capturedFrom}: ${fresh.detail}`);
-            log.step('guardrail', `bloqueado: ${fresh.reason}`);
-            await escalateWithAck(
-              'Déjame revisar esto con el equipo para darte la información correcta y te escribo por aquí 🙏',
-              `Dato desactualizado — ${fresh.detail}`,
-              result.response
-            );
-            log.done();
-            return;
-          }
-
-          // El bot prometió "consultar con el equipo y confirmar" pero la
-          // pipeline no escaló → esa promesa no le llega a nadie. La
-          // convertimos en escalación real: se avisa al admin y la
-          // conversación pasa a humano, usando el mismo texto como acuse.
-          if (guardrail.promisesTeamFollowup(result.response)) {
-            log.step('promise_escalate', 'el bot prometió consultar con el equipo → escalando de verdad');
-            await escalateWithAck(
-              result.response,
-              result.escalationReason || 'El bot le dijo al cliente que consultaría algo con el equipo',
-              result.response
-            );
-            log.done();
-            return;
-          }
-        }
-
-        if (result.switchToHuman) {
-          const reason = result.escalationReason || 'Necesita validación del ejecutivo';
-          const ack = result.response || 'Déjame consultarlo con el equipo y te confirmo por aquí 🙏';
-          await escalateWithAck(ack, reason, result.response);
-          log.step('switchToHuman', `admin consultado — conv ${capturedConvId} en pausa, cliente avisado`);
+        const outboundDecision = await pipelineOutbound.evaluatePipelineResult({
+          orgId: org.id,
+          conversationId: capturedConvId,
+          userMessage: textToProcess,
+          result,
+        });
+        if (outboundDecision.escalate) {
+          log.step(outboundDecision.code, outboundDecision.reason);
+          await escalateWithAck(
+            outboundDecision.response,
+            outboundDecision.reason,
+            outboundDecision.botWasGoingToSay
+          );
           log.done();
           return;
         }
@@ -467,6 +448,9 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           sentBy:            'ai',
           agentType:         result.agentType,
           status:            windowExpired ? 'failed' : 'sent',
+          aiProvider:        result.aiProvider,
+          aiModel:           result.aiModel,
+          promptVersion:     result.promptVersion,
         });
 
         await db.updateConversationLastMessage(capturedConvId, result.response);
@@ -786,7 +770,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
               { type: 'text', text: 'Describe brevemente qué muestra esta imagen en 1-2 oraciones en español, sin saludar.' }
             ]}]
           });
-          imageContext = `[imagen: ${visionResp.content[0]?.text || 'imagen enviada por el cliente'}]`;
+          imageContext = `[imagen: ${responseText(visionResp, 'imagen enviada por el cliente')}]`;
         } catch (_) {}
       }
 

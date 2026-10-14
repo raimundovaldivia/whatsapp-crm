@@ -101,6 +101,31 @@ test('el agente de ventas envía la respuesta por DeepSeek cuando está seleccio
   assert.equal(requests[0].max_tokens, 1024);
 });
 
+test('el agente de ventas limita el nombre autorizado y el dialecto en el prompt', async () => {
+  const requests = [];
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async request => {
+        requests.push(request);
+        return { content: [{ type: 'text', text: 'Respuesta segura' }] };
+      } };
+    }
+  }
+  const sales = load('src/services/agents/sales.js', { '@anthropic-ai/sdk': Anthropic }, {
+    process: { env: { ANTHROPIC_API_KEY: 'test-key' } },
+  });
+  await sales.generateSalesResponse(
+    [{ direction: 'outbound', content: 'Hola Hilda' }],
+    '¿Tienen Jumbo?',
+    'Huevos Jumbo — $12.000',
+    '',
+    { customerName: 'Karen' },
+  );
+  assert.match(requests[0].system, /NOMBRE AUTORIZADO: Karen/);
+  assert.match(requests[0].system, /Nunca inventes/);
+  assert.match(requests[0].system, /español chileno neutro/i);
+});
+
 test('el análisis visual usa DeepSeek y conserva el bloque de imagen Anthropic-compatible', async () => {
   const constructorOptions = [];
   const requests = [];

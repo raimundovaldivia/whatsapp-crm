@@ -14,7 +14,7 @@ const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
-const { client: conversationalAI, modelFor: conversationalModelFor, responseText } = require('./ai-provider');
+const { client: conversationalAI, modelFor: conversationalModelFor, responseText, provider: conversationalProvider } = require('./ai-provider');
 const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
@@ -27,6 +27,14 @@ const purchaseFeedback = require('./purchase-feedback');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
+
+function aiTrace(tier, promptVersion) {
+  return {
+    aiProvider: conversationalProvider,
+    aiModel: conversationalModelFor(tier),
+    promptVersion,
+  };
+}
 
 const DELIVERY_STATUS_PATTERNS = [
   /(a\s+qu[eé]\s+hora|qu[eé]\s+hora|en\s+qu[eé]\s+horario|qu[eé]\s+horario|horario\s+de\s+(entrega|reparto|despacho))\b/i,
@@ -1020,10 +1028,10 @@ REGLAS ABSOLUTAS:
           { role: 'user', content: `Conversación reciente:\n${recentHistory}\n\nÚltimo mensaje del cliente: "${userMessage}"` },
         ],
       });
-      const scheduledMsg = aiResp.content[0]?.text?.trim()
-        || `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar.`;
+      const scheduledMsg = responseText(aiResp,
+        `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar.`);
       L.agent('orchestrator', 0);
-      return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled' };
+      return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled', ...aiTrace('fast', 'scheduled-order-v1') };
     } catch (err) {
       console.warn('[Pipeline] scheduled Haiku error:', err.message);
       const fallback = `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar. Si necesitas cambiar algo, dímelo con gusto.`;
@@ -1999,7 +2007,7 @@ REGLAS ABSOLUTAS:
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, softOpts);
     L.agent('sales', Date.now() - tSoft);
     L.step('future_interest', 'interés sin fecha — sin presión');
-    return { response: salesResponse, agentType: 'sales', newState: 'future_interest' };
+    return { response: salesResponse, agentType: 'sales', newState: 'future_interest', ...aiTrace('smart', 'sales-v2') };
   }
 
   // Si el turno anterior ya guardó la fecha al responder una consulta sobre
@@ -2064,7 +2072,7 @@ REGLAS ABSOLUTAS:
     }
     await db.updatePipelineState(conversationId, effectiveState, undefined);
     L.agent('sales', Date.now() - tDel);
-    return { response: salesResponse, agentType: 'sales', newState: effectiveState };
+    return { response: salesResponse, agentType: 'sales', newState: effectiveState, ...aiTrace('smart', 'sales-v2') };
   }
 
   // El cliente quiere hablar con humano — salvo si ya detectamos bucle de escalación
@@ -2115,7 +2123,7 @@ REGLAS ABSOLUTAS:
 
     await db.updatePipelineState(conversationId, newState, undefined);
     L.agent('sales', Date.now() - tWarm);
-    return { response: salesResponse, agentType: 'sales', newState };
+    return { response: salesResponse, agentType: 'sales', newState, ...aiTrace('smart', 'sales-v2') };
   }
 
   // Interés, objeción, exploración, delivery, soporte → Agente de ventas
@@ -2128,7 +2136,7 @@ REGLAS ABSOLUTAS:
   }
   await db.updatePipelineState(conversationId, finalState, undefined);
   L.agent('sales', Date.now() - tGen);
-  return { response: salesResponse, agentType: 'sales', newState: finalState };
+  return { response: salesResponse, agentType: 'sales', newState: finalState, ...aiTrace('smart', 'sales-v2') };
 }
 
 /**
@@ -2718,7 +2726,12 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // Aún recopilando datos — quitar la palabra clave si apareció en el texto
   const cleanResponse = agentResponse.replace(/ORDEN_CONFIRMADA/g, '').trim();
-  return { response: cleanResponse || '¡Entendido! Déjame verificar los datos.', agentType: 'orders', newState: 'collecting_order' };
+  return {
+    response: cleanResponse || '¡Entendido! Déjame verificar los datos.',
+    agentType: 'orders',
+    newState: 'collecting_order',
+    ...aiTrace('smart', 'orders-v1'),
+  };
 }
 
 /**

@@ -46,6 +46,19 @@ function scoreProduct(product, context) {
   return score;
 }
 
+function productFamily(value) {
+  const text = norm(value?.title || value);
+  if (/\b(queso|quesos)\b/.test(text)) return 'cheese';
+  if (/\b(aceituna|aceitunas)\b/.test(text)) return 'olives';
+  if (/\b(huevo|huevos|jumbo|xl|bandeja)\b/.test(text)) return 'eggs';
+  return null;
+}
+
+function explicitVariant(value) {
+  const text = norm(value);
+  return ['jumbo', 'xl', 'queso', 'aceituna'].find(marker => new RegExp(`\\b${marker}s?\\b`).test(text)) || null;
+}
+
 async function catalog(orgId) {
   const source = await db.getSetting(orgId, 'catalog_source');
   if (source === 'local') {
@@ -58,6 +71,11 @@ async function catalog(orgId) {
       if (validImageUrl(product.image_url || product.imageUrl)) return product;
       const ranked = (cached || [])
         .filter(candidate => validImageUrl(candidate.image_url || candidate.imageUrl))
+        .filter(candidate => {
+          const localFamily = productFamily(product);
+          const candidateFamily = productFamily(candidate);
+          return !localFamily || !candidateFamily || localFamily === candidateFamily;
+        })
         .map(candidate => ({ candidate, score: scoreProduct(candidate, norm(product.title)) }))
         .sort((a, b) => b.score - a.score);
       return ranked[0]?.score >= 7 ? { ...product, image_url: ranked[0].candidate.image_url || ranked[0].candidate.imageUrl } : product;
@@ -73,9 +91,13 @@ async function suggest({ orgId, conversationId, userMessage, response }) {
   const messages = await db.getLastMessages(conversationId, 10);
   const context = norm([...messages.map(message => message.content), userMessage, response].join(' '));
   const currentSelection = norm(userMessage);
+  const selectedFamily = productFamily(currentSelection);
+  const selectedVariant = explicitVariant(currentSelection);
   const products = (await catalog(orgId))
     .map(product => ({ ...product, image: validImageUrl(product.image_url || product.imageUrl) }))
-    .filter(product => product.image && Number(product.stock ?? product.inventory_quantity ?? 1) !== 0);
+    .filter(product => product.image && Number(product.stock ?? product.inventory_quantity ?? 1) !== 0)
+    .filter(product => !selectedFamily || productFamily(product) === selectedFamily)
+    .filter(product => !selectedVariant || new RegExp(`\\b${selectedVariant}s?\\b`).test(norm(product.title)));
   if (!products.length) return null;
 
   // Lo que el cliente acaba de escoger pesa más que la lista de opciones del
@@ -99,4 +121,4 @@ async function suggest({ orgId, conversationId, userMessage, response }) {
   };
 }
 
-module.exports = { suggest, norm, scoreProduct, explicitProductInterest, validImageUrl };
+module.exports = { suggest, norm, scoreProduct, explicitProductInterest, validImageUrl, productFamily, explicitVariant };

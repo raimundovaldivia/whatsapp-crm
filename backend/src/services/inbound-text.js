@@ -4,6 +4,8 @@ const { resumeDivaOnInbound } = require('./conversation-mode');
 const { notifyAdminHumanPendingReply } = require('./notifications');
 const provider = require('./whatsapp-provider');
 const { isTerminalConversationReply } = require('./inbound-message-policy');
+const pipelineOutbound = require('./pipeline-outbound');
+const { notifyAdmin } = require('./admin-notify');
 
 async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead, whatsappChannelId = null, prepareMedia = null, scheduleResponse = null }) {
   if (!parsed?.from || !parsed?.text) return;
@@ -95,9 +97,31 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     : await pipeline.processMessage(org.id, conversation.id, textToProcess);
   if (result.skipped || result.duplicate || !result.response) return;
 
-  const checked = await require('./response-guardrail').checkResponseFreshness(org.id, conversation.id, result.response, { userMessage: parsed.text });
-  if (!checked.ok) {
-    result.response = 'Para asegurarme de entenderte bien, ¿qué necesitas confirmar?';
+  const outboundDecision = await pipelineOutbound.evaluatePipelineResult({
+    orgId: org.id,
+    conversationId: conversation.id,
+    userMessage: textToProcess,
+    result,
+  });
+  if (outboundDecision.escalate) {
+    const responseWasReplaced = outboundDecision.response !== result.response;
+    await pipelineOutbound.coordinateConversation({
+      orgId: org.id,
+      conversationId: conversation.id,
+      conversation: beforeResponse,
+      userMessage: textToProcess,
+      reason: outboundDecision.reason,
+      botWasGoingToSay: outboundDecision.botWasGoingToSay,
+      io,
+    });
+    result.response = outboundDecision.response;
+    result.agentType = 'orchestrator';
+    result.productMedia = null;
+    if (responseWasReplaced) {
+      result.aiProvider = null;
+      result.aiModel = null;
+      result.promptVersion = 'escalation-ack-v1';
+    }
   }
 
   const beforeSend = await db.getConversationById(conversation.id);
@@ -110,12 +134,12 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     content: result.response,
     sentBy: 'ai',
     agentType: result.agentType,
+    aiProvider: result.aiProvider,
+    aiModel: result.aiModel,
+    promptVersion: result.promptVersion,
   });
   await db.updateConversationLastMessage(conversation.id, result.response);
 
-  if (result.switchToHuman) {
-    io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'coordinating' });
-  }
   updatedConv = await db.getConversationById(conversation.id);
   io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
 
@@ -134,6 +158,17 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     io?.to(`org_${org.id}`).emit(`order_created_${org.id}`, {
       conversationId: conversation.id,
       order: result.orderCreated,
+    });
+  }
+  if (result.adminNotice) {
+    notifyAdmin(org.id, { body: result.adminNotice, kind: 'order', conversationId: conversation.id }).catch(() => {});
+  }
+  if (result.orderUpdated || result.orderCancelled) {
+    const changed = result.orderUpdated || result.orderCancelled;
+    io?.to(`org_${org.id}`).emit(`order_updated_${org.id}`, {
+      conversationId: conversation.id,
+      orderId: changed.orderId,
+      event: result.orderUpdated ? 'updated' : 'cancelled',
     });
   }
   };

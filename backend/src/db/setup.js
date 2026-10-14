@@ -194,6 +194,9 @@ async function setupDatabase() {
       -- Migración: media_id para mensajes con imagen o audio
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_id TEXT;
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivery_error JSONB;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_provider TEXT;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_model TEXT;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS prompt_version TEXT;
       ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_status_check;
       ALTER TABLE messages ADD CONSTRAINT messages_status_check
         CHECK(status IN ('pending','sent','delivered','read','failed'));

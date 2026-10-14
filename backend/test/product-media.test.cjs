@@ -40,3 +40,42 @@ test('no repite fotos ni envía una imagen cuando la selección sigue ambigua', 
   } });
   assert.equal(await media.suggest({ orgId: 1, conversationId: 1, userMessage: 'Quiero XL 30 cafés', response: 'Perfecto' }), null);
 });
+
+test('una selección Jumbo nunca reutiliza una foto de queso del historial', async () => {
+  const db = {
+    getSetting: async () => 'local',
+    getLastMessages: async () => [
+      { direction: 'outbound', content: 'También tenemos queso de cabra', type: 'text' },
+      { direction: 'inbound', content: '¿Precio del queso?', type: 'text' },
+    ],
+    getProducts: async () => [
+      { id: 1, title: 'Huevos Jumbo bandeja 30 unidades', image_url: 'https://cdn.example/jumbo.jpg', stock: 10 },
+      { id: 2, title: 'Queso de cabra artesanal', image_url: 'https://cdn.example/queso.jpg', stock: 10 },
+    ],
+  };
+  const media = load('src/services/product-media.js', { '../db/database': db });
+  const suggestion = await media.suggest({
+    orgId: 1,
+    conversationId: 2,
+    userMessage: '¿Cuál es el precio de los Jumbo?',
+    response: 'Los Jumbo cuestan $12.000.',
+  });
+  assert.equal(suggestion.mediaUrl, 'https://cdn.example/jumbo.jpg');
+  assert.doesNotMatch(suggestion.caption, /queso/i);
+});
+
+test('el catálogo local no cruza fotos entre familias de productos', async () => {
+  const db = {
+    getSetting: async () => 'local',
+    getLastMessages: async () => [],
+    getProducts: async () => [
+      { id: 1, title: 'Huevos Jumbo bandeja 30 unidades', image_url: null, stock: 10 },
+    ],
+    getCachedProducts: async () => [
+      { id: 9, title: 'Queso Jumbo artesanal 500 gramos', image_url: 'https://cdn.example/queso.jpg', stock: 10 },
+    ],
+  };
+  const media = load('src/services/product-media.js', { '../db/database': db });
+  const suggestion = await media.suggest({ orgId: 1, conversationId: 2, userMessage: 'Quiero Jumbo', response: 'Perfecto' });
+  assert.equal(suggestion, null);
+});

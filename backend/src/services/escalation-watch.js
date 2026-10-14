@@ -14,7 +14,7 @@
 
 const { getPool } = require('../db/database');
 const db          = require('../db/database');
-const kapso       = require('./kapso-whatsapp');
+const whatsappProvider = require('./whatsapp-provider');
 const { notifyAdmin } = require('./admin-notify');
 const { getAdminConversationBrief, formatConversationBrief } = require('./notifications');
 const { isCustomerMessagingHour } = require('./outbound-policy');
@@ -37,7 +37,7 @@ async function sweepEscalations(now = new Date()) {
     // humana desde la escalación, sin recordatorio todavía y con el cliente
     // aún dentro de la ventana de 24 h (si no, el texto libre no llega).
     const { rows } = await pool.query(`
-      SELECT c.id, c.organization_id, c.phone_number, c.contact_name,
+      SELECT c.id, c.organization_id, c.phone_number, c.contact_name, c.whatsapp_channel_id,
              c.last_escalation_at, c.last_escalation_reason,
              COALESCE(NULLIF(s.value, ''), '${DEFAULT_REMINDER_MINUTES}')::int AS reminder_minutes
         FROM conversations c
@@ -58,19 +58,21 @@ async function sweepEscalations(now = new Date()) {
 
     for (const c of rows) {
       try {
-        const wc = await db.getWhatsappConfig(c.organization_id);
-        if (!wc || wc.provider !== 'kapso') continue;
+        const wc = c.whatsapp_channel_id
+          ? await db.getWhatsappChannel(c.organization_id, c.whatsapp_channel_id)
+          : await db.getWhatsappConfig(c.organization_id);
+        if (!wc) continue;
 
         const waited = Math.round((Date.now() - new Date(c.last_escalation_at).getTime()) / 60000);
         const text = 'Sigo con tu consulta pendiente con el equipo 🙏 Te escribimos por aquí apenas la revisen. ¡Gracias por la paciencia!';
 
         let sent = null;
-        try { sent = await kapso.sendTextMessage(c.phone_number, text, wc); }
+        try { sent = await whatsappProvider.sendTextMessage(c.phone_number, text, wc); }
         catch (e) { if (!e.is24hWindow) throw e; }
 
         await db.saveMessage({
           conversationId:    c.id,
-          whatsappMessageId: sent?.messages?.[0]?.id || null,
+          whatsappMessageId: whatsappProvider.messageId(sent),
           direction:         'outbound',
           content:           text,
           sentBy:            'ai',

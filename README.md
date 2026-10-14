@@ -138,6 +138,8 @@ El proveedor seleccionado se aplica a conversaciones, pedidos, evaluaciones, cam
 
 Los audios tienen una etapa previa: WhatsApp/Kapso puede entregar la transcripción o el backend puede obtenerla con `AUDIO_TRANSCRIPTION_PROVIDER=openai` y `OPENAI_API_KEY`. Una vez transcrito, el texto siempre continúa por el proveedor elegido en `AI_PROVIDER`. Claude y DeepSeek reciben texto e imágenes, no el audio crudo.
 
+Todas las respuestas generadas pasan por las mismas protecciones de frescura, escalamiento y promesas al equipo, tanto en Kapso como en Evolution y en reintentos. Los mensajes salientes generados por IA guardan proveedor, modelo y versión de prompt para facilitar auditorías sin almacenar claves ni razonamientos internos.
+
 ---
 
 ### Paso 6 — Iniciar en desarrollo

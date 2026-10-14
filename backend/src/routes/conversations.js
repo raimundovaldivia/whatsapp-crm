@@ -10,6 +10,8 @@ const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
 const paymentOptions = require('../services/payment-options');
 const { notifyAdminHandoff } = require('../services/notifications');
+const { notifyAdmin } = require('../services/admin-notify');
+const pipelineOutbound = require('../services/pipeline-outbound');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
 const followUp = require('../services/follow-up');
@@ -1391,21 +1393,89 @@ router.post('/retry-unanswered', async (req, res) => {
           continue;
         }
         const result = await pipeline.processMessage(req.orgId, conv.id, conv.last_inbound);
-        if (result.skipped || !result.response) continue;
+        if (result.duplicate) {
+          results.push({ phone: conv.phone_number, success: false, reason: 'duplicate' });
+          continue;
+        }
+        if (result.skipped || !result.response) {
+          results.push({ phone: conv.phone_number, success: false, reason: result.reason || 'no_response' });
+          continue;
+        }
 
         if (result?.response && !result?.duplicate) {
+          const currentConversation = await db.getConversationById(conv.id, req.orgId);
+          const outboundDecision = await pipelineOutbound.evaluatePipelineResult({
+            orgId: req.orgId,
+            conversationId: conv.id,
+            userMessage: conv.last_inbound,
+            result,
+          });
+          if (outboundDecision.escalate) {
+            const responseWasReplaced = outboundDecision.response !== result.response;
+            await pipelineOutbound.coordinateConversation({
+              orgId: req.orgId,
+              conversationId: conv.id,
+              conversation: currentConversation || conv,
+              userMessage: conv.last_inbound,
+              reason: outboundDecision.reason,
+              botWasGoingToSay: outboundDecision.botWasGoingToSay,
+              io,
+            });
+            result.response = outboundDecision.response;
+            result.agentType = 'orchestrator';
+            result.productMedia = null;
+            if (responseWasReplaced) {
+              result.aiProvider = null;
+              result.aiModel = null;
+              result.promptVersion = 'escalation-ack-v1';
+            }
+          }
           // Enviar y guardar en DB
           const sendConfig = await outboundConfig(req.orgId, conv);
           if (!sendConfig) throw new Error('WhatsApp no configurado para la conversación');
           const sent = await whatsappProvider.sendTextMessage(conv.phone_number, result.response, sendConfig);
-          await db.saveMessage({
+          const savedOutbound = await db.saveMessage({
             conversationId: conv.id,
             whatsappMessageId: whatsappProvider.messageId(sent),
             direction: 'outbound',
             content: result.response,
             sentBy: 'ai',
+            agentType: result.agentType,
+            aiProvider: result.aiProvider,
+            aiModel: result.aiModel,
+            promptVersion: result.promptVersion,
           }).catch(() => {});
           await db.updateConversationLastMessage(conv.id, result.response, false).catch(() => {});
+
+          const finalConversation = await db.getConversationById(conv.id, req.orgId);
+          io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, {
+            message: savedOutbound,
+            conversation: finalConversation,
+          });
+          if (result.productMedia) {
+            await require('../services/product-media-delivery').sendSuggested({
+              suggestion: result.productMedia,
+              orgId: req.orgId,
+              conversation: finalConversation || currentConversation || conv,
+              config: sendConfig,
+              io,
+              agentType: result.agentType,
+            });
+          }
+          if (result.orderCreated) {
+            io?.to(`org_${req.orgId}`).emit(`order_created_${req.orgId}`, { conversationId: conv.id, order: result.orderCreated });
+          }
+          if (result.orderUpdated || result.orderCancelled) {
+            const changed = result.orderUpdated || result.orderCancelled;
+            io?.to(`org_${req.orgId}`).emit(`order_updated_${req.orgId}`, {
+              conversationId: conv.id,
+              orderId: changed.orderId,
+              event: result.orderUpdated ? 'updated' : 'cancelled',
+            });
+          }
+          if (result.adminNotice) {
+            notifyAdmin(req.orgId, { body: result.adminNotice, kind: 'order', conversationId: conv.id }).catch(() => {});
+          }
 
           results.push({ phone: conv.phone_number, success: true });
           console.log(`[RetryUnanswered] ✅ ${conv.phone_number}: respondido`);
