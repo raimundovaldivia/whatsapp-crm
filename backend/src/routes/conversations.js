@@ -1342,10 +1342,11 @@ router.post('/retry-unanswered', async (req, res) => {
         c.id,
         c.phone_number,
         c.whatsapp_channel_id,
+        m.id AS last_inbound_id,
         m.content AS last_inbound
       FROM conversations c
       JOIN LATERAL (
-        SELECT content, direction, created_at
+        SELECT id, content, direction, created_at
         FROM messages
         WHERE conversation_id = c.id
         ORDER BY created_at DESC
@@ -1368,7 +1369,23 @@ router.post('/retry-unanswered', async (req, res) => {
 
     const results = [];
     for (const conv of rows) {
+      let lockClient = null;
       try {
+        lockClient = await pool.connect();
+        await lockClient.query('SELECT pg_advisory_lock($1, $2)', [req.orgId, conv.id]);
+        const latest = await lockClient.query(`
+          SELECT id, direction
+          FROM messages
+          WHERE conversation_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `, [conv.id]);
+        if (!latest.rows[0]
+          || latest.rows[0].direction !== 'inbound'
+          || String(latest.rows[0].id) !== String(conv.last_inbound_id)) {
+          results.push({ phone: conv.phone_number, success: false, reason: 'already_answered' });
+          continue;
+        }
         if (inboundPolicy.isNoResponseNeeded(conv.last_inbound)) {
           results.push({ phone: conv.phone_number, success: false, reason: 'no_response_needed' });
           continue;
@@ -1398,6 +1415,11 @@ router.post('/retry-unanswered', async (req, res) => {
       } catch (err) {
         console.error(`[RetryUnanswered] ❌ ${conv.phone_number}:`, err.message);
         results.push({ phone: conv.phone_number, success: false, reason: err.message });
+      } finally {
+        if (lockClient) {
+          await lockClient.query('SELECT pg_advisory_unlock($1, $2)', [req.orgId, conv.id]).catch(() => {});
+          lockClient.release();
+        }
       }
 
       // pequeña pausa entre mensajes para no saturar la API
