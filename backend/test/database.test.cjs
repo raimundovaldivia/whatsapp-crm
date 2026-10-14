@@ -15,7 +15,15 @@ test('PostgreSQL migrations, tenant payment isolation, rollback and expense idem
     await setup.setupDatabase();
     await setup.setupDatabase(); // Migration must also be safe on the next boot.
     await engine.exec("INSERT INTO organizations (id,name,slug) VALUES (1,'A','a'),(2,'B','b'); INSERT INTO conversations(id,organization_id,phone_number) VALUES (1,1,'111'),(2,2,'222'); INSERT INTO orders(id,organization_id,conversation_id,items,total_price,status) VALUES (1,1,1,'[]','100','sent'),(2,2,2,'[]','100','sent'); INSERT INTO payment_proofs(id,organization_id,conversation_id,order_id,media_id) VALUES (1,1,1,1,'m1'),(2,2,2,2,'m2');");
+    await engine.query("SELECT setval(pg_get_serial_sequence('conversations','id'), 2, true)");
     const db=load('src/db/database.js',{pg:{Pool}});
+    const socialA=await db.upsertSocialConversation(1,'instagram','meta-user-1','Ana Social');
+    const socialAAgain=await db.upsertSocialConversation(1,'instagram','meta-user-1','Ana Social');
+    const socialOtherOrg=await db.upsertSocialConversation(2,'instagram','meta-user-1','Otra Ana');
+    assert.equal(socialA.id,socialAAgain.id,'el mismo usuario social no duplica conversaciones dentro de una organización');
+    assert.notEqual(socialA.id,socialOtherOrg.id,'la identidad social está aislada por organización');
+    assert.equal(socialA.phone_number,null,'Meta no fabrica un teléfono para identificar al cliente');
+    assert.equal((await db.getAllConversations(1)).some(row=>row.id===socialA.id),false,'la bandeja de WhatsApp no mezcla chats sociales');
     await engine.exec(`INSERT INTO shopify_orders
       (organization_id,shopify_order_id,shopify_name,financial_status,fulfillment_status,
        payment_marked_at,payment_record_source,delivered_at)

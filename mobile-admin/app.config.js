@@ -2,8 +2,8 @@
  * app.config.js — Configuración de Expo para la app ADMIN (Central).
  *
  * App aparte de la de repartidor: otro slug, otro bundle id, otro proyecto EAS.
- * Antes del primer build hay que correr `eas init` para generar el projectId
- * (queda en extra.eas.projectId y en updates.url). Ver README.md.
+ * El proyecto EAS ya está vinculado; `extra.eas.projectId` y `updates.url`
+ * deben conservarse para builds, notificaciones y actualizaciones OTA.
  *
  *   EXPO_PUBLIC_API_URL   backend del CRM (default en src/config.js)
  */
@@ -13,6 +13,11 @@ module.exports = {
     slug: 'diezrios-central-admin',
     version: '1.0.0',
     runtimeVersion: '1.0.0',
+    owner: 'raivaldivia',
+    updates: {
+      url: 'https://u.expo.dev/f32a6047-9f13-48d1-acca-0a32bfc6f947',
+      fallbackToCacheTimeout: 0,
+    },
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'dark',
@@ -43,8 +48,7 @@ module.exports = {
     ],
     extra: {
       apiUrl: process.env.EXPO_PUBLIC_API_URL || null,
-      // eas: { projectId: '<CORRE eas init>' },   // lo completa `eas init`
+      eas: { projectId: 'f32a6047-9f13-48d1-acca-0a32bfc6f947' },
     },
-    // updates: { url: 'https://u.expo.dev/<projectId>' },  // lo completa `eas init`
   },
 };

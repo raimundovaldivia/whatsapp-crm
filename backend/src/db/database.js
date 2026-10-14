@@ -527,10 +527,33 @@ async function upsertConversation(orgId, phoneNumber, contactName = null, whatsa
   );
 }
 
+async function upsertSocialConversation(orgId, channel, externalUserId, contactName = null) {
+  if (!['facebook', 'instagram'].includes(channel)) throw new Error('Canal social inválido');
+  const externalId = String(externalUserId || '').trim();
+  if (!externalId || externalId.length > 255) throw new Error('Identificador social inválido');
+  const displayName = normalizeName(contactName) || (channel === 'instagram' ? 'Cliente de Instagram' : 'Cliente de Facebook');
+  const conversation = await queryOne(
+    `INSERT INTO conversations
+       (organization_id, phone_number, contact_name, source_channel, external_user_id)
+     VALUES ($1, NULL, $2, $3, $4)
+     ON CONFLICT (organization_id, source_channel, external_user_id)
+       WHERE source_channel IN ('facebook','instagram') AND external_user_id IS NOT NULL
+     DO UPDATE SET
+       contact_name = CASE
+         WHEN EXCLUDED.contact_name IS NOT NULL
+          AND EXCLUDED.contact_name NOT IN ('Cliente de Instagram','Cliente de Facebook')
+         THEN EXCLUDED.contact_name ELSE conversations.contact_name END,
+       updated_at = NOW()
+     RETURNING *`,
+    [orgId, displayName, channel, externalId]
+  );
+  return conversation;
+}
+
 async function getAllConversations(orgId, { unreadOnly = false } = {}) {
   const where = unreadOnly
-    ? 'c.organization_id = $1 AND c.unread_count > 0'
-    : 'c.organization_id = $1';
+    ? "c.organization_id = $1 AND c.unread_count > 0 AND c.source_channel = 'whatsapp'"
+    : "c.organization_id = $1 AND c.source_channel = 'whatsapp'";
   // Resolve the saved customer name consistently without merging channel conversations.
   const conversations = await query(
     `SELECT * FROM (
@@ -694,6 +717,8 @@ async function getStalledConversations() {
     FROM conversations c
     JOIN organizations o ON o.id = c.organization_id
     WHERE
+      c.source_channel = 'whatsapp'
+      AND
       c.agent_mode    = 'ai'
       AND c.pipeline_state IN ('interested', 'collecting_order')
       AND c.last_inbound_at IS NOT NULL
@@ -1935,15 +1960,15 @@ async function getContact(orgId, phone) {
  * Solo actualiza los campos que vienen con valor (no pisa datos existentes con null).
  *
  * @param {number} orgId
- * @param {object} data - { phone, name?, email?, address?, city?, region?, notes?, shopifyId? }
+ * @param {object} data - { phone, name?, email?, address?, city?, region?, notes?, shopifyId?, source? }
  */
-async function upsertContact(orgId, { phone, name, email, address, city, region, notes, shopifyId } = {}) {
+async function upsertContact(orgId, { phone, name, email, address, city, region, notes, shopifyId, source } = {}) {
   if (!phone) return null;
   phone = normalizePhone(phone); // siempre normalizar antes de guardar
   if (!phone) return null;
   await pool.query(
-    `INSERT INTO contacts (organization_id, phone, name, email, address, city, region, notes, shopify_id, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+    `INSERT INTO contacts (organization_id, phone, name, email, address, city, region, notes, shopify_id, source, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
      ON CONFLICT (organization_id, phone) DO UPDATE SET
        name       = COALESCE(EXCLUDED.name,       contacts.name),
        email      = COALESCE(EXCLUDED.email,      contacts.email),
@@ -1952,10 +1977,12 @@ async function upsertContact(orgId, { phone, name, email, address, city, region,
        region     = COALESCE(EXCLUDED.region,     contacts.region),
        notes      = COALESCE(EXCLUDED.notes,      contacts.notes),
        shopify_id = COALESCE(EXCLUDED.shopify_id, contacts.shopify_id),
+       source     = COALESCE(contacts.source, EXCLUDED.source),
        total_orders = contacts.total_orders + CASE WHEN EXCLUDED.address IS NOT NULL THEN 1 ELSE 0 END,
        last_order_at = CASE WHEN EXCLUDED.address IS NOT NULL THEN NOW() ELSE contacts.last_order_at END,
        updated_at = NOW()`,
-    [orgId, phone, normalizeName(name), email || null, address || null, city || null, region || null, notes || null, shopifyId || null]
+    [orgId, phone, normalizeName(name), email || null, address || null, city || null, region || null, notes || null, shopifyId || null,
+      ['facebook', 'instagram', 'whatsapp'].includes(source) ? source : 'whatsapp']
   );
   return getContact(orgId, phone);
 }
@@ -2527,7 +2554,7 @@ module.exports = {
   // Agents
   createAgent, getAgents, createDefaultAgents,
   // Conversations
-  upsertConversation, getAllConversations, getConversationById, setConversationPinned, setCustomerNote,
+  upsertConversation, upsertSocialConversation, getAllConversations, getConversationById, setConversationPinned, setCustomerNote,
   updateConversationLastMessage, markConversationAsRead, setAgentMode, claimHumanPendingNotification,
   updatePipelineState, getOrderDraft, claimOrderCreation,
   // Scheduled orders

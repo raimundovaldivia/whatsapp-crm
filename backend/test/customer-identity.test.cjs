@@ -20,7 +20,7 @@ test('customer identity remains consistent across providers, historical phones a
       CREATE TABLE conversations (id SERIAL PRIMARY KEY, organization_id INT, phone_number TEXT,
         contact_name TEXT, whatsapp_channel_id INT, updated_at TIMESTAMP, last_message_at TIMESTAMP,
         unread_count INT DEFAULT 0, is_pinned BOOLEAN DEFAULT FALSE, pinned_at TIMESTAMPTZ,
-        agent_mode TEXT DEFAULT 'ai');
+        agent_mode TEXT DEFAULT 'ai', source_channel TEXT DEFAULT 'whatsapp');
       CREATE TABLE messages (id SERIAL PRIMARY KEY, conversation_id INT, direction TEXT,
         sent_by TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
       CREATE TABLE whatsapp_channels (id INT, name TEXT, phone_number TEXT, provider TEXT);

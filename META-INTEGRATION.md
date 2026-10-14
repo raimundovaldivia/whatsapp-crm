@@ -3,7 +3,8 @@
 El CRM incluye un módulo **Facebook e Instagram** con cuatro capacidades:
 
 - autorización OAuth por organización;
-- bandeja de mensajes de Facebook Messenger e Instagram;
+- bandeja de mensajes de Facebook Messenger e Instagram, con respuesta manual o automática de Diva y creación de pedidos en el CRM;
+- bandeja de comentarios de Facebook e Instagram, con respuesta manual o automática de Diva;
 - publicación de texto, imágenes, videos y Reels;
 - resumen de rendimiento de Meta Ads de los últimos 30 días.
 
@@ -15,8 +16,8 @@ El CRM incluye un módulo **Facebook e Instagram** con cuatro capacidades:
 3. En Webhooks, registrar:
    `https://whatsapp-crm-api-production-f804.up.railway.app/meta-webhook`
 4. Usar el mismo valor de `META_WEBHOOK_VERIFY_TOKEN` como token de verificación.
-5. Suscribir la página a `messages`, `messaging_postbacks` y `feed`. Para Instagram, activar mensajes para la cuenta profesional vinculada.
-6. Solicitar acceso avanzado a los permisos usados por la app: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `pages_messaging`, `pages_manage_posts`, `instagram_basic`, `instagram_manage_messages`, `instagram_content_publish`, `ads_read`, `ads_management` y `business_management`.
+5. Suscribir la página a `messages`, `messaging_postbacks` y `feed`. Para Instagram, suscribir la cuenta profesional a `messages`, `messaging_postbacks` y `comments`.
+6. Solicitar acceso avanzado a los permisos usados por la app: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `pages_messaging`, `pages_manage_posts`, `pages_manage_engagement`, `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `instagram_content_publish`, `ads_read`, `ads_management` y `business_management`.
 
 ## Variables del backend
 
@@ -39,10 +40,17 @@ FRONTEND_URL=https://whatsapp-crm-production-c76b.up.railway.app
 3. Abrir **Más funciones → Facebook e Instagram → Conexión**.
 4. Pulsar **Conectar Meta** y autorizar la cuenta administradora de Diez Ríos.
 5. Elegir la página de Facebook y la cuenta publicitaria correctas y guardar.
-6. Enviar un mensaje de prueba a Facebook y a Instagram; verificar que aparezca en **Mensajes** y responder desde el CRM.
-7. Hacer una publicación de prueba y revisar las métricas en **Anuncios**.
+6. En **Conexión → Atención automática con Diva**, activar por separado mensajes privados y comentarios. Las opciones comienzan desactivadas para evitar respuestas públicas accidentales al conectar una cuenta existente.
+7. Enviar un mensaje de prueba a Facebook y a Instagram; verificar que aparezca en **Mensajes** y que Diva responda usando el catálogo vigente.
+8. Probar un pedido completo por mensaje privado: producto y cantidad → nombre → dirección → ciudad → teléfono → resumen → confirmación. El pedido debe aparecer en **Pedidos** y como referencia dentro del chat social. El sistema nunca inventa el teléfono: exige uno válido antes de confirmar.
+9. Crear un comentario de prueba en ambas redes; verificarlo en **Comentarios**. Diva responde públicamente de forma breve y deriva los datos privados o la compra a mensaje directo o a la tienda.
+10. Hacer una publicación de prueba y revisar las métricas en **Anuncios**.
 
 Instagram debe ser una cuenta profesional (Business o Creator) vinculada a la página de Facebook. Meta no permite iniciar conversaciones frías: la persona debe haber escrito primero a la cuenta profesional.
+
+La automatización social requiere además el módulo **Ventas con IA** activo. Si Marketing o Ventas con IA no está contratado, el backend no ejecuta respuestas automáticas. Los eventos repetidos se deduplican por el identificador entregado por Meta y las respuestas propias de la página o cuenta se ignoran para evitar bucles.
+
+Los mensajes privados usan el mismo pipeline de catálogo, precios, datos de despacho, confirmación, prevención de duplicados y creación de pedidos que WhatsApp. Cada identidad de Instagram o Facebook se guarda separada por organización y canal, sin convertir el identificador de Meta en un teléfono. Los comentarios permanecen públicos y nunca recopilan nombre, dirección, teléfono ni otros datos del pedido.
 
 ## Embudo de conversaciones y enlaces rastreables
 

@@ -6,6 +6,7 @@ import { useTheme } from '../theme.js';
 const tabs = [
   ['conexion', 'Conexión', Link2],
   ['mensajes', 'Mensajes', MessageCircle],
+  ['comentarios', 'Comentarios', MessageCircle],
   ['contenido', 'Contenido', Upload],
   ['ads', 'Anuncios', BarChart3],
 ];
@@ -59,6 +60,7 @@ export default function SocialPanel() {
           <>
             {active === 'conexion' && <ConnectionTab status={status} connect={connect} reload={load} colors={colors} setError={setError} />}
             {active === 'mensajes' && <MessagesTab connected={status?.connected} connect={connect} colors={colors} />}
+            {active === 'comentarios' && <CommentsTab connected={status?.connected} connect={connect} colors={colors} />}
             {active === 'contenido' && <ContentTab connected={status?.connected} connect={connect} colors={colors} />}
             {active === 'ads' && <AdsTab connected={status?.connected} connect={connect} colors={colors} />}
           </>
@@ -74,9 +76,15 @@ function ConnectionTab({ status, connect, reload, colors, setError }) {
   const [pageId, setPageId] = useState(c?.page_id || '');
   const [adAccountId, setAdAccountId] = useState(c?.ad_account_id || '');
   const [saving, setSaving] = useState(false);
+  const [autoMessages, setAutoMessages] = useState(!!c?.auto_reply_messages);
+  const [autoComments, setAutoComments] = useState(!!c?.auto_reply_comments);
   useEffect(() => {
     if (status?.connected) metaAPI.assets().then(setAssets).catch(e => setError(e.response?.data?.error || e.message));
   }, [status?.connected]);
+  useEffect(() => {
+    setAutoMessages(!!c?.auto_reply_messages);
+    setAutoComments(!!c?.auto_reply_comments);
+  }, [c?.auto_reply_messages, c?.auto_reply_comments]);
   const saveAssets = async () => {
     setSaving(true);
     try { await metaAPI.selectAssets({ pageId, adAccountId }); await reload(); }
@@ -87,6 +95,12 @@ function ConnectionTab({ status, connect, reload, colors, setError }) {
     if (!window.confirm('¿Desconectar Facebook e Instagram de este CRM?')) return;
     try { await metaAPI.disconnect(); await reload(); }
     catch (e) { setError(e.response?.data?.error || e.message); }
+  };
+  const saveAutomation = async () => {
+    setSaving(true);
+    try { await metaAPI.automation({ autoReplyMessages: autoMessages, autoReplyComments: autoComments }); await reload(); }
+    catch (e) { setError(e.response?.data?.error || e.message); }
+    finally { setSaving(false); }
   };
   return <div style={{ display: 'grid', gap: 14 }}>
     <Card colors={colors}>
@@ -111,8 +125,17 @@ function ConnectionTab({ status, connect, reload, colors, setError }) {
         <button onClick={saveAssets} disabled={saving} style={{ ...primary(colors), marginTop: 12 }}>{saving ? 'Guardando…' : 'Guardar selección'}</button>
       </Card>}
       {c.last_error && <ErrorBox>{c.last_error}</ErrorBox>}
+      <Card colors={colors}>
+        <strong style={{ color: colors.textPrimary, fontSize: 13 }}>Atención automática con Diva</strong>
+        <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>En mensajes privados, Diva cotiza, solicita nombre, dirección, ciudad y teléfono, confirma el resumen y crea el pedido dentro del CRM. En comentarios nunca solicita datos personales y deriva la compra al canal privado.</div>
+        <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+          <label style={{ ...label(colors), display: 'flex', alignItems: 'center', gap: 8 }}><input type="checkbox" checked={autoMessages} onChange={e => setAutoMessages(e.target.checked)} />Responder mensajes privados automáticamente</label>
+          <label style={{ ...label(colors), display: 'flex', alignItems: 'center', gap: 8 }}><input type="checkbox" checked={autoComments} onChange={e => setAutoComments(e.target.checked)} />Responder comentarios automáticamente</label>
+        </div>
+        <button onClick={saveAutomation} disabled={saving} style={{ ...primary(colors), marginTop: 14 }}>{saving ? 'Guardando…' : 'Guardar automatización'}</button>
+      </Card>
       <Card colors={colors} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div><strong style={{ color: colors.textPrimary, fontSize: 13 }}>Webhook de Meta</strong><div style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>Configura en Meta: <code>/meta-webhook</code> y suscribe messages, messaging_postbacks y feed.</div></div>
+        <div><strong style={{ color: colors.textPrimary, fontSize: 13 }}>Webhook de Meta</strong><div style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>Configura en Meta: <code>/meta-webhook</code> y suscribe messages, messaging_postbacks, feed y comments.</div></div>
         <button onClick={disconnect} style={{ ...secondary(colors), color: '#f87171' }}><Unplug size={14} /> Desconectar</button>
       </Card>
     </>}
@@ -126,21 +149,63 @@ function Asset({ colors, icon, title, value }) {
 function MessagesTab({ connected, connect, colors }) {
   const [threads, setThreads] = useState([]); const [selected, setSelected] = useState(null);
   const [messages, setMessages] = useState([]); const [text, setText] = useState(''); const [error, setError] = useState('');
+  const [unansweredOnly, setUnansweredOnly] = useState(false);
   const refresh = async () => { try { setThreads(await metaAPI.threads()); } catch (e) { setError(e.response?.data?.error || e.message); } };
   useEffect(() => { if (connected) refresh(); }, [connected]);
   const open = async t => { setSelected(t); setMessages(await metaAPI.messages(t.id)); };
   const send = async () => { if (!text.trim()) return; try { const m = await metaAPI.sendMessage(selected.id, text); setMessages(v => [...v, m]); setText(''); } catch (e) { setError(e.response?.data?.error || e.message); } };
   if (!connected) return <ConnectNeeded connect={connect} colors={colors} />;
+  const visibleThreads = unansweredOnly ? threads.filter(thread => thread.last_message_direction === 'inbound') : threads;
   return <Card colors={colors} style={{ padding: 0, minHeight: 520, display: 'grid', gridTemplateColumns: 'minmax(220px,32%) 1fr', overflow: 'hidden' }}>
     <div style={{ borderRight: `1px solid ${colors.border}` }}>
-      <div style={{ padding: 12, borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', color: colors.textPrimary }}><strong>Conversaciones</strong><button onClick={refresh} style={iconButton(colors)}><RefreshCw size={15} /></button></div>
+      <div style={{ padding: 12, borderBottom: `1px solid ${colors.border}`, display: 'grid', gap: 9, color: colors.textPrimary }}><div style={{ display: 'flex', justifyContent: 'space-between' }}><strong>Conversaciones</strong><button onClick={refresh} style={iconButton(colors)}><RefreshCw size={15} /></button></div><label style={{ ...label(colors), display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={unansweredOnly} onChange={e => setUnansweredOnly(e.target.checked)} />Solo mensajes sin respuesta</label></div>
       {threads.length === 0 && <p style={{ color: colors.textMuted, padding: 16, fontSize: 12 }}>Los mensajes nuevos aparecerán aquí cuando el webhook esté activo.</p>}
-      {threads.map(t => <button key={t.id} onClick={() => open(t)} style={{ width: '100%', textAlign: 'left', border: 0, borderBottom: `1px solid ${colors.border}`, background: selected?.id === t.id ? colors.bgHover : 'transparent', padding: 13, cursor: 'pointer' }}><strong style={{ color: colors.textPrimary, display: 'block' }}>{t.contact_name || t.external_user_id}</strong><span style={{ color: colors.textMuted, fontSize: 11 }}>{t.channel === 'instagram' ? 'Instagram' : 'Facebook'} · {t.last_message || ''}</span></button>)}
+      {visibleThreads.map(t => <button key={t.id} onClick={async () => { await open(t); setThreads(items => items.map(item => item.id === t.id ? { ...item, unread_count: 0 } : item)); }} style={{ width: '100%', textAlign: 'left', border: 0, borderBottom: `1px solid ${colors.border}`, background: selected?.id === t.id ? colors.bgHover : 'transparent', padding: 13, cursor: 'pointer' }}><strong style={{ color: colors.textPrimary, display: 'flex', justifyContent: 'space-between', gap: 8 }}>{t.contact_name || t.external_user_id}{Number(t.unread_count || 0) > 0 && <span style={{ color: '#fff', background: colors.green, borderRadius: 999, minWidth: 18, height: 18, padding: '0 5px', fontSize: 10, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t.unread_count}</span>}</strong><span style={{ color: colors.textMuted, fontSize: 11, display: 'block' }}>{t.channel === 'instagram' ? 'Instagram' : 'Facebook'} · {t.last_message || ''}</span>{t.order_id && <span style={{ color: colors.green, fontSize: 10, display: 'block', marginTop: 4 }}>Pedido #{t.order_id} · {t.order_status}</span>}</button>)}
     </div>
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {!selected ? <div style={{ margin: 'auto', color: colors.textMuted }}>Selecciona una conversación</div> : <><div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>{messages.map(m => <div key={m.id} style={{ maxWidth: '75%', margin: `6px ${m.direction === 'outbound' ? '0 6px auto' : 'auto 0 6px'}`, background: m.direction === 'outbound' ? colors.green : colors.bgHover, color: m.direction === 'outbound' ? '#fff' : colors.textPrimary, padding: '9px 11px', borderRadius: 10, fontSize: 13 }}>{m.content}</div>)}</div><ErrorBox>{error}</ErrorBox><div style={{ padding: 12, borderTop: `1px solid ${colors.border}`, display: 'flex', gap: 8 }}><input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Responder…" style={input(colors)} /><button onClick={send} style={primary(colors)}><Send size={15} /></button></div></>}
+      {!selected ? <div style={{ margin: 'auto', color: colors.textMuted }}>Selecciona una conversación</div> : <>{selected.order_id && <div style={{ padding: '9px 14px', borderBottom: `1px solid ${colors.border}`, color: colors.green, fontSize: 12 }}>Pedido #{selected.order_id} creado en el CRM · {selected.order_status}</div>}<div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>{messages.map(m => <div key={m.id} style={{ maxWidth: '75%', margin: `6px ${m.direction === 'outbound' ? '0 6px auto' : 'auto 0 6px'}`, background: m.direction === 'outbound' ? (m.status === 'failed' ? '#7f1d1d' : colors.green) : colors.bgHover, color: m.direction === 'outbound' ? '#fff' : colors.textPrimary, padding: '9px 11px', borderRadius: 10, fontSize: 13 }}>{m.content}{m.status === 'failed' && <div style={{ fontSize: 10, marginTop: 4 }}>No se pudo enviar</div>}</div>)}</div><ErrorBox>{error}</ErrorBox><div style={{ padding: 12, borderTop: `1px solid ${colors.border}`, display: 'flex', gap: 8 }}><input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Responder…" style={input(colors)} /><button onClick={send} style={primary(colors)}><Send size={15} /></button></div></>}
     </div>
   </Card>;
+}
+
+function CommentsTab({ connected, connect, colors }) {
+  const [comments, setComments] = useState([]);
+  const [unansweredOnly, setUnansweredOnly] = useState(true);
+  const [drafts, setDrafts] = useState({});
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState('');
+  const load = async () => {
+    setError('');
+    try { setComments(await metaAPI.comments(unansweredOnly)); }
+    catch (e) { setError(e.response?.data?.error || e.message); }
+  };
+  useEffect(() => { if (connected) load(); }, [connected, unansweredOnly]);
+  const reply = async comment => {
+    const text = String(drafts[comment.id] || '').trim();
+    if (!text) return;
+    setBusy(comment.id); setError('');
+    try {
+      const updated = await metaAPI.replyComment(comment.id, text);
+      setComments(items => unansweredOnly ? items.filter(item => item.id !== comment.id) : items.map(item => item.id === comment.id ? updated : item));
+      setDrafts(values => ({ ...values, [comment.id]: '' }));
+    } catch (e) { setError(e.response?.data?.error || e.message); }
+    finally { setBusy(null); }
+  };
+  if (!connected) return <ConnectNeeded connect={connect} colors={colors} />;
+  return <div style={{ display: 'grid', gap: 12 }}>
+    <Card colors={colors} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <label style={{ ...label(colors), display: 'flex', alignItems: 'center', gap: 7 }}><input type="checkbox" checked={unansweredOnly} onChange={e => setUnansweredOnly(e.target.checked)} />Solo comentarios sin respuesta</label>
+      <button onClick={load} style={secondary(colors)}><RefreshCw size={14} /> Actualizar</button>
+    </Card>
+    <ErrorBox>{error}</ErrorBox>
+    {comments.map(comment => <Card key={comment.id} colors={colors}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start' }}><div><strong style={{ color: colors.textPrimary, fontSize: 13 }}>{comment.author_name || comment.author_id}</strong><div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>{comment.channel === 'instagram' ? 'Instagram' : 'Facebook'} · {new Date(comment.created_at).toLocaleString('es-CL')}</div></div><span style={{ color: comment.status === 'replied' ? colors.green : colors.warning, fontSize: 11 }}>{comment.status === 'replied' ? `Respondido por ${comment.replied_by === 'ai' ? 'Diva' : 'el equipo'}` : comment.status === 'error' ? 'Requiere revisión' : 'Sin respuesta'}</span></div>
+      <div style={{ color: colors.textPrimary, fontSize: 13, lineHeight: 1.5, marginTop: 12 }}>{comment.content}</div>
+      {comment.reply_text && <div style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 1.5, marginTop: 10, paddingLeft: 10, borderLeft: `2px solid ${colors.green}` }}>{comment.reply_text}</div>}
+      {comment.status !== 'replied' && <div style={{ display: 'flex', gap: 8, marginTop: 12 }}><input value={drafts[comment.id] || ''} onChange={e => setDrafts(values => ({ ...values, [comment.id]: e.target.value }))} onKeyDown={e => e.key === 'Enter' && reply(comment)} placeholder="Responder públicamente…" style={input(colors)} /><button disabled={busy === comment.id} onClick={() => reply(comment)} style={primary(colors)}>{busy === comment.id ? <Loader size={15} /> : <Send size={15} />}</button></div>}
+    </Card>)}
+    {comments.length === 0 && <Card colors={colors} style={{ textAlign: 'center', color: colors.textMuted }}>No hay comentarios en esta vista.</Card>}
+  </div>;
 }
 
 function ContentTab({ connected, connect, colors }) {

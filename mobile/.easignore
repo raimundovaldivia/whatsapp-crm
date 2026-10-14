@@ -1,0 +1,8 @@
+node_modules/
+.expo/
+.eas-inspect*/
+dist-check/
+dist/
+dist-audit/
+dist-returns/
+*.log

@@ -297,7 +297,9 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const tiendaUrl = await db.getSetting(orgId, 'store_public_url') || null;
 
   // ── Tipo de cliente: personal o empresa / lead o customer ────────
-  const contact = await db.getContact(orgId, conversation.phone_number).catch(() => null);
+  const contact = conversation.phone_number
+    ? await db.getContact(orgId, conversation.phone_number).catch(() => null)
+    : null;
   const isEmpresa = contact?.client_type === 'empresa';
   const isLead    = contact?.contact_type === 'lead' || !contact?.contact_type;
   const customerNoteSection = customerNoteContext(contact?.notes);
@@ -445,6 +447,9 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
 
   let currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
+  if (['facebook', 'instagram'].includes(conversation.source_channel)) {
+    orderDraft = { ...(orderDraft || {}), requires_customer_phone: true };
+  }
 
   // El template es una fuente comercial real: precios, vigencia y condiciones
   // se extraen del mensaje efectivamente enviado, no se dejan a interpretación
@@ -479,7 +484,9 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   const promotionSection = promotions.promptSection(promotionContext);
   let campaignThreadSection = '';
   try {
-    const thread = await require('./campaign-journeys').registerInbound(orgId, conversation.phone_number);
+    const thread = conversation.phone_number
+      ? await require('./campaign-journeys').registerInbound(orgId, conversation.phone_number)
+      : null;
     if (thread) {
       campaignThreadSection = `## Hilo de campaña automática activo
 El cliente está respondiendo a la secuencia "${thread.name}" (objetivo: ${thread.objective}), después del paso ${thread.current_step} de ${thread.total_steps}${thread.last_template ? `, template ${thread.last_template}` : ''}.
@@ -1323,6 +1330,12 @@ REGLAS ABSOLUTAS:
   // preguntar cuánto stock le queda: "para el miércoles, aún me quedan unos"
   // ya contiene toda la decisión necesaria y no es un pedido para hoy.
   const scheduleExplicitFutureOrder = async () => {
+    // Instagram y Facebook no entregan teléfono. En esos canales una fecha
+    // futura sigue el pedido completo para recopilar contacto y despacho; no
+    // se crea un agendamiento incompleto con identidad ficticia.
+    if (['facebook', 'instagram'].includes(conversation.source_channel)) {
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft || {}, productosTexto, orderCtx);
+    }
     const todayISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
     const recentTexts = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`);
     const extracted = await extractScheduledOrderData(userMessage, recentTexts, todayISO);
@@ -2209,6 +2222,7 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx = {}) {
   const { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null } = orderCtx;
   orderDraft = pricing.normalizeDraft(orderDraft || {});
+  if (['facebook', 'instagram'].includes(conversation.source_channel)) orderDraft.requires_customer_phone = true;
   if (promotionContext) orderDraft.promotion = promotions.snapshot(promotionContext);
 
   // 0a. ¿Se arrepintió a mitad del pedido? Antes el estado quedaba pegado en
@@ -2223,8 +2237,9 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // 0b. Siempre fusionar datos del cliente desde CRM/Shopify — no solo la primera vez.
   try {
-    const ds    = await db.getPrimaryDataSource(orgId);
-    const known = await getKnownCustomerData(orgId, conversation.phone_number, ds);
+    const ds = await db.getPrimaryDataSource(orgId);
+    const knownPhone = orderDraft.customer_phone || conversation.phone_number;
+    const known = knownPhone ? await getKnownCustomerData(orgId, knownPhone, ds) : {};
     if (Object.keys(known).length > 0) {
       for (const [key, val] of Object.entries(known)) {
         if (val && !orderDraft[key]) orderDraft[key] = val;
@@ -2252,6 +2267,17 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
   );
+  if (orderDraft.requires_customer_phone) updatedDraft.requires_customer_phone = true;
+  if (updatedDraft.customer_phone) {
+    const normalizedPhone = ordersAgent.normalizeCustomerPhone(updatedDraft.customer_phone);
+    if (ordersAgent.isValidCustomerPhone(normalizedPhone)) {
+      updatedDraft.customer_phone = normalizedPhone;
+      delete updatedDraft.phone_invalid;
+    } else {
+      delete updatedDraft.customer_phone;
+      updatedDraft.phone_invalid = true;
+    }
+  }
   const explicitDelivery = resolveExplicitDeliveryDate(userMessage, todayISOChile());
   if (explicitDelivery.conflict) {
     return {
@@ -2380,12 +2406,16 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const addrChanged = (updatedDraft.address && updatedDraft.address !== orderDraft.address)
                    || (updatedDraft.city    && updatedDraft.city    !== orderDraft.city);
   if (addrChanged) {
+    const contactPhone = updatedDraft.customer_phone || conversation.phone_number;
+    if (contactPhone) {
     db.upsertContact(orgId, {
-      phone:   conversation.phone_number,
+      phone:   contactPhone,
       name:    updatedDraft.customer_name || null,
       address: updatedDraft.address       || null,
       city:    updatedDraft.city          || null,
+      source:  conversation.source_channel || 'whatsapp',
     }).catch(e => console.warn('[Pipeline] No se pudo guardar dirección en contacto:', e.message));
+    }
   }
 
   // 2. Respuesta del agente de órdenes (con el carrito valorizado en el prompt)
@@ -2415,20 +2445,23 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city };
     const summary = pricing.summaryBlock(priced);
     const deliveryLine = updatedDraft.delivery_date ? `\n📅 Entrega: ${formatDateEs(updatedDraft.delivery_date)}` : '';
-    const who = `👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}${deliveryLine}`;
+    const customerPhone = updatedDraft.customer_phone || conversation.phone_number;
+    const phoneLine = updatedDraft.requires_customer_phone ? `\n📞 ${customerPhone}` : '';
+    const who = `👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}${phoneLine}${deliveryLine}`;
 
-    const saveContact = () => Promise.all([
+    const saveContact = () => customerPhone ? Promise.all([
       db.upsertContact(orgId, {
-        phone:     conversation.phone_number,
+        phone:     customerPhone,
         name:      updatedDraft.customer_name  || null,
         email:     updatedDraft.customer_email || null,
         address:   updatedDraft.address        || null,
         city:      updatedDraft.city           || null,
         region:    updatedDraft.region         || null,
         shopifyId: updatedDraft.shopify_customer_id || null,
+        source:    conversation.source_channel || 'whatsapp',
       }),
-      db.promoteToCustomer(orgId, conversation.phone_number),
-    ]).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message));
+      db.promoteToCustomer(orgId, customerPhone),
+    ]).catch(e => console.warn('[Pipeline] No se pudo guardar contacto:', e.message)) : Promise.resolve();
 
     // ── Edición de un pedido existente ─────────────────────────────
     if (updatedDraft.editing_order_id) {
@@ -2447,7 +2480,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         // Dejar rastro en las notas del pedido (el CRM muestra la marca "modificado por el cliente")
         getPool().query(
           `UPDATE orders SET notes = COALESCE(notes, '') || $1 WHERE id = $2`,
-          [`\n[bot] Modificado por el cliente por WhatsApp (${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })})`, orderId]
+          [`\n[bot] Modificado por el cliente por ${conversation.source_channel === 'instagram' ? 'Instagram' : conversation.source_channel === 'facebook' ? 'Facebook' : 'WhatsApp'} (${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })})`, orderId]
         ).catch(() => {});
         saveContact();
         await db.updatePipelineState(conversationId, 'done', {});
@@ -2486,7 +2519,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           organizationId: orgId,
           items:           itemsForDb,
           customerName:    updatedDraft.customer_name,
-          customerPhone:   updatedDraft.customer_phone || conversation.phone_number,
+          customerPhone,
           shippingAddress,
           totalPrice:      priced.total,
           note:            orderNote,
@@ -2653,7 +2686,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     shopToken,
     customer,
     lineItems,
-    `WhatsApp CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}${draft.discount_pct ? ` | Desc. ${draft.discount_pct}%` : ''}${orderNote ? ` | Nota despacho: ${orderNote}` : ''}`,
+    `${conversation.source_channel === 'instagram' ? 'Instagram' : conversation.source_channel === 'facebook' ? 'Facebook' : 'WhatsApp'} CRM | Dir: ${draft.address}, ${draft.city} | Conv: ${conversationId}${draft.discount_pct ? ` | Desc. ${draft.discount_pct}%` : ''}${orderNote ? ` | Nota despacho: ${orderNote}` : ''}`,
   );
 
   const order = await db.createOrder({

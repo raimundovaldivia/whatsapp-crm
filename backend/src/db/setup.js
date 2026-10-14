@@ -157,9 +157,21 @@ async function setupDatabase() {
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS limbo_reason_code TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS limbo_reason_note TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS limbo_reason_updated_at TIMESTAMPTZ;
+      -- Los chats sociales no exponen el teléfono del usuario. Se enlazan por
+      -- el identificador estable que entrega Meta y solo guardan teléfono en
+      -- el pedido/contacto cuando el cliente lo proporciona explícitamente.
+      ALTER TABLE conversations ALTER COLUMN phone_number DROP NOT NULL;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_channel TEXT NOT NULL DEFAULT 'whatsapp';
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS external_user_id TEXT;
+      ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_source_channel_check;
+      ALTER TABLE conversations ADD CONSTRAINT conversations_source_channel_check
+        CHECK(source_channel IN ('whatsapp','facebook','instagram')) NOT VALID;
       ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_organization_id_phone_number_key;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_org_channel_phone
         ON conversations(organization_id, COALESCE(whatsapp_channel_id, 0), phone_number);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_org_social_identity
+        ON conversations(organization_id, source_channel, external_user_id)
+        WHERE source_channel IN ('facebook','instagram') AND external_user_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_conversations_org_pinned
         ON conversations(organization_id, is_pinned DESC, pinned_at DESC, last_message_at DESC);
 
@@ -1529,6 +1541,8 @@ async function setupDatabase() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS auto_reply_messages BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS auto_reply_comments BOOLEAN NOT NULL DEFAULT FALSE;
       CREATE INDEX IF NOT EXISTS idx_meta_connections_page ON meta_connections(page_id);
       CREATE INDEX IF NOT EXISTS idx_meta_connections_ig ON meta_connections(instagram_account_id);
 
@@ -1545,7 +1559,10 @@ async function setupDatabase() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(organization_id,channel,external_user_id)
       );
+      ALTER TABLE meta_threads ADD COLUMN IF NOT EXISTS crm_conversation_id INTEGER REFERENCES conversations(id) ON DELETE SET NULL;
       CREATE INDEX IF NOT EXISTS idx_meta_threads_org ON meta_threads(organization_id,last_message_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_threads_crm_conversation
+        ON meta_threads(crm_conversation_id) WHERE crm_conversation_id IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS meta_messages (
         id BIGSERIAL PRIMARY KEY,
@@ -1560,6 +1577,27 @@ async function setupDatabase() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_meta_messages_thread ON meta_messages(thread_id,created_at);
+
+      CREATE TABLE IF NOT EXISTS meta_comments (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL CHECK(channel IN ('facebook','instagram')),
+        external_comment_id TEXT NOT NULL UNIQUE,
+        post_id TEXT,
+        parent_comment_id TEXT,
+        author_id TEXT NOT NULL,
+        author_name TEXT,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'received' CHECK(status IN ('received','replied','error','ignored')),
+        reply_text TEXT,
+        reply_external_id TEXT,
+        replied_by TEXT CHECK(replied_by IN ('ai','human')),
+        raw_payload JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        replied_at TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_comments_org_created
+        ON meta_comments(organization_id,created_at DESC);
     `);
     await client.query(`
       CREATE TABLE IF NOT EXISTS order_returns (

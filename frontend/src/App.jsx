@@ -362,7 +362,7 @@ export default function App() {
   // Cargar módulos activos de la organización (una vez que hay sesión)
   useEffect(() => {
     if (!user) return;
-    const refreshModules = () => api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({ stats: false, orders: false, repartos: false, pagos: false, clientes: false, mensajeria: false, productos: false, evaluacion: false }));
+    const refreshModules = () => api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({ stats: false, orders: false, repartos: false, pagos: false, clientes: false, mensajeria: false, campaigns: false, social: false, productos: false, evaluacion: false }));
     refreshModules();
     window.addEventListener('focus', refreshModules);
     window.addEventListener('commercial-changed', refreshModules);

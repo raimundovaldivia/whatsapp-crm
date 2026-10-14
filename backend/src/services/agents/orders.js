@@ -13,13 +13,15 @@ const ORDERS_SYSTEM = `Eres el asistente de pedidos de una tienda. El cliente ya
 2. Productos + cantidades (puede ser MÁS DE UN producto; si no dice cantidad, asume 1 y confírmalo)
 3. Dirección de envío (calle, número, sector/barrio si aplica)
 4. Ciudad
-5. Fecha de entrega, solo si el cliente pidió explícitamente un día
-6. Confirmación final
+5. Teléfono de contacto, SOLO si DATOS RECOPILADOS contiene requires_customer_phone=true
+6. Fecha de entrega, solo si el cliente pidió explícitamente un día
+7. Confirmación final
 
 ━━━ REGLAS CRÍTICAS ━━━
 - Pide UN dato a la vez. Nunca preguntes 2 cosas en el mismo mensaje.
 - Si un dato ya está en DATOS RECOPILADOS → NO lo pidas de nuevo jamás.
 - NUNCA inventes ni supongas datos que no están en DATOS RECOPILADOS.
+- Si requires_customer_phone=true, pide el teléfono antes de mostrar el resumen final. El teléfono debe tener entre 8 y 15 dígitos; si el sistema marca phone_invalid=true, explica brevemente que necesitas un número válido y vuelve a pedirlo.
 - Si el cliente dice una cantidad ("uno", "dos", "un par", "3"), intégrala directamente.
 - Cantidad no especificada = 1 (asúmelo y menciona "1 unidad" en el resumen para que confirme).
 - El cliente puede pedir VARIOS productos ("dos bandejas XL y una de color"). Regístralos todos; no le hagas elegir uno.
@@ -64,6 +66,7 @@ Cuando tengas TODOS los datos y todos los ítems estén en el catálogo, muestra
 💰 Total: $[total]
 👤 [Nombre]
 📍 [Dirección], [Ciudad]
+[Si requires_customer_phone=true: 📞 [Teléfono]]
 [Si existe delivery_date: 📅 Entrega: fecha solicitada]
 
 ¿Todo correcto?"
@@ -134,7 +137,7 @@ async function generateOrderResponse(conversationHistory, userMessage, orderDraf
  * Usa haiku (barato/rápido) para parsear info estructurada
  */
 async function extractOrderData(conversationHistory, currentDraft) {
-  const EXTRACT_SYSTEM = `Extrae los datos del pedido de esta conversación de WhatsApp.
+  const EXTRACT_SYSTEM = `Extrae los datos del pedido de esta conversación comercial.
 Devuelve SOLO un JSON con los campos que encuentres. Si no encuentras un campo, omítelo.
 
 Campos posibles:
@@ -291,15 +294,27 @@ function isCancelDuringCollection(userMessage) {
  * Verifica si tenemos suficientes datos para crear la orden
  */
 function hasRequiredData(draft) {
-  return REQUIRED_FIELDS.every(f => draft[f]) && Array.isArray(draft.items) && draft.items.length > 0;
+  const phoneReady = !draft?.requires_customer_phone || isValidCustomerPhone(draft.customer_phone);
+  return phoneReady && REQUIRED_FIELDS.every(f => draft[f]) && Array.isArray(draft.items) && draft.items.length > 0;
 }
 
 /** Campos que faltan, en palabras para el cliente. */
 function missingFields(draft) {
   const labels = { customer_name: 'nombre completo', address: 'dirección', city: 'ciudad' };
   const missing = REQUIRED_FIELDS.filter(f => !draft[f]).map(f => labels[f]);
+  if (draft?.requires_customer_phone && !isValidCustomerPhone(draft.customer_phone)) missing.push('teléfono de contacto');
   if (!Array.isArray(draft.items) || draft.items.length === 0) missing.unshift('producto');
   return missing;
+}
+
+function normalizeCustomerPhone(value) {
+  let phone = String(value || '').replace(/\D/g, '');
+  if (/^9\d{8}$/.test(phone)) phone = `56${phone}`;
+  return phone;
+}
+
+function isValidCustomerPhone(value) {
+  return /^\d{8,15}$/.test(normalizeCustomerPhone(value));
 }
 
 /**
@@ -314,4 +329,4 @@ function filterDraftForDisplay(draft) {
   return display;
 }
 
-module.exports = { generateOrderResponse, extractOrderData, isOrderConfirmed, isCancelDuringCollection, claimsRegistered, hasRequiredData, missingFields };
+module.exports = { generateOrderResponse, extractOrderData, isOrderConfirmed, isCancelDuringCollection, claimsRegistered, hasRequiredData, missingFields, normalizeCustomerPhone, isValidCustomerPhone };

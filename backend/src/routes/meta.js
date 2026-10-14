@@ -5,14 +5,17 @@ const axios = require('axios');
 const db = require('../db/database');
 const { getPool } = db;
 const { requireAuth, requireRole, JWT_SECRET } = require('../middleware/auth');
+const { requireSolution } = require('../middleware/commercial-access');
 const meta = require('../services/meta-platform');
+const socialEvents = require('../services/social-events');
+const socialCrm = require('../services/social-crm');
 const { summarizeInsights } = require('../services/ad-attribution');
 
 const router = express.Router();
 const SCOPES = [
   'pages_show_list', 'pages_read_engagement', 'pages_manage_metadata',
-  'pages_messaging', 'pages_manage_posts',
-  'instagram_basic', 'instagram_manage_messages', 'instagram_content_publish',
+  'pages_messaging', 'pages_manage_posts', 'pages_manage_engagement',
+  'instagram_basic', 'instagram_manage_messages', 'instagram_manage_comments', 'instagram_content_publish',
   'ads_read', 'ads_management', 'business_management',
   'whatsapp_business_management', 'whatsapp_business_messaging',
 ];
@@ -34,7 +37,7 @@ function callbackUrl() {
 async function getConnection(orgId, includeSecrets = false) {
   const fields = includeSecrets ? '*' : `id, organization_id, facebook_user_name, page_id, page_name,
     instagram_account_id, instagram_username, ad_account_id, ad_account_name, scopes, status,
-    token_expires_at, last_error, created_at, updated_at`;
+    token_expires_at, last_error, auto_reply_messages, auto_reply_comments, created_at, updated_at`;
   const { rows } = await getPool().query(`SELECT ${fields} FROM meta_connections WHERE organization_id = $1`, [orgId]);
   return rows[0] || null;
 }
@@ -94,6 +97,19 @@ async function fetchAssets(userToken) {
   return { profile, pages: pages.data || [], adAccounts: adAccounts.data || [], whatsappAccounts, whatsappError };
 }
 
+async function subscribeSocialWebhooks(page, instagram) {
+  if (page?.id && page?.access_token) {
+    await meta.graphPost(`${page.id}/subscribed_apps`, page.access_token, {
+      subscribed_fields: 'messages,messaging_postbacks,feed',
+    }).catch(error => console.warn('[Meta] Suscripción webhook Page:', meta.graphError(error)));
+  }
+  if (instagram?.id && page?.access_token) {
+    await meta.graphPost(`${instagram.id}/subscribed_apps`, page.access_token, {
+      subscribed_fields: 'messages,messaging_postbacks,comments',
+    }).catch(error => console.warn('[Meta] Suscripción webhook Instagram:', meta.graphError(error)));
+  }
+}
+
 // Callback público: Meta redirige aquí después del login.
 router.get('/callback', async (req, res) => {
   let state;
@@ -140,11 +156,7 @@ router.get('/callback', async (req, res) => {
         })), adAccounts: assets.adAccounts, whatsappAccounts: assets.whatsappAccounts }), expiresAt]
     );
 
-    if (page?.id && page?.access_token) {
-      await meta.graphPost(`${page.id}/subscribed_apps`, page.access_token, {
-        subscribed_fields: 'messages,messaging_postbacks,feed',
-      }).catch(error => console.warn('[Meta] Suscripción webhook Page:', meta.graphError(error)));
-    }
+    await subscribeSocialWebhooks(page, instagram);
     res.redirect(`${frontendUrl()}/?meta_success=1`);
   } catch (error) {
     console.error('[Meta OAuth]', meta.graphError(error));
@@ -159,9 +171,9 @@ router.get('/callback', async (req, res) => {
   }
 });
 
-router.use(requireAuth);
+router.use(requireAuth, requireRole('owner', 'admin'), requireSolution('marketing'));
 
-router.get('/auth-url', requireRole('owner', 'admin'), (req, res) => {
+router.get('/auth-url', (req, res) => {
   try {
     const appId = meta.requiredEnv('META_APP_ID');
     const state = jwt.sign({ orgId: req.orgId, userId: req.userId }, JWT_SECRET, {
@@ -182,7 +194,7 @@ router.get('/status', async (req, res) => {
   res.json({ connected: connection?.status === 'connected', connection });
 });
 
-router.get('/assets', requireRole('owner', 'admin'), async (req, res) => {
+router.get('/assets', async (req, res) => {
   try {
     const connection = await getConnection(req.orgId, true);
     if (!connection) return res.status(404).json({ error: 'Meta no está conectado' });
@@ -196,7 +208,7 @@ router.get('/assets', requireRole('owner', 'admin'), async (req, res) => {
   } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
 });
 
-router.post('/whatsapp/activate', requireRole('owner', 'admin'), async (req, res) => {
+router.post('/whatsapp/activate', async (req, res) => {
   try {
     const wabaId = String(req.body.businessAccountId || '').trim();
     const phoneId = String(req.body.phoneNumberId || '').trim();
@@ -241,7 +253,7 @@ router.post('/whatsapp/activate', requireRole('owner', 'admin'), async (req, res
   }
 });
 
-router.patch('/assets', requireRole('owner', 'admin'), async (req, res) => {
+router.patch('/assets', async (req, res) => {
   try {
     const connection = await getConnection(req.orgId, true);
     if (!connection) return res.status(404).json({ error: 'Meta no está conectado' });
@@ -258,19 +270,29 @@ router.patch('/assets', requireRole('owner', 'admin'), async (req, res) => {
       [page?.id || null, page?.name || null, meta.encryptToken(page?.access_token), ig?.id || null,
         ig?.username || null, ad?.id || null, ad?.name || null, req.orgId]
     );
+    await subscribeSocialWebhooks(page, ig);
     res.json({ connection: await getConnection(req.orgId) });
   } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
 });
 
-router.delete('/connection', requireRole('owner', 'admin'), async (req, res) => {
+router.delete('/connection', async (req, res) => {
   await getPool().query('DELETE FROM meta_connections WHERE organization_id=$1', [req.orgId]);
   res.json({ success: true });
 });
 
 router.get('/threads', async (req, res) => {
   const { rows } = await getPool().query(
-    `SELECT t.*, (SELECT content FROM meta_messages m WHERE m.thread_id=t.id ORDER BY m.created_at DESC LIMIT 1) last_message
-       FROM meta_threads t WHERE t.organization_id=$1 ORDER BY t.last_message_at DESC LIMIT 100`, [req.orgId]
+    `SELECT t.*,
+       (SELECT content FROM meta_messages m WHERE m.thread_id=t.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) last_message,
+       (SELECT direction FROM meta_messages m WHERE m.thread_id=t.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) last_message_direction,
+       latest_order.id AS order_id,latest_order.status AS order_status,latest_order.total_price AS order_total
+       FROM meta_threads t
+       LEFT JOIN LATERAL (
+         SELECT o.id,o.status,o.total_price FROM orders o
+          WHERE o.organization_id=$1 AND o.conversation_id=t.crm_conversation_id
+          ORDER BY o.created_at DESC LIMIT 1
+       ) latest_order ON TRUE
+       WHERE t.organization_id=$1 ORDER BY t.last_message_at DESC LIMIT 100`, [req.orgId]
   );
   res.json({ threads: rows });
 });
@@ -281,18 +303,20 @@ router.get('/threads/:id/messages', async (req, res) => {
       WHERE m.thread_id=$1 AND t.organization_id=$2 ORDER BY m.created_at ASC LIMIT 200`,
     [Number(req.params.id), req.orgId]
   );
+  await getPool().query('UPDATE meta_threads SET unread_count=0,updated_at=NOW() WHERE id=$1 AND organization_id=$2',
+    [Number(req.params.id), req.orgId]);
   res.json({ messages: rows });
 });
 
 router.post('/threads/:id/messages', async (req, res) => {
   try {
     const text = String(req.body.text || '').trim();
-    if (!text) return res.status(400).json({ error: 'Escribe un mensaje' });
+    if (!text || text.length > 1000) return res.status(400).json({ error: 'Escribe un mensaje de hasta 1000 caracteres' });
     const { rows: [thread] } = await getPool().query('SELECT * FROM meta_threads WHERE id=$1 AND organization_id=$2', [Number(req.params.id), req.orgId]);
     if (!thread) return res.status(404).json({ error: 'Conversación no encontrada' });
     const connection = await getConnection(req.orgId, true);
     const token = meta.decryptToken(connection.page_access_token);
-    const result = await meta.graphPost(`${connection.page_id}/messages`, token, {
+    const result = await meta.graphPost(socialEvents.messageEndpoint(connection, thread.channel), token, {
       recipient: { id: thread.external_user_id }, message: { text },
     });
     const { rows: [message] } = await getPool().query(
@@ -300,8 +324,57 @@ router.post('/threads/:id/messages', async (req, res) => {
        VALUES($1,$2,'outbound',$3,'sent','human') RETURNING *`,
       [thread.id, result.message_id || null, text]
     );
+    await socialCrm.recordOutbound({
+      orgId: req.orgId, thread, externalMessageId: result.message_id || null,
+      content: text, sentBy: 'human', agentType: null,
+    });
     await getPool().query('UPDATE meta_threads SET last_message_at=NOW(),updated_at=NOW() WHERE id=$1', [thread.id]);
     res.json({ message });
+  } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
+});
+
+router.patch('/automation', async (req, res) => {
+  if (typeof req.body.autoReplyMessages !== 'boolean' || typeof req.body.autoReplyComments !== 'boolean') {
+    return res.status(400).json({ error: 'Indica si Diva responderá mensajes y comentarios' });
+  }
+  const { rows: [connection] } = await getPool().query(
+    `UPDATE meta_connections SET auto_reply_messages=$1,auto_reply_comments=$2,updated_at=NOW()
+      WHERE organization_id=$3 RETURNING auto_reply_messages,auto_reply_comments`,
+    [req.body.autoReplyMessages, req.body.autoReplyComments, req.orgId]
+  );
+  if (!connection) return res.status(404).json({ error: 'Meta no está conectado' });
+  res.json({ automation: connection });
+});
+
+router.get('/comments', async (req, res) => {
+  const unanswered = String(req.query.unanswered || '') === 'true';
+  const { rows } = await getPool().query(
+    `SELECT id,channel,external_comment_id,post_id,parent_comment_id,author_id,author_name,
+            content,status,reply_text,replied_by,created_at,replied_at
+       FROM meta_comments
+      WHERE organization_id=$1 ${unanswered ? "AND status IN ('received','error')" : ''}
+      ORDER BY created_at DESC LIMIT 200`, [req.orgId]
+  );
+  res.json({ comments: rows });
+});
+
+router.post('/comments/:id/replies', async (req, res) => {
+  try {
+    const text = String(req.body.text || '').trim();
+    if (!text || text.length > 1000) return res.status(400).json({ error: 'Escribe una respuesta de hasta 1000 caracteres' });
+    const { rows: [comment] } = await getPool().query(
+      'SELECT * FROM meta_comments WHERE id=$1 AND organization_id=$2', [Number(req.params.id), req.orgId]
+    );
+    if (!comment) return res.status(404).json({ error: 'Comentario no encontrado' });
+    const connection = await getConnection(req.orgId, true);
+    if (!connection?.page_access_token) return res.status(400).json({ error: 'Meta no está conectado' });
+    const result = await meta.graphPost(socialEvents.commentReplyEndpoint(comment), meta.decryptToken(connection.page_access_token), { message: text });
+    const { rows: [updated] } = await getPool().query(
+      `UPDATE meta_comments SET status='replied',reply_text=$1,reply_external_id=$2,
+         replied_by='human',replied_at=NOW() WHERE id=$3 AND organization_id=$4 RETURNING *`,
+      [text, result.id || null, comment.id, req.orgId]
+    );
+    res.json({ comment: updated });
   } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
 });
 
@@ -480,7 +553,7 @@ async function waitUntilMediaReady(containerId, token) {
   throw new Error('El video sigue procesándose en Meta; inténtalo nuevamente en unos minutos');
 }
 
-router.post('/publish', requireRole('owner', 'admin'), async (req, res) => {
+router.post('/publish', async (req, res) => {
   try {
     const { platform, message, mediaUrl, mediaType = 'image' } = req.body;
     const connection = await getConnection(req.orgId, true);

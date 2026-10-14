@@ -6,21 +6,18 @@ central desde el celular: Chat, Pedidos, Repartos y Avisos con push.
 Es un proyecto Expo aparte de la app de repartidor (`mobile/`), con su propio
 bundle id y su propio proyecto EAS. Comparte el mismo backend del CRM.
 
-## Primer arranque (una sola vez)
+## Preparación local
 
 ```bash
 cd mobile-admin
 npm install
-npx eas login            # tu cuenta de Expo
-npx eas init             # crea el projectId → completa app.config.js
+npx eas login            # cuenta Expo con acceso a @raivaldivia
 ```
 
-Después de `eas init`, en `app.config.js` descomenta y completa:
-- `extra.eas.projectId` con el id que te dio
-- `updates.url = 'https://u.expo.dev/<ese id>'` (para OTA, opcional)
-
-El push necesita el `projectId`, así que este paso es obligatorio para las
-notificaciones.
+El proyecto ya está vinculado a EAS como
+`@raivaldivia/diezrios-central-admin`. `app.config.js` conserva el
+`projectId` y la URL de actualizaciones OTA; no vuelvas a ejecutar `eas init`
+salvo que se migre deliberadamente a otra cuenta Expo.
 
 ## Build del APK (Android)
 
