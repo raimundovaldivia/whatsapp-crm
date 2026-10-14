@@ -7,7 +7,7 @@ Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de 
 ## ✨ Características
 
 - 💬 **UI tipo WhatsApp** — interfaz familiar para gestionar todas las conversaciones
-- 🤖 **Agente IA con Claude** — responde preguntas sobre productos, precios y disponibilidad
+- 🤖 **Agentes IA intercambiables** — Claude o DeepSeek cubren conversación, análisis, campañas, asistentes e imágenes
 - ⏸️ **Toggle IA/Humano por conversación** — pausa el bot y toma control cuando quieras
 - 🛍️ **Conexión Shopify** — aporta catálogo, clientes y pedidos cuando está habilitada
 - 🔔 **Tiempo real** — los mensajes aparecen instantáneamente con Socket.io
@@ -31,8 +31,8 @@ Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de 
 └─────────────────┘                   ┌──────────▼───────────┐
                                       │   Frontend React     │
 ┌─────────────────┐                   │   CRM tipo WhatsApp  │
-│  Anthropic API  │ ◄────────────────►│                      │
-│  (Claude)       │                   └──────────────────────┘
+│ Proveedor de IA │ ◄────────────────►│                      │
+│ Claude/DeepSeek │                   └──────────────────────┘
 └─────────────────┘
 ```
 
@@ -44,7 +44,7 @@ Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de 
 
 - Node.js 18+
 - Cuenta de Meta for Developers
-- Cuenta de Anthropic (Claude API)
+- Cuenta del proveedor de IA elegido: Anthropic o DeepSeek
 - Tienda Shopify con acceso de administrador
 
 ---
@@ -72,11 +72,14 @@ WHATSAPP_TOKEN=tu_access_token_permanente
 WHATSAPP_PHONE_NUMBER_ID=tu_phone_number_id
 WHATSAPP_BUSINESS_ACCOUNT_ID=tu_business_account_id
 WEBHOOK_VERIFY_TOKEN=cualquier_palabra_secreta_que_eliges
-# Elige anthropic (predeterminado) o deepseek para las respuestas del bot
+# Elige anthropic (predeterminado) o deepseek para todos los procesos de IA
 AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=tu_clave_de_anthropic
 # Si AI_PROVIDER=deepseek:
 DEEPSEEK_API_KEY=tu_clave_de_deepseek
+# Opcional: transcripción de audios cuando WhatsApp no entrega texto
+AUDIO_TRANSCRIPTION_PROVIDER=openai
+OPENAI_API_KEY=tu_clave_de_openai
 SHOPIFY_STORE_URL=tu-tienda.myshopify.com
 SHOPIFY_ACCESS_TOKEN=shpat_...
 FRONTEND_URL=http://localhost:5173
@@ -118,20 +121,22 @@ VITE_BACKEND_URL=http://localhost:3001
 
 ---
 
-### Paso 5 — Elegir proveedor de IA conversacional
+### Paso 5 — Elegir proveedor de IA
 
 Claude sigue siendo el proveedor predeterminado:
 
 1. Define `AI_PROVIDER=anthropic`.
 2. Crea una clave en [console.anthropic.com](https://console.anthropic.com) y guárdala en `ANTHROPIC_API_KEY`.
 
-Para usar DeepSeek en las respuestas del bot:
+Para usar DeepSeek en todos los procesos de IA:
 
 1. Define `AI_PROVIDER=deepseek`.
 2. Crea una clave en [platform.deepseek.com](https://platform.deepseek.com) y guárdala en `DEEPSEEK_API_KEY`.
-3. Opcionalmente define `DEEPSEEK_MODEL`, `DEEPSEEK_FAST_MODEL` o `DEEPSEEK_SMART_MODEL`. Sin overrides se usa `deepseek-flash`.
+3. Opcionalmente define `DEEPSEEK_MODEL`, `DEEPSEEK_FAST_MODEL`, `DEEPSEEK_SMART_MODEL` o `DEEPSEEK_VISION_MODEL`. Sin overrides se usa `deepseek-flash`.
 
-Las funciones auxiliares que todavía usan Claude, como análisis visual, campañas y el asistente administrativo, siguen requiriendo `ANTHROPIC_API_KEY` cuando están habilitadas.
+El proveedor seleccionado se aplica a conversaciones, pedidos, evaluaciones, campañas, reenganche, asistentes administrativos, notificaciones y análisis visual. No hay llamadas directas a un proveedor fuera de la capa común.
+
+Los audios tienen una etapa previa: WhatsApp/Kapso puede entregar la transcripción o el backend puede obtenerla con `AUDIO_TRANSCRIPTION_PROVIDER=openai` y `OPENAI_API_KEY`. Una vez transcrito, el texto siempre continúa por el proveedor elegido en `AI_PROVIDER`. Claude y DeepSeek reciben texto e imágenes, no el audio crudo.
 
 ---
 
@@ -246,5 +251,5 @@ PUT /api/settings
 
 - **Número de prueba**: Meta te permite hasta 5 números de prueba gratis. Para producción necesitas aprobar tu número de negocio.
 - **Costos de WhatsApp**: Meta cobra por conversación iniciada por el negocio (24h window gratis para responder mensajes iniciados por el cliente).
-- **Costo Claude**: Aproximadamente $0.003 por mensaje respondido con claude-sonnet-4-6.
+- **Costo IA**: depende del proveedor y modelo configurados para texto, herramientas e imágenes.
 - **Shopify cache**: Los productos se actualizan automáticamente cada hora.

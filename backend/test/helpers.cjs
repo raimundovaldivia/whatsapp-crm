@@ -23,7 +23,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === '../services/conversation-attention') return require(path.join(root, 'src/services/conversation-attention.js'));
       if (name === '../services/sales-closing' || name === './sales-closing') return require(path.join(root, 'src/services/sales-closing.js'));
       if (name === './promotion-context') return require(path.join(root, 'src/services/promotion-context.js'));
-      if (name === './ai-provider' || name === '../ai-provider') {
+      if (name === './ai-provider' || name === '../ai-provider' || name === '../services/ai-provider') {
         const providerDeps = Object.hasOwn(deps, '@anthropic-ai/sdk')
           ? deps
           : {
@@ -42,6 +42,9 @@ function load(file, deps = {}, extra = {}) {
           },
         };
         return load('src/services/ai-provider.js', providerDeps, providerExtra);
+      }
+      if (name === './audio-transcription' || name === '../services/audio-transcription') {
+        return load('src/services/audio-transcription.js', deps, extra);
       }
       if (name.endsWith('/xl-welcome-pricing')) return require(path.join(root, 'src/services/xl-welcome-pricing.js'));
       if (name === '../utils/payment-breakdown') return require(path.join(root, 'src/utils/payment-breakdown.js'));

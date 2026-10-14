@@ -42,12 +42,17 @@ function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
   const smartModel = isDeepSeek
     ? (env.DEEPSEEK_SMART_MODEL || env.DEEPSEEK_MODEL || 'deepseek-flash')
     : (env.ANTHROPIC_SMART_MODEL || 'claude-sonnet-4-6');
+  const visionModel = isDeepSeek
+    ? (env.DEEPSEEK_VISION_MODEL || env.DEEPSEEK_MODEL || 'deepseek-flash')
+    : (env.ANTHROPIC_VISION_MODEL || env.ANTHROPIC_FAST_MODEL || 'claude-haiku-4-5-20251001');
 
   return {
     provider,
     client,
     modelFor(tier = 'smart') {
-      return tier === 'fast' ? fastModel : smartModel;
+      if (tier === 'fast') return fastModel;
+      if (tier === 'vision') return visionModel;
+      return smartModel;
     },
   };
 }

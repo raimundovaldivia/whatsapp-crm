@@ -28,6 +28,8 @@ const { resumeDivaOnInbound, keepHumanAfterReply } = require('../services/conver
 const { isDeliveredOrder, buildPaymentProofReply } = require('../services/payment-proof-reply');
 const campaignGuard = require('../services/broadcast-campaign-guard');
 const { isTerminalConversationReply } = require('../services/inbound-message-policy');
+const { client: aiClient, modelFor } = require('../services/ai-provider');
+const audioTranscription = require('../services/audio-transcription');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -175,10 +177,10 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     console.log(`[KapsoWebhook] 📍 Ubicación de ${parsed.from} → ${label}`);
   }
 
-  // ── Audio sin transcript → transcribir si hay OPENAI_API_KEY (Whisper) ──
+  // ── Audio sin transcript → usar el proveedor de transcripción configurado ──
   // Kapso ya transcribe si la opción está activa en su panel; esto es el
   // respaldo cuando no viene transcript.
-  if (parsed.type === 'audio' && !parsed.text && await require('../services/commercial').permitted(org.id,'sales_ai') && process.env.OPENAI_API_KEY && (parsed.mediaUrl || parsed.mediaId)) {
+  if (parsed.type === 'audio' && !parsed.text && await require('../services/commercial').permitted(org.id,'sales_ai') && audioTranscription.isConfigured() && (parsed.mediaUrl || parsed.mediaId)) {
     const transcript = await transcribeAudio(parsed, whatsappConfig).catch(e => {
       console.warn('[KapsoWebhook] transcripción falló:', e.message);
       return null;
@@ -714,7 +716,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       return;
     }
 
-    // ── 1. Descargar imagen y analizar con Claude Vision ────────────
+    // ── 1. Descargar imagen y analizar con el modelo visual activo ──
     // Kapso provee media_url directa en el webhook — usarla sin llamar getMediaUrl
     let analysis = { is_payment_proof: false };
     let data, contentType;
@@ -771,15 +773,13 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       });
 
       if (!sales) return;
-      // Analizar imagen con Claude Vision y pasar contexto al pipeline
+      // Analizar imagen con el proveedor de IA activo y pasar contexto al pipeline
       let imageContext = '[No se pudo interpretar la imagen; pide al cliente que explique su contenido]';
       if (data && contentType) {
         try {
-          const Anthropic = require('@anthropic-ai/sdk');
-          const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
           const base64img = Buffer.from(data).toString('base64');
           const visionResp = await aiClient.messages.create({
-            model: 'claude-haiku-4-5-20251001',
+            model: modelFor('vision'),
             max_tokens: 200,
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: contentType, data: base64img } },
@@ -988,8 +988,8 @@ async function reverseGeocode({ lat, lng }) {
 }
 
 /**
- * Transcribe un audio de WhatsApp con Whisper (OpenAI). Solo se usa si hay
- * OPENAI_API_KEY y Kapso no entregó transcript. Node 18+ trae fetch/FormData/Blob.
+ * Descarga un audio de WhatsApp y lo entrega al proveedor de transcripción.
+ * El texto resultante continúa por el mismo proveedor conversacional activo.
  */
 async function transcribeAudio(parsed, whatsappConfig, service = kapsoService) {
   let data, contentType;
@@ -1000,21 +1000,7 @@ async function transcribeAudio(parsed, whatsappConfig, service = kapsoService) {
     ({ data, contentType } = await service.downloadMedia(info.url, whatsappConfig));
   }
   if (!data) return null;
-  const ext = /mpeg|mp3/.test(contentType || '') ? 'mp3' : /wav/.test(contentType || '') ? 'wav' : /webm/.test(contentType || '') ? 'webm' : /ogg|opus/.test(contentType || '') ? 'ogg' : /mp4|m4a|aac/.test(contentType || '') ? 'm4a' : 'ogg';
-  const form = new FormData();
-  form.append('file', new Blob([Buffer.from(data)], { type: contentType || 'audio/ogg' }), `audio.${ext}`);
-  form.append('model', 'whisper-1');
-  form.append('language', 'es');
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-    body: form,
-    signal: AbortSignal.timeout(45000),
-  });
-  if (!res.ok) throw new Error(`Whisper HTTP ${res.status}`);
-  const json = await res.json();
-  const text = (json.text || '').trim();
-  return text || null;
+  return audioTranscription.transcribeBuffer(data, contentType);
 }
 
 module.exports = router;

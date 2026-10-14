@@ -2,7 +2,7 @@
  * agent-commands.js — Agente IA para consultas CRM vía WhatsApp
  *
  * Los agentes registrados envían mensajes con prefijo # al número del negocio.
- * Este servicio usa Claude Haiku para interpretar lenguaje natural:
+ * Este servicio usa el proveedor de IA activo para interpretar lenguaje natural:
  *   - Preguntas de datos → dirige al panel con acceso por organización
  *   - Acciones de gestión → PAUSAR/ACTIVAR/MSG/PAGAR/etc.
  *   - Preguntas generales → responde directamente con IA
@@ -14,7 +14,7 @@
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
-const Anthropic    = require('@anthropic-ai/sdk');
+const { client: aiClient, modelFor } = require('./ai-provider');
 const { activateDivaForAutomatedMessage } = require('./conversation-mode');
 const {
   buildBodyTemplateComponent,
@@ -22,7 +22,6 @@ const {
   renderTemplate,
 } = require('../utils/template-renderer.mjs');
 
-const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const ASSISTANT_NAME = 'Diva';
 
 const campaignSessions = new Map();
@@ -170,12 +169,12 @@ async function processAICommand(org, wc, agent, raw) {
     return `Sí, puedo ayudarte a preparar una campaña usando los templates aprobados de WhatsApp. Primero consulto los templates reales, luego eliges el público y te muestro una vista previa. Solo se ejecuta si escribes *CONFIRMAR ENVÍO*.\n\nEscribe _templates disponibles_ y ${ASSISTANT_NAME} te guiará paso a paso.`;
   }
 
-  // ── Parsear intención con Claude Haiku ──
+  // ── Parsear intención con el modelo rápido del proveedor activo ──
   let parsed;
   try {
     const dialogueHistory = getAdminDialogue(org.id, agent);
     const aiRes = await aiClient.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: modelFor('fast'),
       max_tokens: 512,
       system: buildSystemPrompt(org.id),
       messages: [...dialogueHistory, { role: 'user', content: raw }],

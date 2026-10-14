@@ -18,6 +18,7 @@ const router  = express.Router();
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { client: aiClient, modelFor } = require('../services/ai-provider');
 
 router.use(requireAuth);
 router.use(requireRole('owner', 'admin', 'supervisor'));
@@ -123,7 +124,7 @@ async function gradeConversation(client, conv, messages) {
     return `${who}: ${mm.content}`;
   }).join('\n').slice(0, 6000);
   const resp = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: modelFor('fast'),
     max_tokens: 400,
     system: GRADE_SYSTEM,
     messages: [{ role: 'user', content: `Cliente: ${conv.contact_name || conv.phone_number}\n\n${transcript}\n\nEvalúa y devuelve el JSON.` }],
@@ -162,8 +163,7 @@ router.post('/grade', async (req, res) => {
     );
     if (!candidates.length) return res.json({ success: true, from: f, to: t, graded: [], distribucion: {}, errores: [], reglas: [] });
 
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = aiClient;
 
     const graded = [];
     for (const c of candidates) {
@@ -196,7 +196,7 @@ router.post('/grade', async (req, res) => {
       try {
         const top = errores.slice(0, 8).map(e => `${e.text} (x${e.count})`);
         const rResp = await client.messages.create({
-          model: 'claude-haiku-4-5-20251001',
+          model: modelFor('fast'),
           max_tokens: 400,
           system: `Convierte estos errores recurrentes de un bot de ventas por WhatsApp en REGLAS concretas para que no vuelvan a pasar.
 Reglas en imperativo, específicas, máximo 15 palabras, en español. Responde SOLO un array JSON de strings.`,

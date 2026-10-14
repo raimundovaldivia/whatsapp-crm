@@ -1,7 +1,7 @@
 /**
  * reengagement.js — Pronóstico de compra con IA
  *
- * GET  /api/reengagement/candidates   → Claude analiza comportamiento de cada cliente
+ * GET  /api/reengagement/candidates   → la IA analiza comportamiento de cada cliente
  *                                       y predice cuándo comprará próximamente
  * POST /api/reengagement/generate     → mensaje personalizado para un cliente
  * POST /api/reengagement/send         → envía WhatsApp
@@ -13,7 +13,7 @@ const router    = express.Router();
 const db             = require('../db/database');
 const { getPool }    = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
-const Anthropic = require('@anthropic-ai/sdk');
+const { client: aiClient, modelFor } = require('../services/ai-provider');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
@@ -430,8 +430,6 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
   return recovered;
 }
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
 // Cache en memoria: sesión actual (respaldo al cache de DB)
 const analysisCache = new Map();
 const CACHE_TTL = 2 * 60 * 60 * 1000;
@@ -652,8 +650,8 @@ Incluir TODOS los ${customers.length} clientes. Ordenar por d ascendente.`;
 
   let raw = '';
   try {
-    const response = await anthropic.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 8192,
       messages:   [{ role: 'user', content: prompt }],
     });
@@ -1117,8 +1115,8 @@ PROHIBIDO — no incluyas nada de esto:
 - Urgencia fabricada de cualquier tipo
 - Más de 3 líneas`;
 
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001', max_tokens: 200,
+    const response = await aiClient.messages.create({
+      model: modelFor('fast'), max_tokens: 200,
       messages: [{ role: 'user', content: prompt }],
     });
 
@@ -1201,8 +1199,8 @@ Reglas:
 Responde SOLO con un objeto JSON, sin explicaciones:
 {${varNums.map(v => `"${v}": "..."`).join(', ')}}`;
 
-    const response = await anthropic.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 200,
       messages:   [{ role: 'user', content: prompt }],
     });
@@ -1356,8 +1354,8 @@ Responde SOLO con JSON válido (sin texto extra, sin markdown):
   "vars": { "1": "valor", "2": "valor", ... }
 }`;
 
-    const response = await anthropic.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 600,
       messages:   [{ role: 'user', content: prompt }],
     });
@@ -1564,8 +1562,6 @@ router.post('/generate-templates', async (req, res) => {
     const { storeContext: providedContext } = req.body || {};
     const db    = require('../db/database.js');
     const shopifyApi = require('../services/shopify-api.js');
-    const Anthropic  = require('@anthropic-ai/sdk');
-
     // Usar contexto provisto por el usuario, o intentar Shopify
     let storeContext = '';
     let shopName = 'la tienda';
@@ -1606,7 +1602,6 @@ router.post('/generate-templates', async (req, res) => {
       }
     }
 
-    const client = new Anthropic();
     const prompt = `Eres un experto en marketing de WhatsApp para e-commerce latinoamericano.
 
 Contexto de la tienda:
@@ -1666,8 +1661,8 @@ Responde SOLO con JSON válido (sin markdown ni texto extra):
   ]
 }`;
 
-    const msg = await client.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const msg = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 3500,
       messages:   [{ role: 'user', content: prompt }],
     });

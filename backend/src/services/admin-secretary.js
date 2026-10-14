@@ -10,10 +10,8 @@
  * La sesión dura mientras el admin sigue respondiendo (timeout: 45 min).
  */
 
-const Anthropic = require('@anthropic-ai/sdk');
+const { client, modelFor } = require('./ai-provider');
 const db        = require('../db/database');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ─── Sesiones activas: una por org ───────────────────────────────────────────
 const SESSION_TIMEOUT_MS = 45 * 60 * 1000; // 45 min de inactividad → cierra sesión
@@ -137,7 +135,7 @@ Respondé ÚNICAMENTE con JSON válido, sin explicaciones adicionales:
   let result;
   try {
     const response = await client.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+      model:      modelFor('fast'),
       max_tokens: 500,
       system:     systemPrompt,
       messages,

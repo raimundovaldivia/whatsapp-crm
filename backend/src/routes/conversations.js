@@ -15,6 +15,7 @@ const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents
 const followUp = require('../services/follow-up');
 const { reconcilePendingMessages } = require('../services/message-status-recovery');
 const { isTrackableDestination, extractTrackingTokens } = require('../services/lead-journey');
+const { client: aiClient, modelFor } = require('../services/ai-provider');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -1003,9 +1004,6 @@ router.post('/trigger-follow-up', requireRole('owner', 'admin', 'supervisor'), a
 router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
     // Conversaciones con actividad en últimas 48h que no estén en 'done' ni excluidas manualmente
     const { rows: convs } = await pool.query(
       `SELECT c.id, c.contact_name, c.phone_number, c.pipeline_state
@@ -1047,8 +1045,8 @@ router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), asyn
         `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${(m.content || '').slice(0, 200)}`
       ).join('\n');
 
-      const response = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
+      const response = await aiClient.messages.create({
+        model: modelFor('fast'),
         max_tokens: 10,
         system: 'Eres un clasificador de intención de compra. Responde SOLO con "si" o "no".',
         messages: [{
@@ -1083,7 +1081,6 @@ router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), asyn
  */
 router.post('/:id/analyze', async (req, res) => {
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
@@ -1097,9 +1094,8 @@ router.post('/:id/analyze', async (req, res) => {
       return `[${time}] ${who}: ${m.content}`;
     }).join('\n');
 
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const resp = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const resp = await aiClient.messages.create({
+      model: modelFor('fast'),
       max_tokens: 1024,
       system: `Eres un analista de calidad para un CRM de WhatsApp con bot de ventas IA.
 Tu tarea: analizar conversaciones y evaluar el desempeño del bot.
@@ -1186,16 +1182,14 @@ Analiza y devuelve el JSON.`,
  */
 router.post('/:id/generate-improvements', async (req, res) => {
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
     const { errores = [], oportunidades = [], resumen = '' } = req.body;
 
     if (!errores.length && !oportunidades.length) {
       return res.json({ success: true, rules: [] });
     }
 
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const resp = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const resp = await aiClient.messages.create({
+      model: modelFor('fast'),
       max_tokens: 512,
       system: `Eres un experto en optimización de bots de ventas por WhatsApp.
 Tu tarea: convertir errores y oportunidades detectadas en una conversación en REGLAS CONCRETAS que el bot debe seguir de ahora en adelante.

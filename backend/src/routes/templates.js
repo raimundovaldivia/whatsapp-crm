@@ -14,6 +14,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { getTemplateVariables, hasTemplateVariableValue } = require('../utils/template-renderer.mjs');
 const templateAutomation = require('../services/template-automation');
 const collection = require('../services/payment-collection');
+const { client: aiClient, modelFor } = require('../services/ai-provider');
 
 router.use(requireAuth);
 
@@ -315,9 +316,6 @@ router.post('/generate', async (req, res) => {
       return res.status(400).json({ success: false, error: 'goal requerido' });
     }
 
-    const Anthropic = require('@anthropic-ai/sdk');
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
     const prompt = `Eres un experto en WhatsApp Business API Templates con años de experiencia aprobando templates en Meta para tiendas de productos frescos del campo (huevos, aceitunas, quesos, miel, conservas, etc.) en Chile.
 
 El usuario quiere un template para este objetivo:
@@ -370,8 +368,8 @@ Responde ÚNICAMENTE con este JSON (sin markdown, sin explicaciones extra):
   }
 }`;
 
-    const response = await anthropic.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 400,
       messages:   [{ role: 'user', content: prompt }],
     });
