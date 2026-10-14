@@ -18,7 +18,7 @@ const router  = express.Router();
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { client: aiClient, modelFor } = require('../services/ai-provider');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
 
 router.use(requireAuth);
 router.use(requireRole('owner', 'admin', 'supervisor'));
@@ -129,7 +129,7 @@ async function gradeConversation(client, conv, messages) {
     system: GRADE_SYSTEM,
     messages: [{ role: 'user', content: `Cliente: ${conv.contact_name || conv.phone_number}\n\n${transcript}\n\nEvalúa y devuelve el JSON.` }],
   });
-  const raw = (resp.content[0]?.text || '{}').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  const raw = responseText(resp, '{}').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
   try { return JSON.parse(raw); } catch { return { puntaje: null, errores: [], estado_final: 'otro', resumen: '(no se pudo evaluar)' }; }
 }
 
@@ -202,7 +202,7 @@ router.post('/grade', async (req, res) => {
 Reglas en imperativo, específicas, máximo 15 palabras, en español. Responde SOLO un array JSON de strings.`,
           messages: [{ role: 'user', content: `Errores frecuentes:\n${top.join('\n')}\n\nGenera entre 3 y 6 reglas.` }],
         });
-        const raw = (rResp.content[0]?.text || '[]').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+        const raw = responseText(rResp, '[]').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
         reglas = JSON.parse(raw);
         if (!Array.isArray(reglas)) reglas = [];
       } catch { reglas = []; }

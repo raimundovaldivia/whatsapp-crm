@@ -20,6 +20,22 @@ function normalizeProvider(value = 'anthropic') {
   return provider;
 }
 
+function responseText(response, fallback = '') {
+  const blocks = Array.isArray(response?.content) ? response.content : [];
+  const text = blocks
+    .filter(block => block?.type === 'text' || typeof block?.text === 'string')
+    .map(block => typeof block.text === 'string' ? block.text : '')
+    .join('')
+    .trim();
+  return text || fallback;
+}
+
+function hasUsableResponse(response) {
+  if (responseText(response)) return true;
+  return Array.isArray(response?.content)
+    && response.content.some(block => block?.type === 'tool_use');
+}
+
 function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
   const provider = normalizeProvider(env.AI_PROVIDER);
   const isDeepSeek = provider === 'deepseek';
@@ -44,7 +60,16 @@ function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
         const providerRequest = isDeepSeek
           ? { reasoning: { effort: 'none' }, ...request }
           : request;
-        return sdkClient.messages.create(providerRequest);
+        const response = await sdkClient.messages.create(providerRequest);
+        if (!isDeepSeek || hasUsableResponse(response)) return response;
+
+        // DeepSeek can occasionally complete a request without a visible text
+        // block. A successful-but-empty response must never reach WhatsApp.
+        const retry = await sdkClient.messages.create(providerRequest);
+        if (!hasUsableResponse(retry)) {
+          throw new Error('DeepSeek devolvió una respuesta vacía después de reintentar');
+        }
+        return retry;
       },
     },
   };
@@ -75,5 +100,6 @@ module.exports = {
   ...activeProvider,
   createAIProvider,
   normalizeProvider,
+  responseText,
   DEEPSEEK_ANTHROPIC_BASE_URL,
 };

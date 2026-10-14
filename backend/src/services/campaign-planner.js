@@ -1,4 +1,4 @@
-const { client: activeAIClient, modelFor } = require('./ai-provider');
+const { client: activeAIClient, modelFor, responseText } = require('./ai-provider');
 
 const OBJECTIVES = new Set(['promocion', 'reactivacion', 'seguimiento', 'cobranza', 'despacho', 'informativo']);
 const AUDIENCE_TYPES = new Set(['all', 'natural', 'empresa']);
@@ -137,7 +137,7 @@ async function planCampaign({ instruction, templates, currentAudience = {}, clie
     temperature: 0,
     messages: [{ role: 'user', content: plannerPrompt(cleanInstruction, approved, currentAudience) }],
   });
-  const raw = extractJson(response.content?.[0]?.text || '');
+  const raw = extractJson(responseText(response));
   return normalizePlan(raw, approved);
 }
 

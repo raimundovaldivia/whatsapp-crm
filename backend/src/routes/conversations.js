@@ -15,7 +15,7 @@ const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents
 const followUp = require('../services/follow-up');
 const { reconcilePendingMessages } = require('../services/message-status-recovery');
 const { isTrackableDestination, extractTrackingTokens } = require('../services/lead-journey');
-const { client: aiClient, modelFor } = require('../services/ai-provider');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -1055,7 +1055,7 @@ router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), asyn
         }],
       });
 
-      const answer = response.content[0]?.text?.trim().toLowerCase() || '';
+      const answer = responseText(response).toLowerCase();
       if (answer.startsWith('si') || answer === 'sí') {
         await pool.query(
           `UPDATE conversations SET pipeline_state = 'interested', updated_at = NOW() WHERE id = $1`,
@@ -1141,12 +1141,13 @@ Analiza y devuelve el JSON.`,
     });
 
     let analysis;
+    const rawText = responseText(resp);
     try {
       // El modelo a veces envuelve el JSON en ```json ... ``` — limpiar antes de parsear
-      const raw = resp.content[0].text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+      const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
       analysis = JSON.parse(raw);
     } catch {
-      analysis = { resumen: resp.content[0].text, error: 'Formato inesperado' };
+      analysis = { resumen: rawText, error: 'Formato inesperado' };
     }
 
     // Aplicar automáticamente el estado detectado al pipeline
@@ -1218,7 +1219,7 @@ Genera entre 2 y 5 reglas concretas para el bot basadas en estos errores y oport
 
     let rules = [];
     try {
-      const raw = resp.content[0].text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+      const raw = responseText(resp).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
       rules = JSON.parse(raw);
       if (!Array.isArray(rules)) rules = [];
     } catch {

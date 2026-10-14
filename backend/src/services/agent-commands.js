@@ -14,7 +14,7 @@
 
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
-const { client: aiClient, modelFor } = require('./ai-provider');
+const { client: aiClient, modelFor, responseText } = require('./ai-provider');
 const { activateDivaForAutomatedMessage } = require('./conversation-mode');
 const {
   buildBodyTemplateComponent,
@@ -179,7 +179,7 @@ async function processAICommand(org, wc, agent, raw) {
       system: buildSystemPrompt(org.id),
       messages: [...dialogueHistory, { role: 'user', content: raw }],
     });
-    const jsonText = aiRes.content[0]?.text?.trim() || '{}';
+    const jsonText = responseText(aiRes, '{}');
     parsed = JSON.parse(jsonText);
     rememberAdminDialogue(org.id, agent, raw, parsed);
   } catch (err) {

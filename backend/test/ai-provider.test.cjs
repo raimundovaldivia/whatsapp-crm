@@ -125,3 +125,48 @@ test('el análisis visual usa DeepSeek y conserva el bloque de imagen Anthropic-
   assert.equal(requests[0].messages[0].content[0].type, 'image');
   assert.equal(requests[0].messages[0].content[0].source.media_type, 'image/png');
 });
+
+test('responseText ignora bloques de razonamiento y encuentra el texto visible', () => {
+  const { provider } = loadProvider({ ANTHROPIC_API_KEY: 'anthropic-test-key' });
+  assert.equal(provider.responseText({ content: [
+    { type: 'thinking', thinking: 'interno' },
+    { type: 'text', text: 'Respuesta visible' },
+  ] }), 'Respuesta visible');
+});
+
+test('DeepSeek reintenta una respuesta vacía antes de devolverla', async () => {
+  let calls = 0;
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async () => {
+        calls += 1;
+        return calls === 1
+          ? { content: [{ type: 'text', text: '' }] }
+          : { content: [{ type: 'text', text: 'Respuesta recuperada' }] };
+      } };
+    }
+  }
+  const provider = load('src/services/ai-provider.js', { '@anthropic-ai/sdk': Anthropic }, {
+    process: { env: { AI_PROVIDER: 'deepseek', DEEPSEEK_API_KEY: 'deepseek-test-key' } },
+  });
+
+  const response = await provider.client.messages.create({ messages: [] });
+  assert.equal(provider.responseText(response), 'Respuesta recuperada');
+  assert.equal(calls, 2);
+});
+
+test('DeepSeek falla explícitamente si ambos intentos llegan vacíos', async () => {
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async () => ({ content: [{ type: 'text', text: '' }] }) };
+    }
+  }
+  const provider = load('src/services/ai-provider.js', { '@anthropic-ai/sdk': Anthropic }, {
+    process: { env: { AI_PROVIDER: 'deepseek', DEEPSEEK_API_KEY: 'deepseek-test-key' } },
+  });
+
+  await assert.rejects(
+    provider.client.messages.create({ messages: [] }),
+    /respuesta vacía después de reintentar/,
+  );
+});

@@ -12,7 +12,7 @@
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
 const { notifyAdmin } = require('./admin-notify');
-const { client: aiClient, modelFor } = require('./ai-provider');
+const { client: aiClient, modelFor, responseText } = require('./ai-provider');
 
 function cleanContextText(value, max = 220) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -109,7 +109,7 @@ Reglas:
         content: `${reason ? `MOTIVO DEL AVISO: ${cleanContextText(reason, 400)}\n\n` : ''}CONVERSACIÓN (más reciente al final):\n${contextLines.join('\n')}`,
       }],
     });
-    const raw = response.content?.[0]?.text?.trim() || '';
+    const raw = responseText(response);
     const parsed = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
     return {
       requiresAction: parsed.requiresAction !== false,

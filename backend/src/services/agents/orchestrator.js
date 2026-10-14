@@ -1,4 +1,4 @@
-const { client, modelFor } = require('../ai-provider');
+const { client, modelFor, responseText } = require('../ai-provider');
 const { isBareLinkMessage } = require('../inbound-message-policy');
 
 const SIMPLE_MESSAGE_PARTS = [
@@ -92,7 +92,7 @@ Nada más. Solo el JSON.`;
       messages: [...history, { role: 'user', content: userMessage }],
     });
 
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
     return {
       intent: json.intent || 'exploring',
@@ -270,7 +270,7 @@ Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgenc
       messages: [{ role: 'user', content: `${recent}\nCLIENTE: ${userMessage}` }],
     });
 
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
     return {
       escalate: json.escalate === true,

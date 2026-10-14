@@ -10,7 +10,7 @@
  * La sesión dura mientras el admin sigue respondiendo (timeout: 45 min).
  */
 
-const { client, modelFor } = require('./ai-provider');
+const { client, modelFor, responseText } = require('./ai-provider');
 const db        = require('../db/database');
 
 // ─── Sesiones activas: una por org ───────────────────────────────────────────
@@ -141,7 +141,7 @@ Respondé ÚNICAMENTE con JSON válido, sin explicaciones adicionales:
       messages,
     });
 
-    const raw = response.content[0]?.text?.trim() || '';
+    const raw = responseText(response);
     const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     result = JSON.parse(cleaned);
   } catch {

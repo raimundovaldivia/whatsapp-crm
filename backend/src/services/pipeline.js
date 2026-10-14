@@ -14,7 +14,7 @@ const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
-const { client: conversationalAI, modelFor: conversationalModelFor } = require('./ai-provider');
+const { client: conversationalAI, modelFor: conversationalModelFor, responseText } = require('./ai-provider');
 const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
@@ -2162,7 +2162,7 @@ Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre
 - Solo el JSON.`,
       messages: [{ role: 'user', content: `Conversación:\n${recent}\n\nÚltimo mensaje del cliente: "${userMessage}"` }],
     });
-    claim = JSON.parse((resp.content[0]?.text || '').match(/\{[\s\S]*\}/)?.[0] || 'null');
+    claim = JSON.parse(responseText(resp).match(/\{[\s\S]*\}/)?.[0] || 'null');
   } catch (e) {
     console.warn('[Pipeline] faltante: extracción falló:', e.message);
     return null;

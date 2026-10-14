@@ -5,7 +5,7 @@
  * si lo es, extrae monto, fecha, banco y referencia.
  */
 
-const { client, modelFor } = require('./ai-provider');
+const { client, modelFor, responseText } = require('./ai-provider');
 
 function cleanText(value) {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, 250) : null;
@@ -98,7 +98,7 @@ Si NO es comprobante de pago, devuelve is_payment_proof: false y el resto null.`
     }],
   });
 
-  const raw = response.content[0]?.text || '{}';
+  const raw = responseText(response, '{}');
 
   try {
     // Intentar parsear directo

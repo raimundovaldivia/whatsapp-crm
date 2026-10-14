@@ -9,7 +9,7 @@
  * Suena como alguien de la tienda que se acordó del cliente.
  */
 
-const { client, modelFor } = require('./ai-provider');
+const { client, modelFor, responseText } = require('./ai-provider');
 const db               = require('../db/database');
 const whatsappProvider = require('./whatsapp-provider');
 const {
@@ -71,7 +71,7 @@ async function generateFollowUpMessage(conv, history, storeContext) {
     messages:   [{ role: 'user', content: 'Genera el mensaje de seguimiento.' }],
   });
 
-  const text = response.content[0]?.text?.trim() || '';
+  const text = responseText(response);
   return text;
 }
 

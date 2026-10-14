@@ -14,7 +14,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { getTemplateVariables, hasTemplateVariableValue } = require('../utils/template-renderer.mjs');
 const templateAutomation = require('../services/template-automation');
 const collection = require('../services/payment-collection');
-const { client: aiClient, modelFor } = require('../services/ai-provider');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
 
 router.use(requireAuth);
 
@@ -374,7 +374,7 @@ Responde ÚNICAMENTE con este JSON (sin markdown, sin explicaciones extra):
       messages:   [{ role: 'user', content: prompt }],
     });
 
-    const raw   = response.content[0]?.text?.trim() || '{}';
+    const raw   = responseText(response, '{}');
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) {
       return res.status(500).json({ success: false, error: 'La IA no devolvió un JSON válido', raw: raw.slice(0, 200) });

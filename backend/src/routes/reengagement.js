@@ -13,7 +13,7 @@ const router    = express.Router();
 const db             = require('../db/database');
 const { getPool }    = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
-const { client: aiClient, modelFor } = require('../services/ai-provider');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
@@ -655,7 +655,7 @@ Incluir TODOS los ${customers.length} clientes. Ordenar por d ascendente.`;
       max_tokens: 8192,
       messages:   [{ role: 'user', content: prompt }],
     });
-    raw = response.content[0]?.text?.trim() || '[]';
+    raw = responseText(response, '[]');
   } catch (apiErr) {
     console.error('[Reengagement] Error llamando a IA:', apiErr.message);
     return [];
@@ -1120,7 +1120,7 @@ PROHIBIDO — no incluyas nada de esto:
       messages: [{ role: 'user', content: prompt }],
     });
 
-    res.json({ success: true, message: response.content[0]?.text?.trim() || '', phone });
+    res.json({ success: true, message: responseText(response), phone });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1205,7 +1205,7 @@ Responde SOLO con un objeto JSON, sin explicaciones:
       messages:   [{ role: 'user', content: prompt }],
     });
 
-    const raw   = response.content[0]?.text?.trim() || '{}';
+    const raw   = responseText(response, '{}');
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) {
       console.error('[Reengagement/fill-vars] No JSON en respuesta:', raw);
@@ -1360,7 +1360,7 @@ Responde SOLO con JSON válido (sin texto extra, sin markdown):
       messages:   [{ role: 'user', content: prompt }],
     });
 
-    const raw   = response.content[0]?.text?.trim() || '{}';
+    const raw   = responseText(response, '{}');
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) {
       console.error('[ai-pick-template] No JSON en respuesta:', raw);
@@ -1667,7 +1667,7 @@ Responde SOLO con JSON válido (sin markdown ni texto extra):
       messages:   [{ role: 'user', content: prompt }],
     });
 
-    const raw = msg.content[0]?.text || '';
+    const raw = responseText(msg);
     let parsed;
     try {
       parsed = JSON.parse(raw);

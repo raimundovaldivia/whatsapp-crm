@@ -1,4 +1,4 @@
-const { client, modelFor } = require('../ai-provider');
+const { client, modelFor, responseText } = require('../ai-provider');
 const { normalizeDraft } = require('../order-pricing');
 
 // Campos requeridos para crear la orden (además de al menos un ítem)
@@ -127,7 +127,7 @@ async function generateOrderResponse(conversationHistory, userMessage, orderDraf
     messages,
   });
 
-  return response.content[0]?.text?.trim() || '';
+  return responseText(response);
 }
 
 /**
@@ -177,7 +177,7 @@ Solo el JSON, nada más.`;
       messages: [{ role: 'user', content: recent }],
     });
 
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const extracted = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
 
     // Un template puede decir "entrega el mismo día", pero eso no significa

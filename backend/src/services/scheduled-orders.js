@@ -5,7 +5,7 @@
  * la fecha y el producto usando el modelo rápido configurado.
  */
 
-const { client, modelFor } = require('./ai-provider');
+const { client, modelFor, responseText } = require('./ai-provider');
 const businessDate = require('./business-date');
 
 // Patrones en español que indican pedido futuro
@@ -73,7 +73,7 @@ Responde SOLO JSON: {"desiredDate":"YYYY-MM-DD","productNotes":"texto","confiden
       system: SYSTEM,
       messages: [{ role: 'user', content: `Contexto previo:\n${context}\n\nMensaje actual: ${userMessage}` }],
     });
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
     const modelDate = businessDate.toISODate(json.desiredDate);
     return {
