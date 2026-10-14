@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { classifyJourney, summarizeJourneys, isTrackableDestination, extractTrackingTokens, shouldCountTrackingRequest } = require('../src/services/lead-journey');
+const { classifyJourney, summarizeJourneys, explicitReason, isTrackableDestination, extractTrackingTokens, shouldCountTrackingRequest } = require('../src/services/lead-journey');
 const { PGlite } = require('@electric-sql/pglite');
 const { load } = require('./helpers.cjs');
 
@@ -31,6 +31,40 @@ test('keeps recent conversations active instead of calling them abandoned', () =
   const result = classifyJourney({ pipeline_state: 'exploring', silent_hours: 1.5 });
   assert.equal(result.outcome, 'active');
   assert.equal(result.reason_code, 'active');
+});
+
+test('clasifica los motivos explícitos de no compra y prioriza la respuesta más reciente', () => {
+  assert.equal(explicitReason('Disculpe pero no necesito... Gracias').code, 'no_need');
+  assert.equal(explicitReason('YA NO NECESITO., YA COMPRÉ POR OTRO MEDIO').code, 'competitor');
+  assert.equal(explicitReason('No necesito\nNo\nFue por precio').code, 'price');
+});
+
+test('cierra el análisis al completar la consulta y muestra la intención futura', () => {
+  const result = classifyJourney({
+    pipeline_state: 'future_interest',
+    recent_inbound_text: 'No necesito\nSí, claro',
+    silent_hours: 0.1,
+    order_draft: JSON.stringify({
+      purchase_feedback: { status: 'completed', future_consideration: true, reason: 'no_need' },
+    }),
+  });
+  assert.equal(result.outcome, 'limbo');
+  assert.equal(result.reason_code, 'no_need');
+  assert.equal(result.future_purchase_intent, true);
+});
+
+test('prioriza el motivo confirmado por la consulta sobre el rechazo inicial', () => {
+  const result = classifyJourney({
+    pipeline_state: 'future_interest',
+    recent_inbound_text: 'Ya no necesito\nNo\nFue por la atención',
+    silent_hours: 0.1,
+    order_draft: JSON.stringify({
+      purchase_feedback: { status: 'completed', future_consideration: false, reason: 'service' },
+    }),
+  });
+  assert.equal(result.reason_code, 'service');
+  assert.equal(result.reason_label, 'Atención o servicio');
+  assert.equal(result.future_purchase_intent, false);
 });
 
 test('summarizes funnel and response-time cohorts', () => {

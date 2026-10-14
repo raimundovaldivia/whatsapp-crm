@@ -212,6 +212,7 @@ docker-compose up --build -d
 - Desde las 12:50, los pedidos nuevos reciben como alternativa el próximo día de despacho. Si un pedido protegido termina después de las 13:00, se deriva al equipo sin contradecir ni rechazar al cliente.
 - Los cierres en curso reciben seguimiento breve a los **5 minutos**; otros interesados, a los **15 minutos**. Se permiten como máximo dos intentos y nunca dos en la misma etapa.
 - No se envían seguimientos cuando el cliente ya respondió, pidió no recibir mensajes, tiene un pedido o pago activo, o la conversación está en atención humana.
+- Si el cliente indica que ya no necesita o que compró en otro lugar, se le pregunta una sola vez si nos consideraría para una próxima compra. Solo si responde que no se consulta el motivo, y el resultado queda visible en el análisis de campaña.
 - La pestaña **Calientes** prioriza pedidos en curso y muestra la vigencia del despacho; **Seguimiento** reúne conversaciones aún recuperables.
 
 ---

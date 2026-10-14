@@ -23,6 +23,7 @@ const outboundPolicy = require('./outbound-text-policy');
 const deliveryCoverage = require('./delivery-coverage');
 const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
 const salesClosing = require('./sales-closing');
+const purchaseFeedback = require('./purchase-feedback');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
@@ -295,6 +296,24 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const history = await db.getLastMessages(conversationId, 16);
   if (inboundPolicy.isClosingAcknowledgement?.(userMessage, history, conversation?.pipeline_state)) {
     return { response: null, skipped: true, reason: 'CLOSING_ACKNOWLEDGEMENT' };
+  }
+  const storedDraft = (() => {
+    if (conversation?.order_draft && typeof conversation.order_draft === 'object') return conversation.order_draft;
+    try { return JSON.parse(conversation?.order_draft || '{}'); } catch { return {}; }
+  })();
+  const feedbackAction = purchaseFeedback.nextAction({
+    message: userMessage,
+    draft: storedDraft,
+    state: conversation?.pipeline_state || 'exploring',
+  });
+  if (feedbackAction) {
+    await db.updatePipelineState(conversationId, feedbackAction.state, feedbackAction.draft);
+    L.step('purchase_feedback', feedbackAction.draft?.purchase_feedback?.status || 'completed');
+    return {
+      response: feedbackAction.response,
+      agentType: 'orchestrator',
+      newState: feedbackAction.state,
+    };
   }
   const deliveryEnabled = await require('./commercial').permitted(orgId, 'delivery').catch(() => false);
 

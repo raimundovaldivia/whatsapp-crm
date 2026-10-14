@@ -34,6 +34,18 @@ test('no persigue a quien dijo que aún tiene huevos porque se los regalaron', (
   ]), true);
 });
 
+test('no reactiva seguimientos después de rechazar o comprar en otro lugar', () => {
+  for (const content of [
+    'Por el momento no lo tomaré',
+    'Ya no necesito, ya compré por otro medio',
+  ]) {
+    assert.equal(shouldSkipAutomatedFollowUp([
+      { direction: 'outbound', content: '¿Cuántas bandejas necesitas?' },
+      { direction: 'inbound', content },
+    ]), true);
+  }
+});
+
 test('no reabre un hilo que Diva ya cerró', () => {
   assert.equal(shouldSkipAutomatedFollowUp([
     { direction: 'inbound', content: 'Gracias' },

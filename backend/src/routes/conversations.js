@@ -131,7 +131,7 @@ router.post('/:id/tracking-links', async (req, res) => {
 router.patch('/:id/limbo-reason', async (req, res) => {
   try {
     const conversationId = Number(req.params.id);
-    const allowed = new Set(['price', 'delivery', 'payment', 'later', 'stock', 'declined', 'competitor', 'no_reply', 'unknown']);
+    const allowed = new Set(['price', 'delivery', 'payment', 'later', 'stock', 'declined', 'competitor', 'no_need', 'service', 'no_reply', 'unknown']);
     const reasonCode = String(req.body?.reason || '');
     const note = String(req.body?.note || '').trim();
     if (!Number.isInteger(conversationId) || conversationId < 1 || !allowed.has(reasonCode)) {
