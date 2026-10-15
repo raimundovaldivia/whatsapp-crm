@@ -486,11 +486,11 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   let promotionContext = promotionsEnabled
     ? promotions.fromHistory(promotionHistory, products) || promotions.restore(orderDraft?.promotion)
     : null;
-  // El último mensaje personal de cajas es una decisión comercial explícita y
+  // El último mensaje personal con escala de bandejas es una decisión comercial explícita y
   // más reciente. Mientras siga dentro de su hora reemplaza (sin acumular) una
   // eventual oferta automática por bandejas. Fuera de esa hora vuelve a regir
   // la oferta personal anterior si todavía está activa.
-  if (personalOffer && promotionContext?.oneHourBoxGift && promotionContext.active) personalOffer = null;
+  if (personalOffer && promotionContext?.oneHourTieredGift && promotionContext.active) personalOffer = null;
   else if (personalOffer) promotionContext = null;
   if (!promotionsEnabled && orderDraft?.promotion) {
     orderDraft = { ...orderDraft };
@@ -1120,7 +1120,7 @@ REGLAS ABSOLUTAS:
   // primero importes normales. La promoción recibida por template o por el
   // anuncio es la fuente comercial prioritaria.
   if (promotionContext?.active
-      && promotionContext.offers?.length
+      && (promotionContext.offers?.length || promotionContext.oneHourTieredGift)
       && promotions.isCurrentPriceQuestion(userMessage)) {
     const nextDraft = { ...(orderDraft || {}), promotion: promotions.snapshot(promotionContext) };
     await db.updatePipelineState(conversationId, 'interested', nextDraft);
@@ -1167,16 +1167,38 @@ REGLAS ABSOLUTAS:
   // contiene varias promociones. Antes el modelo escogía una al azar y podía
   // crear un pedido con cantidad/precio que el cliente nunca solicitó.
   if (promotionContext?.active
-      && promotionContext.offers?.length > 1
+      && (promotionContext.offers?.length > 1 || promotionContext.oneHourTieredGift)
       && promotions.isBareAffirmative(userMessage)
-      && (promotionContext.oneHourBoxGift || ['template_sent', 'interested'].includes(currentState))
+      && (promotionContext.oneHourTieredGift || ['template_sent', 'interested'].includes(currentState))
       && !(orderDraft?.items?.length)) {
     const nextDraft = { ...(orderDraft || {}), promotion: promotions.snapshot(promotionContext) };
     await db.updatePipelineState(conversationId, 'interested', nextDraft);
     L.agent('sales', 0);
-    L.step('promotion_choice_required', `${promotionContext.offers.length} opciones; respuesta afirmativa sin selección`);
+    L.step('promotion_choice_required', promotionContext.oneHourTieredGift
+      ? 'escala personal; falta cantidad y calibre'
+      : `${promotionContext.offers.length} opciones; respuesta afirmativa sin selección`);
     return {
       response: promotions.choiceReply(promotionContext),
+      agentType: 'sales',
+      newState: 'interested',
+    };
+  }
+
+  // Si después de ver la escala responde sólo "XL" o "Jumbo", conservar la
+  // elección y pedir los datos que identifican el SKU sin inventar formato ni
+  // color. El siguiente turno continúa normalmente con el pedido valorizado.
+  const tieredGiftSize = promotions.tieredGiftSize?.(userMessage, promotionContext);
+  if (tieredGiftSize && !(orderDraft?.items?.length)) {
+    const nextDraft = {
+      ...(orderDraft || {}),
+      promotion: promotions.snapshot(promotionContext),
+      tiered_gift_size: tieredGiftSize,
+    };
+    await db.updatePipelineState(conversationId, 'interested', nextDraft);
+    L.agent('sales', 0);
+    L.step('tiered_gift_size_selected', tieredGiftSize);
+    return {
+      response: promotions.tieredGiftSizeReply(tieredGiftSize),
       agentType: 'sales',
       newState: 'interested',
     };
@@ -2481,6 +2503,12 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   if (personalOfferDiscount) {
     priced = pricing.priceItems(updatedDraft.items, products, { ...pricingOptions, fixedDiscountAmount: personalOfferDiscount });
   }
+  const tieredGiftDiscount = promotionApplies
+    ? (promotions.applicableTieredGiftDiscount?.(priced, promotionContext, orderNow) || 0)
+    : 0;
+  if (tieredGiftDiscount) {
+    priced = pricing.priceItems(updatedDraft.items, products, { ...pricingOptions, fixedDiscountAmount: tieredGiftDiscount });
+  }
   const giftQualifies = freeGiftRule && promotions.giftQualifies(freeGiftRule, priced.total);
   if (giftQualifies && !selectedGift && freeGiftRule.candidates?.length === 1) {
     selectedGift = freeGiftRule.candidates[0];
@@ -2560,7 +2588,9 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // 2. Respuesta del agente de órdenes (con el carrito valorizado en el prompt)
   const promoPricing = promotionApplies
-    ? `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal. Conserva TODOS los productos promocionados que pidió el cliente; no elimines ninguno por una marca de stock del catálogo.\n`
+    ? (promotionContext.oneHourTieredGift
+      ? `REGALO PERSONAL APLICADO: ${tieredGiftDiscount ? `$${tieredGiftDiscount.toLocaleString('es-CL')} según la cantidad de bandejas XL/Jumbo` : 'todavía no aplica porque falta una bandeja XL/Jumbo elegible'}. Usa exactamente el total calculado y continúa recopilando los datos faltantes del pedido.\n`
+      : `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal. Conserva TODOS los productos promocionados que pidió el cliente; no elimines ninguno por una marca de stock del catálogo.\n`)
     : '';
   const pricingText   = promoPricing + pricing.pricingContext(priced);
   let agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
