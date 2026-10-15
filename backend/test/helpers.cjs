@@ -25,6 +25,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === '../services/lead-qualification') return require(path.join(root, 'src/services/lead-qualification.js'));
       if (name === '../services/sales-closing' || name === './sales-closing') return require(path.join(root, 'src/services/sales-closing.js'));
       if (name === './purchase-feedback') return require(path.join(root, 'src/services/purchase-feedback.js'));
+      if (name === './personal-offers') return require(path.join(root, 'src/services/personal-offers.js'));
       if (name === './promotion-context') return require(path.join(root, 'src/services/promotion-context.js'));
       if (name === './ai-provider' || name === '../ai-provider' || name === '../services/ai-provider') {
         const providerDeps = Object.hasOwn(deps, '@anthropic-ai/sdk')

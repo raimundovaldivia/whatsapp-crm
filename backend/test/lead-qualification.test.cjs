@@ -32,6 +32,12 @@ test('distingue interés futuro, rechazo y pedido ganado', () => {
   assert.equal(qualifyLead({ messages: inbound('precio'), hasOrder: true }).temperature, 'won');
 });
 
+test('distingue una consulta de precio de una objeción de precio confirmada', () => {
+  assert.equal(qualifyLead({ messages: inbound('¿Cuánto cuesta la bandeja XL?') }).signals.priceObjection, false);
+  assert.equal(qualifyLead({ messages: inbound('Fue por el precio') }).signals.priceObjection, true);
+  assert.equal(qualifyLead({ messages: inbound('Se me hace caro') }).signals.priceObjection, true);
+});
+
 test('la evaluación guarda el estado anterior sin aplicar ni cruzar organizaciones', async () => {
   const calls = [];
   const pool = { query: async (sql, params) => {

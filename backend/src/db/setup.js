@@ -892,6 +892,51 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_lead_qualification_audits_run
         ON lead_qualification_audits(organization_id, run_id, proposed_temperature);
 
+      -- Beneficios de recuperación individuales. La fila conserva monto,
+      -- vigencia, costo y ancla del último mensaje entrante para que el envío
+      -- y el canje sean auditables, únicos y aislados por organización.
+      CREATE TABLE IF NOT EXISTS personal_offers (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        inbound_anchor TIMESTAMPTZ NOT NULL,
+        discount_amount INTEGER NOT NULL CHECK(discount_amount IN (1000, 3500, 4000, 7000)),
+        discount_tiers JSONB NOT NULL DEFAULT '[{"minTrays":1,"amount":1000},{"minTrays":2,"amount":4000},{"minTrays":3,"amount":7000}]'::jsonb,
+        min_trays INTEGER NOT NULL DEFAULT 1 CHECK(min_trays >= 1),
+        unit_cost INTEGER NOT NULL DEFAULT 150 CHECK(unit_cost >= 0),
+        min_margin_pct NUMERIC(5,2) NOT NULL DEFAULT 40 CHECK(min_margin_pct BETWEEN 0 AND 100),
+        price_reason_source TEXT NOT NULL CHECK(price_reason_source IN ('manual','observed')),
+        price_reason_confidence NUMERIC(4,3) NOT NULL CHECK(price_reason_confidence BETWEEN 0 AND 1),
+        status TEXT NOT NULL DEFAULT 'reserved' CHECK(status IN ('reserved','sent','redeemed','expired','failed')),
+        expires_at TIMESTAMPTZ NOT NULL,
+        message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+        redeemed_order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+        redeemed_discount_amount INTEGER,
+        redeemed_trays INTEGER,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TIMESTAMPTZ,
+        redeemed_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        UNIQUE(organization_id, conversation_id, inbound_anchor)
+      );
+      CREATE INDEX IF NOT EXISTS idx_personal_offers_org_status
+        ON personal_offers(organization_id, status, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_personal_offers_conversation
+        ON personal_offers(organization_id, conversation_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS personal_offer_baselines (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        inventory_xl_eggs INTEGER NOT NULL CHECK(inventory_xl_eggs >= 0),
+        inventory_l_eggs INTEGER NOT NULL CHECK(inventory_l_eggs >= 0),
+        qualification_summary JSONB NOT NULL DEFAULT '{}',
+        configuration JSONB NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX IF NOT EXISTS idx_personal_offer_baselines_org
+        ON personal_offer_baselines(organization_id, captured_at DESC);
+
       -- Cierre comercial asistido. La reserva se toma al comenzar realmente
       -- un pedido; no depende de que el modelo recuerde la hora del primer mensaje.
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS sales_started_at TIMESTAMPTZ;

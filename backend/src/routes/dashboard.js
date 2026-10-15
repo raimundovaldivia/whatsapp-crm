@@ -267,4 +267,169 @@ router.get('/wins', async (req, res) => {
   }
 });
 
+router.get('/personal-offers', async (req, res) => {
+  try {
+    const days = Number.parseInt(req.query.days || '30', 10);
+    if (!Number.isSafeInteger(days) || days < 1 || days > 90) {
+      return res.status(400).json({ success: false, error: 'days debe estar entre 1 y 90' });
+    }
+    const pool = getPool();
+    const params = [req.orgId, days];
+    const [summaryResult, tiersResult, dailyResult, priceQualificationResult, inventoryResult, baselineResult] = await Promise.all([
+      pool.query(`
+        SELECT COUNT(*)::int AS detected,
+               COUNT(*) FILTER (WHERE po.sent_at IS NOT NULL)::int AS sent,
+               COUNT(*) FILTER (WHERE po.status = 'failed')::int AS failed,
+               COUNT(*) FILTER (WHERE po.status = 'redeemed')::int AS won,
+               COUNT(*) FILTER (WHERE po.status = 'sent' AND po.expires_at <= NOW())::int AS expired,
+               COUNT(*) FILTER (WHERE po.sent_at IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM messages m
+                  WHERE m.conversation_id = po.conversation_id AND m.direction = 'inbound'
+                    AND m.created_at > po.sent_at AND m.created_at <= COALESCE(po.redeemed_at, po.expires_at)
+               ))::int AS replied,
+               COALESCE(SUM(po.redeemed_discount_amount) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS discounts,
+               COALESCE(SUM(NULLIF(o.total_price, '')::numeric) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS recovered_revenue,
+               COALESCE(AVG(NULLIF(o.total_price, '')::numeric) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS average_ticket,
+               COALESCE(SUM(po.redeemed_trays) FILTER (WHERE po.status = 'redeemed'), 0)::int AS trays,
+               COALESCE(SUM((po.redeemed_trays * 30 * po.unit_cost)) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS estimated_egg_cost
+          FROM personal_offers po
+          LEFT JOIN orders o ON o.id = po.redeemed_order_id AND o.organization_id = po.organization_id
+         WHERE po.organization_id = $1
+           AND po.created_at >= NOW() - ($2::int * INTERVAL '1 day')
+      `, params),
+      pool.query(`
+        SELECT CASE WHEN redeemed_trays >= 3 THEN '3+' ELSE redeemed_trays::text END AS tier,
+               COUNT(*)::int AS won,
+               COALESCE(SUM(redeemed_discount_amount), 0)::numeric AS discounts,
+               COALESCE(SUM(NULLIF(o.total_price, '')::numeric), 0)::numeric AS revenue,
+               COALESCE(AVG(NULLIF(o.total_price, '')::numeric), 0)::numeric AS average_ticket
+          FROM personal_offers po
+          JOIN orders o ON o.id = po.redeemed_order_id AND o.organization_id = po.organization_id
+         WHERE po.organization_id = $1 AND po.status = 'redeemed'
+           AND po.created_at >= NOW() - ($2::int * INTERVAL '1 day')
+         GROUP BY 1 ORDER BY MIN(redeemed_trays)
+      `, params),
+      pool.query(`
+        SELECT (po.created_at AT TIME ZONE 'America/Santiago')::date AS day,
+               COUNT(*)::int AS detected,
+               COUNT(*) FILTER (WHERE po.sent_at IS NOT NULL)::int AS sent,
+               COUNT(*) FILTER (WHERE po.status = 'redeemed')::int AS won,
+               COALESCE(SUM(NULLIF(o.total_price, '')::numeric) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS revenue
+          FROM personal_offers po
+          LEFT JOIN orders o ON o.id = po.redeemed_order_id AND o.organization_id = po.organization_id
+         WHERE po.organization_id = $1
+           AND po.created_at >= NOW() - ($2::int * INTERVAL '1 day')
+         GROUP BY 1 ORDER BY 1
+      `, params),
+      pool.query(`
+        WITH cohort AS (
+          SELECT c.id, c.limbo_reason_code,
+                 COALESCE(NULLIF(c.order_draft, ''), '{}')::jsonb #>> '{purchase_feedback,reason}' AS feedback_reason,
+                 COALESCE(CASE WHEN c.qualified_at IS NOT NULL THEN c.lead_signals ELSE qa.proposed_signals END, '{}'::jsonb) AS signals
+            FROM conversations c
+            LEFT JOIN LATERAL (
+              SELECT a.proposed_signals
+                FROM lead_qualification_audits a
+                JOIN lead_qualification_runs r ON r.run_id = a.run_id
+                 AND r.organization_id = a.organization_id AND r.status = 'completed'
+               WHERE a.organization_id = c.organization_id AND a.conversation_id = c.id
+               ORDER BY r.completed_at DESC NULLS LAST, a.id DESC LIMIT 1
+            ) qa ON TRUE
+           WHERE c.organization_id = $1 AND c.source_channel = 'whatsapp'
+             AND c.last_inbound_at >= NOW() - ($2::int * INTERVAL '1 day')
+             AND c.last_inbound_at < NOW() - INTERVAL '2 hours'
+             AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.organization_id = c.organization_id AND o.conversation_id = c.id AND o.status <> 'cancelled')
+        )
+        SELECT COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE limbo_reason_code = 'price' OR feedback_reason = 'price' OR signals->>'priceObjection' = 'true')::int AS price_confirmed,
+               COUNT(*) FILTER (WHERE limbo_reason_code IS NULL AND feedback_reason IS NULL AND COALESCE(signals->>'priceObjection', 'false') <> 'true' AND signals->>'priceQuestion' = 'true')::int AS price_probable,
+               COUNT(*) FILTER (WHERE COALESCE(limbo_reason_code, '') <> 'price' AND COALESCE(feedback_reason, '') <> 'price'
+                 AND COALESCE(signals->>'priceObjection', 'false') <> 'true'
+                 AND (limbo_reason_code IS NOT NULL OR feedback_reason IS NOT NULL))::int AS other_known,
+               COUNT(*) FILTER (WHERE limbo_reason_code IS NULL AND feedback_reason IS NULL AND COALESCE(signals->>'priceObjection', 'false') <> 'true' AND COALESCE(signals->>'priceQuestion', 'false') <> 'true')::int AS unknown
+          FROM cohort
+      `, params),
+      pool.query(`
+        WITH sizes AS (
+          SELECT CASE
+                   WHEN COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* '(^|[^[:alnum:]])xl([^[:alnum:]]|$)' THEN 'XL'
+                   WHEN COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* '(^|[^[:alnum:]])l([^[:alnum:]]|$)' THEN 'L'
+                 END AS size,
+                 COALESCE((item->>'quantity')::int, 0) AS trays
+            FROM personal_offers po
+            JOIN orders o ON o.id = po.redeemed_order_id AND o.organization_id = po.organization_id
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(NULLIF(o.items, '')::jsonb, '[]'::jsonb)) item
+           WHERE po.organization_id = $1 AND po.status = 'redeemed'
+             AND po.created_at >= NOW() - ($2::int * INTERVAL '1 day')
+             AND COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* 'huevos?'
+             AND COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* 'bandeja'
+        )
+        SELECT wanted.size, COALESCE(SUM(sizes.trays), 0)::int AS sold,
+               CASE wanted.size
+                 WHEN 'XL' THEN COALESCE((SELECT CASE WHEN value ~ '^[0-9]+$' THEN value::int END FROM settings WHERE organization_id = $1 AND key = 'personal_offer_target_xl_trays'), 100)
+                 ELSE COALESCE((SELECT CASE WHEN value ~ '^[0-9]+$' THEN value::int END FROM settings WHERE organization_id = $1 AND key = 'personal_offer_target_l_trays'), 100)
+               END AS target
+          FROM (VALUES ('XL'), ('L')) wanted(size)
+          LEFT JOIN sizes ON sizes.size = wanted.size
+         GROUP BY wanted.size ORDER BY wanted.size DESC
+      `, params),
+      pool.query(`SELECT captured_at, inventory_xl_eggs, inventory_l_eggs, qualification_summary, configuration
+        FROM personal_offer_baselines WHERE organization_id = $1 ORDER BY captured_at DESC LIMIT 1`, [req.orgId]),
+    ]);
+    const row = summaryResult.rows[0] || {};
+    const sent = Number(row.sent) || 0;
+    const won = Number(row.won) || 0;
+    const replied = Number(row.replied) || 0;
+    const revenue = Number(row.recovered_revenue) || 0;
+    const estimatedCost = Number(row.estimated_egg_cost) || 0;
+    res.json({
+      success: true,
+      data: {
+        periodDays: days,
+        detected: Number(row.detected) || 0,
+        sent,
+        replied,
+        won,
+        failed: Number(row.failed) || 0,
+        expired: Number(row.expired) || 0,
+        responseRate: sent ? Math.round(replied * 1000 / sent) / 10 : 0,
+        conversionRate: sent ? Math.round(won * 1000 / sent) / 10 : 0,
+        recoveredRevenue: revenue,
+        averageTicket: Number(row.average_ticket) || 0,
+        discounts: Number(row.discounts) || 0,
+        trays: Number(row.trays) || 0,
+        estimatedContribution: revenue - estimatedCost,
+        baseline: baselineResult.rows[0] || null,
+        priceQualification: {
+          total: Number(priceQualificationResult.rows[0]?.total) || 0,
+          confirmed: Number(priceQualificationResult.rows[0]?.price_confirmed) || 0,
+          probable: Number(priceQualificationResult.rows[0]?.price_probable) || 0,
+          otherKnown: Number(priceQualificationResult.rows[0]?.other_known) || 0,
+          unknown: Number(priceQualificationResult.rows[0]?.unknown) || 0,
+        },
+        inventory: inventoryResult.rows.map(item => ({
+          size: item.size,
+          sold: Number(item.sold) || 0,
+          target: Number(item.target) || 100,
+          remaining: Math.max(0, (Number(item.target) || 100) - (Number(item.sold) || 0)),
+        })),
+        tiers: tiersResult.rows.map(tier => ({
+          tier: tier.tier, won: Number(tier.won) || 0,
+          discounts: Number(tier.discounts) || 0,
+          revenue: Number(tier.revenue) || 0,
+          averageTicket: Number(tier.average_ticket) || 0,
+        })),
+        daily: dailyResult.rows.map(day => ({
+          date: day.day, detected: Number(day.detected) || 0,
+          sent: Number(day.sent) || 0, won: Number(day.won) || 0,
+          revenue: Number(day.revenue) || 0,
+        })),
+      },
+    });
+  } catch (err) {
+    console.error('[dashboard/personal-offers]', err.message);
+    res.status(500).json({ success: false, error: 'No se pudieron cargar las métricas de ofertas personales' });
+  }
+});
+
 module.exports = router;

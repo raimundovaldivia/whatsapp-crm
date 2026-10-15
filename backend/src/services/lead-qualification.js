@@ -67,7 +67,8 @@ function leadSignals({ messages = [], orderDraft = null } = {}) {
     ),
     quoteOnly: /\b(s[oó]lo|solo)\s+(?:estoy\s+)?(?:cotizando|consultando|viendo\s+precios)|\bpor\s+ahora\s+(?:s[oó]lo\s+)?(?:cotizo|consulto)\b/i.test(text),
     future: /\b(m[aá]s\s+adelante|pr[oó]ximamente|otro\s+d[ií]a|el\s+pr[oó]ximo\s+mes|despu[eé]s\s+veo|te\s+aviso)\b/i.test(text),
-    priceObjection: /\b(muy\s+caro|est[aá]\s+caro|no\s+me\s+alcanza|fuera\s+de\s+presupuesto)\b/i.test(text),
+    priceObjection: /\b(muy\s+caro|est[aá]\s+caro|se\s+me\s+hace\s+caro|no\s+me\s+alcanza|fuera\s+de\s+presupuesto)\b/i.test(text)
+      || /(?:^|\n)\s*(?:fue\s+)?(?:por\s+)?(?:el\s+)?precio\s*(?:$|\n)/i.test(text),
     declined: /\b(no\s+gracias|no\s+me\s+interesa|ya\s+no\s+quiero|no\s+quiero\s+comprar)\b/i.test(text),
   };
 }

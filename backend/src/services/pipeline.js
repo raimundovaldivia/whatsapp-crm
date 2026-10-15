@@ -24,6 +24,7 @@ const deliveryCoverage = require('./delivery-coverage');
 const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
 const salesClosing = require('./sales-closing');
 const purchaseFeedback = require('./purchase-feedback');
+const personalOffers = require('./personal-offers');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
@@ -451,30 +452,15 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const xlPricing = require('./xl-welcome-pricing');
   const previousXlContext = await xlPricing.context(getPool(), orgId, conversation.phone_number);
   const xlContext = isEmpresa ? previousXlContext : xlPricing.forStore(previousXlContext);
-  const leadSection = xlContext.enabled ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
+  const personalOfferPaymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
+  const personalOffer = personalOfferPaymentMode === 'cod' && db.getActivePersonalOffer
+    ? await db.getActivePersonalOffer(orgId, conversationId).catch(() => null)
+    : null;
+  const leadSection = personalOffer
+    ? personalOffers.promptSection(personalOffer)
+    : (xlContext.enabled ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
 
-Este cliente es un lead nuevo, posiblemente llegó por publicidad. Tu objetivo es CERRAR LA VENTA en esta conversación.
-
-REGLA PRINCIPAL: Si el cliente ya quiere comprar sin dudar → cierra el pedido de inmediato, SIN ofrecer descuento. Los descuentos son SOLO para cuando el cliente duda o se va a ir sin comprar.
-
-⚠️ SEÑALES DE SALIDA — cuando el cliente diga cualquiera de estas frases o similares, NO te despidas. En cambio, ofrece el descuento de bienvenida:
-- "les aviso", "le aviso", "les comento", "le comento"
-- "voy a pensar", "lo voy a pensar", "lo pienso"
-- "gracias por ahora", "muchas gracias", "ok gracias"
-- "después veo", "después te escribo", "más adelante"
-- "se lo enviaré a mi mamá", "lo voy a consultar", "lo consulto con…"
-- "lo voy a ver con…", "lo veo con mi familia"
-- cualquier frase que implique "me voy a ir sin comprar ahora"
-→ Responde con el descuento: "Antes de que te vayas, como cliente nuevo te puedo dar un 5% de descuento en tu primer pedido 🎉 ¿Te animas?"
-
-Escalera de descuentos (úsala progresivamente, solo si el cliente sigue sin cerrar):
-1. Primera señal de salida o duda → ofrece 5%: "Como cliente nuevo tienes un 5% de descuento en tu primer pedido 🎉"
-2. Sigue sin cerrar después del 5% → sube a 7%: "Te subo el descuento a un 7%, quiero que puedas conocer nuestros productos"
-3. Aún no cierra después del 7% → ofrece el máximo: "Te dejo nuestro mejor precio de bienvenida: 10% — es lo máximo que puedo ofrecerte 😊"
-4. NUNCA ofrezcas más del 10% ni bajes el precio de otra forma.
-
-Revisa el historial: si ya ofreciste un nivel de descuento, NO lo repitas, pasa al siguiente nivel.
-Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido.` : '';
+Este cliente es un lead nuevo, posiblemente llegó por publicidad. Defiende el valor y facilita el cierre, pero no inventes ni negocies descuentos. Los únicos beneficios válidos son los que el sistema muestre explícitamente como vigentes.` : '');
 
 
   let currentState = conversation.pipeline_state || 'exploring';
@@ -503,7 +489,7 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
       console.warn('[Pipeline] No se pudo leer la oferta del anuncio:', error.message);
     }
   }
-  const promotionContext = promotionsEnabled
+  const promotionContext = promotionsEnabled && !personalOffer
     ? promotions.fromHistory(promotionHistory, products) || promotions.restore(orderDraft?.promotion)
     : null;
   if (!promotionsEnabled && orderDraft?.promotion) {
@@ -529,7 +515,11 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   }
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
-  const orderCtx = { products, specialPrices, baseSpecialPrices, isLead, promotionContext, xlContext, now: nowCl };
+  const orderCtx = {
+    products, specialPrices, baseSpecialPrices, isLead, promotionContext,
+    xlContext: personalOffer ? { ...xlContext, enabled: false, eligible: false } : xlContext,
+    personalOffer, now: nowCl,
+  };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
@@ -2313,7 +2303,7 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
  * @param {object} orderCtx — { products, specialPrices, isLead }
  */
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx = {}) {
-  const { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null } = orderCtx;
+  const { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null, personalOffer = null } = orderCtx;
   const requestedOrderNow = orderCtx.now ? new Date(orderCtx.now) : null;
   const orderNow = requestedOrderNow && !Number.isNaN(requestedOrderNow.getTime()) ? requestedOrderNow : new Date();
   orderDraft = pricing.normalizeDraft(orderDraft || {});
@@ -2469,18 +2459,23 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     });
   }
 
-  // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a
-  //     leads (es la escalera de bienvenida del prompt de ventas); para
-  //     clientes existentes cualquier descuento lo maneja el equipo.
-  let priced = pricing.priceItems(updatedDraft.items, products, {
+  // 1a. Valorizar el carrito contra el catálogo. Las promociones generales y
+  //     el beneficio personal son mutuamente excluyentes; el monto personal
+  //     se decide por código según bandejas XL/L y margen, nunca por el modelo.
+  const pricingOptions = {
     specialPrices: promotionApplies ? specialPrices : baseSpecialPrices,
     categoryDiscounts: promotionApplies ? promotionContext.categoryDiscounts : [],
     secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
     discountPct: promotionApplies && promotionContext.discountPct
       ? promotionContext.discountPct
-      : (isLead && !orderCtx.xlContext?.enabled ? updatedDraft.discount_pct : 0),
+      : (isLead && !orderCtx.xlContext?.enabled && !personalOffer ? updatedDraft.discount_pct : 0),
     maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
-  });
+  };
+  let priced = pricing.priceItems(updatedDraft.items, products, pricingOptions);
+  let personalOfferDiscount = personalOffers.applicableDiscount(priced, personalOffer, orderNow);
+  if (personalOfferDiscount) {
+    priced = pricing.priceItems(updatedDraft.items, products, { ...pricingOptions, fixedDiscountAmount: personalOfferDiscount });
+  }
   const giftQualifies = freeGiftRule && promotions.giftQualifies(freeGiftRule, priced.total);
   if (giftQualifies && !selectedGift && freeGiftRule.candidates?.length === 1) {
     selectedGift = freeGiftRule.candidates[0];
@@ -2488,15 +2483,20 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   if (giftQualifies && selectedGift) {
     const giftItem = promotions.freeGiftOrderItem(selectedGift, freeGiftRule);
     if (giftItem) {
-      priced = pricing.priceItems([...priced.items, giftItem], products, {
+      const itemsWithGift = [...priced.items, giftItem];
+      priced = pricing.priceItems(itemsWithGift, products, {
         specialPrices: promotionApplies ? specialPrices : baseSpecialPrices,
         categoryDiscounts: promotionApplies ? promotionContext.categoryDiscounts : [],
         secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
         discountPct: promotionApplies && promotionContext.discountPct
           ? promotionContext.discountPct
-          : (isLead && !orderCtx.xlContext?.enabled ? updatedDraft.discount_pct : 0),
+          : (isLead && !orderCtx.xlContext?.enabled && !personalOffer ? updatedDraft.discount_pct : 0),
         maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
       });
+      personalOfferDiscount = personalOffers.applicableDiscount(priced, personalOffer, orderNow);
+      if (personalOfferDiscount) {
+        priced = pricing.priceItems(itemsWithGift, products, { ...pricingOptions, fixedDiscountAmount: personalOfferDiscount });
+      }
       updatedDraft.free_gift_choice = selectedGift;
       delete updatedDraft.awaiting_free_gift;
     }
@@ -2513,6 +2513,13 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   updatedDraft.subtotal = priced.subtotal;
   updatedDraft.discount_pct = priced.discountPct;
   updatedDraft.discount_amount = priced.discountAmount;
+  if (personalOfferDiscount) {
+    updatedDraft.personal_offer_id = personalOffer.id;
+    updatedDraft.personal_offer_discount_amount = personalOfferDiscount;
+  } else {
+    delete updatedDraft.personal_offer_id;
+    delete updatedDraft.personal_offer_discount_amount;
+  }
   updatedDraft.total    = priced.total;
   if (priced.unmatched.length) console.log(`[Pipeline] 🛒 Ítems sin match en catálogo: ${priced.unmatched.join(' | ')}`);
   await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
@@ -2656,6 +2663,9 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           shippingAddress,
           totalPrice:      priced.total,
           note:            orderNote,
+          personalOfferId: updatedDraft.personal_offer_id || null,
+          personalOfferDiscountAmount: updatedDraft.personal_offer_discount_amount || null,
+          personalOfferTrays: updatedDraft.personal_offer_id ? personalOffers.eggTrayQuantity(priced.items) : null,
         });
         const orderMeta = {};
         if (updatedDraft.delivery_date) orderMeta.delivery_date = updatedDraft.delivery_date;
@@ -2852,6 +2862,9 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     shippingAddress: { address: draft.address, city: draft.city },
     totalPrice: shopifyResult.totalPrice || draft.total || null,
     note: orderNote,
+    personalOfferId: draft.personal_offer_id || null,
+    personalOfferDiscountAmount: draft.personal_offer_discount_amount || null,
+    personalOfferTrays: draft.personal_offer_id ? personalOffers.eggTrayQuantity(items) : null,
   });
 
   await db.updateOrder(order.id, {

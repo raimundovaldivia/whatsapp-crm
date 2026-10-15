@@ -17,6 +17,7 @@ const {
   shouldSkipAutomatedFollowUp,
 } = require('./outbound-policy');
 const salesClosing = require('./sales-closing');
+const personalOffers = require('./personal-offers');
 
 const FOLLOW_UP_PROMPT = `Eres alguien que trabaja en una tienda y vas a escribirle a un cliente que estaba interesado pero dejó de responder.
 
@@ -253,6 +254,93 @@ async function runHotClosingFollowUp(io = null, now = new Date()) {
   return { sent, skipped };
 }
 
+async function runPersonalOfferFollowUp(io = null, now = new Date(), options = {}) {
+  let sent = 0, skipped = 0;
+  if (!isCustomerMessagingHour(now)) return { sent, skipped, reason: 'outside_customer_hours' };
+
+  try {
+    const candidates = await db.getPersonalOfferCandidates({
+      organizationId: options.organizationId || null,
+      minIdleHours: options.minIdleHours || 18,
+      maxIdleHours: options.maxIdleHours || 23,
+      limit: options.limit || 100,
+    });
+    for (const candidate of candidates) {
+      let claimed = null;
+      try {
+        if (!await require('./commercial').permitted(candidate.organization_id, 'marketing')) {
+          skipped++;
+          continue;
+        }
+        const history = await db.getLastMessages(candidate.id, 10);
+        if (shouldSkipAutomatedFollowUp(history)) {
+          skipped++;
+          continue;
+        }
+        const contact = await db.getContact(candidate.organization_id, candidate.phone_number).catch(() => null);
+        if (contact?.opt_out) {
+          skipped++;
+          continue;
+        }
+        const discountTiers = personalOffers.safeTiers(candidate);
+        if (!discountTiers) {
+          console.warn(`[PersonalOffer] Sin margen suficiente para conversación ${candidate.id}`);
+          skipped++;
+          continue;
+        }
+        const validHours = Number(await db.getSetting(candidate.organization_id, 'personal_offer_valid_hours')) || personalOffers.DEFAULT_VALID_HOURS;
+        claimed = await db.claimPersonalOffer({
+          organizationId: candidate.organization_id,
+          conversationId: candidate.id,
+          inboundAnchor: candidate.last_inbound_at,
+          discountAmount: discountTiers.at(-1).amount,
+          discountTiers,
+          minTrays: personalOffers.DEFAULT_MIN_TRAYS,
+          unitCost: Number(candidate.unit_cost) || personalOffers.DEFAULT_UNIT_COST,
+          minMarginPct: Number(candidate.min_margin_pct) || personalOffers.DEFAULT_MIN_MARGIN_PCT,
+          expiresAt: personalOffers.expiryFrom(now, validHours),
+          priceReasonSource: candidate.price_reason_source,
+          priceReasonConfidence: candidate.price_reason_confidence,
+        });
+        if (!claimed) {
+          skipped++;
+          continue;
+        }
+
+        const whatsappConfig = await whatsappProvider.configForConversation(candidate.organization_id, candidate);
+        if (!whatsappConfig) throw new Error('Sin configuración de WhatsApp');
+        const message = personalOffers.buildMessage(claimed, candidate);
+        const providerResult = await whatsappProvider.sendTextMessage(candidate.phone_number, message, whatsappConfig);
+        const saved = await db.saveMessage({
+          conversationId: candidate.id,
+          whatsappMessageId: whatsappProvider.messageId(providerResult),
+          direction: 'outbound',
+          content: message,
+          sentBy: 'ai',
+          agentType: 'personal_offer_follow_up',
+        });
+        await db.updateConversationLastMessage(candidate.id, message, false);
+        await db.markPersonalOfferSent(candidate.organization_id, claimed.id, saved?.id || null);
+        sent++;
+
+        if (io) {
+          const updatedConversation = await db.getConversationById(candidate.id, candidate.organization_id);
+          io.to(`org_${candidate.organization_id}`).emit(`new_message_${candidate.organization_id}`, {
+            message: saved || { conversationId: candidate.id, direction: 'outbound', content: message, agentType: 'personal_offer_follow_up' },
+            conversation: updatedConversation,
+          });
+        }
+      } catch (error) {
+        if (claimed?.id) await db.markPersonalOfferFailed(candidate.organization_id, claimed.id, error.message).catch(() => null);
+        console.error(`[PersonalOffer] Error en conversación ${candidate.id}:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('[PersonalOffer] Error general:', error.message);
+  }
+  return { sent, skipped };
+}
+
 /**
  * Inicia el job de follow-up con intervalo de 30 minutos.
  * @param {object} io - instancia de Socket.IO (opcional)
@@ -265,7 +353,11 @@ function startFollowUpJob(io = null) {
   // Primera corrida después de 5 minutos del arranque (para no saturar el inicio)
   setTimeout(() => {
     runFollowUp(io);
-    setInterval(() => runFollowUp(io), INTERVAL_MS);
+    runPersonalOfferFollowUp(io);
+    setInterval(() => {
+      runFollowUp(io);
+      runPersonalOfferFollowUp(io);
+    }, INTERVAL_MS);
   }, 5 * 60 * 1000);
 }
 
@@ -280,4 +372,4 @@ function startHotClosingJob(io = null) {
   }, 30 * 1000);
 }
 
-module.exports = { startFollowUpJob, runFollowUp, startHotClosingJob, runHotClosingFollowUp };
+module.exports = { startFollowUpJob, runFollowUp, runPersonalOfferFollowUp, startHotClosingJob, runHotClosingFollowUp };

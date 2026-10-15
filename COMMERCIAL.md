@@ -29,6 +29,14 @@ Configurar `PLATFORM_ADMIN_USER_IDS` en el backend de Railway con los identifica
 - `null` significa sin límite. La cuenta base admite tres usuarios.
 - El medidor de turnos **no representa todo el consumo de IA**: análisis de imágenes, transcripciones, asistente y evaluaciones no se facturan por este contador. Los costes de WhatsApp, proveedores y otros servicios se deben contemplar en el acuerdo comercial.
 
+## Recuperación personal por precio
+
+El seguimiento diario de recuperación solo puede enviar una oferta dentro de la ventana de texto libre de WhatsApp, con Marketing contratado, baja comercial respetada y `personal_offers_enabled=true`. Una consulta de precio no basta: se exige una objeción de precio observada, una respuesta de pérdida que confirme precio o una clasificación manual equivalente. Los casos no confirmados permanecen visibles en estadísticas, sin descuento automático.
+
+La oferta vigente para Diez Ríos se limita a bandejas de huevos XL o L y usa una escala individual ligada al número: $1.000 por una bandeja, $4.000 por dos y $7.000 por tres o más. Se aplica una sola vez, con vencimiento persistido. Antes de ofrecerla y antes de valorizar el pedido se verifica el costo configurado por huevo y un margen mínimo; no se combina con otras promociones ni con la antigua escalera porcentual. Por seguridad, este flujo automatizado opera solo con pago contra entrega.
+
+Antes de activar la campaña se guarda un baseline con fecha, inventario inicial, distribución de motivos y configuración. El dashboard separa consultas de precio de objeciones confirmadas y muestra envíos, respuestas, pedidos ganados, conversión, ticket, descuento, venta recuperada, contribución estimada y avance de inventario XL/L. La contribución descuenta el costo del huevo configurado, pero no envase, despacho, comisiones ni impuestos.
+
 ## Migración y publicación
 
 Respaldar PostgreSQL antes de desplegar. `commercial.sql` crea tablas y conserva una sola vez el acceso de las organizaciones existentes como `legacy`, con los siete módulos y sin límites. Los registros posteriores no reciben este acceso. Los reinicios no repiten la concesión.
