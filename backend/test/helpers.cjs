@@ -22,6 +22,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './inbound-message-policy') return require(path.join(root, 'src/services/inbound-message-policy.js'));
       if (name === './delivery-coverage') return require(path.join(root, 'src/services/delivery-coverage.js'));
       if (name === '../services/conversation-attention') return require(path.join(root, 'src/services/conversation-attention.js'));
+      if (name === '../services/lead-qualification') return require(path.join(root, 'src/services/lead-qualification.js'));
       if (name === '../services/sales-closing' || name === './sales-closing') return require(path.join(root, 'src/services/sales-closing.js'));
       if (name === './purchase-feedback') return require(path.join(root, 'src/services/purchase-feedback.js'));
       if (name === './promotion-context') return require(path.join(root, 'src/services/promotion-context.js'));

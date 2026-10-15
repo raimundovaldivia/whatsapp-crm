@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 const { withAttentionState } = require('../services/conversation-attention');
 const salesClosing = require('../services/sales-closing');
+const { qualifyLead } = require('../services/lead-qualification');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -937,6 +938,93 @@ async function claimHumanPendingNotification(conversationId, cooldownMinutes = 5
   return !!row;
 }
 
+async function calculateLeadQualification(conversationId, orgId = null) {
+  const scoped = orgId === null || orgId === undefined
+    ? await queryOne(
+      `SELECT c.*,
+          EXISTS (
+            SELECT 1 FROM orders o
+             WHERE o.conversation_id = c.id
+               AND o.organization_id = c.organization_id
+               AND o.status <> 'cancelled'
+               AND o.created_at > NOW() - INTERVAL '7 days'
+               AND o.created_at >= COALESCE(c.last_inbound_at, c.last_message_at, c.created_at) - INTERVAL '24 hours'
+          ) AS has_order
+         FROM conversations c
+        WHERE c.id = $1`,
+      [conversationId]
+    )
+    : await queryOne(
+      `SELECT c.*,
+          EXISTS (
+            SELECT 1 FROM orders o
+             WHERE o.conversation_id = c.id
+               AND o.organization_id = c.organization_id
+               AND o.status <> 'cancelled'
+               AND o.created_at > NOW() - INTERVAL '7 days'
+               AND o.created_at >= COALESCE(c.last_inbound_at, c.last_message_at, c.created_at) - INTERVAL '24 hours'
+          ) AS has_order
+         FROM conversations c
+        WHERE c.id = $1 AND c.organization_id = $2`,
+      [conversationId, orgId]
+    );
+  if (!scoped) return null;
+
+  const messages = await query(
+    `SELECT recent.direction, recent.content
+       FROM (
+         SELECT m.direction, m.content, m.created_at
+           FROM messages m
+           JOIN conversations c ON c.id = m.conversation_id
+          WHERE m.conversation_id = $1 AND c.organization_id = $2
+          ORDER BY m.created_at DESC
+          LIMIT 30
+       ) recent
+      ORDER BY recent.created_at ASC`,
+    [scoped.id, scoped.organization_id]
+  );
+  const qualification = qualifyLead({
+    messages,
+    pipelineState: scoped.pipeline_state,
+    orderDraft: scoped.order_draft,
+    hasOrder: Boolean(scoped.has_order),
+  });
+  return { conversation: scoped, qualification };
+}
+
+async function applyLeadQualification(conversationId, orgId, qualification) {
+  return queryOne(
+    `UPDATE conversations
+        SET lead_temperature = $1,
+            lead_score = $2,
+            qualification_reasons = $3,
+            lead_signals = $4,
+            qualified_at = NOW()
+      WHERE id = $5 AND organization_id = $6
+      RETURNING id, organization_id, lead_temperature, lead_score,
+                qualification_reasons, lead_signals, qualified_at`,
+    [
+      qualification.temperature,
+      qualification.score,
+      JSON.stringify(qualification.reasons),
+      JSON.stringify({ ...qualification.signals, veryHotGate: qualification.veryHotGate }),
+      conversationId,
+      orgId,
+    ]
+  );
+}
+
+async function refreshLeadQualification(conversationId, orgId = null, { skipUnqualified = false } = {}) {
+  const calculated = await calculateLeadQualification(conversationId, orgId);
+  if (!calculated) return null;
+  if (skipUnqualified && calculated.conversation.lead_temperature === null) return null;
+  return applyLeadQualification(
+    calculated.conversation.id,
+    calculated.conversation.organization_id,
+    calculated.qualification
+  );
+}
+
 async function updatePipelineState(id, state, orderDraft = null) {
   const lifecycleSql = `,
     sales_started_at = CASE
@@ -978,6 +1066,7 @@ async function updatePipelineState(id, state, orderDraft = null) {
       [state, id]
     );
   }
+  await refreshLeadQualification(id, null, { skipUnqualified: true });
 }
 
 async function getOrderDraft(id) {
@@ -1806,6 +1895,7 @@ async function createOrder({ conversationId, organizationId, items, customerName
         WHERE id = $1 AND organization_id = $2`,
       [conversationId, organizationId]
     );
+    await refreshLeadQualification(conversationId, organizationId, { skipUnqualified: true });
   }
   // Actualizar last_order_at en contacts para que el broadcast lo excluya correctamente
   if (customerPhone) {
@@ -2771,7 +2861,7 @@ module.exports = {
   // Conversations
   upsertConversation, upsertSocialConversation, getAllConversations, getConversationById, setConversationPinned, setCustomerNote,
   updateConversationLastMessage, markConversationAsRead, setAgentMode, claimHumanPendingNotification,
-  updatePipelineState, getOrderDraft, claimOrderCreation,
+  updatePipelineState, calculateLeadQualification, applyLeadQualification, refreshLeadQualification, getOrderDraft, claimOrderCreation,
   // Scheduled orders
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,

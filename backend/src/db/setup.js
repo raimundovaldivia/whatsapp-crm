@@ -826,6 +826,72 @@ async function setupDatabase() {
       -- Migración: bandera para excluir manualmente de Hot Leads
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
 
+      -- Calificación comercial separada del estado operativo del bot. La
+      -- columna nullable conserva el baseline de conversaciones antiguas.
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_temperature TEXT;
+      ALTER TABLE conversations ALTER COLUMN lead_temperature SET DEFAULT 'exploring';
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_score INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS qualification_reasons JSONB NOT NULL DEFAULT '[]';
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_signals JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS qualified_at TIMESTAMPTZ;
+      DO $$
+      BEGIN
+        ALTER TABLE conversations ADD CONSTRAINT conversations_lead_temperature_check
+          CHECK(lead_temperature IS NULL OR lead_temperature IN
+            ('exploring','interested','hot','very_hot','future','won','discarded')) NOT VALID;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+      DO $$
+      BEGIN
+        ALTER TABLE conversations ADD CONSTRAINT conversations_lead_score_check
+          CHECK(lead_score BETWEEN 0 AND 100) NOT VALID;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+      CREATE INDEX IF NOT EXISTS idx_conversations_lead_temperature
+        ON conversations(organization_id, lead_temperature, last_message_at DESC);
+
+      -- Una evaluación masiva guarda estado anterior y propuesta antes de
+      -- permitir cualquier aplicación de resultados.
+      CREATE TABLE IF NOT EXISTS lead_qualification_runs (
+        run_id TEXT PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        requested_limit INTEGER NOT NULL CHECK(requested_limit BETWEEN 1 AND 500),
+        conversation_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','failed')),
+        applied BOOLEAN NOT NULL DEFAULT FALSE,
+        summary JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ
+      );
+      CREATE TABLE IF NOT EXISTS lead_qualification_audits (
+        id BIGSERIAL PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES lead_qualification_runs(run_id) ON DELETE CASCADE,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        before_pipeline_state TEXT,
+        before_lead_temperature TEXT,
+        before_lead_score INTEGER,
+        before_hot_excluded BOOLEAN NOT NULL DEFAULT FALSE,
+        before_legacy_hot BOOLEAN NOT NULL DEFAULT FALSE,
+        before_qualification_reasons JSONB NOT NULL DEFAULT '[]',
+        before_lead_signals JSONB NOT NULL DEFAULT '{}',
+        before_updated_at TIMESTAMPTZ,
+        proposed_temperature TEXT NOT NULL,
+        proposed_score INTEGER NOT NULL,
+        proposed_reasons JSONB NOT NULL DEFAULT '[]',
+        proposed_signals JSONB NOT NULL DEFAULT '{}',
+        applied BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, run_id, conversation_id)
+      );
+      ALTER TABLE lead_qualification_audits
+        ADD COLUMN IF NOT EXISTS before_updated_at TIMESTAMPTZ;
+      CREATE INDEX IF NOT EXISTS idx_lead_qualification_runs_org
+        ON lead_qualification_runs(organization_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_lead_qualification_audits_run
+        ON lead_qualification_audits(organization_id, run_id, proposed_temperature);
+
       -- Cierre comercial asistido. La reserva se toma al comenzar realmente
       -- un pedido; no depende de que el modelo recuerde la hora del primer mensaje.
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS sales_started_at TIMESTAMPTZ;

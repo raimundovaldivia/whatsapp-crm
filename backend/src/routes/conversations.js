@@ -439,6 +439,26 @@ router.patch('/:id/pipeline-state', async (req, res) => {
   }
 });
 
+router.patch('/:id/hot-lead-exclusion', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  try {
+    const conversationId = Number(req.params.id);
+    if (!Number.isInteger(conversationId) || conversationId < 1 || typeof req.body?.excluded !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'Solicitud de exclusión inválida' });
+    }
+    const { rows } = await getPool().query(
+      `UPDATE conversations
+          SET hot_lead_excluded = $1, updated_at = NOW()
+        WHERE id = $2 AND organization_id = $3
+        RETURNING id, hot_lead_excluded`,
+      [req.body.excluded, conversationId, req.orgId]
+    );
+    if (!rows[0]) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    res.json({ success: true, excluded: rows[0].hot_lead_excluded });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 /**
  * PATCH /api/conversations/:id/client-type
  * Marcar manualmente un contacto como "empresa" o "personal"
@@ -1001,80 +1021,181 @@ router.post('/trigger-follow-up', requireRole('owner', 'admin', 'supervisor'), a
 
 /**
  * POST /api/conversations/scan-hot-leads
- * Analiza conversaciones con actividad en las últimas 48h usando IA (Haiku)
- * y actualiza su pipeline_state a 'interested' si detecta intención de compra hoy.
+ * Guarda el estado vigente y una propuesta explicable sin modificar ninguna
+ * conversación. La aplicación queda en un paso separado y auditable.
  */
 router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
+  const runId = crypto.randomUUID();
   try {
-    // Conversaciones con actividad en últimas 48h que no estén en 'done' ni excluidas manualmente
+    const requestedLimit = req.body?.limit === undefined ? 200 : Number(req.body.limit);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 500) {
+      return res.status(400).json({ success: false, error: 'limit debe ser un entero entre 1 y 500' });
+    }
+    await pool.query(
+      `INSERT INTO lead_qualification_runs
+        (run_id, organization_id, created_by, requested_limit)
+       VALUES ($1, $2, $3, $4)`,
+      [runId, req.orgId, req.userId || null, requestedLimit]
+    );
     const { rows: convs } = await pool.query(
-      `SELECT c.id, c.contact_name, c.phone_number, c.pipeline_state
+      `SELECT c.id
        FROM conversations c
        WHERE c.organization_id = $1
-         AND c.agent_mode = 'ai'
-         AND c.last_message_at > NOW() - INTERVAL '48 hours'
-         AND c.pipeline_state NOT IN ('done', 'interested', 'collecting_order', 'future_interest', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out', 'template_sent')
-         AND (c.hot_lead_excluded IS NULL OR c.hot_lead_excluded = FALSE)
-         AND NOT EXISTS (
-           SELECT 1 FROM contacts ct
-            WHERE ct.organization_id = c.organization_id
-              AND RIGHT(regexp_replace(COALESCE(ct.phone, ''), '[^0-9]', '', 'g'), 9)
-                = RIGHT(regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g'), 9)
-              AND ct.opt_out = TRUE
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM orders o
-            WHERE o.organization_id = c.organization_id
-              AND o.conversation_id = c.id
-              AND COALESCE(o.status, '') <> 'cancelled'
-         )
+         AND c.last_message_at > NOW() - INTERVAL '30 days'
        ORDER BY c.last_message_at DESC
-       LIMIT 60`,
-      [req.orgId]
+       LIMIT $2`,
+      [req.orgId, requestedLimit]
     );
 
-    let updated = 0;
+    const summary = {
+      legacyHot: 0,
+      exploring: 0, interested: 0, hot: 0, very_hot: 0,
+      future: 0, won: 0, discarded: 0,
+    };
     for (const conv of convs) {
-      // Obtener los últimos 10 mensajes
-      const { rows: msgs } = await pool.query(
-        `SELECT direction, content FROM messages
-         WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 10`,
-        [conv.id]
+      const calculated = await db.calculateLeadQualification(conv.id, req.orgId);
+      if (!calculated) continue;
+      const { conversation: before, qualification: proposed } = calculated;
+      const legacyHot = ['interested', 'collecting_order'].includes(before.pipeline_state)
+        && !before.hot_lead_excluded;
+      if (legacyHot) summary.legacyHot++;
+      summary[proposed.temperature] = (summary[proposed.temperature] || 0) + 1;
+      await pool.query(
+        `INSERT INTO lead_qualification_audits
+          (run_id, organization_id, conversation_id,
+           before_pipeline_state, before_lead_temperature, before_lead_score,
+           before_hot_excluded, before_legacy_hot, before_qualification_reasons,
+           before_lead_signals, before_updated_at,
+           proposed_temperature, proposed_score, proposed_reasons, proposed_signals)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [
+          runId, req.orgId, before.id,
+          before.pipeline_state || null, before.lead_temperature || null, Number(before.lead_score || 0),
+          Boolean(before.hot_lead_excluded), legacyHot,
+          JSON.stringify(before.qualification_reasons || []), JSON.stringify(before.lead_signals || {}),
+          before.updated_at || null,
+          proposed.temperature, proposed.score, JSON.stringify(proposed.reasons),
+          JSON.stringify({ ...proposed.signals, veryHotGate: proposed.veryHotGate }),
+        ]
       );
-      if (!msgs.length) continue;
-
-      const history = msgs.reverse().map(m =>
-        `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${(m.content || '').slice(0, 200)}`
-      ).join('\n');
-
-      const response = await aiClient.messages.create({
-        model: modelFor('fast'),
-        max_tokens: 10,
-        system: 'Eres un clasificador de intención de compra. Responde SOLO con "si" o "no".',
-        messages: [{
-          role: 'user',
-          content: `¿El cliente en esta conversación muestra intención clara de comprar HOY o muy pronto (hace preguntas de precio, disponibilidad, despacho, o dice que lo quiere)?\n\n${history}`,
-        }],
-      });
-
-      const answer = responseText(response).toLowerCase();
-      if (answer.startsWith('si') || answer === 'sí') {
-        await pool.query(
-          `UPDATE conversations SET pipeline_state = 'interested', updated_at = NOW() WHERE id = $1`,
-          [conv.id]
-        );
-        updated++;
-      }
-
-      // Rate limit: pequeña pausa entre llamadas
-      await new Promise(r => setTimeout(r, 200));
     }
 
-    res.json({ success: true, scanned: convs.length, hotLeadsFound: updated });
+    await pool.query(
+      `UPDATE lead_qualification_runs
+          SET conversation_count = $1, status = 'completed', summary = $2,
+              completed_at = NOW()
+        WHERE run_id = $3 AND organization_id = $4`,
+      [convs.length, JSON.stringify(summary), runId, req.orgId]
+    );
+
+    res.json({
+      success: true,
+      runId,
+      applied: false,
+      scanned: convs.length,
+      hotLeadsFound: summary.hot + summary.very_hot,
+      veryHotLeadsFound: summary.very_hot,
+      summary,
+    });
   } catch (err) {
+    await pool.query(
+      `UPDATE lead_qualification_runs
+          SET status = 'failed', completed_at = NOW()
+        WHERE run_id = $1 AND organization_id = $2`,
+      [runId, req.orgId]
+    ).catch(() => {});
     console.error('[scan-hot-leads]', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/lead-qualification-runs/:runId', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rows: runs } = await pool.query(
+      `SELECT * FROM lead_qualification_runs
+        WHERE run_id = $1 AND organization_id = $2`,
+      [req.params.runId, req.orgId]
+    );
+    if (!runs[0]) return res.status(404).json({ success: false, error: 'Evaluación no encontrada' });
+    const { rows: conversations } = await pool.query(
+      `SELECT a.*, c.contact_name, c.phone_number
+         FROM lead_qualification_audits a
+         JOIN conversations c
+           ON c.id = a.conversation_id AND c.organization_id = a.organization_id
+        WHERE a.run_id = $1 AND a.organization_id = $2
+        ORDER BY a.proposed_score DESC, a.conversation_id`,
+      [req.params.runId, req.orgId]
+    );
+    res.json({ success: true, run: runs[0], conversations });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/lead-qualification-runs/:runId/apply', requireRole('owner', 'admin'), async (req, res) => {
+  const pool = getPool();
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const { rows: runs } = await client.query(
+      `SELECT * FROM lead_qualification_runs
+        WHERE run_id = $1 AND organization_id = $2
+        FOR UPDATE`,
+      [req.params.runId, req.orgId]
+    );
+    const run = runs[0];
+    if (!run) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Evaluación no encontrada' });
+    }
+    if (run.status !== 'completed' || run.applied) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'La evaluación no está disponible para aplicar' });
+    }
+    const { rows: updated } = await client.query(
+      `UPDATE conversations c
+          SET lead_temperature = a.proposed_temperature,
+              lead_score = a.proposed_score,
+              qualification_reasons = a.proposed_reasons,
+              lead_signals = a.proposed_signals,
+              qualified_at = NOW()
+         FROM lead_qualification_audits a
+        WHERE a.run_id = $1
+          AND a.organization_id = $2
+          AND c.id = a.conversation_id
+          AND c.organization_id = a.organization_id
+          AND c.updated_at IS NOT DISTINCT FROM a.before_updated_at
+        RETURNING c.id`,
+      [req.params.runId, req.orgId]
+    );
+    const updatedIds = updated.map(row => row.id);
+    if (updatedIds.length) {
+      await client.query(
+        `UPDATE lead_qualification_audits
+            SET applied = TRUE
+          WHERE run_id = $1 AND organization_id = $2
+            AND conversation_id = ANY($3::int[])`,
+        [req.params.runId, req.orgId, updatedIds]
+      );
+    }
+    const skipped = Number(run.conversation_count || 0) - updatedIds.length;
+    await client.query(
+      `UPDATE lead_qualification_runs
+          SET applied = TRUE,
+              summary = summary || $1::jsonb
+        WHERE run_id = $2 AND organization_id = $3`,
+      [JSON.stringify({ appliedCount: updatedIds.length, skippedChanged: skipped }), req.params.runId, req.orgId]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, runId: req.params.runId, applied: updatedIds.length, skippedChanged: skipped });
+  } catch (err) {
+    await client?.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client?.release();
   }
 });
 
