@@ -185,7 +185,8 @@ setupDatabase().then(() => {
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
     require('./services/webhook-inbox').startWebhookWorker();
     require('./services/attribution-backfill').backfillWhatsappAttributions()
-      .catch(error => console.warn('[Attribution] No se pudo recuperar el histórico:', error.message));
+      .catch(error => console.warn('[Attribution] No se pudo recuperar el histórico:', error.message))
+      .finally(() => require('./services/meta-purchase-sync').startMetaPurchaseSyncJob());
     startFollowUpJob(io);
     startHotClosingJob(io);
     startScheduledFollowUpJob(io);
@@ -212,6 +213,7 @@ async function shutdown() {
   server.close();
   io.disconnectSockets(true);
   try {
+    require('./services/meta-purchase-sync').stopMetaPurchaseSyncJob();
     await require('./services/webhook-inbox').stopWebhookWorker();
     await require('./db/database').getPool().end();
     process.exit(0);

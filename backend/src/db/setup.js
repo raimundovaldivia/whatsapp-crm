@@ -1671,8 +1671,44 @@ async function setupDatabase() {
       );
       ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS auto_reply_messages BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS auto_reply_comments BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS purchase_sync_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS conversion_dataset_id TEXT;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS purchase_audience_id TEXT;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS purchase_sync_since TIMESTAMPTZ;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS customer_audience_terms_accepted_at TIMESTAMPTZ;
       CREATE INDEX IF NOT EXISTS idx_meta_connections_page ON meta_connections(page_id);
       CREATE INDEX IF NOT EXISTS idx_meta_connections_ig ON meta_connections(instagram_account_id);
+
+      CREATE TABLE IF NOT EXISTS meta_purchase_deliveries (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+        source TEXT NOT NULL CHECK(source IN ('bot','shopify')),
+        order_key TEXT NOT NULL,
+        destination TEXT NOT NULL CHECK(destination IN ('purchase','audience','audience_remove')),
+        event_id TEXT NOT NULL,
+        ctwa_clid TEXT,
+        phone_hash TEXT,
+        value_amount NUMERIC(14,2) NOT NULL CHECK(value_amount >= 0),
+        currency TEXT NOT NULL DEFAULT 'CLP',
+        event_time TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','processing','sent','failed','skipped')),
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        claimed_at TIMESTAMPTZ,
+        next_attempt_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        last_error TEXT,
+        response_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, source, order_key, destination)
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_purchase_deliveries_pending
+        ON meta_purchase_deliveries(status, next_attempt_at, created_at)
+        WHERE status IN ('pending','failed');
+      CREATE INDEX IF NOT EXISTS idx_meta_purchase_deliveries_org
+        ON meta_purchase_deliveries(organization_id, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS meta_threads (
         id BIGSERIAL PRIMARY KEY,

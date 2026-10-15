@@ -17,7 +17,7 @@ El CRM incluye un módulo **Facebook e Instagram** con cuatro capacidades:
    `https://whatsapp-crm-api-production-f804.up.railway.app/meta-webhook`
 4. Usar el mismo valor de `META_WEBHOOK_VERIFY_TOKEN` como token de verificación.
 5. Suscribir la página a `messages`, `messaging_postbacks` y `feed`. Para Instagram, suscribir la cuenta profesional a `messages`, `messaging_postbacks` y `comments`.
-6. Solicitar acceso avanzado a los permisos usados por la app: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `pages_messaging`, `pages_manage_posts`, `pages_manage_engagement`, `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `instagram_content_publish`, `ads_read`, `ads_management` y `business_management`.
+6. Solicitar acceso avanzado a los permisos usados por la app: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `pages_messaging`, `pages_manage_posts`, `pages_manage_engagement`, `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `instagram_content_publish`, `ads_read`, `ads_management`, `business_management`, `whatsapp_business_management`, `whatsapp_business_messaging` y `whatsapp_business_manage_events`.
 
 ## Variables del backend
 
@@ -63,3 +63,18 @@ Los enlaces usan `CRM_PUBLIC_URL` y redirigen desde `/r/:token`; esta variable d
 ## Recuperación de pedidos durante una incidencia
 
 Cuando un canal queda inhabilitado y se pierde la referencia Click-to-WhatsApp, un owner o admin puede recuperar los pedidos manuales desde **Campañas a WhatsApp → Compras realizadas**. Debe seleccionar el canal y un período de hasta siete días; opcionalmente puede limitar el proceso a primeras compras. La recuperación solo considera pedidos no cancelados pertenecientes a ese canal y organización, es idempotente y deja la atribución marcada como `recuperada`, distinta de una atribución `exacta` entregada por Meta.
+
+## Compradores reales y Conversions API
+
+En **Facebook e Instagram → Conexión → Compradores reales para Meta Ads**, un owner o admin configura el dataset de conversiones y una audiencia de compradores. La función comienza desactivada y exige reconectar Meta con `whatsapp_business_manage_events`, seleccionar una cuenta de WhatsApp Business y confirmar que la organización tiene autorización para utilizar sus teléfonos en una audiencia de clientes.
+
+El sincronizador revisa únicamente pedidos pagados de la organización:
+
+- si conserva el `ctwa_clid` del anuncio, envía `Purchase` con `action_source=business_messaging`, canal `whatsapp`, valor real y moneda `CLP`;
+- si el pedido tiene un teléfono válido, normaliza el número y envía solo su hash SHA-256 a la audiencia configurada;
+- los contactos con baja activa no se agregan y, si la baja ocurre después, el sincronizador retira automáticamente su hash de la audiencia;
+- los eventos `Purchase` se limitan a compras recientes, mientras el histórico seleccionado alimenta la audiencia de compradores;
+- cada combinación pedido/destino se registra antes del envío y es idempotente, con reintentos acotados y sin guardar teléfonos en texto plano en la cola;
+- el aislamiento se aplica siempre por `organization_id` y un pedido Shopify enlazado a un pedido del CRM no se sincroniza dos veces.
+
+El endpoint manual **Sincronizar ahora** usa la misma cola durable. Las verificaciones locales deben inyectar un cliente Meta simulado; no se debe utilizar el dataset ni la audiencia reales durante pruebas rutinarias.

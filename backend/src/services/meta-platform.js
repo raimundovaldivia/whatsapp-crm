@@ -54,6 +54,14 @@ async function graphPost(path, token, data = {}) {
   return response.data;
 }
 
+async function graphDelete(path, token, data = {}) {
+  const response = await axios.delete(`${GRAPH_URL}/${String(path).replace(/^\//, '')}`, {
+    data: { ...data, access_token: token, appsecret_proof: appSecretProof(token) },
+    timeout: 30000,
+  });
+  return response.data;
+}
+
 function graphError(error) {
   const detail = error.response?.data?.error;
   if (!detail) return error.message;
@@ -68,5 +76,6 @@ module.exports = {
   decryptToken,
   graphGet,
   graphPost,
+  graphDelete,
   graphError,
 };

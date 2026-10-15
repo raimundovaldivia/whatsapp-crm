@@ -134,6 +134,7 @@ function ConnectionTab({ status, connect, reload, colors, setError }) {
         </div>
         <button onClick={saveAutomation} disabled={saving} style={{ ...primary(colors), marginTop: 14 }}>{saving ? 'Guardando…' : 'Guardar automatización'}</button>
       </Card>
+      <PurchaseSyncCard colors={colors} setError={setError} />
       <Card colors={colors} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div><strong style={{ color: colors.textPrimary, fontSize: 13 }}>Webhook de Meta</strong><div style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>Configura en Meta: <code>/meta-webhook</code> y suscribe messages, messaging_postbacks, feed y comments.</div></div>
         <button onClick={disconnect} style={{ ...secondary(colors), color: '#f87171' }}><Unplug size={14} /> Desconectar</button>
@@ -144,6 +145,72 @@ function ConnectionTab({ status, connect, reload, colors, setError }) {
 
 function Asset({ colors, icon, title, value }) {
   return <Card colors={colors}><div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>{icon}<div><div style={{ color: colors.textMuted, fontSize: 11 }}>{title}</div><strong style={{ color: colors.textPrimary, fontSize: 13 }}>{value}</strong></div></div></Card>;
+}
+
+function PurchaseSyncCard({ colors, setError }) {
+  const [state, setState] = useState(null);
+  const [datasetId, setDatasetId] = useState('');
+  const [audienceId, setAudienceId] = useState('');
+  const [enabled, setEnabled] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [lookbackDays, setLookbackDays] = useState(90);
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState('');
+  const load = async () => {
+    try {
+      const next = await metaAPI.purchaseSyncStatus();
+      setState(next);
+      setDatasetId(next.config?.datasetId || '');
+      setAudienceId(next.config?.audienceId || '');
+      setEnabled(!!next.config?.enabled);
+      setAcceptedTerms(!!next.config?.audienceTermsAccepted);
+    } catch (error) { setError(error.response?.data?.error || error.message); }
+  };
+  useEffect(() => { load(); }, []);
+  const save = async () => {
+    setSaving(true); setMessage(''); setError('');
+    try {
+      await metaAPI.savePurchaseSync({
+        enabled, datasetId, audienceId, lookbackDays,
+        acceptCustomerAudienceTerms: acceptedTerms,
+      });
+      await load();
+      setMessage(enabled ? 'Sincronización activada.' : 'Sincronización desactivada.');
+    } catch (error) { setError(error.response?.data?.error || error.message); }
+    finally { setSaving(false); }
+  };
+  const run = async () => {
+    setRunning(true); setMessage(''); setError('');
+    try {
+      const result = await metaAPI.runPurchaseSync();
+      await load();
+      setMessage(`Proceso terminado: ${result.result.sent} envío(s), ${result.result.failed} fallido(s).`);
+    } catch (error) { setError(error.response?.data?.error || error.message); }
+    finally { setRunning(false); }
+  };
+  const counts = new Map((state?.stats || []).map(item => [`${item.destination}:${item.status}`, Number(item.count || 0)]));
+  return <Card colors={colors}>
+    <strong style={{ color: colors.textPrimary, fontSize: 13 }}>Compradores reales para Meta Ads</strong>
+    <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>Los pagos confirmados con atribución envían Purchase. Todos los compradores con teléfono válido se agregan cifrados a la audiencia para exclusiones y públicos similares.</div>
+    {state?.config?.needsReconnect && <div style={{ marginTop: 10, color: '#f59e0b', fontSize: 12 }}>Reconecta Meta para autorizar los eventos de WhatsApp antes de activar esta función.</div>}
+    {!state?.config?.wabaConnected && <div style={{ marginTop: 10, color: '#f59e0b', fontSize: 12 }}>Primero activa la cuenta de WhatsApp Business en esta conexión.</div>}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 10, marginTop: 14 }}>
+      <label style={label(colors)}>Dataset de conversiones<input value={datasetId} onChange={event => setDatasetId(event.target.value.replace(/\D/g, ''))} placeholder="ID numérico" style={{ ...input(colors), marginTop: 5 }} /></label>
+      <label style={label(colors)}>Audiencia de compradores<input value={audienceId} onChange={event => setAudienceId(event.target.value.replace(/\D/g, ''))} placeholder="ID numérico" style={{ ...input(colors), marginTop: 5 }} /></label>
+      <label style={label(colors)}>Histórico inicial<select value={lookbackDays} onChange={event => setLookbackDays(Number(event.target.value))} style={{ ...input(colors), marginTop: 5 }}><option value={30}>30 días</option><option value={90}>90 días</option><option value={180}>180 días</option><option value={365}>365 días</option></select></label>
+    </div>
+    <div style={{ display: 'grid', gap: 9, marginTop: 14 }}>
+      <label style={{ ...label(colors), display: 'flex', alignItems: 'flex-start', gap: 8 }}><input type="checkbox" checked={acceptedTerms} disabled={state?.config?.audienceTermsAccepted} onChange={event => setAcceptedTerms(event.target.checked)} /><span>Confirmo que la organización tiene autorización para utilizar estos teléfonos en una audiencia de clientes de Meta.</span></label>
+      <label style={{ ...label(colors), display: 'flex', alignItems: 'center', gap: 8 }}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />Activar sincronización automática</label>
+    </div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
+      <button onClick={save} disabled={saving} style={primary(colors)}>{saving ? 'Guardando…' : 'Guardar configuración'}</button>
+      <button onClick={run} disabled={running || !state?.config?.enabled} style={secondary(colors)}><RefreshCw size={14} /> {running ? 'Sincronizando…' : 'Sincronizar ahora'}</button>
+    </div>
+    <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 12 }}>Purchase enviados: {counts.get('purchase:sent') || 0} · Teléfonos agregados: {counts.get('audience:sent') || 0} · Bajas retiradas: {counts.get('audience_remove:sent') || 0} · Pendientes/fallidos: {(counts.get('purchase:pending') || 0) + (counts.get('audience:pending') || 0) + (counts.get('audience_remove:pending') || 0) + (counts.get('purchase:failed') || 0) + (counts.get('audience:failed') || 0) + (counts.get('audience_remove:failed') || 0)}</div>
+    {message && <div style={{ color: colors.green, fontSize: 12, marginTop: 8 }}>{message}</div>}
+  </Card>;
 }
 
 function MessagesTab({ connected, connect, colors }) {
