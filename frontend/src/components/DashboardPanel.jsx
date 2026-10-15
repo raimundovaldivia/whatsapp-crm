@@ -429,7 +429,7 @@ export default function DashboardPanel({ onChangeView }) {
                         <div key={item.size} style={{ marginBottom: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: colors.textSecondary, marginBottom: '4px' }}>
                             <strong style={{ color: colors.textPrimary }}>{item.size}</strong>
-                            <span>{item.sold} de {item.target} bandejas · faltan {item.remaining}</span>
+                            <span>{item.sold} de {item.target} huevos · faltan {item.remaining}</span>
                           </div>
                           <div style={{ height: '6px', borderRadius: '999px', backgroundColor: colors.border, overflow: 'hidden' }}>
                             <div style={{ height: '100%', width: `${pct}%`, backgroundColor: colors.green, borderRadius: '999px' }} />

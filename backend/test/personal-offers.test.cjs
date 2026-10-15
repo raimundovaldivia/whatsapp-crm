@@ -18,6 +18,12 @@ const activeOffer = {
 test('la escala conserva el margen mínimo con el precio más bajo del catálogo', () => {
   assert.deepEqual(offers.safeTiers({ min_tray_price: 10990, unit_cost: 150, min_margin_pct: 40 }), tiers);
   assert.equal(offers.safeTiers({ min_tray_price: 6000, unit_cost: 150, min_margin_pct: 40 }), null);
+  const mixedPacks = [
+    { title: 'Huevos XL blancos · Bandeja de 20', price: 8490 },
+    { title: 'Huevos L blancos · Bandeja de 30', price: 9490 },
+  ];
+  assert.deepEqual(offers.safeTiers({ eligible_products: mixedPacks, unit_cost: 150, min_margin_pct: 35 }), tiers);
+  assert.equal(offers.safeTiers({ eligible_products: mixedPacks, unit_cost: 150, min_margin_pct: 40 }), null);
 });
 
 test('el mensaje personal muestra toda la escala, asociación al número y vencimiento', () => {
@@ -40,6 +46,10 @@ test('aplica $1.000, $4.000 y $7.000 según bandejas sin bajar del margen', () =
     assert.equal(discounted.fixedDiscountAmount, expected);
     assert.equal(discounted.total, quantity * 10990 - expected);
   }
+  const pack20 = [{ id: 2, title: 'Huevos XL blancos · Bandeja de 20', price: 8490 }];
+  const priced20 = pricing.priceItems([{ product_name: pack20[0].title, quantity: 3 }], pack20);
+  assert.equal(offers.eligibleEggQuantity(priced20.items), 60);
+  assert.equal(offers.applicableDiscount(priced20, activeOffer, new Date('2026-10-16T12:00:00Z')), 7000);
 });
 
 test('no aplica la promoción a otros productos ni después del vencimiento', () => {
@@ -49,6 +59,15 @@ test('no aplica la promoción a otros productos ni después del vencimiento', ()
   assert.equal(offers.applicableDiscount(medium, activeOffer, new Date('2026-10-16T12:00:00Z')), 0);
   const eggs = { items: [{ name: 'Huevos XL · Bandeja de 30', quantity: 2, price: 10990 }], subtotal: 21980, discountAmount: 0 };
   assert.equal(offers.applicableDiscount(eggs, activeOffer, new Date('2026-10-21T12:00:00Z')), 0);
+  const mixedBasket = {
+    items: [
+      { name: 'Huevos XL · Bandeja de 30', quantity: 3, price: 6000 },
+      { name: 'Queso de cabra', quantity: 10, price: 15000 },
+    ],
+    subtotal: 168000,
+    discountAmount: 0,
+  };
+  assert.equal(offers.applicableDiscount(mixedBasket, activeOffer, new Date('2026-10-16T12:00:00Z')), 0);
 });
 
 test('el seguimiento reclama, envía y audita una oferta confirmada por precio', async () => {

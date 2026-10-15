@@ -904,7 +904,7 @@ async function setupDatabase() {
         discount_tiers JSONB NOT NULL DEFAULT '[{"minTrays":1,"amount":1000},{"minTrays":2,"amount":4000},{"minTrays":3,"amount":7000}]'::jsonb,
         min_trays INTEGER NOT NULL DEFAULT 1 CHECK(min_trays >= 1),
         unit_cost INTEGER NOT NULL DEFAULT 150 CHECK(unit_cost >= 0),
-        min_margin_pct NUMERIC(5,2) NOT NULL DEFAULT 40 CHECK(min_margin_pct BETWEEN 0 AND 100),
+        min_margin_pct NUMERIC(5,2) NOT NULL DEFAULT 35 CHECK(min_margin_pct BETWEEN 0 AND 100),
         price_reason_source TEXT NOT NULL CHECK(price_reason_source IN ('manual','observed')),
         price_reason_confidence NUMERIC(4,3) NOT NULL CHECK(price_reason_confidence BETWEEN 0 AND 1),
         status TEXT NOT NULL DEFAULT 'reserved' CHECK(status IN ('reserved','sent','redeemed','expired','failed')),
@@ -924,6 +924,7 @@ async function setupDatabase() {
         ON personal_offers(organization_id, status, expires_at);
       CREATE INDEX IF NOT EXISTS idx_personal_offers_conversation
         ON personal_offers(organization_id, conversation_id, created_at DESC);
+      ALTER TABLE personal_offers ALTER COLUMN min_margin_pct SET DEFAULT 35;
 
       CREATE TABLE IF NOT EXISTS personal_offer_baselines (
         id BIGSERIAL PRIMARY KEY,

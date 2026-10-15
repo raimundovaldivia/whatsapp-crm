@@ -291,9 +291,21 @@ router.get('/personal-offers', async (req, res) => {
                COALESCE(SUM(NULLIF(o.total_price, '')::numeric) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS recovered_revenue,
                COALESCE(AVG(NULLIF(o.total_price, '')::numeric) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS average_ticket,
                COALESCE(SUM(po.redeemed_trays) FILTER (WHERE po.status = 'redeemed'), 0)::int AS trays,
-               COALESCE(SUM((po.redeemed_trays * 30 * po.unit_cost)) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS estimated_egg_cost
+               COALESCE(SUM(recovered.eggs) FILTER (WHERE po.status = 'redeemed'), 0)::int AS eggs,
+               COALESCE(SUM((recovered.eggs * po.unit_cost)) FILTER (WHERE po.status = 'redeemed'), 0)::numeric AS estimated_egg_cost
           FROM personal_offers po
           LEFT JOIN orders o ON o.id = po.redeemed_order_id AND o.organization_id = po.organization_id
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(SUM(
+              COALESCE((item->>'quantity')::int, 0) *
+              COALESCE(NULLIF(SUBSTRING(COALESCE(item->>'name', item->>'title', item->>'product_name', '')
+                FROM '[Bb]andeja[[:space:]]+de[[:space:]]+([0-9]+)'), '')::int, 30)
+            ), 0)::int AS eggs
+            FROM jsonb_array_elements(COALESCE(NULLIF(o.items, '')::jsonb, '[]'::jsonb)) item
+            WHERE COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* 'huevos?'
+              AND COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* 'bandeja'
+              AND COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* '(^|[^[:alnum:]])(xl|l)([^[:alnum:]]|$)'
+          ) recovered ON po.status = 'redeemed'
          WHERE po.organization_id = $1
            AND po.created_at >= NOW() - ($2::int * INTERVAL '1 day')
       `, params),
@@ -355,7 +367,9 @@ router.get('/personal-offers', async (req, res) => {
                    WHEN COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* '(^|[^[:alnum:]])xl([^[:alnum:]]|$)' THEN 'XL'
                    WHEN COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* '(^|[^[:alnum:]])l([^[:alnum:]]|$)' THEN 'L'
                  END AS size,
-                 COALESCE((item->>'quantity')::int, 0) AS trays
+                 COALESCE((item->>'quantity')::int, 0) *
+                 COALESCE(NULLIF(SUBSTRING(COALESCE(item->>'name', item->>'title', item->>'product_name', '')
+                   FROM '[Bb]andeja[[:space:]]+de[[:space:]]+([0-9]+)'), '')::int, 30) AS eggs
             FROM personal_offers po
             JOIN orders o ON o.id = po.redeemed_order_id AND o.organization_id = po.organization_id
             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(NULLIF(o.items, '')::jsonb, '[]'::jsonb)) item
@@ -364,10 +378,10 @@ router.get('/personal-offers', async (req, res) => {
              AND COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* 'huevos?'
              AND COALESCE(item->>'name', item->>'title', item->>'product_name', '') ~* 'bandeja'
         )
-        SELECT wanted.size, COALESCE(SUM(sizes.trays), 0)::int AS sold,
+        SELECT wanted.size, COALESCE(SUM(sizes.eggs), 0)::int AS sold,
                CASE wanted.size
-                 WHEN 'XL' THEN COALESCE((SELECT CASE WHEN value ~ '^[0-9]+$' THEN value::int END FROM settings WHERE organization_id = $1 AND key = 'personal_offer_target_xl_trays'), 100)
-                 ELSE COALESCE((SELECT CASE WHEN value ~ '^[0-9]+$' THEN value::int END FROM settings WHERE organization_id = $1 AND key = 'personal_offer_target_l_trays'), 100)
+                 WHEN 'XL' THEN COALESCE((SELECT CASE WHEN value ~ '^[0-9]+$' THEN value::int END FROM settings WHERE organization_id = $1 AND key = 'personal_offer_target_xl_eggs'), 3000)
+                 ELSE COALESCE((SELECT CASE WHEN value ~ '^[0-9]+$' THEN value::int END FROM settings WHERE organization_id = $1 AND key = 'personal_offer_target_l_eggs'), 3000)
                END AS target
           FROM (VALUES ('XL'), ('L')) wanted(size)
           LEFT JOIN sizes ON sizes.size = wanted.size
@@ -398,6 +412,7 @@ router.get('/personal-offers', async (req, res) => {
         averageTicket: Number(row.average_ticket) || 0,
         discounts: Number(row.discounts) || 0,
         trays: Number(row.trays) || 0,
+        eggs: Number(row.eggs) || 0,
         estimatedContribution: revenue - estimatedCost,
         baseline: baselineResult.rows[0] || null,
         priceQualification: {
@@ -410,8 +425,9 @@ router.get('/personal-offers', async (req, res) => {
         inventory: inventoryResult.rows.map(item => ({
           size: item.size,
           sold: Number(item.sold) || 0,
-          target: Number(item.target) || 100,
-          remaining: Math.max(0, (Number(item.target) || 100) - (Number(item.sold) || 0)),
+          target: Number(item.target) || 3000,
+          remaining: Math.max(0, (Number(item.target) || 3000) - (Number(item.sold) || 0)),
+          unit: 'eggs',
         })),
         tiers: tiersResult.rows.map(tier => ({
           tier: tier.tier, won: Number(tier.won) || 0,

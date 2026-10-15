@@ -779,8 +779,8 @@ async function getPersonalOfferCandidates({ organizationId = null, minIdleHours 
            CASE WHEN c.limbo_reason_code = 'price' THEN 'manual' ELSE 'observed' END AS price_reason_source,
            CASE WHEN c.limbo_reason_code = 'price' OR COALESCE(NULLIF(c.order_draft, ''), '{}')::jsonb #>> '{purchase_feedback,reason}' = 'price' THEN 1.0 ELSE 0.94 END AS price_reason_confidence,
            COALESCE(NULLIF(cost_setting.value, '')::numeric, 150) AS unit_cost,
-           COALESCE(NULLIF(margin_setting.value, '')::numeric, 40) AS min_margin_pct,
-           catalog.min_tray_price
+           COALESCE(NULLIF(margin_setting.value, '')::numeric, 35) AS min_margin_pct,
+           catalog.min_tray_price, catalog.eligible_products
       FROM conversations c
       ${customerIdentityJoin()}
       LEFT JOIN settings enabled_setting
@@ -803,7 +803,8 @@ async function getPersonalOfferCandidates({ organizationId = null, minIdleHours 
          LIMIT 1
       ) qa ON TRUE
       LEFT JOIN LATERAL (
-        SELECT MIN(p.price)::numeric AS min_tray_price
+        SELECT MIN(p.price)::numeric AS min_tray_price,
+               jsonb_agg(jsonb_build_object('title', p.title, 'price', p.price) ORDER BY p.price, p.title) AS eligible_products
           FROM products p
          WHERE p.organization_id = c.organization_id AND p.active = TRUE
            AND COALESCE(p.is_business, FALSE) = FALSE
@@ -868,7 +869,7 @@ async function getPersonalOfferCandidates({ organizationId = null, minIdleHours 
   return rows;
 }
 
-async function claimPersonalOffer({ organizationId, conversationId, inboundAnchor, discountAmount, discountTiers, minTrays = 1, unitCost = 150, minMarginPct = 40, expiresAt, priceReasonSource = 'observed', priceReasonConfidence = 0.94 }) {
+async function claimPersonalOffer({ organizationId, conversationId, inboundAnchor, discountAmount, discountTiers, minTrays = 1, unitCost = 150, minMarginPct = 35, expiresAt, priceReasonSource = 'observed', priceReasonConfidence = 0.94 }) {
   return queryOne(`
     INSERT INTO personal_offers
       (organization_id, conversation_id, inbound_anchor, discount_amount, discount_tiers, min_trays, unit_cost, min_margin_pct, expires_at, price_reason_source, price_reason_confidence)
