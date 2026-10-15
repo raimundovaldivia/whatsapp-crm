@@ -453,15 +453,9 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const previousXlContext = await xlPricing.context(getPool(), orgId, conversation.phone_number);
   const xlContext = isEmpresa ? previousXlContext : xlPricing.forStore(previousXlContext);
   const personalOfferPaymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
-  const personalOffer = personalOfferPaymentMode === 'cod' && db.getActivePersonalOffer
+  let personalOffer = personalOfferPaymentMode === 'cod' && db.getActivePersonalOffer
     ? await db.getActivePersonalOffer(orgId, conversationId).catch(() => null)
     : null;
-  const leadSection = personalOffer
-    ? personalOffers.promptSection(personalOffer)
-    : (xlContext.enabled ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
-
-Este cliente es un lead nuevo, posiblemente llegó por publicidad. Defiende el valor y facilita el cierre, pero no inventes ni negocies descuentos. Los únicos beneficios válidos son los que el sistema muestre explícitamente como vigentes.` : '');
-
 
   let currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
@@ -489,9 +483,15 @@ Este cliente es un lead nuevo, posiblemente llegó por publicidad. Defiende el v
       console.warn('[Pipeline] No se pudo leer la oferta del anuncio:', error.message);
     }
   }
-  const promotionContext = promotionsEnabled && !personalOffer
+  let promotionContext = promotionsEnabled
     ? promotions.fromHistory(promotionHistory, products) || promotions.restore(orderDraft?.promotion)
     : null;
+  // El último mensaje personal de cajas es una decisión comercial explícita y
+  // más reciente. Mientras siga dentro de su hora reemplaza (sin acumular) una
+  // eventual oferta automática por bandejas. Fuera de esa hora vuelve a regir
+  // la oferta personal anterior si todavía está activa.
+  if (personalOffer && promotionContext?.oneHourBoxGift && promotionContext.active) personalOffer = null;
+  else if (personalOffer) promotionContext = null;
   if (!promotionsEnabled && orderDraft?.promotion) {
     orderDraft = { ...orderDraft };
     delete orderDraft.promotion;
@@ -500,6 +500,11 @@ Este cliente es un lead nuevo, posiblemente llegó por publicidad. Defiende el v
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
   productosTexto = promotions.alignPromotedAvailability(productosTexto, promotionContext);
   const promotionSection = promotions.promptSection(promotionContext);
+  const leadSection = personalOffer
+    ? personalOffers.promptSection(personalOffer)
+    : (xlContext.enabled && !promotionContext?.active ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
+
+Este cliente es un lead nuevo, posiblemente llegó por publicidad. Defiende el valor y facilita el cierre, pero no inventes ni negocies descuentos. Los únicos beneficios válidos son los que el sistema muestre explícitamente como vigentes.` : '');
   let campaignThreadSection = '';
   try {
     const thread = conversation.phone_number
@@ -1164,7 +1169,7 @@ REGLAS ABSOLUTAS:
   if (promotionContext?.active
       && promotionContext.offers?.length > 1
       && promotions.isBareAffirmative(userMessage)
-      && ['template_sent', 'interested'].includes(currentState)
+      && (promotionContext.oneHourBoxGift || ['template_sent', 'interested'].includes(currentState))
       && !(orderDraft?.items?.length)) {
     const nextDraft = { ...(orderDraft || {}), promotion: promotions.snapshot(promotionContext) };
     await db.updatePipelineState(conversationId, 'interested', nextDraft);

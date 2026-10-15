@@ -263,6 +263,56 @@ test('una promoción sin vigencia explícita vence automáticamente en 24 horas'
   assert.equal(promotion.restore(promotion.snapshot(active), new Date('2026-10-02T10:01:00.000Z')).active, false);
 });
 
+test('reconoce el regalo personal de una hora y calcula las cajas XL y Jumbo sin acumular descuentos', () => {
+  const message = {
+    direction: 'outbound',
+    created_at: '2026-10-15T17:00:00.000Z',
+    content: `Hola 😊 Soy Rai de Diez Ríos.
+
+Hoy tienes un regalo de hasta $7.000 para usar en tu compra 🎁 Además, si haces tu pedido dentro de la próxima hora, podemos despacharlo hoy mismo 🚚
+
+¿Te gustaría aprovecharlo? Si quieres, te ayudo a elegir tus productos.`,
+  };
+  const boxProducts = [
+    { id: 'jumbo100', title: 'Huevos Jumbo · Caja de 100', priceMin: 37000 },
+    { id: 'xl180', title: 'Huevos XL · Caja de 180', priceMin: 55000 },
+    { id: 'xl30', title: 'Huevos XL · Bandeja de 30', priceMin: 10990 },
+  ];
+
+  const promo = promotion.fromHistory([message], boxProducts, new Date('2026-10-15T17:30:00.000Z'));
+  assert.equal(promo.oneHourBoxGift, true);
+  assert.equal(promo.active, true);
+  assert.equal(promo.expiresAt, '2026-10-15T18:00:00.000Z');
+  assert.deepEqual(promo.offers.map(offer => [offer.label, offer.regularPrice, offer.price]), [
+    ['Caja Jumbo de 100 huevos', 37000, 30000],
+    ['Caja XL de 180 huevos', 55000, 48000],
+  ]);
+  assert.match(promotion.choiceReply(promo), /Jumbo de 100 huevos: antes \$37\.000 → hoy \$30\.000/);
+  assert.match(promotion.choiceReply(promo), /XL de 180 huevos: antes \$55\.000 → hoy \$48\.000/);
+  assert.equal(promotion.selectedOffer('Quiero la XL', promo).price, 48000);
+  assert.equal(promotion.selectedOffer('Me quedo con la jumbo', promo).price, 30000);
+  assert.equal(pricing.priceItems(promotion.offerOrderItems(promotion.selectedOffer('XL', promo)), boxProducts).total, 48000);
+  assert.match(promotion.promptSection(promo), /No lo acumules con ningún otro descuento/i);
+
+  const expired = promotion.fromHistory([message], boxProducts, new Date('2026-10-15T18:00:01.000Z'));
+  assert.equal(expired.active, false);
+  assert.match(promotion.promptSection(expired), /pasaron 60 minutos/i);
+});
+
+test('el regalo de cajas omite una alternativa si el descuento rompe el margen mínimo', () => {
+  const message = {
+    direction: 'outbound',
+    created_at: '2026-10-15T17:00:00.000Z',
+    content: 'Hoy tienes un regalo de hasta $7.000 para usar en tu compra. Haz tu pedido dentro de la próxima hora.',
+  };
+  const unsafeCatalog = [
+    { id: 'jumbo100', title: 'Huevos Jumbo · Caja de 100', priceMin: 30000 },
+    { id: 'xl180', title: 'Huevos XL · Caja de 180', priceMin: 55000 },
+  ];
+  const promo = promotion.fromHistory([message], unsafeCatalog, new Date('2026-10-15T17:30:00.000Z'));
+  assert.deepEqual(promo.offers.map(offer => offer.size), ['XL']);
+});
+
 test('la segunda aceituna al 50% cobra un envase completo y medio envase por cada par', () => {
   const oliveTemplate = {
     direction: 'outbound',

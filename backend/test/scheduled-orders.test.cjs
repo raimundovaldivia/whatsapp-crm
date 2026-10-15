@@ -364,6 +364,50 @@ PROMO DIEZ RIOS: QUESO DE CABRA + BANDEJA XL 30 = $25.000
   assert.match(result.response, /QUESO DE CABRA \+ BANDEJA XL 30.*\$25\.000/is);
 });
 
+test('un sí al regalo personal enviado como texto muestra las cajas y no elige una al azar', async () => {
+  let createdOrders = 0;
+  let savedState = null;
+  let savedDraft = null;
+  const sentAt = new Date();
+  const campaignText = `Hola 😊 Soy Rai de Diez Ríos.
+
+Hoy tienes un regalo de hasta $7.000 para usar en tu compra 🎁 Además, si haces tu pedido dentro de la próxima hora, podemos despacharlo hoy mismo 🚚
+
+¿Te gustaría aprovecharlo? Si quieres, te ayudo a elegir tus productos.`;
+  const products = [
+    { id: 'jumbo100', title: 'Huevos Jumbo · Caja de 100', price: 37000, active: true },
+    { id: 'xl180', title: 'Huevos XL · Caja de 180', price: 55000, active: true },
+  ];
+  const db = {
+    getConversationById: async () => ({ id: 41, organization_id: 1, phone_number: '56941000000', contact_name: 'Cliente', pipeline_state: 'exploring', agent_mode: 'ai' }),
+    getLastMessages: async () => [{ direction: 'outbound', content: campaignText, created_at: sentAt }],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Cliente', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => products,
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    createOrder: async () => { createdOrders++; },
+    updatePipelineState: async (_id, state, draft) => { savedState = state; savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 41, 'Sí');
+  assert.equal(result.newState, 'interested');
+  assert.equal(savedState, 'interested');
+  assert.equal(createdOrders, 0);
+  assert.equal(savedDraft.items, undefined);
+  assert.match(result.response, /Jumbo de 100 huevos: antes \$37\.000 → hoy \$30\.000/);
+  assert.match(result.response, /XL de 180 huevos: antes \$55\.000 → hoy \$48\.000/);
+});
+
 test('elegir la promo correcta tras una confirmación errónea prepara la edición del mismo pedido', async () => {
   let savedDraft = null;
   let createdOrders = 0;

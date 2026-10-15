@@ -5,6 +5,9 @@
 const pricing = require('./order-pricing');
 
 const TZ = 'America/Santiago';
+const ONE_HOUR_BOX_GIFT_AMOUNT = 7000;
+const ONE_HOUR_BOX_GIFT_UNIT_COST = 150;
+const ONE_HOUR_BOX_GIFT_MIN_MARGIN_PCT = 35;
 
 function norm(value) {
   return String(value || '')
@@ -23,6 +26,49 @@ function chileDay(value = new Date()) {
 
 function money(value) {
   return Number(String(value || '').replace(/[^0-9]/g, '')) || 0;
+}
+
+function isOneHourBoxGift(body) {
+  const text = String(body || '');
+  return /hoy\s+tienes\s+un\s+regalo\s+de\s+hasta\s+\$?\s*7[.\s]?000/iu.test(text)
+    && /(?:pedido|compra)[^.!?\n]{0,55}dentro\s+de\s+la\s+pr[oó]xima\s+hora/iu.test(text);
+}
+
+function oneHourBoxGiftOffers(products = []) {
+  const catalog = pricing.flattenCatalog(products);
+  const definitions = [
+    { size: 'Jumbo', units: 100, sizePattern: /\bjumbo\b/ },
+    { size: 'XL', units: 180, sizePattern: /\bxl\b/ },
+  ];
+  return definitions.map(definition => {
+    const candidate = catalog.find(item => {
+      const title = norm(item.title);
+      return item.available !== false
+        && /\bcaja\b/.test(title)
+        && definition.sizePattern.test(title)
+        && new RegExp(`\\b${definition.units}\\b`).test(title);
+    });
+    if (!candidate) return null;
+    const regularPrice = Number(candidate.price) || 0;
+    const price = regularPrice - ONE_HOUR_BOX_GIFT_AMOUNT;
+    const cost = definition.units * ONE_HOUR_BOX_GIFT_UNIT_COST;
+    const marginPct = price > 0 ? ((price - cost) / price) * 100 : 0;
+    if (price <= 0 || marginPct < ONE_HOUR_BOX_GIFT_MIN_MARGIN_PCT) return null;
+    return {
+      units: definition.units,
+      quantity: 1,
+      descriptor: definition.size,
+      label: `Caja ${definition.size} de ${definition.units} huevos`,
+      productLabel: candidate.title,
+      productTitle: candidate.title,
+      productId: candidate.product_id,
+      variantId: candidate.variant_id,
+      regularPrice,
+      price,
+      giftAmount: ONE_HOUR_BOX_GIFT_AMOUNT,
+      size: definition.size,
+    };
+  }).filter(Boolean);
 }
 
 function cleanOfferLabel(value) {
@@ -281,13 +327,16 @@ function beforeChileCutoff(now, day, cutoff) {
 
 function parseTemplate(message, products = [], now = new Date()) {
   const content = String(message?.content || '');
-  const templateName = content.match(/\[Template:\s*([^\]]+)\]/i)?.[1]?.trim() || '';
+  const oneHourBoxGift = isOneHourBoxGift(content);
+  const templateName = content.match(/\[Template:\s*([^\]]+)\]/i)?.[1]?.trim()
+    || (oneHourBoxGift ? 'regalo_personal_cajas_1h' : '');
   if (!templateName) return null;
   const body = content.replace(/^\s*\[Template:[^\]]+\]\s*/i, '').trim();
   // El monto mínimo de una regla de regalo no es el precio de una oferta.
   // Ej.: "1 aceituna GRATIS en compras sobre $20.000" no significa que la
   // aceituna cueste $20.000.
-  const offers = parseOffers(body).filter(offer => !/\b(?:gratis|regalo)\b/iu.test(`${offer.label || ''} ${offer.descriptor || ''}`));
+  const offers = (oneHourBoxGift ? oneHourBoxGiftOffers(products) : parseOffers(body))
+    .filter(offer => !/\b(?:gratis|regalo)\b/iu.test(`${offer.label || ''} ${offer.descriptor || ''}`));
   const categoryDiscounts = parseCategoryDiscounts(body);
   const secondUnitDiscounts = parseSecondUnitDiscounts(body);
   const freeGift = parseFreeGift(body);
@@ -312,12 +361,15 @@ function parseTemplate(message, products = [], now = new Date()) {
   const cutoff = parseCutoff(body);
   const orderCutoffOnlyToday = /(?:extendimos|ampliamos|extendido|nuevo\s+horario)[^.!?\n]{0,90}?pedidos?\s+de\s+hoy[^.!?\n]{0,60}?(?:hasta|a)\s+las?/iu.test(body)
     || (freeGift && validOnlyToday && /(?:pedido|compra|orden)(?:s|do|dos)?[^.!?\n]{0,80}?antes\s+de\s+las?/iu.test(body));
-  const usesDefaultValidity = !validUntil && !orderCutoffOnlyToday;
-  const expiresAt = usesDefaultValidity ? new Date(sentAt.getTime() + 24 * 60 * 60 * 1000).toISOString() : null;
+  const validityMinutes = oneHourBoxGift ? 60 : null;
+  const usesDefaultValidity = !validityMinutes && !validUntil && !orderCutoffOnlyToday;
+  const expiresAt = validityMinutes
+    ? new Date(sentAt.getTime() + validityMinutes * 60 * 1000).toISOString()
+    : (usesDefaultValidity ? new Date(sentAt.getTime() + 24 * 60 * 60 * 1000).toISOString() : null);
   const activeByDate = !validUntil || (!!today && today <= validUntil);
   const activeByDefault = !expiresAt || new Date(now).getTime() <= new Date(expiresAt).getTime();
   const active = activeByDate && activeByDefault && (!orderCutoffOnlyToday || beforeChileCutoff(now, sentDay, cutoff));
-  const sameDayConditional = /(mismo\s+d[ií]a|durante\s+el\s+d[ií]a)/iu.test(body);
+  const sameDayConditional = /(mismo\s+d[ií]a|durante\s+el\s+d[ií]a|despach(?:ar|arlo|arla|amos)[^.!?\n]{0,20}hoy\s+mismo)/iu.test(body);
   const stockConditional = /(si\s+(tenemos|hay)\s+stock|sujeta?\s+a\s+stock|disponib(?:le|les)\s+en\s+stock|hasta\s+agotar\s+stock)/iu.test(body);
   const freeShippingMatch = body.match(/(?:despachos?|env[ií]os?)\s+gratis[^$\d]{0,35}(?:sobre|desde|superiores?\s+a)\s*\$?\s*([\d.]+)/iu);
   const freeShippingMin = freeShippingMatch ? money(freeShippingMatch[1]) : 0;
@@ -404,13 +456,15 @@ function parseTemplate(message, products = [], now = new Date()) {
 
   return {
     templateName, body, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday,
-    deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, active, cutoff, sameDayConditional, stockConditional,
+    deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, active, cutoff, sameDayConditional, stockConditional,
+    oneHourBoxGift,
   };
 }
 
 function fromHistory(history = [], products = [], now = new Date()) {
   const templates = (Array.isArray(history) ? history : [])
-    .filter(message => message?.direction === 'outbound' && /\[Template:/i.test(message?.content || ''))
+    .filter(message => message?.direction === 'outbound'
+      && (/\[Template:/i.test(message?.content || '') || isOneHourBoxGift(message?.content)))
     .reverse();
   for (const message of templates) {
     const promotion = parseTemplate(message, products, now);
@@ -421,8 +475,8 @@ function fromHistory(history = [], products = [], now = new Date()) {
 
 function snapshot(promotion) {
   if (!promotion) return null;
-  const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional } = promotion;
-  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional };
+  const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourBoxGift } = promotion;
+  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourBoxGift };
 }
 
 function restore(saved, now = new Date()) {
@@ -443,13 +497,17 @@ function promptSection(promotion) {
   if (!promotion.active) {
     const reason = promotion.orderCutoffOnlyToday
       ? `el horario para pedir terminó a las ${promotion.cutoff}`
-      : (promotion.usesDefaultValidity ? 'pasaron 24 horas desde su envío' : `su vigencia terminó el ${promotion.validUntil}`);
+      : (promotion.validityMinutes
+        ? `pasaron ${promotion.validityMinutes} minutos desde su envío`
+        : (promotion.usesDefaultValidity ? 'pasaron 24 horas desde su envío' : `su vigencia terminó el ${promotion.validUntil}`));
     return `## Promoción vencida\nEl cliente recibió el template ${promotion.templateName}, pero ${reason}. NO uses esos precios. Si pregunta por la oferta, explica brevemente que venció y ofrece revisar los precios actuales.`;
   }
   const deliveryRule = promotion.sameDayConditional
     ? `La entrega el mismo día${promotion.cutoff ? ` requiere confirmar antes de las ${promotion.cutoff}` : ''}${promotion.stockConditional ? ' y está sujeta a stock' : ''}. Esta condición es distinta de la vigencia del precio.`
     : '';
-  const priceRule = promotion.discountPct
+  const priceRule = promotion.oneHourBoxGift
+    ? `El regalo es de $${ONE_HOUR_BOX_GIFT_AMOUNT.toLocaleString('es-CL')} y ya está incorporado en cada precio mostrado. Sólo aplica a una caja Jumbo de 100 o una caja XL de 180. No lo acumules con ningún otro descuento.`
+    : promotion.discountPct
     ? `Aplica exactamente ${promotion.discountPct}% de descuento al subtotal del pedido.`
     : (promotion.offers.length ? 'Para estas presentaciones usa el precio promocional, nunca el precio normal del catálogo.' : 'Usa los precios normales del catálogo para los productos comprados.');
   const categoryRules = (promotion.categoryDiscounts || []).map(rule => `Aplica ${rule.pct}% de descuento solamente a ${rule.target}.`).join(' ');
@@ -461,7 +519,9 @@ function promptSection(promotion) {
     ? `Sólo aplica a pedidos cuya entrega sea hasta el ${promotion.validUntil}. Para una entrega posterior usa precios normales.`
     : (promotion.validOnlyToday
       ? 'La promoción aplica si el pedido queda confirmado hoy. Puede pedir hoy y solicitar entrega para otro día.'
-      : (promotion.usesDefaultValidity ? 'El template no indicó vigencia: por seguridad esta promoción vence 24 horas después de su envío.' : `Vigencia: ${promotion.validUntil}.`));
+      : (promotion.validityMinutes
+        ? `La promoción vence exactamente ${promotion.validityMinutes} minutos después del envío de este mensaje.`
+        : (promotion.usesDefaultValidity ? 'El template no indicó vigencia: por seguridad esta promoción vence 24 horas después de su envío.' : `Vigencia: ${promotion.validUntil}.`)));
   const shipping = promotion.freeShippingMin ? `Despacho gratis si el total del pedido es igual o superior a $${promotion.freeShippingMin.toLocaleString('es-CL')}.` : '';
   const ordering = promotion.orderCutoffOnlyToday ? `El pedido debe confirmarse hoy antes de las ${promotion.cutoff}; la hora antigua indicada más abajo no se usa.` : '';
   const giftRule = promotion.freeGift
@@ -512,6 +572,15 @@ function selectedOffer(message, promotion) {
   if (!promotion?.active || !Array.isArray(promotion.offers)) return null;
   const text = norm(message);
   if (!text) return null;
+  if (promotion.oneHourBoxGift) {
+    const sizeMatches = promotion.offers.filter(offer => {
+      const size = norm(offer.size || offer.descriptor);
+      return size === 'xl'
+        ? /\bxl\b/.test(text)
+        : new RegExp(`\\b${size}\\b`).test(text);
+    });
+    if (sizeMatches.length === 1) return sizeMatches[0];
+  }
   const numberedChoice = text.match(/^(?:la\s+)?(?:opcion\s+)?(\d{1,2})$/iu);
   if (numberedChoice) {
     const index = Number(numberedChoice[1]) - 1;
@@ -602,6 +671,7 @@ function isBareAffirmative(message) {
 }
 
 function choiceReply(promotion) {
+  if (promotion?.oneHourBoxGift) return priceReply(promotion);
   const choices = (promotion?.offers || []).map((offer, index) =>
     `${index + 1}) ${offer.label} — $${Number(offer.price).toLocaleString('es-CL')}`
   ).join('\n');
@@ -615,6 +685,12 @@ function isCurrentPriceQuestion(message) {
 }
 
 function priceReply(promotion) {
+  if (promotion?.oneHourBoxGift) {
+    const choices = promotion.offers.map((offer, index) =>
+      `${index + 1}) ${offer.label}: antes $${Number(offer.regularPrice).toLocaleString('es-CL')} → hoy $${Number(offer.price).toLocaleString('es-CL')}`
+    ).join('\n');
+    return `Claro 😊 Tu regalo de $${ONE_HOUR_BOX_GIFT_AMOUNT.toLocaleString('es-CL')} queda así:\n\n${choices}\n\nEs personal y válido durante una hora desde el mensaje que te envié. ¿Prefieres Jumbo o XL?`;
+  }
   const choices = (promotion?.offers || []).map((offer, index) =>
     `${index + 1}) ${offer.label} — $${Number(offer.price).toLocaleString('es-CL')}`
   ).join('\n');
@@ -633,8 +709,13 @@ function futureReply(promotion) {
   if (!promotion.active) {
     const reason = promotion.orderCutoffOnlyToday
       ? `hasta las ${promotion.cutoff}`
-      : (promotion.usesDefaultValidity ? 'durante 24 horas desde su envío' : `hasta el ${promotion.validUntil || promotion.sentDay}`);
+      : (promotion.validityMinutes
+        ? `durante ${promotion.validityMinutes} minutos desde su envío`
+        : (promotion.usesDefaultValidity ? 'durante 24 horas desde su envío' : `hasta el ${promotion.validUntil || promotion.sentDay}`));
     return `Esa promoción era válida ${reason} y ya venció. Puedo ayudarte con los precios disponibles de hoy, ¿qué cantidad necesitas?`;
+  }
+  if (promotion.oneHourBoxGift) {
+    return `El regalo de $${ONE_HOUR_BOX_GIFT_AMOUNT.toLocaleString('es-CL')} se mantiene si confirmas dentro de la hora desde el mensaje. El despacho ofrecido es para hoy. ¿Cuál prefieres: ${optionText(promotion)}?`;
   }
   const choices = optionText(promotion);
   if (promotion.validOnlyToday) {
