@@ -78,6 +78,26 @@ test('una intención nueva posterior al último pedido vuelve a ser evaluable', 
   assert.match(result.recommendedAction, /confirmaci[oó]n directa/i);
 });
 
+test('una respuesta posventa no hereda la intención del pedido ya convertido', () => {
+  const result = probability.scoreConversation({
+    now,
+    messages: [
+      message('inbound', 'Quiero dos bandejas XL', '2026-10-16T13:00:00.000Z'),
+      message('outbound', 'Pedido confirmado', '2026-10-16T13:10:00.000Z'),
+      message('outbound', '¿Cómo te resultaron los huevos?', '2026-10-16T15:20:00.000Z'),
+      message('inbound', 'Todo bien, gracias', '2026-10-16T15:30:00.000Z'),
+    ],
+    pipelineState: 'done',
+    priorOrders: 2,
+    lastOrderAt: '2026-10-16T15:00:00.000Z',
+    historicalEggs: [60, 60],
+  });
+
+  assert.ok(result.probability48h < 30);
+  assert.notEqual(result.stage, 'decision');
+  assert.equal(result.signals.some(signal => signal.key === 'explicit_intent'), false);
+});
+
 test('calcula huevos desde líneas de pedido y respeta multiplicadores', () => {
   const eggs = probability.eggsFromOrderItems(JSON.stringify([
     { name: 'CAJA XL 180 HUEVOS CAFE', quantity: 2 },
