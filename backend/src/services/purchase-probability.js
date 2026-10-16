@@ -1,4 +1,7 @@
-const MODEL_VERSION = 'conversation-rules-v3';
+const MODEL_VERSION = 'conversation-rules-v4';
+
+const EXPLICIT_INTENT_PATTERN = /\b(?:quiero|quisiera|necesito|dame|deme|dejame|dejeme|anotame|anoteme|encarg|confirmo|me llevo|voy a llevar|guardame|reservame)\b/;
+const BOUGHT_ELSEWHERE_PATTERN = /\b(?:ya\s+)?compr(?:e|amos|aron|o)\b[^\n]{0,80}\b(?:otro|otra)\s+(?:proveedor|parte|lado)\b/;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -150,12 +153,20 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', clientT
   const askedPrice = /cu[aá]nto|precio|valor|sale|cuesta|cotiz/.test(inbound);
   const hasQuote = /\$\s*[\d.]+|\b\d{1,3}(?:\.\d{3})+\b/.test(outbound);
   const hasQuantity = /\b\d{1,3}\s*(?:huevos?|unidades?|bandejas?|packs?|cajas?)\b|\b(?:una|dos|tres|cuatro)\s*(?:bandejas?|cajas?)\b/.test(inbound);
-  const explicitIntent = /\b(?:quiero|quisiera|necesito|dame|deme|dejame|dejeme|anotame|anoteme|encarg|confirmo|me llevo|voy a llevar|guardame|reservame)\b/.test(inbound);
+  const explicitIntent = EXPLICIT_INTENT_PATTERN.test(inbound);
   const delivery = /repart|despach|entreg|env[ií]o|s[aá]bado|ma[nñ]ana|hoy|horario/.test(inbound);
   const address = /direcci[oó]n|domicilio|calle|avenida|pasaje|depto|departamento|condominio/.test(inbound);
   const softFuture = /te aviso|les aviso|lo pienso|voy a pensar|estoy cotizando|solo cotiz|cualquier cosa|mas adelante|m[aá]s adelante/.test(inbound);
   const priceObjection = /muy caro|esta caro|est[aá] caro|m[aá]s barato|se me sale|fuera de presupuesto|mucho para mi/.test(inbound);
   const optOut = pipelineState === 'opted_out' || /no me escrib|no quiero recibir|dame de baja|no contactar/.test(inbound);
+  let boughtElsewhereIndex = -1;
+  for (let index = 0; index < inboundMessages.length; index++) {
+    if (BOUGHT_ELSEWHERE_PATTERN.test(normalized(inboundMessages[index].content))) boughtElsewhereIndex = index;
+  }
+  const renewedIntentAfterAlternative = boughtElsewhereIndex >= 0 && inboundMessages
+    .slice(boughtElsewhereIndex + 1)
+    .some(message => EXPLICIT_INTENT_PATTERN.test(normalized(message.content)));
+  const boughtElsewhere = boughtElsewhereIndex >= 0 && !renewedIntentAfterAlternative;
   const lastInboundTime = lastInboundAt ? new Date(lastInboundAt).getTime() : Number.NaN;
   const alreadyConverted = Number.isFinite(lastOrderTime)
     && (!Number.isFinite(lastInboundTime) || lastOrderTime >= lastInboundTime);
@@ -172,6 +183,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', clientT
   if (address) points += addSignal(signals, 'address', 'Entregó o consultó dirección', 14);
   if (softFuture) points += addSignal(signals, 'soft_future', 'Dejó la decisión para después', 3);
   if (priceObjection) points += addSignal(signals, 'price_objection', 'Mostró objeción de precio', -7);
+  if (boughtElsewhere) addSignal(signals, 'bought_elsewhere', 'Informó que ya compró con otro proveedor', -100);
   if (estimate.ambiguity) points += addSignal(signals, 'container_ambiguity', 'La presentación por caja quedó ambigua', -12);
 
   const stateWeights = {
@@ -205,13 +217,14 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', clientT
   points += addSignal(signals, 'recency', ageHours <= 24 ? 'Conversación activa en las últimas 24 horas' : `Último mensaje entrante hace ${Math.round(ageHours / 24)} día(s)`, recencyWeight);
 
   if (alreadyConverted) addSignal(signals, 'already_converted', 'La compra más reciente ocurrió después de esta conversación', -100);
-  if (optOut || alreadyConverted || recentBusinessOrder) points = -100;
-  const suppressed = optOut || alreadyConverted || recentBusinessOrder;
+  if (optOut || alreadyConverted || recentBusinessOrder || boughtElsewhere) points = -100;
+  const suppressed = optOut || alreadyConverted || recentBusinessOrder || boughtElsewhere;
   const probability24h = suppressed ? 0 : Math.round(100 / (1 + Math.exp(-(points - 45) / 13)));
   const probability48h = suppressed ? 0 : Math.round(probability24h + (100 - probability24h) * 0.22);
 
   let stage = 'exploration';
   if (alreadyConverted) stage = 'converted';
+  else if (boughtElsewhere) stage = 'excluded';
   else if (recentBusinessOrder) stage = 'excluded';
   else if (explicitIntent && hasQuantity) stage = 'decision';
   else if (softFuture && hasQuote) stage = 'post_quote';
@@ -222,6 +235,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', clientT
   let blocker = 'needs_qualification';
   if (optOut) blocker = 'opted_out';
   else if (alreadyConverted) blocker = 'already_purchased';
+  else if (boughtElsewhere) blocker = 'bought_elsewhere';
   else if (recentBusinessOrder) blocker = 'business_recent_order';
   else if (estimate.ambiguity) blocker = 'unit_clarification';
   else if (priceObjection) blocker = 'price';
@@ -234,6 +248,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', clientT
   const actions = {
     opted_out: 'No contactar',
     already_purchased: 'No insistir por esta compra; esperar una nueva señal posterior al pedido',
+    bought_elsewhere: 'No insistir por esta compra; informó que ya compró con otro proveedor',
     business_recent_order: 'Excluir de la acción comercial de esta semana porque la empresa ya compró',
     unit_clarification: `Aclarar si pidió ${estimate.ambiguity?.count || ''} cajas mayoristas de 180 huevos o ${estimate.ambiguity?.count || ''} bandejas de ${estimate.ambiguity?.quotedUnits || ''}; después confirmar variedad y dirección`,
     price: 'Resolver la objeción con una alternativa concreta basada en lo cotizado',

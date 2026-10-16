@@ -153,6 +153,36 @@ test('excluye empresas que ya compraron durante los últimos siete días', () =>
   assert.ok(person.probability48h > 0);
 });
 
+test('excluye a quien informó que ya compró con otro proveedor', () => {
+  const result = probability.scoreConversation({
+    now,
+    messages: [
+      message('inbound', 'Cuánto saldría comprar 3 cajas semanales', '2026-10-09T17:45:00.000Z'),
+      message('outbound', '¿Te las pedimos para esta semana?', '2026-10-09T17:48:00.000Z'),
+      message('inbound', 'Hola buen día, esperé mucho la respuesta, ya compramos con otro proveedor, gracias de todas maneras', '2026-10-10T08:04:00.000Z'),
+    ],
+  });
+
+  assert.equal(result.probability24h, 0);
+  assert.equal(result.probability48h, 0);
+  assert.equal(result.stage, 'excluded');
+  assert.equal(result.blocker, 'bought_elsewhere');
+  assert.match(result.recommendedAction, /no insistir.*otro proveedor/i);
+});
+
+test('una intención nueva posterior a comprar fuera vuelve a ser evaluable', () => {
+  const result = probability.scoreConversation({
+    now,
+    messages: [
+      message('inbound', 'Ya compramos con otro proveedor', '2026-10-10T08:04:00.000Z'),
+      message('inbound', 'Ahora necesito dos cajas XL para mañana', '2026-10-16T15:30:00.000Z'),
+    ],
+  });
+
+  assert.ok(result.probability48h > 0);
+  assert.notEqual(result.blocker, 'bought_elsewhere');
+});
+
 test('el recálculo rechaza rangos inválidos antes de consultar la base', async () => {
   let queries = 0;
   const pool = { query: async () => { queries++; return { rows: [] }; } };
