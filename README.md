@@ -195,6 +195,23 @@ docker-compose up --build -d
 
 ## 📱 Uso del CRM
 
+### Probabilidad de compra
+
+El panel **Más funciones → Evaluación** puede puntuar las conversaciones de un período y priorizarlas por:
+
+- probabilidad de compra dentro de 24 y 48 horas;
+- cantidad probable de huevos;
+- huevos esperados (`probabilidad × cantidad`);
+- señales que explican el cálculo;
+- bloqueo conversacional y próxima acción sugerida.
+
+Cada evaluación se guarda por organización, fecha, rango y versión del modelo. Después de 24 y 48 horas el sistema contrasta la estimación con pedidos reales y calcula error Brier para poder recalibrar el modelo. La recomendación describe una estrategia conversacional; cualquier mensaje se redacta desde el historial individual y no desde una plantilla genérica.
+
+Endpoints protegidos para `owner`, `admin` y `supervisor`:
+
+- `GET /api/bot-eval/purchase-probability?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `POST /api/bot-eval/purchase-probability/recalculate` con `{ "from": "YYYY-MM-DD", "to": "YYYY-MM-DD" }`
+
 ### Panel de conversaciones (izquierda)
 - Lista todas las conversaciones ordenadas por último mensaje
 - El punto verde/amarillo indica si el agente IA está activo o pausado

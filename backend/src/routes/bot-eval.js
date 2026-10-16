@@ -18,6 +18,7 @@ const router  = express.Router();
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const purchaseProbability = require('../services/purchase-probability');
 const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
 
 router.use(requireAuth);
@@ -25,6 +26,7 @@ router.use(requireRole('owner', 'admin', 'supervisor'));
 
 const DAY = 86400000;
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+const localDay = (date = new Date()) => date.toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
 
 // Señales de confusión / fricción en el texto (cliente o bot).
 const CLIENT_FRICTION = /\bno\s+(entend|es\s+eso|era\s+eso|me\s+sirve|es\s+lo\s+que)|ya\s+te\s+(dije|hab[ií]a)|te\s+pregunt[eé]|otra\s+vez|no,\s|eso\s+no\b|no\s+es\s+as[ií]/i;
@@ -34,7 +36,8 @@ const BOT_CONFUSED   = /no\s+(entiendo|entend[ií]|logro\s+entender|s[eé]\s+a\s
 async function periodMetrics(pool, orgId, from, to) {
   // Conversaciones con al menos un mensaje entrante del cliente en el rango.
   const { rows: convs } = await pool.query(
-    `SELECT c.id, c.pipeline_state, c.agent_mode, c.last_escalation_at, c.opted_out,
+    `SELECT c.id, c.pipeline_state, c.agent_mode, c.last_escalation_at,
+            COALESCE(contact.opt_out, FALSE) AS opted_out,
             c.created_at,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'inbound'
                 AND m.created_at >= $2::date AND m.created_at < ($3::date + INTERVAL '1 day')) AS inbound_in,
@@ -50,6 +53,13 @@ async function periodMetrics(pool, orgId, from, to) {
                 AND o.status <> 'cancelled'
                 AND o.created_at >= $2::date AND o.created_at < ($3::date + INTERVAL '1 day')) AS orders_in
        FROM conversations c
+       LEFT JOIN LATERAL (
+         SELECT ct.opt_out
+           FROM contacts ct
+          WHERE ct.organization_id = c.organization_id
+            AND ct.phone = c.phone_number
+          LIMIT 1
+       ) contact ON TRUE
       WHERE c.organization_id = $1
         AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'inbound'
                      AND m.created_at >= $2::date AND m.created_at < ($3::date + INTERVAL '1 day'))`,
@@ -236,6 +246,322 @@ router.post('/apply-rules', async (req, res) => {
     res.json({ success: true, added: added.length, total: current.length, rules: current });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+function validateRange(from, to) {
+  if (!isDate(from) || !isDate(to)) return 'Las fechas deben usar formato YYYY-MM-DD';
+  const start = new Date(`${from}T12:00:00Z`);
+  const end = new Date(`${to}T12:00:00Z`);
+  const days = Math.round((end - start) / DAY) + 1;
+  if (!Number.isFinite(days) || days < 1) return 'La fecha inicial debe ser anterior a la final';
+  if (days > 62) return 'El período máximo de evaluación es de 62 días';
+  return null;
+}
+
+async function reconcilePurchaseOutcomes(pool, orgId) {
+  await pool.query(
+    `UPDATE conversation_purchase_scores s
+        SET actual_bought_24h = EXISTS (
+              SELECT 1 FROM orders o
+               WHERE o.organization_id = s.organization_id
+                 AND o.conversation_id = s.conversation_id
+                 AND o.status <> 'cancelled'
+                 AND o.created_at > s.evaluated_at
+                 AND o.created_at <= s.evaluated_at + INTERVAL '24 hours'
+            ) OR EXISTS (
+              SELECT 1
+                FROM conversations c
+                JOIN shopify_orders so
+                  ON so.organization_id = c.organization_id
+                 AND RIGHT(regexp_replace(COALESCE(so.customer_phone, ''), '[^0-9]', '', 'g'), 9)
+                     = RIGHT(regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g'), 9)
+               WHERE c.id = s.conversation_id
+                 AND c.organization_id = s.organization_id
+                 AND COALESCE(so.shopify_created_at, so.synced_at) > s.evaluated_at
+                 AND COALESCE(so.shopify_created_at, so.synced_at) <= s.evaluated_at + INTERVAL '24 hours'
+                 AND LOWER(COALESCE(so.financial_status, '')) NOT IN ('voided','refunded')
+            ),
+            outcome_checked_at = NOW(), updated_at = NOW()
+      WHERE s.organization_id = $1
+        AND s.evaluated_at <= NOW() - INTERVAL '24 hours'
+        AND s.actual_bought_24h IS NULL`,
+    [orgId]
+  );
+  await pool.query(
+    `UPDATE conversation_purchase_scores s
+        SET actual_bought_48h = EXISTS (
+              SELECT 1 FROM orders o
+               WHERE o.organization_id = s.organization_id
+                 AND o.conversation_id = s.conversation_id
+                 AND o.status <> 'cancelled'
+                 AND o.created_at > s.evaluated_at
+                 AND o.created_at <= s.evaluated_at + INTERVAL '48 hours'
+            ) OR EXISTS (
+              SELECT 1
+                FROM conversations c
+                JOIN shopify_orders so
+                  ON so.organization_id = c.organization_id
+                 AND RIGHT(regexp_replace(COALESCE(so.customer_phone, ''), '[^0-9]', '', 'g'), 9)
+                     = RIGHT(regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g'), 9)
+               WHERE c.id = s.conversation_id
+                 AND c.organization_id = s.organization_id
+                 AND COALESCE(so.shopify_created_at, so.synced_at) > s.evaluated_at
+                 AND COALESCE(so.shopify_created_at, so.synced_at) <= s.evaluated_at + INTERVAL '48 hours'
+                 AND LOWER(COALESCE(so.financial_status, '')) NOT IN ('voided','refunded')
+            ),
+            outcome_checked_at = NOW(), updated_at = NOW()
+      WHERE s.organization_id = $1
+        AND s.evaluated_at <= NOW() - INTERVAL '48 hours'
+        AND s.actual_bought_48h IS NULL`,
+    [orgId]
+  );
+}
+
+async function purchaseScoreResponse(pool, orgId, from, to, evaluationDate) {
+  const params = [orgId, evaluationDate, purchaseProbability.MODEL_VERSION, from, to];
+  const { rows } = await pool.query(
+    `SELECT s.*, c.contact_name, c.phone_number, c.pipeline_state,
+            COALESCE(contact.opt_out, FALSE) AS opt_out
+       FROM conversation_purchase_scores s
+       JOIN conversations c
+         ON c.id = s.conversation_id AND c.organization_id = s.organization_id
+       LEFT JOIN LATERAL (
+         SELECT ct.opt_out FROM contacts ct
+          WHERE ct.organization_id = s.organization_id AND ct.phone = c.phone_number
+          LIMIT 1
+       ) contact ON TRUE
+      WHERE s.organization_id = $1
+        AND s.evaluation_date = $2::date
+        AND s.model_version = $3
+        AND s.source_from = $4::date
+        AND s.source_to = $5::date
+      ORDER BY s.expected_eggs_48h DESC, s.probability_48h DESC
+      LIMIT 250`,
+    params
+  );
+  const { rows: [totals] } = await pool.query(
+    `SELECT COUNT(*)::int AS evaluated,
+            COUNT(*) FILTER (WHERE probability_48h >= 60)::int AS high_probability,
+            ROUND(COALESCE(SUM(expected_eggs_24h), 0))::int AS expected_eggs_24h,
+            ROUND(COALESCE(SUM(expected_eggs_48h), 0))::int AS expected_eggs_48h,
+            ROUND(COALESCE(AVG(probability_48h), 0))::int AS average_probability_48h,
+            COUNT(actual_bought_48h)::int AS outcomes_checked,
+            ROUND(AVG(POWER(probability_48h / 100.0 - CASE WHEN actual_bought_48h THEN 1 ELSE 0 END, 2))
+              FILTER (WHERE actual_bought_48h IS NOT NULL), 3) AS brier_score_48h
+       FROM conversation_purchase_scores
+      WHERE organization_id = $1 AND evaluation_date = $2::date
+        AND model_version = $3 AND source_from = $4::date AND source_to = $5::date`,
+    params
+  );
+  const summary = {
+    evaluated: Number(totals.evaluated) || 0,
+    highProbability: Number(totals.high_probability) || 0,
+    expectedEggs24h: Number(totals.expected_eggs_24h) || 0,
+    expectedEggs48h: Number(totals.expected_eggs_48h) || 0,
+    averageProbability48h: Number(totals.average_probability_48h) || 0,
+    outcomesChecked: Number(totals.outcomes_checked) || 0,
+    brierScore48h: totals.brier_score_48h == null ? null : Number(totals.brier_score_48h),
+  };
+  return { summary, prospects: rows };
+}
+
+/**
+ * GET /api/bot-eval/purchase-probability?from&to
+ * Devuelve el último snapshot diario del rango, con resultados ya observables.
+ */
+router.get('/purchase-probability', async (req, res) => {
+  const pool = getPool();
+  const from = isDate(req.query.from) ? req.query.from : localDay(new Date(Date.now() - 6 * DAY));
+  const to = isDate(req.query.to) ? req.query.to : localDay();
+  const rangeError = validateRange(from, to);
+  if (rangeError) return res.status(400).json({ success: false, error: rangeError });
+  try {
+    await reconcilePurchaseOutcomes(pool, req.orgId);
+    const { rows: [latest] } = await pool.query(
+      `SELECT MAX(evaluation_date)::text AS evaluation_date
+         FROM conversation_purchase_scores
+        WHERE organization_id = $1 AND model_version = $2
+          AND source_from = $3::date AND source_to = $4::date`,
+      [req.orgId, purchaseProbability.MODEL_VERSION, from, to]
+    );
+    if (!latest?.evaluation_date) {
+      return res.json({ success: true, from, to, modelVersion: purchaseProbability.MODEL_VERSION, summary: null, prospects: [] });
+    }
+    const data = await purchaseScoreResponse(pool, req.orgId, from, to, latest.evaluation_date);
+    res.json({ success: true, from, to, evaluationDate: latest.evaluation_date, modelVersion: purchaseProbability.MODEL_VERSION, ...data });
+  } catch (err) {
+    console.error('[BotEval/purchase-probability GET]', err.message);
+    res.status(500).json({ success: false, error: 'No se pudo cargar la probabilidad de compra' });
+  }
+});
+
+/**
+ * POST /api/bot-eval/purchase-probability/recalculate { from, to }
+ * Recalcula señales conversacionales sin enviar mensajes ni llamar servicios externos.
+ */
+router.post('/purchase-probability/recalculate', async (req, res) => {
+  const pool = getPool();
+  const from = req.body?.from;
+  const to = req.body?.to;
+  const rangeError = validateRange(from, to);
+  if (rangeError) return res.status(400).json({ success: false, error: rangeError });
+  const limit = Math.min(2000, Math.max(1, Number.parseInt(req.body?.limit, 10) || 1500));
+  const evaluatedAt = new Date();
+  const evaluationDate = localDay(evaluatedAt);
+
+  try {
+    const { rows: conversations } = await pool.query(
+      `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.last_message_at,
+              COALESCE(contact.total_orders, 0)::int AS total_orders,
+              contact.last_order_at,
+              COALESCE(contact.opt_out, FALSE) AS opt_out
+         FROM conversations c
+         LEFT JOIN LATERAL (
+           SELECT ct.total_orders, ct.last_order_at, ct.opt_out
+             FROM contacts ct
+            WHERE ct.organization_id = c.organization_id AND ct.phone = c.phone_number
+            LIMIT 1
+         ) contact ON TRUE
+        WHERE c.organization_id = $1
+          AND EXISTS (
+            SELECT 1 FROM messages m
+             WHERE m.conversation_id = c.id
+               AND m.direction = 'inbound'
+               AND m.created_at >= $2::date
+               AND m.created_at < ($3::date + INTERVAL '1 day')
+          )
+        ORDER BY c.last_message_at DESC
+        LIMIT $4`,
+      [req.orgId, from, to, limit]
+    );
+
+    if (!conversations.length) {
+      return res.json({ success: true, from, to, evaluationDate, modelVersion: purchaseProbability.MODEL_VERSION, summary: { evaluated: 0 }, prospects: [] });
+    }
+
+    const ids = conversations.map(conversation => conversation.id);
+    const { rows: messages } = await pool.query(
+      `SELECT m.id, m.conversation_id, m.direction, m.content, m.sent_by, m.created_at
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.organization_id = $1
+          AND m.conversation_id = ANY($2::int[])
+          AND m.created_at >= $3::date
+          AND m.created_at < ($4::date + INTERVAL '1 day')
+        ORDER BY m.conversation_id, m.created_at`,
+      [req.orgId, ids, from, to]
+    );
+    const messagesByConversation = new Map();
+    for (const message of messages) {
+      const list = messagesByConversation.get(message.conversation_id) || [];
+      list.push(message);
+      messagesByConversation.set(message.conversation_id, list);
+    }
+
+    const { rows: orderRows } = await pool.query(
+      `SELECT customer_phone AS phone, items, created_at
+         FROM orders
+        WHERE organization_id = $1 AND status <> 'cancelled'
+          AND created_at >= $2::date - INTERVAL '365 days'
+       UNION ALL
+       SELECT customer_phone AS phone, items::text,
+              COALESCE(shopify_created_at, synced_at) AS created_at
+         FROM shopify_orders
+        WHERE organization_id = $1
+          AND LOWER(COALESCE(financial_status, '')) NOT IN ('voided','refunded')
+          AND COALESCE(shopify_created_at, synced_at) >= $2::date - INTERVAL '365 days'`,
+      [req.orgId, from]
+    );
+    const historyByPhone = new Map();
+    for (const order of orderRows) {
+      const phone = purchaseProbability.canonicalPhone(order.phone);
+      if (!phone) continue;
+      const eggs = purchaseProbability.eggsFromOrderItems(order.items);
+      if (!eggs) continue;
+      const list = historyByPhone.get(phone) || [];
+      list.push({ eggs, createdAt: order.created_at });
+      historyByPhone.set(phone, list);
+    }
+
+    const snapshots = conversations.map(conversation => {
+      const phone = purchaseProbability.canonicalPhone(conversation.phone_number);
+      const history = historyByPhone.get(phone) || [];
+      const score = purchaseProbability.scoreConversation({
+        messages: messagesByConversation.get(conversation.id) || [],
+        pipelineState: conversation.opt_out ? 'opted_out' : conversation.pipeline_state,
+        priorOrders: conversation.total_orders,
+        lastOrderAt: conversation.last_order_at || history.map(item => item.createdAt).sort().at(-1) || null,
+        historicalEggs: history.map(item => item.eggs),
+        now: evaluatedAt,
+      });
+      return {
+        conversation_id: conversation.id,
+        evaluation_date: evaluationDate,
+        evaluated_at: evaluatedAt.toISOString(),
+        source_from: from,
+        source_to: to,
+        model_version: score.modelVersion,
+        probability_24h: score.probability24h,
+        probability_48h: score.probability48h,
+        estimated_eggs: score.estimatedEggs,
+        expected_eggs_24h: score.expectedEggs24h,
+        expected_eggs_48h: score.expectedEggs48h,
+        estimate_source: score.estimateSource,
+        stage: score.stage,
+        blocker: score.blocker,
+        signals: score.signals,
+        recommended_action: score.recommendedAction,
+        explanation: score.explanation,
+        score_inputs: {
+          rawPoints: score.rawPoints,
+          lastInboundAt: score.lastInboundAt,
+          priorOrders: conversation.total_orders,
+          lastOrderAt: conversation.last_order_at,
+        },
+      };
+    });
+
+    await pool.query(
+      `INSERT INTO conversation_purchase_scores
+        (organization_id, conversation_id, evaluation_date, evaluated_at, source_from, source_to,
+         model_version, probability_24h, probability_48h, estimated_eggs,
+         expected_eggs_24h, expected_eggs_48h, estimate_source, stage, blocker,
+         signals, recommended_action, explanation, score_inputs)
+       SELECT $1, x.conversation_id, x.evaluation_date, x.evaluated_at, x.source_from, x.source_to,
+              x.model_version, x.probability_24h, x.probability_48h, x.estimated_eggs,
+              x.expected_eggs_24h, x.expected_eggs_48h, x.estimate_source, x.stage, x.blocker,
+              x.signals, x.recommended_action, x.explanation, x.score_inputs
+         FROM jsonb_to_recordset($2::jsonb) AS x(
+           conversation_id INTEGER, evaluation_date DATE, evaluated_at TIMESTAMPTZ,
+           source_from DATE, source_to DATE, model_version TEXT,
+           probability_24h NUMERIC, probability_48h NUMERIC, estimated_eggs INTEGER,
+           expected_eggs_24h NUMERIC, expected_eggs_48h NUMERIC, estimate_source TEXT,
+           stage TEXT, blocker TEXT, signals JSONB, recommended_action TEXT,
+           explanation TEXT, score_inputs JSONB
+         )
+       ON CONFLICT (organization_id, conversation_id, evaluation_date, model_version, source_from, source_to)
+       DO UPDATE SET
+         evaluated_at = EXCLUDED.evaluated_at, source_from = EXCLUDED.source_from,
+         source_to = EXCLUDED.source_to, probability_24h = EXCLUDED.probability_24h,
+         probability_48h = EXCLUDED.probability_48h, estimated_eggs = EXCLUDED.estimated_eggs,
+         expected_eggs_24h = EXCLUDED.expected_eggs_24h,
+         expected_eggs_48h = EXCLUDED.expected_eggs_48h,
+         estimate_source = EXCLUDED.estimate_source, stage = EXCLUDED.stage,
+         blocker = EXCLUDED.blocker, signals = EXCLUDED.signals,
+         recommended_action = EXCLUDED.recommended_action,
+         explanation = EXCLUDED.explanation, score_inputs = EXCLUDED.score_inputs,
+         actual_bought_24h = NULL, actual_bought_48h = NULL,
+         actual_order_id = NULL, actual_eggs = NULL, outcome_checked_at = NULL,
+         updated_at = NOW()`,
+      [req.orgId, JSON.stringify(snapshots)]
+    );
+
+    const data = await purchaseScoreResponse(pool, req.orgId, from, to, evaluationDate);
+    res.json({ success: true, from, to, evaluationDate, modelVersion: purchaseProbability.MODEL_VERSION, ...data });
+  } catch (err) {
+    console.error('[BotEval/purchase-probability recalculate]', err.message);
+    res.status(500).json({ success: false, error: 'No se pudo recalcular la probabilidad de compra' });
   }
 });
 
