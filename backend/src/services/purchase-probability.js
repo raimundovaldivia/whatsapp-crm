@@ -109,9 +109,16 @@ function hoursSince(value, now) {
 }
 
 function scoreConversation({ messages = [], pipelineState = 'exploring', priorOrders = 0, lastOrderAt = null, historicalEggs = [], now = new Date() }) {
-  const inboundMessages = messages.filter(message => message.direction === 'inbound');
+  const lastOrderTime = lastOrderAt ? new Date(lastOrderAt).getTime() : Number.NaN;
+  const scoringMessages = Number.isFinite(lastOrderTime)
+    ? messages.filter(message => {
+      const messageTime = new Date(message.created_at).getTime();
+      return Number.isFinite(messageTime) && messageTime > lastOrderTime;
+    })
+    : messages;
+  const inboundMessages = scoringMessages.filter(message => message.direction === 'inbound');
   const inbound = normalized(inboundMessages.map(message => message.content).join(' '));
-  const outbound = normalized(messages.filter(message => message.direction === 'outbound').map(message => message.content).join(' '));
+  const outbound = normalized(scoringMessages.filter(message => message.direction === 'outbound').map(message => message.content).join(' '));
   const all = `${inbound} ${outbound}`;
   const lastInboundAt = inboundMessages.at(-1)?.created_at || null;
   const ageHours = hoursSince(lastInboundAt, now);
@@ -129,7 +136,6 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   const priceObjection = /muy caro|esta caro|est[aá] caro|m[aá]s barato|se me sale|fuera de presupuesto|mucho para mi/.test(inbound);
   const optOut = pipelineState === 'opted_out' || /no me escrib|no quiero recibir|dame de baja|no contactar/.test(inbound);
   const lastInboundTime = lastInboundAt ? new Date(lastInboundAt).getTime() : Number.NaN;
-  const lastOrderTime = lastOrderAt ? new Date(lastOrderAt).getTime() : Number.NaN;
   const alreadyConverted = Number.isFinite(lastOrderTime)
     && (!Number.isFinite(lastInboundTime) || lastOrderTime >= lastInboundTime);
 
@@ -208,7 +214,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
     needs_qualification: 'Continuar desde la última pregunta concreta y descubrir producto y cantidad',
   };
 
-  const estimate = estimateEggs(messages, historicalEggs);
+  const estimate = estimateEggs(scoringMessages, historicalEggs);
   return {
     modelVersion: MODEL_VERSION,
     probability24h: clamp(probability24h, 0, 99),
