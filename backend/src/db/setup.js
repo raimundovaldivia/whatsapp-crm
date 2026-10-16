@@ -1791,6 +1791,47 @@ async function setupDatabase() {
         amount INTEGER NOT NULL, recorded_by INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+
+    // ─── INTELIGENCIA COMERCIAL: probabilidad de compra ─────────────
+    // Cada ejecución conserva un snapshot diario por conversación y versión
+    // del modelo. Esto permite contrastar la probabilidad con compras reales
+    // posteriores sin mezclar organizaciones ni sobrescribir otros días.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS conversation_purchase_scores (
+        id                    BIGSERIAL PRIMARY KEY,
+        organization_id       INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id       INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        evaluation_date       DATE NOT NULL,
+        evaluated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        source_from            DATE NOT NULL,
+        source_to              DATE NOT NULL,
+        model_version          TEXT NOT NULL,
+        probability_24h        NUMERIC(5,2) NOT NULL CHECK(probability_24h BETWEEN 0 AND 100),
+        probability_48h        NUMERIC(5,2) NOT NULL CHECK(probability_48h BETWEEN 0 AND 100),
+        estimated_eggs         INTEGER NOT NULL DEFAULT 0 CHECK(estimated_eggs >= 0),
+        expected_eggs_24h      NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(expected_eggs_24h >= 0),
+        expected_eggs_48h      NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(expected_eggs_48h >= 0),
+        estimate_source        TEXT,
+        stage                  TEXT NOT NULL,
+        blocker                TEXT NOT NULL,
+        signals                JSONB NOT NULL DEFAULT '[]'::jsonb,
+        recommended_action     TEXT NOT NULL,
+        explanation            TEXT,
+        score_inputs           JSONB NOT NULL DEFAULT '{}'::jsonb,
+        actual_bought_24h       BOOLEAN,
+        actual_bought_48h       BOOLEAN,
+        actual_order_id         TEXT,
+        actual_eggs             INTEGER,
+        outcome_checked_at      TIMESTAMPTZ,
+        created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, conversation_id, evaluation_date, model_version, source_from, source_to)
+      );
+      CREATE INDEX IF NOT EXISTS idx_purchase_scores_org_date
+        ON conversation_purchase_scores(organization_id, evaluation_date DESC, expected_eggs_48h DESC);
+      CREATE INDEX IF NOT EXISTS idx_purchase_scores_outcomes
+        ON conversation_purchase_scores(organization_id, outcome_checked_at, evaluated_at);
+    `);
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'eggs-catalog-v2.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-boxes-promotional.sql'), 'utf8'));
