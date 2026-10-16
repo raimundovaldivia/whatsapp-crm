@@ -117,6 +117,25 @@ test('usa la mediana del historial cuando la conversación no incluye cantidad',
   assert.equal(result.estimateSource, 'purchase_history');
 });
 
+test('no convierte cajas ambiguas en 180 huevos cuando la cotización ofrece bandejas', () => {
+  const result = probability.scoreConversation({
+    now,
+    pipelineState: 'collecting_order',
+    messages: [
+      message('inbound', '¿Cuánto cuestan los huevos de campo?', '2026-10-13T11:53:00.000Z'),
+      message('outbound', '¿Qué talla prefieres y cuántos huevos necesitas?', '2026-10-13T11:53:10.000Z'),
+      message('inbound', 'XL 20 cajas', '2026-10-13T15:13:00.000Z'),
+      message('outbound', 'XL · Bandeja de 20: blancos $8.490, mixtos $8.990 o cafés $9.990', '2026-10-13T15:13:10.000Z'),
+    ],
+  });
+
+  assert.equal(result.estimatedEggs, 400);
+  assert.equal(result.estimateSource, 'ambiguous_container');
+  assert.equal(result.blocker, 'unit_clarification');
+  assert.ok(result.signals.some(signal => signal.key === 'container_ambiguity'));
+  assert.match(result.recommendedAction, /20 cajas mayoristas de 180 huevos o 20 bandejas de 20/i);
+});
+
 test('el recálculo rechaza rangos inválidos antes de consultar la base', async () => {
   let queries = 0;
   const pool = { query: async () => { queries++; return { rows: [] }; } };

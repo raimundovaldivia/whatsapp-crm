@@ -1,4 +1,4 @@
-const MODEL_VERSION = 'conversation-rules-v1';
+const MODEL_VERSION = 'conversation-rules-v2';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -68,7 +68,28 @@ function explicitEggsFromText(value) {
   return 0;
 }
 
+function ambiguousBoxQuote(messages) {
+  const inbound = normalized(messages.filter(message => message.direction === 'inbound').slice(-8).map(message => message.content).join(' '));
+  const outbound = normalized(messages.filter(message => message.direction === 'outbound').slice(-5).map(message => message.content).join(' '));
+  const boxCount = inbound.match(/\b(\d{1,2})\s*cajas?\b(?![^\n]{0,30}\bde\s*(?:100|120|180)\b)/);
+  const quotedTray = outbound.match(/\bbandejas?\s*(?:de\s*)?(20|30)\b/);
+  if (!boxCount || !quotedTray) return null;
+
+  const count = clamp(Number(boxCount[1]), 1, 99);
+  const quotedUnits = Number(quotedTray[1]);
+  return { count, quotedUnits, provisionalEggs: count * quotedUnits };
+}
+
 function estimateEggs(messages, historicalEggs = []) {
+  const ambiguity = ambiguousBoxQuote(messages);
+  if (ambiguity) {
+    return {
+      eggs: clamp(ambiguity.provisionalEggs, 0, 5000),
+      source: 'ambiguous_container',
+      ambiguity,
+    };
+  }
+
   const inbound = messages.filter(message => message.direction === 'inbound').slice(-8).reverse();
   for (const message of inbound) {
     const eggs = explicitEggsFromText(message.content);
@@ -138,6 +159,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   const lastInboundTime = lastInboundAt ? new Date(lastInboundAt).getTime() : Number.NaN;
   const alreadyConverted = Number.isFinite(lastOrderTime)
     && (!Number.isFinite(lastInboundTime) || lastOrderTime >= lastInboundTime);
+  const estimate = estimateEggs(scoringMessages, historicalEggs);
 
   if (hasProduct) points += addSignal(signals, 'product', 'Producto o calibre identificado', 8);
   if (askedPrice) points += addSignal(signals, 'price_question', 'Consultó precio o cotización', 8);
@@ -148,6 +170,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   if (address) points += addSignal(signals, 'address', 'Entregó o consultó dirección', 14);
   if (softFuture) points += addSignal(signals, 'soft_future', 'Dejó la decisión para después', 3);
   if (priceObjection) points += addSignal(signals, 'price_objection', 'Mostró objeción de precio', -7);
+  if (estimate.ambiguity) points += addSignal(signals, 'container_ambiguity', 'La presentación por caja quedó ambigua', -12);
 
   const stateWeights = {
     interested: 8,
@@ -196,6 +219,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   let blocker = 'needs_qualification';
   if (optOut) blocker = 'opted_out';
   else if (alreadyConverted) blocker = 'already_purchased';
+  else if (estimate.ambiguity) blocker = 'unit_clarification';
   else if (priceObjection) blocker = 'price';
   else if (softFuture) blocker = 'decision_delay';
   else if (delivery && !explicitIntent) blocker = 'logistics';
@@ -206,6 +230,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   const actions = {
     opted_out: 'No contactar',
     already_purchased: 'No insistir por esta compra; esperar una nueva señal posterior al pedido',
+    unit_clarification: `Aclarar si pidió ${estimate.ambiguity?.count || ''} cajas mayoristas de 180 huevos o ${estimate.ambiguity?.count || ''} bandejas de ${estimate.ambiguity?.quotedUnits || ''}; después confirmar variedad y dirección`,
     price: 'Resolver la objeción con una alternativa concreta basada en lo cotizado',
     decision_delay: 'Retomar exactamente el producto, cantidad y precio que dejó pendientes',
     logistics: 'Resolver primero el despacho u horario y pedir una elección concreta',
@@ -214,7 +239,6 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
     needs_qualification: 'Continuar desde la última pregunta concreta y descubrir producto y cantidad',
   };
 
-  const estimate = estimateEggs(scoringMessages, historicalEggs);
   return {
     modelVersion: MODEL_VERSION,
     probability24h: clamp(probability24h, 0, 99),
