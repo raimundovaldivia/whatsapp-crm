@@ -415,10 +415,11 @@ router.post('/purchase-probability/recalculate', async (req, res) => {
       `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.last_message_at,
               COALESCE(contact.total_orders, 0)::int AS total_orders,
               contact.last_order_at,
+              COALESCE(contact.client_type, 'personal') AS client_type,
               COALESCE(contact.opt_out, FALSE) AS opt_out
          FROM conversations c
          LEFT JOIN LATERAL (
-           SELECT ct.total_orders, ct.last_order_at, ct.opt_out
+           SELECT ct.total_orders, ct.last_order_at, ct.client_type, ct.opt_out
              FROM contacts ct
             WHERE ct.organization_id = c.organization_id AND ct.phone = c.phone_number
             LIMIT 1
@@ -496,6 +497,7 @@ router.post('/purchase-probability/recalculate', async (req, res) => {
       const score = purchaseProbability.scoreConversation({
         messages: messagesByConversation.get(conversation.id) || [],
         pipelineState: conversation.opt_out ? 'opted_out' : conversation.pipeline_state,
+        clientType: conversation.client_type,
         priorOrders: conversation.total_orders,
         lastOrderAt,
         historicalEggs: history.map(item => item.eggs),
@@ -522,6 +524,7 @@ router.post('/purchase-probability/recalculate', async (req, res) => {
         score_inputs: {
           rawPoints: score.rawPoints,
           lastInboundAt: score.lastInboundAt,
+          clientType: conversation.client_type,
           priorOrders: conversation.total_orders,
           lastOrderAt,
         },
