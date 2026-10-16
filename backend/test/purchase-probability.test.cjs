@@ -136,6 +136,23 @@ test('no convierte cajas ambiguas en 180 huevos cuando la cotización ofrece ban
   assert.match(result.recommendedAction, /20 cajas mayoristas de 180 huevos o 20 bandejas de 20/i);
 });
 
+test('excluye empresas que ya compraron durante los últimos siete días', () => {
+  const shared = {
+    now,
+    lastOrderAt: '2026-10-14T15:00:00.000Z',
+    messages: [message('inbound', 'Quiero dos cajas XL', '2026-10-16T15:30:00.000Z')],
+  };
+  const business = probability.scoreConversation({ ...shared, clientType: 'empresa' });
+  const person = probability.scoreConversation({ ...shared, clientType: 'personal' });
+
+  assert.equal(business.probability24h, 0);
+  assert.equal(business.probability48h, 0);
+  assert.equal(business.stage, 'excluded');
+  assert.equal(business.blocker, 'business_recent_order');
+  assert.match(business.recommendedAction, /excluir.*esta semana/i);
+  assert.ok(person.probability48h > 0);
+});
+
 test('el recálculo rechaza rangos inválidos antes de consultar la base', async () => {
   let queries = 0;
   const pool = { query: async () => { queries++; return { rows: [] }; } };

@@ -1,4 +1,4 @@
-const MODEL_VERSION = 'conversation-rules-v2';
+const MODEL_VERSION = 'conversation-rules-v3';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -129,7 +129,7 @@ function hoursSince(value, now) {
   return Math.max(0, (now.getTime() - new Date(value).getTime()) / 3600000);
 }
 
-function scoreConversation({ messages = [], pipelineState = 'exploring', priorOrders = 0, lastOrderAt = null, historicalEggs = [], now = new Date() }) {
+function scoreConversation({ messages = [], pipelineState = 'exploring', clientType = 'personal', priorOrders = 0, lastOrderAt = null, historicalEggs = [], now = new Date() }) {
   const lastOrderTime = lastOrderAt ? new Date(lastOrderAt).getTime() : Number.NaN;
   const scoringMessages = Number.isFinite(lastOrderTime)
     ? messages.filter(message => {
@@ -159,6 +159,8 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   const lastInboundTime = lastInboundAt ? new Date(lastInboundAt).getTime() : Number.NaN;
   const alreadyConverted = Number.isFinite(lastOrderTime)
     && (!Number.isFinite(lastInboundTime) || lastOrderTime >= lastInboundTime);
+  const orderAgeHours = hoursSince(lastOrderAt, now);
+  const recentBusinessOrder = clientType === 'empresa' && orderAgeHours <= 24 * 7;
   const estimate = estimateEggs(scoringMessages, historicalEggs);
 
   if (hasProduct) points += addSignal(signals, 'product', 'Producto o calibre identificado', 8);
@@ -189,9 +191,9 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
     points += addSignal(signals, 'purchase_history', `${priorOrders} pedido(s) anteriores`, weight);
   }
 
-  const orderAgeHours = hoursSince(lastOrderAt, now);
   if (orderAgeHours <= 24 * 7) points += addSignal(signals, 'recent_order', 'Ya compró durante los últimos 7 días', -25);
   else if (orderAgeHours <= 24 * 21) points += addSignal(signals, 'recent_order', 'Compró durante las últimas 3 semanas', -10);
+  if (recentBusinessOrder) addSignal(signals, 'business_weekly_exclusion', 'Empresa con compra durante los últimos 7 días', -100);
 
   let recencyWeight;
   if (ageHours <= 24) recencyWeight = 12;
@@ -203,13 +205,14 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   points += addSignal(signals, 'recency', ageHours <= 24 ? 'Conversación activa en las últimas 24 horas' : `Último mensaje entrante hace ${Math.round(ageHours / 24)} día(s)`, recencyWeight);
 
   if (alreadyConverted) addSignal(signals, 'already_converted', 'La compra más reciente ocurrió después de esta conversación', -100);
-  if (optOut || alreadyConverted) points = -100;
-  const suppressed = optOut || alreadyConverted;
+  if (optOut || alreadyConverted || recentBusinessOrder) points = -100;
+  const suppressed = optOut || alreadyConverted || recentBusinessOrder;
   const probability24h = suppressed ? 0 : Math.round(100 / (1 + Math.exp(-(points - 45) / 13)));
   const probability48h = suppressed ? 0 : Math.round(probability24h + (100 - probability24h) * 0.22);
 
   let stage = 'exploration';
   if (alreadyConverted) stage = 'converted';
+  else if (recentBusinessOrder) stage = 'excluded';
   else if (explicitIntent && hasQuantity) stage = 'decision';
   else if (softFuture && hasQuote) stage = 'post_quote';
   else if (delivery && !explicitIntent) stage = 'logistics';
@@ -219,6 +222,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   let blocker = 'needs_qualification';
   if (optOut) blocker = 'opted_out';
   else if (alreadyConverted) blocker = 'already_purchased';
+  else if (recentBusinessOrder) blocker = 'business_recent_order';
   else if (estimate.ambiguity) blocker = 'unit_clarification';
   else if (priceObjection) blocker = 'price';
   else if (softFuture) blocker = 'decision_delay';
@@ -230,6 +234,7 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   const actions = {
     opted_out: 'No contactar',
     already_purchased: 'No insistir por esta compra; esperar una nueva señal posterior al pedido',
+    business_recent_order: 'Excluir de la acción comercial de esta semana porque la empresa ya compró',
     unit_clarification: `Aclarar si pidió ${estimate.ambiguity?.count || ''} cajas mayoristas de 180 huevos o ${estimate.ambiguity?.count || ''} bandejas de ${estimate.ambiguity?.quotedUnits || ''}; después confirmar variedad y dirección`,
     price: 'Resolver la objeción con una alternativa concreta basada en lo cotizado',
     decision_delay: 'Retomar exactamente el producto, cantidad y precio que dejó pendientes',
