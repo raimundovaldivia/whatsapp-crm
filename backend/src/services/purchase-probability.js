@@ -128,6 +128,10 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   const softFuture = /te aviso|les aviso|lo pienso|voy a pensar|estoy cotizando|solo cotiz|cualquier cosa|mas adelante|m[aá]s adelante/.test(inbound);
   const priceObjection = /muy caro|esta caro|est[aá] caro|m[aá]s barato|se me sale|fuera de presupuesto|mucho para mi/.test(inbound);
   const optOut = pipelineState === 'opted_out' || /no me escrib|no quiero recibir|dame de baja|no contactar/.test(inbound);
+  const lastInboundTime = lastInboundAt ? new Date(lastInboundAt).getTime() : Number.NaN;
+  const lastOrderTime = lastOrderAt ? new Date(lastOrderAt).getTime() : Number.NaN;
+  const alreadyConverted = Number.isFinite(lastOrderTime)
+    && (!Number.isFinite(lastInboundTime) || lastOrderTime >= lastInboundTime);
 
   if (hasProduct) points += addSignal(signals, 'product', 'Producto o calibre identificado', 8);
   if (askedPrice) points += addSignal(signals, 'price_question', 'Consultó precio o cotización', 8);
@@ -169,12 +173,15 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
   else recencyWeight = -20;
   points += addSignal(signals, 'recency', ageHours <= 24 ? 'Conversación activa en las últimas 24 horas' : `Último mensaje entrante hace ${Math.round(ageHours / 24)} día(s)`, recencyWeight);
 
-  if (optOut) points = -100;
-  const probability24h = optOut ? 0 : Math.round(100 / (1 + Math.exp(-(points - 45) / 13)));
-  const probability48h = optOut ? 0 : Math.round(probability24h + (100 - probability24h) * 0.22);
+  if (alreadyConverted) addSignal(signals, 'already_converted', 'La compra más reciente ocurrió después de esta conversación', -100);
+  if (optOut || alreadyConverted) points = -100;
+  const suppressed = optOut || alreadyConverted;
+  const probability24h = suppressed ? 0 : Math.round(100 / (1 + Math.exp(-(points - 45) / 13)));
+  const probability48h = suppressed ? 0 : Math.round(probability24h + (100 - probability24h) * 0.22);
 
   let stage = 'exploration';
-  if (explicitIntent && hasQuantity) stage = 'decision';
+  if (alreadyConverted) stage = 'converted';
+  else if (explicitIntent && hasQuantity) stage = 'decision';
   else if (softFuture && hasQuote) stage = 'post_quote';
   else if (delivery && !explicitIntent) stage = 'logistics';
   else if (askedPrice && hasQuote) stage = 'quoted';
@@ -182,14 +189,17 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', priorOr
 
   let blocker = 'needs_qualification';
   if (optOut) blocker = 'opted_out';
+  else if (alreadyConverted) blocker = 'already_purchased';
   else if (priceObjection) blocker = 'price';
   else if (softFuture) blocker = 'decision_delay';
   else if (delivery && !explicitIntent) blocker = 'logistics';
+  else if (explicitIntent && hasQuantity) blocker = 'confirmation';
   else if (hasProduct && !hasQuantity) blocker = 'quantity';
   else if (hasQuantity && !explicitIntent) blocker = 'confirmation';
 
   const actions = {
     opted_out: 'No contactar',
+    already_purchased: 'No insistir por esta compra; esperar una nueva señal posterior al pedido',
     price: 'Resolver la objeción con una alternativa concreta basada en lo cotizado',
     decision_delay: 'Retomar exactamente el producto, cantidad y precio que dejó pendientes',
     logistics: 'Resolver primero el despacho u horario y pedir una elección concreta',
