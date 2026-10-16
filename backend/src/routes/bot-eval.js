@@ -487,11 +487,17 @@ router.post('/purchase-probability/recalculate', async (req, res) => {
     const snapshots = conversations.map(conversation => {
       const phone = purchaseProbability.canonicalPhone(conversation.phone_number);
       const history = historyByPhone.get(phone) || [];
+      const lastOrderAt = [conversation.last_order_at, ...history.map(item => item.createdAt)]
+        .filter(Boolean)
+        .map(value => new Date(value))
+        .filter(value => Number.isFinite(value.getTime()))
+        .sort((a, b) => a - b)
+        .at(-1) || null;
       const score = purchaseProbability.scoreConversation({
         messages: messagesByConversation.get(conversation.id) || [],
         pipelineState: conversation.opt_out ? 'opted_out' : conversation.pipeline_state,
         priorOrders: conversation.total_orders,
-        lastOrderAt: conversation.last_order_at || history.map(item => item.createdAt).sort().at(-1) || null,
+        lastOrderAt,
         historicalEggs: history.map(item => item.eggs),
         now: evaluatedAt,
       });
@@ -517,7 +523,7 @@ router.post('/purchase-probability/recalculate', async (req, res) => {
           rawPoints: score.rawPoints,
           lastInboundAt: score.lastInboundAt,
           priorOrders: conversation.total_orders,
-          lastOrderAt: conversation.last_order_at,
+          lastOrderAt,
         },
       };
     });

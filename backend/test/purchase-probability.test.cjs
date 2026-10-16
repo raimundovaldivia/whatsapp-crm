@@ -51,6 +51,33 @@ test('un contacto dado de baja nunca aparece con probabilidad positiva', () => {
   assert.equal(result.recommendedAction, 'No contactar');
 });
 
+test('no vuelve a vender una conversación que ya terminó en compra', () => {
+  const result = probability.scoreConversation({
+    now,
+    messages: [message('inbound', 'Quiero dos bandejas XL')],
+    pipelineState: 'done',
+    lastOrderAt: '2026-10-16T15:00:00.000Z',
+  });
+
+  assert.equal(result.probability24h, 0);
+  assert.equal(result.probability48h, 0);
+  assert.equal(result.stage, 'converted');
+  assert.equal(result.blocker, 'already_purchased');
+  assert.match(result.recommendedAction, /no insistir/i);
+});
+
+test('una intención nueva posterior al último pedido vuelve a ser evaluable', () => {
+  const result = probability.scoreConversation({
+    now,
+    messages: [message('inbound', 'Quiero dos bandejas XL', '2026-10-16T15:30:00.000Z')],
+    lastOrderAt: '2026-10-16T15:00:00.000Z',
+  });
+
+  assert.ok(result.probability48h > 0);
+  assert.equal(result.blocker, 'confirmation');
+  assert.match(result.recommendedAction, /confirmaci[oó]n directa/i);
+});
+
 test('calcula huevos desde líneas de pedido y respeta multiplicadores', () => {
   const eggs = probability.eggsFromOrderItems(JSON.stringify([
     { name: 'CAJA XL 180 HUEVOS CAFE', quantity: 2 },
