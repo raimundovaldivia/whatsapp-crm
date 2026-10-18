@@ -2,9 +2,36 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💬</text></svg>" />
+    <link id="app-favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💬</text></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Resel</title>
+    <title></title>
+    <script>
+      (() => {
+        const host = window.location.hostname;
+        const parts = window.location.pathname.split('/').filter(Boolean);
+        const isAdmin = parts[0] === 'admin';
+        const justo = !isAdmin && ['justocasero.com', 'www.justocasero.com', 'justocasero.cl', 'www.justocasero.cl'].includes(host);
+        const diezRios = !isAdmin && ['diezrios.com', 'www.diezrios.com'].includes(host);
+        const tienda = !isAdmin && parts[0] === 'tienda' && parts[1];
+        const identity = justo
+          ? { title: 'Justo Casero | Huevos café XL y Jumbo por caja', icon: '/store-assets/justo-casero/logo.png', color: '#f2644b' }
+          : diezRios
+            ? { title: 'Diez Ríos · Del campo a tu mesa', icon: '/store-assets/diez-rios/icono-diez-rios-oficial-v1.png', color: '#173b2b' }
+            : tienda
+              ? { title: 'Tienda', color: '#173b2b' }
+              : { title: 'Resel', color: '#0c1a20' };
+        document.title = identity.title;
+        if (identity.icon) {
+          const favicon = document.getElementById('app-favicon');
+          favicon.href = identity.icon;
+          favicon.type = 'image/png';
+        }
+        const theme = document.createElement('meta');
+        theme.name = 'theme-color';
+        theme.content = identity.color;
+        document.head.appendChild(theme);
+      })();
+    </script>
     <!-- Leaflet: mapa del panel de Repartos (OpenStreetMap, sin API key) -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
