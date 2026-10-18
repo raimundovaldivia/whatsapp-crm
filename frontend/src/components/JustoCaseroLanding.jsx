@@ -4,6 +4,7 @@ import './justo-casero.css';
 const API = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 const CRM_STORE_SLUG = 'diez-rios-mrs96z69';
 const FALLBACK_WHATSAPP = '56942876413';
+const PRICE_VOTES_KEY = 'justo_casero_price_votes_v1';
 
 const productTests = [
   { id: 'despensa', icon: '🍚', label: 'Arroz y fideos', detail: 'Básicos rendidores para la despensa.' },
@@ -33,10 +34,20 @@ function whatsappHref(phone, message) {
   return `https://wa.me/${onlyDigits(phone)}?text=${encodeURIComponent(message)}`;
 }
 
+function savedPriceVotes() {
+  try {
+    const votes = JSON.parse(localStorage.getItem(PRICE_VOTES_KEY) || '{}');
+    return votes && typeof votes === 'object' ? votes : {};
+  } catch {
+    return {};
+  }
+}
+
 export default function JustoCaseroLanding() {
   const [whatsapp, setWhatsapp] = useState(FALLBACK_WHATSAPP);
   const [selection, setSelection] = useState('');
   const [otherIdea, setOtherIdea] = useState('');
+  const [priceVotes, setPriceVotes] = useState(savedPriceVotes);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -70,6 +81,15 @@ export default function JustoCaseroLanding() {
     `Hola, ya compré en Justo Casero y mi voto para el próximo producto es: ${vote}.`,
   ) : '', [vote, whatsapp]);
   const orderLink = message => whatsappHref(whatsapp, message);
+  const choosePriceVote = (size, answer) => {
+    const next = { ...priceVotes, [size]: answer };
+    setPriceVotes(next);
+    try { localStorage.setItem(PRICE_VOTES_KEY, JSON.stringify(next)); } catch {}
+  };
+  const priceVoteLink = (size, answer) => whatsappHref(
+    whatsapp,
+    `Hola, mi opinión sobre el precio cotizado de la caja de huevos café ${size} es: ${answer === 'fair' ? 'sí, me parece justo 👍' : 'creo que podría ser más bajo 👎'}.`,
+  );
 
   return (
     <div className="jc-landing">
@@ -81,6 +101,7 @@ export default function JustoCaseroLanding() {
           <nav className="jc-nav" aria-label="Navegación principal">
             <a href="#productos">Productos</a>
             <a href="#como-comprar">Cómo comprar</a>
+            <a href="#precio-justo">Precio justo</a>
             <a href="#proximo-producto">Tu voto</a>
           </nav>
           <a className="jc-button jc-button-small" href={orderLink('Hola, quiero consultar por las cajas de huevos café XL y Jumbo de Justo Casero.')} target="_blank" rel="noreferrer">
@@ -116,7 +137,7 @@ export default function JustoCaseroLanding() {
           <div className="jc-container jc-benefit-grid">
             <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Solo huevos café</h2><p>Una oferta precisa, sin variedades que puedan confundir.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">▦</span><div><h2>Venta por caja</h2><p>Formato pensado para hogares, emprendedores y negocios.</p></div></article>
-            <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>Pedido directo</h2><p>La conversación y el pedido quedan gestionados en ReSell.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>Pedido directo</h2><p>Nuestro equipo recibe la conversación y gestiona tu pedido.</p></div></article>
           </div>
         </section>
 
@@ -140,13 +161,45 @@ export default function JustoCaseroLanding() {
           </div>
         </section>
 
+        <section className="jc-price-check" id="precio-justo">
+          <div className="jc-container jc-price-check-card">
+            <div className="jc-price-check-heading">
+              <span className="jc-kicker">El precio también se vota</span>
+              <h2>¿Te pareció justo?</h2>
+              <p>Después de recibir tu cotización, cuéntanos cómo sentiste el precio. Tu respuesta nos ayuda a mantener una oferta honesta.</p>
+            </div>
+            <div className="jc-price-vote-grid">
+              {eggBoxes.map(product => {
+                const answer = priceVotes[product.size];
+                return (
+                  <article className="jc-price-vote-card" key={product.size}>
+                    <div><span>Caja de huevos café</span><strong>{product.size}</strong></div>
+                    <p>¿El precio cotizado está bien?</p>
+                    <div className="jc-price-vote-buttons" role="group" aria-label={`Evaluar precio de caja ${product.size}`}>
+                      <button type="button" className={answer === 'fair' ? 'is-selected is-fair' : ''} aria-pressed={answer === 'fair'} onClick={() => choosePriceVote(product.size, 'fair')}><span aria-hidden="true">👍</span> Sí, está justo</button>
+                      <button type="button" className={answer === 'high' ? 'is-selected is-high' : ''} aria-pressed={answer === 'high'} onClick={() => choosePriceVote(product.size, 'high')}><span aria-hidden="true">👎</span> Está un poco alto</button>
+                    </div>
+                    {answer && (
+                      <div className="jc-price-vote-result" role="status">
+                        <span>¡Gracias! Tu opinión quedó marcada.</span>
+                        <a href={priceVoteLink(product.size, answer)} target="_blank" rel="noreferrer">Registrarla por WhatsApp <span aria-hidden="true">→</span></a>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+            <p className="jc-price-privacy">Guardamos una respuesta por tamaño en este dispositivo. Al enviarla por WhatsApp queda asociada a tu conversación con nuestro equipo.</p>
+          </div>
+        </section>
+
         <section className="jc-how" id="como-comprar">
           <div className="jc-container">
             <div className="jc-centered-heading"><span className="jc-kicker">Comprar será así de fácil</span><h2>Tres pasos y listo.</h2></div>
             <ol className="jc-steps">
               <li><span>1</span><h3>Consulta</h3><p>Pide el precio vigente de las cajas de huevos café.</p></li>
               <li><span>2</span><h3>Elige</h3><p>Indica si necesitas XL o Jumbo y cuántas cajas.</p></li>
-              <li><span>3</span><h3>Coordina</h3><p>ReSell recibe la conversación y gestiona tu pedido por WhatsApp.</p></li>
+              <li><span>3</span><h3>Coordina</h3><p>Nuestro equipo recibe la conversación y gestiona tu pedido por WhatsApp.</p></li>
             </ol>
           </div>
         </section>
