@@ -65,7 +65,7 @@ export default function JustoCaseroLanding() {
     const description = document.querySelector('meta[name="description"]');
     const previousDescription = description?.getAttribute('content') || '';
     document.title = 'Justo Casero | Productos locales y precios justos';
-    description?.setAttribute('content', 'Productos locales o de buen precio, elegidos con criterio. Partimos con cajas de huevos café XL y Jumbo.');
+    description?.setAttribute('content', 'Para la casera y el casero: productos locales o de buen precio, elegidos con criterio. Partimos con huevos café XL y Jumbo.');
 
     return () => {
       controller.abort();
@@ -114,7 +114,7 @@ export default function JustoCaseroLanding() {
         <section className="jc-hero">
           <div className="jc-container jc-hero-grid">
             <div className="jc-hero-copy">
-              <div className="jc-eyebrow"><span /> Productos bien elegidos</div>
+              <div className="jc-eyebrow"><span /> Para la casera y el casero</div>
               <h1>Local cuando se puede. <em>Buen precio siempre.</em></h1>
               <p className="jc-hero-lead">Partimos con cajas de huevos café XL y Jumbo. Después iremos sumando productos locales o alternativas que realmente convengan.</p>
               <div className="jc-hero-actions">
@@ -137,7 +137,7 @@ export default function JustoCaseroLanding() {
           <div className="jc-container jc-benefit-grid">
             <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Hoy ofrecemos cajas de huevos café XL y Jumbo.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">▦</span><div><h2>Selección con criterio</h2><p>Cada producto debe ser local o tener un precio que realmente convenga.</p></div></article>
-            <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>La gente decide</h2><p>Tus votos nos ayudan a elegir qué incorporar después.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>Ustedes deciden</h2><p>La casera y el casero nos ayudan a elegir qué incorporar después.</p></div></article>
           </div>
         </section>
 
@@ -236,7 +236,7 @@ export default function JustoCaseroLanding() {
         </section>
       </main>
 
-      <footer className="jc-footer"><div className="jc-container jc-footer-inner"><img src="/store-assets/justo-casero/logo.png" alt="Justo Casero" /><p>Productos locales o de buen precio, elegidos con criterio.</p><a href={orderLink('Hola, quiero comprar huevos café en caja.')} target="_blank" rel="noreferrer">Comprar por WhatsApp</a></div></footer>
+      <footer className="jc-footer"><div className="jc-container jc-footer-inner"><img src="/store-assets/justo-casero/logo.png" alt="Justo Casero" /><p>Para la casera y el casero: productos locales o de buen precio.</p><a href={orderLink('Hola, quiero comprar huevos café en caja.')} target="_blank" rel="noreferrer">Comprar por WhatsApp</a></div></footer>
     </div>
   );
 }
