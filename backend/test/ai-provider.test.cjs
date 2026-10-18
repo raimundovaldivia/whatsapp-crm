@@ -47,7 +47,8 @@ test('DeepSeek usa su clave, endpoint Anthropic oficial y modelos configurables'
   assert.equal(constructorOptions[0].baseURL, 'https://api.deepseek.com/anthropic');
   assert.equal(constructorOptions[0].timeout, 30000);
   assert.equal(constructorOptions[0].maxRetries, 1);
-  assert.equal(requests[0].reasoning.effort, 'none');
+  assert.equal(requests[0].thinking.type, 'disabled');
+  assert.equal(requests[0].reasoning, undefined);
   assert.equal(requests[0].max_tokens, 1024);
   assert.equal(provider.modelFor('fast'), 'deepseek-fast-test');
   assert.equal(provider.modelFor('smart'), 'deepseek-smart-test');
@@ -59,6 +60,37 @@ test('un proveedor desconocido falla cerrado y no cae silenciosamente en Claude'
     () => loadProvider({ AI_PROVIDER: 'otro', ANTHROPIC_API_KEY: 'secret' }),
     /AI_PROVIDER debe ser/,
   );
+});
+
+test('la herramienta obligatoria funciona con DeepSeek sin modificar solicitudes Anthropic', async () => {
+  const request = {
+    messages: [{ role: 'user', content: 'Prepara un borrador para revisión.' }],
+    tools: [{ name: 'customer_draft', input_schema: { type: 'object' } }],
+    tool_choice: { type: 'tool', name: 'customer_draft' }, max_tokens: 900,
+  };
+  for (const mode of ['deepseek', 'anthropic']) {
+    let observed;
+    class SDK {
+      constructor() {
+        this.messages = { create: async input => {
+          observed = input;
+          if (mode === 'deepseek' && input.thinking?.type !== 'disabled') {
+            throw new Error('Thinking mode does not support this tool_choice');
+          }
+          return { content: [{ type: 'tool_use', name: 'customer_draft', input: { decision: 'draft', message: 'Borrador' } }] };
+        } };
+      }
+    }
+    const provider = load('src/services/ai-provider.js', { '@anthropic-ai/sdk': SDK }, {
+      process: { env: { AI_PROVIDER: mode, DEEPSEEK_API_KEY: 'test', ANTHROPIC_API_KEY: 'test' } },
+    });
+    const response = await provider.client.messages.create(request);
+    assert.equal(response.content[0].type, 'tool_use');
+    assert.equal(observed.tool_choice, request.tool_choice);
+    assert.equal(observed.tools, request.tools);
+    if (mode === 'anthropic') assert.equal(observed, request);
+  }
+  assert.equal(request.thinking, undefined);
 });
 
 test('DeepSeek sin clave falla antes de construir el SDK y no reutiliza la clave de Claude', async () => {
@@ -97,7 +129,7 @@ test('el agente de ventas envía la respuesta por DeepSeek cuando está seleccio
   assert.equal(response, 'Respuesta desde el proveedor configurado');
   assert.equal(constructorOptions[0].baseURL, 'https://api.deepseek.com/anthropic');
   assert.equal(requests[0].model, 'deepseek-flash');
-  assert.equal(requests[0].reasoning.effort, 'none');
+  assert.equal(requests[0].thinking.type, 'disabled');
   assert.equal(requests[0].max_tokens, 1024);
 });
 

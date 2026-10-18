@@ -134,7 +134,7 @@ Para usar DeepSeek en todos los procesos de IA:
 2. Crea una clave en [platform.deepseek.com](https://platform.deepseek.com) y guárdala en `DEEPSEEK_API_KEY`.
 3. Opcionalmente define `DEEPSEEK_MODEL`, `DEEPSEEK_FAST_MODEL`, `DEEPSEEK_SMART_MODEL` o `DEEPSEEK_VISION_MODEL`. Sin overrides se usa `deepseek-flash`.
 
-El proveedor seleccionado se aplica a conversaciones, pedidos, evaluaciones, campañas, reenganche, asistentes administrativos, notificaciones y análisis visual. No hay llamadas directas a un proveedor fuera de la capa común.
+El proveedor seleccionado se aplica a conversaciones, pedidos, evaluaciones, campañas, reenganche, asistentes administrativos, notificaciones y análisis visual. No hay llamadas directas a un proveedor fuera de la capa común. En el endpoint compatible con Anthropic, DeepSeek recibe `thinking: { type: 'disabled' }`; esto permite exigir la respuesta estructurada de los borradores sin activar razonamiento incompatible con una herramienta obligatoria. Referencia: [compatibilidad oficial](https://api-docs.deepseek.com/guides/anthropic_api/).
 
 Los audios tienen una etapa previa: WhatsApp/Kapso puede entregar la transcripción o el backend puede obtenerla con `AUDIO_TRANSCRIPTION_PROVIDER=openai` y `OPENAI_API_KEY`. Una vez transcrito, el texto siempre continúa por el proveedor elegido en `AI_PROVIDER`. Claude y DeepSeek reciben texto e imágenes, no el audio crudo.
 

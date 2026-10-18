@@ -75,7 +75,10 @@ function createAIProvider(env = process.env, AnthropicClient = Anthropic) {
                 positiveInteger(request?.max_tokens, 1),
                 positiveInteger(env.DEEPSEEK_MIN_OUTPUT_TOKENS, 1024),
               ),
-              reasoning: { effort: 'none' },
+              // /messages uses Anthropic's thinking field. `reasoning` is a
+              // Responses API field and leaves thinking on here, rejecting
+              // named tool choices such as the draft-review contract.
+              thinking: { type: 'disabled' },
             }
           : request;
         const response = await sdkClient.messages.create(providerRequest);
