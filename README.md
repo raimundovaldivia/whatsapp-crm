@@ -256,6 +256,13 @@ PUT /api/settings
 
 ---
 
+## Rutas públicas
+
+- `/justo-casero`: landing de la marca Justo Casero para vender exclusivamente cajas de huevos café XL y Jumbo. Los pedidos y votos del Radar Casero se abren por WhatsApp y entran al mismo CRM de la organización.
+- `justocasero.com`, `www.justocasero.com`, `justocasero.cl` y `www.justocasero.cl`: dominios preparados para mostrar esa landing cuando apunten a este frontend.
+
+---
+
 ## 🔧 API Endpoints
 
 | Método | Ruta | Descripción |

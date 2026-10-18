@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 const App = React.lazy(() => import('./App.jsx'))
 const Tienda = React.lazy(() => import('./components/Tienda.jsx'))
+const JustoCaseroLanding = React.lazy(() => import('./components/JustoCaseroLanding.jsx'))
 import './index.css'
 
 const ASSET_RELOAD_KEY = 'resel_asset_reload_at'
@@ -110,19 +111,26 @@ const STORE_DOMAINS = {
   'www.diezrios.com': 'diez-rios-mrs96z69',
   'diezrios.com':     'diez-rios-mrs96z69',
 };
+const JUSTO_CASERO_DOMAINS = new Set([
+  'justocasero.com',
+  'www.justocasero.com',
+  'justocasero.cl',
+  'www.justocasero.cl',
+]);
 
 // En dominios de tienda, /admin reserva el acceso al CRM. El resto del
 // dominio sigue mostrando la tienda publica.
 const pathParts  = window.location.pathname.split('/').filter(Boolean);
 const domainSlug = STORE_DOMAINS[window.location.hostname];
 const isAdmin    = pathParts[0] === 'admin';
+const isJustoCasero = !isAdmin && (JUSTO_CASERO_DOMAINS.has(window.location.hostname) || pathParts[0] === 'justo-casero');
 const isTienda   = !isAdmin && (domainSlug || (pathParts[0] === 'tienda' && pathParts[1]));
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AppErrorBoundary>
       <React.Suspense fallback={<AppLoader />}>
-        {isTienda ? <Tienda slug={domainSlug || pathParts[1]} /> : <App />}
+        {isJustoCasero ? <JustoCaseroLanding /> : isTienda ? <Tienda slug={domainSlug || pathParts[1]} /> : <App />}
       </React.Suspense>
     </AppErrorBoundary>
   </React.StrictMode>,
