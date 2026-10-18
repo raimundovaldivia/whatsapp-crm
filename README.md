@@ -287,3 +287,7 @@ PUT /api/settings
 - **Costos de WhatsApp**: Meta cobra por conversación iniciada por el negocio (24h window gratis para responder mensajes iniciados por el cliente).
 - **Costo IA**: depende del proveedor y modelo configurados para texto, herramientas e imágenes.
 - **Shopify cache**: Los productos se actualizan automáticamente cada hora.
+
+### Redacción individual por Evolution
+
+En Mensajería masiva, el canal Evolution permite indicar el objetivo y las condiciones en lenguaje natural. La IA vigente redacta por cliente con su historial y conversación; preparar borradores no envía mensajes. Cada texto debe revisarse y puede corregirse o excluirse antes de autorizar el lote. La autorización se vincula a los destinatarios y textos exactos, que se guardan en la cola existente. Cambiar un mensaje exige volver a revisarlo. Las campañas detenidas mantienen su estado. Esta función envía texto y no incorpora imágenes.

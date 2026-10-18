@@ -1087,6 +1087,13 @@ router.get('/candidates', async (req, res) => {
 ───────────────────────────────────────────────────────────────────── */
 router.post('/generate', async (req, res) => {
   try {
+    if (req.body?.instruction !== undefined || req.body?.phones !== undefined) {
+      const drafts = require('../services/broadcast-drafts');
+      drafts.validateRequest(req.body);
+      await require('../services/commercial').assertModule(req.orgId, 'marketing');
+      const result = await drafts.generateDrafts(req.orgId, req.body, aiClient);
+      return res.json({ success: true, ...result });
+    }
     const { phone } = req.body;
     const cached    = analysisCache.get(req.orgId);
     const c         = cached?.data?.find(x => x.phone === phone) || {};
@@ -1122,7 +1129,7 @@ PROHIBIDO — no incluyas nada de esto:
 
     res.json({ success: true, message: responseText(response), phone });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'No se pudo redactar el mensaje. No se ha enviado nada.' });
   }
 });
 
@@ -1925,6 +1932,14 @@ router.post('/campaigns', async (req, res) => {
     const { templateName, total, testMode = false, testPhone = null, sendingProvider = 'kapso', sendingChannelId = null } = req.body || {};
     if (req.body?.sendingProvider) await require('../services/broadcast-sender').resolveSender(req.orgId, sendingProvider, sendingChannelId);
     const pacing = sendingProvider === 'evolution' ? require('../services/broadcast-sender').pacingSettings(req.body.pacingSettings) : null;
+    if (req.body.generationMode !== undefined) {
+      if (req.body.generationMode !== 'instruction' || sendingProvider !== 'evolution'
+        || typeof req.body.instruction !== 'string' || req.body.instruction.trim().length < 10 || req.body.instruction.length > 6000) {
+        return res.status(400).json({ error: 'Instrucción o método de redacción inválido' });
+      }
+      pacing.generationMode = 'instruction';
+      pacing.instruction = req.body.instruction.trim();
+    }
     const totalCount = Number(total);
     if (!templateName) return res.status(400).json({ success: false, error: 'templateName requerido' });
     if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 5000) {
@@ -1961,6 +1976,9 @@ router.post('/campaigns/:id/start', async (req, res) => {
       phones.add(phone);
       return { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone };
     });
+    if (campaign.pacing_settings?.generationMode === 'instruction') {
+      require('../services/broadcast-drafts').validateApproval(prepared, req.body.approval);
+    }
     client = await getPool().connect();
     await client.query('BEGIN');
     const locked = (await client.query('SELECT * FROM broadcast_campaigns WHERE id = $1 AND organization_id = $2 FOR UPDATE', [campaign.id, req.orgId])).rows[0];
@@ -1972,6 +1990,12 @@ router.post('/campaigns/:id/start', async (req, res) => {
         SELECT $1, $2, ordinality::integer, value FROM jsonb_array_elements($3::jsonb) WITH ORDINALITY`,
         [campaign.id, req.orgId, JSON.stringify(prepared)]);
       await client.query('UPDATE broadcast_campaigns SET server_managed = TRUE WHERE id = $1', [campaign.id]);
+      if (campaign.pacing_settings?.generationMode === 'instruction') {
+        await client.query(`UPDATE broadcast_campaigns SET pacing_settings = pacing_settings || $3::jsonb
+          WHERE id = $1 AND organization_id = $2`, [campaign.id, req.orgId, JSON.stringify({
+          approval: { fingerprint: req.body.approval.fingerprint, approvedBy: req.userId, approvedAt: new Date().toISOString() },
+        })]);
+      }
     }
     await client.query('COMMIT');
     res.json({ success: true, campaign: { ...campaign, server_managed: true } });
@@ -2546,6 +2570,9 @@ async function sendBulk(req, res) {
   if (campaignId) {
     const campaign = await getBroadcastCampaign(req.orgId, campaignId);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (campaign.pacing_settings?.generationMode === 'instruction' && !req[SERVER_QUEUE]) {
+      return res.status(409).json({ error: 'Revisa y autoriza los borradores antes de iniciar esta campaña desde el servidor' });
+    }
     if (campaign.server_managed && (!req[SERVER_QUEUE] || campaign.status !== 'processing')) {
       return res.status(409).json({ error: 'Esta campaña se controla desde el servidor' });
     }

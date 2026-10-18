@@ -10,6 +10,7 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel } from '../utils/broadcast-audience.mjs';
+import { reviewFingerprint, editReviewedEntry, canApproveDrafts } from '../utils/broadcast-drafts.mjs';
 
 function consolidateVisibleCandidates(rows = []) {
   const grouped = new Map();
@@ -1309,9 +1310,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
   const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
   const [directText, setDirectText] = useState('');
+  const [directMode, setDirectMode] = useState('instruction');
+  const [directInstruction, setDirectInstruction] = useState('');
+  const [drafting, setDrafting] = useState(false);
+  const [draftProgress, setDraftProgress] = useState({ done: 0, total: 0 });
+  const [draftReport, setDraftReport] = useState(null);
+  const draftRunRef = useRef(0);
   const directEditorRef = useRef(null);
   const isDirect = sendingMethodKey.startsWith('evolution:');
-  const messageReady = isDirect ? !!directText.trim() : !!selTpl;
+  const isInstruction = isDirect && directMode === 'instruction';
+  const messageReady = isDirect ? (isInstruction ? directInstruction.trim().length >= 10 : !!directText.trim()) : !!selTpl;
   const [waitSeconds, setWaitSeconds] = useState(0);
   const selectedMethod = sendingMethods.find(m => (m.channelId ? `evolution:${m.channelId}` : 'kapso') === sendingMethodKey);
   const loadSendingMethods = useCallback(async () => {
@@ -1379,6 +1387,18 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 5000);
   };
+
+  useEffect(() => () => { draftRunRef.current++; }, []);
+
+  // A change in audience, instruction or sender invalidates in-flight drafts.
+  useEffect(() => {
+    draftRunRef.current++;
+    setDrafting(false);
+    setDraftReport(null);
+    setReviewPlan(null);
+    setReviewedItems(new Set());
+  }, [directInstruction, directMode, selected, search, audienceType, audienceSegment, purchaseAge,
+    customPurchaseDays, prodPhones, deliveryPhones, sendingMethodKey, testMode, testPhoneInput]);
 
   async function openContactOrders(event, contact) {
     event.stopPropagation();
@@ -2011,12 +2031,56 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     }
   }
 
+  async function prepareInstructionReview() {
+    if (selectedCount > 100) { showToast('Acota la selección a un máximo de 100 clientes para revisar sus borradores.', 'error'); return; }
+    const run = ++draftRunRef.current;
+    const chosen = testMode ? audience.slice(0, 1) : [...audience];
+    setDrafting(true);
+    setDraftProgress({ done: 0, total: chosen.length });
+    setDraftReport(null);
+    setReviewPlan(null);
+    const drafts = [];
+    try {
+      for (let i = 0; i < chosen.length; i += 6) {
+        const { data } = await api.post('/reengagement/generate', {
+          instruction: directInstruction.trim(), phones: chosen.slice(i, i + 6).map(contact => contact.phone), audienceType,
+        }, { timeout: 180000 });
+        if (run !== draftRunRef.current) return;
+        if (!Array.isArray(data.drafts)) throw new Error('No se recibieron los borradores. No se ha enviado nada.');
+        drafts.push(...data.drafts);
+        setDraftProgress({ done: Math.min(i + 6, chosen.length), total: chosen.length });
+      }
+      const excluded = drafts.filter(draft => draft.decision !== 'draft');
+      const entries = drafts.filter(draft => draft.decision === 'draft').map(draft => {
+        const contact = chosen.find(person => normPhone(person.phone) === normPhone(draft.phone));
+        if (!contact) throw new Error('El borrador no corresponde a la selección.');
+        return { contact, reason: draft.reason, evidence: draft.evidence, previewText: draft.message,
+          item: { phone: testMode ? TEST_PHONE : contact.phone, originalPhone: contact.phone,
+            contactName: contact.name, message: draft.message, previewText: draft.message } };
+      });
+      setDraftReport({ excluded, total: chosen.length, prepared: entries.length });
+      if (!entries.length) { showToast('Ningún cliente cumple las condiciones. Revisa los motivos y ajusta la instrucción.', 'error'); return; }
+      setReviewIdx(0);
+      setGuidedReview(true);
+      setReviewedItems(new Set());
+      setReviewPlan({ templateName: 'Redacción individual · Evolution', entries,
+        generationMode: 'instruction', instruction: directInstruction.trim(), excluded,
+        sendingProvider: selectedMethod.provider, sendingChannelId: selectedMethod.channelId,
+        sendingLabel: selectedMethod.label, audienceLabel: purchaseAgeLabel(purchaseDays),
+        ...directPacing, testMode, testPhone: TEST_PHONE, createdAt: Date.now() });
+    } catch (error) {
+      if (run === draftRunRef.current) showToast(error.response?.data?.error || error.message || 'No se pudieron preparar los borradores. No se envió nada.', 'error');
+    } finally { if (run === draftRunRef.current) setDrafting(false); }
+  }
+
   function prepareReview() {
+    if (drafting) return;
     if (isDirect && !Object.entries(directPacing).every(([key, value]) => Number.isInteger(Number(value)) && Number(value) >= (key === 'batchPauseSeconds' ? 0 : 1) && Number(value) <= (key === 'batchSize' ? 5000 : 86400))) { showToast('Revisa los tiempos y el tamaño del lote', 'error'); return; }
     if (!selectedMethod?.available) { showToast('Selecciona un método de envío conectado', 'error'); return; }
     if (!messageReady) { showToast(isDirect ? 'Escribe el mensaje primero' : 'Selecciona un template primero', 'error'); return; }
     if (selectedCount === 0) { showToast('Selecciona al menos un contacto', 'error'); return; }
     if (testMode && !TEST_PHONE) { showToast('Ingresa un número de prueba antes de enviar', 'error'); return; }
+    if (isInstruction) { prepareInstructionReview(); return; }
 
     const bodyComp = isDirect ? null : getBodyComponent(selTpl);
     const variableNumbers = getTemplateVariables(bodyComp?.text || '');
@@ -2104,6 +2168,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   async function confirmSend() {
     if (!reviewPlan?.entries?.length || sendingRef.current) return;
+    if (reviewPlan.generationMode === 'instruction' && !canApproveDrafts(reviewPlan, reviewedItems)) {
+      showToast('Revisa cada mensaje antes de autorizar el envío.', 'error'); return;
+    }
     sendingRef.current = true;
     stopSendingRef.current = false;
     const direct = reviewPlan.sendingProvider === 'evolution';
@@ -2114,6 +2181,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setSending(true);
     setResults(null);
     try {
+      const approval = reviewPlan.generationMode === 'instruction'
+        ? { confirmed: true, fingerprint: await reviewFingerprint(reviewPlan.entries) } : undefined;
       const created = await api.post('/reengagement/campaigns', {
         templateName: reviewPlan.templateName,
         total: items.length,
@@ -2122,11 +2191,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
+        ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction } : {}),
       });
       campaignId = created.data.campaign.id;
       if (direct) {
         handedToServer = true;
-        await api.post(`/reengagement/campaigns/${campaignId}/start`, { items }, { timeout: 45000 });
+        await api.post(`/reengagement/campaigns/${campaignId}/start`, { items, ...(approval ? { approval } : {}) }, { timeout: 45000 });
         setReviewPlan(null);
         setHistoryOpen(true);
         showToast('Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
@@ -2657,7 +2727,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </button>
 
         {/* Enviar */}
-        <button onClick={prepareReview} disabled={sending || selectedCount === 0 || !messageReady} style={{
+        <button onClick={prepareReview} disabled={sending || drafting || selectedCount === 0 || !messageReady} style={{
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '7px 16px', borderRadius: colors.radiusMd, border: 'none',
           backgroundColor: (selectedCount > 0 && messageReady) ? colors.green : colors.bgHover,
@@ -2666,7 +2736,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           opacity: sending ? 0.7 : 1,
         }}>
           <Send size={14} />
-          {sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : (testMode ? 'Revisar 1 mensaje de prueba' : `Revisar envío a ${selectedCount}`)}
+          {drafting ? `Redactando ${draftProgress.done}/${draftProgress.total}…` : sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : isInstruction ? `Preparar ${testMode ? 1 : selectedCount} borradores` : (testMode ? 'Revisar 1 mensaje de prueba' : `Revisar envío a ${selectedCount}`)}
         </button>
       </div>
 
@@ -2893,8 +2963,28 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
       {/* Mapeo de variables del template */}
       {isDirect && <section aria-label="Redactar mensaje para Evolution" style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}` }}>
-        <label htmlFor="evolution-message" style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 800 }}>Escribe tu mensaje</label>
-        <p style={{ margin: '6px 0 10px', fontSize: 12, color: colors.textSecondary }}>Texto libre. Puedes insertar estos datos donde quieras; todos son opcionales.</p>
+        <label style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 800 }}>Redacción para Evolution
+          <select aria-label="Cómo redactar los mensajes" value={directMode} disabled={sending || drafting || !!reviewPlan}
+            onChange={event => setDirectMode(event.target.value)} style={{ marginLeft: 12, padding: 6, background: colors.bgCard, color: colors.textPrimary }}>
+            <option value="instruction">Dar una instrucción a la IA</option>
+            <option value="manual">Escribir un texto común manualmente</option>
+          </select>
+        </label>
+        {isInstruction ? <>
+          <p style={{ fontSize: 12, color: colors.textSecondary }}>Explica qué quieres lograr, las ofertas y a quiénes excluir. La IA revisará las compras y conversaciones para redactar un borrador por cliente. Tú revisas y autorizas los mensajes antes de enviarlos.</p>
+          <textarea id="evolution-instruction" aria-label="Instrucción para redactar mensajes" value={directInstruction} maxLength={6000}
+            disabled={sending || drafting || !!reviewPlan} onChange={event => setDirectInstruction(event.target.value)} rows={5}
+            placeholder="Ofrece reposición para mañana a particulares según cuándo y cuánto compran. Incluye aceitunas y trata de otra forma a quienes compraron una sola vez. Indica aquí los precios, cantidades disponibles y exclusiones."
+            style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 12, borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5 }} />
+          <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>Preparar borradores no envía mensajes. Se evalúa solamente el público seleccionado. Los precios y compromisos deben revisarse antes de autorizar.</div>
+          {drafting && <button onClick={() => { draftRunRef.current++; setDrafting(false); }} style={{ marginTop: 8 }}>Cancelar preparación</button>}
+          {draftReport && <div style={{ marginTop: 10, color: colors.textSecondary, fontSize: 12 }}>
+            {draftReport.prepared} borradores · {draftReport.excluded.length} excluidos · ningún envío automático.
+            {draftReport.excluded.map(draft => <div key={draft.phone}>{draft.name || draft.phone}: {draft.reason}</div>)}
+          </div>}
+        </> : <>
+        <label htmlFor="evolution-message" style={{ display: 'block', marginTop: 10, color: colors.textPrimary }}>Texto común para los seleccionados</label>
+        <p style={{ margin: '6px 0 10px', fontSize: 12, color: colors.textSecondary }}>Este modo repite el texto y reemplaza los datos insertados. Para una redacción individual, usa una instrucción a la IA.</p>
         <div role="group" aria-label="Insertar dato del cliente" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
           {DIRECT_PARAMETERS.map(parameter => <button key={parameter.key} type="button"
             onClick={() => insertParameter(parameter.key)} disabled={sending || !!reviewPlan}
@@ -2908,6 +2998,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           placeholder="Escribe aquí. Por ejemplo: Hola {{nombre}}, ¿necesitas huevos esta semana?"
           style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 12, borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5 }} />
         <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>Los datos se reemplazan por los de cada cliente. Si falta un dato usado, te avisaremos antes de enviar.</div>
+        </>}
       </section>}
       {!isDirect && !loading && selTpl && tplVarCount > 0 && (
         <div style={{ padding: '8px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgApp, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
@@ -2970,7 +3061,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       )}
 
       {/* Vista previa del mensaje */}
-      {!loading && (isDirect || selTpl) && (() => {
+      {!loading && !isInstruction && (isDirect || selTpl) && (() => {
         const sel = audience;
         if (!sel.length) return null;
         const idx = Math.min(previewIdx, sel.length - 1);
@@ -3176,7 +3267,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         const idx = Math.min(reviewIdx, reviewPlan.entries.length - 1);
         const entry = reviewPlan.entries[idx];
         const reviewedCount = reviewedItems.size;
-        const guidedComplete = guidedReview && reviewedCount === reviewPlan.entries.length;
+        const individual = reviewPlan.generationMode === 'instruction';
+        const guidedComplete = guidedReview && (individual ? canApproveDrafts(reviewPlan, reviewedItems) : reviewedCount === reviewPlan.entries.length);
         return (
           <div role="dialog" aria-modal="true" aria-label="Revisar envío masivo" style={{ position: 'fixed', inset: 0, zIndex: 10000, backgroundColor: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
             <div style={{ width: 'min(760px, 96vw)', maxHeight: '90vh', overflowY: 'auto', backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 14, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
@@ -3203,6 +3295,10 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     {sendProgress.lastReason && <div style={{ marginTop: 4, fontSize: 12, color: colors.yellow }}>{sendProgress.lastReason}</div>}
                   </div>}
                   <div style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>Esta vista usa exactamente los mensajes preparados que se enviarán.</div>
+                  {individual && <details style={{ marginTop: 8, color: colors.textSecondary, fontSize: 12 }}><summary>Instrucción y exclusiones</summary>
+                    <p style={{ whiteSpace: 'pre-wrap' }}>{reviewPlan.instruction}</p>
+                    {(reviewPlan.excluded || []).map(draft => <p key={draft.phone}>{draft.name || draft.phone}: {draft.reason}</p>)}
+                  </details>}
                 </div>
                 <button onClick={() => setReviewPlan(null)} disabled={sending} aria-label="Cerrar revisión" style={{ border: 'none', background: 'none', color: colors.textMuted, cursor: sending ? 'not-allowed' : 'pointer', padding: 4 }}><X size={18} /></button>
               </div>
@@ -3224,7 +3320,25 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     <button onClick={() => setReviewIdx(i => Math.min(reviewPlan.entries.length - 1, i + 1))} disabled={idx === reviewPlan.entries.length - 1 || sending} style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: colors.radiusSm, color: colors.textSecondary, padding: '3px 12px', cursor: idx === reviewPlan.entries.length - 1 ? 'default' : 'pointer', opacity: idx === reviewPlan.entries.length - 1 ? 0.5 : 1 }}>→</button>
                   </span>}
                 </div>
-                <div style={{ whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }}>{entry.previewText || '(Template sin cuerpo de texto)'}</div>
+                {individual ? <>
+                  <div style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
+                    {entry.reason}
+                    {entry.evidence && <div style={{ marginTop: 5 }}>Última compra: {entry.evidence.ultimaCompra || 'sin registro'} · Intervalo entre compras: {entry.evidence.intervaloMedianoDias ? `${entry.evidence.intervaloMedianoDias} días (estimado)` : 'sin frecuencia suficiente'}</div>}
+                  </div>
+                  <textarea aria-label={`Mensaje para ${entry.contact?.name || entry.contact?.phone}`} value={entry.previewText} rows={6} maxLength={1200} disabled={sending}
+                    onChange={event => {
+                      setReviewPlan(plan => editReviewedEntry(plan, idx, event.target.value));
+                      setReviewedItems(current => { const next = new Set(current); next.delete(idx); return next; });
+                    }} style={{ width: '100%', boxSizing: 'border-box', whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }} />
+                  <button disabled={sending} onClick={() => {
+                    const entries = reviewPlan.entries.filter((_, i) => i !== idx);
+                    const excluded = [...(reviewPlan.excluded || []), { phone: entry.contact.phone, name: entry.contact.name, reason: 'Excluido durante la revisión.' }];
+                    setDraftReport(previous => ({ ...previous, excluded, prepared: entries.length }));
+                    setReviewPlan(entries.length ? { ...reviewPlan, entries, excluded } : null);
+                    setReviewIdx(Math.max(0, Math.min(idx, entries.length - 1)));
+                    setReviewedItems(new Set([...reviewedItems].filter(i => i !== idx).map(i => i > idx ? i - 1 : i)));
+                  }} style={{ marginTop: 7 }}>Excluir a esta persona</button>
+                </> : <div style={{ whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }}>{entry.previewText || '(Template sin cuerpo de texto)'}</div>}
                 <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 7 }}>Destino real: {entry.item.phone} · Puedes recorrer todos los mensajes antes de confirmar.</div>
                 {guidedReview && (
                   <div style={{ marginTop: 10, padding: '9px 11px', borderRadius: 8, backgroundColor: `${colors.green}12`, border: `1px solid ${colors.green}33`, color: colors.textSecondary, fontSize: 12, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
@@ -3250,7 +3364,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 <button onClick={() => setReviewPlan(null)} disabled={sending} style={{ padding: '8px 15px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, cursor: sending ? 'not-allowed' : 'pointer' }}>Volver y corregir</button>
                 <button onClick={confirmSend} disabled={sending || (guidedReview && !guidedComplete)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: guidedReview && !guidedComplete ? colors.bgHover : colors.green, color: guidedReview && !guidedComplete ? colors.textMuted : '#fff', fontWeight: 800, cursor: sending || (guidedReview && !guidedComplete) ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
                   {sending ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
-                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : guidedReview && !guidedComplete ? `Faltan ${reviewPlan.entries.length - reviewedCount} por revisar` : `Confirmar y enviar ${reviewPlan.entries.length}`}
+                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : guidedReview && !guidedComplete ? 'Revisa y completa cada mensaje' : `${individual ? 'Autorizar' : 'Confirmar'} y enviar ${reviewPlan.entries.length}`}
                 </button>
               </div>
             </div>
