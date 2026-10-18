@@ -7,9 +7,9 @@ const FALLBACK_WHATSAPP = '56942876413';
 const PRICE_VOTES_KEY = 'justo_casero_price_votes_v1';
 
 const productTests = [
-  { id: 'despensa', icon: '🍚', label: 'Arroz y fideos', detail: 'Básicos rendidores para la despensa.' },
-  { id: 'aceite', icon: '🫗', label: 'Aceite', detail: 'Un esencial que siempre hace falta.' },
-  { id: 'papel', icon: '🧻', label: 'Papel higiénico', detail: 'Compra práctica para el hogar o negocio.' },
+  { id: 'lacteos', icon: '🧀', label: 'Quesos y lácteos locales', detail: 'Productos cercanos, frescos y con buena procedencia.' },
+  { id: 'conservas', icon: '🫒', label: 'Aceitunas y conservas', detail: 'Alternativas locales elegidas por sabor y origen.' },
+  { id: 'despensa', icon: '🍚', label: 'Despensa a buen precio', detail: 'Arroz, fideos, aceite y otros básicos que realmente convengan.' },
   { id: 'otra', icon: '+', label: 'Otra idea', detail: 'Cuéntanos qué producto te gustaría encontrar.' },
 ];
 
@@ -64,8 +64,8 @@ export default function JustoCaseroLanding() {
     const previousTitle = document.title;
     const description = document.querySelector('meta[name="description"]');
     const previousDescription = description?.getAttribute('content') || '';
-    document.title = 'Justo Casero | Huevos café XL y Jumbo por caja';
-    description?.setAttribute('content', 'Cajas de huevos café XL y Jumbo con atención directa en La Serena y Coquimbo.');
+    document.title = 'Justo Casero | Productos locales y precios justos';
+    description?.setAttribute('content', 'Productos locales o de buen precio, elegidos con criterio. Partimos con cajas de huevos café XL y Jumbo.');
 
     return () => {
       controller.abort();
@@ -114,9 +114,9 @@ export default function JustoCaseroLanding() {
         <section className="jc-hero">
           <div className="jc-container jc-hero-grid">
             <div className="jc-hero-copy">
-              <div className="jc-eyebrow"><span /> Huevos café por caja</div>
-              <h1>XL y Jumbo <em>al precio justo.</em></h1>
-              <p className="jc-hero-lead">Una oferta simple: vendemos solamente huevos café, en cajas XL y Jumbo.</p>
+              <div className="jc-eyebrow"><span /> Productos bien elegidos</div>
+              <h1>Local cuando se puede. <em>Buen precio siempre.</em></h1>
+              <p className="jc-hero-lead">Partimos con cajas de huevos café XL y Jumbo. Después iremos sumando productos locales o alternativas que realmente convengan.</p>
               <div className="jc-hero-actions">
                 <a className="jc-button jc-button-primary" href={orderLink('Hola, quiero conocer el precio y disponibilidad de las cajas de huevos café XL y Jumbo.')} target="_blank" rel="noreferrer">
                   Consultar precio por caja <span aria-hidden="true">→</span>
@@ -135,17 +135,17 @@ export default function JustoCaseroLanding() {
 
         <section className="jc-benefits" aria-label="Características de la oferta">
           <div className="jc-container jc-benefit-grid">
-            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Solo huevos café</h2><p>Una oferta precisa, sin variedades que puedan confundir.</p></div></article>
-            <article><span className="jc-icon" aria-hidden="true">▦</span><div><h2>Venta por caja</h2><p>Formato pensado para hogares, emprendedores y negocios.</p></div></article>
-            <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>Pedido directo</h2><p>Nuestro equipo recibe la conversación y gestiona tu pedido.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Hoy ofrecemos cajas de huevos café XL y Jumbo.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">▦</span><div><h2>Selección con criterio</h2><p>Cada producto debe ser local o tener un precio que realmente convenga.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>La gente decide</h2><p>Tus votos nos ayudan a elegir qué incorporar después.</p></div></article>
           </div>
         </section>
 
         <section className="jc-section" id="productos">
           <div className="jc-container">
             <div className="jc-section-heading">
-              <div><span className="jc-kicker">Nuestra oferta inicial</span><h2>Un color.<br />Dos tamaños.</h2></div>
-              <p>Por ahora Justo Casero vende únicamente cajas de huevos café. Elige XL o Jumbo y consulta disponibilidad.</p>
+              <div><span className="jc-kicker">Nuestra primera categoría</span><h2>Huevos café.<br />Dos tamaños.</h2></div>
+              <p>Comenzamos con cajas de huevos café. Elige XL o Jumbo mientras preparamos los próximos productos de Justo Casero.</p>
             </div>
             <div className="jc-egg-grid">
               {eggBoxes.map((product, index) => (
@@ -214,9 +214,9 @@ export default function JustoCaseroLanding() {
         <section className="jc-radar" id="proximo-producto">
           <div className="jc-container jc-radar-card">
             <div className="jc-radar-heading">
-              <span className="jc-kicker">Radar Casero · Test postcompra</span>
+              <span className="jc-kicker">Radar Casero · Próximos productos</span>
               <h2>¿Qué debería llegar después?</h2>
-              <p>Si ya compraste tus huevos, ayúdanos a escoger el próximo producto. Son ideas en evaluación: todavía no están a la venta.</p>
+              <p>Queremos sumar productos locales o alternativas de buen precio. Ayúdanos a escoger qué probar primero: estas ideas todavía no están a la venta.</p>
             </div>
             <div className="jc-vote-grid" role="group" aria-label="Opciones para el próximo producto">
               {productTests.map(product => (
@@ -236,7 +236,7 @@ export default function JustoCaseroLanding() {
         </section>
       </main>
 
-      <footer className="jc-footer"><div className="jc-container jc-footer-inner"><img src="/store-assets/justo-casero/logo.png" alt="Justo Casero" /><p>Huevos café por caja, al precio justo.</p><a href={orderLink('Hola, quiero comprar huevos café en caja.')} target="_blank" rel="noreferrer">Comprar por WhatsApp</a></div></footer>
+      <footer className="jc-footer"><div className="jc-container jc-footer-inner"><img src="/store-assets/justo-casero/logo.png" alt="Justo Casero" /><p>Productos locales o de buen precio, elegidos con criterio.</p><a href={orderLink('Hola, quiero comprar huevos café en caja.')} target="_blank" rel="noreferrer">Comprar por WhatsApp</a></div></footer>
     </div>
   );
 }

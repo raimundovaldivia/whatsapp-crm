@@ -28,7 +28,7 @@ const isTienda = !isAdmin && (domainSlug || (pathParts[0] === 'tienda' && pathPa
 
 function applyInitialPageIdentity() {
   const identity = isJustoCasero
-    ? { title: 'Justo Casero | Huevos café XL y Jumbo por caja', icon: '/store-assets/justo-casero/logo.png', color: '#f2644b' }
+    ? { title: 'Justo Casero | Productos locales y precios justos', icon: '/store-assets/justo-casero/logo.png', color: '#f2644b' }
     : domainSlug
       ? { title: 'Diez Ríos · Del campo a tu mesa', icon: '/store-assets/diez-rios/icono-diez-rios-oficial-v1.png', color: '#173b2b' }
       : isTienda
