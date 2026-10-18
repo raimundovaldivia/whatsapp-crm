@@ -234,6 +234,13 @@ Endpoints protegidos para `owner`, `admin` y `supervisor`:
 - Si el cliente indica que ya no necesita o que compró en otro lugar, se le pregunta una sola vez si nos consideraría para una próxima compra. Solo si responde que no se consulta el motivo, y el resultado queda visible en el análisis de campaña.
 - La pestaña **Calientes** prioriza pedidos en curso y muestra la vigencia del despacho; **Seguimiento** reúne conversaciones aún recuperables.
 
+### Cobranza y coordinación operativa
+- Si un cliente informa que podrá transferir en una fecha futura, el bot registra el compromiso y suspende los cobros automáticos hasta ese día.
+- Los pedidos con comprobante pendiente, pago verificado o una nota explícita de "no cobrar" se excluyen de cobranza para evitar duplicados.
+- Una fecha de entrega confirmada después de crear el pedido se guarda en el pedido y lo retira de rutas que aún no comenzaron.
+- Cuando la ventana de WhatsApp del admin está cerrada, el aviso del CRM permite abrir el chat del negocio con un mensaje preparado para reactivarla.
+- La evaluación de calidad procesa conversaciones en paralelo y admite hasta 120 segundos antes de informar timeout.
+
 ---
 
 ## ⚙️ Personalizar el agente

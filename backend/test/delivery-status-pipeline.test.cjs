@@ -4,6 +4,16 @@ const { load } = require('./helpers.cjs');
 
 function buildPipeline(deliveryDate, status = 'draft', options = {}) {
   const stateUpdates = options.stateUpdates || [];
+  const poolQuery = async (sql, params) => {
+    options.poolQueries?.push({ sql: String(sql), params });
+    if (String(sql).includes('UPDATE orders') && String(sql).includes('delivery_date')) return { rows: [], rowCount: 1 };
+    return {
+      rows: String(sql).includes("COALESCE(r.started_at") && options.todayRoute
+        ? [options.todayRoute]
+        : [],
+      rowCount: 0,
+    };
+  };
   const db = {
     getConversationById: async () => ({
       id: 71,
@@ -49,12 +59,8 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       ? async (...args) => options.clearSameDayHold(...args)
       : undefined,
     getPool: () => ({
-      query: async sql => ({
-        rows: String(sql).includes("COALESCE(r.started_at") && options.todayRoute
-          ? [options.todayRoute]
-          : [],
-        rowCount: 0,
-      }),
+      query: poolQuery,
+      connect: async () => ({ query: poolQuery, release() {} }),
     }),
   };
 
@@ -78,7 +84,15 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       selectedFreeGift: () => null,
       appliesToDelivery: () => false,
     },
-    './payment-collection': { getPendingCharges: async () => [] },
+    './payment-collection': { getPendingCharges: async () => options.pendingCharges || [] },
+    './payment-promises': {
+      isTemporaryPaymentAccessIssue: message => /bloque[oó].{0,40}(clave|banco)/i.test(message),
+      detectPaymentPromise: () => options.paymentPromise || null,
+      recordPaymentPromise: async (...args) => { options.promiseRecords?.push(args); },
+    },
+    './delivery-attempts': {
+      recordRouteOutcome: async (...args) => { options.routeOutcomes?.push(args); },
+    },
     './scheduled-orders': {
       isFutureOrderIntent: () => false,
       isSoftFutureIntent: () => false,
@@ -363,6 +377,58 @@ test('un sí posterior confirma la fecha consultada sin confirmar prematuramente
   assert.doesNotMatch(result.response, /pedido confirmado/i);
   assert.equal(stateUpdates.at(-1).draft.delivery_date, tomorrow);
   assert.equal(stateUpdates.at(-1).draft.pending_delivery_date, undefined);
+});
+
+test('una fecha confirmada después de crear el pedido se persiste sin escalar', async () => {
+  const poolQueries = [];
+  const routeOutcomes = [];
+  const pipeline = buildPipeline(null, 'draft', {
+    deliveryEnabled: true,
+    schedule: 'Lunes a Sábado de 15:00 a 21:00',
+    history: [{ direction: 'outbound', content: 'Pedido #88 confirmado. Total $45.000.' }],
+    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje ambiguo' },
+    poolQueries,
+    routeOutcomes,
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿Ya para el lunes?');
+
+  const update = poolQueries.find(entry => /UPDATE orders/.test(entry.sql) && /delivery_date/.test(entry.sql));
+  assert.ok(update);
+  assert.match(update.params[0], /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(update.params[3], 1);
+  assert.equal(routeOutcomes.length, 1);
+  assert.equal(result.switchToHuman, undefined);
+  assert.match(result.response, /qued[oó] registrado/i);
+});
+
+test('una clave bancaria bloqueada pide fecha de pago sin escalar', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    pendingCharges: [{ source: 'bot', id: '88', order_label: '#88', customer_phone: '56911111111', total_price: 45000 }],
+    escalation: { escalate: true, urgency: 'medium', reason: 'problema de pago' },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'Se me bloqueó la clave del banco');
+
+  assert.equal(result.switchToHuman, undefined);
+  assert.match(result.response, /qué día podrás hacer la transferencia/i);
+});
+
+test('una promesa de pago se guarda y suspende nuevos cobros hasta la fecha', async () => {
+  const promiseRecords = [];
+  const pipeline = buildPipeline(null, 'draft', {
+    pendingCharges: [{ source: 'bot', id: '88', order_label: '#88', customer_phone: '56911111111', total_price: 45000 }],
+    paymentPromise: { date: '2026-10-19', label: 'lunes, 19 de octubre' },
+    promiseRecords,
+    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje ambiguo' },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'El lunes deposito');
+
+  assert.equal(promiseRecords.length, 1);
+  assert.equal(promiseRecords[0][0], 1);
+  assert.equal(result.switchToHuman, undefined);
+  assert.match(result.response, /no te enviaremos otro cobro antes/i);
 });
 
 test('una abreviación pregunta por el pedido activo sin caer en escalación genérica', async () => {

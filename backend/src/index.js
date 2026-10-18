@@ -34,6 +34,7 @@ const { startAdminWindowJob } = require('./services/admin-notify');
 const { startEscalationWatchJob } = require('./services/escalation-watch'); // Recordatorio si una escalación queda sin respuesta              // Aviso previo + cola de alertas admin
 const { startConversationModeWatchJob } = require('./services/conversation-mode-watch');
 const { startDeliveryRecoveryJob } = require('./services/delivery-recovery');
+const { startPaymentPromiseFollowUpJob } = require('./services/payment-promises');
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
 const shopifyOAuthRouter   = require('./routes/shopify-oauth');   // Shopify OAuth flow
 const authRouter           = require('./routes/auth');
@@ -196,6 +197,7 @@ setupDatabase().then(() => {
     startEscalationWatchJob();
     startConversationModeWatchJob(io);
     startDeliveryRecoveryJob();
+    startPaymentPromiseFollowUpJob(io);
   });
 }).catch(err => {
   console.error('Error iniciando DB:', err);

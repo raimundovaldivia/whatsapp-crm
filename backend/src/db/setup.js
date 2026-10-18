@@ -573,6 +573,10 @@ async function setupDatabase() {
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promised_for DATE;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promise_note TEXT;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promise_recorded_at TIMESTAMPTZ;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promise_followed_up_at TIMESTAMPTZ;
       -- Varias rutas (cambios de estado, entrega, cobranza) escriben updated_at.
       -- La tabla original solo tenía created_at, así que la agregamos aquí.
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
@@ -702,6 +706,10 @@ async function setupDatabase() {
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promised_for DATE;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promise_note TEXT;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promise_recorded_at TIMESTAMPTZ;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promise_followed_up_at TIMESTAMPTZ;
       -- Link historical collection receipts only when both sides match uniquely.
       WITH attempts AS (
         SELECT 'bot' AS source, id::text AS id, organization_id, customer_phone, charge_requested_at FROM orders WHERE charge_message_id IS NULL AND charge_requested_at IS NOT NULL

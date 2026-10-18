@@ -35,10 +35,11 @@ router.get('/', async (req, res) => {
       [req.orgId]
     );
 
-    const [windowOpen, lastInbound, adminPhone] = await Promise.all([
+    const [windowOpen, lastInbound, adminPhone, whatsappConfig] = await Promise.all([
       isWindowOpen(req.orgId),
       db.getSetting(req.orgId, 'admin_window_last_inbound').catch(() => null),
       db.getSetting(req.orgId, 'admin_alert_phone').catch(() => null),
+      db.getWhatsappConfig(req.orgId).catch(() => null),
     ]);
 
     // Dedup por conversación para el conteo "real" (una conversación = un aviso)
@@ -54,6 +55,7 @@ router.get('/', async (req, res) => {
       windowOpen,
       lastInbound,
       adminConfigured: !!adminPhone,
+      businessPhone: whatsappConfig?.display_phone_number || whatsappConfig?.twilio_phone_number || null,
       count: uniqueCount,
       alerts: rows.map(r => ({
         id:           r.id,

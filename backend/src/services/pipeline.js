@@ -25,6 +25,7 @@ const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./bus
 const salesClosing = require('./sales-closing');
 const purchaseFeedback = require('./purchase-feedback');
 const personalOffers = require('./personal-offers');
+const paymentPromises = require('./payment-promises');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
@@ -89,6 +90,16 @@ function scheduleCoversWeekday(schedule, weekday) {
     if (start >= 0 && end >= 0) return start <= end ? index >= start && index <= end : index >= start || index <= end;
   }
   return new RegExp(`\\b${wanted}\\b`).test(text) ? true : null;
+}
+
+function looksLikeDeliveryDateConfirmation(message, history = []) {
+  const text = String(message || '').trim();
+  if (!text || text.length > 160) return false;
+  if (DELIVERY_AVAILABILITY_PATTERNS.some(pattern => pattern.test(text))) return true;
+  if (!/\b(?:ya|entonces|queda|quedar[ií]a|ser[ií]a|para)\b/iu.test(text)) return false;
+  const lastOutbound = history.slice().reverse().find(item => item?.direction === 'outbound');
+  return /\bpedido\b.{0,80}\b(?:confirmado|generado|registrado|total)\b|\b(?:confirmado|generado|registrado)\b.{0,80}\bpedido\b/iu
+    .test(String(lastOutbound?.content || ''));
 }
 
 function missingOrderData(draft = {}, conversation = {}) {
@@ -801,6 +812,90 @@ Reglas estrictas:
     }
   } catch (e) {
     console.warn('[Pipeline] chargeOrder bot context error:', e.message);
+  }
+
+  // Un problema temporal con la app bancaria no necesita atención humana.
+  // Si el cliente entrega una fecha, se guarda en el pedido y la cobranza se
+  // reactiva recién ese día mediante payment-promises.js.
+  if (chargeOrder && paymentPromises.isTemporaryPaymentAccessIssue(userMessage)) {
+    await db.updatePipelineState(conversationId, currentState, orderDraft || {});
+    L.agent('orchestrator', 0);
+    L.step('payment_access_issue', chargeOrder.order_label);
+    return {
+      response: 'No hay problema, puede pasar 🙏 ¿Qué día podrás hacer la transferencia? La dejo registrada para no volver a cobrarte antes de esa fecha.',
+      agentType: 'orchestrator',
+      newState: currentState,
+    };
+  }
+  const paymentPromise = chargeOrder
+    ? paymentPromises.detectPaymentPromise(userMessage, todayISOChile())
+    : null;
+  if (chargeOrder && paymentPromise) {
+    await paymentPromises.recordPaymentPromise(orgId, chargeOrder, paymentPromise, userMessage);
+    await db.updatePipelineState(conversationId, currentState, orderDraft || {});
+    L.agent('orchestrator', 0);
+    L.step('payment_promise', `${chargeOrder.order_label}: ${paymentPromise.date}`);
+    return {
+      response: `Perfecto, dejo registrado el pago para el ${paymentPromise.label}. No te enviaremos otro cobro antes de esa fecha; cuando transfieras, envíanos el comprobante por este chat 🙏`,
+      agentType: 'orchestrator',
+      newState: currentState,
+    };
+  }
+
+  // Mensajes como "¿ya para el lunes?" confirman la fecha del pedido ya
+  // creado. Se persiste y se retira de cualquier ruta que aún no haya salido.
+  if (activeOrder && EDITABLE_OR_ACTIVE(activeOrder.status)
+      && looksLikeDeliveryDateConfirmation(userMessage, history)) {
+    const requested = resolveExplicitDeliveryDate(userMessage, todayISOChile());
+    if (requested.explicit && requested.conflict) {
+      L.agent('orchestrator', 0);
+      return {
+        response: 'Quiero dejar la fecha correcta: el día y la fecha que indicas no coinciden. ¿Para qué fecha exacta necesitas el pedido?',
+        agentType: 'orchestrator',
+        newState: currentState,
+      };
+    }
+    if (requested.date) {
+      const weekday = new Intl.DateTimeFormat('es-CL', { timeZone: 'UTC', weekday: 'long' })
+        .format(new Date(`${requested.date}T12:00:00Z`));
+      const covered = scheduleCoversWeekday(deliverySchedule, weekday);
+      if (covered === false) {
+        L.agent('orchestrator', 0);
+        return {
+          response: `${weekday[0].toUpperCase()}${weekday.slice(1)} no está dentro de nuestro reparto habitual${deliverySchedule ? ` (${deliverySchedule})` : ''}. Indícame otro día y lo dejo registrado.`,
+          agentType: 'orchestrator',
+          newState: currentState,
+        };
+      }
+      const client = await getPool().connect();
+      try {
+        await client.query('BEGIN');
+        const { rowCount } = await client.query(
+          `UPDATE orders
+              SET delivery_date = $1::date,
+                  notes = COALESCE(notes, '') || $2,
+                  updated_at = NOW()
+            WHERE id = $3 AND organization_id = $4
+              AND status IN ('draft','nuevo','sent','payment_received','por_despachar')`,
+          [requested.date, `\n[bot] Fecha de entrega confirmada por el cliente: ${requested.date}`, activeOrder.id, orgId]
+        );
+        if (!rowCount) throw Object.assign(new Error('El pedido ya no admite cambios de fecha'), { status: 409 });
+        await recordRouteOutcome(client, orgId, 'bot', activeOrder.id, 'postponed', `Entrega confirmada para ${requested.date}`);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+      L.agent('orchestrator', 0);
+      L.step('delivery_date_confirmed_after_order', `#${activeOrder.id}: ${requested.date}`);
+      return {
+        response: `Sí, tu pedido #${activeOrder.id} quedó registrado para el ${formatDateEs(requested.date)} 📅 Te avisamos cuando vaya saliendo.`,
+        agentType: 'orchestrator',
+        newState: currentState,
+      };
+    }
   }
 
   L.context({

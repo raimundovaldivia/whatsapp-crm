@@ -143,6 +143,19 @@ async function gradeConversation(client, conv, messages) {
   try { return JSON.parse(raw); } catch { return { puntaje: null, errores: [], estado_final: 'otro', resumen: '(no se pudo evaluar)' }; }
 }
 
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
 /** Normaliza un error para agruparlo (minúsculas, sin tildes, recortado). */
 function errKey(s) {
   return String(s || '').toLowerCase()
@@ -175,15 +188,14 @@ router.post('/grade', async (req, res) => {
 
     const client = aiClient;
 
-    const graded = [];
-    for (const c of candidates) {
+    const graded = (await mapWithConcurrency(candidates, 4, async c => {
       try {
         const msgs = await db.getMessagesByConversation(c.id, 120);
-        if (!msgs.length) continue;
+        if (!msgs.length) return null;
         const g = await gradeConversation(client, c, msgs);
-        graded.push({ id: c.id, name: c.contact_name || c.phone_number, msgs: Number(c.msgs), ...g });
-      } catch (e) { /* saltar la que falle */ }
-    }
+        return { id: c.id, name: c.contact_name || c.phone_number, msgs: Number(c.msgs), ...g };
+      } catch (e) { return null; }
+    })).filter(Boolean);
 
     // Distribución de puntajes
     const distribucion = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };

@@ -570,17 +570,47 @@ async function getPendingCharges(orgId, dateRange = {}) {
             o.items::text                AS items,
             o.payment_marked_at          AS payment_marked_at,
             o.charge_requested_at        AS charge_requested_at,
+            o.payment_promised_for       AS payment_promised_for,
+            o.payment_promise_followed_up_at AS payment_promise_followed_up_at,
             o.charge_message_id AS charge_message_id,
             (SELECT m.status FROM messages m JOIN conversations mc ON mc.id=m.conversation_id WHERE m.whatsapp_message_id=o.charge_message_id AND mc.organization_id=o.organization_id) AS charge_status,
             COALESCE(o.charge_request_count, 0) AS charge_request_count,
             (SELECT pp.id FROM payment_proofs pp
               WHERE pp.organization_id = o.organization_id
-                AND pp.order_id = o.id AND pp.status IN ('pending', 'pre_verified')
-              ORDER BY pp.created_at DESC LIMIT 1) AS proof_id,
+                AND pp.status IN ('pending', 'pre_verified')
+                AND (pp.order_id = o.id OR (
+                  pp.conversation_id = o.conversation_id AND pp.order_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM orders proof_order
+                     WHERE proof_order.id = pp.order_id
+                       AND proof_order.organization_id = o.organization_id
+                       AND proof_order.conversation_id = o.conversation_id
+                       AND proof_order.id <> o.id
+                       AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
+                       AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
+                       AND (proof_order.status IN ('paid', 'payment_received')
+                         OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
+                         OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])')
+                  )
+                ))
+              ORDER BY (pp.order_id = o.id) DESC, pp.created_at DESC LIMIT 1) AS proof_id,
             (SELECT pp.status FROM payment_proofs pp
               WHERE pp.organization_id = o.organization_id
-                AND pp.order_id = o.id AND pp.status IN ('pending', 'pre_verified')
-              ORDER BY pp.created_at DESC LIMIT 1) AS proof_status,
+                AND pp.status IN ('pending', 'pre_verified')
+                AND (pp.order_id = o.id OR (
+                  pp.conversation_id = o.conversation_id AND pp.order_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM orders proof_order
+                     WHERE proof_order.id = pp.order_id
+                       AND proof_order.organization_id = o.organization_id
+                       AND proof_order.conversation_id = o.conversation_id
+                       AND proof_order.id <> o.id
+                       AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
+                       AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
+                       AND (proof_order.status IN ('paid', 'payment_received')
+                         OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
+                         OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])')
+                  )
+                ))
+              ORDER BY (pp.order_id = o.id) DESC, pp.created_at DESC LIMIT 1) AS proof_status,
             (SELECT COUNT(*) FROM payment_proofs pp
               WHERE pp.organization_id = o.organization_id
                 AND pp.order_id = o.id
@@ -607,13 +637,29 @@ async function getPendingCharges(orgId, dateRange = {}) {
         AND o.payment_method IN ('transferencia', 'mixto')
         AND o.status = 'entregado'
         AND COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric > 0
+        AND COALESCE(o.notes, '') !~* '(no[[:space:]]*cobrar|pagad[oa]|sin[[:space:]]*cobro)'
+        AND COALESCE(o.delivery_note, '') !~* '(no[[:space:]]*cobrar|pagad[oa]|sin[[:space:]]*cobro)'
+        AND (o.payment_promised_for IS NULL OR o.payment_promised_for <= (NOW() AT TIME ZONE 'America/Santiago')::date)
         AND ($2::date IS NULL OR (COALESCE(o.delivered_at, o.payment_marked_at, o.created_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date >= $2::date)
         AND ($3::date IS NULL OR (COALESCE(o.delivered_at, o.payment_marked_at, o.created_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date <= $3::date)
         AND NOT EXISTS (
           SELECT 1 FROM payment_proofs pp
            WHERE pp.organization_id = o.organization_id
-             AND pp.order_id = o.id
              AND pp.status = 'verified'
+             AND (pp.order_id = o.id OR (
+               pp.conversation_id = o.conversation_id AND pp.order_id IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM orders proof_order
+                  WHERE proof_order.id = pp.order_id
+                    AND proof_order.organization_id = o.organization_id
+                    AND proof_order.conversation_id = o.conversation_id
+                    AND proof_order.id <> o.id
+                    AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
+                    AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
+                    AND (proof_order.status IN ('paid', 'payment_received')
+                      OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
+                      OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])')
+               )
+             ))
         )
 
       UNION ALL
@@ -639,6 +685,8 @@ async function getPendingCharges(orgId, dateRange = {}) {
             s.items::text                AS items,
             s.payment_marked_at          AS payment_marked_at,
             s.charge_requested_at        AS charge_requested_at,
+            s.payment_promised_for       AS payment_promised_for,
+            s.payment_promise_followed_up_at AS payment_promise_followed_up_at,
             s.charge_message_id AS charge_message_id,
             (SELECT m.status FROM messages m JOIN conversations mc ON mc.id=m.conversation_id WHERE m.whatsapp_message_id=s.charge_message_id AND mc.organization_id=s.organization_id) AS charge_status,
             COALESCE(s.charge_request_count, 0) AS charge_request_count,
@@ -661,6 +709,7 @@ async function getPendingCharges(orgId, dateRange = {}) {
         AND s.crm_status = 'entregado'
         AND s.financial_status IS DISTINCT FROM 'paid'
         AND COALESCE(NULLIF(s.total_price::text, ''), '0')::numeric > 0
+        AND (s.payment_promised_for IS NULL OR s.payment_promised_for <= (NOW() AT TIME ZONE 'America/Santiago')::date)
         AND ($2::date IS NULL OR (COALESCE(s.delivered_at, s.payment_marked_at, s.shopify_created_at, s.synced_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date >= $2::date)
         AND ($3::date IS NULL OR (COALESCE(s.delivered_at, s.payment_marked_at, s.shopify_created_at, s.synced_at) AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date <= $3::date)
 
