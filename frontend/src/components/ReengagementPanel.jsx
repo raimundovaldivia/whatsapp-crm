@@ -2670,7 +2670,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
           Segmento
           <select aria-label="Segmento del público" value={audienceSegment} disabled={sending || !!reviewPlan}
-            onChange={event => { setAudienceSegment(event.target.value); setPreviewIdx(0); }}
+            onChange={event => {
+              setAudienceSegment(event.target.value);
+              // "Sin compras" no tiene fecha de último pedido: el filtro de fecha quedaría vacío.
+              if (event.target.value === 'lead') setPurchaseAge('all');
+              setPreviewIdx(0);
+            }}
             style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
             <option value="all">Todos</option>
             <option value="lead">Sin compras</option>
@@ -2682,7 +2687,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
         <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
           Último pedido
-          <select aria-label="Tiempo sin pedir" value={purchaseAge} disabled={sending || !!reviewPlan}
+          <select aria-label="Tiempo sin pedir" value={audienceSegment === 'lead' ? 'all' : purchaseAge} disabled={sending || !!reviewPlan || audienceSegment === 'lead'}
             onChange={e => { setPurchaseAge(e.target.value); setPreviewIdx(0); }}
             style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
             <option value="all">Cualquier fecha</option>
