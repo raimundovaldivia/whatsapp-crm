@@ -2687,8 +2687,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
         <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
           Último pedido
-          <select aria-label="Tiempo sin pedir" value={audienceSegment === 'lead' ? 'all' : purchaseAge} disabled={sending || !!reviewPlan || audienceSegment === 'lead'}
-            onChange={e => { setPurchaseAge(e.target.value); setPreviewIdx(0); }}
+          <select aria-label="Tiempo sin pedir" value={purchaseAge} disabled={sending || !!reviewPlan}
+            onChange={e => {
+              setPurchaseAge(e.target.value);
+              // Sin compras y fecha de último pedido son excluyentes: elegir una fecha quita "Sin compras".
+              if (e.target.value !== 'all' && audienceSegment === 'lead') setAudienceSegment('all');
+              setPreviewIdx(0);
+            }}
             style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
             <option value="all">Cualquier fecha</option>
             <option value="range_7_29">Entre 7 y 29 días</option>
