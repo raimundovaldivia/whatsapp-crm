@@ -1264,6 +1264,8 @@ async function setupDatabase() {
       ALTER TABLE broadcast_campaigns
         ADD COLUMN IF NOT EXISTS pause_reason TEXT;
       ALTER TABLE broadcast_campaigns
+        ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
+      ALTER TABLE broadcast_campaigns
         ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
       ALTER TABLE broadcast_campaigns
         DROP CONSTRAINT IF EXISTS broadcast_campaigns_status_check;

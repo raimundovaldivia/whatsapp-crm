@@ -1289,6 +1289,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [customPurchaseDays, setCustomPurchaseDays] = useState('45');
   const [audienceType, setAudienceType] = useState('all');
   const [audienceSegment, setAudienceSegment] = useState('all');
+  const [phoneListText, setPhoneListText] = useState('');
   const [selected,       setSelected]       = useState(new Set());
   const [templates,      setTemplates]      = useState(parentTemplates);
   const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
@@ -1309,6 +1310,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [methodsError, setMethodsError] = useState('');
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
   const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
+  const [scheduledFor, setScheduledFor] = useState('');
   const [directText, setDirectText] = useState('');
   const [directMode, setDirectMode] = useState('instruction');
   const [directInstruction, setDirectInstruction] = useState('');
@@ -1928,7 +1930,17 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   const purchaseDays = purchaseAge === 'custom' ? customPurchaseDays : purchaseAge;
-  const filtered = contacts.filter(c => {
+  // Lista de números pegada a mano: solo esos números, y los que no están en contactos entran como leads.
+  const listPhones = phoneListText.trim()
+    ? new Set(phoneListText.split(/[\s,;]+/).map(normPhone).filter(p => /^569\d{8}$/.test(p)))
+    : null;
+  const knownPhones = new Set(contacts.map(c => normPhone(c.phone)));
+  const listExtras = listPhones
+    ? [...listPhones].filter(p => !knownPhones.has(p)).map(p => ({ phone: p, name: '', contact_type: 'lead', client_type: 'personal', total_orders: 0, opt_out: false, last_order_at: null, has_pending_scheduled: false, source: 'lista' }))
+    : [];
+  const pool = listPhones ? [...contacts, ...listExtras] : contacts;
+  const filtered = pool.filter(c => {
+    if (listPhones && !listPhones.has(normPhone(c.phone))) return false;
     if (search) {
       const q = search.toLowerCase();
       if (!(c.name || '').toLowerCase().includes(q) && !(c.phone || '').includes(q)) return false;
@@ -2191,6 +2203,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
+        ...(direct && scheduledFor ? { scheduledFor: new Date(scheduledFor).toISOString() } : {}),
         ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction } : {}),
       });
       campaignId = created.data.campaign.id;
@@ -2199,7 +2212,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         await api.post(`/reengagement/campaigns/${campaignId}/start`, { items, ...(approval ? { approval } : {}) }, { timeout: 45000 });
         setReviewPlan(null);
         setHistoryOpen(true);
-        showToast('Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
+        showToast(scheduledFor
+          ? `Campaña programada para ${new Date(scheduledFor).toLocaleString('es-CL')}. Puedes cerrar el navegador.`
+          : 'Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
         return;
       }
       let sent = 0, failed = 0, skipped = 0, pending = 0, chatsPending = 0;
@@ -2571,11 +2586,32 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 style={{ width: 150, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
             </label>)}
           </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+            Inicio programado (opcional, hora de Chile)
+            <input type="datetime-local" value={scheduledFor} disabled={sending || !!reviewPlan}
+              onChange={event => setScheduledFor(event.target.value)}
+              style={{ width: 230, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
+          </label>
+          El envío directo solo sale entre 08:00 y 21:00 (hora de Chile). Si programas una hora fuera de ese rango, espera a la siguiente ventana.
           La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.
           Se envía sólo el texto revisado, sin botones ni archivos. Puedes cerrar el navegador después de confirmar; el servidor continúa el envío.
         </div>}
       </section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
+
+        {/* Lista de números pegada (uno por línea o separados por coma) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 100%' }}>
+          <textarea
+            value={phoneListText}
+            onChange={e => setPhoneListText(e.target.value)}
+            placeholder="Pega números para enviar solo a esos (uno por línea o separados por coma). Ej: 56912345678"
+            rows={2}
+            style={{ width: '100%', padding: '7px 12px', borderRadius: colors.radiusMd, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }}
+          />
+          {listPhones && <div style={{ fontSize: 12, color: colors.textSecondary }}>
+            {listPhones.size} números válidos pegados · {listExtras.length} no están en contactos (entran como leads)
+          </div>}
+        </div>
 
         {/* Search */}
         <input

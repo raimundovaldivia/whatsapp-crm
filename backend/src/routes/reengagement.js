@@ -1941,16 +1941,27 @@ router.post('/campaigns', async (req, res) => {
       pacing.instruction = req.body.instruction.trim();
     }
     const totalCount = Number(total);
+    let scheduledFor = null;
+    if (req.body.scheduledFor) {
+      scheduledFor = new Date(req.body.scheduledFor);
+      if (sendingProvider !== 'evolution' || Number.isNaN(scheduledFor.getTime())) {
+        return res.status(400).json({ success: false, error: 'La programación solo aplica a envíos directos con hora válida' });
+      }
+      if (scheduledFor.getTime() < Date.now() - 60000 || scheduledFor.getTime() > Date.now() + 30 * 86400000) {
+        return res.status(400).json({ success: false, error: 'La hora programada debe ser dentro de los próximos 30 días' });
+      }
+    }
     if (!templateName) return res.status(400).json({ success: false, error: 'templateName requerido' });
     if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 5000) {
       return res.status(400).json({ success: false, error: 'Cantidad de destinatarios inválida' });
     }
     const { rows } = await getPool().query(
       `INSERT INTO broadcast_campaigns
-         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id, pacing_settings)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id, pacing_settings, scheduled_for)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.orgId, req.userId, templateName, totalCount, !!testMode,
-        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId, pacing ? JSON.stringify(pacing) : null]
+        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId, pacing ? JSON.stringify(pacing) : null,
+        scheduledFor]
     );
     res.json({ success: true, campaign: rows[0] });
   } catch (err) {

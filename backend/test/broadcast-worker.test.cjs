@@ -1,3 +1,5 @@
+process.env.EVOLUTION_SEND_HOUR_START = '0';
+process.env.EVOLUTION_SEND_HOUR_END = '24';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
@@ -9,7 +11,7 @@ test('durable queue survives workers, serializes a campaign, respects waits and 
   const pool = new PGlite();
   try {
     await pool.exec(`CREATE TABLE organizations (id INTEGER PRIMARY KEY); INSERT INTO organizations VALUES(1);
-      CREATE TABLE broadcast_campaigns (id BIGINT PRIMARY KEY, organization_id INT, status TEXT DEFAULT 'processing', server_managed BOOLEAN DEFAULT TRUE, completed_at TIMESTAMPTZ);
+      CREATE TABLE broadcast_campaigns (id BIGINT PRIMARY KEY, organization_id INT, status TEXT DEFAULT 'processing', server_managed BOOLEAN DEFAULT TRUE, completed_at TIMESTAMPTZ, scheduled_for TIMESTAMPTZ, sending_provider TEXT DEFAULT 'kapso');
       INSERT INTO broadcast_campaigns(id,organization_id) VALUES(1,1);`);
     const source = fs.readFileSync(path.join(__dirname,'../src/db/setup.js'),'utf8');
     await pool.exec(source.match(/CREATE TABLE IF NOT EXISTS broadcast_jobs[\s\S]*?CREATE INDEX IF NOT EXISTS idx_broadcast_jobs_pending[^;]*;/)[0]);
@@ -48,7 +50,7 @@ test('starting a queued campaign is atomic, idempotent and tenant scoped; browse
   const { handler, response, noop } = require('./helpers.cjs');
   const engine = new PGlite();
   try {
-    await engine.exec(`CREATE TABLE broadcast_campaigns (id BIGINT PRIMARY KEY, organization_id INT, total_count INT,
+    await engine.exec(`CREATE TABLE broadcast_campaigns (id BIGINT PRIMARY KEY, organization_id INT, total_count INT, scheduled_for TIMESTAMPTZ,
       sending_provider TEXT, sending_channel_id INT, server_managed BOOLEAN DEFAULT FALSE, status TEXT DEFAULT 'processing', completed_at TIMESTAMPTZ);
       CREATE TABLE broadcast_jobs (id SERIAL, campaign_id BIGINT, organization_id INT, position INT, item JSONB, UNIQUE(campaign_id,position));
       CREATE TABLE broadcast_campaign_recipients(campaign_id BIGINT);
