@@ -471,7 +471,7 @@ function fromHistory(history = [], products = [], now = new Date()) {
 function snapshot(promotion) {
   if (!promotion) return null;
   const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift } = promotion;
-  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift };
+  return { templateName, offerId: promotion.offerId ?? null, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift };
 }
 
 function restore(saved, now = new Date()) {

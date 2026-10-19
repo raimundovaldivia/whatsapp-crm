@@ -58,7 +58,7 @@ router.post('/', async (req, res) => {
 // ── PUT /api/products/:id ──────────────────────────────────────────
 router.put('/:id', async (req, res) => {
   try {
-    const { title, description, price, compare_price, comparePrice, sku, stock, image_url, imageUrl, active, position, category, isBusiness, is_business, bulkPrice, bulk_price, bulkMinQty, bulk_min_qty } = req.body;
+    const { title, description, price, compare_price, comparePrice, sku, stock, image_url, imageUrl, active, position, category, isBusiness, is_business, bulkPrice, bulk_price, bulkMinQty, bulk_min_qty, unitCost, unit_cost, minMarginPct, min_margin_pct } = req.body;
     const updates = {};
     if (title       !== undefined) updates.title         = title;
     if (description !== undefined) updates.description   = description;
@@ -73,6 +73,16 @@ router.put('/:id', async (req, res) => {
     if ((isBusiness ?? is_business) !== undefined) updates.is_business = isBusiness ?? is_business;
     if ((bulkPrice  ?? bulk_price)  !== undefined) updates.bulk_price  = (bulkPrice ?? bulk_price)  || null;
     if ((bulkMinQty ?? bulk_min_qty) !== undefined) updates.bulk_min_qty = (bulkMinQty ?? bulk_min_qty) || null;
+    if ((unitCost ?? unit_cost) !== undefined) {
+      const cost = unitCost ?? unit_cost;
+      if (cost !== null && cost !== '' && (!Number.isInteger(Number(cost)) || Number(cost) < 0)) return res.status(400).json({ error: 'El costo debe ser un entero mayor o igual a cero' });
+      updates.unit_cost = cost === null || cost === '' ? null : Number(cost);
+    }
+    if ((minMarginPct ?? min_margin_pct) !== undefined) {
+      const margin = minMarginPct ?? min_margin_pct;
+      if (margin !== null && margin !== '' && (!Number.isFinite(Number(margin)) || Number(margin) < 0 || Number(margin) >= 100)) return res.status(400).json({ error: 'El margen mínimo debe estar entre 0 y 100' });
+      updates.min_margin_pct = margin === null || margin === '' ? null : Number(margin);
+    }
 
     const product = await db.updateProduct(req.orgId, parseInt(req.params.id), updates);
     if (!product) return res.status(404).json({ error: 'Producto no encontrado' });

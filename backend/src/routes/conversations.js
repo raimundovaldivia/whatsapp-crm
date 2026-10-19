@@ -498,18 +498,26 @@ router.get('/:id/orders', async (req, res) => {
  * Crear una orden manual desde el panel admin.
  * Body: { items: [{productId, title, price, quantity}], sendSummary: boolean }
  */
+const campaignOffers = require('../services/campaign-offers');
+const campaignOffersStore = require('../services/campaign-offers-store');
+
 router.post('/:id/orders', async (req, res) => {
   try {
     const convId = parseInt(req.params.id);
     const conv   = await db.getConversationById(convId, req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
-    const { items = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '' } = req.body;
-    if (!items.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
+    const { items: rawItems = [], offerId = null, sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '' } = req.body;
+    if (!rawItems.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
     if (typeof note !== 'string' || note.trim().length > 1000) {
       return res.status(400).json({ success: false, error: 'La nota del pedido no puede superar 1000 caracteres' });
     }
 
+    // Oferta de campaña: sólo la última enviada, vigente, y referenciada por el pedido.
+    const latestCampaign = await campaignOffersStore.latestForConversation(db.getPool(), req.orgId, convId).catch(() => null);
+    const offerToRedeem = latestCampaign && latestCampaign.status === 'sent' && offerId != null && Number(offerId) === Number(latestCampaign.id) ? latestCampaign : null;
+    const normalizedItems = rawItems.map(i => ({ ...i, product_id: i.product_id ?? i.productId ?? i.id }));
+    const items = offerToRedeem ? campaignOffers.applyOfferToItems(normalizedItems, offerToRedeem, null).items : normalizedItems;
     const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
     const discountNum   = parseFloat(discount) || 0;
     const discountAmount = discountNum > 0
@@ -546,6 +554,10 @@ router.post('/:id/orders', async (req, res) => {
       totalPrice,
       note: note.trim() || null,
     });
+    if (offerToRedeem) {
+      await campaignOffersStore.redeem(db.getPool(), req.orgId, offerToRedeem.id, order.id)
+        .catch(error => console.warn('[Campaign offers] no se pudo canjear la oferta:', error.message));
+    }
 
     // Guardar mensaje de resumen en el chat y enviarlo al cliente
     if (sendSummary) {

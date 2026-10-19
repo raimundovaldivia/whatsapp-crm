@@ -1848,6 +1848,7 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'store-product-favorites.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'social-stories.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-product-images.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'campaign-offers.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

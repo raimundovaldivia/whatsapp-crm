@@ -219,7 +219,7 @@ async function finalizeAcceptedBroadcast({ orgId, campaignId, item, sentResult, 
   }
   const updated = await db.getConversationById(convId);
   io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: savedMsg, conversation: updated });
-  return { conversationId: convId };
+  return { conversationId: convId, messageId: savedMsg?.id ?? null };
 }
 
 /**
@@ -2630,6 +2630,7 @@ async function sendBulk(req, res) {
 
   const results = [];
   for (const item of items) {
+    let offerDraft = null;
     // Normalizar teléfono: con código de país, sin "+"
     item.phone = db.normalizePhone(item.phone);
     let acceptedByProvider = false;
@@ -2644,6 +2645,22 @@ async function sendBulk(req, res) {
           continue;
         }
         if (!String(item.templateName ? item.previewText || '' : item.message || '').trim()) throw new Error('El mensaje directo está vacío');
+        // Oferta personal: no se envía si faltan campos o no cumple las reglas.
+        // La respuesta trae la lista de campos faltantes para completarlos en la app.
+        if (item.offer) {
+          const products = await db.getProducts(req.orgId, true);
+          const catalog = products.map(p => ({ product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct }));
+          const check = require('../services/campaign-offers').validateOfferDraft(item.offer, { catalog });
+          if (!check.ok) {
+            const reasons = [...check.missing.map(f => `falta ${f}`), ...check.errors];
+            await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: `Oferta incompleta: ${reasons.join('; ')}` });
+            results.push({ phone: item.phone, success: false, skipped: true, error: 'Oferta incompleta', missing: check.missing, errors: check.errors });
+            continue;
+          }
+          // Borrador de oferta antes de enviar; pasa a 'sent' solo si WhatsApp la acepta.
+          const offerConversation = await db.upsertConversation(req.orgId, item.phone, item.contactName || 'Cliente', sendingChannelId);
+          offerDraft = await require('../services/campaign-offers-store').createDraft(db.getPool(), req.orgId, offerConversation.id, item.offer);
+        }
       }
 
       if (!item.force) {
@@ -2726,6 +2743,13 @@ async function sendBulk(req, res) {
       });
       if (direct) {
         const saved = await persistAccepted();
+        if (offerDraft) {
+          try {
+            await require('../services/campaign-offers-store').markSent(db.getPool(), req.orgId, offerDraft.id, saved.messageId);
+          } catch (offerError) {
+            console.error('[SendBulk] La oferta se envió pero no pudo marcarse como enviada:', offerError.message);
+          }
+        }
         results.push({ phone: item.phone, success: true, whatsappMessageId: acceptedMessageId,
           conversationId: saved.conversationId });
       } else {

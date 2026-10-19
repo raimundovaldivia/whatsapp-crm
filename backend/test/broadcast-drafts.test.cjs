@@ -8,6 +8,7 @@ function setup() {
     normalizePhone: phone => String(phone).replace(/\D/g, ''),
     getSetting: async org => { assert.equal(org, 7); return 'Aceitunas verdes 500 g $3.700'; },
     getOrgById: async org => { assert.equal(org, 7); return { name: 'Negocio de prueba' }; },
+    getProducts: async () => [],
     getContact: async (org, phone) => { assert.equal(org, 7); return phone === '56999999999' ? null : { name: 'Ana', client_type: phone === '56922222222' ? 'empresa' : 'natural', opt_out: phone === '56933333333' }; },
     getPool: () => ({ query: async (sql, params) => {
       assert.match(sql, /organization_id = \$1/);

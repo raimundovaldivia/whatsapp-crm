@@ -2180,6 +2180,10 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
 }
 
 async function updateOrder(id, updates) {
+  if (updates.status === 'cancelled') {
+    try { await require('../services/campaign-offers-store').releaseOnCancel(getPool(), null, id); }
+    catch (error) { console.warn('[Campaign offers] no se pudo liberar la oferta al cancelar:', error.message); }
+  }
   const keys = Object.keys(updates);
   const values = Object.values(updates);
   const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
@@ -2292,7 +2296,7 @@ async function createProduct(orgId, { title, description, price, comparePrice, s
 }
 
 async function updateProduct(orgId, id, updates) {
-  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, category:1, is_business:1, bulk_price:1, bulk_min_qty:1, updated_at:1 };
+  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, category:1, is_business:1, bulk_price:1, bulk_min_qty:1, unit_cost:1, min_margin_pct:1, updated_at:1 };
   const keys   = Object.keys(updates).filter(k => allowed[k]);
   if (!keys.length) return getProductById(orgId, id);
   const values = keys.map(k => updates[k]);

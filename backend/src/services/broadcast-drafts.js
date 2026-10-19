@@ -4,6 +4,7 @@ const { modelFor } = require('./ai-provider');
 const { resolveCustomerPhones } = require('./customer-identity');
 const { todayISOChile } = require('./business-date');
 const { createHash } = require('node:crypto');
+const { validateOfferDraft } = require('./campaign-offers');
 
 const MODE = 'instruction';
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -76,20 +77,42 @@ async function customerContext(orgId, phone, audienceType, today) {
   } };
 }
 
-function validateDraft(raw, customer) {
+const OFFER_KEYS = ['product_id', 'offer_price', 'expires_at', 'cap_units'];
+
+// The model proposes only values stated in the instruction; anything else stays null
+// and the operator completes it manually before approval.
+function offerFrom(input, phone, catalog, now) {
+  if (!input || typeof input !== 'object' || OFFER_KEYS.every(key => input[key] == null)) return null;
+  const fields = {
+    product_id: input.product_id == null ? null : String(input.product_id),
+    offer_price: input.offer_price == null ? null : Number(input.offer_price),
+    expires_at: input.expires_at ?? null,
+    scope: input.cap_units == null ? 'all_units' : { cap_units: Number(input.cap_units) },
+    recipients: [phone],
+    margin_confirmed: false,
+  };
+  return { fields, ...validateOfferDraft(fields, { catalog, now }) };
+}
+
+function validateDraft(raw, customer, { catalog = [], now = new Date() } = {}) {
   if (!raw || !['draft', 'skip'].includes(raw.decision) || typeof raw.reason !== 'string' || !raw.reason.trim()) throw fail('La IA devolvió un borrador incompleto. Vuelve a prepararlo.', 502);
   const reason = text(raw.reason, 600);
   if (raw.decision === 'skip') return { phone: customer.phone, name: customer.name, decision: 'skip', reason };
   if (typeof raw.message !== 'string' || !raw.message.trim() || raw.message.length > 1200 || /\{\{|\}\}/.test(raw.message)) {
     throw fail('La IA devolvió un mensaje inválido. No se preparó ningún envío.', 502);
   }
-  return { phone: customer.phone, name: customer.name, decision: 'draft', reason, message: raw.message.trim(), evidence: customer.context.compras };
+  const offer = offerFrom(raw.offer, customer.phone, catalog, now);
+  return { phone: customer.phone, name: customer.name, decision: 'draft', reason, message: raw.message.trim(), evidence: customer.context.compras, offer };
 }
 
 async function generateDrafts(orgId, body, aiClient) {
   const request = validateRequest(body);
   const today = todayISOChile();
   const [store, organization] = await Promise.all([db.getSetting(orgId, 'store_context'), db.getOrgById(orgId)]);
+  const catalog = (await db.getProducts(orgId, true)).map(p => ({
+    product_id: String(p.id), title: text(p.title, 120), available: !p.deprecated_at,
+    unit_cost: p.unit_cost ?? null, min_margin_pct: p.min_margin_pct ?? null,
+  }));
   const drafts = [];
   // One generation per customer; neighbouring customers' conversations are never shared.
   for (const phone of request.phones) {
@@ -106,19 +129,26 @@ Usa tono breve y natural, una propuesta pertinente y una pregunta sencilla. No v
 No presentes como frecuencia una compra única. Si compró recientemente, no presupongas necesidad; si lleva mucho tiempo, consulta su interés sin dar una reposición por hecha.
 Incluye los complementos que pida el operador, con preferencia conocida si existe. No inventes preferencias, cantidades, precios, descuentos, disponibilidad ni compromisos de entrega. Un precio histórico no es una oferta vigente.
 Si faltan datos indispensables para cumplir la instrucción, devuelve skip con la duda concreta. Respeta rechazos, bajas y conversaciones pendientes; no insistas después de una oferta reciente sin respuesta.
+Oferta: si la instrucción define una oferta concreta, llena "offer" sólo con lo que diga textualmente: product_id (exactamente uno de catalogoProductos), offer_price (entero, precio final por unidad en pesos), expires_at (YYYY-MM-DD) y cap_units (entero si hay tope de unidades, null si no hay tope). Cada dato que no aparezca va en null: nunca lo inventes ni lo deduzcas. Si la instrucción no define oferta, usa offer null. El mensaje menciona la oferta sólo si existe.
 La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa fecha. No reveles cálculos de frecuencia, notas internas ni datos de terceros al cliente.`,
       messages: [{ role: 'user', content: JSON.stringify({
         instruccion: request.instruction, negocio: text(organization?.name, 100),
-        catalogoDisponible: text(store, 10000), cliente: customer.context,
+        catalogoDisponible: text(store, 10000), catalogoProductos: catalog.filter(p => p.available).map(({ product_id, title }) => ({ product_id, title })), cliente: customer.context,
       }) }],
       tools: [{ name: 'customer_draft', description: 'Propuesta para revisión; no efectúa envíos.', input_schema: {
         type: 'object', additionalProperties: false, required: ['decision', 'reason', 'message'],
-        properties: { decision: { type: 'string', enum: ['draft', 'skip'] }, reason: { type: 'string' }, message: { type: 'string' } },
+        properties: {
+          decision: { type: 'string', enum: ['draft', 'skip'] }, reason: { type: 'string' }, message: { type: 'string' },
+          offer: { type: ['object', 'null'], additionalProperties: false, required: OFFER_KEYS, properties: {
+            product_id: { type: ['string', 'null'] }, offer_price: { type: ['integer', 'null'] },
+            expires_at: { type: ['string', 'null'] }, cap_units: { type: ['integer', 'null'] },
+          } },
+        },
       } }],
       tool_choice: { type: 'tool', name: 'customer_draft' },
     });
     const raw = response.content?.find(part => part.type === 'tool_use' && part.name === 'customer_draft')?.input;
-    drafts.push(validateDraft(raw, customer));
+    drafts.push(validateDraft(raw, customer, { catalog, now: new Date() }));
   }
   return { drafts, generatedAt: new Date().toISOString(), businessDate: today, requiresApproval: true };
 }
