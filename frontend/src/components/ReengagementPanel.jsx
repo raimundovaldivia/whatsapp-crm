@@ -1309,6 +1309,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [methodsError, setMethodsError] = useState('');
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
   const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
+  const [scheduledFor, setScheduledFor] = useState('');
   const [directText, setDirectText] = useState('');
   const [directMode, setDirectMode] = useState('instruction');
   const [directInstruction, setDirectInstruction] = useState('');
@@ -2191,6 +2192,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
+        ...(direct && scheduledFor ? { scheduledFor: new Date(scheduledFor).toISOString() } : {}),
         ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction } : {}),
       });
       campaignId = created.data.campaign.id;
@@ -2199,7 +2201,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         await api.post(`/reengagement/campaigns/${campaignId}/start`, { items, ...(approval ? { approval } : {}) }, { timeout: 45000 });
         setReviewPlan(null);
         setHistoryOpen(true);
-        showToast('Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
+        showToast(scheduledFor
+          ? `Campaña programada para ${new Date(scheduledFor).toLocaleString('es-CL')}. Puedes cerrar el navegador.`
+          : 'Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
         return;
       }
       let sent = 0, failed = 0, skipped = 0, pending = 0, chatsPending = 0;
@@ -2571,6 +2575,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 style={{ width: 150, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
             </label>)}
           </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+            Inicio programado (opcional, hora de Chile)
+            <input type="datetime-local" value={scheduledFor} disabled={sending || !!reviewPlan}
+              onChange={event => setScheduledFor(event.target.value)}
+              style={{ width: 230, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
+          </label>
+          El envío directo solo sale entre 08:00 y 21:00 (hora de Chile). Si programas una hora fuera de ese rango, espera a la siguiente ventana.
           La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.
           Se envía sólo el texto revisado, sin botones ni archivos. Puedes cerrar el navegador después de confirmar; el servidor continúa el envío.
         </div>}

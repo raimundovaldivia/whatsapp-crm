@@ -12,13 +12,19 @@ function createWorker(sendOne, pool = db.getPool()) {
         WHERE state = 'processing' AND claimed_at < NOW() - INTERVAL '5 minutes' RETURNING campaign_id
       ) UPDATE broadcast_campaigns SET status = 'interrupted', completed_at = NOW()
         WHERE id IN (SELECT campaign_id FROM stale) AND status = 'processing'`);
+      // Envíos directos (Evolution) solo dentro de la ventana horaria de Chile.
+      const windowStart = Number(process.env.EVOLUTION_SEND_HOUR_START ?? 8);
+      const windowLastHour = Number(process.env.EVOLUTION_SEND_HOUR_END ?? 21) - 1;
       const { rows } = await pool.query(`UPDATE broadcast_jobs j SET state = 'processing', claimed_at = NOW()
         WHERE j.id = (
           SELECT q.id FROM broadcast_jobs q JOIN broadcast_campaigns c ON c.id = q.campaign_id
           WHERE q.state = 'pending' AND q.available_at <= NOW() AND c.server_managed AND c.status = 'processing'
+            AND (c.scheduled_for IS NULL OR c.scheduled_for <= NOW())
+            AND (c.sending_provider IS DISTINCT FROM 'evolution'
+                 OR EXTRACT(HOUR FROM (NOW() AT TIME ZONE 'America/Santiago')) BETWEEN $1 AND $2)
             AND NOT EXISTS (SELECT 1 FROM broadcast_jobs busy WHERE busy.campaign_id = q.campaign_id AND busy.state = 'processing')
           ORDER BY q.available_at, q.id FOR UPDATE OF q, c SKIP LOCKED LIMIT 1
-        ) RETURNING j.*`);
+        ) RETURNING j.*`, [windowStart, windowLastHour]);
       const job = rows[0];
       if (!job) return;
       let response;
