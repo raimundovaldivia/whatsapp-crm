@@ -1,13 +1,19 @@
-// Forma canónica de la oferta. Debe coincidir con canonicalOffer en backend/src/services/broadcast-drafts.js:
-// la huella de aprobación la usa en ambos lados.
+// Forma canónica de una oferta. Debe coincidir con canonicalOffer en backend/src/services/broadcast-drafts.js:
+// la huella de aprobación la calculan ambos lados.
 export function canonicalOffer(offer) {
-  if (!offer) return null;
   return {
     product_id: String(offer.product_id ?? ''),
     offer_price: Number(offer.offer_price ?? 0),
     expires_at: String(offer.expires_at ?? ''),
     scope: offer.scope ?? 'all_units',
   };
+}
+
+// Lista canónica de ofertas de un destinatario, ordenada por producto (igual que en el backend).
+export function canonicalOffers(offers) {
+  return (Array.isArray(offers) ? offers : [])
+    .map(canonicalOffer)
+    .sort((a, b) => a.product_id.localeCompare(b.product_id));
 }
 
 export function offerKey(offer) {
@@ -19,11 +25,17 @@ export const OFFER_FIELD_LABELS = {
   scope: 'alcance', recipients: 'destinatario', margin_confirmed: 'confirmación de margen',
 };
 
+export const MAX_OFFERS_PER_RECIPIENT = 5;
+
+export function offersList(entry) {
+  return Array.isArray(entry?.item?.offers) ? entry.item.offers : [];
+}
+
 export function reviewPayload(entries) {
   return entries.map(entry => ({
     phone: String(entry.item.phone).replace(/\D/g, ''),
     message: String(entry.item.message || '').trim(),
-    offer: canonicalOffer(entry.item.offer),
+    offers: canonicalOffers(offersList(entry)),
   }));
 }
 
@@ -39,10 +51,19 @@ export function editReviewedEntry(plan, index, message) {
   } : entry) };
 }
 
-// Una oferta solo está lista si fue validada tal como está escrita ahora.
+// Dos ofertas del mismo producto para un destinatario no se pueden autorizar.
+export function duplicateOfferProducts(entry) {
+  const ids = offersList(entry).map(o => String(o.product_id ?? ''));
+  return ids.filter((id, i) => id !== '' && ids.indexOf(id) !== i);
+}
+
+// Una oferta solo está lista si cada una fue validada tal como está escrita ahora.
 export function offerReady(entry) {
-  if (!entry.item.offer) return true;
-  return entry.offerCheck?.ok === true && entry.offerCheckKey === offerKey(entry.item.offer);
+  const offers = offersList(entry);
+  if (!offers.length) return true;
+  if (duplicateOfferProducts(entry).length) return false;
+  const checks = entry.offerChecks || [];
+  return offers.every((offer, i) => checks[i]?.ok === true && checks[i].key === offerKey(offer));
 }
 
 export function canApproveDrafts(plan, reviewed) {
@@ -51,20 +72,30 @@ export function canApproveDrafts(plan, reviewed) {
     && !/\{\{|\}\}/.test(entry.item.message) && offerReady(entry));
 }
 
-export function setEntryOffer(plan, index, offer) {
+// Reemplaza la lista de ofertas de un destinatario y pide validarla de nuevo.
+export function setEntryOffers(plan, index, offers) {
   return { ...plan, entries: plan.entries.map((entry, i) => i === index
-    ? { ...entry, item: { ...entry.item, offer }, offerCheck: null, offerCheckKey: null } : entry) };
+    ? { ...entry, item: { ...entry.item, offers }, offerChecks: [] } : entry) };
 }
 
-export function setEntryOfferCheck(plan, index, check, key) {
-  return { ...plan, entries: plan.entries.map((entry, i) => i === index && offerKey(entry.item.offer) === key
-    ? { ...entry, offerCheck: check, offerCheckKey: key } : entry) };
+export function offersSnapshot(entry) {
+  return JSON.stringify(offersList(entry));
 }
 
-// Copia los datos de la oferta a todos los destinatarios; `results` viene de la validación de cada uno.
-export function applyOfferToAll(plan, fields, results) {
-  return { ...plan, entries: plan.entries.map((entry, i) => {
-    const offer = { ...fields, recipients: [entry.item.phone] };
-    return { ...entry, item: { ...entry.item, offer }, offerCheck: results[i] ?? null, offerCheckKey: offerKey(offer) };
+// Guarda resultados de validación solo si la lista no cambió mientras se validaba.
+export function setEntryOfferChecks(plan, index, results, snapshot) {
+  return { ...plan, entries: plan.entries.map((entry, i) => i === index && offersSnapshot(entry) === snapshot
+    ? { ...entry, offerChecks: offersList(entry).map((offer, k) => ({
+      ...(results[k] || { ok: false, missing: ['validación'], errors: [] }), key: offerKey(offer),
+    })) } : entry) };
+}
+
+// Pone la oferta en cada destinatario, reemplazando la del mismo producto si ya existía.
+export function applyOfferToAll(plan, fields) {
+  const productId = String(fields.product_id ?? '');
+  return { ...plan, entries: plan.entries.map(entry => {
+    const others = offersList(entry).filter(o => String(o.product_id ?? '') !== productId);
+    const offers = [...others, { ...fields, recipients: [entry.item.phone] }];
+    return { ...entry, item: { ...entry.item, offers }, offerChecks: [] };
   }) };
 }

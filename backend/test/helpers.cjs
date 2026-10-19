@@ -57,7 +57,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './order-returns') return load('src/routes/order-returns.js', deps, extra);
       if (name === './campaign-offers' || name === '../services/campaign-offers') return require(path.join(root, 'src/services/campaign-offers.js'));
       if (name === './campaign-offers-store' || name === '../services/campaign-offers-store') return {
-        latestForConversation: async () => null, createDraft: async () => null, markSent: async () => null,
+        latestForConversation: async () => null, activeForConversation: async () => [], createDraft: async () => null, markSent: async () => null,
         redeem: async () => null, releaseOnCancel: async () => null, expireDue: async () => 0,
       };
       if (name === 'express' || name === 'jsonwebtoken' || name === 'ipaddr.js' || name === 'crypto' || name.startsWith('node:')) return require(name);

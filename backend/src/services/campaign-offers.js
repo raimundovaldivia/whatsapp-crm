@@ -184,7 +184,29 @@ function toPromotionContext(offer, now = new Date()) {
 
 const isExpiredOffer = (offer, now = new Date()) => isExpired(offer, now);
 
+/** Varias ofertas vigentes (una por producto) como un solo contexto de precios. */
+function toPromotionContextMany(offers, now = new Date()) {
+  const contexts = (offers || []).map(o => toPromotionContext(o, now)).filter(Boolean);
+  if (!contexts.length) return null;
+  return {
+    ...contexts[0],
+    offerId: null,
+    offerIds: contexts.map(c => c.offerId),
+    offers: contexts.flatMap(c => c.offers),
+    specialPrices: Object.assign({}, ...contexts.map(c => c.specialPrices)),
+    active: contexts.some(c => c.active),
+  };
+}
+
+/** Lista de ofertas de un destinatario: `offers` (varias) o `offer` (una, compatibilidad). */
+function offerListFrom(item) {
+  if (Array.isArray(item?.offers)) return item.offers.filter(Boolean);
+  return item?.offer ? [item.offer] : [];
+}
+
 module.exports = {
+  offerListFrom,
+  toPromotionContextMany,
   isExpiredOffer,
   REQUIRED_FIELDS,
   validateOfferDraft,

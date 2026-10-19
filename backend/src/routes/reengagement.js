@@ -2003,23 +2003,29 @@ router.post('/campaigns/:id/start', async (req, res) => {
       const message = String(item.templateName ? item.previewText || '' : item.message || '').trim();
       if (!/^[0-9]{8,15}$/.test(phone) || !message || message.length > 4096 || phones.has(phone)) throw Object.assign(new Error('Revisa los teléfonos y mensajes del lote; no debe haber destinatarios repetidos'), { status: 400 });
       phones.add(phone);
-      const row = { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone, offer: null, campaignOfferId: null };
-      if (item.offer) {
-        // Validación al iniciar: si una oferta no está completa, no se aprueba ni se envía el lote.
-        const offer = { ...item.offer, recipients: [phone] };
+      const row = { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone, offers: [], campaignOfferIds: [] };
+      const offerList = campaignOffers.offerListFrom(item);
+      if (offerList.length) {
+        // Validación al iniciar: si una oferta no está completa o se repite un producto, no se aprueba ni se envía el lote.
+        if (new Set(offerList.map(o => String(o.product_id))).size !== offerList.length) {
+          throw Object.assign(new Error(`Ofertas repetidas por producto para ${phone}`), { status: 400 });
+        }
         if (!offerCatalog) {
           offerCatalog = (await db.getProducts(req.orgId, true)).map(p => ({
             product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct,
           }));
         }
-        const check = campaignOffers.validateOfferDraft(offer, { catalog: offerCatalog });
-        if (!check.ok) {
-          throw Object.assign(new Error(`Oferta incompleta para ${phone}: ${[...check.missing.map(field => `falta ${field}`), ...check.errors].join('; ')}`), { status: 400 });
-        }
         const conversation = await db.upsertConversation(req.orgId, phone, item.contactName || 'Cliente', campaign.sending_channel_id);
-        const draft = await offerStore.createDraft(db.getPool(), req.orgId, conversation.id, offer);
-        row.offer = item.offer;
-        row.campaignOfferId = draft.id;
+        for (const entry of offerList) {
+          const offer = { ...entry, recipients: [phone] };
+          const check = campaignOffers.validateOfferDraft(offer, { catalog: offerCatalog });
+          if (!check.ok) {
+            throw Object.assign(new Error(`Oferta incompleta para ${phone}: ${[...check.missing.map(field => `falta ${field}`), ...check.errors].join('; ')}`), { status: 400 });
+          }
+          const draft = await offerStore.createDraft(db.getPool(), req.orgId, conversation.id, offer);
+          row.offers.push(entry);
+          row.campaignOfferIds.push(draft.id);
+        }
       }
       prepared.push(row);
     }
@@ -2666,7 +2672,7 @@ async function sendBulk(req, res) {
 
   const results = [];
   for (const item of items) {
-    let offerDraft = null;
+    let offerDrafts = [];
     // Normalizar teléfono: con código de país, sin "+"
     item.phone = db.normalizePhone(item.phone);
     let acceptedByProvider = false;
@@ -2683,22 +2689,27 @@ async function sendBulk(req, res) {
         if (!String(item.templateName ? item.previewText || '' : item.message || '').trim()) throw new Error('El mensaje directo está vacío');
         // Oferta personal: no se envía si faltan campos o no cumple las reglas.
         // La respuesta trae la lista de campos faltantes para completarlos en la app.
-        if (item.campaignOfferId) {
-          // Borrador creado al iniciar la campaña; se marca como enviado solo si WhatsApp acepta.
-          offerDraft = { id: item.campaignOfferId };
-        } else if (item.offer) {
+        if (item.campaignOfferIds?.length) {
+          // Borradores creados al iniciar la campaña; cada uno pasa a 'sent' solo si WhatsApp acepta.
+          offerDrafts = item.campaignOfferIds.map(id => ({ id }));
+        } else if (require('../services/campaign-offers').offerListFrom(item).length) {
+          const offerList = require('../services/campaign-offers').offerListFrom(item);
           const products = await db.getProducts(req.orgId, true);
           const catalog = products.map(p => ({ product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct }));
-          const check = require('../services/campaign-offers').validateOfferDraft(item.offer, { catalog });
-          if (!check.ok) {
-            const reasons = [...check.missing.map(f => `falta ${f}`), ...check.errors];
+          const reasons = [];
+          for (const entry of offerList) {
+            const check = require('../services/campaign-offers').validateOfferDraft(entry, { catalog });
+            if (!check.ok) reasons.push(...check.missing.map(f => `falta ${f}`), ...check.errors);
+          }
+          if (reasons.length) {
             await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: `Oferta incompleta: ${reasons.join('; ')}` });
-            results.push({ phone: item.phone, success: false, skipped: true, error: 'Oferta incompleta', missing: check.missing, errors: check.errors });
+            results.push({ phone: item.phone, success: false, skipped: true, error: 'Oferta incompleta', missing: [], errors: reasons });
             continue;
           }
-          // Borrador de oferta antes de enviar; pasa a 'sent' solo si WhatsApp la acepta.
           const offerConversation = await db.upsertConversation(req.orgId, item.phone, item.contactName || 'Cliente', sendingChannelId);
-          offerDraft = await require('../services/campaign-offers-store').createDraft(db.getPool(), req.orgId, offerConversation.id, item.offer);
+          for (const entry of offerList) {
+            offerDrafts.push(await require('../services/campaign-offers-store').createDraft(db.getPool(), req.orgId, offerConversation.id, entry));
+          }
         }
       }
 
@@ -2782,7 +2793,7 @@ async function sendBulk(req, res) {
       });
       if (direct) {
         const saved = await persistAccepted();
-        if (offerDraft) {
+        for (const offerDraft of offerDrafts) {
           try {
             await require('../services/campaign-offers-store').markSent(db.getPool(), req.orgId, offerDraft.id, saved.messageId);
           } catch (offerError) {

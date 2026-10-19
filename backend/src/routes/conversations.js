@@ -514,10 +514,12 @@ router.post('/:id/orders', async (req, res) => {
     }
 
     // Oferta de campaña: sólo la última enviada, vigente, y referenciada por el pedido.
-    const latestCampaign = await campaignOffersStore.latestForConversation(db.getPool(), req.orgId, convId).catch(() => null);
-    const offerToRedeem = latestCampaign && latestCampaign.status === 'sent' && offerId != null && Number(offerId) === Number(latestCampaign.id) ? latestCampaign : null;
+    const campaignRows = await campaignOffersStore.activeForConversation(db.getPool(), req.orgId, convId).catch(() => []);
+    const requestedOfferIds = new Set((Array.isArray(req.body.offerIds) ? req.body.offerIds : (offerId != null ? [offerId] : [])).map(Number));
+    const offersToRedeem = campaignRows.filter(o => o.status === 'sent' && !campaignOffers.isExpiredOffer(o) && requestedOfferIds.has(Number(o.id)));
     const normalizedItems = rawItems.map(i => ({ ...i, product_id: i.product_id ?? i.productId ?? i.id }));
-    const items = offerToRedeem ? campaignOffers.applyOfferToItems(normalizedItems, offerToRedeem, null).items : normalizedItems;
+    let items = normalizedItems;
+    for (const offer of offersToRedeem) items = campaignOffers.applyOfferToItems(items, offer, null).items;
     const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
     const discountNum   = parseFloat(discount) || 0;
     const discountAmount = discountNum > 0
@@ -554,8 +556,8 @@ router.post('/:id/orders', async (req, res) => {
       totalPrice,
       note: note.trim() || null,
     });
-    if (offerToRedeem) {
-      await campaignOffersStore.redeem(db.getPool(), req.orgId, offerToRedeem.id, order.id)
+    for (const offer of offersToRedeem) {
+      await campaignOffersStore.redeem(db.getPool(), req.orgId, offer.id, order.id)
         .catch(error => console.warn('[Campaign offers] no se pudo canjear la oferta:', error.message));
     }
 

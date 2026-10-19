@@ -23,6 +23,21 @@ async function latestForConversation(pool, orgId, conversationId) {
   return rows[0] || null;
 }
 
+/** Última oferta enviada por cada producto de la conversación (una vigente por producto). */
+async function activeForConversation(pool, orgId, conversationId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (po.product_id) po.*, pr.title AS product_title FROM campaign_offers po
+         LEFT JOIN products pr ON pr.id::text = po.product_id
+        WHERE po.organization_id = $1 AND po.conversation_id = $2
+          AND po.status IN ('sent', 'redeemed', 'expired', 'superseded')
+        ORDER BY po.product_id, COALESCE(po.sent_at, po.created_at) DESC, po.id DESC
+     ) latest_per_product`,
+    [orgId, conversationId],
+  );
+  return rows;
+}
+
 /** Crea la oferta como borrador, antes del envío. Los campos ya fueron validados. */
 async function createDraft(pool, orgId, conversationId, fields) {
   const { rows } = await pool.query(
@@ -41,8 +56,8 @@ async function markSent(pool, orgId, offerId, messageId, now = new Date()) {
   if (!current) throw new Error('Oferta no encontrada');
   await pool.query(
     `UPDATE campaign_offers SET status = 'superseded', superseded_at = $3::timestamptz
-      WHERE organization_id = $1 AND conversation_id = $2 AND status = 'sent' AND id <> $4`,
-    [orgId, current.conversation_id, now.toISOString(), offerId],
+      WHERE organization_id = $1 AND conversation_id = $2 AND product_id = $5 AND status = 'sent' AND id <> $4`,
+    [orgId, current.conversation_id, now.toISOString(), offerId, current.product_id],
   );
   const { rows } = await pool.query(
     `UPDATE campaign_offers SET status = 'sent', sent_at = $3::timestamptz, message_id = $4::integer
@@ -92,4 +107,4 @@ async function expireDue(pool, orgId, now = new Date()) {
   return rows;
 }
 
-module.exports = { latestForConversation, createDraft, markSent, redeem, releaseOnCancel, expireDue };
+module.exports = { activeForConversation, latestForConversation, createDraft, markSent, redeem, releaseOnCancel, expireDue };

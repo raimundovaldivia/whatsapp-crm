@@ -78,6 +78,7 @@ async function customerContext(orgId, phone, audienceType, today) {
 }
 
 const OFFER_KEYS = ['product_id', 'offer_price', 'expires_at', 'cap_units'];
+const MAX_OFFERS_PER_RECIPIENT = 5;
 
 // The model proposes only values stated in the instruction; anything else stays null
 // and the operator completes it manually before approval.
@@ -101,8 +102,9 @@ function validateDraft(raw, customer, { catalog = [], now = new Date() } = {}) {
   if (typeof raw.message !== 'string' || !raw.message.trim() || raw.message.length > 1200 || /\{\{|\}\}/.test(raw.message)) {
     throw fail('La IA devolvió un mensaje inválido. No se preparó ningún envío.', 502);
   }
-  const offer = offerFrom(raw.offer, customer.phone, catalog, now);
-  return { phone: customer.phone, name: customer.name, decision: 'draft', reason, message: raw.message.trim(), evidence: customer.context.compras, offer };
+  const offers = (Array.isArray(raw.offers) ? raw.offers : []).slice(0, MAX_OFFERS_PER_RECIPIENT)
+    .map(entry => offerFrom(entry, customer.phone, catalog, now)).filter(Boolean);
+  return { phone: customer.phone, name: customer.name, decision: 'draft', reason, message: raw.message.trim(), evidence: customer.context.compras, offers };
 }
 
 async function generateDrafts(orgId, body, aiClient) {
@@ -129,7 +131,7 @@ Usa tono breve y natural, una propuesta pertinente y una pregunta sencilla. No v
 No presentes como frecuencia una compra única. Si compró recientemente, no presupongas necesidad; si lleva mucho tiempo, consulta su interés sin dar una reposición por hecha.
 Incluye los complementos que pida el operador, con preferencia conocida si existe. No inventes preferencias, cantidades, precios, descuentos, disponibilidad ni compromisos de entrega. Un precio histórico no es una oferta vigente.
 Si faltan datos indispensables para cumplir la instrucción, devuelve skip con la duda concreta. Respeta rechazos, bajas y conversaciones pendientes; no insistas después de una oferta reciente sin respuesta.
-Oferta: si la instrucción define una oferta concreta, llena "offer" sólo con lo que diga textualmente: product_id (exactamente uno de catalogoProductos), offer_price (entero, precio final por unidad en pesos), expires_at (YYYY-MM-DD) y cap_units (entero si hay tope de unidades, null si no hay tope). Cada dato que no aparezca va en null: nunca lo inventes ni lo deduzcas. Si la instrucción no define oferta, usa offer null. El mensaje menciona la oferta sólo si existe.
+Ofertas: si la instrucción define ofertas concretas, llena "offers" con una entrada por producto (máximo 5, un solo precio por producto), sólo con lo que diga textualmente: product_id (exactamente uno de catalogoProductos), offer_price (entero, precio final por unidad en pesos), expires_at (YYYY-MM-DD) y cap_units (entero si hay tope de unidades, null si no hay tope). Cada dato que no aparezca va en null: nunca lo inventes ni lo deduzcas. Si la instrucción no define ofertas, usa offers []. El mensaje menciona sólo las ofertas presentes en "offers".
 La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa fecha. No reveles cálculos de frecuencia, notas internas ni datos de terceros al cliente.`,
       messages: [{ role: 'user', content: JSON.stringify({
         instruccion: request.instruction, negocio: text(organization?.name, 100),
@@ -139,10 +141,10 @@ La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa f
         type: 'object', additionalProperties: false, required: ['decision', 'reason', 'message'],
         properties: {
           decision: { type: 'string', enum: ['draft', 'skip'] }, reason: { type: 'string' }, message: { type: 'string' },
-          offer: { type: ['object', 'null'], additionalProperties: false, required: OFFER_KEYS, properties: {
+          offers: { type: 'array', maxItems: MAX_OFFERS_PER_RECIPIENT, items: { type: 'object', additionalProperties: false, required: OFFER_KEYS, properties: {
             product_id: { type: ['string', 'null'] }, offer_price: { type: ['integer', 'null'] },
             expires_at: { type: ['string', 'null'] }, cap_units: { type: ['integer', 'null'] },
-          } },
+          } } },
         },
       } }],
       tool_choice: { type: 'tool', name: 'customer_draft' },
@@ -155,7 +157,6 @@ La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa f
 
 // Forma canónica de la oferta: la misma se calcula en la interfaz para la huella.
 function canonicalOffer(offer) {
-  if (!offer) return null;
   return {
     product_id: String(offer.product_id ?? ''),
     offer_price: Number(offer.offer_price ?? 0),
@@ -164,9 +165,16 @@ function canonicalOffer(offer) {
   };
 }
 
+// Lista canónica de ofertas de un destinatario, ordenada por producto.
+function canonicalOffers(offers) {
+  return (Array.isArray(offers) ? offers : [])
+    .map(canonicalOffer)
+    .sort((a, b) => a.product_id.localeCompare(b.product_id));
+}
+
 function fingerprint(items) {
   return createHash('sha256').update(JSON.stringify(items.map(item => ({
-    phone: db.normalizePhone(item.phone), message: String(item.message || '').trim(), offer: canonicalOffer(item.offer),
+    phone: db.normalizePhone(item.phone), message: String(item.message || '').trim(), offers: canonicalOffers(item.offers ?? (item.offer ? [item.offer] : [])),
   })))).digest('hex');
 }
 

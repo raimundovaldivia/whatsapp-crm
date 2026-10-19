@@ -505,12 +505,13 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   // la oferta personal anterior si todavía está activa.
   // Oferta de campaña (texto libre): la última enviada y vigente reemplaza la oferta automática
   // y la promoción por historial mientras siga vigente.
-  const campaignOffer = promotionsEnabled
-    ? await campaignOffersStore.latestForConversation(getPool(), orgId, conversationId).catch(() => null)
-    : null;
-  if (campaignOffer && campaignOffer.status === 'sent' && !campaignOffers.isExpiredOffer(campaignOffer)) {
+  const campaignOfferRows = promotionsEnabled
+    ? await campaignOffersStore.activeForConversation(getPool(), orgId, conversationId).catch(() => [])
+    : [];
+  const sentCampaignOffers = campaignOfferRows.filter(o => o.status === 'sent' && !campaignOffers.isExpiredOffer(o));
+  if (sentCampaignOffers.length) {
     personalOffer = null;
-    promotionContext = campaignOffers.toPromotionContext(campaignOffer);
+    promotionContext = campaignOffers.toPromotionContextMany(sentCampaignOffers);
   }
   if (personalOffer && promotionContext?.oneHourTieredGift && promotionContext.active) personalOffer = null;
   else if (personalOffer) promotionContext = null;
@@ -2808,12 +2809,13 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           personalOfferDiscountAmount: updatedDraft.personal_offer_discount_amount || null,
           personalOfferTrays: updatedDraft.personal_offer_id ? personalOffers.eggTrayQuantity(priced.items) : null,
         });
-        try {
-          const pendingCampaign = await campaignOffersStore.latestForConversation(getPool(), orgId, conversationId);
-          if (pendingCampaign?.status === 'sent' && priced.items.some(it => String(it.product_id) === String(pendingCampaign.product_id))) {
-            await campaignOffersStore.redeem(getPool(), orgId, pendingCampaign.id, order.id);
-          }
-        } catch (error) { console.warn('[Campaign offers] no se pudo canjear la oferta:', error.message); }
+        const pendingCampaigns = await campaignOffersStore.activeForConversation(getPool(), orgId, conversationId).catch(() => []);
+        for (const pending of pendingCampaigns) {
+          if (pending.status !== 'sent' || campaignOffers.isExpiredOffer(pending)) continue;
+          if (!priced.items.some(it => String(it.product_id) === String(pending.product_id))) continue;
+          try { await campaignOffersStore.redeem(getPool(), orgId, pending.id, order.id); }
+          catch (error) { console.warn('[Campaign offers] no se pudo canjear la oferta:', error.message); }
+        }
         const orderMeta = {};
         if (updatedDraft.delivery_date) orderMeta.delivery_date = updatedDraft.delivery_date;
         if (Object.keys(orderMeta).length) await db.updateOrder(order.id, orderMeta);
