@@ -294,11 +294,11 @@ router.get('/by-product', requireContactsAccess, async (req, res) => {
   if (!q) return res.json({ success: true, phones: [], count: 0, term: '' });
   try {
     const { rows } = await pool.query(
-      `SELECT customer_phone, items FROM orders
+      `SELECT customer_phone, items::text AS items FROM orders
          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
            AND status <> 'cancelled' AND items IS NOT NULL
        UNION ALL
-       SELECT customer_phone, items FROM shopify_orders
+       SELECT customer_phone, items::text AS items FROM shopify_orders
          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
            AND items IS NOT NULL`,
       [req.orgId]
