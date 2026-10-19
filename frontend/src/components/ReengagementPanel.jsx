@@ -9,7 +9,7 @@ import {
 
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
-import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel } from '../utils/broadcast-audience.mjs';
+import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
 import { reviewFingerprint, editReviewedEntry, canApproveDrafts } from '../utils/broadcast-drafts.mjs';
 
 function consolidateVisibleCandidates(rows = []) {
@@ -1290,6 +1290,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [audienceType, setAudienceType] = useState('all');
   const [audienceSegment, setAudienceSegment] = useState('all');
   const [phoneListText, setPhoneListText] = useState('');
+  const [limitCount, setLimitCount] = useState('');
   const [selected,       setSelected]       = useState(new Set());
   const [templates,      setTemplates]      = useState(parentTemplates);
   const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
@@ -1958,7 +1959,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     return true;
   });
 
-  const audience = selectedAudience(filtered, selected);
+  const audienceAll = selectedAudience(filtered, selected);
+  // Límite opcional: se envía solo a las N personas con compra más reciente de la selección.
+  const audience = limitCount ? limitToMostRecent(audienceAll, limitCount) : audienceAll;
   const selectedCount = audience.length;
 
   function toggleAll() {
@@ -2598,6 +2601,15 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </div>}
       </section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
+
+        {/* Límite de cantidad: las N personas con compra más reciente */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, fontSize: 13 }}>
+          Elegir solo
+          <input type="number" min="1" step="1" value={limitCount} placeholder="todos"
+            onChange={e => setLimitCount(e.target.value)}
+            style={{ width: 90, padding: '7px 10px', borderRadius: colors.radiusMd, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px' }} />
+          personas (las de compra más reciente)
+        </label>
 
         {/* Lista de números pegada (uno por línea o separados por coma) */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 100%' }}>

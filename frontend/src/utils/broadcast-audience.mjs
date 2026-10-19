@@ -17,6 +17,14 @@ export function selectedAudience(contacts, selected) {
   return contacts.filter(contact => selected.has(contact.phone));
 }
 
+// Deja solo las N personas con compra más reciente (las sin compras van al final).
+export function limitToMostRecent(contacts, limit) {
+  const max = Number(limit);
+  if (!Number.isInteger(max) || max < 1) return contacts;
+  const time = c => (c.last_order_at ? new Date(c.last_order_at).getTime() : 0) || 0;
+  return [...contacts].sort((a, b) => time(b) - time(a)).slice(0, max);
+}
+
 export function purchaseAgeLabel(days) {
   if (days === 'range_7_29') return 'Entre 7 y 29 días sin comprar';
   if (days === 'range_30_60') return 'Entre 30 y 60 días sin comprar';
