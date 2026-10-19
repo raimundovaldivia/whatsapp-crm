@@ -494,7 +494,7 @@ export default function App() {
 
       {/* Control de alertas al admin en cola (tarjeta flotante; se autooculta si no hay nada).
           Solo para roles con acceso de gestión. */}
-      {['owner', 'admin', 'supervisor'].includes(userRole) && <AdminAlertsBanner />}
+      {/* Tarjeta de avisos al admin oculta a pedido del usuario */}
 
       {/* Barra de navegación (lateral desktop / inferior móvil) */}
       <NavBar
