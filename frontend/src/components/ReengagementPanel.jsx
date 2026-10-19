@@ -10,7 +10,7 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
-import { reviewFingerprint, editReviewedEntry, canApproveDrafts } from '../utils/broadcast-drafts.mjs';
+import { reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, setEntryOffer, setEntryOfferCheck, applyOfferToAll, OFFER_FIELD_LABELS } from '../utils/broadcast-drafts.mjs';
 
 function consolidateVisibleCandidates(rows = []) {
   const grouped = new Map();
@@ -1352,6 +1352,63 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [reviewIdx,      setReviewIdx]      = useState(0);
   const [guidedReview,   setGuidedReview]   = useState(false);
   const [reviewedItems,  setReviewedItems]  = useState(new Set());
+
+  const [offerProducts, setOfferProducts] = useState([]);
+  const reviewEntry = reviewPlan?.entries?.[reviewIdx];
+  const reviewOfferKey = reviewEntry?.item?.offer ? offerKey(reviewEntry.item.offer) : null;
+  useEffect(() => {
+    if (!reviewPlan || reviewPlan.sendingProvider !== 'evolution' || offerProducts.length) return;
+    api.get('/products').then(({ data }) => setOfferProducts((Array.isArray(data) ? data : []).filter(p => p.active && !p.deprecated_at))).catch(() => {});
+  }, [reviewPlan?.sendingProvider, offerProducts.length]);
+  // Valida en tiempo real la oferta del mensaje que se está revisando (mismas reglas que el envío).
+  useEffect(() => {
+    if (!reviewOfferKey || reviewEntry.offerCheckKey === reviewOfferKey) return undefined;
+    const idx = reviewIdx;
+    const timer = setTimeout(async () => {
+      const fallback = { ok: false, missing: [], errors: ['No se pudo validar la oferta. Reintenta.'], warnings: [] };
+      try {
+        const { data } = await api.post('/reengagement/offers/validate', { offers: [JSON.parse(reviewOfferKey)] });
+        setReviewPlan(plan => plan ? setEntryOfferCheck(plan, idx, data.results?.[0] ?? fallback, reviewOfferKey) : plan);
+      } catch {
+        setReviewPlan(plan => plan ? setEntryOfferCheck(plan, idx, fallback, reviewOfferKey) : plan);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [reviewOfferKey, reviewIdx]);
+
+  function updateEntryOffer(idx, patch) {
+    setReviewPlan(plan => {
+      const entry = plan.entries[idx];
+      const base = entry.item.offer || { product_id: '', offer_price: null, expires_at: null, scope: 'all_units', recipients: [entry.item.phone], margin_confirmed: false };
+      return setEntryOffer(plan, idx, { ...base, ...patch });
+    });
+  }
+
+  function removeEntryOffer(idx) {
+    setReviewPlan(plan => setEntryOffer(plan, idx, null));
+  }
+
+  async function applyOfferEverywhere(idx) {
+    const fields = reviewPlan.entries[idx].item.offer;
+    try {
+      const offers = reviewPlan.entries.map(entry => ({ ...fields, recipients: [entry.item.phone] }));
+      const { data } = await api.post('/reengagement/offers/validate', { offers });
+      setReviewPlan(plan => applyOfferToAll(plan, fields, data.results || []));
+      showToast('Oferta aplicada a todos los destinatarios', 'success');
+    } catch {
+      showToast('No se pudo validar la oferta para todos', 'error');
+    }
+  }
+
+  function offerStatusText(entry) {
+    if (!entry.offerCheck || entry.offerCheckKey !== offerKey(entry.item.offer)) return 'Validando…';
+    if (entry.offerCheck.ok) return '✓ Oferta válida';
+    const missing = (entry.offerCheck.missing || []).filter(f => f !== 'margin_confirmed' || !(entry.offerCheck.warnings || []).length).map(f => OFFER_FIELD_LABELS[f] || f);
+    const parts = [];
+    if (missing.length) parts.push(`Faltan: ${missing.join(', ')}`);
+    if ((entry.offerCheck.errors || []).length) parts.push(entry.offerCheck.errors.join('; '));
+    return parts.join(' · ') || 'Oferta incompleta';
+  }
   const [results,        setResults]        = useState(null);
   const [toast,          setToast]          = useState(null);
   const [testMode,       setTestMode]       = useState(false);
@@ -2069,9 +2126,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       const entries = drafts.filter(draft => draft.decision === 'draft').map(draft => {
         const contact = chosen.find(person => normPhone(person.phone) === normPhone(draft.phone));
         if (!contact) throw new Error('El borrador no corresponde a la selección.');
+        const offerFields = draft.offer?.fields ?? null;
         return { contact, reason: draft.reason, evidence: draft.evidence, previewText: draft.message,
+          offerCheck: draft.offer ? { ok: draft.offer.ok, missing: draft.offer.missing, errors: draft.offer.errors, warnings: draft.offer.warnings } : null,
+          offerCheckKey: offerKey(offerFields),
           item: { phone: testMode ? TEST_PHONE : contact.phone, originalPhone: contact.phone,
-            contactName: contact.name, message: draft.message, previewText: draft.message } };
+            contactName: contact.name, message: draft.message, previewText: draft.message, offer: offerFields } };
       });
       setDraftReport({ excluded, total: chosen.length, prepared: entries.length });
       if (!entries.length) { showToast('Ningún cliente cumple las condiciones. Revisa los motivos y ajusta la instrucción.', 'error'); return; }
@@ -3397,6 +3457,45 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     setReviewedItems(new Set([...reviewedItems].filter(i => i !== idx).map(i => i > idx ? i - 1 : i)));
                   }} style={{ marginTop: 7 }}>Excluir a esta persona</button>
                 </> : <div style={{ whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }}>{entry.previewText || '(Template sin cuerpo de texto)'}</div>}
+                {reviewPlan.sendingProvider === 'evolution' && (
+                  <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <strong style={{ fontSize: 12, color: colors.textPrimary }}>Oferta de campaña</strong>
+                      {entry.item.offer
+                        ? <button type="button" disabled={sending} onClick={() => removeEntryOffer(idx)} style={{ fontSize: 12 }}>Quitar oferta</button>
+                        : <button type="button" disabled={sending} onClick={() => updateEntryOffer(idx, {})} style={{ fontSize: 12 }}>Agregar oferta</button>}
+                    </div>
+                    {entry.item.offer && <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+                        <label style={{ fontSize: 12 }}>Producto
+                          <select value={entry.item.offer.product_id || ''} disabled={sending} onChange={event => updateEntryOffer(idx, { product_id: event.target.value })} style={{ width: '100%' }}>
+                            <option value="">Selecciona…</option>
+                            {offerProducts.map(product => <option key={product.id} value={String(product.id)}>{product.title}</option>)}
+                          </select>
+                        </label>
+                        <label style={{ fontSize: 12 }}>Precio por unidad ($)
+                          <input type="number" min="1" step="1" disabled={sending} value={entry.item.offer.offer_price ?? ''} onChange={event => updateEntryOffer(idx, { offer_price: event.target.value === '' ? null : Number(event.target.value) })} style={{ width: '100%' }} />
+                        </label>
+                        <label style={{ fontSize: 12 }}>Vence
+                          <input type="date" disabled={sending} value={entry.item.offer.expires_at || ''} onChange={event => updateEntryOffer(idx, { expires_at: event.target.value || null })} style={{ width: '100%' }} />
+                        </label>
+                        <label style={{ fontSize: 12 }}>Tope de unidades (vacío = todas)
+                          <input type="number" min="1" step="1" disabled={sending} value={entry.item.offer.scope?.cap_units ?? ''} onChange={event => updateEntryOffer(idx, { scope: event.target.value ? { cap_units: Number(event.target.value) } : 'all_units' })} style={{ width: '100%' }} />
+                        </label>
+                      </div>
+                      {(entry.offerCheck?.warnings || []).some(w => w.includes('margen')) && (
+                        <label style={{ fontSize: 12, display: 'flex', gap: 6, marginTop: 8 }}>
+                          <input type="checkbox" checked={entry.item.offer.margin_confirmed === true} disabled={sending} onChange={event => updateEntryOffer(idx, { margin_confirmed: event.target.checked })} />
+                          Confirmo el margen de este producto (no tiene costo ni margen cargados)
+                        </label>
+                      )}
+                      <div style={{ marginTop: 8, fontSize: 12, color: offerReady(entry) ? colors.green : colors.textSecondary }}>{offerStatusText(entry)}</div>
+                      <button type="button" disabled={sending || !offerReady(entry)} onClick={() => applyOfferEverywhere(idx)} style={{ marginTop: 8, fontSize: 12 }}>
+                        Aplicar esta oferta a todos ({reviewPlan.entries.length})
+                      </button>
+                    </>}
+                  </div>
+                )}
                 <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 7 }}>Destino real: {entry.item.phone} · Puedes recorrer todos los mensajes antes de confirmar.</div>
                 {guidedReview && (
                   <div style={{ marginTop: 10, padding: '9px 11px', borderRadius: 8, backgroundColor: `${colors.green}12`, border: `1px solid ${colors.green}33`, color: colors.textSecondary, fontSize: 12, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
@@ -3420,9 +3519,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   </div>
                 )}
                 <button onClick={() => setReviewPlan(null)} disabled={sending} style={{ padding: '8px 15px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, cursor: sending ? 'not-allowed' : 'pointer' }}>Volver y corregir</button>
-                <button onClick={confirmSend} disabled={sending || (guidedReview && !guidedComplete)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: guidedReview && !guidedComplete ? colors.bgHover : colors.green, color: guidedReview && !guidedComplete ? colors.textMuted : '#fff', fontWeight: 800, cursor: sending || (guidedReview && !guidedComplete) ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
+                <button onClick={confirmSend} disabled={sending || (guidedReview && !guidedComplete) || reviewPlan.entries.some(e => !offerReady(e))} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: guidedReview && !guidedComplete ? colors.bgHover : colors.green, color: guidedReview && !guidedComplete ? colors.textMuted : '#fff', fontWeight: 800, cursor: sending || (guidedReview && !guidedComplete) ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
                   {sending ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
-                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : guidedReview && !guidedComplete ? 'Revisa y completa cada mensaje' : `${individual ? 'Autorizar' : 'Confirmar'} y enviar ${reviewPlan.entries.length}`}
+                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : guidedReview && !guidedComplete ? 'Revisa y completa cada mensaje' : reviewPlan.entries.some(e => !offerReady(e)) ? 'Completa las ofertas para autorizar' : `${individual ? 'Autorizar' : 'Confirmar'} y enviar ${reviewPlan.entries.length}`}
                 </button>
               </div>
             </div>

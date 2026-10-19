@@ -1085,6 +1085,20 @@ router.get('/candidates', async (req, res) => {
 /* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/generate
 ───────────────────────────────────────────────────────────────────── */
+// Valida ofertas con la misma regla del envío (la interfaz la usa en tiempo real).
+router.post('/offers/validate', async (req, res) => {
+  try {
+    const offers = Array.isArray(req.body?.offers) ? req.body.offers.slice(0, 500) : [];
+    const campaignOffers = require('../services/campaign-offers');
+    const catalog = (await db.getProducts(req.orgId, true)).map(p => ({
+      product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct,
+    }));
+    res.json({ results: offers.map(offer => campaignOffers.validateOfferDraft(offer || {}, { catalog })) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/generate', async (req, res) => {
   try {
     if (req.body?.instruction !== undefined || req.body?.phones !== undefined) {
@@ -1980,13 +1994,35 @@ router.post('/campaigns/:id/start', async (req, res) => {
     const items = req.body.items;
     if (!Array.isArray(items) || items.length !== Number(campaign.total_count) || items.length > 5000) return res.status(400).json({ error: 'Destinatarios inválidos' });
     const phones = new Set();
-    const prepared = items.map(item => {
+    const offerStore = require('../services/campaign-offers-store');
+    const campaignOffers = require('../services/campaign-offers');
+    let offerCatalog = null;
+    const prepared = [];
+    for (const item of items) {
       const phone = db.normalizePhone(item.phone);
       const message = String(item.templateName ? item.previewText || '' : item.message || '').trim();
       if (!/^[0-9]{8,15}$/.test(phone) || !message || message.length > 4096 || phones.has(phone)) throw Object.assign(new Error('Revisa los teléfonos y mensajes del lote; no debe haber destinatarios repetidos'), { status: 400 });
       phones.add(phone);
-      return { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone };
-    });
+      const row = { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone, offer: null, campaignOfferId: null };
+      if (item.offer) {
+        // Validación al iniciar: si una oferta no está completa, no se aprueba ni se envía el lote.
+        const offer = { ...item.offer, recipients: [phone] };
+        if (!offerCatalog) {
+          offerCatalog = (await db.getProducts(req.orgId, true)).map(p => ({
+            product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct,
+          }));
+        }
+        const check = campaignOffers.validateOfferDraft(offer, { catalog: offerCatalog });
+        if (!check.ok) {
+          throw Object.assign(new Error(`Oferta incompleta para ${phone}: ${[...check.missing.map(field => `falta ${field}`), ...check.errors].join('; ')}`), { status: 400 });
+        }
+        const conversation = await db.upsertConversation(req.orgId, phone, item.contactName || 'Cliente', campaign.sending_channel_id);
+        const draft = await offerStore.createDraft(db.getPool(), req.orgId, conversation.id, offer);
+        row.offer = item.offer;
+        row.campaignOfferId = draft.id;
+      }
+      prepared.push(row);
+    }
     if (campaign.pacing_settings?.generationMode === 'instruction') {
       require('../services/broadcast-drafts').validateApproval(prepared, req.body.approval);
     }
@@ -2647,7 +2683,10 @@ async function sendBulk(req, res) {
         if (!String(item.templateName ? item.previewText || '' : item.message || '').trim()) throw new Error('El mensaje directo está vacío');
         // Oferta personal: no se envía si faltan campos o no cumple las reglas.
         // La respuesta trae la lista de campos faltantes para completarlos en la app.
-        if (item.offer) {
+        if (item.campaignOfferId) {
+          // Borrador creado al iniciar la campaña; se marca como enviado solo si WhatsApp acepta.
+          offerDraft = { id: item.campaignOfferId };
+        } else if (item.offer) {
           const products = await db.getProducts(req.orgId, true);
           const catalog = products.map(p => ({ product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct }));
           const check = require('../services/campaign-offers').validateOfferDraft(item.offer, { catalog });

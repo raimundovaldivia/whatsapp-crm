@@ -153,9 +153,20 @@ La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa f
   return { drafts, generatedAt: new Date().toISOString(), businessDate: today, requiresApproval: true };
 }
 
+// Forma canónica de la oferta: la misma se calcula en la interfaz para la huella.
+function canonicalOffer(offer) {
+  if (!offer) return null;
+  return {
+    product_id: String(offer.product_id ?? ''),
+    offer_price: Number(offer.offer_price ?? 0),
+    expires_at: String(offer.expires_at ?? ''),
+    scope: offer.scope ?? 'all_units',
+  };
+}
+
 function fingerprint(items) {
   return createHash('sha256').update(JSON.stringify(items.map(item => ({
-    phone: db.normalizePhone(item.phone), message: String(item.message || '').trim(),
+    phone: db.normalizePhone(item.phone), message: String(item.message || '').trim(), offer: canonicalOffer(item.offer),
   })))).digest('hex');
 }
 
