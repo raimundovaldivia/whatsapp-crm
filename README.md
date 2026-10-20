@@ -294,6 +294,8 @@ En Mensajería masiva, el canal Evolution permite indicar el objetivo y las cond
 
 Las ofertas son personales: se guardan por organización, conversación y producto, y se activan tras un envío aceptado. No cambian el catálogo público. El selector de productos consume la respuesta `{ products: [...] }` y permite reintentar si falla la carga. El vencimiento se edita con fecha y hora de Chile; una fecha sin hora conserva vigencia hasta el cierre de ese día. La cola omite mensajes cuyas ofertas hayan vencido antes de enviarlos.
 
+El inbox y sus contadores muestran conversaciones con un mensaje real. Las conversaciones reservadas para ofertas pendientes permanecen disponibles para la campaña y aparecen automáticamente al guardarse el primer mensaje. El filtro solo afecta la vista del CRM: no borra registros, modifica la cola ni necesita reiniciar el servidor de envíos. También conserva mensajes multimedia sin texto de vista previa.
+
 La revisión permite recuperar textos desde un JSON con `contacts: [{ phone, message }]` para exactamente los contactos seleccionados (máximo 100). Solo recupera los textos y su orden: descarta autorizaciones, precios e identidad importados, exige completar y validar las ofertas y revisar cada mensaje nuevamente. No crea campañas ni envía al importar.
 
 Para estas reglas, ejecutar las pruebas del backend y `npm test` en el frontend. Las regresiones cubren horario de invierno/verano, almacenamiento UTC, ofertas vencidas en cola, carga del catálogo y recuperación sin autorización heredada. Los imports de las pruebas admiten rutas Windows.
