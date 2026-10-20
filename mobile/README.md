@@ -15,26 +15,54 @@ Funciona con cualquier tienda del CRM — con Shopify conectado o sin él.
    WEB (Repartos)                          APP (repartidor)
    ─────────────────────────               ───────────────────────────
    1. Elegir pedidos pendientes
-   2. Optimizar ruta (Google Maps)
+   2. Revisar alertas de cobertura y optimizar ruta (Google Maps)
    3. Asignar repartidor ─────────────▶   4. Ve sus rutas asignadas
-                                          5. Abre la ruta: mapa + paradas
-                                          6. Marca entregado / no encontrado
+                                          5. Consolida la carga; los clientes
+                                             reciben el aviso de salida
+                                          6. Abre la ruta: mapa + paradas
+                                             y corrige direcciones observadas
+                                          7. Marca entregado / no encontrado
                                              + medio de pago (efectivo/transferencia)
-   7. Historial: progreso en vivo ◀────────┘
-   8. Pedidos → 💸 Por cobrar (si fue transferencia sin comprobante)
+   8. Historial: progreso en vivo ◀────────┘
+   9. Pedidos → 💸 Por cobrar (si fue transferencia sin comprobante)
 ```
 
 - Cada ruta tiene un **repartidor asignado** (usuario con rol `repartidor`).
   El chofer ve solo sus rutas, más las que quedaron sin asignar.
-- El rol `repartidor` **solo accede a `/api/delivery/*`**. No puede leer
-  chats, clientes ni pedidos del CRM aunque tenga el token.
+- El rol `repartidor` **solo accede a `/api/delivery/*`**. Puede leer y
+  responder únicamente el chat del cliente que pertenece a una parada de su
+  ruta activa. Una incidencia cerrada conserva ese acceso durante 7 días;
+  nunca expone otros chats, clientes ni pedidos del CRM.
+- Al asignar la ruta, la app muestra una notificación push al repartidor. Al
+  completar el checklist de carga, cada cliente recibe un aviso idempotente de
+  que su pedido quedó con el repartidor y, cuando el canal lo permite, un enlace
+  temporal para seguir su ubicación. Si un cliente responde, el chofer
+  recibe otro push que abre directamente el chat de esa parada.
+- Durante una ruta activa la app pide permiso de ubicación y publica una
+  actualización cada 15 segundos o 30 metros mientras sigue ejecutándose. El
+  enlace no muestra datos personales y vence al cerrar la parada o la ruta.
 - Al marcar "Entregado", la app pregunta cómo pagó el cliente. Si fue
   transferencia, el pedido aparece en **Pedidos → Por cobrar** hasta que
   llegue el comprobante.
+- **Entrega parcial** permite indicar la cantidad entregada de cada producto.
+  La parada guarda el detalle entregado y pendiente, cobra únicamente lo
+  entregado y crea un pedido separado con el saldo para la fecha elegida.
+- Si un pedido cambia antes de iniciar la ruta, las cantidades se actualizan
+  en la copia de la ruta y el checklist de carga se reinicia. Así se debe
+  consolidar nuevamente la carga real antes de comenzar el reparto.
 - En cada parada, **Avisar con Diva: voy en camino** envía el aviso desde el
   WhatsApp del negocio y lo registra en el chat. El botón solo se habilita si
   el cliente escribió durante las últimas 24 horas; fuera de esa ventana la
   app indica que corresponde usar un template aprobado.
+- Cancelar, reprogramar o cerrar una entrega sin éxito deja el chat en estado
+  de resolución y envía un seguimiento automático en el mismo historial. Si
+  la ventana está cerrada usa Evolution o el template Utility configurado como
+  **Resolver entrega**.
+- La web permite configurar un radio común desde la bodega y otros puntos de
+  cobertura. Los pedidos fuera del rango o sin coordenadas quedan sin marcar
+  inicialmente y llegan señalados al repartidor si el equipo decide incluirlos.
+  El chofer puede corregir la dirección solo en una ruta activa asignada a él;
+  el backend actualiza el pedido, la parada y deja una auditoría en la ruta.
 
 ---
 
@@ -129,9 +157,14 @@ mobile/
 | GET    | `/api/auth/me`                      | Validar token guardado                    |
 | GET    | `/api/delivery/routes/active`       | Rutas activas del repartidor              |
 | GET    | `/api/delivery/routes/:id`          | Detalle de una ruta (refresco)            |
+| PATCH  | `/api/delivery/routes/:id/start`    | Confirma carga e inicia avisos a clientes  |
+| GET    | `/api/delivery/routes/:id/stops/chat` | Historial del cliente de esa parada       |
+| POST   | `/api/delivery/routes/:id/stops/chat` | Responder desde el chat de la parada      |
 | GET    | `/api/delivery/routes/:id/en-route-status` | Comprueba la ventana de 24 h de una parada |
 | POST   | `/api/delivery/routes/:id/notify-en-route` | Diva avisa que el pedido va en camino      |
-| PATCH  | `/api/delivery/routes/:id/stops`    | Marcar parada `{ stopKey, status, paymentMethod }` |
+| PATCH  | `/api/delivery/routes/:id/location` | Actualiza la ubicación de los enlaces temporales |
+| PATCH  | `/api/delivery/routes/:id/stops`    | Marcar parada; parcial acepta `deliveredQuantities` y `deliverAfter` |
+| PATCH  | `/api/delivery/routes/:id/stops/address` | Corregir dirección de una parada asignada |
 
 El `stopKey` va en el **body**, no en la URL: los pedidos de Shopify tienen
 IDs con barras (`gid://shopify/Order/123`) que Express no acepta como

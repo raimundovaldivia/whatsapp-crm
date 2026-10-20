@@ -50,12 +50,14 @@ function summarize(route) {
   const stops    = stopsOf(route);
   const statuses = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
   const done = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'entregado').length;
+  const partial = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'partial').length;
   const fail = stops.filter(s => ['cancelled', 'not_delivered'].includes(statuses[`${s.source}_${s.id}`])).length;
   const postponed = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'postponed').length;
   const pend = stops.filter(s => !statuses[`${s.source}_${s.id}`] || statuses[`${s.source}_${s.id}`] === 'pending').length;
-  const pct  = stops.length > 0 ? Math.round(((done + fail + postponed) / stops.length) * 100) : 0;
+  const pct  = stops.length > 0 ? Math.round(((done + partial + fail + postponed) / stops.length) * 100) : 0;
   const priorityCount = stops.filter(isPriorityRetry).length;
-  return { stops, statuses, done, fail, postponed, pend, pct, priorityCount };
+  const coverageReviewCount = stops.filter(stop => ['outside', 'unlocated'].includes(stop?.coverage?.status)).length;
+  return { stops, statuses, done, partial, fail, postponed, pend, pct, priorityCount, coverageReviewCount };
 }
 
 export default function OrdersScreen({ navigation, user, onLogout }) {
@@ -176,7 +178,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
         )}
 
         {!loading && !error && routes.map(route => {
-          const { stops, statuses, done, fail, postponed, pend, pct, priorityCount } = summarize(route);
+          const { stops, statuses, done, partial, fail, postponed, pend, pct, priorityCount, coverageReviewCount } = summarize(route);
           const color = STATUS_COLOR[route.status] || C.muted;
           const isActive = route.status === 'sent' || route.status === 'in_progress';
           return (
@@ -192,6 +194,12 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                 <View style={s.priorityBanner}>
                   <Text style={s.priorityBannerTitle}>⚠️ {priorityCount} reintento{priorityCount === 1 ? '' : 's'} prioritario{priorityCount === 1 ? '' : 's'}</Text>
                   <Text style={s.priorityBannerText}>Pedidos no entregados en rutas anteriores. Aparecen primero en el recorrido.</Text>
+                </View>
+              )}
+              {coverageReviewCount > 0 && (
+                <View style={[s.priorityBanner, { backgroundColor: '#3a180d', borderColor: '#ef444466' }]}>
+                  <Text style={[s.priorityBannerTitle, { color: '#fca5a5' }]}>📍 {coverageReviewCount} dirección{coverageReviewCount === 1 ? '' : 'es'} por revisar</Text>
+                  <Text style={[s.priorityBannerText, { color: '#fecaca' }]}>Fuera de cobertura o sin ubicación. Ábrela para corregirla antes de salir.</Text>
                 </View>
               )}
 
@@ -220,7 +228,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                     <View style={[s.progressFill, { width: `${pct}%` }]} />
                   </View>
                   <Text style={s.progressText}>
-                    {done} entregados · {fail} sin entrega{postponed ? ` · ${postponed} reprogramados` : ''} · {pend} pendientes
+                    {done} entregados{partial ? ` · ${partial} parciales` : ''} · {fail} sin entrega{postponed ? ` · ${postponed} reprogramados` : ''} · {pend} pendientes
                   </Text>
                 </View>
               )}
@@ -230,7 +238,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                 <View style={s.stopsPreview}>
                   {stops.slice(0, 4).map((stop, idx) => {
                     const st = statuses[`${stop.source}_${stop.id}`] || 'pending';
-                    const c  = st === 'entregado' ? C.green : st === 'cancelled' ? C.red : st === 'not_delivered' ? C.blue : C.orange;
+                    const c  = st === 'entregado' ? C.green : st === 'partial' ? '#f59e0b' : st === 'cancelled' ? C.red : st === 'not_delivered' ? C.blue : C.orange;
                     return (
                       <View key={`${stop.source}_${stop.id}`} style={s.stopRow}>
                         <View style={[s.stopNum, { backgroundColor: c }]}>
@@ -240,7 +248,7 @@ export default function OrdersScreen({ navigation, user, onLogout }) {
                           {isPriorityRetry(stop) ? '⚠ ' : ''}{stop.customerName}
                         </Text>
                         <Text style={[s.stopStatus, { color: c }]}>
-                          {st === 'entregado' ? '✓' : st === 'cancelled' ? '✕' : st === 'not_delivered' ? '!' : '•'}
+                          {st === 'entregado' ? '✓' : st === 'partial' ? '◐' : st === 'cancelled' ? '✕' : st === 'not_delivered' ? '!' : '•'}
                         </Text>
                       </View>
                     );

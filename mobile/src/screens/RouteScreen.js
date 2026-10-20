@@ -9,7 +9,7 @@
  * optimización con Google Maps). Sin coordenadas, la lista ocupa toda la
  * pantalla en vez de mostrar un mapa vacío de otra ciudad.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal, TextInput,
   Image, Alert, ScrollView, ActivityIndicator,
@@ -18,7 +18,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import * as ImagePicker from 'expo-image-picker';
-import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute, reorderRouteStops } from '../services/api';
+import * as Location from 'expo-location';
+import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute, reorderRouteStops, updateDriverLocation } from '../services/api';
 import { routeStops as stopsOf } from '../utils/routeMap';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
@@ -30,6 +31,7 @@ const EXPENSE_CATS = ['Combustible', 'Peaje', 'Comida', 'Mantención', 'Otro'];
 const STOP_COLORS = {
   pending:   C.orange,
   entregado: C.green,
+  partial:   '#f59e0b',
   cancelled: C.red,
   postponed: '#a78bfa',   // reprogramado: el cliente pidió otro día
   not_delivered: C.blue,   // visita cerrada sin modificar el pedido
@@ -166,6 +168,32 @@ export default function RouteScreen({ route: navRoute, navigation }) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  // Seguimiento en primer plano: se activa únicamente durante una ruta en
+  // curso y se detiene al terminarla o salir de esta pantalla.
+  useEffect(() => {
+    if (route?.status !== 'in_progress') return undefined;
+    let alive = true;
+    let subscription = null;
+    (async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!permission.granted || !alive) return;
+        subscription = await Location.watchPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 15000,
+          distanceInterval: 30,
+        }, position => {
+          if (!alive) return;
+          updateDriverLocation(routeId, position.coords).catch(() => {});
+        });
+      } catch (_) {}
+    })();
+    return () => {
+      alive = false;
+      subscription?.remove();
+    };
+  }, [route?.status, routeId]);
+
   if (loading && !route) {
     return (
       <View style={s.center}>
@@ -184,6 +212,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
 
   const stops      = stopsOf(route);
   const priorityCount = stops.filter(isPriorityRetry).length;
+  const coverageReviewStops = stops.filter(stop => ['outside', 'unlocated'].includes(stop?.coverage?.status));
   const statuses   = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
   const manifest   = buildManifest(stops, statuses);
   const manifestUnits = manifest.reduce((acc, [, q]) => acc + q, 0);
@@ -197,10 +226,11 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   const colorOf    = stop => STOP_COLORS[stateOf(stop)] || STOP_COLORS.pending;
 
   const doneCount   = stops.filter(st => stateOf(st) === 'entregado').length;
+  const partialCount = stops.filter(st => stateOf(st) === 'partial').length;
   const failedCount = stops.filter(st => stateOf(st) === 'cancelled').length;
   const postponedCount = stops.filter(st => stateOf(st) === 'postponed').length;
   const notDeliveredCount = stops.filter(st => stateOf(st) === 'not_delivered').length;
-  const allDone     = stops.length > 0 && doneCount + failedCount + postponedCount + notDeliveredCount === stops.length;
+  const allDone     = stops.length > 0 && doneCount + partialCount + failedCount + postponedCount + notDeliveredCount === stops.length;
 
   // Próxima parada pendiente: se resalta para que el chofer no tenga que buscar
   const nextPending = stops.find(st => stateOf(st) === 'pending');
@@ -270,7 +300,14 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           setStartBusy(true);
           try {
             const started = await startRoute(routeId);
-            if (started) setRoute(current => ({ ...current, ...started }));
+            if (started?.route) setRoute(current => ({ ...current, ...started.route }));
+            const notices = started?.customerNotifications;
+            if (notices) {
+              const detail = notices.failed
+                ? `${notices.sent} clientes avisados. ${notices.failed} aviso${notices.failed === 1 ? '' : 's'} no pudo enviarse; revisa esas paradas en el chat.`
+                : `${notices.sent} clientes fueron avisados de que su pedido ya está con el repartidor.`;
+              Alert.alert('Reparto iniciado', detail);
+            }
           } catch (err) {
             Alert.alert('No se pudo iniciar', err.response?.data?.error || 'Revisa tu conexión e intenta nuevamente.');
             await load();
@@ -300,6 +337,19 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             <View style={s.priorityNotice}>
               <Text style={s.priorityNoticeTitle}>⚠️ {priorityCount} entrega{priorityCount === 1 ? '' : 's'} con prioridad</Text>
               <Text style={s.priorityNoticeText}>Son pedidos pendientes de rutas anteriores. Deben realizarse antes que las entregas nuevas y ya aparecen al inicio del recorrido.</Text>
+            </View>
+          )}
+
+          {coverageReviewStops.length > 0 && (
+            <View style={s.coverageNotice}>
+              <Text style={s.coverageNoticeTitle}>📍 {coverageReviewStops.length} dirección{coverageReviewStops.length === 1 ? '' : 'es'} por verificar</Text>
+              <Text style={s.coverageNoticeText}>Están fuera del rango o no pudieron ubicarse. Ábrelas para confirmar y corregir la dirección antes de salir.</Text>
+              {coverageReviewStops.map(stop => (
+                <TouchableOpacity key={stopKeyOf(stop)} onPress={() => openStopDetail(stop)} style={s.coverageStopBtn}>
+                  <Text style={s.coverageStopText}>{stop.customerName || stop.orderName} · {stop.coverage?.status === 'outside' ? `${stop.coverage.distanceKm} km` : 'sin ubicar'}</Text>
+                  <Text style={s.coverageStopLink}>Revisar →</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           )}
 
@@ -390,6 +440,12 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                   <Text style={s.priorityNoticeText}>Estas entregas vienen de rutas anteriores y están ubicadas al comienzo del recorrido.</Text>
                 </View>
               )}
+              {coverageReviewStops.length > 0 && (
+                <View style={s.coverageNotice}>
+                  <Text style={s.coverageNoticeTitle}>📍 {coverageReviewStops.length} dirección{coverageReviewStops.length === 1 ? '' : 'es'} por verificar</Text>
+                  <Text style={s.coverageNoticeText}>El repartidor puede abrir cada parada y corregirla desde el detalle.</Text>
+                </View>
+              )}
               <View style={s.moneyCard}>
                 <View style={s.moneyHead}><Text style={s.moneyTitle}>💰 Resumen del recorrido</Text><Text style={s.moneyValue}>{CLP(financial.routeValue)}</Text></View>
                 <View style={s.moneyGrid}>
@@ -434,7 +490,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
             return (
               <ScaleDecorator>
                 <TouchableOpacity
-                  style={[s.stopCard, isDone && s.stopDone, isNext && s.stopNext, isActive && s.stopDragging]}
+                  style={[s.stopCard, stop?.coverage?.status === 'outside' && s.stopOutside, isDone && s.stopDone, isNext && s.stopNext, isActive && s.stopDragging]}
                   onPress={() => !isActive && openStopDetail(stop)}
                   onLongPress={!savingOrder ? drag : undefined}
                   delayLongPress={220}
@@ -452,6 +508,8 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                       {stop.customerName}
                     </Text>
                     <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || 'Sin dirección'}</Text>
+                    {stop?.coverage?.status === 'outside' ? <Text style={s.coverageChip}>⚠ Fuera de cobertura · {stop.coverage.distanceKm} km</Text> : null}
+                    {stop?.coverage?.status === 'unlocated' ? <Text style={s.coverageChip}>⚠ Dirección sin ubicar</Text> : null}
                     {stop.isReturn ? <Text style={s.stopHistory}>↩️ Cambio/devolución · abre para confirmar retiro y reemplazo</Text> : null}
                     {isPriorityRetry(stop) && (
                       <View style={s.retryChip}>
@@ -471,7 +529,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                   </View>
                   <View style={[s.badge, { backgroundColor: color + '22', borderColor: color + '44' }]}>
                     <Text style={[s.badgeText, { color }]}>
-                      {state === 'entregado' ? 'Entregado' : state === 'cancelled' ? 'Cancelado' : state === 'postponed' ? 'Reprogramado' : state === 'not_delivered' ? 'Sin entrega' : isNext ? 'Siguiente' : 'Pendiente'}
+                      {state === 'entregado' ? 'Entregado' : state === 'partial' ? 'Entrega parcial' : state === 'cancelled' ? 'Cancelado' : state === 'postponed' ? 'Reprogramado' : state === 'not_delivered' ? 'Sin entrega' : isNext ? 'Siguiente' : 'Pendiente'}
                     </Text>
                   </View>
                 </TouchableOpacity>
@@ -481,7 +539,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
           ListFooterComponent={allDone ? (
             <View style={s.summary}>
               <Text style={s.summaryText}>
-                🎉 Ruta completada: {doneCount} entregados{failedCount ? ` · ${failedCount} cancelados` : ''}{postponedCount ? ` · ${postponedCount} reprogramados` : ''}{notDeliveredCount ? ` · ${notDeliveredCount} sin entrega` : ''}
+                🎉 Ruta completada: {doneCount} entregados{partialCount ? ` · ${partialCount} parciales` : ''}{failedCount ? ` · ${failedCount} cancelados` : ''}{postponedCount ? ` · ${postponedCount} reprogramados` : ''}{notDeliveredCount ? ` · ${notDeliveredCount} sin entrega` : ''}
               </Text>
             </View>
           ) : null}
@@ -573,6 +631,12 @@ const s = StyleSheet.create({
   priorityNotice:{ backgroundColor: '#2A210D', borderWidth: 1, borderColor: '#8A6113', borderRadius: R.md, padding: 13, marginHorizontal: 12, marginBottom: 10 },
   priorityNoticeTitle:{ color: '#fbbf24', fontSize: 14, fontWeight: '900' },
   priorityNoticeText:{ color: '#fde68a', fontSize: 12, lineHeight: 18, marginTop: 4 },
+  coverageNotice:{ backgroundColor: '#3a180d', borderWidth: 1, borderColor: '#ef444477', borderRadius: R.md, padding: 13, marginHorizontal: 12, marginBottom: 10 },
+  coverageNoticeTitle:{ color: '#fca5a5', fontSize: 14, fontWeight: '900' },
+  coverageNoticeText:{ color: '#fecaca', fontSize: 12, lineHeight: 18, marginTop: 4, marginBottom: 5 },
+  coverageStopBtn:{ flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: '#ef444433', paddingVertical: 9 },
+  coverageStopText:{ flex: 1, color: C.text, fontSize: 12, fontWeight: '700' },
+  coverageStopLink:{ color: '#fca5a5', fontSize: 12, fontWeight: '900' },
   retryChip:{ backgroundColor: '#3a2a10', borderRadius: 8, borderWidth: 1, borderColor: '#f59e0b66', paddingHorizontal: 8, paddingVertical: 6, marginTop: 7 },
   retryChipTitle:{ color: '#fbbf24', fontSize: 10, fontWeight: '900' },
   retryChipText:{ color: '#fde68a', fontSize: 11, lineHeight: 15, marginTop: 2 },
@@ -628,12 +692,14 @@ const s = StyleSheet.create({
   dragHandleText:{ color: C.muted, fontSize: 20, fontWeight: '900' },
   stopDone:     { opacity: 0.55 },
   stopNext:     { backgroundColor: '#202010', borderLeftWidth: 3, borderLeftColor: C.orange, borderColor: C.orange + '55' },
+  stopOutside:  { borderColor: '#ef444477', backgroundColor: '#2b1616' },
   stopNum:      { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   stopNumText:  { color: '#fff', fontWeight: '800', fontSize: 14 },
   stopBody:     { flex: 1, gap: 2 },
   stopName:     { color: C.text, fontWeight: '700', fontSize: 15 },
   textDone:     { textDecorationLine: 'line-through', color: C.muted },
   stopAddr:     { color: C.muted, fontSize: 12 },
+  coverageChip: { color: '#fca5a5', fontSize: 11, fontWeight: '800', marginTop: 3 },
   stopHistory:  { color: '#c4b5fd', fontSize: 11, fontWeight: '700', marginTop: 2 },
   stopTime:     { color: C.blue, fontSize: 11 },
   stopPay:      { color: C.muted, fontSize: 11, marginTop: 2 },

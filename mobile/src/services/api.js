@@ -181,7 +181,21 @@ export async function reorderRouteStops(routeId, stopKeys) {
 export async function startRoute(routeId) {
   const client = await getClient();
   const res = await client.patch(`/api/delivery/routes/${routeId}/start`);
-  return res.data?.route || null;
+  return {
+    route: res.data?.route || null,
+    customerNotifications: res.data?.customerNotifications || null,
+  };
+}
+
+/** Actualiza la ubicación visible en los enlaces temporales de la ruta. */
+export async function updateDriverLocation(routeId, location) {
+  const client = await getClient();
+  const res = await client.patch(`/api/delivery/routes/${routeId}/location`, {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.accuracy,
+  });
+  return res.data?.location || null;
 }
 
 export async function registerPushToken(expoToken) {
@@ -202,12 +216,12 @@ export async function unregisterPushToken(expoToken) {
  *
  * @param {number} routeId
  * @param {string} stopKey        "shopify_<id>" o "bot_<id>"
- * @param {string} status         'entregado' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
+ * @param {string} status         'entregado' | 'partial' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
  * @param {string} [paymentMethod] 'efectivo' | 'transferencia' | 'otro' — solo al entregar.
  *        Si es transferencia, el pedido queda en "Por cobrar" en el CRM
  *        hasta que llegue el comprobante.
  */
-export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras, deliverAfter, paymentBreakdown) {
+export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras, deliverAfter, paymentBreakdown, partialDelivery) {
   const client = await getClient();
   const body = { stopKey, status };
   if (paymentMethod) body.paymentMethod = paymentMethod;
@@ -217,9 +231,19 @@ export async function updateStopStatus(routeId, stopKey, status, paymentMethod, 
   }
   if (note && note.trim()) body.note = note.trim();
   if (Array.isArray(extras) && extras.length) body.extras = extras;
-  if (deliverAfter) body.deliverAfter = deliverAfter;   // 'postponed': YYYY-MM-DD
+  if (deliverAfter) body.deliverAfter = deliverAfter;   // 'postponed' o 'partial': YYYY-MM-DD
+  if (partialDelivery) body.deliveredQuantities = partialDelivery.deliveredQuantities;
   const res = await client.patch(`/api/delivery/routes/${routeId}/stops`, body);
   return res.data;
+}
+
+/** Corrige la dirección del pedido y de la parada asignada al repartidor. */
+export async function updateStopAddress(routeId, stopKey, address, city, updateContact = true) {
+  const client = await getClient();
+  const res = await client.patch(`/api/delivery/routes/${routeId}/stops/address`, {
+    stopKey, address, city, updateContact,
+  });
+  return res.data?.stop || null;
 }
 
 /** Estado de la ventana de 24 h para poder avisar que el pedido va en camino. */

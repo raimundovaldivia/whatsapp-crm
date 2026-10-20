@@ -19,7 +19,7 @@ const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 
 const STATUS_LABEL = { completed: 'Completada', cancelled: 'Cancelada' };
 const STATUS_COLOR = { completed: C.green, cancelled: C.red };
-const STOP_LABEL = { entregado: 'Entregado', cancelled: 'Cancelado', postponed: 'Reprogramado', not_delivered: 'Sin entrega', pending: 'Pendiente' };
+const STOP_LABEL = { entregado: 'Entregado', partial: 'Entrega parcial', cancelled: 'Cancelado', postponed: 'Reprogramado', not_delivered: 'Sin entrega', pending: 'Pendiente' };
 const PAY_LABEL = { efectivo: 'Efectivo', transferencia: 'Transferencia', mixto: 'Mixto', otro: 'Otro' };
 
 function stopsOf(route) {
@@ -33,9 +33,10 @@ function summarize(route) {
   const stops    = stopsOf(route);
   const statuses = route?.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
   const done = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'entregado').length;
+  const partial = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'partial').length;
   const fail = stops.filter(s => ['cancelled', 'not_delivered'].includes(statuses[`${s.source}_${s.id}`])).length;
   const postponed = stops.filter(s => statuses[`${s.source}_${s.id}`] === 'postponed').length;
-  return { total: stops.length, done, fail, postponed };
+  return { total: stops.length, done, partial, fail, postponed };
 }
 
 function fmtDate(route) {
@@ -106,7 +107,7 @@ export default function HistoryScreen({ navigation }) {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.green} />}>
           <Text style={s.hint}>Toca una ruta para revisarla. Si te equivocaste en una parada, ábrela y vuelve a marcarla.</Text>
           {routes.map(route => {
-            const { total, done, fail, postponed } = summarize(route);
+            const { total, done, partial, fail, postponed } = summarize(route);
             const color = STATUS_COLOR[route.status] || C.muted;
             return (
               <View key={route.id} style={s.card}>
@@ -121,6 +122,7 @@ export default function HistoryScreen({ navigation }) {
                   <View style={s.stats}>
                     <View style={s.stat}><Text style={s.statNum}>{total}</Text><Text style={s.statLabel}>Pedidos</Text></View>
                     <View style={s.stat}><Text style={[s.statNum, { color: C.green }]}>{done}</Text><Text style={s.statLabel}>Entregados</Text></View>
+                    {partial > 0 && <View style={s.stat}><Text style={[s.statNum, { color: '#f59e0b' }]}>{partial}</Text><Text style={s.statLabel}>Parciales</Text></View>}
                     <View style={s.stat}><Text style={[s.statNum, { color: C.red }]}>{fail}</Text><Text style={s.statLabel}>Sin entrega</Text></View>
                     {postponed > 0 && <View style={s.stat}><Text style={[s.statNum, { color: C.orange }]}>{postponed}</Text><Text style={s.statLabel}>Reprogramados</Text></View>}
                   </View>
@@ -145,7 +147,7 @@ export default function HistoryScreen({ navigation }) {
                             <Text style={s.orderMeta}>{stop.orderName || ''}{payment ? ` · ${PAY_LABEL[payment] || payment}` : ''}</Text>
                           </View>
                           <View style={s.orderRight}>
-                            <Text style={[s.orderStatus, { color: state === 'entregado' ? C.green : state === 'postponed' ? C.orange : C.red }]}>{STOP_LABEL[state] || state}</Text>
+                            <Text style={[s.orderStatus, { color: state === 'entregado' ? C.green : state === 'partial' ? '#f59e0b' : state === 'postponed' ? C.orange : C.red }]}>{STOP_LABEL[state] || state}</Text>
                             <Text style={s.orderAmount}>{CLP(stop.totalPrice || stop.total_price)}</Text>
                           </View>
                         </View>

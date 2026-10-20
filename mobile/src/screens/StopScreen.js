@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import {
   updateStopStatus, getSellCatalog, getModules, getOrderItems, setOrderItems,
-  getEnRouteNotificationStatus, sendEnRouteNotification,
+  getEnRouteNotificationStatus, sendEnRouteNotification, updateStopAddress,
 } from '../services/api';
 import { C, R, shadowSoft } from '../theme';
 
@@ -29,6 +29,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
   // Al entregar hay que registrar cómo pagó el cliente: se pregunta acá mismo,
   // con botones grandes, en vez de un Alert encadenado.
   const [askingPayment, setAskingPayment] = useState(false);
+  const [deliveryStatus, setDeliveryStatus] = useState('entregado');
+  const [partialMode, setPartialMode] = useState(false);
+  const [partialItems, setPartialItems] = useState([]);
+  const [partialDate, setPartialDate] = useState(null);
   // Motivo por el que la parada no se entregó.
   const [outcomeMode, setOutcomeMode] = useState(null); // choose | cancel | postpone | other
   const [outcomeReason, setOutcomeReason] = useState('');
@@ -40,6 +44,15 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const [note, setNote] = useState(navRoute.params?.stop?.note || '');
   // Total mostrado en pantalla; puede cambiar si el repartidor edita los productos.
   const [orderTotal, setOrderTotal] = useState(Number(navRoute.params?.stop?.totalPrice) || 0);
+  const [currentItems, setCurrentItems] = useState(Array.isArray(navRoute.params?.stop?.items) ? navRoute.params.stop.items : []);
+  const [addressInfo, setAddressInfo] = useState({
+    address: stop?.address || '', city: stop?.city || '', fullAddress: stop?.fullAddress || '',
+    lat: stop?.lat ?? null, lng: stop?.lng ?? null, coverage: stop?.coverage || null,
+  });
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [addressDraft, setAddressDraft] = useState(stop?.address || '');
+  const [cityDraft, setCityDraft] = useState(stop?.city || '');
+  const [savingAddress, setSavingAddress] = useState(false);
 
   // Venta extra en ruta ("bandejas extras") — solo si la tienda lo activó.
   const [sellEnabled, setSellEnabled] = useState(false);
@@ -91,6 +104,17 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const extrasList  = Object.values(extras).filter(e => e.quantity > 0);
   const extrasTotal = extrasList.reduce((s, e) => s + e.price * e.quantity, 0);
   const extrasArray = extrasList.map(e => ({ name: e.title, quantity: e.quantity, price: e.price }));
+  const partialOrderedSubtotal = partialItems.reduce((sum, item) => sum + item.orderedQuantity * item.price, 0);
+  const partialDeliveredSubtotal = partialItems.reduce((sum, item) => sum + item.deliveredQuantity * item.price, 0);
+  const partialDeliveredUnits = partialItems.reduce((sum, item) => sum + item.deliveredQuantity, 0);
+  const partialOrderedUnits = partialItems.reduce((sum, item) => sum + item.orderedQuantity, 0);
+  const partialDeliveredTotal = Math.round(orderTotal * (
+    partialOrderedSubtotal > 0
+      ? partialDeliveredSubtotal / partialOrderedSubtotal
+      : partialOrderedUnits > 0 ? partialDeliveredUnits / partialOrderedUnits : 0
+  ));
+  const partialPendingTotal = Math.max(0, Math.round(orderTotal - partialDeliveredTotal));
+  const paymentOrderTotal = deliveryStatus === 'partial' ? partialDeliveredTotal : orderTotal;
 
   function bumpExtra(p, delta) {
     setExtras(prev => {
@@ -161,6 +185,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
       setShowItemsEditor(false);
       setEditItems([]);
       if (typeof newTotal === 'number') setOrderTotal(newTotal);
+      if (Array.isArray(resp?.items)) setCurrentItems(resp.items);
       let confirmation = typeof newTotal === 'number'
         ? `Nuevo total: ${CLP(newTotal)}`
         : 'Los cambios se guardaron.';
@@ -185,8 +210,51 @@ export default function StopScreen({ route: navRoute, navigation }) {
     setEditItems([]);
   }
 
+  function openPartialDelivery() {
+    const items = currentItems;
+    const clean = items.map((item, index) => ({
+      index,
+      name: item.name || item.title || `Producto ${index + 1}`,
+      price: Math.max(0, Number(item.price) || 0),
+      orderedQuantity: Math.max(0, Math.round(Number(item.quantity) || 0)),
+      deliveredQuantity: Math.max(0, Math.round(Number(item.quantity) || 0)),
+    })).filter(item => item.orderedQuantity > 0);
+    if (!clean.length) {
+      Alert.alert('Sin productos', 'Esta parada no tiene productos válidos para dividir la entrega.');
+      return;
+    }
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    setPartialItems(clean);
+    setPartialDate(fmt(tomorrow));
+    setDeliveryStatus('partial');
+    setPartialMode(true);
+  }
+
+  function bumpPartialQty(index, delta) {
+    setPartialItems(prev => prev.map((item, itemIndex) => itemIndex === index
+      ? { ...item, deliveredQuantity: Math.max(0, Math.min(item.orderedQuantity, item.deliveredQuantity + delta)) }
+      : item));
+  }
+
+  function continuePartialDelivery() {
+    const hasDelivered = partialItems.some(item => item.deliveredQuantity > 0);
+    const hasPending = partialItems.some(item => item.deliveredQuantity < item.orderedQuantity);
+    if (!hasDelivered || !hasPending) {
+      Alert.alert('Revisa las cantidades', 'Debe quedar al menos un producto entregado y uno pendiente.');
+      return;
+    }
+    if (!partialDate) {
+      Alert.alert('Falta la fecha', 'Indica cuándo se entregará lo pendiente.');
+      return;
+    }
+    setPartialMode(false);
+    setAskingPayment(true);
+  }
+
   function openMaps() {
-    const destination = navigationDestination(stop);
+    const destination = navigationDestination({ ...stop, ...addressInfo });
     if (!destination) return Alert.alert('Sin ubicación', 'Este pedido no tiene coordenadas ni una dirección válida.');
     const addr = encodeURIComponent(destination);
     const url  = Platform.OS === 'ios'
@@ -195,6 +263,26 @@ export default function StopScreen({ route: navRoute, navigation }) {
     Linking.openURL(url).catch(() =>
       Linking.openURL(navigationUrl(stop)).catch(() => Alert.alert('No se pudo abrir el mapa', 'Revisa la conexión e intenta nuevamente.'))
     );
+  }
+
+  async function saveAddress() {
+    if (!addressDraft.trim()) return Alert.alert('Falta la dirección', 'Escribe la calle y número correctos.');
+    setSavingAddress(true);
+    try {
+      const updated = await updateStopAddress(routeId, stopKey, addressDraft.trim(), cityDraft.trim(), true);
+      if (updated) setAddressInfo({
+        address: updated.address || '', city: updated.city || '', fullAddress: updated.fullAddress || '',
+        lat: updated.lat ?? null, lng: updated.lng ?? null, coverage: updated.coverage || null,
+      });
+      setEditingAddress(false);
+      Alert.alert('Dirección actualizada', updated?.coverage?.status === 'outside'
+        ? 'Se guardó, pero sigue fuera del rango configurado. Confírmala con el cliente o el equipo.'
+        : 'La parada y los datos del cliente quedaron actualizados.');
+    } catch (err) {
+      Alert.alert('No se pudo guardar', err.response?.data?.error || 'Revisa la conexión e intenta nuevamente.');
+    } finally {
+      setSavingAddress(false);
+    }
   }
 
   const phoneDigits = (stop.phone || '').replace(/\D/g, '');
@@ -245,7 +333,14 @@ export default function StopScreen({ route: navRoute, navigation }) {
     setLoading(true);
     try {
       const finalNote = overrideNote === undefined ? note : overrideNote;
-      const resp = await updateStopStatus(routeId, stopKey, newStatus, paymentMethod, finalNote, extrasArray, deliverAfter, paymentBreakdown);
+      const partialDelivery = newStatus === 'partial'
+        ? { deliveredQuantities: partialItems.map(item => item.deliveredQuantity) }
+        : null;
+      const resp = await updateStopStatus(
+        routeId, stopKey, newStatus, paymentMethod, finalNote, extrasArray,
+        newStatus === 'partial' ? partialDate : deliverAfter,
+        paymentBreakdown, partialDelivery
+      );
       setStatus(newStatus);
       setPaidWith(paymentMethod || null);
       setDone(true);
@@ -260,6 +355,16 @@ export default function StopScreen({ route: navRoute, navigation }) {
           : ac.reason === 'cobrado_recien' ? 'ℹ️ Ya se le cobró hace poco; no se repite.'
           : '⚠️ No se pudo enviar el cobro automático; quedó en "Por cobrar".';
         Alert.alert('Entrega registrada', detail, [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        return;
+      }
+      const followup = resp?.customerFollowup;
+      if (['cancelled', 'postponed', 'not_delivered'].includes(newStatus) && followup) {
+        const detail = followup.status === 'sent'
+          ? 'Diva ya escribió al cliente en el mismo chat para resolver o reprogramar la entrega.'
+          : followup.reason === 'ALREADY_PROCESSED'
+            ? 'El seguimiento de esta incidencia ya había sido enviado.'
+            : 'La incidencia quedó registrada, pero no se pudo enviar el mensaje automático. Abre el chat de la parada para continuar la coordinación.';
+        Alert.alert('Seguimiento del cliente', detail, [{ text: 'OK', onPress: () => navigation.goBack() }]);
         return;
       }
       setTimeout(() => navigation.goBack(), 1400);
@@ -328,11 +433,43 @@ export default function StopScreen({ route: navRoute, navigation }) {
       {/* Nombre */}
       <Text style={s.customerName}>{stop.customerName}</Text>
 
+      {addressInfo.coverage?.status === 'outside' && (
+        <View style={s.coverageAlert}>
+          <Text style={s.coverageTitle}>⚠️ DIRECCIÓN FUERA DE COBERTURA</Text>
+          <Text style={s.coverageText}>{addressInfo.coverage.distanceKm} km desde {addressInfo.coverage.centerName || 'el punto más cercano'} · rango máximo {addressInfo.coverage.radiusKm} km.</Text>
+          <Text style={s.coverageText}>Verifica la dirección con el cliente y corrígela aquí antes de navegar.</Text>
+        </View>
+      )}
+      {addressInfo.coverage?.status === 'unlocated' && (
+        <View style={s.coverageAlert}>
+          <Text style={s.coverageTitle}>⚠️ DIRECCIÓN SIN UBICAR</Text>
+          <Text style={s.coverageText}>El mapa no pudo reconocerla. Revísala y corrígela antes de continuar.</Text>
+        </View>
+      )}
+
       {/* Dirección */}
       <View style={s.infoCard}>
         <Text style={s.infoLabel}>📍 Dirección</Text>
-        <Text style={s.infoValue}>{stop.address || '—'}</Text>
-        {stop.city ? <Text style={s.infoCity}>{stop.city}</Text> : null}
+        {editingAddress ? (
+          <>
+            <TextInput style={s.addressInput} value={addressDraft} onChangeText={setAddressDraft}
+              placeholder="Calle y número" placeholderTextColor={C.muted} autoFocus />
+            <TextInput style={s.addressInput} value={cityDraft} onChangeText={setCityDraft}
+              placeholder="Ciudad" placeholderTextColor={C.muted} />
+            <View style={s.addressActions}>
+              <TouchableOpacity style={s.addressCancel} onPress={() => setEditingAddress(false)} disabled={savingAddress}><Text style={s.addressCancelText}>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity style={s.addressSave} onPress={saveAddress} disabled={savingAddress}><Text style={s.addressSaveText}>{savingAddress ? 'Guardando…' : 'Guardar dirección'}</Text></TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={s.infoValue}>{addressInfo.address || '—'}</Text>
+            {addressInfo.city ? <Text style={s.infoCity}>{addressInfo.city}</Text> : null}
+            {!stop?.isReturn && <TouchableOpacity onPress={() => { setAddressDraft(addressInfo.address || ''); setCityDraft(addressInfo.city || ''); setEditingAddress(true); }} style={s.editAddressBtn}>
+              <Text style={s.editAddressText}>✏️ Corregir dirección</Text>
+            </TouchableOpacity>}
+          </>
+        )}
       </View>
 
       {/* Teléfono */}
@@ -344,10 +481,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
       ) : null}
 
       {/* Productos */}
-      {stop.items?.length > 0 && (
+      {currentItems.length > 0 && (
         <View style={s.infoCard}>
           <Text style={s.infoLabel}>📦 Productos</Text>
-          {stop.items.map((item, i) => (
+          {currentItems.map((item, i) => (
             <Text key={i} style={s.infoValue}>
               {item.title || item.name}
               {item.quantity > 1 ? ` × ${item.quantity}` : ''}
@@ -388,10 +525,11 @@ export default function StopScreen({ route: navRoute, navigation }) {
       {/* ─── Acciones ─── */}
       {done ? (
         <View style={s.doneBox}>
-          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : status === 'postponed' ? '📅' : status === 'cancelled' ? '🚫' : '📵'}</Text>
+          <Text style={s.doneIcon}>{status === 'entregado' ? '✅' : status === 'partial' ? '📦' : status === 'postponed' ? '📅' : status === 'cancelled' ? '🚫' : '📵'}</Text>
           <Text style={s.doneText}>
-            {status === 'entregado' ? '¡Entregado!' : status === 'postponed' ? 'Reprogramado' : status === 'cancelled' ? 'Pedido cancelado' : 'Parada cerrada sin entrega'}
+            {status === 'entregado' ? '¡Entregado!' : status === 'partial' ? 'Entrega parcial registrada' : status === 'postponed' ? 'Reprogramado' : status === 'cancelled' ? 'Pedido cancelado' : 'Parada cerrada sin entrega'}
           </Text>
+          {status === 'partial' && <Text style={s.donePay}>Se creó un nuevo pedido solo con lo pendiente</Text>}
           {status === 'postponed' && <Text style={s.donePay}>Vuelve a "por despachar" para la ruta de ese día</Text>}
           {status === 'cancelled' && <Text style={s.donePay}>El pedido quedó cancelado definitivamente</Text>}
           {status === 'not_delivered' && <Text style={s.donePay}>El pedido no fue modificado</Text>}
@@ -399,6 +537,46 @@ export default function StopScreen({ route: navRoute, navigation }) {
           {paidWith === 'transferencia' && <Text style={s.donePay}>🏦 Por transferencia — queda pendiente el comprobante</Text>}
           {paidWith === 'mixto' && <Text style={s.donePay}>💵🏦 Pago mixto registrado — la transferencia queda pendiente de conciliación</Text>}
           <Text style={s.doneSub}>Volviendo a la ruta...</Text>
+        </View>
+      ) : partialMode ? (
+        <View style={s.payBox}>
+          <Text style={s.payTitle}>¿Qué se entregó?</Text>
+          <Text style={s.outcomeHelp}>Marca la cantidad entregada. La diferencia quedará en un pedido nuevo para la fecha elegida.</Text>
+          {partialItems.map((item, index) => (
+            <View key={`${item.index}_${item.name}`} style={s.partialRow}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={s.editName} numberOfLines={2}>{item.name}</Text>
+                <Text style={s.editPrice}>Pedido: {item.orderedQuantity} · Pendiente: {item.orderedQuantity - item.deliveredQuantity}</Text>
+              </View>
+              <TouchableOpacity style={s.stepBtn} onPress={() => bumpPartialQty(index, -1)}><Text style={s.stepTxt}>−</Text></TouchableOpacity>
+              <View style={s.partialQtyBox}>
+                <Text style={s.partialQtyLabel}>Entregado</Text>
+                <Text style={s.stepQty}>{item.deliveredQuantity}</Text>
+              </View>
+              <TouchableOpacity style={s.stepBtn} onPress={() => bumpPartialQty(index, 1)}><Text style={s.stepTxt}>+</Text></TouchableOpacity>
+            </View>
+          ))}
+          <View style={s.partialTotals}>
+            <Text style={s.partialDelivered}>Entregado: {CLP(partialDeliveredTotal)}</Text>
+            <Text style={s.partialPending}>Pendiente: {CLP(partialPendingTotal)}</Text>
+          </View>
+          <Text style={s.splitLabel}>¿Cuándo se entrega lo pendiente?</Text>
+          <View style={s.postponeGrid}>
+            {postponeOptions().map(option => (
+              <TouchableOpacity key={option.key} onPress={() => setPartialDate(option.key)}
+                style={[s.postponeChip, partialDate === option.key && s.postponeChipOn]} activeOpacity={0.8}>
+                <Text style={[s.postponeChipName, partialDate === option.key && { color: '#fff' }]}>{option.name}</Text>
+                <Text style={s.postponeChipSub}>{option.sub}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity style={[s.payBtn, s.partialConfirmBtn, loading && s.btnDisabled]}
+            onPress={continuePartialDelivery} disabled={loading} activeOpacity={0.85}>
+            <Text style={s.payBtnText}>Continuar al pago</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { setPartialMode(false); setDeliveryStatus('entregado'); }} disabled={loading} activeOpacity={0.7}>
+            <Text style={s.payCancel}>← Cancelar entrega parcial</Text>
+          </TouchableOpacity>
         </View>
       ) : outcomeMode === 'postpone' ? (
         /* ── Entregar después: ¿para qué día? ── */
@@ -501,16 +679,16 @@ export default function StopScreen({ route: navRoute, navigation }) {
         /* ── Paso 2: ¿cómo pagó? ── */
         <View style={s.payBox}>
           <Text style={s.payTitle}>¿Cómo pagó {stop.customerName?.split(' ')[0] || 'el cliente'}?</Text>
-          {(orderTotal > 0 || extrasTotal > 0) && (
+          {(paymentOrderTotal > 0 || extrasTotal > 0) && (
             <Text style={s.paySub}>
-              Total a cobrar: {CLP(orderTotal + extrasTotal)}
+              {deliveryStatus === 'partial' ? 'Total entregado a cobrar' : 'Total a cobrar'}: {CLP(paymentOrderTotal + extrasTotal)}
               {extrasTotal > 0 ? ` (incluye +${CLP(extrasTotal)} extra)` : ''}
             </Text>
           )}
 
           <TouchableOpacity
             style={[s.payBtn, s.payCash, loading && s.btnDisabled]}
-            onPress={() => submit('entregado', 'efectivo')}
+            onPress={() => submit(deliveryStatus, 'efectivo')}
             disabled={loading}
             activeOpacity={0.85}>
             {loading ? <ActivityIndicator color="#fff" /> : (
@@ -523,7 +701,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
 
           <TouchableOpacity
             style={[s.payBtn, s.payTransfer, loading && s.btnDisabled]}
-            onPress={() => submit('entregado', 'transferencia')}
+            onPress={() => submit(deliveryStatus, 'transferencia')}
             disabled={loading}
             activeOpacity={0.85}>
             {loading ? <ActivityIndicator color="#fff" /> : (
@@ -544,7 +722,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
               <Text style={s.payBtnText}>Efectivo + transferencia</Text>
             </TouchableOpacity>
           ) : (() => {
-            const total = Math.round(orderTotal + extrasTotal);
+            const total = Math.round(paymentOrderTotal + extrasTotal);
             const cash = Math.round(Number(splitCash) || 0);
             const transfer = Math.max(0, total - cash);
             const valid = cash > 0 && transfer > 0;
@@ -567,7 +745,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
                 {!valid && <Text style={s.splitError}>Ambos montos deben ser mayores a $0.</Text>}
                 <TouchableOpacity
                   style={[s.payBtn, s.payMixed, (!valid || loading) && s.btnDisabled]}
-                  onPress={() => submit('entregado', 'mixto', null, undefined, { cash, transfer })}
+                  onPress={() => submit(deliveryStatus, 'mixto', null, undefined, { cash, transfer })}
                   disabled={!valid || loading}>
                   {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.payBtnText}>Confirmar pago mixto</Text>}
                 </TouchableOpacity>
@@ -580,14 +758,14 @@ export default function StopScreen({ route: navRoute, navigation }) {
 
           <TouchableOpacity
             style={[s.payBtn, s.payOther, loading && s.btnDisabled]}
-            onPress={() => submit('entregado', 'otro')}
+            onPress={() => submit(deliveryStatus, 'otro')}
             disabled={loading}
             activeOpacity={0.85}>
             <Text style={[s.payBtnText, { color: C.muted }]}>Otro / no corresponde</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={() => setAskingPayment(false)}
+            onPress={() => { setAskingPayment(false); if (deliveryStatus === 'partial') setPartialMode(true); }}
             disabled={loading}
             activeOpacity={0.7}>
             <Text style={s.payCancel}>← Volver</Text>
@@ -712,7 +890,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
           <View style={s.statusRow}>
             <TouchableOpacity
               style={[s.statusBtn, s.deliveredBtn, loading && s.btnDisabled]}
-              onPress={() => setAskingPayment(true)}
+              onPress={() => { setDeliveryStatus('entregado'); setAskingPayment(true); }}
               disabled={loading}
               activeOpacity={0.85}>
               <Text style={s.statusIcon}>✓</Text>
@@ -728,6 +906,19 @@ export default function StopScreen({ route: navRoute, navigation }) {
               <Text style={[s.statusBtnText, { color: C.red }]}>No entregado</Text>
             </TouchableOpacity>
           </View>
+          {!stop?.isReturn && (
+            <TouchableOpacity
+              style={[s.partialActionBtn, loading && s.btnDisabled]}
+              onPress={openPartialDelivery}
+              disabled={loading}
+              activeOpacity={0.85}>
+              <Text style={s.partialActionIcon}>◐</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={s.partialActionTitle}>Entrega parcial</Text>
+                <Text style={s.partialActionSub}>Indicar qué se entregó y qué queda pendiente</Text>
+              </View>
+            </TouchableOpacity>
+          )}
         </>
       )}
     </ScrollView>
@@ -765,11 +956,23 @@ const s = StyleSheet.create({
   priorityReason:{ color: C.text, fontSize: 14, fontWeight: '700', lineHeight: 19, marginTop: 8 },
   priorityAttempts:{ color: '#fbbf24', fontSize: 12, marginTop: 5 },
 
+  coverageAlert:{ backgroundColor: '#3a180d', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#ef444488' },
+  coverageTitle:{ color: '#fca5a5', fontSize: 14, fontWeight: '900' },
+  coverageText:{ color: '#fecaca', fontSize: 13, lineHeight: 19, marginTop: 5 },
+
   customerName: { color: C.text, fontSize: 29, fontWeight: '900', letterSpacing: -0.8, marginTop: 4, marginBottom: 8 },
 
   infoCard:     { backgroundColor: C.card, borderRadius: R.lg, padding: 16, borderWidth: 1, borderColor: C.borderSoft, ...shadowSoft },
   infoLabel:    { color: C.muted, fontSize: 12, fontWeight: '600', marginBottom: 6 },
   infoValue:    { color: C.text, fontSize: 17, fontWeight: '600', lineHeight: 24 },
+  editAddressBtn:{ alignSelf: 'flex-start', marginTop: 10, paddingVertical: 6 },
+  editAddressText:{ color: C.blue, fontSize: 13, fontWeight: '700' },
+  addressInput:{ backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 12, color: C.text, fontSize: 15, marginTop: 7 },
+  addressActions:{ flexDirection: 'row', gap: 8, marginTop: 10 },
+  addressCancel:{ flex: 1, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: C.border, alignItems: 'center' },
+  addressCancelText:{ color: C.muted, fontWeight: '700' },
+  addressSave:{ flex: 2, padding: 12, borderRadius: 10, backgroundColor: C.green, alignItems: 'center' },
+  addressSaveText:{ color: C.inkOnAccent, fontWeight: '900' },
   historyCard:  { borderColor: '#a78bfa88', backgroundColor: '#211b36' },
   historyRow:   { paddingVertical: 7, borderTopWidth: 1, borderTopColor: '#a78bfa33' },
   historyTitle: { color: '#c4b5fd', fontSize: 13, fontWeight: '800' },
@@ -819,6 +1022,10 @@ const s = StyleSheet.create({
   failedBtn:    { backgroundColor: C.card, borderWidth: 2, borderColor: C.red },
   statusIcon:   { fontSize: 26 },
   statusBtnText:{ color: '#fff', fontWeight: '800', fontSize: 15 },
+  partialActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: R.md, padding: 15, backgroundColor: '#3a2a10', borderWidth: 1, borderColor: '#f59e0b88' },
+  partialActionIcon:{ color: '#fbbf24', fontSize: 28, fontWeight: '900' },
+  partialActionTitle:{ color: '#fbbf24', fontSize: 16, fontWeight: '900' },
+  partialActionSub:{ color: '#fde68a', fontSize: 12, marginTop: 2 },
 
   doneBox:      { alignItems: 'center', padding: 40, gap: 10 },
   doneIcon:     { fontSize: 64 },
@@ -843,6 +1050,13 @@ const s = StyleSheet.create({
   splitSummary: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   splitSummaryText: { color: C.text, fontSize: 13, fontWeight: '700', flex: 1 },
   splitError:   { color: C.orange, fontSize: 12, textAlign: 'center' },
+  partialRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 11 },
+  partialQtyBox:{ minWidth: 58, alignItems: 'center' },
+  partialQtyLabel:{ color: C.muted, fontSize: 9, textTransform: 'uppercase', fontWeight: '700' },
+  partialTotals:{ flexDirection: 'row', justifyContent: 'space-between', gap: 10, backgroundColor: C.card, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: C.border },
+  partialDelivered:{ color: C.green, fontSize: 14, fontWeight: '800' },
+  partialPending:{ color: C.orange, fontSize: 14, fontWeight: '800' },
+  partialConfirmBtn:{ backgroundColor: C.orange },
 
   editBox:       { backgroundColor: C.card, borderWidth: 1, borderColor: C.borderSoft, borderRadius: R.lg, padding: 13, gap: 10, ...shadowSoft },
   editOpenBtn:   { alignItems: 'center', paddingVertical: 4 },
