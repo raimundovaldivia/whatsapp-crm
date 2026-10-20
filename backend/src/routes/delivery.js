@@ -1358,7 +1358,9 @@ router.post('/routes/:id/reoptimize', requireRole('owner', 'admin', 'supervisor'
 });
 
 router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
-  const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim().slice(0, 160) : '';
+  // Conserva la clave completa: los reemplazos pueden superar 160 caracteres.
+  // Más abajo se exige que coincida exactamente con un producto de esta ruta.
+  const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
   const checked = req.body?.checked;
   if (!itemName || typeof checked !== 'boolean') return res.status(400).json({ success: false, error: 'Falta producto o estado de carga' });
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;

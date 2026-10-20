@@ -33,6 +33,10 @@ test('a scheduled exchange becomes a real route stop and keeps inventory review 
         (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date,2,'return-route-test','[]'
       );
     `);
+    // Las devoluciones admiten descripciones de reemplazo de hasta 2000 caracteres.
+    const replacement = 'Entregar una unidad pendiente del pedido original. Sin cobro ni retiro de productos. '.repeat(25).slice(0, 2000);
+    await query('UPDATE order_returns SET replacement_description=$1 WHERE id=1', [replacement]);
+    const loadItemName = `Entregar: ${replacement}`;
 
     const database = { getPool: () => new Pool(), getSetting: async () => null };
     const router = load('src/routes/delivery.js', {
@@ -63,7 +67,38 @@ test('a scheduled exchange becomes a real route stop and keeps inventory review 
     assert.equal(storedReturn.route_id, routeId);
     assert.equal(storedReturn.driver_user_id, 2);
 
-    await query(`UPDATE delivery_routes SET load_checklist=$1::jsonb WHERE id=$2`, [JSON.stringify({ 'Entregar: Queso fresco blanco': true }), routeId]);
+    async function checkLoad(itemName, checked, overrides = {}) {
+      const res = response();
+      await handler(router, 'patch', `/routes/${routeId}/load-checklist`)({
+        orgId: 1, userId: 2, role: 'repartidor', params: { id: String(routeId) },
+        body: { itemName, checked }, ...overrides,
+      }, res);
+      return res;
+    }
+    const checked = await checkLoad(loadItemName, true);
+    assert.equal(checked.code, 200, JSON.stringify(checked.body));
+    assert.equal(checked.body.loadChecklist[loadItemName], true);
+    assert.equal((await query('SELECT load_checklist FROM delivery_routes WHERE id=$1', [routeId])).rows[0].load_checklist[loadItemName], true);
+
+    // Ni una clave recortada ni otra descripción con el mismo prefijo son el producto.
+    for (const wrongName of [loadItemName.slice(0, 160), `${loadItemName} otro`]) {
+      const rejected = await checkLoad(wrongName, true);
+      assert.equal(rejected.code, 400, JSON.stringify(rejected.body));
+    }
+    assert.equal((await checkLoad(loadItemName, false, { orgId: 2 })).code, 404);
+    assert.equal((await checkLoad(loadItemName, false, { userId: 3 })).code, 404);
+    assert.deepEqual((await query('SELECT load_checklist FROM delivery_routes WHERE id=$1', [routeId])).rows[0].load_checklist, { [loadItemName]: true });
+
+    const unchecked = await checkLoad(loadItemName, false);
+    assert.equal(unchecked.code, 200, JSON.stringify(unchecked.body));
+    assert.equal(unchecked.body.loadChecklist[loadItemName], false);
+    const beforeLoad = response();
+    await handler(router, 'patch', `/routes/${routeId}/start`)({
+      orgId: 1, userId: 2, role: 'repartidor', params: { id: String(routeId) }, body: {},
+    }, beforeLoad);
+    assert.equal(beforeLoad.code, 409, JSON.stringify(beforeLoad.body));
+    assert.match(beforeLoad.body.error, /checklist de carga/);
+    assert.equal((await checkLoad(loadItemName, true)).code, 200);
     const started = response();
     await handler(router, 'patch', '/routes/1/start')({
       orgId: 1, userId: 2, role: 'repartidor', params: { id: String(routeId) }, body: {},
