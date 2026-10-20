@@ -334,8 +334,12 @@ router.post('/whatsapp/channels', async (req, res) => {
       name, phoneNumber, evolutionApiUrl, evolutionApiKey,
       evolutionInstance, isDefault = false,
     } = req.body;
-    if (!name?.trim() || !evolutionApiUrl?.trim() || !evolutionApiKey?.trim() || !evolutionInstance?.trim()) {
-      return res.status(400).json({ success: false, error: 'Nombre, URL, API Key e instancia son obligatorios' });
+    const channelApiKey = typeof evolutionApiKey === 'string' ? evolutionApiKey.trim() : '';
+    if (!name?.trim() || !evolutionApiUrl?.trim() || !evolutionInstance?.trim()) {
+      return res.status(400).json({ success: false, error: 'Nombre, URL e instancia son obligatorios' });
+    }
+    if (!channelApiKey && !process.env.EVOLUTION_API_KEY) {
+      return res.status(400).json({ success: false, error: 'Falta la API Key de Evolution en el servidor' });
     }
     let parsedUrl;
     try { parsedUrl = new URL(evolutionApiUrl); } catch { return res.status(400).json({ success: false, error: 'La URL de Evolution no es válida' }); }
@@ -347,7 +351,7 @@ router.post('/whatsapp/channels', async (req, res) => {
     const config = {
       provider: 'evolution',
       evolution_api_url: parsedUrl.toString().replace(/\/$/, ''),
-      evolution_api_key: evolutionApiKey.trim(),
+      evolution_api_key: channelApiKey || null,
       evolution_instance: evolutionInstance.trim(),
     };
     let connection = null;

@@ -306,11 +306,11 @@ async function getEvolutionWhatsappChannel(orgId) {
     `SELECT * FROM whatsapp_channels
       WHERE organization_id = $1 AND provider = 'evolution' AND assigned_user_id IS NULL
         AND evolution_api_url IS NOT NULL
-        AND evolution_api_key IS NOT NULL
+        AND (evolution_api_key IS NOT NULL OR $2::boolean)
         AND evolution_instance IS NOT NULL
       ORDER BY (status = 'connected') DESC, is_default DESC, id ASC
       LIMIT 1`,
-    [orgId]
+    [orgId, Boolean(process.env.EVOLUTION_API_KEY)]
   );
 }
 

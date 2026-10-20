@@ -27,7 +27,8 @@ async function isApiMessage(messageId, config) {
 
 function credentials(config = {}) {
   const baseUrl = String(config.evolution_api_url || '').trim().replace(/\/+$/, '');
-  const apiKey = String(config.evolution_api_key || '').trim();
+  // Clave por canal si existe; si no, la clave global del servidor de Evolution.
+  const apiKey = String(config.evolution_api_key || process.env.EVOLUTION_API_KEY || '').trim();
   const instance = String(config.evolution_instance || '').trim();
   if (!baseUrl || !apiKey || !instance) {
     const error = new Error('Evolution API no está configurada completamente');
