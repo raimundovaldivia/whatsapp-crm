@@ -33,7 +33,18 @@ const BOT_CONFUSED   = /no\s+(entiendo|entend[ií]|logro\s+entender|s[eé]\s+a\s
 async function periodMetrics(pool, orgId, from, to) {
   // Conversaciones con al menos un mensaje entrante del cliente en el rango.
   const { rows: convs } = await pool.query(
-    `SELECT c.id, c.pipeline_state, c.agent_mode, c.last_escalation_at, c.opted_out,
+    `SELECT c.id, c.pipeline_state, c.agent_mode, c.last_escalation_at,
+            (c.pipeline_state = 'opted_out' OR EXISTS (
+              SELECT 1
+                FROM contacts ct
+               WHERE ct.organization_id = c.organization_id
+                 AND ct.opt_out = TRUE
+                 AND c.phone_number IS NOT NULL
+                 AND regexp_replace(ct.phone, '[^0-9]', '', 'g') <> ''
+                 AND regexp_replace(c.phone_number, '[^0-9]', '', 'g') <> ''
+                 AND RIGHT(regexp_replace(ct.phone, '[^0-9]', '', 'g'), 9)
+                     = RIGHT(regexp_replace(c.phone_number, '[^0-9]', '', 'g'), 9)
+            )) AS opted_out,
             c.created_at,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'inbound'
                 AND m.created_at >= $2::date AND m.created_at < ($3::date + INTERVAL '1 day')) AS inbound_in,
@@ -132,6 +143,19 @@ async function gradeConversation(client, conv, messages) {
   try { return JSON.parse(raw); } catch { return { puntaje: null, errores: [], estado_final: 'otro', resumen: '(no se pudo evaluar)' }; }
 }
 
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
+}
+
 /** Normaliza un error para agruparlo (minúsculas, sin tildes, recortado). */
 function errKey(s) {
   return String(s || '').toLowerCase()
@@ -165,15 +189,18 @@ router.post('/grade', async (req, res) => {
     const Anthropic = require('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-    const graded = [];
-    for (const c of candidates) {
+    const evaluated = await mapWithConcurrency(candidates, 4, async c => {
       try {
         const msgs = await db.getMessagesByConversation(c.id, 120);
-        if (!msgs.length) continue;
+        if (!msgs.length) return null;
         const g = await gradeConversation(client, c, msgs);
-        graded.push({ id: c.id, name: c.contact_name || c.phone_number, msgs: Number(c.msgs), ...g });
-      } catch (e) { /* saltar la que falle */ }
-    }
+        return { id: c.id, name: c.contact_name || c.phone_number, msgs: Number(c.msgs), ...g };
+      } catch (e) {
+        console.warn(`[BotEval/grade] conversación ${c.id}:`, e.message);
+        return null;
+      }
+    });
+    const graded = evaluated.filter(Boolean);
 
     // Distribución de puntajes
     const distribucion = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };

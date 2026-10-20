@@ -16,6 +16,7 @@ const shopifyApi  = require('../services/shopify-api');
 const collection  = require('../services/payment-collection');
 const { paymentBreakdown } = require('../utils/payment-breakdown');
 const { recordRouteOutcome } = require('../services/delivery-attempts');
+const { syncOrderIntoUnstartedRoutes } = require('../services/delivery-items');
 const deliveryNotifications = require('../services/delivery-notifications');
 const { resolveCustomerPhones } = require('../services/customer-identity');
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -430,29 +431,47 @@ router.post('/shopify/sync', async (req, res) => {
  * Body: { items: [{ name, quantity, price }] }
  */
 router.patch('/:id/items', async (req, res) => {
+  let client;
   try {
     const { items } = req.body;
     if (!Array.isArray(items)) return res.status(400).json({ error: 'items debe ser un array' });
-    const total = items.reduce((s, i) => s + (Number(i.price) * Number(i.quantity)), 0);
-    const pool = getPool();
+    const clean = items.map(item => ({
+      ...item,
+      name: String(item?.name || item?.title || '').trim().slice(0, 200),
+      title: String(item?.name || item?.title || '').trim().slice(0, 200),
+      quantity: Math.round(Number(item?.quantity)),
+      price: Math.round(Number(item?.price)),
+    }));
+    if (!clean.length || clean.some(item => !item.name || !Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 1000 || !Number.isSafeInteger(item.price) || item.price < 0 || item.price > 100000000)) {
+      return res.status(400).json({ error: 'Productos inválidos' });
+    }
+    const total = clean.reduce((s, i) => s + i.price * i.quantity, 0);
+    client = await getPool().connect();
+    await client.query('BEGIN');
     const orderId = parseInt(req.params.id);
-    const { rows: [before] } = await pool.query(
-      'SELECT * FROM orders WHERE id = $1 AND organization_id = $2',
+    const { rows: [before] } = await client.query(
+      'SELECT * FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE',
       [orderId, req.orgId]
     );
-    if (!before) return res.status(404).json({ error: 'Pedido no encontrado' });
-    const { rows: [updated] } = await pool.query(
+    if (!before) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    const { rows: [updated] } = await client.query(
       `UPDATE orders SET items = $1, total_price = $2, updated_at = NOW()
         WHERE id = $3 AND organization_id = $4 RETURNING *`,
-      [JSON.stringify(items), String(total), orderId, req.orgId]
+      [JSON.stringify(clean), String(total), orderId, req.orgId]
     );
+    const syncedRoutes = await syncOrderIntoUnstartedRoutes(client, req.orgId, 'bot', orderId, clean, total);
+    await client.query('COMMIT');
     const notification = await sendOrderEditNotification(req.orgId, {
       source: 'bot', id: orderId, before, after: updated,
     });
-    res.json({ success: true, data: updated, notification });
+    res.json({ success: true, data: updated, notification, syncedRoutes, checklistReset: syncedRoutes > 0 });
   } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ success: false, error: err.message });
-  }
+  } finally { client?.release(); }
 });
 
 /**
@@ -997,6 +1016,7 @@ router.patch('/set-items', async (req, res) => {
   const { source, id, items } = req.body;
   if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
   if (!Array.isArray(items)) return res.status(400).json({ success: false, error: 'items debe ser un array' });
+  let client;
   try {
     const clean = items
       .map(i => ({
@@ -1009,33 +1029,40 @@ router.patch('/set-items', async (req, res) => {
       .filter(i => i.name && i.quantity > 0);
     const total = clean.reduce((s, i) => s + i.price * i.quantity, 0);
     const itemsJson = JSON.stringify(clean);
-    const pool = getPool();
+    client = await getPool().connect();
+    await client.query('BEGIN');
     const table = source === 'shopify' ? 'shopify_orders' : 'orders';
     const idColumn = source === 'shopify' ? 'shopify_order_id' : 'id';
     const key = source === 'shopify' ? String(id) : parseInt(id);
-    const { rows: [before] } = await pool.query(
-      `SELECT * FROM ${table} WHERE ${idColumn} = $1 AND organization_id = $2`,
+    const { rows: [before] } = await client.query(
+      `SELECT * FROM ${table} WHERE ${idColumn} = $1 AND organization_id = $2 FOR UPDATE`,
       [key, req.orgId]
     );
-    if (!before) return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    if (!before) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Pedido no encontrado' });
+    }
     const result = source === 'shopify'
-      ? await pool.query(
+      ? await client.query(
           `UPDATE shopify_orders SET items = $1::jsonb, total_price = $2, delivery_modified = TRUE
             WHERE shopify_order_id = $3 AND organization_id = $4 RETURNING *`,
           [itemsJson, total, String(id), req.orgId]
         )
-      : await pool.query(
+      : await client.query(
           `UPDATE orders SET items = $1, total_price = $2, delivery_modified = TRUE, updated_at = NOW()
             WHERE id = $3 AND organization_id = $4 RETURNING *`,
           [itemsJson, String(total), parseInt(id), req.orgId]
         );
     const after = result.rows[0];
+    const syncedRoutes = await syncOrderIntoUnstartedRoutes(client, req.orgId, source, id, clean, total);
+    await client.query('COMMIT');
     const notification = await sendOrderEditNotification(req.orgId, { source, id, before, after });
-    res.json({ success: true, total, items: clean, notification });
+    res.json({ success: true, total, items: clean, notification, syncedRoutes, checklistReset: syncedRoutes > 0 });
   } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
     console.error('[Orders/set-items]', err.message);
     res.status(500).json({ success: false, error: err.message });
-  }
+  } finally { client?.release(); }
 });
 
 /**
@@ -1127,9 +1154,10 @@ router.patch('/history-edit', async (req, res) => {
       );
     }
 
+    const syncedRoutes = await syncOrderIntoUnstartedRoutes(client, req.orgId, source, id, clean, total);
     await client.query('COMMIT');
     const notification = await sendOrderEditNotification(req.orgId, { source, id, before, after: order });
-    res.json({ success: true, total, items: clean, order, notification });
+    res.json({ success: true, total, items: clean, order, notification, syncedRoutes, checklistReset: syncedRoutes > 0 });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('[Orders/history-edit]', err.message);

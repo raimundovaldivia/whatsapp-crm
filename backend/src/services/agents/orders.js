@@ -283,11 +283,12 @@ function claimsRegistered(text) {
  */
 function isCancelDuringCollection(userMessage) {
   const m = (userMessage || '').toLowerCase().trim();
-  if (m.length > 40) return false;
+  if (m.length > 80) return false;
   // Una corrección como "no quiero XL, quiero L" modifica el carrito; no lo cancela.
   if (/\bno\s+quiero\b.{0,25}\b(?:pero|sino|mejor|quiero)\b/i.test(m)) return false;
   return /^(no|no,?\s*no\s+quiero|mejor no|no gracias|cancela(r|lo)?|cancelemos|olv[ií]dalo|d[ée]jalo|dejalo|ya no( lo)?( quiero)?|no quiero|no quiero nada|yo no he pedido nada|nada por ahora)[\s!.]*$/i.test(m)
-      || /\bcancel(a|ar|o|emos)\b.*\bpedido\b/i.test(m);
+      || /\bcancel(a|ar|o|emos)\b.*\bpedido\b/i.test(m)
+      || /^\s*no\s+me\s+(?:env[ií](?:e|es)|mand(?:e|es)|despach(?:e|es)|traig(?:a|as))\s+(?:(?:la|el|mi)\s+)?(?:compra|pedido|encargo)\b/iu.test(m);
 }
 
 /**

@@ -74,7 +74,7 @@ async function getUnpaidOrders(orgId) {
   const pool = getPool();
   const [bot, shop] = await Promise.all([
     pool.query(
-      `SELECT o.id::text AS id, 'bot' AS source, '#BOT-' || o.id AS label, o.status, o.customer_name, o.customer_phone AS phone,
+      `SELECT o.id::text AS id, 'bot' AS source, '#DR-' || o.id AS label, o.status, o.customer_name, o.customer_phone AS phone,
               CASE WHEN o.payment_method = 'mixto' THEN o.payment_transfer_amount ELSE o.total_price::numeric END AS total_price,
               o.created_at, COALESCE(o.updated_at, o.created_at) AS touched_at, o.payment_method, c.contact_name
          FROM orders o LEFT JOIN conversations c ON c.id = o.conversation_id
@@ -170,7 +170,7 @@ function scoreProofEvidence(mov, orders, proof) {
 
   const botOrderIds = new Set(orders.filter(o => o.source === 'bot').map(o => String(o.id)));
   const orderLinked = proof.order_id != null && botOrderIds.has(String(proof.order_id));
-  if (orderLinked) add('order', 'Voucher asociado al mismo pedido', 25, `#BOT-${proof.order_id}`);
+  if (orderLinked) add('order', 'Voucher asociado al mismo pedido', 25, `#DR-${proof.order_id}`);
 
   const proofPhone = normalizedPhone(proof.customer_phone);
   const orderPhoneMatch = !!proofPhone && orders.some(o => normalizedPhone(o.phone) === proofPhone);
@@ -374,7 +374,7 @@ async function confirm(orgId, movementId, orders, userId, note = null, options =
     for (const o of orders) {
       if (o.source === 'bot') {
         const { rows: [prev] } = await client.query(`SELECT status, payment_method, customer_phone, customer_name, total_price, created_at FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [parseInt(o.id), orgId]);
-        if (!prev) throw Object.assign(new Error(`Pedido #BOT-${o.id} no encontrado`), { status: 404 });
+        if (!prev) throw Object.assign(new Error(`Pedido #DR-${o.id} no encontrado`), { status: 404 });
         await client.query(
           `UPDATE orders SET status = 'paid', payment_method = CASE WHEN payment_method = 'mixto' THEN 'mixto' ELSE 'transferencia' END, payment_marked_at = NOW(), updated_at = NOW(),
                   notes = COALESCE(notes, '') || $3

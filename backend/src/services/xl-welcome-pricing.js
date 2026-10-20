@@ -205,11 +205,25 @@ function trayCountPriceReply(userMessage, history = [], products = [], ctx = {})
   return `Para ${count} bandejas ${size}${requestedUnits ? ` de ${requestedUnits} huevos cada una` : ''}:\n${options.map(format).join('\n')}\n\n${condition} ${close}`;
 }
 
+function deliveryThreshold(rawThreshold) {
+  const parsed = Number(String(rawThreshold ?? '').replace(/[^0-9]/g, ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10000;
+}
+
 function deliveryPriceLine(ctx, rawThreshold) {
   if (!ctx?.web) return '';
-  const parsed = Number(String(rawThreshold ?? '').replace(/[^0-9]/g, ''));
-  const threshold = Number.isFinite(parsed) && parsed > 0 ? parsed : 10000;
-  return `🚚 Costo de despacho: $1.500 en pedidos menores a ${money(threshold)}; gratis desde ${money(threshold)}.`;
+  const threshold = deliveryThreshold(rawThreshold);
+  return `🚚 Costo de despacho en La Serena y Coquimbo: $1.500 en pedidos menores a ${money(threshold)}; gratis desde ${money(threshold)}.`;
+}
+
+function deliveryPriceReply(message, ctx, rawThreshold) {
+  if (!ctx?.web) return null;
+  const text = normalize(message);
+  const mentionsDelivery = /\b(despacho|delivery|envio|reparto)\b/.test(text);
+  const asksPrice = /\b(gratis|gratuito|sin costo|cobran|cobro|cuesta|costo|valor|precio)\b/.test(text);
+  if (!mentionsDelivery || !asksPrice) return null;
+  const threshold = deliveryThreshold(rawThreshold);
+  return `Sí 😊 El despacho es gratis en compras desde ${money(threshold)} en todo La Serena y Coquimbo. Si tu compra es menor a ${money(threshold)}, el despacho cuesta $1.500.`;
 }
 
 /**
@@ -316,4 +330,4 @@ Antes de las 13:00 de America/Santiago: entrega el mismo día de reparto, sujeto
 No acumules descuentos. Respeta tarifas especiales y ofertas mejores. No uses la antigua escalera de 5%, 7% o 10%. Responde precios directamente; prioriza 30 y 60 XL sin ocultar otros formatos si los pide.
 Pedidos antes de las 13:00 (America/Santiago) se entregan el mismo día de reparto, sujeto a stock y cobertura. Después de esa hora confirma la próxima fecha disponible. No prometas envío gratis adicional. No registres un pedido sin aceptación ni confirmes antes de guardarlo.`;
 }
-module.exports = { trayTotal, WEB_TIERS, forStore, TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, quantityPriceReply, trayCountPriceReply, deliveryPriceLine, prompt };
+module.exports = { trayTotal, WEB_TIERS, forStore, TIERS, STORE_SLUG, packSize, scaleTotal, historicalScale, context, apply, applyQuote, quantityPriceReply, trayCountPriceReply, deliveryPriceLine, deliveryPriceReply, prompt };

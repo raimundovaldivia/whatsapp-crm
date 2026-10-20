@@ -11,6 +11,46 @@ async function sendOrderEditNotification(...args) {
     return { sent: false, skipped: true, reason: 'SEND_FAILED', error: error.message };
   }
 }
+
+function replaceRouteOrder(rawStops, source, id, items, total) {
+  const stops = Array.isArray(rawStops) ? rawStops : JSON.parse(rawStops || '[]');
+  return stops.map(stop => stop.source === source && String(stop.id) === String(id)
+    ? { ...stop, items, totalPrice: total, total_price: total }
+    : stop);
+}
+
+async function syncOrderIntoUnstartedRoutes(client, organizationId, source, id, items, total) {
+  const { rows: routes } = await client.query(
+    `SELECT id, status, orders, optimized_route
+       FROM delivery_routes
+      WHERE organization_id = $1
+        AND status IN ('draft', 'sent')
+        AND started_at IS NULL
+      FOR UPDATE`,
+    [organizationId]
+  );
+  let updated = 0;
+  for (const route of routes) {
+    const members = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
+    if (!members.some(stop => stop.source === source && String(stop.id) === String(id))) continue;
+    await client.query(
+      `UPDATE delivery_routes
+          SET orders = $1::jsonb,
+              optimized_route = $2::jsonb,
+              load_checklist = CASE WHEN status = 'sent' THEN '{}'::jsonb ELSE load_checklist END
+        WHERE id = $3 AND organization_id = $4`,
+      [
+        JSON.stringify(replaceRouteOrder(route.orders, source, id, items, total)),
+        JSON.stringify(replaceRouteOrder(route.optimized_route, source, id, items, total)),
+        route.id,
+        organizationId,
+      ]
+    );
+    updated += 1;
+  }
+  return updated;
+}
+
 async function routeItems(req, res) {
   let client;
   try {
@@ -44,14 +84,8 @@ async function routeItems(req, res) {
       // La ruta conserva una copia de cada pedido para funcionar sin conexión.
       // Mantenerla sincronizada evita que la carga muestre cantidades antiguas
       // después de una corrección hecha por el repartidor o el administrador.
-      const syncStops = rawStops => {
-        const list = Array.isArray(rawStops) ? rawStops : JSON.parse(rawStops || '[]');
-        return list.map(stop => stop.source === source && String(stop.id) === String(id)
-          ? { ...stop, items: clean, totalPrice: total, total_price: total }
-          : stop);
-      };
-      const syncedOrders = syncStops(route.orders);
-      const syncedOptimized = syncStops(route.optimized_route);
+      const syncedOrders = replaceRouteOrder(route.orders, source, id, clean, total);
+      const syncedOptimized = replaceRouteOrder(route.optimized_route, source, id, clean, total);
       await client.query(
         `UPDATE delivery_routes
             SET orders=$1, optimized_route=$2,
@@ -59,6 +93,9 @@ async function routeItems(req, res) {
           WHERE id=$3 AND organization_id=$4`,
         [JSON.stringify(syncedOrders), JSON.stringify(syncedOptimized), route.id, req.orgId]
       );
+      if (route.status === 'draft' || route.status === 'sent') {
+        await syncOrderIntoUnstartedRoutes(client, req.orgId, source, id, clean, total);
+      }
       result = {items:clean,total};
     }
     await client.query('COMMIT');
@@ -76,4 +113,4 @@ async function routeItems(req, res) {
     res.status(err.status || 500).json({error:err.message});
   } finally {client?.release();}
 }
-module.exports = { routeItems };
+module.exports = { routeItems, syncOrderIntoUnstartedRoutes };

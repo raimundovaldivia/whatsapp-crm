@@ -10,6 +10,7 @@ const meta = require('../services/meta-platform');
 const socialEvents = require('../services/social-events');
 const socialCrm = require('../services/social-crm');
 const { summarizeInsights } = require('../services/ad-attribution');
+const purchaseSync = require('../services/meta-purchase-sync');
 
 const router = express.Router();
 const SCOPES = [
@@ -17,7 +18,7 @@ const SCOPES = [
   'pages_messaging', 'pages_manage_posts', 'pages_manage_engagement',
   'instagram_basic', 'instagram_manage_messages', 'instagram_manage_comments', 'instagram_content_publish',
   'ads_read', 'ads_management', 'business_management',
-  'whatsapp_business_management', 'whatsapp_business_messaging',
+  'whatsapp_business_management', 'whatsapp_business_messaging', 'whatsapp_business_manage_events',
 ];
 
 function publicUrl() {
@@ -37,7 +38,9 @@ function callbackUrl() {
 async function getConnection(orgId, includeSecrets = false) {
   const fields = includeSecrets ? '*' : `id, organization_id, facebook_user_name, page_id, page_name,
     instagram_account_id, instagram_username, ad_account_id, ad_account_name, scopes, status,
-    token_expires_at, last_error, auto_reply_messages, auto_reply_comments, created_at, updated_at`;
+    token_expires_at, last_error, auto_reply_messages, auto_reply_comments,
+    purchase_sync_enabled, conversion_dataset_id, purchase_audience_id, purchase_sync_since,
+    customer_audience_terms_accepted_at, created_at, updated_at`;
   const { rows } = await getPool().query(`SELECT ${fields} FROM meta_connections WHERE organization_id = $1`, [orgId]);
   return rows[0] || null;
 }
@@ -192,6 +195,100 @@ router.get('/auth-url', (req, res) => {
 router.get('/status', async (req, res) => {
   const connection = await getConnection(req.orgId);
   res.json({ connected: connection?.status === 'connected', connection });
+});
+
+router.get('/purchase-sync', async (req, res) => {
+  const connection = await getConnection(req.orgId);
+  if (!connection) return res.status(404).json({ error: 'Meta no está conectado' });
+  const { rows: stats } = await getPool().query(
+    `SELECT destination, status, COUNT(*)::int AS count,
+            MAX(sent_at) AS last_sent_at, MAX(updated_at) AS last_updated_at
+       FROM meta_purchase_deliveries
+      WHERE organization_id=$1
+      GROUP BY destination,status
+      ORDER BY destination,status`,
+    [req.orgId]
+  );
+  const { rows: [whatsapp] } = await getPool().query(
+    'SELECT business_account_id FROM whatsapp_configs WHERE organization_id=$1',
+    [req.orgId]
+  );
+  res.json({
+    config: {
+      enabled: !!connection.purchase_sync_enabled,
+      datasetId: connection.conversion_dataset_id || '',
+      audienceId: connection.purchase_audience_id || '',
+      since: connection.purchase_sync_since || null,
+      audienceTermsAccepted: !!connection.customer_audience_terms_accepted_at,
+      wabaConnected: !!whatsapp?.business_account_id,
+      needsReconnect: !(connection.scopes || []).includes('whatsapp_business_manage_events'),
+    },
+    stats,
+  });
+});
+
+router.put('/purchase-sync', async (req, res) => {
+  const enabled = req.body.enabled === true;
+  const datasetId = String(req.body.datasetId || '').trim();
+  const audienceId = String(req.body.audienceId || '').trim();
+  const lookbackDays = Number(req.body.lookbackDays || 90);
+  const restartFromLookback = req.body.restartFromLookback === true;
+  const acceptedTerms = req.body.acceptCustomerAudienceTerms === true;
+  const validAssetId = value => /^\d{5,30}$/.test(value);
+  if (datasetId && !validAssetId(datasetId)) return res.status(400).json({ error: 'El ID del dataset no es válido' });
+  if (audienceId && !validAssetId(audienceId)) return res.status(400).json({ error: 'El ID de la audiencia no es válido' });
+  if (!Number.isInteger(lookbackDays) || lookbackDays < 1 || lookbackDays > 365) {
+    return res.status(400).json({ error: 'El período histórico debe estar entre 1 y 365 días' });
+  }
+  const connection = await getConnection(req.orgId);
+  if (!connection || connection.status !== 'connected') return res.status(400).json({ error: 'Conecta Meta antes de activar compradores reales' });
+  if (enabled && (!datasetId || !audienceId)) {
+    return res.status(400).json({ error: 'Configura el dataset de conversiones y la audiencia de compradores' });
+  }
+  if (enabled && !(connection.scopes || []).includes('whatsapp_business_manage_events')) {
+    return res.status(409).json({ error: 'Reconecta Meta para autorizar el permiso de eventos de WhatsApp' });
+  }
+  const { rows: [whatsapp] } = await getPool().query(
+    'SELECT business_account_id FROM whatsapp_configs WHERE organization_id=$1',
+    [req.orgId]
+  );
+  if (enabled && !whatsapp?.business_account_id) {
+    return res.status(400).json({ error: 'Activa una cuenta de WhatsApp Business antes de sincronizar compras' });
+  }
+  if (audienceId && !connection.customer_audience_terms_accepted_at && !acceptedTerms) {
+    return res.status(400).json({ error: 'Debes confirmar que cuentas con autorización para usar los teléfonos en una audiencia de clientes' });
+  }
+  const since = new Date(Date.now() - lookbackDays * 86400000);
+  await getPool().query(
+    `UPDATE meta_connections
+        SET purchase_sync_enabled=$1,
+            conversion_dataset_id=$2,
+            purchase_audience_id=$3,
+            purchase_sync_since=CASE
+              WHEN $1::boolean AND (purchase_sync_since IS NULL OR purchase_sync_enabled=FALSE OR $4::boolean)
+                THEN $5::timestamptz
+              ELSE purchase_sync_since
+            END,
+            customer_audience_terms_accepted_at=CASE
+              WHEN $6::boolean THEN COALESCE(customer_audience_terms_accepted_at,NOW())
+              ELSE customer_audience_terms_accepted_at
+            END,
+            updated_at=NOW()
+      WHERE organization_id=$7`,
+    [enabled, datasetId || null, audienceId || null, restartFromLookback, since, acceptedTerms, req.orgId]
+  );
+  res.json({ success: true, config: (await getConnection(req.orgId)) });
+});
+
+router.post('/purchase-sync/run', async (req, res) => {
+  try {
+    const connection = await getConnection(req.orgId);
+    if (!connection?.purchase_sync_enabled) return res.status(409).json({ error: 'Activa primero la sincronización de compradores reales' });
+    const result = await purchaseSync.runMetaPurchaseSync({ organizationId: req.orgId });
+    res.json({ success: true, result });
+  } catch (error) {
+    res.status(502).json({ error: meta.graphError(error) });
+  }
 });
 
 router.get('/assets', async (req, res) => {

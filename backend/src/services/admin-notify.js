@@ -8,8 +8,8 @@
  * al número, TODAS sus alertas fallan en silencio y nunca se entera.
  *
  * SOLUCIÓN — tres piezas:
- *  1. notifyAdmin(): intenta enviar; si la ventana está cerrada, guarda el
- *     mensaje en la cola (admin_outbox) en vez de perderlo.
+ *  1. notifyAdmin(): comprueba la ventana antes de intentar enviar; si está
+ *     cerrada, guarda el mensaje en la cola (admin_outbox) en vez de perderlo.
  *  2. markAdminWindowOpen(): cuando el admin escribe al número, su ventana de
  *     24h se reabre → se drena la cola (se le mandan los pendientes).
  *  3. sweepAdminWindowWarnings(): cron que le avisa ANTES de que la ventana se
@@ -70,6 +70,15 @@ async function notifyAdmin(orgId, { body, kind = 'help', conversationId = null, 
 
   const cfg = wc || await db.getWhatsappConfig(orgId).catch(() => null);
   if (!cfg || cfg.provider !== 'kapso') return { sent: false, queued: false, reason: 'sin_kapso' };
+
+  // La ventana se conoce por el último mensaje entrante del admin. Evitar un
+  // intento inútil contra Meta también permite que los callers hagan la misma
+  // comprobación antes de generar con IA el contenido de la alerta.
+  if (!await isWindowOpen(orgId)) {
+    await queueMessage(orgId, adminPhone, body, kind, conversationId);
+    console.warn(`[AdminNotify] 📥 Ventana del admin cerrada — alerta encolada sin intentar envío (${kind}).`);
+    return { sent: false, queued: true, reason: 'ventana_cerrada' };
+  }
 
   try {
     await kapsoService.sendTextMessage(adminPhone, body, cfg);

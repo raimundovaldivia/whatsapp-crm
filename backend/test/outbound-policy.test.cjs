@@ -27,6 +27,15 @@ test('no insiste cuando el cliente ya postergó la compra', () => {
   ]), true);
 });
 
+test('no insiste después de un rechazo breve y explícito', () => {
+  for (const text of ['No gracias', 'No gracias 🙏', 'No voy a querer', 'Yo aviso 👍']) {
+    assert.equal(shouldSkipAutomatedFollowUp([
+      { direction: 'outbound', content: '¿Quieres que prepare tu pedido?' },
+      { direction: 'inbound', content: text },
+    ]), true, text);
+  }
+});
+
 test('no persigue a quien dijo que aún tiene huevos porque se los regalaron', () => {
   assert.equal(shouldSkipAutomatedFollowUp([
     { direction: 'outbound', content: '¿Te preparamos tu pedido?' },

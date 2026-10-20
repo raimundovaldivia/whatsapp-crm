@@ -570,6 +570,10 @@ async function setupDatabase() {
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promised_for DATE;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promise_note TEXT;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promise_recorded_at TIMESTAMPTZ;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_promise_followed_up_at TIMESTAMPTZ;
       -- Varias rutas (cambios de estado, entrega, cobranza) escriben updated_at.
       -- La tabla original solo tenía created_at, así que la agregamos aquí.
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
@@ -699,6 +703,10 @@ async function setupDatabase() {
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_requested_at  TIMESTAMP;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_message_id TEXT;
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS charge_request_count INTEGER DEFAULT 0;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promised_for DATE;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promise_note TEXT;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promise_recorded_at TIMESTAMPTZ;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS payment_promise_followed_up_at TIMESTAMPTZ;
       -- Link historical collection receipts only when both sides match uniquely.
       WITH attempts AS (
         SELECT 'bot' AS source, id::text AS id, organization_id, customer_phone, charge_requested_at FROM orders WHERE charge_message_id IS NULL AND charge_requested_at IS NOT NULL
@@ -822,6 +830,72 @@ async function setupDatabase() {
 
       -- Migración: bandera para excluir manualmente de Hot Leads
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
+
+      -- Calificación comercial separada del estado operativo del bot. Se deja
+      -- nullable para distinguir conversaciones aún no recalificadas.
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_temperature TEXT;
+      ALTER TABLE conversations ALTER COLUMN lead_temperature SET DEFAULT 'exploring';
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_score INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS qualification_reasons JSONB NOT NULL DEFAULT '[]';
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_signals JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS qualified_at TIMESTAMPTZ;
+      DO $$
+      BEGIN
+        ALTER TABLE conversations ADD CONSTRAINT conversations_lead_temperature_check
+          CHECK(lead_temperature IS NULL OR lead_temperature IN
+            ('exploring','interested','hot','very_hot','future','won','discarded')) NOT VALID;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+      DO $$
+      BEGIN
+        ALTER TABLE conversations ADD CONSTRAINT conversations_lead_score_check
+          CHECK(lead_score BETWEEN 0 AND 100) NOT VALID;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+      CREATE INDEX IF NOT EXISTS idx_conversations_lead_temperature
+        ON conversations(organization_id, lead_temperature, last_message_at DESC);
+
+      -- Cada recalificación masiva conserva la clasificación anterior y la
+      -- propuesta nueva antes de aplicar cambios, para poder medir precisión.
+      CREATE TABLE IF NOT EXISTS lead_qualification_runs (
+        run_id TEXT PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        requested_limit INTEGER NOT NULL CHECK(requested_limit BETWEEN 1 AND 500),
+        conversation_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','failed')),
+        applied BOOLEAN NOT NULL DEFAULT FALSE,
+        summary JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ
+      );
+      CREATE TABLE IF NOT EXISTS lead_qualification_audits (
+        id BIGSERIAL PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES lead_qualification_runs(run_id) ON DELETE CASCADE,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        before_pipeline_state TEXT,
+        before_lead_temperature TEXT,
+        before_lead_score INTEGER,
+        before_hot_excluded BOOLEAN NOT NULL DEFAULT FALSE,
+        before_legacy_hot BOOLEAN NOT NULL DEFAULT FALSE,
+        before_qualification_reasons JSONB NOT NULL DEFAULT '[]',
+        before_lead_signals JSONB NOT NULL DEFAULT '{}',
+        before_updated_at TIMESTAMPTZ,
+        proposed_temperature TEXT NOT NULL,
+        proposed_score INTEGER NOT NULL,
+        proposed_reasons JSONB NOT NULL DEFAULT '[]',
+        proposed_signals JSONB NOT NULL DEFAULT '{}',
+        applied BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, run_id, conversation_id)
+      );
+      ALTER TABLE lead_qualification_audits
+        ADD COLUMN IF NOT EXISTS before_updated_at TIMESTAMPTZ;
+      CREATE INDEX IF NOT EXISTS idx_lead_qualification_runs_org
+        ON lead_qualification_runs(organization_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_lead_qualification_audits_run
+        ON lead_qualification_audits(organization_id, run_id, proposed_temperature);
 
       -- Migración: tipo de cliente en contactos (personal / empresa)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS client_type TEXT DEFAULT 'personal';
@@ -1314,12 +1388,98 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_payment_amounts JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_notes     JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_address_updates JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_partial_deliveries JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_times     JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS load_checklist JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS started_at     TIMESTAMPTZ;
+      ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS partial_parent_source TEXT,
+        ADD COLUMN IF NOT EXISTS partial_parent_id TEXT,
+        ADD COLUMN IF NOT EXISTS partial_origin_route_id INTEGER REFERENCES delivery_routes(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS partial_origin_stop_key TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_partial_remainder
+        ON orders(organization_id, partial_origin_route_id, partial_origin_stop_key)
+        WHERE partial_origin_route_id IS NOT NULL AND partial_origin_stop_key IS NOT NULL;
+      ALTER TABLE conversations
+        ADD COLUMN IF NOT EXISTS delivery_state TEXT,
+        ADD COLUMN IF NOT EXISTS delivery_route_id INTEGER,
+        ADD COLUMN IF NOT EXISTS delivery_stop_key TEXT;
+      CREATE TABLE IF NOT EXISTS delivery_customer_events (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        route_id INTEGER NOT NULL REFERENCES delivery_routes(id) ON DELETE CASCADE,
+        stop_key TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','sent','failed')),
+        payload JSONB NOT NULL DEFAULT '{}',
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, route_id, stop_key, event_type)
+      );
+      CREATE TABLE IF NOT EXISTS delivery_tracking_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        route_id INTEGER NOT NULL REFERENCES delivery_routes(id) ON DELETE CASCADE,
+        stop_key TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        latitude DOUBLE PRECISION,
+        longitude DOUBLE PRECISION,
+        accuracy_m DOUBLE PRECISION,
+        location_updated_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ NOT NULL,
+        revoked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK(latitude IS NULL OR latitude BETWEEN -90 AND 90),
+        CHECK(longitude IS NULL OR longitude BETWEEN -180 AND 180),
+        CHECK(accuracy_m IS NULL OR accuracy_m BETWEEN 0 AND 10000)
+      );
+      ALTER TABLE delivery_tracking_sessions
+        DROP CONSTRAINT IF EXISTS delivery_tracking_sessions_organization_id_route_id_stop_key_key;
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
         ON delivery_routes(organization_id, driver_user_id, status);
+      CREATE INDEX IF NOT EXISTS idx_delivery_customer_events_route
+        ON delivery_customer_events(organization_id, route_id, event_type, status);
+      CREATE INDEX IF NOT EXISTS idx_delivery_tracking_route
+        ON delivery_tracking_sessions(organization_id, route_id, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_delivery_tracking_stop
+        ON delivery_tracking_sessions(organization_id, route_id, stop_key);
+      CREATE TABLE IF NOT EXISTS customer_feedback_requests (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        source TEXT NOT NULL CHECK(source IN ('bot','shopify')),
+        order_id TEXT NOT NULL,
+        order_label TEXT,
+        customer_phone TEXT NOT NULL,
+        customer_name TEXT,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','sending','sent','replied','skipped','failed')),
+        scheduled_for TIMESTAMPTZ NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        sent_at TIMESTAMPTZ,
+        replied_at TIMESTAMPTZ,
+        score SMALLINT CHECK(score BETWEEN 1 AND 5),
+        sentiment TEXT CHECK(sentiment IN ('positive','negative')),
+        feedback_text TEXT,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, customer_phone)
+      );
+      CREATE INDEX IF NOT EXISTS idx_customer_feedback_due
+        ON customer_feedback_requests(status, scheduled_for);
+      CREATE INDEX IF NOT EXISTS idx_customer_feedback_org_replied
+        ON customer_feedback_requests(organization_id, replied_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_conversations_delivery_route
+        ON conversations(organization_id, delivery_route_id, delivery_state);
     `);
 
     // Antes del checklist, enviar una ruta la dejaba inmediatamente en
@@ -1543,8 +1703,44 @@ async function setupDatabase() {
       );
       ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS auto_reply_messages BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS auto_reply_comments BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS purchase_sync_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS conversion_dataset_id TEXT;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS purchase_audience_id TEXT;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS purchase_sync_since TIMESTAMPTZ;
+      ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS customer_audience_terms_accepted_at TIMESTAMPTZ;
       CREATE INDEX IF NOT EXISTS idx_meta_connections_page ON meta_connections(page_id);
       CREATE INDEX IF NOT EXISTS idx_meta_connections_ig ON meta_connections(instagram_account_id);
+
+      CREATE TABLE IF NOT EXISTS meta_purchase_deliveries (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+        source TEXT NOT NULL CHECK(source IN ('bot','shopify')),
+        order_key TEXT NOT NULL,
+        destination TEXT NOT NULL CHECK(destination IN ('purchase','audience','audience_remove')),
+        event_id TEXT NOT NULL,
+        ctwa_clid TEXT,
+        phone_hash TEXT,
+        value_amount NUMERIC(14,2) NOT NULL CHECK(value_amount >= 0),
+        currency TEXT NOT NULL DEFAULT 'CLP',
+        event_time TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','processing','sent','failed','skipped')),
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        claimed_at TIMESTAMPTZ,
+        next_attempt_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        last_error TEXT,
+        response_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, source, order_key, destination)
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_purchase_deliveries_pending
+        ON meta_purchase_deliveries(status, next_attempt_at, created_at)
+        WHERE status IN ('pending','failed');
+      CREATE INDEX IF NOT EXISTS idx_meta_purchase_deliveries_org
+        ON meta_purchase_deliveries(organization_id, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS meta_threads (
         id BIGSERIAL PRIMARY KEY,
@@ -1632,6 +1828,9 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-boxes-promotional.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'store-product-favorites.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-product-images.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals-rewards-v2.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'campaign-offers.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

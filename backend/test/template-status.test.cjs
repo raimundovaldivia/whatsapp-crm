@@ -14,9 +14,9 @@ test('collection messages identify the order, delivery date and amount',()=>{
   {id:'1043',source:'bot',order_label:'#1043',customer_name:'MARÍA INÉS',total_price:20000,delivered_at:'2026-09-25T15:00:00.000Z'},
  ]);
  assert.equal(grouped.total_price,60000);
- assert.match(collection.buildVoucherRequestMessage(grouped),/#1042.*#1043.*\$60\.000/s);
+ assert.match(collection.buildVoucherRequestMessage(grouped),/#1042.*#DR-1043.*\$60\.000/s);
  assert.doesNotMatch(collection.buildVoucherRequestMessage(grouped),/datos bancarios/i);
- assert.match(collection.buildChargeMessage(grouped,{template:'Pedidos {pedido}; total {total}.',bankDetails:'Banco de prueba'}),/#1042.*#1043.*\$60\.000.*Banco de prueba/s);
+ assert.match(collection.buildChargeMessage(grouped,{template:'Pedidos {pedido}; total {total}.',bankDetails:'Banco de prueba'}),/#1042.*#DR-1043.*\$60\.000.*Banco de prueba/s);
  const range=collection.normalizeChargeDateRange({from:'2026-10-01',to:'2026-10-31'});
  assert.equal(range.from,'2026-10-01');assert.equal(range.to,'2026-10-31');
  assert.throws(()=>collection.normalizeChargeDateRange({from:'2026-02-30'}),/fecha válida/);
@@ -91,6 +91,12 @@ test('template acceptance is pending, failure details survive reload and stale r
  assert.equal(await collection.getOrderForCharge(1,'bot','1'),null,'a debt with a voucher under review cannot be charged again');
  await query("INSERT INTO orders(id,organization_id,conversation_id,customer_phone,items,total_price,status,payment_method) VALUES (4,1,1,'111','[]',100,'entregado','transferencia'); INSERT INTO payment_proofs(id,organization_id,conversation_id,order_id,media_id,status) VALUES (101,1,1,4,'voucher-approved','verified')");
  assert.equal((await collection.getPendingCharges(1)).some(o=>o.id==='4'),false,'an approved voucher closes the debt');
+ await query("INSERT INTO orders(id,organization_id,conversation_id,customer_phone,items,total_price,status,payment_method,notes) VALUES (5,1,1,'111','[]',100,'entregado','transferencia','PAGADO · NO COBRAR')");
+ assert.equal((await collection.getPendingCharges(1)).some(o=>o.id==='5'),false,'an explicit no-charge note can never trigger collection');
+ await query("INSERT INTO orders(id,organization_id,conversation_id,customer_phone,items,total_price,status,payment_method,payment_promised_for) VALUES (6,1,1,'111','[]',100,'entregado','transferencia',(NOW() AT TIME ZONE 'America/Santiago')::date + 2)");
+ assert.equal((await collection.getPendingCharges(1)).some(o=>o.id==='6'),false,'a future payment promise pauses collection');
+ await query("INSERT INTO orders(id,organization_id,conversation_id,customer_phone,items,total_price,status,payment_method,notes) VALUES (7,1,1,'111','[]',777,'paid','transferencia','Duplicado pagado, no cobrar'); INSERT INTO payment_proofs(id,organization_id,conversation_id,order_id,media_id,status) VALUES (102,1,1,7,'voucher-duplicate','pending'); INSERT INTO orders(id,organization_id,conversation_id,customer_phone,items,total_price,status,payment_method) VALUES (8,1,1,'111','[]',777,'entregado','transferencia')");
+ assert.equal(await collection.getOrderForCharge(1,'bot','8'),null,'proof on a marked paid duplicate also blocks collection');
  await query("INSERT INTO messages(conversation_id,whatsapp_message_id,direction,content,agent_type,status,created_at) SELECT 1,'historic-unknown','outbound','charge','cobranza','sent',charge_requested_at-INTERVAL '1 second' FROM orders WHERE id=2");
  let reads=0;
  const reconcile=load('src/services/payment-collection.js',{'../db/database':{...db,getWhatsappConfig:async()=>({provider:'kapso'})},'./commercial':{permitted:async()=>true},'./kapso-whatsapp':{getMessageStatus:async id=>{reads++;return {messageId:id,status:'failed',error:[{code:131042}]}}}});
@@ -241,7 +247,7 @@ test('collection sends one voucher request per customer and links every selected
  assert.ok(registered.every(args=>args[1]===1&&args[2]==='wamid.voucher'));
  assert.equal(saved.agentType,'solicitud_comprobante');
  assert.equal(saved.status,'pending');
- assert.match(saved.content,/#1.*#2.*\$25\.000/s);
+ assert.match(saved.content,/#DR-1.*#DR-2.*\$25\.000/s);
  assert.equal((await service.sendChargeGroupRequest(1,[current[0],{...current[1],customer_phone:'56999999999'}],{mode:'voucher'})).reason,'clientes_mezclados');
  current[0].proof_status='pending';
  assert.equal((await service.sendChargeGroupRequest(1,current,{mode:'charge'})).reason,'voucher_por_revisar');

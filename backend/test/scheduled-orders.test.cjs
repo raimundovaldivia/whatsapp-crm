@@ -268,6 +268,77 @@ for (const scenario of [
   assert.match(result.response, /100 Jumbo.*37\.000/i);
 });
 
+test('aceptar un upsell directo crea el borrador de tres bandejas al precio ofrecido', async () => {
+  let savedDraft = null;
+  let escalationChecks = 0;
+  const promotions = require('../src/services/promotion-context');
+  const products = [
+    { id: 41, title: 'Huevos L blancos · Bandeja de 30', price: 9490, stock: 20, active: true },
+    { id: 42, title: 'Huevos L mixtos · Bandeja de 30', price: 9990, stock: 20, active: true },
+  ];
+  const history = [{
+    direction: 'outbound',
+    created_at: '2026-10-16T13:25:00-03:00',
+    content: 'Hola Angely, sé que compras todas las semanas y normalmente llevas 2 bandejas L, con preferencia por blancos. Hoy, si agregas una tercera, te dejo las 3 bandejas en $28.000. Si me confirmas antes de las 15:00, todavía pueden entrar al reparto de hoy. ¿Te las dejo para Algarrobo 2886?',
+  }];
+  const db = {
+    getConversationById: async () => ({ id: 29, organization_id: 1, phone_number: '56942876413', contact_name: 'Angely', pipeline_state: 'interested', agent_mode: 'ai' }),
+    getLastMessages: async () => history,
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Angely', address1: 'Algarrobo 2886', city: 'La Serena', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => products,
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    updatePipelineState: async (_id, state, draft) => { if (state === 'collecting_order') savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './promotion-context': {
+      ...promotions,
+      fromHistory: (messages, catalog) => promotions.fromHistory(messages, catalog, new Date('2026-10-16T14:51:00-03:00')),
+      restore: saved => promotions.restore(saved, new Date('2026-10-16T14:51:00-03:00')),
+    },
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './agents/orchestrator': {
+      checkEscalation: async () => { escalationChecks++; return { escalate: true, urgency: 'medium', reason: 'no debería ejecutarse' }; },
+      classifyIntent: async () => ({ intent: 'unknown', confidence: 0.1 }),
+    },
+    './agents/orders': {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => draft,
+      generateOrderResponse: async () => 'Perfecto: 3 bandejas L blancas por $28.000. ¿Todo correcto?',
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => true,
+      missingFields: () => [],
+    },
+    './order-pricing': require('../src/services/order-pricing'),
+    './order-quote': require('../src/services/order-quote'),
+    './scheduled-orders': {
+      isFutureOrderIntent: scheduled.isFutureOrderIntent,
+      isSoftFutureIntent: scheduled.isSoftFutureIntent,
+      extractScheduledOrderData: async () => null,
+      formatDateEs: value => value,
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 29, 'Muy bien las 3 bandejas');
+
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(escalationChecks, 0);
+  assert.equal(savedDraft.customer_name, 'Angely');
+  assert.equal(savedDraft.address, 'Algarrobo 2886');
+  assert.equal(savedDraft.items[0].product_id, '41');
+  assert.equal(savedDraft.items[0].quantity, 3);
+  assert.equal(savedDraft.total, 28000);
+  assert.match(result.response, /3 bandejas L blancas.*\$28\.000/i);
+});
+
 test('una preferencia de frescura se conserva como nota del pedido promocional', async () => {
   let savedDraft = null;
   const existingDraft = {

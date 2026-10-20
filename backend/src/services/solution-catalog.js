@@ -2,7 +2,7 @@
 const SOLUTIONS = [
   { key: 'sales_ai', name: 'Ventas con IA', description: 'Atiende consultas y acompaña la venta por WhatsApp.', includes: ['Agente de ventas', 'Evaluación del bot'], requires: ['orders'], flags: ['evaluacion'] },
   { key: 'orders', name: 'Gestión de pedidos', description: 'Organiza y da seguimiento a los pedidos de tu tienda.', includes: ['Pedidos', 'Seguimiento operativo'], requires: [], flags: ['orders'] },
-  { key: 'marketing', name: 'Marketing', description: 'Centraliza campañas, redes sociales, contenido y recompra.', includes: ['Campañas a WhatsApp', 'Facebook e Instagram', 'Comentarios y mensajes', 'Reenganche', 'Seguimientos comerciales'], requires: [], flags: ['mensajeria', 'campaigns', 'social'] },
+  { key: 'marketing', name: 'Marketing', description: 'Centraliza campañas, redes sociales, contenido y recompra.', includes: ['Campañas a WhatsApp', 'Facebook e Instagram', 'Comentarios y mensajes', 'Reenganche', 'Referidos', 'Seguimientos comerciales'], requires: [], flags: ['mensajeria', 'campaigns', 'social', 'referidos'] },
   { key: 'payments', name: 'Pagos y cobranza', description: 'Centraliza comprobantes, conciliación y cobros pendientes.', includes: ['Comprobantes', 'Conciliación', 'Cobranza automática'], requires: ['orders'], flags: ['pagos', 'cobranza'] },
   { key: 'delivery', name: 'Logística', description: 'Coordina rutas, entregas y el trabajo de tus repartidores.', includes: ['Rutas', 'App de reparto', 'Gastos y entregas'], requires: ['orders'], flags: ['repartos', 'edit_delivered_items'] },
   { key: 'storefront', name: 'Tienda y catálogo', description: 'Publica tus productos en una tienda conectada a tu operación.', includes: ['Catálogo propio', 'Tienda pública'], requires: ['orders'], flags: ['productos'] },
@@ -10,7 +10,7 @@ const SOLUTIONS = [
 ];
 const KEYS = SOLUTIONS.map(s => s.key);
 const FLAG_SOLUTION = Object.fromEntries(SOLUTIONS.flatMap(s => s.flags.map(f => [f, s.key])));
-const DEFAULT_FLAGS = { stats: true, orders: true, repartos: true, pagos: true, clientes: true, mensajeria: true, campaigns: true, social: true, productos: true, evaluacion: true, edit_delivered_items: false, cobranza: false };
+const DEFAULT_FLAGS = { stats: true, orders: true, repartos: true, pagos: true, clientes: true, mensajeria: true, campaigns: true, social: true, referidos: true, productos: true, evaluacion: true, edit_delivered_items: false, cobranza: false };
 const LIMITS = { bot_turns: { name: 'Turnos del agente de ventas / mes', default: 500 }, seats: { name: 'Usuarios del equipo', default: 3 } };
 function validateModules(modules) {
   if (!Array.isArray(modules) || modules.length > KEYS.length || modules.some(k => !KEYS.includes(k)) || new Set(modules).size !== modules.length) throw Object.assign(new Error('Selección de módulos inválida'), { status: 400 });

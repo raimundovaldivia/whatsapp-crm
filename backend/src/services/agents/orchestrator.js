@@ -61,8 +61,8 @@ async function classifyIntent(userMessage, conversationHistory, pipelineState, o
 Tu ÚNICA tarea es clasificar el mensaje del cliente en UNA de estas categorías:
 
 - greeting: Primer mensaje o saludo simple sin contexto de compra ("hola", "buenas", "hay alguien?")
-- exploring: El cliente está viendo productos, haciendo preguntas generales, comparando opciones
-- interested: El cliente muestra interés claro ("¿cuánto cuesta?", "me gusta ese", "lo quiero", "cuánto vale")
+- exploring: El cliente está viendo productos, compara opciones o solo pregunta precio, disponibilidad o características ("¿cuánto cuesta?", "cuánto vale")
+- interested: El cliente muestra una preferencia concreta por un producto, pero todavía no expresa que comprará ("me gusta el XL", "estoy buscando bandejas grandes")
 - wants_to_order: El cliente está listo para comprar ahora ("quiero pedir", "cómo compro", "me lo mandas", "lo quiero pedir")
 - objection: El cliente tiene dudas, el precio le parece caro, o tiene resistencia a comprar
 - delivery_inquiry: Pregunta sobre envíos, tiempos de entrega, zonas de despacho, horarios
@@ -178,6 +178,17 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
   ];
   if (frustrationPatterns.some(p => p.test(userMessage))) {
     return { escalate: true, reason: 'Cliente muestra frustración fuerte', urgency: 'high' };
+  }
+
+  // Un alimento posiblemente descompuesto no se resuelve con una respuesta
+  // automática: requiere revisión humana y trazabilidad del lote/pedido.
+  const foodSafetyPatterns = [
+    /\b(podrid[oa]|descompuest[oa]|en\s+mal\s+estado|vencid[oa]|hongos?|moho|mal\s+olor|olor\s+raro|agrio|cortad[oa]|echad[oa]\s+a\s+perder)\b/iu,
+    /\b(queso|producto|alimento)\b.{0,30}\b(malo|mala|dañad[oa])\b/iu,
+    /\b(me\s+enferm[oó]|intoxicaci[oó]n|reacci[oó]n)\b/iu,
+  ];
+  if (foodSafetyPatterns.some(p => p.test(userMessage))) {
+    return { escalate: true, reason: 'Posible problema de inocuidad o producto en mal estado', urgency: 'high' };
   }
 
   // ── 4. Post-venta complejo ─────────────────────────────────────

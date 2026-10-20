@@ -4,6 +4,7 @@ const { resumeDivaOnInbound } = require('./conversation-mode');
 const { notifyAdminHumanPendingReply } = require('./notifications');
 const provider = require('./whatsapp-provider');
 const { isTerminalConversationReply } = require('./inbound-message-policy');
+const deliveryInboundNotifications = require('./delivery-inbound-notifications');
 
 async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead, whatsappChannelId = null, prepareMedia = null, scheduleResponse = null }) {
   if (!parsed?.from || !parsed?.text) return;
@@ -46,6 +47,9 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
 
   let updatedConv = await db.getConversationById(conversation.id);
   io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
+  if (typeof deliveryInboundNotifications.notifyAssignedDriversForInbound === 'function') {
+    deliveryInboundNotifications.notifyAssignedDriversForInbound(org.id, updatedConv, parsed.text).catch(() => {});
+  }
 
   if (updatedConv.agent_mode !== 'ai') {
     const recentHistory = await db.getLastMessages(conversation.id, 20).catch(() => []);

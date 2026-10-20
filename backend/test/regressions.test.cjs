@@ -53,6 +53,135 @@ test('delivery: member and assignment checks, missing/completed orders, rollback
     assert.equal((await f.query('SELECT financial_status FROM shopify_orders')).rows[0].financial_status,'paid');
   } finally {await f.engine.close();}
 });
+
+test('partial delivery charges only delivered items and creates one dated remainder order', async () => {
+  const f = await fixture();
+  try {
+    const originalItems = [
+      { name: 'Huevos XL', title: 'Huevos XL', quantity: 1, price: 100 },
+      { name: 'Queso maduro', title: 'Queso maduro', quantity: 1, price: 200 },
+    ];
+    await f.query(
+      `UPDATE orders
+          SET items=$1,total_price='300',customer_name='Patricia',customer_phone='111',shipping_address=$2,status='en_camino'
+        WHERE id=1`,
+      [JSON.stringify(originalItems), JSON.stringify({ address: 'Av. Los Huertos 3250', city: 'Coquimbo' })]
+    );
+    await f.query(
+      `UPDATE delivery_routes SET orders=$1,optimized_route=$1,status='in_progress',stop_statuses='{}' WHERE id=1`,
+      [JSON.stringify([{ source: 'bot', id: 1, customerName: 'Patricia', items: originalItems, totalPrice: 300 }])]
+    );
+    await f.query("SELECT setval(pg_get_serial_sequence('orders','id'),(SELECT MAX(id) FROM orders))");
+    const router = load('src/routes/delivery.js', {
+      '../db/database': f.db,
+      '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+      '../services/payment-collection': { getPendingCharges: async () => [] },
+    });
+    const res = response();
+    await handler(router, 'patch', '/routes/1/stops')({
+      orgId: 1, userId: 10, role: 'repartidor', params: { id: '1' },
+      body: {
+        stopKey: 'bot_1', status: 'partial', paymentMethod: 'transferencia',
+        deliverAfter: '2099-02-03', deliveredQuantities: [1, 0],
+      },
+    }, res);
+
+    assert.equal(res.code, 200, JSON.stringify(res.body));
+    assert.equal(res.body.partialDelivery.deliveredTotal, 100);
+    assert.equal(res.body.partialDelivery.pendingTotal, 200);
+    const original = (await f.query('SELECT status,items,total_price,delivered_at,payment_transfer_amount FROM orders WHERE id=1')).rows[0];
+    assert.equal(original.status, 'entregado');
+    assert.equal(Number(original.total_price), 100);
+    assert.equal(JSON.parse(original.items)[0].name, 'Huevos XL');
+    assert.ok(original.delivered_at);
+    assert.equal(Number(original.payment_transfer_amount), 100);
+    const remainder = (await f.query(`SELECT id,status,items,total_price,to_char(delivery_date,'YYYY-MM-DD') delivery_date,partial_parent_source,partial_parent_id FROM orders WHERE partial_origin_route_id=1 AND partial_origin_stop_key='bot_1'`)).rows[0];
+    assert.equal(remainder.status, 'por_despachar');
+    assert.equal(Number(remainder.total_price), 200);
+    assert.equal(JSON.parse(remainder.items)[0].name, 'Queso maduro');
+    assert.equal(remainder.delivery_date, '2099-02-03');
+    assert.equal(remainder.partial_parent_source, 'bot');
+    assert.equal(remainder.partial_parent_id, '1');
+    const route = (await f.query('SELECT status,stop_statuses,stop_payment_amounts,stop_partial_deliveries FROM delivery_routes WHERE id=1')).rows[0];
+    assert.equal(route.status, 'completed');
+    assert.equal(route.stop_statuses.bot_1, 'partial');
+    assert.equal(Number(route.stop_payment_amounts.bot_1.transfer), 100);
+    assert.equal(route.stop_partial_deliveries.bot_1.remainder.id, remainder.id);
+
+    const dispatches = response();
+    await handler(router, 'get', '/dispatches')({
+      orgId: 1, userId: 10, role: 'admin',
+      query: { from: '2000-01-01', to: '2099-12-31' },
+    }, dispatches);
+    assert.equal(dispatches.code, 200, JSON.stringify(dispatches.body));
+    const dispatch = dispatches.body.rows.find(row => row.stop_key === 'bot_1');
+    assert.equal(dispatch.status, 'partial');
+    assert.equal(dispatch.total, 100);
+    assert.equal(dispatch.pending_total, 200);
+    assert.equal(JSON.stringify(dispatch.items), JSON.stringify([{ name: 'Huevos XL', quantity: 1 }]));
+    assert.equal(JSON.stringify(dispatch.pending_items), JSON.stringify([{ name: 'Queso maduro', quantity: 1 }]));
+    assert.equal(dispatch.remainder_order.id, remainder.id);
+    assert.equal(dispatch.remainder_delivery_date, '2099-02-03');
+  } finally { await f.engine.close(); }
+});
+
+test('partial delivery rejects invalid splits and preserves tenant and order state', async () => {
+  const f = await fixture();
+  try {
+    const items = [{ name: 'Huevos', quantity: 2, price: 100 }];
+    await f.query("UPDATE orders SET items=$1,total_price='200',status='en_camino' WHERE id=1", [JSON.stringify(items)]);
+    await f.query('UPDATE delivery_routes SET orders=$1,optimized_route=$1,status=\'in_progress\',stop_statuses=\'{}\' WHERE id=1', [JSON.stringify([{ source: 'bot', id: 1, items, totalPrice: 200 }])]);
+    const router = load('src/routes/delivery.js', {
+      '../db/database': f.db,
+      '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+    });
+    const call = async (orgId, deliveredQuantities) => {
+      const res = response();
+      await handler(router, 'patch', '/routes/1/stops')({
+        orgId, userId: 10, role: 'repartidor', params: { id: '1' },
+        body: { stopKey: 'bot_1', status: 'partial', deliverAfter: '2099-02-03', deliveredQuantities },
+      }, res);
+      return res;
+    };
+    assert.equal((await call(1, [2])).code, 400);
+    assert.equal((await call(1, [3])).code, 400);
+    assert.equal((await call(2, [1])).code, 404);
+    assert.equal((await f.query('SELECT status,total_price,items FROM orders WHERE id=1')).rows[0].status, 'en_camino');
+    assert.equal((await f.query('SELECT COUNT(*)::int count FROM orders WHERE partial_origin_route_id=1')).rows[0].count, 0);
+    assert.deepEqual((await f.query('SELECT stop_statuses FROM delivery_routes WHERE id=1')).rows[0].stop_statuses, {});
+  } finally { await f.engine.close(); }
+});
+
+test('editing an order before route start refreshes quantities and resets the load checklist', async () => {
+  const f = await fixture();
+  try {
+    const oldItems = [{ name: 'Huevos XL', title: 'Huevos XL', quantity: 1, price: 100 }];
+    await f.query("UPDATE orders SET items=$1,total_price='100' WHERE id=2", [JSON.stringify(oldItems)]);
+    await f.query(
+      `UPDATE delivery_routes
+          SET orders=$1, optimized_route=$1, load_checklist='{"Huevos XL":true}'::jsonb, started_at=NULL
+        WHERE id=2`,
+      [JSON.stringify([{ source: 'bot', id: 2, items: oldItems, totalPrice: 100 }])]
+    );
+    const router = load('src/routes/orders.js', {
+      '../db/database': f.db,
+      '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+      '../services/shopify-api': {},
+    });
+    const res = response();
+    await handler(router, 'patch', '/set-items')({
+      orgId: 1, userId: 10, role: 'coordinador',
+      body: { source: 'bot', id: 2, items: [{ name: 'Huevos XL', quantity: 3, price: 100 }] },
+    }, res);
+    assert.equal(res.code, 200, JSON.stringify(res.body));
+    assert.equal(res.body.syncedRoutes, 1);
+    assert.equal(res.body.checklistReset, true);
+    const route = (await f.query('SELECT orders,optimized_route,load_checklist FROM delivery_routes WHERE id=2')).rows[0];
+    assert.equal(route.orders[0].items[0].quantity, 3);
+    assert.equal(route.optimized_route[0].items[0].quantity, 3);
+    assert.deepEqual(route.load_checklist, {});
+  } finally { await f.engine.close(); }
+});
 test('driver can persist a manual route order without adding or losing stops',async()=>{
   const f=await fixture();
   try {
@@ -90,6 +219,43 @@ test('driver can persist a manual route order without adding or losing stops',as
     const completed=response();
     await handler(router,'patch','/routes/1/reorder')({orgId:1,userId:10,role:'repartidor',params:{id:'1'},body:{stopKeys:['bot_2','bot_1']}},completed);
     assert.equal(completed.code,409);
+  } finally {await f.engine.close();}
+});
+test('assigned driver can correct an address without crossing route or organization boundaries',async()=>{
+  const f=await fixture();
+  try {
+    await f.query(`UPDATE orders SET customer_phone='111',shipping_address=$1 WHERE id=1`,[JSON.stringify({address:'Dirección equivocada',city:'La Serena'})]);
+    await f.query(`UPDATE delivery_routes SET optimized_route=$1 WHERE id=1`,[JSON.stringify([{source:'bot',id:1,address:'Dirección equivocada',city:'La Serena',fullAddress:'Dirección equivocada, La Serena'}])]);
+    const router=load('src/routes/delivery.js',{'../db/database':f.db,'../middleware/auth':{requireAuth:noop,requireRole:()=>noop}});
+
+    const corrected=response();
+    await handler(router,'patch','/routes/1/stops/address')({
+      orgId:1,userId:10,role:'repartidor',params:{id:'1'},
+      body:{stopKey:'bot_1',address:'Av. Balmaceda 123',city:'La Serena',updateContact:true},
+    },corrected);
+    assert.equal(corrected.code,200,JSON.stringify(corrected.body));
+    assert.equal(corrected.body.stop.fullAddress,'Av. Balmaceda 123, La Serena');
+    const storedOrder=(await f.query('SELECT shipping_address FROM orders WHERE id=1')).rows[0];
+    assert.equal(JSON.parse(storedOrder.shipping_address).address,'Av. Balmaceda 123');
+    const storedRoute=(await f.query('SELECT orders,optimized_route,stop_address_updates FROM delivery_routes WHERE id=1')).rows[0];
+    assert.equal(storedRoute.orders[0].fullAddress,'Av. Balmaceda 123, La Serena');
+    assert.equal(storedRoute.optimized_route[0].address,'Av. Balmaceda 123');
+    assert.equal(storedRoute.stop_address_updates.bot_1.changedBy,10);
+
+    const wrongDriver=response();
+    await handler(router,'patch','/routes/2/stops/address')({
+      orgId:1,userId:10,role:'repartidor',params:{id:'2'},
+      body:{stopKey:'bot_2',address:'No debe guardarse',city:'Coquimbo'},
+    },wrongDriver);
+    assert.equal(wrongDriver.code,404);
+    assert.equal((await f.query('SELECT shipping_address FROM orders WHERE id=2')).rows[0].shipping_address,null);
+
+    const wrongOrg=response();
+    await handler(router,'patch','/routes/1/stops/address')({
+      orgId:2,userId:10,role:'repartidor',params:{id:'1'},
+      body:{stopKey:'bot_1',address:'Tampoco debe guardarse',city:'Ovalle'},
+    },wrongOrg);
+    assert.equal(wrongOrg.code,404);
   } finally {await f.engine.close();}
 });
 test('admin can append a stop to an active route and invalidates the load checklist',async()=>{

@@ -281,6 +281,9 @@ function beforeChileCutoff(now, day, cutoff) {
 
 function parseTemplate(message, products = [], now = new Date()) {
   const content = String(message?.content || '');
+  // Referral benefits must be redeemed against the unique ledger; never infer
+  // a reusable free product or discount from an invitation's marketing text.
+  if (message?.agent_type === 'referral' || /\b(?:REF-[A-Z0-9]{8}|BONO-[A-F0-9]{16})\b/i.test(content)) return null;
   const templateName = content.match(/\[Template:\s*([^\]]+)\]/i)?.[1]?.trim() || '';
   if (!templateName) return null;
   const body = content.replace(/^\s*\[Template:[^\]]+\]\s*/i, '').trim();
@@ -408,12 +411,102 @@ function parseTemplate(message, products = [], now = new Date()) {
   };
 }
 
+function quantityNumber(value) {
+  const normalized = norm(value);
+  const words = { un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6 };
+  return Number(normalized) || words[normalized] || 0;
+}
+
+/**
+ * Convierte una oferta personalizada enviada directamente desde el CRM en la
+ * misma estructura segura de una promoción de template. Es deliberadamente
+ * estricta: exige una condición de upsell, un total explícito de bandejas y
+ * precio, talla y color, además de una coincidencia única en el catálogo.
+ * Así un precio conversacional o un resumen de pedido no se transforma en una
+ * promoción por accidente.
+ */
+function parseDirectOffer(message, products = [], now = new Date()) {
+  const body = String(message?.content || '').trim();
+  if (message?.direction !== 'outbound' || !body || /\[Template:/iu.test(body)) return null;
+  if (!/\bsi\s+(?:agregas?|sumas?|llevas?|pides?)\b/iu.test(body)
+      || !/\bte\s+(?:dejo|quedan?)\b/iu.test(body)) return null;
+
+  const totalMatch = body.match(/(?:te\s+(?:dejo|quedan?)\s+)?(?:las\s+)?(\d{1,2}|un(?:o|a)?|dos|tres|cuatro|cinco|seis)\s+bandejas?\s+(?:en|por|a)\s*\$\s*([\d.]+)/iu);
+  const sizeMatches = [...body.matchAll(/\bbandejas?\s+(?:de\s+)?(jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\b/giu)];
+  const colorMatch = body.match(/\b(blancos?|blancas?|mixtos?|mixtas?|caf[eé]s?)\b/iu);
+  if (!totalMatch || !sizeMatches.length || !colorMatch) return null;
+
+  const quantity = quantityNumber(totalMatch[1]);
+  const price = money(totalMatch[2]);
+  const size = norm(sizeMatches.at(-1)[1]).replace('extra large', 'xl').replace('large', 'l').replace(/mediano|mediana/, 'm');
+  const rawColor = norm(colorMatch[1]);
+  const color = rawColor.startsWith('blanc') ? 'blanco'
+    : rawColor.startsWith('mixt') ? 'mixto' : 'cafes';
+  if (quantity < 2 || !price) return null;
+
+  const catalog = pricing.flattenCatalog(products).filter(candidate => candidate.available !== false);
+  const matchingProducts = catalog.filter(candidate => {
+    const title = norm(candidate.title);
+    const titleTokens = new Set(title.split(' '));
+    const hasSize = size.length <= 2 ? titleTokens.has(size) : title.includes(size);
+    const hasColor = color === 'blanco' ? /\bblancos?\b/.test(title)
+      : color === 'mixto' ? /\bmixtos?\b/.test(title)
+        : /\bcafes?\b/.test(title);
+    return /\bhuevos?\b/.test(title) && /\bbandeja\b/.test(title) && hasSize && hasColor;
+  });
+  if (matchingProducts.length !== 1) return null;
+
+  const product = matchingProducts[0];
+  const offer = {
+    units: null,
+    quantity,
+    packs: quantity,
+    size,
+    color,
+    direct: true,
+    productLabel: product.title,
+    productTitle: product.title,
+    productId: product.product_id,
+    variantId: product.variant_id,
+    descriptor: product.title,
+    label: `${quantity} bandejas ${size.toUpperCase()} ${color === 'blanco' ? 'blancas' : color === 'mixto' ? 'mixtas' : 'cafés'}`,
+    price,
+    named: true,
+  };
+  const sentAtCandidate = new Date(message.created_at || message.createdAt || now);
+  const sentAt = Number.isNaN(sentAtCandidate.getTime()) ? new Date(now) : sentAtCandidate;
+  const sentDay = chileDay(sentAt);
+  const today = chileDay(now);
+  const validOnlyToday = /\bhoy\b/iu.test(body);
+  const validUntil = validOnlyToday ? sentDay : null;
+  const expiresAt = validOnlyToday ? null : new Date(sentAt.getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const active = (!validUntil || (!!today && today <= validUntil))
+    && (!expiresAt || new Date(now).getTime() <= new Date(expiresAt).getTime());
+  const cutoff = parseCutoff(body);
+  const specialPrice = { unitPrice: Number(product.price) || price / quantity, quantities: { [String(quantity)]: price } };
+  const specialPrices = {};
+  for (const key of [String(product.product_id), norm(product.product_title), norm(product.title)].filter(Boolean)) {
+    specialPrices[key] = specialPrice;
+  }
+
+  return {
+    templateName: 'oferta_directa_personalizada', body, offers: [offer], discountPct: 0,
+    categoryDiscounts: [], secondUnitDiscounts: [], freeGift: null, specialPrices,
+    sentDay, validUntil, validOnlyToday, deliveryWeekOnly: false, freeShippingMin: 0,
+    orderCutoffOnlyToday: false, usesDefaultValidity: !validOnlyToday, expiresAt, active, cutoff,
+    sameDayConditional: /(reparto|entrega|despacho)\s+de\s+hoy|mismo\s+d[ií]a/iu.test(body),
+    stockConditional: /(si\s+(?:tenemos|hay)\s+stock|sujeta?\s+a\s+stock|seg[uú]n\s+stock)/iu.test(body),
+  };
+}
+
 function fromHistory(history = [], products = [], now = new Date()) {
-  const templates = (Array.isArray(history) ? history : [])
-    .filter(message => message?.direction === 'outbound' && /\[Template:/i.test(message?.content || ''))
+  const outbound = (Array.isArray(history) ? history : [])
+    .filter(message => message?.direction === 'outbound')
     .reverse();
-  for (const message of templates) {
-    const promotion = parseTemplate(message, products, now);
+  for (const message of outbound) {
+    const promotion = /\[Template:/i.test(message?.content || '')
+      ? parseTemplate(message, products, now)
+      : parseDirectOffer(message, products, now);
     if (promotion) return promotion;
   }
   return null;
@@ -422,7 +515,7 @@ function fromHistory(history = [], products = [], now = new Date()) {
 function snapshot(promotion) {
   if (!promotion) return null;
   const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional } = promotion;
-  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional };
+  return { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, expiresAt, cutoff, sameDayConditional, stockConditional, offerId: promotion.offerId ?? null };
 }
 
 function restore(saved, now = new Date()) {
@@ -524,6 +617,22 @@ function selectedOffer(message, promotion) {
   const byPrice = promotion.offers.filter(offer => mentionedAmounts.includes(Number(offer.price)));
   if (byPrice.length === 1) return byPrice[0];
   const matches = promotion.offers.filter(offer => {
+    if (offer.direct) {
+      const trayQuantity = text.match(/\b(\d+|un|uno|una|dos|tres|cuatro|cinco|seis)\s+bandejas?\b/);
+      if (!trayQuantity || quantityNumber(trayQuantity[1]) !== offer.quantity) return false;
+      const explicitSize = text.match(/\bbandejas?\s+(?:de\s+)?(jumbo|extra\s+large|xl|large|l|mediano|mediana|m)\b/);
+      if (explicitSize) {
+        const requestedSize = norm(explicitSize[1]).replace('extra large', 'xl').replace('large', 'l').replace(/mediano|mediana/, 'm');
+        if (requestedSize !== offer.size) return false;
+      }
+      const explicitColor = text.match(/\b(blancos?|blancas?|mixtos?|mixtas?|caf[eé]s?)\b/);
+      if (explicitColor) {
+        const requestedColor = norm(explicitColor[1]).startsWith('blanc') ? 'blanco'
+          : norm(explicitColor[1]).startsWith('mixt') ? 'mixto' : 'cafes';
+        if (requestedColor !== offer.color) return false;
+      }
+      return true;
+    }
     if (offer.combo) {
       return offer.components.every(component => {
         const source = norm(`${component.label} ${component.kind || ''}`);
@@ -537,9 +646,9 @@ function selectedOffer(message, promotion) {
     }
     if (offer.named) {
       if (offer.quantity) {
-        const quantity = text.match(/\b(\d+|un|uno|una|dos)\b/);
+        const quantity = text.match(/\b(\d+|un|uno|una|dos|tres|cuatro|cinco|seis)\b/);
         if (quantity) {
-          const value = ({un:1,uno:1,una:1,dos:2})[quantity[1]] || Number(quantity[1]);
+          const value = quantityNumber(quantity[1]);
           if (value !== offer.quantity) return false;
         }
       }
@@ -700,4 +809,4 @@ function freeGiftChoiceReply(freeGift) {
   return `¡Tu compra califica para ${freeGift.quantity} ${freeGift.target} gratis! 🎁\n\nElige una variedad disponible:\n${choices}\n\nPuedes responder con el número o el nombre.`;
 }
 
-module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseFreeGift, parseTemplate, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, offerOrderItems, isBareAffirmative, choiceReply, isCurrentPriceQuestion, priceReply, isFuturePromotionQuestion, futureReply, appliesToDelivery, giftQualifies, selectedFreeGift, freeGiftOrderItem, freeGiftChoiceReply, norm, chileDay };
+module.exports = { parseOffers, parseDiscountPct, parseCategoryDiscounts, parseSecondUnitDiscounts, parseFreeGift, parseTemplate, parseDirectOffer, fromHistory, snapshot, restore, promptSection, alignPromotedAvailability, selectedOffer, offerOrderItem, offerOrderItems, isBareAffirmative, choiceReply, isCurrentPriceQuestion, priceReply, isFuturePromotionQuestion, futureReply, appliesToDelivery, giftQualifies, selectedFreeGift, freeGiftOrderItem, freeGiftChoiceReply, norm, chileDay };

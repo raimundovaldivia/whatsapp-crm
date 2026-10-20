@@ -11,13 +11,37 @@ const db = require('../db/database');
 const SETTING_KEY = 'automatic_template_assignments';
 
 const CASES = Object.freeze({
+  referral_program: {
+    key: 'referral_program',
+    label: 'Invitaciones y beneficios de referidos',
+    description: 'Mensaje del programa de referidos. Una variable con el texto completo del beneficio y sus condiciones.',
+    category: 'MARKETING',
+    parameterCount: 1,
+    parameters: ['Mensaje completo del programa'],
+  },
   delivery_en_route: {
     key: 'delivery_en_route',
     label: 'Pedido en camino',
-    description: 'Aviso enviado por el repartidor antes de llegar.',
+    description: 'Aviso al consolidar la carga o antes de que llegue el repartidor.',
     category: 'UTILITY',
     parameterCount: 3,
     parameters: ['Nombre', 'Pedido', 'Dirección'],
+  },
+  delivery_resolution: {
+    key: 'delivery_resolution',
+    label: 'Resolver entrega',
+    description: 'Seguimiento automático cuando una entrega se cancela, se reprograma o no se completa.',
+    category: 'UTILITY',
+    parameterCount: 3,
+    parameters: ['Nombre', 'Pedido', 'Motivo'],
+  },
+  customer_feedback: {
+    key: 'customer_feedback',
+    label: 'Opinión primera compra',
+    description: 'Pide una nota de 1 a 5 después de la primera entrega.',
+    category: 'UTILITY',
+    parameterCount: 2,
+    parameters: ['Nombre', 'Pedido'],
   },
   payment_collection: {
     key: 'payment_collection',

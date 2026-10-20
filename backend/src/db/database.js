@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const { withAttentionState } = require('../services/conversation-attention');
+const { qualifyLead } = require('../services/lead-qualification');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -704,6 +705,101 @@ async function updateFollowUpSent(id) {
 }
 
 /**
+ * Recalcula la temperatura comercial usando evidencia persistida. El estado
+ * del pipeline sigue dirigiendo al bot, pero ya no decide por sí solo si un
+ * contacto está caliente.
+ */
+async function calculateLeadQualification(conversationId, orgId = null) {
+  const scoped = orgId === null || orgId === undefined
+    ? await queryOne(
+      `SELECT c.*,
+          EXISTS (
+            SELECT 1 FROM orders o
+             WHERE o.conversation_id = c.id
+               AND o.organization_id = c.organization_id
+               AND o.status <> 'cancelled'
+               AND o.created_at > NOW() - INTERVAL '7 days'
+               AND o.created_at >= COALESCE(c.last_inbound_at, c.last_message_at, c.created_at) - INTERVAL '24 hours'
+          ) AS has_order
+         FROM conversations c
+        WHERE c.id = $1`,
+      [conversationId]
+    )
+    : await queryOne(
+      `SELECT c.*,
+          EXISTS (
+            SELECT 1 FROM orders o
+             WHERE o.conversation_id = c.id
+               AND o.organization_id = c.organization_id
+               AND o.status <> 'cancelled'
+               AND o.created_at > NOW() - INTERVAL '7 days'
+               AND o.created_at >= COALESCE(c.last_inbound_at, c.last_message_at, c.created_at) - INTERVAL '24 hours'
+          ) AS has_order
+         FROM conversations c
+        WHERE c.id = $1 AND c.organization_id = $2`,
+      [conversationId, orgId]
+    );
+  if (!scoped) return null;
+
+  const messages = await query(
+    `SELECT recent.direction, recent.content
+       FROM (
+         SELECT m.direction, m.content, m.created_at
+           FROM messages m
+           JOIN conversations c ON c.id = m.conversation_id
+          WHERE m.conversation_id = $1 AND c.organization_id = $2
+          ORDER BY m.created_at DESC
+          LIMIT 30
+       ) recent
+      ORDER BY recent.created_at ASC`,
+    [scoped.id, scoped.organization_id]
+  );
+  const qualification = qualifyLead({
+    messages,
+    pipelineState: scoped.pipeline_state,
+    orderDraft: scoped.order_draft,
+    hasOrder: Boolean(scoped.has_order),
+  });
+  return { conversation: scoped, qualification };
+}
+
+async function applyLeadQualification(conversationId, orgId, qualification) {
+  return queryOne(
+    `UPDATE conversations
+        SET lead_temperature = $1,
+            lead_score = $2,
+            qualification_reasons = $3,
+            lead_signals = $4,
+            qualified_at = NOW()
+      WHERE id = $5 AND organization_id = $6
+      RETURNING id, organization_id, lead_temperature, lead_score,
+                qualification_reasons, lead_signals, qualified_at`,
+    [
+      qualification.temperature,
+      qualification.score,
+      JSON.stringify(qualification.reasons),
+      JSON.stringify({ ...qualification.signals, veryHotGate: qualification.veryHotGate }),
+      conversationId,
+      orgId,
+    ]
+  );
+}
+
+async function refreshLeadQualification(conversationId, orgId = null, { skipUnqualified = false } = {}) {
+  const calculated = await calculateLeadQualification(conversationId, orgId);
+  if (!calculated) return null;
+  // Las conversaciones existentes quedan intactas hasta que una ejecución de
+  // evaluación guarde su baseline y sea aplicada explícitamente. Las nuevas
+  // nacen como exploring por el DEFAULT del esquema.
+  if (skipUnqualified && calculated.conversation.lead_temperature === null) return null;
+  return applyLeadQualification(
+    calculated.conversation.id,
+    calculated.conversation.organization_id,
+    calculated.qualification
+  );
+}
+
+/**
  * Busca conversaciones abandonadas dentro de la ventana de 24h.
  * Criterios: cliente escribió hace 2-22h, bot estaba activo, sin follow-up reciente.
  */
@@ -786,6 +882,7 @@ async function updatePipelineState(id, state, orderDraft = null) {
       [state, id]
     );
   }
+  await refreshLeadQualification(id, null, { skipUnqualified: true });
 }
 
 async function getOrderDraft(id) {
@@ -1591,6 +1688,7 @@ async function createOrder({ conversationId, organizationId, items, customerName
         WHERE id = $1 AND organization_id = $2`,
       [conversationId, organizationId]
     );
+    await refreshLeadQualification(conversationId, organizationId, { skipUnqualified: true });
   }
   // Actualizar last_order_at en contacts para que el broadcast lo excluya correctamente
   if (customerPhone) {
@@ -1707,12 +1805,24 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
   }
 }
 
-async function updateOrder(id, updates) {
+async function updateOrder(id, updates, orgId = null) {
+  if (updates && updates.status === 'cancelled') {
+    try {
+      await require('../services/campaign-offers-store').releaseOnCancel(getPool(), orgId, id);
+    } catch (error) {
+      console.warn('[DB] no se pudo liberar la oferta personal:', error.message);
+    }
+  }
   const keys = Object.keys(updates);
   const values = Object.values(updates);
   const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
   values.push(id);
-  return queryOne(`UPDATE orders SET ${setClause} WHERE id = $${values.length} RETURNING *`, values);
+  let where = `id = $${values.length}`;
+  if (orgId !== null && orgId !== undefined) {
+    values.push(orgId);
+    where += ` AND organization_id = $${values.length}`;
+  }
+  return queryOne(`UPDATE orders SET ${setClause} WHERE ${where} RETURNING *`, values);
 }
 
 async function getOrdersByOrg(orgId) {
@@ -1766,11 +1876,25 @@ async function getOrdersAwaitingPayment(conversationId) {
  */
 async function getRecentDeliveredOrder(conversationId, days = 7) {
   return queryOne(
-    `SELECT * FROM orders
-      WHERE conversation_id = $1
-        AND status IN ('entregado', 'paid')
-        AND COALESCE(updated_at, created_at) > NOW() - ($2 || ' days')::interval
-      ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
+    `SELECT o.*
+       FROM conversations anchor
+       JOIN orders o
+         ON o.organization_id = anchor.organization_id
+        AND (
+          o.conversation_id = anchor.id
+          OR (
+            LENGTH(regexp_replace(COALESCE(anchor.phone_number, ''), '\\D', '', 'g')) >= 9
+            AND LENGTH(regexp_replace(COALESCE(o.customer_phone, ''), '\\D', '', 'g')) >= 9
+            AND RIGHT(regexp_replace(anchor.phone_number, '\\D', '', 'g'), 9)
+                = RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 9)
+          )
+        )
+      WHERE anchor.id = $1
+        AND o.status IN ('entregado', 'paid')
+        AND COALESCE(o.updated_at, o.created_at) > NOW() - ($2 || ' days')::interval
+      ORDER BY (o.conversation_id = anchor.id) DESC,
+               COALESCE(o.updated_at, o.created_at) DESC
+      LIMIT 1`,
     [conversationId, String(days)]
   );
 }
@@ -1820,7 +1944,7 @@ async function createProduct(orgId, { title, description, price, comparePrice, s
 }
 
 async function updateProduct(orgId, id, updates) {
-  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, category:1, is_business:1, bulk_price:1, bulk_min_qty:1, updated_at:1 };
+  const allowed = { title:1, description:1, price:1, compare_price:1, sku:1, stock:1, image_url:1, active:1, position:1, category:1, is_business:1, bulk_price:1, bulk_min_qty:1, unit_cost:1, min_margin_pct:1, updated_at:1 };
   const keys   = Object.keys(updates).filter(k => allowed[k]);
   if (!keys.length) return getProductById(orgId, id);
   const values = keys.map(k => updates[k]);
@@ -2421,12 +2545,18 @@ async function upsertShopifyOrders(orgId, orders) {
            THEN shopify_orders.fulfillment_status
            ELSE EXCLUDED.fulfillment_status
          END,
-         total_price         = EXCLUDED.total_price,
+         total_price         = CASE
+           WHEN shopify_orders.delivery_modified IS TRUE THEN shopify_orders.total_price
+           ELSE EXCLUDED.total_price
+         END,
          customer_name       = EXCLUDED.customer_name,
          customer_email      = EXCLUDED.customer_email,
          customer_phone      = EXCLUDED.customer_phone,
          shipping_city       = EXCLUDED.shipping_city,
-         items               = EXCLUDED.items,
+         items               = CASE
+           WHEN shopify_orders.delivery_modified IS TRUE THEN shopify_orders.items
+           ELSE EXCLUDED.items
+         END,
          raw_json            = EXCLUDED.raw_json,
          shopify_created_at  = EXCLUDED.shopify_created_at,
          synced_at           = NOW()`,
@@ -2556,7 +2686,7 @@ module.exports = {
   // Conversations
   upsertConversation, upsertSocialConversation, getAllConversations, getConversationById, setConversationPinned, setCustomerNote,
   updateConversationLastMessage, markConversationAsRead, setAgentMode, claimHumanPendingNotification,
-  updatePipelineState, getOrderDraft, claimOrderCreation,
+  updatePipelineState, calculateLeadQualification, applyLeadQualification, refreshLeadQualification, getOrderDraft, claimOrderCreation,
   // Scheduled orders
   createScheduledOrder, getPendingScheduledOrders, markScheduledOrderSent, cancelScheduledOrder,
   updateLastInbound, updateFollowUpSent, getStalledConversations,

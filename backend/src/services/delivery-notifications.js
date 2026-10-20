@@ -5,11 +5,17 @@ const kapsoService = require('./kapso-whatsapp');
 const evolutionService = require('./evolution-whatsapp');
 const templateAutomation = require('./template-automation');
 const { toISODate } = require('./business-date');
+const { normalizeOrderLabel } = require('../utils/order-reference');
 
 const CUSTOMER_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function phoneDigits(value = '') {
-  return String(value).replace(/\D/g, '');
+  const digits = String(value).trim().split('@')[0].split(':')[0].replace(/\D/g, '');
+  return /^9\d{8}$/.test(digits) ? `56${digits}` : digits;
+}
+
+function stopOrderLabel(stop = {}) {
+  return normalizeOrderLabel(stop.orderName, stop.source, stop.id) || stop.orderName || stop.id || '';
 }
 
 function windowInfoFromLastInbound(lastInboundAt, now = new Date()) {
@@ -29,7 +35,7 @@ function windowInfoFromLastInbound(lastInboundAt, now = new Date()) {
   };
 }
 
-async function getCustomerServiceWindow(orgId, phone, now = new Date()) {
+async function getCustomerServiceWindow(orgId, phone, now = new Date(), preferredConversationId = null) {
   const normalized = phoneDigits(phone);
   if (!normalized) return { available: false, reason: 'NO_PHONE', conversationId: null, lastInboundAt: null, expiresAt: null };
 
@@ -43,8 +49,9 @@ async function getCustomerServiceWindow(orgId, phone, now = new Date()) {
      WHERE c.organization_id = $1
        AND NOT EXISTS (SELECT 1 FROM whatsapp_channels personal WHERE personal.id=c.whatsapp_channel_id AND personal.assigned_user_id IS NOT NULL)
        AND regexp_replace(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g') = $2
+       AND ($3::bigint IS NULL OR c.id = $3)
      ORDER BY last_inbound_at DESC NULLS LAST, c.last_message_at DESC NULLS LAST
-     LIMIT 1`, [orgId, normalized]);
+     LIMIT 1`, [orgId, normalized, preferredConversationId]);
 
   if (!conversation) {
     return { available: false, reason: 'NO_CONVERSATION', conversationId: null, lastInboundAt: null, expiresAt: null };
@@ -52,11 +59,39 @@ async function getCustomerServiceWindow(orgId, phone, now = new Date()) {
   return { conversationId: conversation.id, whatsappChannelId: conversation.whatsapp_channel_id || null, ...windowInfoFromLastInbound(conversation.last_inbound_at, now) };
 }
 
-function enRouteText({ customerName, orderName }) {
+function enRouteText({ customerName, orderName, trackingUrl }) {
   const firstName = String(customerName || '').trim().split(/\s+/)[0];
   const greeting = firstName ? `Hola ${firstName} 👋` : 'Hola 👋';
-  const order = orderName ? ` ${orderName}` : '';
-  return `${greeting} Tu pedido${order} ya va en camino 🚚. Por favor, mantente atento/a para recibirlo.`;
+  const normalizedOrderName = normalizeOrderLabel(orderName);
+  const order = normalizedOrderName ? ` ${normalizedOrderName}` : '';
+  const tracking = trackingUrl ? `\nPuedes ver la ubicación del reparto aquí: ${trackingUrl}` : '';
+  return `${greeting} Tu pedido${order} ya va en camino 🚚. Por favor, mantente atento/a para recibirlo.${tracking}`;
+}
+
+function loadConsolidatedText({ customerName, orderName, trackingUrl }) {
+  const firstName = String(customerName || '').trim().split(/\s+/)[0];
+  const greeting = firstName ? `Hola ${firstName} 👋` : 'Hola 👋';
+  const normalizedOrderName = normalizeOrderLabel(orderName);
+  const order = normalizedOrderName ? ` ${normalizedOrderName}` : '';
+  const tracking = trackingUrl ? `\nSigue la ubicación del reparto aquí: ${trackingUrl}` : '';
+  return `${greeting} Tu pedido${order} ya fue consolidado y quedó en manos del repartidor 🚚. Desde ahora puedes escribirnos por este chat si necesitas coordinar la entrega.${tracking}`;
+}
+
+function deliveryOutcomeText(stop, { status, note, deliveryDate } = {}) {
+  const firstName = String(stop?.customerName || stop?.customer_name || '').trim().split(/\s+/)[0];
+  const greeting = firstName ? `Hola ${firstName} 👋` : 'Hola 👋';
+  const orderLabel = stopOrderLabel(stop);
+  const order = orderLabel ? ` ${orderLabel}` : '';
+  const reason = String(note || '').trim();
+  if (status === 'postponed') {
+    const date = toISODate(deliveryDate);
+    const formatted = date ? date.split('-').reverse().join('-') : 'la nueva fecha acordada';
+    return `${greeting} Tu pedido${order} quedó reprogramado para el ${formatted}. ¿Te sirve esa fecha o necesitas que coordinemos otra alternativa?`;
+  }
+  if (status === 'cancelled') {
+    return `${greeting} Vimos que tu pedido${order} no pudo completarse${reason ? `: ${reason}` : ''}. Antes de cerrarlo definitivamente queremos ayudarte: ¿prefieres reprogramar, corregir algún dato o cancelar?`;
+  }
+  return `${greeting} No pudimos completar la entrega de tu pedido${order}${reason ? `: ${reason}` : ''}. Queremos resolverlo contigo. ¿Prefieres reprogramar, corregir la dirección o coordinar otra alternativa?`;
 }
 
 function jsonValue(value, fallback) {
@@ -126,12 +161,45 @@ function orderEditText({ customerName, orderLabel, changes }) {
 
 function enRouteTemplateComponents(stop) {
   const name = String(stop.customerName || '').trim().split(/\s+/)[0] || 'Cliente';
-  const order = String(stop.orderName || stop.id || 'tu pedido').trim();
+  const order = String(stopOrderLabel(stop) || 'tu pedido').trim();
   const address = String(stop.fullAddress || stop.address || 'la dirección registrada').trim();
   return [{
     type: 'body',
     parameters: [name, order, address].map(text => ({ type: 'text', text })),
   }];
+}
+
+function deliveryResolutionTemplateComponents(stop, outcome = {}) {
+  const name = String(stop.customerName || stop.customer_name || '').trim().split(/\s+/)[0] || 'Cliente';
+  const order = String(stopOrderLabel(stop) || 'tu pedido').trim();
+  const reason = String(outcome.note || (outcome.status === 'postponed' ? 'entrega reprogramada' : 'entrega no completada')).trim().slice(0, 180);
+  return [{
+    type: 'body',
+    parameters: [name, order, reason].map(text => ({ type: 'text', text })),
+  }];
+}
+
+function customerFeedbackText({ customerName, orderName }) {
+  const firstName = String(customerName || '').trim().split(/\s+/)[0];
+  const greeting = firstName ? `Hola ${firstName} 👋` : 'Hola 👋';
+  const normalizedOrderName = normalizeOrderLabel(orderName);
+  const reference = normalizedOrderName ? ` (${normalizedOrderName})` : '';
+  return `${greeting} Queremos saber cómo fue tu primera experiencia con nosotros${reference}. Del 1 al 5, ¿qué nota le pondrías? Si quieres, cuéntanos qué podríamos mejorar.`;
+}
+
+function customerFeedbackTemplateComponents(stop) {
+  const name = String(stop.customerName || stop.customer_name || '').trim().split(/\s+/)[0] || 'Cliente';
+  const order = String(stopOrderLabel(stop) || 'tu primera compra').trim();
+  return [{
+    type: 'body',
+    parameters: [name, order].map(text => ({ type: 'text', text })),
+  }];
+}
+
+function customerFeedbackTemplateText(stop) {
+  const name = String(stop.customerName || stop.customer_name || '').trim().split(/\s+/)[0] || 'Cliente';
+  const order = String(stopOrderLabel(stop) || 'tu primera compra').trim();
+  return `Hola ${name}. Queremos saber cómo fue tu primera experiencia con nosotros por el pedido ${order}. Del 1 al 5, ¿qué nota le pondrías? Si quieres, cuéntanos qué podríamos mejorar.`;
 }
 
 async function sendProviderText(phone, text, config) {
@@ -141,8 +209,20 @@ async function sendProviderText(phone, text, config) {
   return whatsappService.sendTextMessage(phone, text, config);
 }
 
-async function sendEnRouteNotification(orgId, stop) {
-  const window = await getCustomerServiceWindow(orgId, stop.phone);
+async function sendDeliveryNotification(orgId, stop, {
+  text,
+  assignmentKey = 'delivery_en_route',
+  templateComponents = enRouteTemplateComponents(stop),
+  templateText = null,
+  templateLabel = 'Pedido en camino',
+  agentType = 'delivery',
+} = {}) {
+  const window = await getCustomerServiceWindow(
+    orgId,
+    stop.phone,
+    new Date(),
+    stop.conversationId || stop.conversation_id || null
+  );
   let config = null;
   if (window.whatsappChannelId && db.getWhatsappChannel) {
     config = await db.getWhatsappChannel(orgId, window.whatsappChannelId);
@@ -156,15 +236,14 @@ async function sendEnRouteNotification(orgId, stop) {
     throw error;
   }
 
-  const text = enRouteText(stop);
   let sent;
   let via = 'text';
   let assignment = null;
 
   const sendAssignedTemplate = async () => {
-    assignment = await templateAutomation.getAssignment(orgId, 'delivery_en_route');
+    assignment = await templateAutomation.getAssignment(orgId, assignmentKey);
     if (!assignment) {
-      const error = new Error('La ventana de 24 horas está cerrada y no hay un template automático asignado para “Pedido en camino”.');
+      const error = new Error(`La ventana de 24 horas está cerrada y no hay un template automático asignado para “${templateLabel}”.`);
       error.status = 409;
       error.code = window.reason || 'WINDOW_EXPIRED';
       error.window = window;
@@ -181,7 +260,7 @@ async function sendEnRouteNotification(orgId, stop) {
       stop.phone,
       assignment.name,
       assignment.language || 'es',
-      enRouteTemplateComponents(stop),
+      templateComponents,
       config
     );
   };
@@ -198,25 +277,74 @@ async function sendEnRouteNotification(orgId, stop) {
   }
 
   const messageId = sent?.messageId || sent?.messages?.[0]?.id || sent?.sid || null;
+  const deliveredText = via === 'template' && templateText ? templateText : text;
   let message = null;
+  let conversationId = window.conversationId;
   try {
+    if (!conversationId && typeof db.upsertConversation === 'function') {
+      const conversation = await db.upsertConversation(
+        orgId,
+        stop.phone,
+        stop.customerName || stop.customer_name || 'Cliente',
+        config.id || null
+      );
+      conversationId = conversation?.id || null;
+    }
     message = await db.saveMessage({
-      conversationId: window.conversationId,
+      conversationId,
       whatsappMessageId: messageId,
       direction: 'outbound',
-      content: via === 'template' ? `[Template: ${assignment.name}]\n\n${text}` : text,
+      content: via === 'template' ? `[Template: ${assignment.name}]\n\n${deliveredText}` : deliveredText,
       status: via === 'template' ? 'pending' : 'sent',
       sentBy: 'ai',
-      agentType: 'delivery',
+      agentType,
     });
-    await db.updateConversationLastMessage(window.conversationId, text);
+    if (conversationId) await db.updateConversationLastMessage(conversationId, deliveredText);
   } catch (error) {
     // El proveedor ya aceptó el mensaje: no devolver un error que provoque un
     // segundo envío. El aviso queda como enviado aunque falle el registro local.
     console.error('[Delivery notification] Mensaje enviado pero no registrado:', error.message);
   }
 
-  return { sent: true, text, message, conversationId: window.conversationId, window, via, templateName: assignment?.name || null };
+  return { sent: true, text: deliveredText, message, conversationId, window, via, templateName: assignment?.name || null };
+}
+
+async function sendEnRouteNotification(orgId, stop) {
+  return sendDeliveryNotification(orgId, stop, {
+    text: enRouteText(stop),
+    templateText: enRouteText({ ...stop, trackingUrl: null }),
+  });
+}
+
+async function sendLoadConsolidatedNotification(orgId, stop) {
+  return sendDeliveryNotification(orgId, stop, {
+    text: loadConsolidatedText(stop),
+    templateText: loadConsolidatedText({ ...stop, trackingUrl: null }),
+    templateLabel: 'Pedido en camino',
+    agentType: 'delivery_consolidated',
+  });
+}
+
+async function sendDeliveryOutcomeRecovery(orgId, stop, outcome) {
+  return sendDeliveryNotification(orgId, stop, {
+    text: deliveryOutcomeText(stop, outcome),
+    assignmentKey: 'delivery_resolution',
+    templateComponents: deliveryResolutionTemplateComponents(stop, outcome),
+    templateLabel: 'Resolver entrega',
+    agentType: 'delivery_recovery',
+  });
+}
+
+async function sendCustomerFeedbackRequest(orgId, stop) {
+  const text = customerFeedbackText(stop);
+  return sendDeliveryNotification(orgId, stop, {
+    text,
+    templateText: customerFeedbackTemplateText(stop),
+    assignmentKey: 'customer_feedback',
+    templateComponents: customerFeedbackTemplateComponents(stop),
+    templateLabel: 'Opinión primera compra',
+    agentType: 'customer_feedback',
+  });
 }
 
 async function sendOrderEditNotification(orgId, { source = 'bot', id, before, after }) {
@@ -246,7 +374,7 @@ async function sendOrderEditNotification(orgId, { source = 'bot', id, before, af
 
   const orderLabel = source === 'shopify'
     ? String(after?.name || after?.order_number || before?.name || before?.order_number || `#${id}`)
-    : `#BOT-${id}`;
+    : `#DR-${id}`;
   const text = orderEditText({
     customerName: after?.customer_name || before?.customer_name,
     orderLabel,
@@ -273,13 +401,23 @@ async function sendOrderEditNotification(orgId, { source = 'bot', id, before, af
 }
 
 module.exports = {
+  sendDeliveryNotification,
   CUSTOMER_SERVICE_WINDOW_MS,
   phoneDigits,
   windowInfoFromLastInbound,
   getCustomerServiceWindow,
   enRouteText,
+  loadConsolidatedText,
+  deliveryOutcomeText,
   enRouteTemplateComponents,
+  deliveryResolutionTemplateComponents,
+  customerFeedbackText,
+  customerFeedbackTemplateComponents,
+  customerFeedbackTemplateText,
   sendEnRouteNotification,
+  sendLoadConsolidatedNotification,
+  sendDeliveryOutcomeRecovery,
+  sendCustomerFeedbackRequest,
   normalizedItems,
   normalizedAddress,
   orderEditChanges,

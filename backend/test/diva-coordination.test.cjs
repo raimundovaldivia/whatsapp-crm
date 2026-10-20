@@ -89,6 +89,10 @@ test('una continuación de compra no escala por contexto antiguo y los casos dur
 
   assert.equal((await orchestrator.checkEscalation('quiero hablar con una persona', longHistory, 'interested', 1)).escalate, true);
   assert.equal((await orchestrator.checkEscalation('me llegó el pedido equivocado', longHistory, 'interested', 1)).escalate, true);
+  const unsafeFood = await orchestrator.checkEscalation('El queso venía malo', longHistory, 'interested', 1);
+  assert.equal(unsafeFood.escalate, true);
+  assert.equal(unsafeFood.urgency, 'high');
+  assert.match(unsafeFood.reason, /inocuidad|mal estado/i);
 });
 
 test('un pedido en recopilación evita IA salvo que supere el umbral de atasco', async () => {
@@ -286,6 +290,7 @@ test('Diva avisa una respuesta pendiente en modo humano sin duplicar mensajes se
     },
     './kapso-whatsapp': {},
     './admin-notify': {
+      isWindowOpen: async () => true,
       notifyAdmin: async (orgId, options) => {
         alerts.push({ orgId, ...options });
         return { sent: true, queued: false };
@@ -325,6 +330,7 @@ test('la consulta al administrador incluye la conversación y explica qué decis
     },
     './kapso-whatsapp': {},
     './admin-notify': {
+      isWindowOpen: async () => true,
       notifyAdmin: async (orgId, options) => {
         alerts.push({ orgId, ...options });
         return { sent: true };
@@ -398,6 +404,7 @@ test('Diva analiza el historial y entrega una conclusión en vez de copiar toda 
     '@anthropic-ai/sdk': Anthropic,
     './kapso-whatsapp': {},
     './admin-notify': {
+      isWindowOpen: async () => true,
       notifyAdmin: async (_orgId, options) => {
         alerts.push(options.body);
         return { sent: true };
@@ -417,6 +424,53 @@ test('Diva analiza el historial y entrega una conclusión en vez de copiar toda 
   assert.match(alerts[0], /Karina había pedido esperar hasta la próxima semana/);
   assert.match(alerts[0], /Cerrar con amabilidad y no volver a contactarla/);
   assert.doesNotMatch(alerts[0], /Contexto reciente/);
+});
+
+test('Diva no consume IA para redactar el aviso si la ventana del admin está cerrada', async () => {
+  let aiCalls = 0;
+  class Anthropic {
+    constructor() {
+      this.messages = { create: async () => {
+        aiCalls++;
+        return { content: [{ text: '{}' }] };
+      } };
+    }
+  }
+  const alerts = [];
+  const notifications = load('src/services/notifications.js', {
+    '../db/database': {
+      getSetting: async () => '56990000000',
+      getWhatsappConfig: async () => ({ provider: 'kapso' }),
+      getLastMessages: async () => [
+        { direction: 'outbound', sent_by: 'ai', content: '¿Qué necesitas?' },
+        { direction: 'inbound', content: 'Necesito que revisen mi despacho.' },
+      ],
+      createAdminPendingReply: async () => {},
+    },
+    '@anthropic-ai/sdk': Anthropic,
+    './kapso-whatsapp': {},
+    './admin-notify': {
+      isWindowOpen: async () => false,
+      notifyAdmin: async (_orgId, options) => {
+        alerts.push(options);
+        return { sent: false, queued: true, reason: 'ventana_cerrada' };
+      },
+    },
+  }, {
+    process: { env: { ANTHROPIC_API_KEY: 'test-key' } },
+  });
+
+  await notifications.notifyAdminHelp(
+    1,
+    { id: 77, contact_name: 'Camila', phone_number: '56912345678' },
+    '',
+    'La clienta pidió revisar el despacho.'
+  );
+
+  assert.equal(aiCalls, 0);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].body, /La clienta pidió revisar el despacho/);
+  assert.match(alerts[0].body, /Necesito que revisen mi despacho/);
 });
 
 test('Diva no molesta al administrador por agradecimientos o cierres en modo humano', async () => {
@@ -454,6 +508,7 @@ test('Diva avisa al administrador incluso por un agradecimiento mientras coordin
     },
     './kapso-whatsapp': {},
     './admin-notify': {
+      isWindowOpen: async () => true,
       notifyAdmin: async (_orgId, options) => {
         alerts.push(options);
         return { sent: true };
@@ -486,6 +541,7 @@ test('el aviso general no duplica el caso que ya está en coordinación humana',
     },
     './kapso-whatsapp': { sendTextMessage: async () => { sends++; } },
     './admin-notify': { notifyAdmin: async () => ({ sent: true }) },
+    './delivery-inbound-notifications': { notifyAssignedDriversForInbound: async () => {} },
   });
 
   await notifications.notifyAgentsNewMessage(1, { id: 4, agent_mode: 'human' }, 'Necesito ayuda');

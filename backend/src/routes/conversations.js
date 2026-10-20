@@ -436,6 +436,30 @@ router.patch('/:id/pipeline-state', async (req, res) => {
 });
 
 /**
+ * Excluye o reincorpora una conversación de la bandeja Hot sin alterar el
+ * estado operativo del bot.
+ */
+router.patch('/:id/hot-lead-exclusion', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  try {
+    const conversationId = Number(req.params.id);
+    if (!Number.isInteger(conversationId) || conversationId < 1 || typeof req.body?.excluded !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'Solicitud de exclusión inválida' });
+    }
+    const { rows } = await getPool().query(
+      `UPDATE conversations
+          SET hot_lead_excluded = $1, updated_at = NOW()
+        WHERE id = $2 AND organization_id = $3
+        RETURNING id, hot_lead_excluded`,
+      [req.body.excluded, conversationId, req.orgId]
+    );
+    if (!rows[0]) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+    res.json({ success: true, excluded: rows[0].hot_lead_excluded });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * PATCH /api/conversations/:id/client-type
  * Marcar manualmente un contacto como "empresa" o "personal"
  */
@@ -480,10 +504,35 @@ router.post('/:id/orders', async (req, res) => {
     const conv   = await db.getConversationById(convId, req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
-    const { items = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '' } = req.body;
-    if (!items.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
+    const { items: rawItems = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '', offerId = null } = req.body;
+    if (!rawItems.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
     if (typeof note !== 'string' || note.trim().length > 1000) {
       return res.status(400).json({ success: false, error: 'La nota del pedido no puede superar 1000 caracteres' });
+    }
+
+    // Oferta personal vigente de la conversación: su precio reemplaza al de la línea
+    // del producto ofrecido (solo unidades dentro del alcance). Se canjea al crear el pedido.
+    const offerStore = require('../services/campaign-offers-store');
+    const offerRules = require('../services/campaign-offers');
+    const personalOffer = await offerStore.latestForConversation(db.getPool(), req.orgId, convId);
+    let items = rawItems;
+    let offerToRedeem = null;
+    // Solo se aplica si el operador eligió esta oferta (offerId); nunca de forma automática.
+    if (personalOffer && personalOffer.status === 'sent' && offerId != null && Number(offerId) === Number(personalOffer.id)) {
+      const normalized = rawItems.map(i => ({ ...i, product_id: i.product_id ?? i.productId ?? i.id }));
+      const applied = offerRules.applyOfferToItems(normalized, personalOffer, null, new Date());
+      if (applied.applied) {
+        offerToRedeem = personalOffer;
+        items = applied.items.map((i, idx) => {
+          if (!i.offer_applied) return rawItems[idx];
+          const qty = parseInt(i.quantity || 1);
+          const offered = Number(i.offer_units) || 0;
+          const catalogPrice = parseFloat(rawItems[idx].price) || 0;
+          // Precio promedio por unidad si el alcance cubre solo parte de la cantidad.
+          const avg = Math.round((offered * Number(personalOffer.offer_price) + (qty - offered) * catalogPrice) / qty);
+          return { ...rawItems[idx], price: avg, offer_id: personalOffer.id };
+        });
+      }
     }
 
     const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
@@ -522,6 +571,13 @@ router.post('/:id/orders', async (req, res) => {
       totalPrice,
       note: note.trim() || null,
     });
+    if (offerToRedeem) {
+      try {
+        await offerStore.redeem(db.getPool(), req.orgId, offerToRedeem.id, order.id);
+      } catch (offerError) {
+        console.warn('[Conversations] no se pudo canjear la oferta personal:', offerError.message);
+      }
+    }
 
     // Guardar mensaje de resumen en el chat y enviarlo al cliente
     if (sendSummary) {
@@ -531,7 +587,7 @@ router.post('/:id/orders', async (req, res) => {
         : '';
       const subtotalLine = discountAmount > 0
         ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
-      const summary = `🛒 *Pedido #${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
+      const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
 
       const wc = await db.getWhatsappConfig(req.orgId);
       if (wc) {
@@ -934,6 +990,8 @@ router.get('/search-by-phone', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.agent_mode,
               c.last_message_at, c.hot_lead_excluded, c.whatsapp_channel_id,
+              wc.assigned_user_id AS whatsapp_channel_assigned_user_id,
+              assigned_user.name AS whatsapp_channel_assignee,
               COALESCE(wc.name,
                 CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END
               ) AS whatsapp_channel_name,
@@ -943,6 +1001,9 @@ router.get('/search-by-phone', async (req, res) => {
               (SELECT MIN(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS first_message_at
        FROM conversations c
        LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+       LEFT JOIN users assigned_user
+         ON assigned_user.id = wc.assigned_user_id
+        AND assigned_user.organization_id = c.organization_id
        LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
        WHERE c.organization_id = $1
          AND c.phone_number IN (${placeholders})
@@ -1072,69 +1133,181 @@ Sin comillas. Solo el mensaje.`;
 
 /**
  * POST /api/conversations/scan-hot-leads
- * Analiza conversaciones con actividad en las últimas 48h usando IA (Haiku)
- * y actualiza su pipeline_state a 'interested' si detecta intención de compra hoy.
+ * Recalifica conversaciones recientes con reglas explicables. No cambia el
+ * pipeline_state ni usa una consulta de precio como señal suficiente de hot.
  */
-router.post('/scan-hot-leads', async (req, res) => {
+router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
+  const runId = crypto.randomUUID();
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-    // Conversaciones con actividad en últimas 48h que no estén en 'done' ni excluidas manualmente
+    const requestedLimit = req.body?.limit === undefined ? 200 : Number(req.body.limit);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 500) {
+      return res.status(400).json({ success: false, error: 'limit debe ser un entero entre 1 y 500' });
+    }
+    await pool.query(
+      `INSERT INTO lead_qualification_runs
+        (run_id, organization_id, created_by, requested_limit)
+       VALUES ($1, $2, $3, $4)`,
+      [runId, req.orgId, req.userId || null, requestedLimit]
+    );
     const { rows: convs } = await pool.query(
-      `SELECT c.id, c.contact_name, c.phone_number, c.pipeline_state
+      `SELECT c.id
        FROM conversations c
        WHERE c.organization_id = $1
-         AND c.last_message_at > NOW() - INTERVAL '48 hours'
-         AND c.pipeline_state NOT IN ('done', 'interested', 'collecting_order')
-         AND (c.hot_lead_excluded IS NULL OR c.hot_lead_excluded = FALSE)
+         AND c.last_message_at > NOW() - INTERVAL '30 days'
        ORDER BY c.last_message_at DESC
-       LIMIT 60`,
-      [req.orgId]
+       LIMIT $2`,
+      [req.orgId, requestedLimit]
     );
 
-    let updated = 0;
+    const summary = {
+      legacyHot: 0,
+      exploring: 0, interested: 0, hot: 0, very_hot: 0,
+      future: 0, won: 0, discarded: 0,
+    };
     for (const conv of convs) {
-      // Obtener los últimos 10 mensajes
-      const { rows: msgs } = await pool.query(
-        `SELECT direction, content FROM messages
-         WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 10`,
-        [conv.id]
+      const calculated = await db.calculateLeadQualification(conv.id, req.orgId);
+      if (!calculated) continue;
+      const { conversation: before, qualification: proposed } = calculated;
+      const legacyHot = ['interested', 'collecting_order'].includes(before.pipeline_state)
+        && !before.hot_lead_excluded;
+      if (legacyHot) summary.legacyHot++;
+      summary[proposed.temperature] = (summary[proposed.temperature] || 0) + 1;
+      await pool.query(
+        `INSERT INTO lead_qualification_audits
+          (run_id, organization_id, conversation_id,
+           before_pipeline_state, before_lead_temperature, before_lead_score,
+           before_hot_excluded, before_legacy_hot, before_qualification_reasons,
+           before_lead_signals, before_updated_at,
+           proposed_temperature, proposed_score, proposed_reasons, proposed_signals)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [
+          runId, req.orgId, before.id,
+          before.pipeline_state || null, before.lead_temperature || null, Number(before.lead_score || 0),
+          Boolean(before.hot_lead_excluded), legacyHot,
+          JSON.stringify(before.qualification_reasons || []), JSON.stringify(before.lead_signals || {}),
+          before.updated_at || null,
+          proposed.temperature, proposed.score, JSON.stringify(proposed.reasons),
+          JSON.stringify({ ...proposed.signals, veryHotGate: proposed.veryHotGate }),
+        ]
       );
-      if (!msgs.length) continue;
-
-      const history = msgs.reverse().map(m =>
-        `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${(m.content || '').slice(0, 200)}`
-      ).join('\n');
-
-      const response = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 10,
-        system: 'Eres un clasificador de intención de compra. Responde SOLO con "si" o "no".',
-        messages: [{
-          role: 'user',
-          content: `¿El cliente en esta conversación muestra intención clara de comprar HOY o muy pronto (hace preguntas de precio, disponibilidad, despacho, o dice que lo quiere)?\n\n${history}`,
-        }],
-      });
-
-      const answer = response.content[0]?.text?.trim().toLowerCase() || '';
-      if (answer.startsWith('si') || answer === 'sí') {
-        await pool.query(
-          `UPDATE conversations SET pipeline_state = 'interested', updated_at = NOW() WHERE id = $1`,
-          [conv.id]
-        );
-        updated++;
-      }
-
-      // Rate limit: pequeña pausa entre llamadas
-      await new Promise(r => setTimeout(r, 200));
     }
 
-    res.json({ success: true, scanned: convs.length, hotLeadsFound: updated });
+    await pool.query(
+      `UPDATE lead_qualification_runs
+          SET conversation_count = $1, status = 'completed', summary = $2,
+              completed_at = NOW()
+        WHERE run_id = $3 AND organization_id = $4`,
+      [convs.length, JSON.stringify(summary), runId, req.orgId]
+    );
+
+    res.json({
+      success: true,
+      runId,
+      applied: false,
+      scanned: convs.length,
+      hotLeadsFound: summary.hot + summary.very_hot,
+      veryHotLeadsFound: summary.very_hot,
+      summary,
+    });
   } catch (err) {
+    await pool.query(
+      `UPDATE lead_qualification_runs
+          SET status = 'failed', completed_at = NOW()
+        WHERE run_id = $1 AND organization_id = $2`,
+      [runId, req.orgId]
+    ).catch(() => {});
     console.error('[scan-hot-leads]', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/lead-qualification-runs/:runId', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rows: runs } = await pool.query(
+      `SELECT * FROM lead_qualification_runs
+        WHERE run_id = $1 AND organization_id = $2`,
+      [req.params.runId, req.orgId]
+    );
+    if (!runs[0]) return res.status(404).json({ success: false, error: 'Evaluación no encontrada' });
+    const { rows: conversations } = await pool.query(
+      `SELECT a.*, c.contact_name, c.phone_number
+         FROM lead_qualification_audits a
+         JOIN conversations c
+           ON c.id = a.conversation_id AND c.organization_id = a.organization_id
+        WHERE a.run_id = $1 AND a.organization_id = $2
+        ORDER BY a.proposed_score DESC, a.conversation_id`,
+      [req.params.runId, req.orgId]
+    );
+    res.json({ success: true, run: runs[0], conversations });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/lead-qualification-runs/:runId/apply', requireRole('owner', 'admin'), async (req, res) => {
+  const pool = getPool();
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const { rows: runs } = await client.query(
+      `SELECT * FROM lead_qualification_runs
+        WHERE run_id = $1 AND organization_id = $2
+        FOR UPDATE`,
+      [req.params.runId, req.orgId]
+    );
+    const run = runs[0];
+    if (!run) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Evaluación no encontrada' });
+    }
+    if (run.status !== 'completed' || run.applied) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'La evaluación no está disponible para aplicar' });
+    }
+    const { rows: updated } = await client.query(
+      `UPDATE conversations c
+          SET lead_temperature = a.proposed_temperature,
+              lead_score = a.proposed_score,
+              qualification_reasons = a.proposed_reasons,
+              lead_signals = a.proposed_signals,
+              qualified_at = NOW()
+         FROM lead_qualification_audits a
+        WHERE a.run_id = $1
+          AND a.organization_id = $2
+          AND c.id = a.conversation_id
+          AND c.organization_id = a.organization_id
+          AND c.updated_at IS NOT DISTINCT FROM a.before_updated_at
+        RETURNING c.id`,
+      [req.params.runId, req.orgId]
+    );
+    const updatedIds = updated.map(row => row.id);
+    if (updatedIds.length) {
+      await client.query(
+        `UPDATE lead_qualification_audits
+            SET applied = TRUE
+          WHERE run_id = $1 AND organization_id = $2
+            AND conversation_id = ANY($3::int[])`,
+        [req.params.runId, req.orgId, updatedIds]
+      );
+    }
+    const skipped = Number(run.conversation_count || 0) - updatedIds.length;
+    await client.query(
+      `UPDATE lead_qualification_runs
+          SET applied = TRUE,
+              summary = summary || $1::jsonb
+        WHERE run_id = $2 AND organization_id = $3`,
+      [JSON.stringify({ appliedCount: updatedIds.length, skippedChanged: skipped }), req.params.runId, req.orgId]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, runId: req.params.runId, applied: updatedIds.length, skippedChanged: skipped });
+  } catch (err) {
+    await client?.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client?.release();
   }
 });
 

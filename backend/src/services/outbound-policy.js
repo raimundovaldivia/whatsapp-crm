@@ -33,6 +33,9 @@ function normalizeText(value = '') {
 }
 
 const CUSTOMER_PAUSED_PATTERNS = [
+  /^(?:no|nop|nope)[, .!]*(?:muchas )?gracias\b/,
+  /^no (?:voy a querer|agendare nada|necesito por ahora)\b/,
+  /^(?:yo|te|les?) aviso\b/,
   /\bpor ahora[, ]+(gracias|no|nada|estoy|tengo)\b/,
   /\bpor el momento\b/,
   /\bcuando pueda\b/,

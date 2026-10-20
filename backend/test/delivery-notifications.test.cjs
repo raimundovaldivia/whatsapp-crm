@@ -2,17 +2,29 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load, handler, response, noop } = require('./helpers.cjs');
 
-function serviceWith({ lastInboundAt, providerResult = { messages: [{ id: 'wamid.1' }] }, providerError = null, assignment = null } = {}) {
+function serviceWith({
+  lastInboundAt,
+  providerResult = { messages: [{ id: 'wamid.1' }] },
+  providerError = null,
+  assignment = null,
+  provider = 'kapso',
+  whatsappChannelId = null,
+} = {}) {
   const saved = [];
+  const providerConfig = { id: whatsappChannelId, provider, phone_number_id: 'phone-1', kapso_api_key: 'secret' };
+  let evolutionLookups = 0;
   const db = {
-    getPool: () => ({ query: async () => ({ rows: [{ id: 41, last_inbound_at: lastInboundAt }] }) }),
-    getWhatsappConfig: async () => ({ provider: 'kapso', phone_number_id: 'phone-1', kapso_api_key: 'secret' }),
-    getConversationById: async id => ({ id, phone_number: '56911112222', whatsapp_channel_id: null }),
-    upsertConversation: async (_orgId, phone) => ({ id: 41, phone_number: phone, whatsapp_channel_id: null }),
+    getPool: () => ({ query: async () => ({ rows: [{ id: 41, whatsapp_channel_id: whatsappChannelId, last_inbound_at: lastInboundAt }] }) }),
+    getWhatsappConfig: async () => providerConfig,
+    getWhatsappChannel: async () => providerConfig,
+    getEvolutionWhatsappChannel: async () => { evolutionLookups++; return { id: 99, provider: 'evolution' }; },
+    getConversationById: async id => ({ id, phone_number: '56911112222', whatsapp_channel_id: whatsappChannelId }),
+    upsertConversation: async (_orgId, phone) => ({ id: 41, phone_number: phone, whatsapp_channel_id: whatsappChannelId }),
     saveMessage: async value => { saved.push(value); return { id: 88, ...value }; },
     updateConversationLastMessage: async () => {},
   };
   let sends = 0;
+  let evolutionSends = 0;
   let templateSends = 0;
   const kapso = {
     sendTextMessage: async () => {
@@ -27,14 +39,21 @@ function serviceWith({ lastInboundAt, providerResult = { messages: [{ id: 'wamid
     './kapso-whatsapp': kapso,
     './whatsapp': { sendTextMessage: async () => {} },
     './twilio-whatsapp': { sendTextMessage: async () => {} },
-    './evolution-whatsapp': { sendTextMessage: async () => {} },
+    './evolution-whatsapp': { sendTextMessage: async () => { evolutionSends++; return { messageId: 'evo.1' }; } },
     './whatsapp-provider': {
       configForConversation: async () => ({ provider: 'kapso', phone_number_id: 'phone-1', kapso_api_key: 'secret' }),
       messageId: result => result?.messages?.[0]?.id || null,
     },
     './template-automation': { getAssignment: async () => assignment },
   });
-  return { service, saved, get sends() { return sends; }, get templateSends() { return templateSends; } };
+  return {
+    service,
+    saved,
+    get sends() { return sends; },
+    get evolutionSends() { return evolutionSends; },
+    get evolutionLookups() { return evolutionLookups; },
+    get templateSends() { return templateSends; },
+  };
 }
 
 test('la ventana se mide desde el último mensaje entrante y vence exactamente a las 24 horas', () => {
@@ -56,7 +75,65 @@ test('Diva envía y registra el aviso como agente de despacho dentro de la venta
   assert.equal(fixture.saved.length, 1);
   assert.equal(fixture.saved[0].sentBy, 'ai');
   assert.equal(fixture.saved[0].agentType, 'delivery');
-  assert.match(fixture.saved[0].content, /Katherine.*#BOT-17.*en camino/s);
+  assert.match(fixture.saved[0].content, /Katherine.*#DR-17.*en camino/s);
+});
+
+test('al consolidar la carga avisa que el pedido quedó con el repartidor y conserva el chat', async () => {
+  const fixture = serviceWith({ lastInboundAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+  const result = await fixture.service.sendLoadConsolidatedNotification(3, {
+    phone: '+56 9 1111 2222', customerName: 'Karen Soto', orderName: '#BOT-25',
+  });
+  assert.equal(result.sent, true);
+  assert.equal(fixture.sends, 1);
+  assert.equal(fixture.saved[0].agentType, 'delivery_consolidated');
+  assert.match(fixture.saved[0].content, /Karen.*consolidado.*manos del repartidor/s);
+});
+
+test('el aviso de salida incluye el enlace temporal de seguimiento', async () => {
+  const fixture = serviceWith({ lastInboundAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+  const result = await fixture.service.sendLoadConsolidatedNotification(3, {
+    phone: '+56 9 1111 2222', customerName: 'Karen Soto', orderName: '#BOT-25',
+    trackingUrl: 'https://crm.example/seguimiento/token-seguro',
+  });
+  assert.match(result.text, /Sigue la ubicación.*https:\/\/crm\.example\/seguimiento\/token-seguro/s);
+  assert.match(fixture.saved[0].content, /seguimiento\/token-seguro/);
+});
+
+test('pide feedback de primera compra con una pregunta breve y medible', async () => {
+  const fixture = serviceWith({ lastInboundAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+  const result = await fixture.service.sendCustomerFeedbackRequest(3, {
+    phone: '+56 9 1111 2222', customerName: 'María Soto', orderName: '#BOT-25',
+  });
+  assert.equal(result.sent, true);
+  assert.equal(fixture.saved[0].agentType, 'customer_feedback');
+  assert.match(result.text, /María.*primera experiencia.*#DR-25/s);
+  assert.match(result.text, /Del 1 al 5/);
+});
+
+test('el feedback conserva Evolution cuando esa compra pertenece a una conversación Evolution', async () => {
+  const fixture = serviceWith({
+    lastInboundAt: null,
+    provider: 'evolution',
+    whatsappChannelId: 8,
+  });
+  const result = await fixture.service.sendCustomerFeedbackRequest(3, {
+    phone: '+56 9 1111 2222', customerName: 'María Soto', orderName: '#BOT-25', conversationId: 41,
+  });
+  assert.equal(result.via, 'text');
+  assert.equal(result.conversationId, 41);
+  assert.equal(fixture.evolutionSends, 1);
+  assert.equal(fixture.templateSends, 0);
+});
+
+test('una entrega no completada abre una conversación de resolución en el historial existente', async () => {
+  const fixture = serviceWith({ lastInboundAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+  const result = await fixture.service.sendDeliveryOutcomeRecovery(3, {
+    phone: '56911112222', customerName: 'Leonel Ruiz', orderName: '#51',
+  }, { status: 'not_delivered', note: 'Cliente no estaba' });
+  assert.equal(result.sent, true);
+  assert.equal(fixture.saved[0].conversationId, 41);
+  assert.equal(fixture.saved[0].agentType, 'delivery_recovery');
+  assert.match(result.text, /Cliente no estaba.*reprogramar.*dirección/s);
 });
 
 test('con la ventana cerrada no intenta enviar texto libre', async () => {
@@ -76,12 +153,15 @@ test('con la ventana cerrada usa el template automático asignado sin intentar t
   });
   const result = await fixture.service.sendEnRouteNotification(3, {
     phone: '56911112222', customerName: 'Ana Díaz', orderName: '#43', fullAddress: 'Puerta del Mar 340',
+    trackingUrl: 'https://crm.example/seguimiento/no-incluido-en-template-antiguo',
   });
   assert.equal(result.via, 'template');
   assert.equal(result.templateName, 'aviso_pedido_en_camino');
   assert.equal(fixture.sends, 0);
   assert.equal(fixture.templateSends, 1);
+  assert.equal(fixture.evolutionLookups, 0);
   assert.match(fixture.saved[0].content, /Template: aviso_pedido_en_camino/);
+  assert.doesNotMatch(fixture.saved[0].content, /no-incluido-en-template-antiguo/);
 });
 
 test('si el proveedor informa que la ventana cerró, cambia al template asignado', async () => {
@@ -115,7 +195,7 @@ test('al editar un pedido avisa únicamente los datos que realmente cambiaron', 
   });
   assert.equal(result.sent, true);
   assert.equal(fixture.sends, 1);
-  assert.match(result.text, /Katherine.*#BOT-17/s);
+  assert.match(result.text, /Katherine.*#DR-17/s);
   assert.match(result.text, /1x 100 Jumbo/);
   assert.match(result.text, /Nuevo total: \$37\.000/);
   assert.doesNotMatch(result.text, /Dirección:/);
@@ -175,6 +255,7 @@ test('la API móvil valida ruta, asignación y pertenencia antes de consultar o 
   const router = load('src/routes/delivery.js', {
     '../db/database': { getPool: () => pool },
     '../services/delivery-notifications': notifications,
+    '../services/delivery-tracking': { createTrackingLink: async () => 'https://crm.example/seguimiento/test' },
     '../services/template-automation': { getAssignment: async () => null },
     '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
   });
