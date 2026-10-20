@@ -12,16 +12,19 @@ export default function AuthPage({ onAuth }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [orgOptions, setOrgOptions] = useState(null);
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (e, organizationId) => {
+    if (e) e.preventDefault();
     setError(''); setLoading(true);
     try {
       const data = mode === 'login'
-        ? await authAPI.login({ email: form.email, password: form.password })
+        ? await authAPI.login({ email: form.email, password: form.password, ...(organizationId != null ? { organizationId } : {}) })
         : await authAPI.register(form);
+      if (data.needsOrganization) { setOrgOptions(data.organizations); return; }
+      setOrgOptions(null);
       localStorage.setItem('crm_token', data.token);
       localStorage.setItem('crm_user',  JSON.stringify(data.user));
       localStorage.setItem('crm_org',   JSON.stringify(data.organization));
@@ -291,7 +294,21 @@ export default function AuthPage({ onAuth }) {
               </div>
             )}
 
-            <button type="submit" disabled={loading}
+            {orgOptions && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontSize: '13px', color: colors.textSecondary }}>Este correo tiene cuenta en varias empresas. Elige a cuál entrar:</div>
+                {orgOptions.map(o => (
+                  <button key={o.organization_id} type="button" disabled={loading}
+                    onClick={(e) => handleSubmit(e, o.organization_id)}
+                    style={{ padding: '12px', borderRadius: '10px', border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textPrimary, cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'left', fontSize: '14px' }}>
+                    <strong>{o.name || o.slug}</strong>
+                    <span style={{ color: colors.textSecondary, fontSize: '12px' }}> · {o.role}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {!orgOptions && <button type="submit" disabled={loading}
               style={{
                 backgroundColor: colors.green,
                 color: 'white',
@@ -314,7 +331,7 @@ export default function AuthPage({ onAuth }) {
                   <ArrowRight size={16} />
                 </>
               )}
-            </button>
+            </button>}
           </form>
 
           <button type="button" onClick={()=>setShowSolutions(true)} style={{width:'100%',marginTop:18,padding:12,borderRadius:10,border:`1px solid ${colors.border}`,background:'transparent',color:colors.green,cursor:'pointer'}}>Explorar las 7 soluciones</button>

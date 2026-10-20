@@ -23,7 +23,7 @@ async function setupDatabase() {
       CREATE TABLE IF NOT EXISTS users (
         id              SERIAL PRIMARY KEY,
         organization_id INTEGER NOT NULL,
-        email           TEXT UNIQUE NOT NULL,
+        email           TEXT NOT NULL,
         password_hash   TEXT NOT NULL,
         name            TEXT,
         role            TEXT DEFAULT 'agent' CHECK(role IN ('owner','admin','agent')),
@@ -355,6 +355,9 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_conversations_upd    ON conversations(last_message_at DESC);
       CREATE INDEX IF NOT EXISTS idx_products_org         ON products_cache(organization_id);
       CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
+      -- Un mismo correo puede tener una cuenta por empresa (mismo dueño, dos negocios).
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS users_org_email_uq ON users(organization_id, email);
 
       -- ─── FEEDBACK DE ESCALACIÓN (reentrenamiento continuo) ──────
       CREATE TABLE IF NOT EXISTS escalation_feedback (

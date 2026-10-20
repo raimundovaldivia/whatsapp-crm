@@ -54,6 +54,15 @@ async function getUserByEmail(email) {
   return queryOne('SELECT * FROM users WHERE email = $1', [email]);
 }
 
+// Todas las cuentas activas con ese correo (una por empresa).
+async function getUsersByEmail(email) {
+  return query('SELECT * FROM users WHERE email = $1 AND merged_into_user_id IS NULL ORDER BY id', [email]);
+}
+
+async function getUserByEmailInOrg(email, organizationId) {
+  return queryOne('SELECT * FROM users WHERE email = $1 AND organization_id = $2', [email, organizationId]);
+}
+
 async function getUserById(id) {
   return queryOne(
     'SELECT id, organization_id, email, name, role, auth_version FROM users WHERE id = $1 AND merged_into_user_id IS NULL',
@@ -3020,7 +3029,7 @@ module.exports = {
   // Orgs
   createOrganization, getOrgById, markSetupDone,
   // Users
-  createUser, getUserByEmail, getUserById,
+  createUser, getUserByEmail, getUsersByEmail, getUserByEmailInOrg, getUserById,
   // WhatsApp
   upsertWhatsappConfig, getWhatsappConfig, getOrgByWebhookToken, getOrgByPhoneNumberId, getOrgByTwilioNumber,
   createWhatsappChannel, listWhatsappChannels, getWhatsappChannel, getDefaultWhatsappChannel, getEvolutionWhatsappChannel,
