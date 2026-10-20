@@ -104,7 +104,7 @@ async function setupDatabase() {
         name                    TEXT NOT NULL,
         phone_number            TEXT,
         evolution_api_url       TEXT NOT NULL,
-        evolution_api_key       TEXT NOT NULL,
+        evolution_api_key       TEXT,
         evolution_instance      TEXT NOT NULL,
         webhook_token           TEXT NOT NULL,
         status                  TEXT NOT NULL DEFAULT 'pending',
@@ -118,6 +118,8 @@ async function setupDatabase() {
 
       ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS assigned_user_id INTEGER REFERENCES users(id) ON DELETE RESTRICT;
       ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS expected_phone TEXT;
+      -- La clave puede ir vacía: se usa EVOLUTION_API_KEY del servidor.
+      ALTER TABLE whatsapp_channels ALTER COLUMN evolution_api_key DROP NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_channels_assigned_user
         ON whatsapp_channels(organization_id, assigned_user_id) WHERE assigned_user_id IS NOT NULL;
 
