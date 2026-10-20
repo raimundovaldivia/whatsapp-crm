@@ -34,3 +34,7 @@ Thumbs.db
 .idea/
 
 mobile/dist-returns/
+
+# Copia de despliegue local y parches sueltos (no se versionan)
+.deploy-buyers-real/
+.fix-contacts-by-product.patch
