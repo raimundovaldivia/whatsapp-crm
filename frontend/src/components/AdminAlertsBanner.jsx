@@ -13,7 +13,7 @@
  * canal ya se reabrió) y descartar lo que no aplica.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, X, RefreshCw, ChevronDown, ChevronUp, Send } from 'lucide-react';
+import { AlertTriangle, X, RefreshCw, ChevronDown, ChevronUp, Send, MessageCircle } from 'lucide-react';
 import { useTheme } from '../theme.js';
 import { adminAlertsAPI } from '../utils/api.js';
 
@@ -90,6 +90,16 @@ export default function AdminAlertsBanner() {
 
       {/* Acciones */}
       <div style={{ display: 'flex', gap: '8px', padding: '0 14px 12px' }}>
+        {!data.windowOpen && data.businessPhone && (
+          <button
+            onClick={() => window.open(`https://wa.me/${data.businessPhone}?text=${encodeURIComponent('Hola Diva')}`, '_blank', 'noopener,noreferrer')}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flex: 1,
+              backgroundColor: AMBER, color: '#1c1206', border: 'none', borderRadius: '8px', padding: '8px',
+              fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+            <MessageCircle size={13} />
+            Abrir WhatsApp y reactivar
+          </button>
+        )}
         {data.windowOpen && (
           <button onClick={flush} disabled={flushing}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flex: 1,
@@ -100,7 +110,7 @@ export default function AdminAlertsBanner() {
           </button>
         )}
         <button onClick={() => setExpanded(v => !v)}
-          style={{ flex: data.windowOpen ? 'none' : 1, backgroundColor: 'transparent', color: '#fde68a',
+          style={{ flex: data.windowOpen || data.businessPhone ? 'none' : 1, backgroundColor: 'transparent', color: '#fde68a',
             border: '1px solid #78350f', borderRadius: '8px', padding: '8px 14px', fontSize: '12px',
             fontWeight: 600, cursor: 'pointer' }}>
           {expanded ? 'Ocultar' : 'Ver detalle'}

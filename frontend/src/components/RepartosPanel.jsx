@@ -23,6 +23,12 @@ function uniqueOrders(list) {
   });
 }
 
+function validCoveragePoints(warehouse) {
+  return Array.isArray(warehouse?.coveragePoints)
+    ? warehouse.coveragePoints.filter(point => point && typeof point === 'object')
+    : [];
+}
+
 function mapCoordinates(point) {
   if (point?.lat === null || point?.lat === '' || point?.lng === null || point?.lng === '') return null;
   const lat = Number(point?.lat);
@@ -74,6 +80,27 @@ function RouteMap({ routes, points = [], ordered = false, warehouse, colors, hei
       L.marker(warehouseCoords, { icon: wIcon }).addTo(layer).bindPopup('<b>Bodega</b>');
       allLatLngs.push(warehouseCoords);
     }
+    const coverageCenters = [
+      ...(warehouseCoords ? [{ name: 'Bodega', coords: warehouseCoords }] : []),
+      ...(validCoveragePoints(warehouse).map(point => ({ name: point.name || 'Punto de cobertura', coords: mapCoordinates(point) })).filter(point => point.coords)),
+    ];
+    if (warehouse?.coverageEnabled && Number(warehouse.coverageRadiusKm) > 0) {
+      coverageCenters.forEach((center, index) => {
+        L.circle(center.coords, {
+          radius: Number(warehouse.coverageRadiusKm) * 1000,
+          color: '#38bdf8', fillColor: '#38bdf8', fillOpacity: 0.05, weight: 1, dashArray: '5 5',
+        }).addTo(layer);
+        if (index > 0) {
+          const centerIcon = L.divIcon({
+            className: '',
+            html: '<div style="background:#0ea5e9;color:#fff;width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;border:2px solid #fff">◎</div>',
+            iconSize: [24, 24], iconAnchor: [12, 12],
+          });
+          L.marker(center.coords, { icon: centerIcon }).addTo(layer).bindPopup(`<b>${center.name.replace(/</g, '')}</b><br>Punto de cobertura`);
+        }
+        allLatLngs.push(center.coords);
+      });
+    }
 
     routeList.forEach(rt => {
       const color = rt.color || '#22c55e';
@@ -81,9 +108,10 @@ function RouteMap({ routes, points = [], ordered = false, warehouse, colors, hei
       pts.forEach(({ point: p, coords: ll }) => {
         allLatLngs.push(ll);
         const label = p.label != null ? String(p.label) : '';
+        const pinColor = p.coverageStatus === 'outside' ? '#ef4444' : color;
         const icon = L.divIcon({
           className: '',
-          html: `<div style="background:${color};color:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)">${label || '●'}</div>`,
+          html: `<div style="background:${pinColor};color:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)">${label || '●'}</div>`,
           iconSize: [26, 26], iconAnchor: [13, 13],
         });
         L.marker(ll, { icon }).addTo(layer)
@@ -139,15 +167,33 @@ function fmt(n) { return new Intl.NumberFormat('es-CL', { style: 'currency', cur
 function WarehouseEditor({ colors, warehouse, onSaved }) {
   const [editing, setEditing] = useState(false);
   const [draft,   setDraft]   = useState('');
+  const [radiusDraft, setRadiusDraft] = useState('50');
+  const [pointsDraft, setPointsDraft] = useState('');
   const [saving,  setSaving]  = useState(false);
   const [msg,     setMsg]     = useState(null);
 
-  const start = () => { setDraft(warehouse?.address || ''); setEditing(true); setMsg(null); };
+  const start = () => {
+    setDraft(warehouse?.address || '');
+    setRadiusDraft(String(warehouse?.coverageRadiusKm || 50));
+    setPointsDraft(validCoveragePoints(warehouse).map(p => `${p.name || 'Punto'} | ${p.address || ''}`).join('\n'));
+    setEditing(true);
+    setMsg(null);
+  };
 
   const save = async () => {
     setSaving(true); setMsg(null);
     try {
-      const r = await api.post('/settings/warehouse', { address: draft.trim() });
+      const coveragePoints = pointsDraft.split('\n').map((line, index) => {
+        const parts = line.split('|');
+        const address = (parts.length > 1 ? parts.slice(1).join('|') : parts[0]).trim();
+        const name = (parts.length > 1 ? parts[0] : `Punto ${index + 2}`).trim();
+        return { name, address };
+      }).filter(point => point.address);
+      const r = await api.post('/settings/warehouse', {
+        address: draft.trim(),
+        coverageRadiusKm: radiusDraft,
+        coveragePoints,
+      });
       onSaved(r.data.warehouse);
       setEditing(false);
       if (r.data.warning) setMsg(r.data.warning);
@@ -161,6 +207,7 @@ function WarehouseEditor({ colors, warehouse, onSaved }) {
   if (editing) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <label style={{ fontSize: '11px', color: colors.textMuted }}>Bodega / punto principal</label>
         <input
           autoFocus
           value={draft}
@@ -169,10 +216,24 @@ function WarehouseEditor({ colors, warehouse, onSaved }) {
           placeholder="Dirección de la bodega, ej: Av. Balmaceda 1234, La Serena"
           style={{ ...inputStyle(colors), fontSize: '13px' }}
         />
+        <label style={{ fontSize: '11px', color: colors.textMuted }}>Radio máximo desde cada punto (km)</label>
+        <input
+          type="number" min="1" max="1000" step="1"
+          value={radiusDraft}
+          onChange={e => setRadiusDraft(e.target.value)}
+          style={{ ...inputStyle(colors), fontSize: '13px' }}
+        />
+        <label style={{ fontSize: '11px', color: colors.textMuted }}>Otros puntos de cobertura (opcional, uno por línea)</label>
+        <textarea
+          value={pointsDraft}
+          onChange={e => setPointsDraft(e.target.value)}
+          placeholder={'Sucursal Coquimbo | Av. Ejemplo 123, Coquimbo\nPunto Ovalle | Dirección 456, Ovalle'}
+          style={{ ...inputStyle(colors), minHeight: '58px', resize: 'vertical', fontSize: '11px' }}
+        />
         <div style={{ display: 'flex', gap: '6px' }}>
           <button onClick={save} disabled={saving}
             style={{ flex: 1, background: colors.green, color: '#fff', border: 'none', borderRadius: '7px', padding: '7px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
-            {saving ? 'Guardando...' : 'Guardar bodega'}
+            {saving ? 'Guardando...' : 'Guardar cobertura'}
           </button>
           <button onClick={() => setEditing(false)}
             style={{ background: 'none', border: `1px solid ${colors.border}`, borderRadius: '7px', padding: '7px 12px', color: colors.textMuted, fontSize: '12px', cursor: 'pointer' }}>
@@ -194,12 +255,17 @@ function WarehouseEditor({ colors, warehouse, onSaved }) {
   }
 
   return (
-    <div style={{ fontSize: '11px', color: colors.textMuted, display: 'flex', alignItems: 'center', gap: '5px' }}>
+    <div style={{ fontSize: '11px', color: colors.textMuted, display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
       <span>🏠</span>
       <span style={{ color: colors.textSecondary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {warehouse.address}{!warehouse.geocoded ? ' (sin ubicar)' : ''}
       </span>
       <button onClick={start} style={{ background: 'none', border: 'none', color: colors.blue, cursor: 'pointer', padding: 0, fontSize: '11px' }}>editar</button>
+      <div style={{ width: '100%', paddingLeft: 20, color: warehouse.coverageEnabled ? colors.textMuted : '#fbbf24' }}>
+        {warehouse.coverageEnabled
+          ? `Cobertura: ${warehouse.coverageRadiusKm} km desde ${validCoveragePoints(warehouse).filter(p => p.geocoded).length + 1} punto(s)`
+          : '⚠️ Configura el radio para detectar direcciones fuera de ruta'}
+      </div>
     </div>
   );
 }
@@ -321,6 +387,7 @@ function NuevoReparto({ colors }) {
   const [error,          setError]          = useState(null);
   const [editingAddr,    setEditingAddr]    = useState(null); // key de orden en edición
   const [addrDraft,      setAddrDraft]      = useState('');
+  const [cityDraft,      setCityDraft]      = useState('');
 
   // Multi-vehículo
   const [vehicles,      setVehicles]      = useState(1);        // cuántos vehículos
@@ -336,7 +403,9 @@ function NuevoReparto({ colors }) {
       .then(r => {
         const clean = uniqueOrders(r.data.orders);
         setOrders(clean);
-        setSelected(new Set(clean.map(o => `${o.source}_${o.id}`)));
+        setSelected(new Set(clean
+          .filter(o => !['outside', 'unlocated'].includes(o.coverage?.status))
+          .map(o => `${o.source}_${o.id}`)));
       })
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoadingOrders(false));
@@ -401,9 +470,13 @@ function NuevoReparto({ colors }) {
   }
 
   const selectedOrders = orders.filter(o => selected.has(`${o.source}_${o.id}`));
+  const outsideOrders = orders.filter(o => o.coverage?.status === 'outside');
+  const reviewOrders = orders.filter(o => ['outside', 'unlocated'].includes(o.coverage?.status));
 
   async function handleOptimize() {
     if (selectedOrders.length === 0) return;
+    const selectedOutside = selectedOrders.filter(o => o.coverage?.status === 'outside');
+    if (selectedOutside.length && !window.confirm(`${selectedOutside.length} pedido(s) están fuera del rango configurado. ¿Ya verificaste sus direcciones y quieres incluirlos igualmente?`)) return;
     setOptimizing(true);
     setError(null);
     try {
@@ -477,16 +550,21 @@ function NuevoReparto({ colors }) {
   async function saveAddress(order) {
     if (!addrDraft.trim()) return;
     try {
-      const { data } = await api.patch(`/orders/${order.id}/address`, { address: addrDraft.trim() });
-      alertOrderEditNotification(data.notification);
-      // Actualizar localmente
+      const { data } = await api.patch('/delivery/orders/address', {
+        source: order.source, id: order.id, address: addrDraft.trim(), city: cityDraft.trim(), updateContact: true,
+      });
+      const updated = data.stop;
       setOrders(prev => prev.map(o =>
-        o.source === 'bot' && String(o.id) === String(order.id)
-          ? { ...o, fullAddress: addrDraft.trim(), address: addrDraft.trim() }
+        o.source === order.source && String(o.id) === String(order.id)
+          ? { ...o, ...updated }
           : o
       ));
+      if (updated?.coverage?.status === 'inside') {
+        setSelected(prev => new Set([...prev, `${order.source}_${order.id}`]));
+      }
       setEditingAddr(null);
       setAddrDraft('');
+      setCityDraft('');
     } catch (e) {
       setError(e.response?.data?.error || 'Error guardando dirección');
     }
@@ -570,7 +648,9 @@ function NuevoReparto({ colors }) {
       .then(r => {
         const clean = uniqueOrders(r.data.orders);
         setOrders(clean);
-        setSelected(new Set(clean.map(o => `${o.source}_${o.id}`)));
+        setSelected(new Set(clean
+          .filter(o => !['outside', 'unlocated'].includes(o.coverage?.status))
+          .map(o => `${o.source}_${o.id}`)));
       })
       .finally(() => setLoadingOrders(false));
   }
@@ -623,6 +703,13 @@ function NuevoReparto({ colors }) {
           Pedidos nuevos del bot, pedidos marcados Por despachar y reintentos pendientes. Los pedidos nuevos con fecha futura aparecen el día programado.
         </div>
 
+        {reviewOrders.length > 0 && (
+          <div style={{ margin: '10px 12px 0', padding: '9px 11px', backgroundColor: '#3a180d', border: '1px solid #ef444466', borderRadius: '9px', color: '#fecaca', fontSize: '11px', lineHeight: 1.45 }}>
+            <strong>📍 {reviewOrders.length} dirección{reviewOrders.length === 1 ? '' : 'es'} por revisar.</strong>{' '}
+            {outsideOrders.length ? `${outsideOrders.length} fuera del rango configurado. ` : ''}Quedaron sin seleccionar para evitar agregarlas por error; puedes corregirlas o seleccionarlas manualmente después de verificar.
+          </div>
+        )}
+
         {error && (
           <div style={{ margin: '12px', padding: '10px 14px', backgroundColor: `${colors.red}18`, borderRadius: '8px', color: colors.red, fontSize: '13px' }}>
             {error}
@@ -648,7 +735,8 @@ function NuevoReparto({ colors }) {
                   display: 'flex', alignItems: 'flex-start', gap: '10px',
                   padding: '12px 16px', cursor: 'pointer',
                   borderBottom: `1px solid ${colors.border}`,
-                  backgroundColor: checked ? `${colors.green}08` : 'transparent',
+                  backgroundColor: o.coverage?.status === 'outside' ? '#3a180d55' : checked ? `${colors.green}08` : 'transparent',
+                  borderLeft: o.coverage?.status === 'outside' ? '3px solid #ef4444' : '3px solid transparent',
                   transition: 'background 0.1s',
                 }}>
                   {/* Checkbox */}
@@ -672,31 +760,45 @@ function NuevoReparto({ colors }) {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
                       <MapPin size={11} color={o.fullAddress ? colors.textMuted : colors.red} />
-                      {o.source === 'bot' && !o.fullAddress && editingAddr !== `${o.source}_${o.id}` ? (
+                      {!o.isReturn && !o.fullAddress && editingAddr !== `${o.source}_${o.id}` ? (
                         <button
-                          onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(''); }}
+                          onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(''); setCityDraft(o.city || ''); }}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.red, fontSize: '12px', padding: 0, textDecoration: 'underline' }}>
                           + Agregar dirección
                         </button>
-                      ) : o.source === 'bot' && editingAddr === `${o.source}_${o.id}` ? (
-                        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: '4px', flex: 1 }}>
+                      ) : !o.isReturn && editingAddr === `${o.source}_${o.id}` ? (
+                        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: '4px', flex: 1, flexWrap: 'wrap' }}>
                           <input
                             autoFocus
                             value={addrDraft}
                             onChange={e => setAddrDraft(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') saveAddress(o); if (e.key === 'Escape') { setEditingAddr(null); setAddrDraft(''); } }}
                             placeholder="Ej: Av. Ejemplo 123, La Serena"
-                            style={{ flex: 1, fontSize: '11px', padding: '2px 6px', borderRadius: '5px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, outline: 'none' }}
+                            style={{ flex: '1 1 170px', fontSize: '11px', padding: '2px 6px', borderRadius: '5px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, outline: 'none' }}
                           />
+                          <input value={cityDraft} onChange={e => setCityDraft(e.target.value)} placeholder="Ciudad"
+                            style={{ width: '82px', fontSize: '11px', padding: '2px 6px', borderRadius: '5px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, outline: 'none' }} />
                           <button onClick={() => saveAddress(o)} style={{ background: colors.green, border: 'none', borderRadius: '4px', color: '#fff', fontSize: '11px', padding: '2px 7px', cursor: 'pointer', fontWeight: 600 }}>✓</button>
                           <button onClick={() => { setEditingAddr(null); setAddrDraft(''); }} style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', fontSize: '12px' }}>✕</button>
                         </div>
                       ) : (
-                        <span style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {o.fullAddress || '—'}
-                        </span>
+                        <>
+                          <span style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                            {o.fullAddress || '—'}
+                          </span>
+                          {!o.isReturn && <button title="Corregir dirección" onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(o.address || ''); setCityDraft(o.city || ''); }}
+                            style={{ background: 'none', border: 'none', color: colors.blue, cursor: 'pointer', padding: 0, fontSize: '11px' }}>editar</button>}
+                        </>
                       )}
                     </div>
+                    {o.coverage?.status === 'outside' && (
+                      <div style={{ marginTop: 5, color: '#fca5a5', fontSize: '11px', fontWeight: 800 }}>
+                        ⚠ Fuera de cobertura · {o.coverage.distanceKm} km de {o.coverage.centerName} (máx. {o.coverage.radiusKm} km)
+                      </div>
+                    )}
+                    {o.coverage?.status === 'unlocated' && (
+                      <div style={{ marginTop: 5, color: '#fbbf24', fontSize: '11px', fontWeight: 700 }}>⚠ Dirección no reconocida · revisar antes de despachar</div>
+                    )}
                     <span style={{ color: colors.textMuted, fontSize: '11px' }}>{o.orderName}</span>
                     {o.isReturn && (
                       <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 800, color: '#c4b5fd' }}>
@@ -802,7 +904,7 @@ function NuevoReparto({ colors }) {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {step === 'select' && !optimizing && (() => {
           const pts = selectedOrders.map(o => ({
-            lat: o.lat, lng: o.lng, name: o.customerName, address: o.fullAddress,
+            lat: o.lat, lng: o.lng, name: o.customerName, address: o.fullAddress, coverageStatus: o.coverage?.status,
           }));
           const withCoords   = pts.filter(p => mapCoordinates(p));
           const sinUbicar    = selectedOrders.length - withCoords.length;
@@ -875,7 +977,7 @@ function NuevoReparto({ colors }) {
                     ordered: true,
                     path: rt.path || [],
                     points: (rt.stops || []).map(s => ({
-                      lat: s.lat, lng: s.lng, label: s.stopNumber, name: s.customerName, address: s.fullAddress,
+                      lat: s.lat, lng: s.lng, label: s.stopNumber, name: s.customerName, address: s.fullAddress, coverageStatus: s.coverage?.status,
                     })),
                   }))}
                 />
@@ -1090,6 +1192,7 @@ const PAY_META = {
 };
 const STOP_META = {
   entregado: { label: 'Entregado',    color: '#2dd4bf' },
+  partial:   { label: 'Entrega parcial', color: '#f59e0b' },
   cancelled: { label: 'Cancelado',    color: '#f87171' },
   postponed: { label: 'Reprogramado', color: '#a78bfa' },
   not_delivered: { label: 'Sin entrega', color: '#38bdf8' },
@@ -1097,7 +1200,7 @@ const STOP_META = {
 };
 
 function chargeInfo(row) {
-  if (row.status !== 'entregado') return null;
+  if (!['entregado', 'partial'].includes(row.status)) return null;
   if (row.paid) return { label: 'Pagado', color: '#22c55e', icon: '✅' };
   if (row.payment_method === 'efectivo') return { label: 'Efectivo al entregar', color: '#22c55e', icon: '💵' };
   if (!['transferencia', 'mixto'].includes(row.payment_method)) return null;
@@ -1174,7 +1277,7 @@ function DespachosRepartos({ colors }) {
   async function openChargeModal(d, ev) {
     ev?.stopPropagation?.();
     const pend = (d.rows || []).filter(r =>
-      r.status === 'entregado' && ['transferencia', 'mixto'].includes(r.payment_method) && r.charge?.actionable
+      ['entregado', 'partial'].includes(r.status) && ['transferencia', 'mixto'].includes(r.payment_method) && r.charge?.actionable
     );
     if (!pend.length) return;
     setChargeModal({ day: d.day, rows: pend });
@@ -1281,6 +1384,7 @@ function DespachosRepartos({ colors }) {
     try {
       const { data } = await api.patch('/orders/set-items', { source: itemsModal.source, id: itemsModal.id, items: itemRows });
       alertOrderEditNotification(data.notification);
+      if (data.checklistReset) alert(`Se actualizaron ${data.syncedRoutes} ruta(s) sin iniciar y se reinició su checklist de carga.`);
       setItemsModal(null); setItemRows(null); load();
     } catch (e) { alert(e.response?.data?.error || 'No se pudo guardar'); }
     finally { setItemsBusy(false); }
@@ -1329,13 +1433,14 @@ function DespachosRepartos({ colors }) {
   const days = [];
   const byDay = {};
   for (const r of filtered) {
-    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, pagado: 0, porVerificar: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, sinPagoConfirmado: 0, cobrosAccionables: 0, extras: 0, deudaEmpresa: 0, deudaPersonal: 0, deudoresEmpresa: [], deudoresPersonal: [] }; days.push(byDay[r.day]); }
+    if (!byDay[r.day]) { byDay[r.day] = { day: r.day, rows: [], entregados: 0, parciales: 0, cancelados: 0, sinEntrega: 0, reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, pagado: 0, porVerificar: 0, otro: 0, cobrosEnviados: 0, cobrosPendientes: 0, cobrosSinConfirmar: 0, sinPagoConfirmado: 0, cobrosAccionables: 0, extras: 0, deudaEmpresa: 0, deudaPersonal: 0, deudoresEmpresa: [], deudoresPersonal: [] }; days.push(byDay[r.day]); }
     const d = byDay[r.day];
     d.rows.push(r);
-    if (r.status === 'entregado') {
-      d.entregados++;
+    if (['entregado', 'partial'].includes(r.status)) {
+      if (r.status === 'partial') d.parciales++;
+      else d.entregados++;
       // El total del pedido ya incorpora las ventas extra guardadas en reparto.
-      const amount = Number(r.total) || 0;
+      const amount = (Number(r.total) || 0) + (r.status === 'partial' ? (Number(r.extra_total) || 0) : 0);
       const cashAmount = Number(r.payment_cash_amount) || (r.payment_method === 'efectivo' ? amount : 0);
       const transferAmount = Number(r.payment_transfer_amount) || (r.payment_method === 'transferencia' ? amount : 0);
       if (r.payment_method === 'efectivo' || r.payment_method === 'mixto') d.efectivo += cashAmount;
@@ -1390,7 +1495,7 @@ function DespachosRepartos({ colors }) {
       const identity = periodForDay(d.day, viewMode);
       if (!byPeriod[identity.key]) {
         byPeriod[identity.key] = {
-          ...identity, days: [], rows: 0, entregados: 0, cancelados: 0, sinEntrega: 0,
+          ...identity, days: [], rows: 0, entregados: 0, parciales: 0, cancelados: 0, sinEntrega: 0,
           reprogramados: 0, pendientes: 0, efectivo: 0, transferencia: 0, pagado: 0, porVerificar: 0,
           cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0,
           extras: 0, gastos: 0,
@@ -1400,19 +1505,19 @@ function DespachosRepartos({ colors }) {
       const p = byPeriod[identity.key];
       p.days.push(d);
       p.rows += d.rows.length;
-      for (const field of ['entregados','cancelados','sinEntrega','reprogramados','pendientes','efectivo','transferencia','pagado','porVerificar','cobrosEnviados','cobrosPendientes','deudaEmpresa','deudaPersonal','extras','gastos']) {
+      for (const field of ['entregados','parciales','cancelados','sinEntrega','reprogramados','pendientes','efectivo','transferencia','pagado','porVerificar','cobrosEnviados','cobrosPendientes','deudaEmpresa','deudaPersonal','extras','gastos']) {
         p[field] += Number(d[field]) || 0;
       }
     }
   }
 
   const totals = days.reduce((t, d) => ({
-    entregados: t.entregados + d.entregados, cancelados: t.cancelados + d.cancelados, sinEntrega: t.sinEntrega + d.sinEntrega,
+    entregados: t.entregados + d.entregados, parciales: t.parciales + d.parciales, cancelados: t.cancelados + d.cancelados, sinEntrega: t.sinEntrega + d.sinEntrega,
     efectivo: t.efectivo + d.efectivo, transferencia: t.transferencia + d.transferencia, pagado: t.pagado + d.pagado, porVerificar: t.porVerificar + d.porVerificar,
     cobrosEnviados: t.cobrosEnviados + d.cobrosEnviados, cobrosPendientes: t.cobrosPendientes + d.cobrosPendientes,
     deudaEmpresa: t.deudaEmpresa + d.deudaEmpresa, deudaPersonal: t.deudaPersonal + d.deudaPersonal,
     sinPagoConfirmado: t.sinPagoConfirmado + d.sinPagoConfirmado,
-  }), { entregados: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, pagado: 0, porVerificar: 0, cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0, sinPagoConfirmado: 0 });
+  }), { entregados: 0, parciales: 0, cancelados: 0, sinEntrega: 0, efectivo: 0, transferencia: 0, pagado: 0, porVerificar: 0, cobrosEnviados: 0, cobrosPendientes: 0, deudaEmpresa: 0, deudaPersonal: 0, sinPagoConfirmado: 0 });
   totals.gastos = gastosTotal;
   // La venta se reconoce al entregar el pedido, no al verificar el pago.
   // Incluye personas y empresas; solo separa el medio de pago.
@@ -1425,10 +1530,11 @@ function DespachosRepartos({ colors }) {
   const timeOf = r => new Date(r.at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
 
   function exportCSV() {
-    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Tipo de cliente', 'Teléfono', 'Dirección', 'Productos', 'Estado', 'Medio de pago', 'Efectivo', 'Transferencia', 'Total', 'Extras', 'Cobro', 'Nota'];
+    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Tipo de cliente', 'Teléfono', 'Dirección', 'Entregado', 'Pendiente', 'Próxima entrega', 'Estado', 'Medio de pago', 'Efectivo', 'Transferencia', 'Total entregado', 'Extras', 'Cobro', 'Nota'];
     const lines = filtered.map(r => [
       r.day, r.time_is_exact ? timeOf(r) : '', r.driver_name || '', r.route_name, r.order_label, r.customer_name || '', r.client_type === 'empresa' ? 'Empresa' : 'Persona natural', r.phone || '',
       r.address || '', (r.items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '),
+      (r.pending_items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '), r.remainder_delivery_date || '',
       STOP_META[r.status]?.label || r.status, PAY_META[r.payment_method]?.label || '',
       Math.round(r.payment_cash_amount || 0), Math.round(r.payment_transfer_amount || 0),
       Math.round(r.total || 0), Math.round(r.extra_total || 0), chargeInfo(r)?.label || '', r.note || '',
@@ -1509,6 +1615,7 @@ function DespachosRepartos({ colors }) {
         <select value={status} onChange={e => setStatus(e.target.value)} style={inp}>
           <option value="">Todos los estados</option>
           <option value="entregado">Entregado</option>
+          <option value="partial">Entrega parcial</option>
           <option value="cancelled">Cancelado</option>
           <option value="postponed">Reprogramado</option>
           <option value="not_delivered">Sin entrega</option>
@@ -1522,6 +1629,7 @@ function DespachosRepartos({ colors }) {
       {/* Totales del período */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
         {chip(`${totals.entregados} entregados`, '#2dd4bf')}
+        {totals.parciales > 0 && chip(`${totals.parciales} entregas parciales`, '#f59e0b')}
         {totals.cancelados > 0 && chip(`${totals.cancelados} cancelados`, '#f87171')}
         {totals.sinEntrega > 0 && chip(`${totals.sinEntrega} sin entrega`, '#38bdf8')}
         {chip(`📈 ${CLP(totals.ingresoTotal)} ingreso total`, '#10b981')}
@@ -1579,7 +1687,7 @@ function DespachosRepartos({ colors }) {
                       </span>
                     </td>
                     <td style={{ ...cell, color: colors.textSecondary }}>{period.days.length} días · {period.rows} paradas</td>
-                    <td style={{ ...cell, color: '#2dd4bf', fontWeight: 800 }}>{period.entregados}</td>
+                    <td style={{ ...cell, color: '#2dd4bf', fontWeight: 800 }}>{period.entregados}{period.parciales ? ` + ${period.parciales} parc.` : ''}</td>
                     <td style={{ ...cell, color: incidents ? '#f87171' : colors.textMuted }}>{incidents || '—'}</td>
                     <td style={{ ...cell, color: '#22c55e', fontWeight: 700 }}>{CLP(period.efectivo)}</td>
                     <td style={{ ...cell, color: '#38bdf8', fontWeight: 700 }}>{CLP(period.transferencia)}</td>
@@ -1599,7 +1707,7 @@ function DespachosRepartos({ colors }) {
                         <tr key={d.day} style={{ borderTop: `1px solid ${colors.border}`, background: colors.bgPanel, fontSize: '11px' }}>
                           <td style={{ ...cell, textAlign: 'left', paddingLeft: '34px', color: colors.textPrimary, fontWeight: 700, textTransform: 'capitalize' }}>{dayLabel(d.day)}</td>
                           <td style={{ ...cell, color: colors.textSecondary }}>{d.rows.length} paradas</td>
-                          <td style={{ ...cell, color: '#2dd4bf', fontWeight: 700 }}>{d.entregados}</td>
+                          <td style={{ ...cell, color: '#2dd4bf', fontWeight: 700 }}>{d.entregados}{d.parciales ? ` + ${d.parciales} parc.` : ''}</td>
                           <td style={{ ...cell, color: dayIncidents ? '#f87171' : colors.textMuted }}>{dayIncidents || '—'}</td>
                           <td style={{ ...cell, color: '#22c55e' }}>{CLP(d.efectivo)}</td>
                           <td style={{ ...cell, color: '#38bdf8' }}>{CLP(d.transferencia)}</td>
@@ -1637,6 +1745,7 @@ function DespachosRepartos({ colors }) {
               <span style={{ fontSize: '11px', color: colors.textMuted }}>{d.rows.length} paradas</span>
               <div style={{ flex: 1 }} />
               {chip(`${d.entregados} ✓`, '#2dd4bf')}
+              {d.parciales > 0 && chip(`${d.parciales} parciales`, '#f59e0b')}
               {d.cancelados > 0 && chip(`${d.cancelados} cancelados`, '#f87171')}
               {d.sinEntrega > 0 && chip(`${d.sinEntrega} sin entrega`, '#38bdf8')}
               {d.reprogramados > 0 && chip(`📅 ${d.reprogramados} reprog.`, '#a78bfa')}
@@ -1714,8 +1823,16 @@ function DespachosRepartos({ colors }) {
                             {r.note && <div style={{ color: '#fbbf24', fontSize: '11px' }}>📝 {r.note}</div>}
                           </td>
                           <td style={{ padding: '8px 12px', color: colors.textSecondary }}>
+                            {r.status === 'partial' && <div style={{ color: '#2dd4bf', fontSize: '10px', fontWeight: 800, textTransform: 'uppercase' }}>Entregado</div>}
                             {(r.items || []).map((i, k) => <div key={k}>{i.quantity}x {i.name}</div>)}
                             {(r.extras || []).map((e, k) => <div key={'x' + k} style={{ color: '#c4b5fd' }}>+ {e.quantity}x {e.name}</div>)}
+                            {(r.pending_items || []).length > 0 && (
+                              <div style={{ marginTop: 5, paddingTop: 5, borderTop: `1px solid ${colors.border}`, color: '#fbbf24' }}>
+                                <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase' }}>Pendiente {r.remainder_delivery_date ? `· ${r.remainder_delivery_date}` : ''}</div>
+                                {(r.pending_items || []).map((item, index) => <div key={`p${index}`}>{item.quantity}x {item.name}</div>)}
+                                {r.remainder_order?.orderName && <div style={{ color: colors.textMuted, fontSize: '10px' }}>{r.remainder_order.orderName}</div>}
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '8px 12px' }}>{chip(sm.label, sm.color)}</td>
                           <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
@@ -1737,11 +1854,11 @@ function DespachosRepartos({ colors }) {
                           </td>
                           <td style={{ padding: '8px 12px', color: colors.textPrimary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
                             {!canEditItems ? (
-                              r.status === 'entregado' ? CLP(r.total || 0) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>
+                              ['entregado', 'partial'].includes(r.status) ? CLP(r.total || 0) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>
                             ) : (
                               <span onClick={() => openItems(r)} title="Editar productos y monto"
                                 style={{ cursor: 'pointer', borderBottom: `1px dashed ${colors.blue}` }}>
-                                {r.status === 'entregado' ? CLP(r.total || 0) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>} <span style={{ color: colors.blue, fontSize: '11px' }}>✎</span>
+                                {['entregado', 'partial'].includes(r.status) ? CLP(r.total || 0) : <span style={{ color: colors.textMuted }}>{CLP(r.total)}</span>} <span style={{ color: colors.blue, fontSize: '11px' }}>✎</span>
                               </span>
                             )}
                           </td>
@@ -2122,6 +2239,7 @@ function HistorialRepartos({ colors }) {
           const total   = parseInt(route.order_count) || 0;
           const statuses = typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
           const done    = Object.values(statuses).filter(v => v === 'entregado').length;
+          const partial = Object.values(statuses).filter(v => v === 'partial').length;
           const failed  = Object.values(statuses).filter(v => v === 'cancelled' || v === 'not_delivered').length;
 
           return (
@@ -2145,6 +2263,7 @@ function HistorialRepartos({ colors }) {
                   <div style={{ display: 'flex', gap: '12px', color: colors.textMuted, fontSize: '12px' }}>
                     <span>{total} paradas</span>
                     {done > 0    && <span style={{ color: '#22c55e' }}>✓ {done}</span>}
+                    {partial > 0 && <span style={{ color: '#f59e0b' }}>◐ {partial}</span>}
                     {failed > 0  && <span style={{ color: '#f87171' }}>✕ {failed}</span>}
                     {route.driver_name && <span>👤 {route.driver_name}</span>}
                     {route.total_distance && <span>{route.total_distance}</span>}
@@ -2316,9 +2435,9 @@ function HistorialRepartos({ colors }) {
                           {ordersList.map((o, idx) => {
                             const key = `${o.source}_${o.id}`;
                             const st  = statuses[key] || 'pending';
-                            const col = st === 'entregado' ? '#22c55e' : st === 'cancelled' ? '#f87171' : st === 'not_delivered' ? '#38bdf8' : '#fb923c';
+                            const col = st === 'entregado' ? '#22c55e' : st === 'partial' ? '#f59e0b' : st === 'cancelled' ? '#f87171' : st === 'not_delivered' ? '#38bdf8' : '#fb923c';
                             return (
-                              <span key={key} title={st === 'entregado' ? 'Entregado' : st === 'cancelled' ? 'Cancelado' : st === 'not_delivered' ? 'Sin entrega' : st === 'postponed' ? 'Reprogramado' : 'Pendiente'}
+                              <span key={key} title={st === 'entregado' ? 'Entregado' : st === 'partial' ? 'Entrega parcial' : st === 'cancelled' ? 'Cancelado' : st === 'not_delivered' ? 'Sin entrega' : st === 'postponed' ? 'Reprogramado' : 'Pendiente'}
                                 style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: colors.textSecondary, backgroundColor: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '999px', padding: '3px 10px', maxWidth: '220px' }}>
                                 <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: col, flexShrink: 0 }} />
                                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idx + 1}. {o.customerName || key}</span>

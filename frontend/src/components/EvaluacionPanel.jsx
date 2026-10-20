@@ -43,7 +43,7 @@ export default function EvaluacionPanel() {
   async function runGrade() {
     setLoadingG(true); setError(null); setApplied(null);
     try {
-      const { data } = await api.post('/bot-eval/grade', { from, to, sample: 15 });
+      const { data } = await api.post('/bot-eval/grade', { from, to, sample: 15 }, { timeout: 120000 });
       setGrade(data);
       const pre = {}; (data.reglas || []).forEach((r, i) => { pre[i] = true; });
       setSelRules(pre);

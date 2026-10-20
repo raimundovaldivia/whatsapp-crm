@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatDateTime } from '../utils/dates.js';
 import {
   ShoppingBag, RefreshCw, ExternalLink, Send, RotateCcw,
-  CheckCircle, Clock, XCircle, Package, DollarSign, Bot, Store, Calendar, Download,
+  CheckCircle, Clock, XCircle, Package, DollarSign, Store, Calendar, Download,
   Plus, Trash2, X, MessageSquare, CalendarClock, BanIcon, Truck,
 } from 'lucide-react';
 
@@ -15,6 +15,7 @@ import ClientAddressFields from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
+import { crmOrderLabel } from '../utils/order-reference.js';
 
 // ─── Normalización ────────────────────────────────────────────────
 function normalizeChargePhone(value) {
@@ -27,6 +28,7 @@ function normalizeBotOrder(o) {
     _key:         `bot-${o.id}`,
     source:       'bot',
     rawId:        o.id,
+    orderName:    crmOrderLabel(o.id),
     customerName: o.customer_name || o.contact_name || 'Cliente',
     phone:        o.customer_phone || o.phone_number || '—',
     date:         new Date(o.created_at),
@@ -1125,7 +1127,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
           {/* Fuente */}
           {[
             { key: 'all',     label: 'Todos',   icon: null },
-            { key: 'bot',     label: '🤖 Bot',   icon: null },
+            { key: 'bot',     label: 'DR',       icon: null },
             { key: 'shopify', label: '🛍️ Shopify', icon: null },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setSourceFilterR(key)}
@@ -1431,9 +1433,9 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
       <div onClick={() => setExpanded(!expanded)} style={{ padding: '13px 18px', display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
         <SelectBox checked={!!selected} onChange={onToggleSelect} colors={colors} />
 
-        {/* Badge fuente — Bot */}
+        {/* Identificador visible del pedido CRM. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', backgroundColor: '#0d1f0d', border: '1px solid #1a3d1a', fontSize: '11px', fontWeight: 600, color: colors.green, flexShrink: 0 }}>
-          <Bot size={10} /> Bot
+          <Package size={10} /> {crmOrderLabel(order.id)}
         </div>
 
         {/* Badge estado */}

@@ -21,6 +21,7 @@ export default function ConversationItem({ conversation, selected, onClick }) {
     .toUpperCase();
 
   const avatarColor = stringToColor(phone_number || contact_name || '');
+  const qualification = qualificationView(conversation);
 
   return (
     <div
@@ -136,6 +137,15 @@ export default function ConversationItem({ conversation, selected, onClick }) {
           )}
         </div>
         <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+          {qualification && !conversation.hot_lead_excluded && (
+            <span title={qualification.title} aria-label={qualification.title} style={{
+              fontSize: '10px', fontWeight: 750, padding: '2px 6px', borderRadius: '10px',
+              color: qualification.color, backgroundColor: qualification.background,
+              border: `1px solid ${qualification.color}55`, whiteSpace: 'nowrap',
+            }}>
+              {qualification.label} · {conversation.lead_score || 0}
+            </span>
+          )}
           {conversation.attribution_first_seen_at && (
             <span title={conversation.attribution_campaign_name || conversation.attribution_headline || 'Llegó desde un anuncio'} style={{
               fontSize: '10px', fontWeight: 750, padding: '2px 6px', borderRadius: '10px',
@@ -157,6 +167,26 @@ export default function ConversationItem({ conversation, selected, onClick }) {
       </div>
     </div>
   );
+}
+
+function qualificationView(conversation) {
+  const views = {
+    exploring:  { label: 'Explorando', color: '#94a3b8', background: '#64748b18' },
+    interested: { label: 'Interesado', color: '#38bdf8', background: '#0ea5e918' },
+    hot:        { label: 'Caliente', color: '#fb923c', background: '#f9731618' },
+    very_hot:   { label: 'Muy caliente', color: '#ef4444', background: '#ef444418' },
+    future:     { label: 'Futuro', color: '#a78bfa', background: '#8b5cf618' },
+    won:        { label: 'Ganado', color: '#22c55e', background: '#22c55e18' },
+    discarded:  { label: 'Descartado', color: '#9ca3af', background: '#6b728018' },
+  };
+  const view = views[conversation.lead_temperature];
+  if (!view) return null;
+  let reasons = conversation.qualification_reasons;
+  if (typeof reasons === 'string') {
+    try { reasons = JSON.parse(reasons); } catch { reasons = []; }
+  }
+  const detail = Array.isArray(reasons) && reasons.length ? reasons.join(' · ') : 'Sin señales comerciales suficientes';
+  return { ...view, title: `${view.label} (${conversation.lead_score || 0}/100): ${detail}` };
 }
 
 function stringToColor(str) {

@@ -76,7 +76,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     return () => clearTimeout(msgTimerRef.current);
   }, [search]);
 
-  const HOT_STATES   = ['interested', 'collecting_order'];
+  const HOT_TEMPERATURES = ['hot', 'very_hot'];
   const CLOSED_STATES = new Set(['done', 'delivered', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out', 'template_sent']);
   const now          = Date.now();
   const h24          = 24 * 60 * 60 * 1000;
@@ -92,7 +92,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const humanUnread = conversations.filter(c => c.agent_mode === 'human' && c.unread_count > 0).length;
   const unreadCount = conversations.filter(c => c.unread_count > 0).length;
   const attentionCount = conversations.filter(c => ['requires_human', 'bot_unanswered'].includes(c.attention_state)).length;
-  const hotCount    = conversations.filter(c => HOT_STATES.includes(c.pipeline_state) && !c.hot_lead_excluded && c.attention_state !== 'no_response_needed').length;
+  const hotCount    = conversations.filter(c => HOT_TEMPERATURES.includes(c.lead_temperature) && !c.hot_lead_excluded && c.attention_state !== 'no_response_needed').length;
   const stalledCount = conversations.filter(isStalled).length;
   const isEvolution = c => c?.whatsapp_provider === 'evolution';
   const isMeta = c => c?.whatsapp_provider === 'meta' || c?.whatsapp_provider === 'kapso';
@@ -109,7 +109,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
     if (activeTab === 'unread' && !(c.unread_count > 0))    return false;
     if (activeTab === 'attention' && !['requires_human', 'bot_unanswered'].includes(c.attention_state)) return false;
-    if (activeTab === 'hot'     && (!HOT_STATES.includes(c.pipeline_state) || c.hot_lead_excluded || c.attention_state === 'no_response_needed')) return false;
+    if (activeTab === 'hot'     && (!HOT_TEMPERATURES.includes(c.lead_temperature) || c.hot_lead_excluded || c.attention_state === 'no_response_needed')) return false;
     if (activeTab === 'stalled' && !isStalled(c))                          return false;
     const q = search.toLowerCase();
     return (
@@ -132,9 +132,9 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const handleScanHotLeads = async () => {
     setScanning(true);
     try {
-      await api.post('/conversations/scan-hot-leads');
-      onRefresh();
-      setActiveTab('hot');
+      const result = await api.post('/conversations/scan-hot-leads', { limit: 200 });
+      const summary = result.data?.summary || {};
+      alert(`Evaluación guardada sin cambiar conversaciones.\n\nHot anterior: ${summary.legacyHot || 0}\nCaliente propuesto: ${summary.hot || 0}\nMuy caliente propuesto: ${summary.very_hot || 0}\n\nID: ${result.data?.runId || '—'}`);
     } catch (e) { console.error(e); }
     finally { setScanning(false); }
   };
@@ -537,7 +537,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
           <button onClick={handleScanHotLeads} disabled={scanning}
             style={{ flexShrink: 0, padding: '5px 10px', borderRadius: '20px', border: `1px solid #f97316`, backgroundColor: 'transparent', color: scanning ? colors.textMuted : '#f97316', fontSize: '11px', fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
             {scanning ? <Loader size={10} /> : <Flame size={10} />}
-            {scanning ? 'Escaneando...' : 'Escanear IA'}
+            {scanning ? 'Evaluando...' : 'Evaluar 200'}
           </button>
         )}
         {activeTab === 'stalled' && (

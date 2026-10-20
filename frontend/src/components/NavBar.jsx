@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   BarChart2, Check, ChevronRight, Facebook, Layers, LogOut, Megaphone, Menu,
-  MessageSquare, Moon, Receipt, Settings, ShoppingBag, Store, Sun,
+  MessageSquare, Moon, Receipt, Settings, Share2, ShoppingBag, Store, Sun,
   Truck, UserCog, Users, Wifi, WifiOff, X,
 } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
 const ROLE_VIEWS = {
-  owner:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
-  admin:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
+  owner:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'referidos', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
+  admin:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'referidos', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
   supervisor:  ['chats', 'orders', 'repartos', 'pagos'],
   coordinador: ['repartos'],
   agent:       ['chats'],
@@ -26,6 +26,7 @@ const MORE_NAV_ITEMS = [
   { key: 'mensajeria', icon: Megaphone, label: 'Mensajería' },
   { key: 'campaigns',  icon: BarChart2, label: 'Campañas a WhatsApp' },
   { key: 'social',     icon: Facebook,   label: 'Facebook e Instagram' },
+  { key: 'referidos',  icon: Share2,     label: 'Referidos' },
   { key: 'productos',  icon: Store,     label: 'Mi tienda' },
   { key: 'stats',      icon: BarChart2, label: 'Estadísticas' },
   { key: 'evaluacion', icon: Check,     label: 'Evaluación' },

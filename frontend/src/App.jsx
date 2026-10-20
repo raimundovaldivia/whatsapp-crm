@@ -19,6 +19,7 @@ const UsersPanel = lazy(() => import('./components/UsersPanel.jsx'));
 const ReengagementPanel = lazy(() => import('./components/ReengagementPanel.jsx'));
 const SocialPanel = lazy(() => import('./components/SocialPanel.jsx'));
 const CampaignAttributionPanel = lazy(() => import('./components/CampaignAttributionPanel.jsx'));
+const ReferralsPanel = lazy(() => import('./components/ReferralsPanel.jsx'));
 import AdminAlertsBanner    from './components/AdminAlertsBanner.jsx';
 import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
@@ -350,8 +351,8 @@ export default function App() {
 
   // Qué vistas puede ver cada rol
   const ROLE_VIEWS = {
-    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
-    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
+    owner:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'referidos', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
+    admin:      new Set(['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'referidos', 'productos', 'evaluacion', 'settings', 'dashboard', 'users', 'solutions']),
     supervisor: new Set(['chats', 'orders', 'repartos', 'pagos']),
     coordinador: new Set(['repartos']),
     agent:      new Set(['chats']),
@@ -362,7 +363,7 @@ export default function App() {
   // Cargar módulos activos de la organización (una vez que hay sesión)
   useEffect(() => {
     if (!user) return;
-    const refreshModules = () => api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({ stats: false, orders: false, repartos: false, pagos: false, clientes: false, mensajeria: false, campaigns: false, social: false, productos: false, evaluacion: false }));
+    const refreshModules = () => api.get('/settings/modules').then(r => setModules(r.data?.modules || {})).catch(() => setModules({ stats: false, orders: false, repartos: false, pagos: false, clientes: false, mensajeria: false, campaigns: false, social: false, referidos: false, productos: false, evaluacion: false }));
     refreshModules();
     window.addEventListener('focus', refreshModules);
     window.addEventListener('commercial-changed', refreshModules);
@@ -530,6 +531,7 @@ export default function App() {
               <ChatWindow
                 conversation={selectedConv}
                 messages={selectedMsgs}
+                availableConversations={conversations}
                 onSendMessage={handleSendMessage}
                 onToggleAgentMode={handleToggleAgentMode}
                 onRefresh={loadConversations}
@@ -605,6 +607,8 @@ export default function App() {
       {view === 'campaigns' && allowedViews.has('campaigns') && (
         <CampaignAttributionPanel onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }} />
       )}
+
+      {view === 'referidos' && allowedViews.has('referidos') && <ReferralsPanel />}
 
       {/* Vista Dashboard */}
       {view === 'dashboard' && <DashboardPanel onChangeView={setView} />}

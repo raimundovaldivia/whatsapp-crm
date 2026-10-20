@@ -276,7 +276,7 @@ export default function DashboardPanel({ onChangeView }) {
                   <span style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>
                     Ventas últimos 7 días
                   </span>
-                  <span style={{ fontSize: '11px', color: colors.textMuted }}>Bot + Shopify</span>
+                  <span style={{ fontSize: '11px', color: colors.textMuted }}>DR + Shopify</span>
                 </div>
                 <div style={{ padding: '12px 20px 16px' }}>
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
@@ -418,7 +418,7 @@ export default function DashboardPanel({ onChangeView }) {
                             border: `1px solid ${order.source === 'bot' ? colors.green : colors.tealSoft}33`,
                             flexShrink: 0,
                           }}>
-                            {order.source === 'bot' ? <><Bot size={9} /> Bot</> : '🛍️ Shopify'}
+                            {order.source === 'bot' ? <><Bot size={9} /> DR</> : '🛍️ Shopify'}
                           </span>
                         </div>
                         <div style={{ fontSize: '11px', color: colors.textMuted, marginTop: '2px' }}>
