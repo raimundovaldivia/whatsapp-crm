@@ -4,7 +4,7 @@ const { modelFor } = require('./ai-provider');
 const { resolveCustomerPhones } = require('./customer-identity');
 const { todayISOChile } = require('./business-date');
 const { createHash } = require('node:crypto');
-const { validateOfferDraft } = require('./campaign-offers');
+const { validateOfferDraft, offerExpiryDate } = require('./campaign-offers');
 
 const MODE = 'instruction';
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -87,7 +87,7 @@ function offerFrom(input, phone, catalog, now) {
   const fields = {
     product_id: input.product_id == null ? null : String(input.product_id),
     offer_price: input.offer_price == null ? null : Number(input.offer_price),
-    expires_at: input.expires_at ?? null,
+    expires_at: offerExpiryDate(input.expires_at)?.toISOString() ?? input.expires_at ?? null,
     scope: input.cap_units == null ? 'all_units' : { cap_units: Number(input.cap_units) },
     recipients: [phone],
     margin_confirmed: false,
@@ -131,7 +131,7 @@ Usa tono breve y natural, una propuesta pertinente y una pregunta sencilla. No v
 No presentes como frecuencia una compra única. Si compró recientemente, no presupongas necesidad; si lleva mucho tiempo, consulta su interés sin dar una reposición por hecha.
 Incluye los complementos que pida el operador, con preferencia conocida si existe. No inventes preferencias, cantidades, precios, descuentos, disponibilidad ni compromisos de entrega. Un precio histórico no es una oferta vigente.
 Si faltan datos indispensables para cumplir la instrucción, devuelve skip con la duda concreta. Respeta rechazos, bajas y conversaciones pendientes; no insistas después de una oferta reciente sin respuesta.
-Ofertas: si la instrucción define ofertas concretas, llena "offers" con una entrada por producto (máximo 5, un solo precio por producto), sólo con lo que diga textualmente: product_id (exactamente uno de catalogoProductos), offer_price (entero, precio final por unidad en pesos), expires_at (YYYY-MM-DD) y cap_units (entero si hay tope de unidades, null si no hay tope). Cada dato que no aparezca va en null: nunca lo inventes ni lo deduzcas. Si la instrucción no define ofertas, usa offers []. El mensaje menciona sólo las ofertas presentes en "offers".
+Ofertas: si la instrucción define ofertas concretas, llena "offers" con una entrada por producto (máximo 5, un solo precio por producto), sólo con lo que diga textualmente: product_id (exactamente uno de catalogoProductos), offer_price (entero, precio final por unidad en pesos), expires_at (YYYY-MM-DDTHH:mm en hora de Chile cuando se indica hora de cierre; YYYY-MM-DD sólo cuando vale hasta el fin del día) y cap_units (entero si hay tope de unidades, null si no hay tope). Conserva siempre la hora explícita: "hasta las 13:00" no es fin del día. Cada dato que no aparezca va en null: nunca lo inventes ni lo deduzcas. Si la instrucción no define ofertas, usa offers []. El mensaje menciona sólo las ofertas presentes en "offers".
 La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa fecha. No reveles cálculos de frecuencia, notas internas ni datos de terceros al cliente.`,
       messages: [{ role: 'user', content: JSON.stringify({
         instruccion: request.instruction, negocio: text(organization?.name, 100),

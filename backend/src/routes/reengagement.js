@@ -2687,6 +2687,15 @@ async function sendBulk(req, res) {
           continue;
         }
         if (!String(item.templateName ? item.previewText || '' : item.message || '').trim()) throw new Error('El mensaje directo está vacío');
+        // A queued offer can expire after approval while earlier recipients are sent.
+        // Check again even when its draft was already persisted at campaign start.
+        const offerRules = require('../services/campaign-offers');
+        if (offerRules.offerListFrom(item).some(offer => offerRules.isExpiredOffer(offer))) {
+          const reason = 'La oferta venció antes del envío; mensaje omitido';
+          await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: reason });
+          results.push({ phone: item.phone, success: false, skipped: true, error: reason });
+          continue;
+        }
         // Oferta personal: no se envía si faltan campos o no cumple las reglas.
         // La respuesta trae la lista de campos faltantes para completarlos en la app.
         if (item.campaignOfferIds?.length) {

@@ -27,6 +27,54 @@ export const OFFER_FIELD_LABELS = {
 
 export const MAX_OFFERS_PER_RECIPIENT = 5;
 
+export function offerCatalog(data) {
+  const products = Array.isArray(data) ? data : data?.products;
+  if (!Array.isArray(products)) throw new Error('No se recibió el catálogo de productos.');
+  return products.filter(product => product.active && !product.deprecated_at);
+}
+
+export function offerExpiryInput(value) {
+  if (!value) return '';
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return `${raw}T23:59:59`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(raw)) return raw;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return '';
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date).map(part => [part.type, part.value]));
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
+}
+
+// Restore text only into the current filtered audience. Never trust approvals,
+// channel IDs, pricing, force flags, or contact metadata supplied by a file.
+export function restoreDraftEntries(data, audience) {
+  const rows = Array.isArray(data) ? data : data?.contacts;
+  if (!Array.isArray(rows) || !rows.length || rows.length > 100) throw new Error('Carga entre 1 y 100 borradores.');
+  const phoneOf = value => String(value || '').replace(/\D/g, '');
+  const chosen = new Map(audience.map(contact => [phoneOf(contact.phone), contact]));
+  if (rows.length !== chosen.size) throw new Error('Los borradores deben coincidir con todos los contactos seleccionados.');
+  const seen = new Set();
+  return rows.map(row => {
+    const phone = phoneOf(row.phone);
+    const contact = chosen.get(phone);
+    if (!/^\d{8,15}$/.test(phone) || !contact || seen.has(phone) || contact.opt_out || contact.identity_blocked) {
+      throw new Error('Hay un destinatario repetido, excluido o fuera de la selección.');
+    }
+    if (typeof row.message !== 'string' || !row.message.trim() || row.message.length > 1200 || /\{\{|\}\}/.test(row.message)) {
+      throw new Error(`Revisa el texto para ${phone}: debe tener entre 1 y 1.200 caracteres y no usar variables.`);
+    }
+    seen.add(phone);
+    const message = row.message.trim();
+    return {
+      contact, reason: 'Borrador guardado recuperado para revisión. Verifica su texto y completa las ofertas.',
+      previewText: message, offerChecks: [], requireOffer: true,
+      item: { phone: contact.phone, originalPhone: contact.phone, contactName: contact.name, message, previewText: message, offers: [] },
+    };
+  });
+}
+
 export function offersList(entry) {
   return Array.isArray(entry?.item?.offers) ? entry.item.offers : [];
 }
@@ -60,6 +108,7 @@ export function duplicateOfferProducts(entry) {
 // Una oferta solo está lista si cada una fue validada tal como está escrita ahora.
 export function offerReady(entry) {
   const offers = offersList(entry);
+  if (entry.requireOffer && !offers.length) return false;
   if (!offers.length) return true;
   if (duplicateOfferProducts(entry).length) return false;
   const checks = entry.offerChecks || [];

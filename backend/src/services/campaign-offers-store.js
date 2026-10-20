@@ -40,11 +40,13 @@ async function activeForConversation(pool, orgId, conversationId) {
 
 /** Crea la oferta como borrador, antes del envío. Los campos ya fueron validados. */
 async function createDraft(pool, orgId, conversationId, fields) {
+  const expires = rules.offerExpiryDate(fields.expires_at);
+  if (!expires) throw new Error('Vencimiento de oferta inválido');
   const { rows } = await pool.query(
     `INSERT INTO campaign_offers (organization_id, conversation_id, product_id, offer_price, scope, expires_at, status, created_at)
      VALUES ($1, $2, $3, $4, $5, $6, 'draft', NOW()) RETURNING ${COLUMNS}`,
     [orgId, conversationId, String(fields.product_id), Number(fields.offer_price),
-      JSON.stringify(fields.scope), fields.expires_at],
+      JSON.stringify(fields.scope), expires.toISOString()],
   );
   return rows[0];
 }

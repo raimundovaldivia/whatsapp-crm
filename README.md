@@ -291,3 +291,9 @@ PUT /api/settings
 ### Redacción individual por Evolution
 
 En Mensajería masiva, el canal Evolution permite indicar el objetivo y las condiciones en lenguaje natural. La IA vigente redacta por cliente con su historial y conversación; preparar borradores no envía mensajes. Cada texto debe revisarse y puede corregirse o excluirse antes de autorizar el lote. La autorización se vincula a los destinatarios y textos exactos, que se guardan en la cola existente. Cambiar un mensaje exige volver a revisarlo. Las campañas detenidas mantienen su estado. Esta función envía texto y no incorpora imágenes.
+
+Las ofertas son personales: se guardan por organización, conversación y producto, y se activan tras un envío aceptado. No cambian el catálogo público. El selector de productos consume la respuesta `{ products: [...] }` y permite reintentar si falla la carga. El vencimiento se edita con fecha y hora de Chile; una fecha sin hora conserva vigencia hasta el cierre de ese día. La cola omite mensajes cuyas ofertas hayan vencido antes de enviarlos.
+
+La revisión permite recuperar textos desde un JSON con `contacts: [{ phone, message }]` para exactamente los contactos seleccionados (máximo 100). Solo recupera los textos y su orden: descarta autorizaciones, precios e identidad importados, exige completar y validar las ofertas y revisar cada mensaje nuevamente. No crea campañas ni envía al importar.
+
+Para estas reglas, ejecutar las pruebas del backend y `npm test` en el frontend. Las regresiones cubren horario de invierno/verano, almacenamiento UTC, ofertas vencidas en cola, carga del catálogo y recuperación sin autorización heredada. Los imports de las pruebas admiten rutas Windows.

@@ -91,6 +91,13 @@ test('direct route never falls back to Kapso, enforces opt-out and pauses before
   assert.equal(savedMessages.at(-1).content, 'Hola');
   assert.equal(savedMessages.at(-1).type, 'text');
   assert.equal(savedMessages.at(-1).conversationId, 77);
+  req.body.items = [{ phone: '56912345678', message: 'Hola', force: true,
+    campaignOfferIds: [42], offers: [{ product_id: '1', expires_at: '2000-01-01T13:00' }] }];
+  res = response(); await send(req, res);
+  assert.equal(res.body.results[0].skipped, true);
+  assert.match(res.body.results[0].error, /venció/);
+  assert.equal(sends, 2, 'a queued draft must not send after its offer expires');
+  req.body.items = [{ phone: '56912345678', message: 'Hola', force: true }];
   storageFails = true; res = response(); await send(req, res);
   assert.equal(res.body.results.length, 1);
   assert.equal(res.body.results[0].success, true); // Provider acceptance must never cause a resend.

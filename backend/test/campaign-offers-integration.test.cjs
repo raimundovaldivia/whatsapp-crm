@@ -31,6 +31,17 @@ async function setup() {
 
 const fields = { product_id: '51', offer_price: 8000, expires_at: EXPIRES, scope: 'all_units', recipients: ['56967692870'] };
 
+test('persistencia convierte el cierre local a un instante explícito, incluso con sesión UTC', async () => {
+  const { engine, pool } = await setup();
+  try {
+    await engine.exec("SET TIME ZONE 'UTC'");
+    const offer = await store.createDraft(pool, 1, 10, { ...fields, expires_at: '2026-10-20T13:00' });
+    assert.equal(new Date(offer.expires_at).toISOString(), '2026-10-20T16:00:00.000Z');
+    assert.equal(rules.isExpiredOffer(offer, new Date('2026-10-20T15:59:59Z')), false);
+    assert.equal(rules.isExpiredOffer(offer, new Date('2026-10-20T16:00:00Z')), true);
+  } finally { await engine.close(); }
+});
+
 test('la migración es idempotente y agrega las columnas nuevas', async () => {
   const { engine } = await setup();
   await engine.exec(fs.readFileSync(path.join(__dirname, '../src/db/campaign-offers.sql'), 'utf8'));

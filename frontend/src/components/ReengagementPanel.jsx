@@ -10,7 +10,7 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
-import { reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS } from '../utils/broadcast-drafts.mjs';
+import { reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries } from '../utils/broadcast-drafts.mjs';
 
 function consolidateVisibleCandidates(rows = []) {
   const grouped = new Map();
@@ -1354,13 +1354,24 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [reviewedItems,  setReviewedItems]  = useState(new Set());
 
   const [offerProducts, setOfferProducts] = useState([]);
+  const [offerProductsError, setOfferProductsError] = useState('');
+  const [offerProductsLoading, setOfferProductsLoading] = useState(false);
   const reviewEntry = reviewPlan?.entries?.[reviewIdx];
   const reviewSnapshot = reviewEntry ? offersSnapshot(reviewEntry) : null;
   const reviewNeedsCheck = reviewEntry ? offersList(reviewEntry).some((offer, k) => !offerCheckAt(reviewEntry, k)) : false;
+  async function loadOfferProducts() {
+    setOfferProductsLoading(true);
+    setOfferProductsError('');
+    try {
+      const { data } = await api.get('/products');
+      setOfferProducts(offerCatalog(data));
+    } catch (error) {
+      setOfferProductsError(error.response?.data?.error || 'No se pudo cargar el catálogo. Reintenta antes de autorizar.');
+    } finally { setOfferProductsLoading(false); }
+  }
   useEffect(() => {
-    if (!reviewPlan || reviewPlan.sendingProvider !== 'evolution' || offerProducts.length) return;
-    api.get('/products').then(({ data }) => setOfferProducts((Array.isArray(data) ? data : []).filter(p => p.active && !p.deprecated_at))).catch(() => {});
-  }, [reviewPlan?.sendingProvider, offerProducts.length]);
+    if (reviewPlan?.sendingProvider === 'evolution') loadOfferProducts();
+  }, [reviewPlan?.sendingProvider]);
   // Valida en tiempo real las ofertas del mensaje que se está revisando (mismas reglas que el envío).
   useEffect(() => {
     if (!reviewNeedsCheck) return undefined;
@@ -2180,6 +2191,37 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } catch (error) {
       if (run === draftRunRef.current) showToast(error.response?.data?.error || error.message || 'No se pudieron preparar los borradores. No se envió nada.', 'error');
     } finally { if (run === draftRunRef.current) setDrafting(false); }
+  }
+
+  async function restorePromotionDrafts(event) {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file || sending || drafting || reviewPlan) return;
+    if (!isDirect || testMode || !selectedMethod?.available) { showToast('Selecciona Evolution conectado, sin modo prueba.', 'error'); input.value = ''; return; }
+    if (file.size > 1000000) { showToast('El archivo de borradores supera 1 MB.', 'error'); input.value = ''; return; }
+    const run = ++draftRunRef.current;
+    const chosen = [...audience];
+    setDrafting(true);
+    try {
+      const data = JSON.parse(await file.text());
+      if (run !== draftRunRef.current) return;
+      const entries = restoreDraftEntries(data, chosen);
+      setReviewIdx(0);
+      setGuidedReview(true);
+      setReviewedItems(new Set());
+      setDraftReport({ excluded: [], total: entries.length, prepared: entries.length });
+      setReviewPlan({ templateName: 'Redacción individual · Evolution', entries,
+        generationMode: 'instruction', instruction: directInstruction.trim() || 'Revisar los textos guardados y completar sus ofertas antes de autorizar.', excluded: [],
+        sendingProvider: selectedMethod.provider, sendingChannelId: selectedMethod.channelId,
+        sendingLabel: selectedMethod.label, audienceLabel: purchaseAgeLabel(purchaseDays),
+        ...directPacing, testMode: false, testPhone: '', createdAt: Date.now() });
+      showToast('Borradores recuperados. Completa las ofertas y revisa cada mensaje; no se ha enviado nada.');
+    } catch (error) {
+      if (run === draftRunRef.current) showToast(error.message || 'No se pudieron recuperar los borradores.', 'error');
+    } finally {
+      input.value = '';
+      if (run === draftRunRef.current) setDrafting(false);
+    }
   }
 
   function prepareReview() {
@@ -3129,6 +3171,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             placeholder="Ofrece reposición para mañana a particulares según cuándo y cuánto compran. Incluye aceitunas y trata de otra forma a quienes compraron una sola vez. Indica aquí los precios, cantidades disponibles y exclusiones."
             style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 12, borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5 }} />
           <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>Preparar borradores no envía mensajes. Se evalúa solamente el público seleccionado. Los precios y compromisos deben revisarse antes de autorizar.</div>
+          <details style={{ marginTop: 12, color: colors.textSecondary, fontSize: 12 }}>
+            <summary>Recuperar borradores de promoción guardados</summary>
+            <p>Carga los textos guardados de los contactos seleccionados. Conserva su orden, pero exige completar las ofertas y revisar todo de nuevo. No recupera autorizaciones ni envía mensajes.</p>
+            <input type="file" accept=".json,application/json" aria-label="Archivo de borradores de promoción" disabled={sending || drafting || !!reviewPlan || testMode} onChange={restorePromotionDrafts} />
+          </details>
           {drafting && <button onClick={() => { draftRunRef.current++; setDrafting(false); }} style={{ marginTop: 8 }}>Cancelar preparación</button>}
           {draftReport && <div style={{ marginTop: 10, color: colors.textSecondary, fontSize: 12 }}>
             {draftReport.prepared} borradores · {draftReport.excluded.length} excluidos · ningún envío automático.
@@ -3500,6 +3547,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                       <strong style={{ fontSize: 12, color: colors.textPrimary }}>Ofertas de campaña ({offers.length}/{MAX_OFFERS_PER_RECIPIENT})</strong>
                       <button type="button" disabled={sending || offers.length >= MAX_OFFERS_PER_RECIPIENT} onClick={() => addEntryOffer(idx)} style={{ fontSize: 12 }}>Agregar oferta</button>
                     </div>
+                    {offerProductsLoading && <div role="status" style={{ fontSize: 12 }}>Cargando productos…</div>}
+                    {offerProductsError && <div role="alert" style={{ fontSize: 12 }}>
+                      {offerProductsError} <button type="button" disabled={offerProductsLoading} onClick={loadOfferProducts}>Reintentar productos</button>
+                    </div>}
+                    {!offerProductsLoading && !offerProductsError && !offerProducts.length && <div style={{ fontSize: 12 }}>No hay productos activos en el catálogo.</div>}
+                    {entry.requireOffer && !offers.length && <div style={{ fontSize: 12, color: colors.textSecondary }}>Completa las ofertas de este borrador recuperado antes de marcarlo revisado.</div>}
                     {duplicates.length > 0 && <div style={{ fontSize: 12, color: colors.red || '#c0392b', marginBottom: 8 }}>Hay dos ofertas del mismo producto. Deja una por producto.</div>}
                     {offers.length === 0 && <div style={{ fontSize: 12, color: colors.textSecondary }}>Sin oferta para este destinatario.</div>}
                     {offers.map((offer, k) => {
@@ -3523,7 +3576,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                             <input type="number" min="1" step="1" disabled={sending} value={offer.offer_price ?? ''} onChange={event => updateEntryOffer(idx, k, { offer_price: event.target.value === '' ? null : Number(event.target.value) })} style={{ width: '100%' }} />
                           </label>
                           <label style={{ fontSize: 12 }}>Vence
-                            <input type="date" disabled={sending} value={offer.expires_at || ''} onChange={event => updateEntryOffer(idx, k, { expires_at: event.target.value || null })} style={{ width: '100%' }} />
+                            <input type="datetime-local" step="1" aria-label={`Vencimiento de oferta ${k + 1} (hora de Chile)`} disabled={sending} value={offerExpiryInput(offer.expires_at)} onChange={event => updateEntryOffer(idx, k, { expires_at: event.target.value || null })} style={{ width: '100%' }} />
+                            <span style={{ fontSize: 10 }}>Fecha y hora de Chile</span>
                           </label>
                           <label style={{ fontSize: 12 }}>Tope de unidades (vacío = todas)
                             <input type="number" min="1" step="1" disabled={sending} value={offer.scope?.cap_units ?? ''} onChange={event => updateEntryOffer(idx, k, { scope: event.target.value ? { cap_units: Number(event.target.value) } : 'all_units' })} style={{ width: '100%' }} />
