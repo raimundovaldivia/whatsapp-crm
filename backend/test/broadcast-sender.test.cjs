@@ -2,6 +2,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
 const { load, handler, response, noop } = require('./helpers.cjs');
+// 12:00 en Chile: fuera de la pausa nocturna.
+const DAY = new Date('2026-10-21T15:00:00Z');
+
+test('direct sends wait from 21:00 to 08:00 Chile time', async () => {
+  let queried = false;
+  const sender = load('src/services/broadcast-sender.js', { '../db/database': { getPool: () => ({ query: async () => { queried = true; return { rows: [] }; } }) } });
+  assert.equal(sender.quietHoursWait(DAY), 0);
+  assert.equal(sender.quietHoursWait(new Date('2026-10-21T23:59:59Z')), 0); // 20:59:59
+  assert.equal(sender.quietHoursWait(new Date('2026-10-22T00:00:00Z')), 11 * 3600); // 21:00 -> 08:00
+  assert.equal(sender.quietHoursWait(new Date('2026-10-22T09:30:00Z')), 5400); // 06:30 -> 08:00
+  assert.equal(sender.quietHoursWait(new Date('2026-10-22T11:00:00Z')), 0); // 08:00
+  const night = await sender.claimDirectSlot(1, 3, {}, null, new Date('2026-10-22T02:00:00Z'));
+  assert.equal(night.allowed, false);
+  assert.equal(night.retryAfterSeconds, 9 * 3600);
+  assert.equal(queried, false);
+});
+
 
 test('direct pacing serializes concurrent tabs, pauses each batch and survives reload', async () => {
   const pool = new PGlite();
@@ -13,25 +30,25 @@ test('direct pacing serializes concurrent tabs, pauses each batch and survives r
     await pool.exec(migration);
     const deps = { '../db/database': { getPool: () => pool } };
     let sender = load('src/services/broadcast-sender.js', deps);
-    const concurrent = await Promise.all([sender.claimDirectSlot(1, 3), sender.claimDirectSlot(1, 3)]);
+    const concurrent = await Promise.all([sender.claimDirectSlot(1, 3, {}, null, DAY), sender.claimDirectSlot(1, 3, {}, null, DAY)]);
     assert.equal(concurrent.filter(r => r.allowed).length, 1);
     assert.equal(concurrent.find(r => !r.allowed).retryAfterSeconds, 60);
-    assert.equal((await sender.claimDirectSlot(2, 3)).allowed, true);
-    assert.equal((await sender.claimDirectSlot(1, 4, { intervalSeconds: 12, batchSize: 1, batchPauseSeconds: 90 })).allowed, true);
-    assert.equal((await sender.claimDirectSlot(1, 4)).retryAfterSeconds, 90);
+    assert.equal((await sender.claimDirectSlot(2, 3, {}, null, DAY)).allowed, true);
+    assert.equal((await sender.claimDirectSlot(1, 4, { intervalSeconds: 12, batchSize: 1, batchPauseSeconds: 90 }, null, DAY)).allowed, true);
+    assert.equal((await sender.claimDirectSlot(1, 4, {}, null, DAY)).retryAfterSeconds, 90);
     assert.throws(() => sender.pacingSettings({ batchSize: 0 }), /inválido/);
     assert.throws(() => sender.pacingSettings({ intervalSeconds: 1.5 }), /inválido/);
 
     for (let count = 2; count <= 10; count++) {
       await pool.exec(`UPDATE broadcast_channel_pacing SET next_send_at = NOW() - INTERVAL '1 second' WHERE organization_id=1 AND channel_id=3`);
-      assert.equal((await sender.claimDirectSlot(1, 3)).allowed, true);
+      assert.equal((await sender.claimDirectSlot(1, 3, {}, null, DAY)).allowed, true);
     }
     sender = load('src/services/broadcast-sender.js', deps);
-    const pause = await sender.claimDirectSlot(1, 3);
+    const pause = await sender.claimDirectSlot(1, 3, {}, null, DAY);
     assert.equal(pause.allowed, false);
     assert.ok(pause.retryAfterSeconds >= 299);
     await pool.exec(`UPDATE broadcast_channel_pacing SET next_send_at = NOW() - INTERVAL '1 second' WHERE organization_id=1 AND channel_id=3`);
-    assert.equal((await sender.claimDirectSlot(1, 3)).allowed, true);
+    assert.equal((await sender.claimDirectSlot(1, 3, {}, null, DAY)).allowed, true);
     assert.equal((await pool.query('SELECT batch_count FROM broadcast_channel_pacing WHERE organization_id=1 AND channel_id=3')).rows[0].batch_count, 1);
   } finally { await pool.close(); }
 });

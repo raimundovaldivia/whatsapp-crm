@@ -2,6 +2,23 @@ const db = require('../db/database');
 const DIRECT_INTERVAL_SECONDS = 60;
 const DIRECT_BATCH_SIZE = 10;
 const DIRECT_BATCH_PAUSE_SECONDS = 300;
+// Los envíos directos (Evolution) no salen de noche en Chile: de 21:00 a 08:00 quedan en espera.
+const QUIET_START_HOUR = 21;
+const QUIET_END_HOUR = 8;
+function chileClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Santiago', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = type => Number(parts.find(part => part.type === type)?.value || 0);
+  return { hour: get('hour'), minute: get('minute'), second: get('second') };
+}
+/** Segundos que faltan para las 08:00 de Chile si ahora es horario nocturno; 0 si se puede enviar. */
+function quietHoursWait(now = new Date()) {
+  const { hour, minute, second } = chileClock(now);
+  if (hour >= QUIET_END_HOUR && hour < QUIET_START_HOUR) return 0;
+  const hoursLeft = hour >= QUIET_START_HOUR ? 24 - hour + QUIET_END_HOUR : QUIET_END_HOUR - hour;
+  return Math.max(60, hoursLeft * 3600 - minute * 60 - second);
+}
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 async function resolveSender(orgId, provider, channelId) {
   if (provider === 'evolution') {
@@ -41,8 +58,10 @@ function pacingSettings(input = {}) {
   return result;
 }
 // Shared by all tabs using this channel. Campaign changes do not bypass an active wait.
-async function claimDirectSlot(orgId, channelId, settings = {}, campaignId = null) {
+async function claimDirectSlot(orgId, channelId, settings = {}, campaignId = null, now = new Date()) {
   const { intervalSeconds, batchSize, batchPauseSeconds } = pacingSettings(settings);
+  const quietWait = quietHoursWait(now);
+  if (quietWait) return { allowed: false, retryAfterSeconds: quietWait, quietHours: true };
   const pause = Math.max(intervalSeconds, batchPauseSeconds);
   const pool = db.getPool();
   const { rows } = await pool.query(
@@ -63,4 +82,4 @@ async function claimDirectSlot(orgId, channelId, settings = {}, campaignId = nul
      FROM broadcast_channel_pacing WHERE organization_id = $1 AND channel_id = $2`, [orgId, channelId]);
   return { allowed: false, retryAfterSeconds: result.rows[0]?.wait_seconds || intervalSeconds };
 }
-module.exports = { resolveSender, sendingMethods, claimDirectSlot, pacingSettings, DIRECT_INTERVAL_SECONDS, DIRECT_BATCH_SIZE, DIRECT_BATCH_PAUSE_SECONDS };
+module.exports = { resolveSender, sendingMethods, claimDirectSlot, pacingSettings, quietHoursWait, QUIET_START_HOUR, QUIET_END_HOUR, DIRECT_INTERVAL_SECONDS, DIRECT_BATCH_SIZE, DIRECT_BATCH_PAUSE_SECONDS };
