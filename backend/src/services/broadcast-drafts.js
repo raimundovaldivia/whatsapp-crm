@@ -107,6 +107,50 @@ function validateDraft(raw, customer, { catalog = [], now = new Date() } = {}) {
   return { phone: customer.phone, name: customer.name, decision: 'draft', reason, message: raw.message.trim(), evidence: customer.context.compras, offers };
 }
 
+// Revisión determinista de lo que la IA no debe equivocar: totales de la tabla de
+// precios que escribió el operador y la opción de responder NO.
+const COLOR_WORDS = { blancos: /blanc[oa]s?/, mixtos: /mixt[oa]s?/, 'cafés': /caf[eé]s?/ };
+function priceTableFrom(instruction) {
+  const table = [];
+  const re = /(XL|Jumbo)\s+(20|30)\s+(blancos|mixtos|caf[eé]s)\s*:\s*1\s*\$([\d.]+)\s*,\s*2\s*\$([\d.]+)\s*,\s*3\s*\$([\d.]+)/gi;
+  let m;
+  while ((m = re.exec(String(instruction || '')))) {
+    const n = v => Number(v.replace(/\./g, ''));
+    table.push({ size: m[1].toLowerCase(), eggs: m[2], color: m[3].toLowerCase().replace('cafes', 'cafés'), totals: [n(m[4]), n(m[5]), n(m[6])] });
+  }
+  return table;
+}
+const pesos = v => `$${Number(v).toLocaleString('es-CL')}`;
+function reviewDraftAgainstInstruction(draft, instruction) {
+  if (!draft || draft.decision !== 'draft') return draft;
+  const warnings = [];
+  let message = draft.message;
+  const table = priceTableFrom(instruction);
+  if (table.length) {
+    const lower = message.toLowerCase();
+    const matches = table.filter(e => new RegExp(`\\b${e.size}\\b`).test(lower)
+      && new RegExp(`\\b${e.eggs}\\b`).test(lower) && COLOR_WORDS[e.color].test(lower));
+    const qty = (lower.match(/\b(2|3|dos|tres)\s+bandejas/) || lower.match(/llevando\s+(2|3|dos|tres)\b/) || [])[1];
+    const k = qty ? ({ dos: 2, tres: 3 }[qty] || Number(qty)) : null;
+    const amounts = [...message.matchAll(/\$\s?([\d.]+)/g)].map(a => Number(a[1].replace(/\./g, '')));
+    if (matches.length === 1 && k) {
+      const e = matches[0];
+      const total = e.totals[k - 1];
+      const saving = e.totals[0] * k - total;
+      if (!amounts.includes(total)) warnings.push(`El total de ${k} bandejas ${e.size} ${e.eggs} ${e.color} debe ser ${pesos(total)}.`);
+      const savingText = /ahorr|menos que|menos de lo/i.test(message);
+      if (savingText && !amounts.includes(saving)) warnings.push(`El ahorro debe ser ${pesos(saving)}.`);
+    } else if (amounts.length) {
+      warnings.push('No se pudo verificar el precio contra la tabla: revisa talla, color y cantidad.');
+    }
+  }
+  if (/oferta de no|responde(r)?\s+no\b|responda\s+no\b/i.test(String(instruction || '')) && !/\bNO\b/.test(message)) {
+    message = `${message}\nSi prefieres no recibir más mensajes, responde NO.`;
+  }
+  const reason = warnings.length ? `⚠️ ${warnings.join(' ')} ${draft.reason}`.slice(0, 900) : draft.reason;
+  return { ...draft, message, reason, warnings };
+}
+
 async function generateDrafts(orgId, body, aiClient) {
   const request = validateRequest(body);
   const today = todayISOChile();
@@ -121,7 +165,7 @@ async function generateDrafts(orgId, body, aiClient) {
     const customer = await customerContext(orgId, phone, request.audienceType, today);
     if (customer.decision === 'skip') { drafts.push(customer); continue; }
     const response = await aiClient.messages.create({
-      model: modelFor('fast'), max_tokens: 900,
+      model: modelFor('smart'), max_tokens: 900,
       system: `Redactas borradores de WhatsApp para revisión humana. Nunca envías ni autorizas mensajes.
 Interpreta la instrucción comercial y escribe para ESTA persona usando sus compras y conversación.
 La instrucción del operador define objetivo, oferta y exclusiones. Si esta persona no corresponde, devuelve skip y explica por qué.
@@ -130,7 +174,8 @@ No copies un cuerpo común ni cambies sólo el saludo. La diferencia debe venir 
 Usa tono breve y natural, una propuesta pertinente y una pregunta sencilla. No vuelques todo el catálogo.
 No presentes como frecuencia una compra única. Si compró recientemente, no presupongas necesidad; si lleva mucho tiempo, consulta su interés sin dar una reposición por hecha.
 Incluye los complementos que pida el operador, con preferencia conocida si existe. No inventes preferencias, cantidades, precios, descuentos, disponibilidad ni compromisos de entrega. Un precio histórico no es una oferta vigente.
-Si faltan datos indispensables para cumplir la instrucción, devuelve skip con la duda concreta. Respeta rechazos, bajas y conversaciones pendientes; no insistas después de una oferta reciente sin respuesta.
+Cuando falte un dato del cliente, usa el valor por defecto que indique la instrucción; no devuelvas skip por datos opcionales faltantes. Devuelve skip sólo si el cliente pidió no recibir mensajes o rechazó explícitamente, si tiene un reclamo o una conversación sin resolver de los últimos 7 días, o si la instrucción del operador lo excluye.
+Si la instrucción trae una tabla de precios, copia los totales exactamente de la tabla y calcula el ahorro como precio de 1 bandeja × cantidad − total. No mezcles tallas, colores ni cantidades de huevos.
 Ofertas: si la instrucción define ofertas concretas, llena "offers" con una entrada por producto (máximo 5, un solo precio por producto), sólo con lo que diga textualmente: product_id (exactamente uno de catalogoProductos), offer_price (entero, precio final por unidad en pesos), expires_at (YYYY-MM-DDTHH:mm en hora de Chile cuando se indica hora de cierre; YYYY-MM-DD sólo cuando vale hasta el fin del día) y cap_units (entero si hay tope de unidades, null si no hay tope). Conserva siempre la hora explícita: "hasta las 13:00" no es fin del día. Cada dato que no aparezca va en null: nunca lo inventes ni lo deduzcas. Si la instrucción no define ofertas, usa offers []. El mensaje menciona sólo las ofertas presentes en "offers".
 La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa fecha. No reveles cálculos de frecuencia, notas internas ni datos de terceros al cliente.`,
       messages: [{ role: 'user', content: JSON.stringify({
@@ -150,7 +195,7 @@ La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa f
       tool_choice: { type: 'tool', name: 'customer_draft' },
     });
     const raw = response.content?.find(part => part.type === 'tool_use' && part.name === 'customer_draft')?.input;
-    drafts.push(validateDraft(raw, customer, { catalog, now: new Date() }));
+    drafts.push(reviewDraftAgainstInstruction(validateDraft(raw, customer, { catalog, now: new Date() }), request.instruction));
   }
   return { drafts, generatedAt: new Date().toISOString(), businessDate: today, requiresApproval: true };
 }
@@ -182,4 +227,4 @@ function validateApproval(items, approval) {
   if (approval?.confirmed !== true || approval?.fingerprint !== fingerprint(items)) throw fail('Autoriza los textos y destinatarios exactos antes de enviar.', 409);
 }
 
-module.exports = { MODE, validateRequest, purchaseSummary, validateDraft, generateDrafts, fingerprint, validateApproval };
+module.exports = { MODE, validateRequest, purchaseSummary, validateDraft, generateDrafts, fingerprint, validateApproval, reviewDraftAgainstInstruction };

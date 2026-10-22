@@ -2150,7 +2150,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   async function prepareInstructionReview() {
-    if (selectedCount > 100) { showToast('Acota la selección a un máximo de 100 clientes para revisar sus borradores.', 'error'); return; }
+    if (selectedCount > 5000) { showToast('Acota la selección a un máximo de 5.000 clientes para revisar sus borradores.', 'error'); return; }
     const run = ++draftRunRef.current;
     const chosen = testMode ? audience.slice(0, 1) : [...audience];
     setDrafting(true);
@@ -3612,6 +3612,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 {guidedReview && (
                   <div style={{ marginTop: 10, padding: '9px 11px', borderRadius: 8, backgroundColor: `${colors.green}12`, border: `1px solid ${colors.green}33`, color: colors.textSecondary, fontSize: 12, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
                     <span>Revisión detallada</span>
+                    {!guidedComplete && reviewPlan.entries.length > 1 && (
+                      <button type="button" disabled={sending} onClick={() => setReviewedItems(new Set(reviewPlan.entries.map((_, i) => i)))}
+                        style={{ border: `1px solid ${colors.green}66`, borderRadius: 6, background: 'transparent', color: colors.green, fontSize: 11, fontWeight: 700, padding: '2px 8px', cursor: 'pointer' }}>
+                        Marcar todos como revisados
+                      </button>
+                    )}
                     <strong style={{ color: guidedComplete ? colors.green : colors.textPrimary }}>{reviewedCount} de {reviewPlan.entries.length} revisados</strong>
                   </div>
                 )}

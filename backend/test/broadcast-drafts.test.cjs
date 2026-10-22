@@ -23,7 +23,7 @@ function setup() {
   };
   const drafts = load('src/services/broadcast-drafts.js', {
     '../db/database': database,
-    './ai-provider': { modelFor: tier => { assert.equal(tier, 'fast'); return 'configured-fast-model'; } },
+    './ai-provider': { modelFor: tier => { assert.equal(tier, 'smart'); return 'configured-smart-model'; } },
     './customer-identity': { resolveCustomerPhones: async (_pool, org, phone) => { assert.equal(org, 7); return [phone]; } },
   });
   return { drafts, database, calls };
@@ -34,7 +34,7 @@ test('individual drafting uses scoped history and never queues or sends; unknown
   let generations = 0;
   const anthropic = { messages: { create: async request => {
     generations++;
-    assert.equal(request.model, 'configured-fast-model');
+    assert.equal(request.model, 'configured-smart-model');
     const payload = JSON.parse(request.messages[0].content);
     assert.equal(payload.cliente.compras.intervaloMedianoDias, null);
     assert.equal(payload.cliente.compras.pedidos[0].productos[0].cantidad, 1);
@@ -158,4 +158,21 @@ test('instruction campaigns reject unapproved or changed texts, isolate tenants 
     res = response(); await handler(router, 'post', '/campaigns/1/stop')(req, res);
     assert.equal(res.body.campaign.status, 'interrupted');
   } finally { await engine.close(); }
+});
+
+test('drafts are checked against the operator price table and get the NO opt-out', () => {
+  const { reviewDraftAgainstInstruction } = load('src/services/broadcast-drafts.js', {
+    '@anthropic-ai/sdk': class {},
+  });
+  const instruction = 'Totales: XL 30 cafés: 1 $12.990, 2 $23.800, 3 $32.500. Jumbo 20 cafés: 1 $10.990, 2 $20.100, 3 $27.500. Una pregunta al final y la oferta de NO.';
+  const base = { decision: 'draft', reason: 'ok', phone: '569', name: 'A' };
+  const wrong = reviewDraftAgainstInstruction({ ...base, message: 'Hola, las 2 bandejas de XL cafés de 30 te quedan en $25.000 (ahorras $4.980). ¿Repetimos?' }, instruction);
+  assert.equal(wrong.warnings.length, 2);
+  assert.match(wrong.reason, /\$23\.800/);
+  assert.match(wrong.reason, /\$2\.180/);
+  assert.match(wrong.message, /responde NO\.$/);
+  const right = reviewDraftAgainstInstruction({ ...base, message: 'Hola, 3 bandejas Jumbo cafés de 20 te quedan en $27.500 (ahorras $5.470). ¿Te preparo 3? Si no quieres más mensajes, responde NO.' }, instruction);
+  assert.equal(right.warnings.length, 0);
+  assert.equal(right.reason, 'ok');
+  assert.equal(reviewDraftAgainstInstruction({ ...base, decision: 'skip' }, instruction).decision, 'skip');
 });
