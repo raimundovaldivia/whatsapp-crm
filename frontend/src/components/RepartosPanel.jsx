@@ -2110,6 +2110,24 @@ function HistorialRepartos({ colors }) {
     }
   }
 
+  async function handleFinish(route) {
+    const statuses = route.stop_statuses && typeof route.stop_statuses === 'object' ? route.stop_statuses : {};
+    const resolved = ['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered'];
+    const total = parseInt(route.order_count) || 0;
+    const resolvedCount = Object.values(statuses).filter(v => resolved.includes(v)).length;
+    const pending = Math.max(0, total - resolvedCount);
+    const msg = pending > 0
+      ? 'Quedan ' + pending + ' parada' + (pending === 1 ? '' : 's') + ' sin resultado. Al terminar la ruta, esos pedidos se marcan como no entregados. ¿Terminar la ruta igual?'
+      : '¿Dar por terminada esta ruta?';
+    if (!window.confirm(msg)) return;
+    try {
+      await api.post('/delivery/routes/' + route.id + '/finish');
+      load();
+    } catch (e) {
+      alert(e.response?.data?.error || e.message);
+    }
+  }
+
   async function handleRelease(id) {
     if (!window.confirm('¿Devolver los pedidos de esta ruta a "por despachar"?')) return;
     try {
@@ -2292,6 +2310,11 @@ function HistorialRepartos({ colors }) {
                         title={route.status === 'in_progress' ? 'Conserva las paradas atendidas y reordena solamente las pendientes' : 'Vuelve a calcular el orden de las paradas'}
                         style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#38bdf818', border: '1px solid #38bdf866', borderRadius: '6px', padding: '4px 8px', cursor: reoptimizeBusy !== null ? 'wait' : 'pointer', color: '#38bdf8', fontSize: '12px', whiteSpace: 'nowrap', opacity: reoptimizeBusy !== null ? 0.65 : 1 }}>
                         <RotateCcw size={12} /> {reoptimizeBusy === route.id ? 'Reoptimizando…' : 'Reoptimizar'}
+                      </button>
+                      <button onClick={e => { e.stopPropagation(); handleFinish(route); }}
+                        title="Dar por terminada la ruta"
+                        style={{ background: '#22c55e18', border: '1px solid #22c55e66', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', color: '#22c55e', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                        ✓ Terminar ruta
                       </button>
                       <button onClick={e => { e.stopPropagation(); handleCancel(route.id); }}
                         title="Cancelar ruta"

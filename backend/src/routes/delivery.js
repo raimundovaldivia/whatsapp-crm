@@ -1522,7 +1522,9 @@ router.post('/routes/:id/reoptimize', requireRole('owner', 'admin', 'supervisor'
 });
 
 router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
-  const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim().slice(0, 160) : '';
+  // Conserva la clave completa: los reemplazos pueden superar 160 caracteres.
+  // Más abajo se exige que coincida exactamente con un producto de esta ruta.
+  const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
   const checked = req.body?.checked;
   if (!itemName || typeof checked !== 'boolean') return res.status(400).json({ success: false, error: 'Falta producto o estado de carga' });
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
@@ -2539,6 +2541,87 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
     res.status(err.status || 500).json({ success: false, error: err.message, ...(err.skipped ? { skipped: err.skipped } : {}) });
+  } finally {
+    client?.release();
+  }
+});
+
+// ─── ADMIN: Dar por terminada una ruta ───────────────────────────────────────
+//
+// POST /api/delivery/routes/:id/finish
+//
+// Cierra a mano una ruta enviada o en curso. Las paradas sin resultado pasan a
+// no_entregado y sus pedidos quedan con el mismo tratamiento que el cierre de
+// medianoche (delivery-midnight.js). Las paradas ya resueltas no se tocan.
+const MANUAL_FINISH_REASON = 'La ruta fue terminada por el administrador sin registrar la entrega';
+const RESOLVED_STOP_STATUSES = ['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered'];
+
+router.post('/routes/:id/finish', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const routeId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(routeId)) return res.status(400).json({ success: false, error: 'Ruta inválida' });
+  const pool = getPool();
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const { rows: [route] } = await client.query(
+      `SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+      [routeId, req.orgId]
+    );
+    if (!route) throw Object.assign(new Error('Ruta no encontrada'), { status: 404 });
+    if (!['sent', 'in_progress'].includes(route.status))
+      throw Object.assign(new Error('Solo se pueden terminar rutas enviadas o en curso'), { status: 409 });
+
+    const statuses = { ...(route.stop_statuses || {}) };
+    const notes = { ...(route.stop_notes || {}) };
+    const times = { ...(route.stop_times || {}) };
+    const now = new Date().toISOString();
+    let pendingStops = 0;
+
+    for (const order of jsonList(route.orders)) {
+      const key = orderKey(order);
+      if (!key || RESOLVED_STOP_STATUSES.includes(statuses[key])) continue;
+      pendingStops += 1;
+      statuses[key] = 'not_delivered';
+      notes[key] = MANUAL_FINISH_REASON;
+      times[key] = now;
+      const id = String(order.id);
+      if (order.source === 'shopify') {
+        await client.query(
+          `UPDATE shopify_orders
+              SET crm_status = 'no_entregado', last_attempt_status = 'sin_resolver',
+                  last_attempt_at = COALESCE(last_attempt_at, NOW()), delivery_note = $3,
+                  updated_at = NOW()
+            WHERE organization_id = $1 AND shopify_order_id = $2
+              AND crm_status IN ('asignado_ruta', 'en_camino') AND delivered_at IS NULL`,
+          [req.orgId, id, MANUAL_FINISH_REASON]
+        );
+      } else if (order.source === 'bot' && /^\d+$/.test(id)) {
+        await client.query(
+          `UPDATE orders
+              SET status = 'no_entregado', last_attempt_status = 'sin_resolver',
+                  last_attempt_at = COALESCE(last_attempt_at, NOW()), delivery_note = $3,
+                  updated_at = NOW()
+            WHERE organization_id = $1 AND id = $2
+              AND status IN ('asignado_ruta', 'en_camino') AND delivered_at IS NULL`,
+          [req.orgId, Number(id), MANUAL_FINISH_REASON]
+        );
+      }
+    }
+
+    const { rows: [updated] } = await client.query(
+      `UPDATE delivery_routes
+          SET stop_statuses = $3::jsonb, stop_notes = $4::jsonb, stop_times = $5::jsonb,
+              status = 'completed', completed_at = COALESCE(completed_at, NOW())
+        WHERE id = $1 AND organization_id = $2
+        RETURNING *`,
+      [routeId, req.orgId, JSON.stringify(statuses), JSON.stringify(notes), JSON.stringify(times)]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, route: updated, pendingStops });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 500).json({ success: false, error: err.message });
   } finally {
     client?.release();
   }
