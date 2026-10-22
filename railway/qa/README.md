@@ -13,7 +13,10 @@ una política de red del proveedor. No instalar secretos de integraciones reales
 Los trabajos automáticos están apagados; WhatsApp e IA son simulados.
 
 Cada despliegue usa un commit fijo de una rama QA; no sigue main. Configurar raíz
-del repositorio y archivos Railway `railway/qa/api.json` y `railway/qa/web.json`.
+del repositorio, Dockerfiles `railway/qa/api.Dockerfile` y `railway/qa/web.Dockerfile`,
+y comandos `node src/index.js` (API) / `node gateway.cjs` (web) en los servicios.
+Healthchecks: `/ready` y `/qa_health`. El complemento actual rechaza railwayConfigFile;
+los archivos JSON iniciales no se usan para este despliegue.
 La base usa imagen pública postgres:17-alpine, volumen nuevo de 1000 MB,
 POSTGRES_DB=crm_sandbox, POSTGRES_USER=crm_sandbox, POSTGRES_PASSWORD aleatoria
 y PGDATA=/var/lib/postgresql/data/pgdata. La API no tiene dominio público.

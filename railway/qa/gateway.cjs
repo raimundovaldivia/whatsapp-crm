@@ -26,7 +26,7 @@ function createGateway({ password, root, upstream = 'http://qa-api.railway.inter
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    if (req.url === '/qa-health') { res.end('qa-gateway'); return; }
+    if (['/qa-health', '/qa_health'].includes(req.url)) { res.end('qa-gateway'); return; }
     if (!allowed(req)) {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="CRM QA", charset="UTF-8"' });
       res.end('QA: acceso restringido'); return;
