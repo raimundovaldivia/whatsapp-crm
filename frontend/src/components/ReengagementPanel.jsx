@@ -2033,7 +2033,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   async function prepareInstructionReview() {
-    if (selectedCount > 100) { showToast('Acota la selección a un máximo de 100 clientes para revisar sus borradores.', 'error'); return; }
+    if (selectedCount > 5000) { showToast('Acota la selección a un máximo de 5.000 clientes para revisar sus borradores.', 'error'); return; }
     const run = ++draftRunRef.current;
     const chosen = testMode ? audience.slice(0, 1) : [...audience];
     setDrafting(true);
