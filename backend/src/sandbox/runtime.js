@@ -5,7 +5,15 @@ function validateEnvironment(env) {
   if (env.CRM_SANDBOX !== '1') throw new Error('CRM_SANDBOX=1 requerido');
   if (env.NODE_ENV !== 'development') throw new Error('Sandbox requiere NODE_ENV=development');
   const url = new URL(env.DATABASE_URL);
-  if (url.protocol !== 'postgresql:' || url.hostname !== 'db' || url.port !== '5432'
+  if (env.CRM_SANDBOX_PLATFORM === 'railway') {
+    if (env.RAILWAY_PROJECT_NAME !== 'whatsapp-crm-qa' || env.RAILWAY_ENVIRONMENT_NAME !== 'qa'
+        || url.protocol !== 'postgresql:' || url.hostname !== 'qa-db.railway.internal'
+        || url.port !== '5432' || url.pathname !== '/crm_sandbox'
+        || url.username !== 'crm_sandbox' || !/^[a-f0-9]{64}$/.test(url.password)
+        || url.search || url.hash) {
+      throw new Error('Railway sandbox requiere proyecto QA y base privada exclusiva');
+    }
+  } else if (url.protocol !== 'postgresql:' || url.hostname !== 'db' || url.port !== '5432'
       || url.pathname !== '/crm_sandbox' || url.username !== 'crm_sandbox'
       || url.password !== 'crm_sandbox' || url.search || url.hash) {
     throw new Error('Sandbox solo admite la base db:5432/crm_sandbox de Compose');
@@ -24,7 +32,18 @@ function blocked() {
   throw Object.assign(new Error('SANDBOX: integración externa bloqueada'), { code: 'SANDBOX_EGRESS_BLOCKED' });
 }
 
-function installNetworkGuards() {
+function installNetworkGuards(env = process.env) {
+  if (env.CRM_SANDBOX_PLATFORM === 'railway') {
+    const net = require('node:net');
+    const connect = net.Socket.prototype.connect;
+    net.Socket.prototype.connect = function (...args) {
+      const params = Array.isArray(args[0]) ? args[0] : args;
+      const options = typeof params[0] === 'object' ? params[0]
+        : { port: params[0], host: typeof params[1] === 'string' ? params[1] : 'localhost' };
+      if (options.path || options.host !== 'qa-db.railway.internal' || Number(options.port) !== 5432) blocked();
+      return connect.apply(this, args);
+    };
+  }
   // Defense in depth; Compose's internal network is the network boundary.
   const axios = require('axios');
   axios.defaults.adapter = async () => blocked();
@@ -66,7 +85,7 @@ function initialize(env = process.env) {
   validateEnvironment(env);
   // Sessions intentionally expire on every sandbox restart. Never reuse a production secret.
   env.JWT_SECRET = crypto.randomBytes(48).toString('hex');
-  installNetworkGuards();
+  installNetworkGuards(env);
   const outbox = installSimulators();
   console.log('[SANDBOX] Integraciones simuladas/bloqueadas; trabajos automáticos desactivados.');
   return { outbox };
