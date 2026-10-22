@@ -49,6 +49,29 @@ test('sandbox blocks all external HTTP clients and simulates WhatsApp/AI without
   assert.equal(run.status, 0, run.stderr);
 });
 
+test('Railway QA validates its private database and rejects all other TCP destinations', () => {
+  const railway = { ...env(), CRM_SANDBOX_PLATFORM: 'railway', RAILWAY_PROJECT_NAME: 'whatsapp-crm-qa',
+    RAILWAY_ENVIRONMENT_NAME: 'qa', DATABASE_URL: 'postgresql://crm_sandbox:' + 'a'.repeat(64) + '@qa-db.railway.internal:5432/crm_sandbox' };
+  assert.doesNotThrow(() => validateEnvironment(railway));
+  for (const change of [{ RAILWAY_PROJECT_NAME: 'another-project' }, { RAILWAY_ENVIRONMENT_NAME: 'production' },
+    { DATABASE_URL: railway.DATABASE_URL.replace('qa-db.', 'production-db.') },
+    { DATABASE_URL: railway.DATABASE_URL + '?host=production.invalid' }, { META_APP_SECRET: 'real' }]) {
+    assert.throws(() => validateEnvironment({ ...railway, ...change }));
+  }
+  const run = spawnSync(process.execPath, ['-e', `
+    const assert = require('node:assert/strict');
+    require('./src/sandbox/runtime').initialize();
+    const net = require('node:net');
+    const denied = e => e.code === 'SANDBOX_EGRESS_BLOCKED';
+    for (const options of [{host:'example.com',port:443},{host:'127.0.0.1',port:5432},
+      {host:'qa-db.railway.internal',port:443},{path:'/tmp/socket'},{host:'169.254.169.254',port:80}]) {
+      assert.throws(()=>net.connect(options),denied);
+    }
+    assert.throws(()=>new net.Socket().connect(443,'1.1.1.1'),denied);
+  `], { cwd: require('node:path').resolve(__dirname, '..'), env: { PATH: process.env.PATH, ...railway }, encoding: 'utf8', timeout: 20000 });
+  assert.equal(run.status, 0, run.stderr);
+});
+
 test('sandbox seed is idempotent and creates only synthetic isolated tenants', async () => {
   const engine = new PGlite();
   const query = async (sql, params) => params?.length ? engine.query(sql, params) : (await engine.exec(sql)).at(-1);
