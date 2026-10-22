@@ -92,12 +92,4 @@ async function reconcileStaleDeliveryRoutes(orgId = null, now = new Date()) {
   }
 }
 
-function startDeliveryRecoveryJob() {
-  const run = () => reconcileStaleDeliveryRoutes().then(result => {
-    if (result.recovered) console.log(`[DeliveryRecovery] ${result.recovered} pedido(s) pasaron a no_entregado`);
-  }).catch(error => console.error('[DeliveryRecovery]', error.message));
-  setTimeout(run, 30 * 1000);
-  setInterval(run, 15 * 60 * 1000);
-}
-
-module.exports = { AUTO_REASON, chileDateParts, reconcileStaleDeliveryRoutes, startDeliveryRecoveryJob };
+module.exports = { AUTO_REASON, chileDateParts, reconcileStaleDeliveryRoutes };

@@ -55,7 +55,7 @@ router.get('/', async (req, res) => {
       windowOpen,
       lastInbound,
       adminConfigured: !!adminPhone,
-      businessPhone: whatsappConfig?.display_phone_number || whatsappConfig?.twilio_phone_number || null,
+      businessPhone: String(whatsappConfig?.display_phone_number || whatsappConfig?.twilio_phone_number || '').replace(/[^0-9]/g, '') || null,
       count: uniqueCount,
       alerts: rows.map(r => ({
         id:           r.id,

@@ -2,15 +2,24 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load } = require('./helpers.cjs');
 
+class FakeAnthropic {
+  constructor() { this.messages = { create: async () => ({ content: [{ text: '{}' }] }) }; }
+}
+
+const ordersAgent = load('src/services/agents/orders.js', { '@anthropic-ai/sdk': FakeAnthropic });
+
 function buildPipeline(deliveryDate, status = 'draft', options = {}) {
   const stateUpdates = options.stateUpdates || [];
   const poolQuery = async (sql, params) => {
     options.poolQueries?.push({ sql: String(sql), params });
-    if (String(sql).includes('UPDATE orders') && String(sql).includes('delivery_date')) return { rows: [], rowCount: 1 };
+    options.rawQueries?.push({ sql: String(sql), params });
+    if (/UPDATE orders\s+SET delivery_date/iu.test(String(sql))) return { rows: [], rowCount: 1 };
     return {
-      rows: String(sql).includes("COALESCE(r.started_at") && options.todayRoute
-        ? [options.todayRoute]
-        : [],
+      rows: String(sql).includes('SELECT slug') && options.storeSlug
+        ? [{ slug: options.storeSlug }]
+        : String(sql).includes("COALESCE(r.started_at") && options.todayRoute
+          ? [options.todayRoute]
+          : [],
       rowCount: 0,
     };
   };
@@ -27,8 +36,12 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
     getLastMessages: async () => options.history || [],
     getSetting: async (_orgId, key) => {
       if (key === 'delivery_info' && options.deliveryEnabled) {
-        return JSON.stringify({ schedule: options.schedule || 'Lunes a Sábado de 15:00 a 21:00' });
+        return JSON.stringify({
+          schedule: options.schedule || 'Lunes a Sábado de 15:00 a 21:00',
+          zone: options.deliveryZone || '',
+        });
       }
+      if (key === 'store_free_shipping') return options.freeShipping || null;
       if (key === 'payment_info') return options.paymentInfo || null;
       if (key === 'charge_settings' && options.bankDetails) {
         return JSON.stringify({ bankDetails: options.bankDetails });
@@ -50,7 +63,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       shipping_address: { address: 'Gobernador Demetrio Reygada 4005', city: 'Coquimbo' },
       ...(options.activeOrder || {}),
     }),
-    updateOrder: async (id, values) => { options.updatedOrder?.({ id, values }); return { id, ...values }; },
+    updateOrder: async (id, values, orgId) => { options.updatedOrder?.({ id, values, orgId }); return { id, ...values }; },
     updatePipelineState: async (_id, state, draft) => stateUpdates.push({ state, draft }),
     beginSalesClosing: options.beginSalesClosing
       ? async () => options.beginSalesClosing
@@ -84,6 +97,8 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       selectedFreeGift: () => null,
       appliesToDelivery: () => false,
     },
+    './campaign-offers-store': { activeForConversation: async () => [], redeem: async () => null },
+    './campaign-offers': { toPromotionContextMany: () => null },
     './payment-collection': { getPendingCharges: async () => options.pendingCharges || [] },
     './payment-promises': {
       isTemporaryPaymentAccessIssue: message => /bloque[oó].{0,40}(clave|banco)/i.test(message),
@@ -103,9 +118,25 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       checkEscalation: async () => options.escalation || ({ escalate: false, urgency: 'low', reason: '' }),
       classifyIntent: async () => ({ intent: options.intent || 'post_sale', confidence: 1, reason: 'consulta de reparto' }),
     },
-    ...(options.ordersAgent ? { './agents/orders': options.ordersAgent } : {}),
+    './agents/orders': options.ordersAgent || ordersAgent,
   });
 }
+
+test('responde el costo de despacho con el umbral exacto y ambas comunas', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    deliveryEnabled: true,
+    deliveryZone: 'La Serena y Coquimbo',
+    freeShipping: '10000',
+    storeSlug: 'diez-rios-mrs96z69',
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿El despacho es gratis?');
+
+  assert.equal(result.response, 'Sí 😊 El despacho es gratis en compras desde $10.000 en todo La Serena y Coquimbo. Si tu compra es menor a $10.000, el despacho cuesta $1.500.');
+  assert.equal(result.agentType, 'sales');
+  assert.equal(result.newState, 'exploring');
+});
 
 test('un pedido agendado para hoy pero fuera de ruta pide confirmación humana con el estado real', async () => {
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
@@ -441,7 +472,7 @@ test('una abreviación pregunta por el pedido activo sin caer en escalación gen
 
   assert.equal(result.switchToHuman, undefined);
   assert.equal(result.agentType, 'orchestrator');
-  assert.match(result.response, /pedido #88/i);
+  assert.match(result.response, /pedido #DR-88/i);
   assert.match(result.response, /Caja 100 Huevos Jumbo/i);
   assert.match(result.response, new RegExp(`registrado para el fecha ${future}`, 'i'));
   assert.doesNotMatch(result.response, /equipo/i);
@@ -459,7 +490,7 @@ test('si el cliente aclara que el pedido futuro era para hoy se pide revisar el 
   assert.match(result.response, /necesitabas el pedido para hoy/i);
   assert.match(result.response, new RegExp(`registrado para el fecha ${future}`, 'i'));
   assert.match(result.response, /confirmar el cupo/i);
-  assert.match(result.escalationReason, /pedido #88/i);
+  assert.match(result.escalationReason, /pedido #DR-88/i);
   assert.match(result.escalationReason, /cambio de fecha/i);
   assert.doesNotMatch(result.response, /Esto lo tiene que ver alguien/i);
 });
@@ -530,4 +561,43 @@ test('un pedido por despachar todavía acepta cambios de productos', async () =>
   assert.match(result.response, /Cambi[eé] el producto/i);
   assert.equal(stateUpdates.at(-1).draft.editing_order_id, 88);
   assert.equal(stateUpdates.at(-1).draft.items[0].name, 'Queso maduro');
+});
+
+test('una orden explícita de no enviar cancela el pedido aunque el supervisor quiera escalar', async () => {
+  let updatedOrder = null;
+  const stateUpdates = [];
+  const pipeline = buildPipeline('2026-10-15', 'draft', {
+    stateUpdates,
+    escalation: { escalate: true, urgency: 'high', reason: 'posible molestia' },
+    intent: 'post_sale',
+    updatedOrder: update => { updatedOrder = update; },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'No me envíe la compra, dejó nulo');
+
+  assert.equal(updatedOrder.id, 88);
+  assert.equal(updatedOrder.orgId, 1);
+  assert.equal(updatedOrder.values.status, 'cancelled');
+  assert.equal(Number.isNaN(Date.parse(updatedOrder.values.updated_at)), false);
+  assert.equal(stateUpdates.at(-1).state, 'exploring');
+  assert.equal(result.newState, 'exploring');
+  assert.equal(result.switchToHuman, undefined);
+  assert.match(result.response, /cancelé tu pedido/i);
+  assert.doesNotMatch(result.response, /equipo|molestia/i);
+});
+
+test('una cancelación no modifica automáticamente un pedido que ya salió a reparto', async () => {
+  let updatedOrder = null;
+  const pipeline = buildPipeline('2026-10-15', 'en_camino', {
+    escalation: { escalate: true, urgency: 'high', reason: 'posible molestia' },
+    intent: 'post_sale',
+    updatedOrder: update => { updatedOrder = update; },
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'No me envíe el pedido');
+
+  assert.equal(updatedOrder, null);
+  assert.equal(result.switchToHuman, true);
+  assert.match(result.response, /ya salió a reparto/i);
+  assert.match(result.escalationReason, /pedido #DR-88/i);
 });

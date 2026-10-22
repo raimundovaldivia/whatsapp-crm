@@ -17,20 +17,25 @@ const ordersAgent  = require('./agents/orders');
 const { client: conversationalAI, modelFor: conversationalModelFor, responseText, provider: conversationalProvider } = require('./ai-provider');
 const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
+const campaignOffers = require('./campaign-offers');
+const campaignOffersStore = require('./campaign-offers-store');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 const inboundPolicy = require('./inbound-message-policy');
 const outboundPolicy = require('./outbound-text-policy');
+const orderInputPolicy = require('./order-input-policy');
 const deliveryCoverage = require('./delivery-coverage');
 const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
 const salesClosing = require('./sales-closing');
 const purchaseFeedback = require('./purchase-feedback');
 const personalOffers = require('./personal-offers');
-const campaignOffers = require('./campaign-offers');
-const campaignOffersStore = require('./campaign-offers-store');
 const paymentPromises = require('./payment-promises');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
+const postSaleResolution = require('./post-sale-resolution');
+const customerFeedback = require('./customer-feedback');
+const { syncOrderIntoUnstartedRoutes } = require('./delivery-items');
+const { crmOrderLabel } = require('../utils/order-reference');
 
 function aiTrace(tier, promptVersion) {
   return {
@@ -233,6 +238,12 @@ function effectiveOrderNote(draft = {}) {
  * @returns {{ response: string, agentType: string, newState: string }}
  */
 async function processMessage(orgId, conversationId, userMessage, log = null, options = {}) {
+  try {
+    await require('./referrals').captureInboundReferral(orgId, conversationId, userMessage);
+  } catch (error) {
+    // La atribución nunca debe impedir que el cliente reciba atención.
+    console.warn('[Pipeline] No se pudo registrar el referido:', error.message);
+  }
   let result = await processMessageInternal(orgId, conversationId, userMessage, log, options);
   if (deliveryCoverage.isCoverageRejection(result?.response)) {
     try {
@@ -316,6 +327,32 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     };
   }
   const history = await db.getLastMessages(conversationId, 16);
+  if (typeof customerFeedback.handleInboundFeedback === 'function') {
+    const feedback = await customerFeedback.handleInboundFeedback(orgId, conversationId, userMessage).catch(error => {
+      console.warn('[Pipeline] No se pudo registrar feedback:', error.message);
+      return null;
+    });
+    if (feedback) {
+      if (feedback.needsHuman) {
+        const reason = `Feedback negativo de primera compra${feedback.score ? ` (${feedback.score}/5)` : ''}: ${String(feedback.text).slice(0, 300)}`;
+        await db.setAgentMode(conversationId, 'coordinating');
+        await db.setLastEscalation(conversationId, userMessage, reason);
+        return {
+          response: feedback.response,
+          agentType: 'orchestrator',
+          newState: conversation?.pipeline_state || 'done',
+          switchToHuman: true,
+          escalationReason: reason,
+          adminNotice: `💬 *Feedback primera compra* — ${conversation.contact_name || conversation.phone_number}${feedback.score ? `: ${feedback.score}/5` : ''}. "${String(feedback.text).slice(0, 300)}"`,
+        };
+      }
+      return {
+        response: feedback.response,
+        agentType: 'orchestrator',
+        newState: conversation?.pipeline_state || 'done',
+      };
+    }
+  }
   if (inboundPolicy.isClosingAcknowledgement?.(userMessage, history, conversation?.pipeline_state)) {
     return { response: null, skipped: true, reason: 'CLOSING_ACKNOWLEDGEMENT' };
   }
@@ -734,7 +771,7 @@ Reglas estrictas para responder sobre este pedido:
       // puede seguir gobernando la conversación.
       const hasManualOrderReceipt = history.some(message =>
         message?.direction === 'outbound'
-        && new RegExp(`Pedido\\s+#${activeOrder.id}\\s+generado`, 'iu').test(String(message.content || ''))
+        && new RegExp(`Pedido\\s+#(?:DR-)?${activeOrder.id}\\s+generado`, 'iu').test(String(message.content || ''))
       );
       if (currentState === 'collecting_order' && hasManualOrderReceipt) {
         currentState = 'done';
@@ -826,6 +863,7 @@ Reglas estrictas:
     console.warn('[Pipeline] chargeOrder bot context error:', e.message);
   }
 
+  // ── Compromisos de pago resolubles ──────────────────────────────────────
   // Un problema temporal con la app bancaria no necesita atención humana.
   // Si el cliente entrega una fecha, se guarda en el pedido y la cobranza se
   // reactiva recién ese día mediante payment-promises.js.
@@ -854,8 +892,9 @@ Reglas estrictas:
     };
   }
 
-  // Mensajes como "¿ya para el lunes?" confirman la fecha del pedido ya
-  // creado. Se persiste y se retira de cualquier ruta que aún no haya salido.
+  // ── Fecha de entrega confirmada después de crear el pedido ──────────────
+  // Resuelve mensajes como "¿ya para el lunes?" con el calendario publicado,
+  // persiste la fecha y retira el pedido de cualquier ruta aún no iniciada.
   if (activeOrder && EDITABLE_OR_ACTIVE(activeOrder.status)
       && looksLikeDeliveryDateConfirmation(userMessage, history)) {
     const requested = resolveExplicitDeliveryDate(userMessage, todayISOChile());
@@ -901,9 +940,9 @@ Reglas estrictas:
         client.release();
       }
       L.agent('orchestrator', 0);
-      L.step('delivery_date_confirmed_after_order', `#${activeOrder.id}: ${requested.date}`);
+      L.step('delivery_date_confirmed_after_order', `${crmOrderLabel(activeOrder.id)}: ${requested.date}`);
       return {
-        response: `Sí, tu pedido #${activeOrder.id} quedó registrado para el ${formatDateEs(requested.date)} 📅 Te avisamos cuando vaya saliendo.`,
+        response: `Sí, tu pedido ${crmOrderLabel(activeOrder.id)} quedó registrado para el ${formatDateEs(requested.date)} 📅 Te avisamos cuando vaya saliendo.`,
         agentType: 'orchestrator',
         newState: currentState,
       };
@@ -1223,6 +1262,27 @@ REGLAS ABSOLUTAS:
     };
   }
 
+  // Un contacto particular que pide precios por mayor no debe recibir el
+  // catálogo B2B ni quedar atrapado en una respuesta genérica. Se deriva con
+  // el contexto comercial, pero nunca se cambia su tipo de cliente solo por
+  // una frase ni se exponen precios reservados antes de validarlo.
+  if (!isEmpresa && orderInputPolicy.isWholesaleInquiry(userMessage)) {
+    const reason = `Consulta mayorista pendiente de validación: ${String(userMessage).slice(0, 300)}`;
+    await db.setAgentMode(conversationId, 'coordinating');
+    if (typeof db.setLastEscalation === 'function') await db.setLastEscalation(conversationId, userMessage, reason);
+    await db.updatePipelineState(conversationId, 'interested', orderDraft || {});
+    L.agent('orchestrator', 0);
+    L.step('wholesale_validation', 'contacto no clasificado como empresa');
+    return {
+      response: 'Sí atendemos compras por mayor. Para cotizarte correctamente, indícame el nombre del negocio, la comuna, el producto y la cantidad aproximada. Dejé tu solicitud al equipo comercial para que valide el formato y los precios de empresa.',
+      agentType: 'orchestrator',
+      newState: 'interested',
+      switchToHuman: true,
+      escalationReason: reason,
+      adminNotice: `🏢 *Consulta mayorista* — ${conversation.contact_name || conversation.phone_number || 'Contacto social'}: "${String(userMessage).slice(0, 300)}"`,
+    };
+  }
+
   // Una consulta de precio no debe saltarse una oferta vigente y mostrar
   // primero importes normales. La promoción recibida por template o por el
   // anuncio es la fuente comercial prioritaria.
@@ -1237,6 +1297,21 @@ REGLAS ABSOLUTAS:
       response: promotions.priceReply(promotionContext),
       agentType: 'sales',
       newState: 'interested',
+    };
+  }
+
+  const ambiguousQuantity = orderInputPolicy.ambiguousQuantityToken(userMessage);
+  if (ambiguousQuantity) {
+    const possibleUnits = `${ambiguousQuantity.slice(0, -1)}0`;
+    const possiblePackages = ambiguousQuantity.slice(0, -1);
+    const nextState = currentState === 'collecting_order' ? 'collecting_order' : 'interested';
+    await db.updatePipelineState(conversationId, nextState, orderDraft || {});
+    L.agent('orders', 0);
+    L.step('ambiguous_quantity', ambiguousQuantity);
+    return {
+      response: `No quiero asumir mal la cantidad: cuando escribes “${ambiguousQuantity}”, ¿te refieres a ${possibleUnits} unidades, a ${possiblePackages} bandejas/cajas o a otra cantidad? Indícame la cantidad y la presentación, por favor.`,
+      agentType: 'orders',
+      newState: nextState,
     };
   }
 
@@ -1365,7 +1440,7 @@ REGLAS ABSOLUTAS:
     };
     L.step(
       correctsJustConfirmedOrder ? 'immediate_promo_order_correction' : 'immediate_promo_order',
-      `${chosenImmediatePromotion.label} $${chosenImmediatePromotion.price}${correctsJustConfirmedOrder ? `; edita pedido #${activeOrder.id}` : ''}`
+      `${chosenImmediatePromotion.label} $${chosenImmediatePromotion.price}${correctsJustConfirmedOrder ? `; edita pedido ${crmOrderLabel(activeOrder.id)}` : ''}`
     );
     L.agent('orders', 0);
     return handleOrderCollection(
@@ -1451,9 +1526,9 @@ REGLAS ABSOLUTAS:
     const dateText = activeDeliveryLabel ? ` Está registrado para el ${activeDeliveryLabel}.` : '';
     const summaryText = activeOrderSummary || 'pedido activo';
     L.agent('orchestrator', 0);
-    L.step('order_recap', `pedido #${activeOrder.id}`);
+    L.step('order_recap', `pedido ${crmOrderLabel(activeOrder.id)}`);
     return {
-      response: `Tienes registrado el pedido #${activeOrder.id}: ${summaryText}.${dateText} ¿Eso es lo que querías revisar?`,
+      response: `Tienes registrado el pedido ${crmOrderLabel(activeOrder.id)}: ${summaryText}.${dateText} ¿Eso es lo que querías revisar?`,
       agentType: 'orchestrator',
       newState: currentState,
     };
@@ -1467,7 +1542,7 @@ REGLAS ABSOLUTAS:
   ];
   if (activeOrder && activeDeliveryISO > todayISO
       && CORRECTS_DELIVERY_TO_TODAY.some(pattern => pattern.test(userMessage))) {
-    const reason = `Cliente aclara que necesitaba hoy el pedido #${activeOrder.id}, pero está registrado para ${activeDeliveryLabel}; confirmar cupo y cambio de fecha`;
+    const reason = `Cliente aclara que necesitaba hoy el pedido ${crmOrderLabel(activeOrder.id)}, pero está registrado para ${activeDeliveryLabel}; confirmar cupo y cambio de fecha`;
     L.agent('orchestrator', 0);
     L.step('delivery_date_correction', reason);
     return {
@@ -1627,6 +1702,85 @@ REGLAS ABSOLUTAS:
     }
   }
 
+  // ── Posventa resoluble ─────────────────────────────────────────────
+  // Conserva reclamos de inocuidad en escalación humana, pero evita que
+  // cambios simples o dudas de calibre queden detenidos en esa cola.
+  const pendingExchange = currentState === 'post_sale_exchange_offer'
+    && orderDraft?.post_sale?.type === 'exchange_offer';
+  const pendingResolution = postSaleResolution.detectPostSaleResolution(userMessage, { pendingExchange });
+  if (pendingResolution?.kind === 'exchange_accept') {
+    const orderLabel = orderDraft?.post_sale?.order_label || 'el pedido reciente';
+    const reason = `Cliente aceptó coordinar un cambio para ${orderLabel}`;
+    await db.setAgentMode(conversationId, 'coordinating');
+    await db.setLastEscalation(conversationId, userMessage, reason);
+    await db.updatePipelineState(conversationId, 'done', {});
+    L.step('post_sale_exchange_accept', orderLabel);
+    return {
+      response: 'Perfecto. Dejo solicitado el cambio y le paso el caso al equipo para que confirme por aquí los productos y la coordinación 🙏',
+      agentType: 'orchestrator',
+      newState: 'done',
+      switchToHuman: true,
+      escalationReason: reason,
+      adminNotice: `🔁 *Cambio solicitado* — ${conversation.contact_name || conversation.phone_number}, ${orderLabel}. Confirmar producto de reemplazo y coordinación.`,
+    };
+  }
+  if (pendingResolution?.kind === 'exchange_decline') {
+    await db.updatePipelineState(conversationId, 'done', {});
+    L.step('post_sale_exchange_decline', 'cliente no solicita cambio');
+    return {
+      response: 'Entendido, gracias por avisarnos. Si cambias de opinión o notas otro problema con el pedido, escríbenos por aquí.',
+      agentType: 'orchestrator',
+      newState: 'done',
+    };
+  }
+
+  let recentDeliveredOrder = null;
+  if (!['collecting_order', 'scheduled'].includes(currentState) && typeof db.getRecentDeliveredOrder === 'function') {
+    recentDeliveredOrder = await db.getRecentDeliveredOrder(conversationId, 7).catch(() => null);
+  }
+  let recentOrderHasEggs = false;
+  try {
+    const deliveredItems = typeof recentDeliveredOrder?.items === 'string'
+      ? JSON.parse(recentDeliveredOrder.items)
+      : recentDeliveredOrder?.items;
+    recentOrderHasEggs = Array.isArray(deliveredItems)
+      && deliveredItems.some(item => /\b(huevos?|bandeja|xl|jumbo)\b/iu.test(String(item?.name || item?.title || item?.product_name || '')));
+  } catch (_) {}
+  const resolvablePostSale = postSaleResolution.detectPostSaleResolution(userMessage, {
+    hasRecentDeliveredOrder: !!recentDeliveredOrder,
+    recentOrderHasEggs,
+  });
+  if (resolvablePostSale?.kind === 'exchange_offer') {
+    const orderLabel = recentDeliveredOrder?.id ? `pedido ${crmOrderLabel(recentDeliveredOrder.id)}` : 'pedido reciente';
+    const nextDraft = {
+      ...(orderDraft || {}),
+      post_sale: { type: 'exchange_offer', order_id: recentDeliveredOrder?.id || null, order_label: orderLabel },
+    };
+    await db.updatePipelineState(conversationId, 'post_sale_exchange_offer', nextDraft);
+    L.step('post_sale_exchange_offer', orderLabel);
+    return {
+      response: postSaleResolution.exchangeOfferText(conversation.contact_name),
+      agentType: 'orchestrator',
+      newState: 'post_sale_exchange_offer',
+    };
+  }
+  if (resolvablePostSale?.kind === 'egg_weight_explanation') {
+    L.step('post_sale_egg_weight', recentDeliveredOrder?.id ? `pedido ${crmOrderLabel(recentDeliveredOrder.id)}` : 'consulta');
+    return {
+      response: postSaleResolution.eggWeightExplanationText(conversation.contact_name),
+      agentType: 'orchestrator',
+      newState: currentState,
+    };
+  }
+  if (resolvablePostSale?.kind === 'third_party_delivery_status') {
+    L.step('third_party_delivery_status', 'solicita identificador seguro');
+    return {
+      response: postSaleResolution.thirdPartyStatusText(),
+      agentType: 'orchestrator',
+      newState: currentState,
+    };
+  }
+
   // ── Agente de escalación — corre en paralelo con la clasificación ──
   const effectiveState = isTemplateReply ? 'interested' : currentState;
   const [escalationResult, intentResult] = await Promise.all([
@@ -1635,6 +1789,12 @@ REGLAS ABSOLUTAS:
       ? Promise.resolve(null)
       : orchestrator.classifyIntent(userMessage, history, effectiveState, { hasActiveOrder: !!activeOrder, activeOrderSummary }),
   ]);
+  // Una orden inequívoca de no despachar un pedido activo debe llegar al
+  // flujo transaccional de cancelación antes que una escalación genérica.
+  // Si el pedido ya salió a reparto, ese mismo flujo conserva la derivación
+  // humana y no modifica el estado automáticamente.
+  const explicitActiveOrderCancellation = !!activeOrder
+    && ordersAgent.isCancelDuringCollection(userMessage);
 
   L.escalation(escalationResult.escalate, escalationResult.urgency, escalationResult.reason);
 
@@ -1745,7 +1905,7 @@ REGLAS ABSOLUTAS:
   }
 
   // Si el agente de escalación detecta que se necesita humano
-  if (escalationResult.escalate && !isDeliveryStatusInquiry) {
+  if (escalationResult.escalate && !isDeliveryStatusInquiry && !explicitActiveOrderCancellation) {
     console.log(`[Pipeline] 🚨 Escalación detectada (${escalationResult.urgency}): ${escalationResult.reason}`);
     await db.setAgentMode(conversationId, 'coordinating');
     await db.setLastEscalation(conversationId, userMessage, escalationResult.reason);
@@ -1769,6 +1929,23 @@ REGLAS ABSOLUTAS:
     };
   }
 
+  // El costo de reparto es una regla comercial exacta. Responderlo en código
+  // evita que la IA omita el cobro bajo el umbral o limite la cobertura a una
+  // sola de las dos comunas.
+  const deliveryPriceReply = deliveryEnabled
+    ? xlPricing.deliveryPriceReply(userMessage, xlContext, freeShippingRaw)
+    : null;
+  if (deliveryPriceReply) {
+    await db.updatePipelineState(conversationId, currentState, orderDraft);
+    L.agent('sales', 0);
+    L.step('delivery_price', 'regla exacta de costo y cobertura');
+    return {
+      response: deliveryPriceReply,
+      agentType: 'sales',
+      newState: currentState,
+    };
+  }
+
   // ── Si estamos en proceso de recopilación de datos ──────────────
   if (currentState === 'collecting_order') {
     L.agent('orders', 0);
@@ -1776,7 +1953,9 @@ REGLAS ABSOLUTAS:
   }
 
   // ── Paso 1: Orquestador clasifica la intención ──────────────────
-  const { intent, confidence } = intentResult || { intent: 'interested', confidence: 0.9 };
+  const classifiedIntent = intentResult || { intent: 'interested', confidence: 0.9 };
+  const intent = explicitActiveOrderCancellation ? 'cancel_order' : classifiedIntent.intent;
+  const { confidence } = classifiedIntent;
   L.intent(intent, Math.round(confidence * 100), 0);
   console.log(`[Pipeline] Intent: ${intent} (${Math.round(confidence * 100)}%) | State: ${effectiveState}${isTemplateReply ? ' 🔥 WARM LEAD' : ''}`);
 
@@ -1849,7 +2028,7 @@ REGLAS ABSOLUTAS:
       const stops = optimized.length ? optimized : original;
       const position = stops.findIndex(stop => String(stop.source) === 'bot' && String(stop.id) === String(activeOrder.id));
       const statuses = activeDeliveryRoute.stop_statuses || {};
-      const finished = new Set(['entregado','cancelled','postponed']);
+      const finished = new Set(['entregado','partial','cancelled','postponed','not_delivered']);
       const processed = stops.filter(stop => finished.has(statuses[`${stop.source}_${stop.id}`])).length;
       if (position >= 0) {
         const pendingBefore = stops.slice(0, position).filter(stop => !finished.has(statuses[`${stop.source}_${stop.id}`])).length;
@@ -1895,26 +2074,26 @@ REGLAS ABSOLUTAS:
       response = `Sí, hoy hubo reparto${hi}. ${routeMismatch} y sigue ${String(activeOrder.status) === 'por_despachar' ? 'listo para despachar' : 'en preparación'}.${deliveryHoursEnded ? ' El horario de hoy ya terminó.' : ''} Para no darte una fecha incorrecta, le pido al equipo revisar lo ocurrido y confirmar el próximo despacho. Te responden por aquí 🙏`;
       switchToHuman = true;
       escalationReason = todayDeliveryActivity.includes_order
-        ? `El pedido #${activeOrder.id} aparece en la ruta de hoy (${todayDeliveryActivity.name || `#${todayDeliveryActivity.id}`}) pero no figura entregado; revisar resultado`
-        : `Hoy hubo ruta (${todayDeliveryActivity.name || `#${todayDeliveryActivity.id}`}) pero el pedido #${activeOrder.id} no aparece incluido; confirmar próximo despacho`;
+        ? `El pedido ${crmOrderLabel(activeOrder.id)} aparece en la ruta de hoy (${todayDeliveryActivity.name || `#${todayDeliveryActivity.id}`}) pero no figura entregado; revisar resultado`
+        : `Hoy hubo ruta (${todayDeliveryActivity.name || `#${todayDeliveryActivity.id}`}) pero el pedido ${crmOrderLabel(activeOrder.id)} no aparece incluido; confirmar próximo despacho`;
     } else if (asksAboutTodaysRoute) {
       response = `No veo una ruta de reparto registrada hoy que incluya tu pedido${hi}. El pedido sigue ${String(activeOrder.status) === 'por_despachar' ? 'listo para despachar' : 'en preparación'}${deliveryHoursEnded ? ' y el horario de hoy ya terminó' : ''}. Le pido al equipo revisar qué ocurrió y confirmar cuándo sale, para no darte una información incorrecta 🙏`;
       switchToHuman = true;
-      escalationReason = `Pedido #${activeOrder.id}: cliente consulta si hubo reparto hoy, pero no hay ruta registrada que permita confirmarlo`;
+      escalationReason = `Pedido ${crmOrderLabel(activeOrder.id)}: cliente consulta si hubo reparto hoy, pero no hay ruta registrada que permita confirmarlo`;
     } else if (scheduledRelation === 'today') {
       response = deliveryHoursEnded
         ? `Tu pedido estaba agendado para hoy${hi}, pero el horario de reparto ya terminó y todavía figura en preparación, sin aparecer en una ruta. Le pido al equipo revisar qué ocurrió y confirmar el próximo despacho. Te responden por aquí 🙏`
         : `Tu pedido está agendado para hoy${hi}, pero todavía figura en preparación y aún no aparece en ruta.${win} Para que puedas organizarte, le pido al equipo confirmar si sale hoy o si conviene pasarlo para mañana. Te responden por aquí 🙏`;
       switchToHuman = true;
-      escalationReason = `Pedido #${activeOrder.id} agendado para hoy sigue en estado ${activeOrder.status}; cliente necesita confirmar si se reparte hoy`;
+      escalationReason = `Pedido ${crmOrderLabel(activeOrder.id)} agendado para hoy sigue en estado ${activeOrder.status}; cliente necesita confirmar si se reparte hoy`;
     } else if (scheduledRelation === 'past') {
       response = `Veo que tu pedido estaba agendado para el ${scheduledDate}, pero todavía figura pendiente. Para darte una respuesta correcta, le pido al equipo revisarlo y confirmarte por aquí 🙏`;
       switchToHuman = true;
-      escalationReason = `Pedido #${activeOrder.id} mantiene fecha vencida (${scheduledDate}) y estado ${activeOrder.status}`;
+      escalationReason = `Pedido ${crmOrderLabel(activeOrder.id)} mantiene fecha vencida (${scheduledDate}) y estado ${activeOrder.status}`;
     } else if (deliveryHoursEnded) {
       response = `El horario de reparto de hoy ya terminó${hi}. Tu pedido sigue en preparación y no aparece en una ruta activa, así que no quiero prometerte una entrega que no está confirmada. Le pido al equipo revisar si quedó para el próximo reparto y te responden por aquí 🙏`;
       switchToHuman = true;
-      escalationReason = `Pedido #${activeOrder.id} sigue en estado ${activeOrder.status} al terminar el horario de reparto y no figura en una ruta activa`;
+      escalationReason = `Pedido ${crmOrderLabel(activeOrder.id)} sigue en estado ${activeOrder.status} al terminar el horario de reparto y no figura en una ruta activa`;
     } else if (activeOrder.status === 'por_despachar') {
       response = `Tu pedido está listo para despachar${hi} 📦, pero todavía no aparece en una ruta. Aún no hay una hora de entrega confirmada; te avisamos apenas salga a reparto.`;
     } else {
@@ -1922,7 +2101,7 @@ REGLAS ABSOLUTAS:
       response = `Tu pedido está en preparación${hi} 😊.${win} Sale en el próximo reparto y te avisamos apenas vaya en camino.`;
     }
     L.agent('orchestrator', 0);
-    L.step('delivery_status', `pedido #${activeOrder.id} estado ${activeOrder.status}`);
+    L.step('delivery_status', `pedido ${crmOrderLabel(activeOrder.id)} estado ${activeOrder.status}`);
     return {
       response,
       agentType: 'orchestrator',
@@ -1976,12 +2155,12 @@ REGLAS ABSOLUTAS:
       ).catch(() => {});
     } catch (e) { console.warn('[Pipeline] no se pudo anotar preferencia de horario:', e.message); }
     L.agent('orders', 0);
-    L.step('delivery_pref', `pedido #${activeOrder.id}: "${pref}"`);
+    L.step('delivery_pref', `pedido ${crmOrderLabel(activeOrder.id)}: "${pref}"`);
     return {
       response: `¡Anotado${hi}! 📝 Le paso al equipo tu preferencia para la entrega ("${pref}") y lo tienen en cuenta al coordinar el despacho. ¿Algo más?`,
       agentType: 'orders',
       newState: currentState,
-      adminNotice: `🕒 *Preferencia de entrega* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido #${activeOrder.id}: "${pref}"`,
+      adminNotice: `🕒 *Preferencia de entrega* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido ${crmOrderLabel(activeOrder.id)}: "${pref}"`,
     };
   }
 
@@ -2009,7 +2188,7 @@ REGLAS ABSOLUTAS:
         agentType: 'orders',
         newState: currentState,
         switchToHuman: true,
-        escalationReason: `Cliente quiere ${verb} el pedido #${activeOrder.id} (${orderItemsText}) que ya está ${activeOrder.status}`,
+        escalationReason: `Cliente quiere ${verb} el pedido ${crmOrderLabel(activeOrder.id)} (${orderItemsText}) que ya está ${activeOrder.status}`,
       };
     }
 
@@ -2063,11 +2242,11 @@ REGLAS ABSOLUTAS:
           response: `¡Listo! En vez de cancelarlo${orderItemsText ? ` (${orderItemsText})` : ''}, te lo dejo agendado para el ${cuando} 📅 Ese día te avisamos cuando vaya saliendo. Si prefieres cancelarlo del todo, dímelo y lo hago 😊`,
           agentType: 'orders',
           newState: currentState,
-          adminNotice: `📅 *Pedido reprogramado por el cliente* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido #${activeOrder.id}${orderItemsText ? ` (${orderItemsText})` : ''} → ${cuando}`,
+          adminNotice: `📅 *Pedido reprogramado por el cliente* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido ${crmOrderLabel(activeOrder.id)}${orderItemsText ? ` (${orderItemsText})` : ''} → ${cuando}`,
         };
       }
 
-      await db.updateOrder(activeOrder.id, { status: 'cancelled', updated_at: new Date() });
+      await db.updateOrder(activeOrder.id, { status: 'cancelled', updated_at: new Date() }, orgId);
       await db.updatePipelineState(conversationId, 'exploring', {});
       L.step('cancel_order', `pedido ${activeOrder.id} cancelado por el cliente`);
       return {
@@ -2330,7 +2509,7 @@ Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre
   try { addr = typeof delivered.shipping_address === 'string' ? JSON.parse(delivered.shipping_address) : (delivered.shipping_address || {}); } catch { addr = {}; }
   const tomorrow = new Date(Date.now() + 86400000);
   const tomorrowISO = tomorrow.toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
-  const label = `#${delivered.id}`;
+  const label = crmOrderLabel(delivered.id);
   const summaryText = missing.map(m => `${m.quantity}x ${m.product_name}`).join(', ');
   const noteText = `Faltante del pedido ${label}: el cliente pidió ${missing.map(m => `${m.ordered} ${m.product_name}`).join(', ')} y recibió ${missing.map(m => m.received).join(', ')}. Registrado por el bot.`;
 
@@ -2360,7 +2539,7 @@ Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre
     agentType: 'orders',
     newState: 'exploring',
     orderCreated: { orderId: order.id },
-    adminNotice: `⚠️ *Entrega incompleta* — ${delivered.customer_name || conversation.phone_number} reclama que del pedido ${label} le faltó ${summaryText}.\nEl bot creó el pedido #${order.id} (${summaryText}, $${Math.round(total).toLocaleString('es-CL')}) para el ${d}/${m}. Revísalo en Pedidos: si no corresponde, cancélalo.`,
+    adminNotice: `⚠️ *Entrega incompleta* — ${delivered.customer_name || conversation.phone_number} reclama que del pedido ${label} le faltó ${summaryText}.\nEl bot creó el pedido ${crmOrderLabel(order.id)} (${summaryText}, $${Math.round(total).toLocaleString('es-CL')}) para el ${d}/${m}. Revísalo en Pedidos: si no corresponde, cancélalo.`,
   };
 }
 
@@ -2495,6 +2674,19 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
   );
+  const unexpectedAffirmativeItems = orderInputPolicy.unexpectedItemsFromBareAffirmative(
+    userMessage,
+    orderDraft,
+    updatedDraft
+  );
+  if (unexpectedAffirmativeItems.length) {
+    await db.updatePipelineState(conversationId, 'collecting_order', orderDraft);
+    return {
+      response: 'Para evitar agregar algo que no pediste, escríbeme explícitamente el producto y la cantidad que quieres sumar. Mantendré el pedido actual sin cambios hasta entonces.',
+      agentType: 'orders',
+      newState: 'collecting_order',
+    };
+  }
   if (orderDraft.requires_customer_phone) updatedDraft.requires_customer_phone = true;
   if (updatedDraft.customer_phone) {
     const normalizedPhone = ordersAgent.normalizeCustomerPhone(updatedDraft.customer_phone);
@@ -2758,11 +2950,23 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           ...(orderNote ? { delivery_note: orderNote } : {}),
           ...(updatedDraft.delivery_date ? { delivery_date: updatedDraft.delivery_date } : {}),
           updated_at: new Date(),
-        });
+        }, orgId);
+        if (!updated) throw Object.assign(new Error('Pedido no encontrado en esta organización'), { status: 404 });
+        const routeSyncClient = await getPool().connect();
+        try {
+          await routeSyncClient.query('BEGIN');
+          await syncOrderIntoUnstartedRoutes(routeSyncClient, orgId, 'bot', orderId, itemsForDb, priced.total);
+          await routeSyncClient.query('COMMIT');
+        } catch (syncError) {
+          await routeSyncClient.query('ROLLBACK').catch(() => {});
+          throw syncError;
+        } finally {
+          routeSyncClient.release();
+        }
         // Dejar rastro en las notas del pedido (el CRM muestra la marca "modificado por el cliente")
         getPool().query(
-          `UPDATE orders SET notes = COALESCE(notes, '') || $1 WHERE id = $2`,
-          [`\n[bot] Modificado por el cliente por ${conversation.source_channel === 'instagram' ? 'Instagram' : conversation.source_channel === 'facebook' ? 'Facebook' : 'WhatsApp'} (${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })})`, orderId]
+          `UPDATE orders SET notes = COALESCE(notes, '') || $1 WHERE id = $2 AND organization_id = $3`,
+          [`\n[bot] Modificado por el cliente por ${conversation.source_channel === 'instagram' ? 'Instagram' : conversation.source_channel === 'facebook' ? 'Facebook' : 'WhatsApp'} (${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })})`, orderId, orgId]
         ).catch(() => {});
         saveContact();
         await db.updatePipelineState(conversationId, 'done', {});
@@ -2778,7 +2982,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         return {
           response: `Recibí los cambios 📝 pero hubo un problema técnico al actualizar tu pedido 😔 Se lo paso al equipo para que lo corrija y te confirmen por aquí.`,
           agentType: 'orders', newState: 'collecting_order', switchToHuman: true,
-          escalationReason: `Error actualizando pedido #${orderId}: ${err.message}`,
+          escalationReason: `Error actualizando pedido ${crmOrderLabel(orderId)}: ${err.message}`,
         };
       }
     }
@@ -3015,6 +3219,13 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     personalOfferDiscountAmount: draft.personal_offer_discount_amount || null,
     personalOfferTrays: draft.personal_offer_id ? personalOffers.eggTrayQuantity(items) : null,
   });
+  if (draft?.promotion?.offerId) {
+    try {
+      await campaignOffersStore.redeem(db.getPool(), orgId, draft.promotion.offerId, order.id);
+    } catch (error) {
+      console.warn('[Pipeline] no se pudo canjear la oferta personal:', error.message);
+    }
+  }
 
   await db.updateOrder(order.id, {
     shopify_draft_id: shopifyResult.shopifyDraftId,

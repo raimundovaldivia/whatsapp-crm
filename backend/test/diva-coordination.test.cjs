@@ -89,6 +89,10 @@ test('una continuación de compra no escala por contexto antiguo y los casos dur
 
   assert.equal((await orchestrator.checkEscalation('quiero hablar con una persona', longHistory, 'interested', 1)).escalate, true);
   assert.equal((await orchestrator.checkEscalation('me llegó el pedido equivocado', longHistory, 'interested', 1)).escalate, true);
+  const unsafeFood = await orchestrator.checkEscalation('El queso venía malo', longHistory, 'interested', 1);
+  assert.equal(unsafeFood.escalate, true);
+  assert.equal(unsafeFood.urgency, 'high');
+  assert.match(unsafeFood.reason, /inocuidad|mal estado/i);
 });
 
 test('un pedido en recopilación evita IA salvo que supere el umbral de atasco', async () => {
@@ -537,6 +541,7 @@ test('el aviso general no duplica el caso que ya está en coordinación humana',
     },
     './kapso-whatsapp': { sendTextMessage: async () => { sends++; } },
     './admin-notify': { notifyAdmin: async () => ({ sent: true }) },
+    './delivery-inbound-notifications': { notifyAssignedDriversForInbound: async () => {} },
   });
 
   await notifications.notifyAgentsNewMessage(1, { id: 4, agent_mode: 'human' }, 'Necesito ayuda');

@@ -22,6 +22,7 @@ const kapsoService  = require('./kapso-whatsapp');
 const twilioService = require('./twilio-whatsapp');
 const metaService   = require('./whatsapp');
 const evolutionService = require('./evolution-whatsapp');
+const { normalizeOrderLabel } = require('../utils/order-reference');
 
 // Espera mínima entre dos cobros al mismo pedido (evita spam por doble click
 // o por reintentos de la app del repartidor).
@@ -215,7 +216,7 @@ function orderReference(order) {
   if (Array.isArray(order?.group_orders) && order.group_orders.length > 0) {
     return order.group_orders.map(item => orderReference(item)).join(', ');
   }
-  const label = order?.order_label || `#${order?.id}`;
+  const label = normalizeOrderLabel(order?.order_label || `#${order?.id}`, order?.source, order?.id);
   const delivered = formatDeliveryDate(order);
   return delivered ? `${label} (entregado el ${delivered})` : label;
 }
@@ -562,7 +563,7 @@ async function getPendingCharges(orgId, dateRange = {}) {
                  THEN 'factura' ELSE 'boleta' END AS tax_document_type,
             'not_issued'                  AS tax_document_status,
             (CASE WHEN o.payment_method = 'mixto' THEN o.payment_transfer_amount ELSE o.total_price::numeric END)::text AS total_price,
-            CONCAT('#', o.id::text)      AS order_label,
+            CONCAT('#DR-', o.id::text)   AS order_label,
             o.status                     AS order_status,
             o.created_at                 AS created_at,
             o.delivered_at               AS delivered_at,

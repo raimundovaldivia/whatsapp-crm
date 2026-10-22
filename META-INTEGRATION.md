@@ -52,6 +52,8 @@ La automatización social requiere además el módulo **Ventas con IA** activo. 
 
 Los mensajes privados usan el mismo pipeline de catálogo, precios, datos de despacho, confirmación, prevención de duplicados y creación de pedidos que WhatsApp. Cada identidad de Instagram o Facebook se guarda separada por organización y canal, sin convertir el identificador de Meta en un teléfono. Los comentarios permanecen públicos y nunca recopilan nombre, dirección, teléfono ni otros datos del pedido.
 
+Antes de modificar el carrito, el pipeline pide aclaración ante cantidades alfanuméricas ambiguas y no permite que un “sí” aislado agregue un producto nuevo visto solo en una tarjeta o mensaje saliente. Las consultas por mayor de contactos aún no validados como empresa se derivan al equipo comercial sin exponer precios B2B ni cambiar automáticamente la clasificación del cliente.
+
 ## Embudo de conversaciones y enlaces rastreables
 
 La vista **Campañas a WhatsApp → Embudo y clientes en limbo** une la atribución del anuncio con los mensajes, los enlaces enviados y los pedidos. Muestra el tiempo hasta la primera respuesta, el avance alcanzado y separa motivos observados de inferencias del sistema.

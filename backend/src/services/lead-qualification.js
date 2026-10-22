@@ -106,6 +106,8 @@ function qualifyLead({ messages = [], pipelineState = 'exploring', orderDraft = 
     return { temperature: 'future', score, reasons, signals, veryHotGate: false };
   }
 
+  // Protección principal: el puntaje no basta. "Muy caliente" requiere una
+  // compra explícita, producto y al menos cantidad o datos concretos.
   const veryHotGate = signals.explicitPurchase
     && signals.product
     && (signals.quantity || signals.customerDetails);

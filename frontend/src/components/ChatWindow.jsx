@@ -8,22 +8,24 @@ import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { buildBodyTemplateComponent, getBodyComponent, getTemplateVariables, renderTemplate } from '../utils/template-renderer.js';
 import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
+import { crmOrderLabel } from '../utils/order-reference.js';
+import { channelConversationSignature, mergeCustomerChannelConversations } from '../utils/chat-channels.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
-const channelKey = (item) => item?.whatsapp_channel_id
-  ? `channel:${item.whatsapp_channel_id}`
-  : `official:${item?.whatsapp_provider || 'meta'}`;
-
 const channelLabel = (item) => {
+  const assignee = item?.whatsapp_channel_assignee;
+  const channel = item?.whatsapp_channel_phone
+    ? `+${String(item.whatsapp_channel_phone).replace(/^\+/, '')}`
+    : item?.whatsapp_channel_name || 'número sin identificar';
+  if (item?.whatsapp_channel_assigned_user_id) {
+    return `Repartidor${assignee ? ` · ${assignee}` : ''} · ${channel}`;
+  }
   const provider = item?.whatsapp_provider === 'evolution'
     ? 'Evolution'
     : item?.whatsapp_provider === 'kapso'
       ? 'Kapso'
       : 'WhatsApp oficial';
-  const channel = item?.whatsapp_channel_phone
-    ? `+${String(item.whatsapp_channel_phone).replace(/^\+/, '')}`
-    : item?.whatsapp_channel_name || 'número sin identificar';
   return `${provider} · ${channel}`;
 };
 
@@ -33,7 +35,7 @@ const normalizeProductSearch = (value) => String(value || '')
   .toLowerCase()
   .trim();
 
-export default function ChatWindow({ conversation, messages, onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted, onSelectConversation }) {
+export default function ChatWindow({ conversation, messages, availableConversations = [], onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted, onSelectConversation }) {
   const { colors, isDark } = useTheme();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -121,30 +123,28 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     }
   }, [conversation, noteDraft, onConversationUpdated]);
 
+  const liveChannelSignature = channelConversationSignature(conversation, availableConversations);
+
   useEffect(() => {
     let cancelled = false;
-    setChannelConversations([conversation]);
+    const liveRows = mergeCustomerChannelConversations(conversation, availableConversations);
+    setChannelConversations(liveRows);
     setLoadingChannels(true);
 
     conversationsAPI.getByPhone(conversation.phone_number)
       .then((rows) => {
         if (cancelled) return;
-        const unique = new Map([[channelKey(conversation), conversation]]);
-        rows.forEach((row) => {
-          const key = channelKey(row);
-          if (!unique.has(key)) unique.set(key, row);
-        });
-        setChannelConversations([...unique.values()]);
+        setChannelConversations(mergeCustomerChannelConversations(conversation, availableConversations, rows));
       })
       .catch(() => {
-        if (!cancelled) setChannelConversations([conversation]);
+        if (!cancelled) setChannelConversations(liveRows);
       })
       .finally(() => {
         if (!cancelled) setLoadingChannels(false);
       });
 
     return () => { cancelled = true; };
-  }, [conversation.id, conversation.phone_number]);
+  }, [conversation.id, conversation.phone_number, liveChannelSignature]);
 
   const selectChannelConversation = useCallback((conversationId) => {
     if (Number(conversationId) !== Number(conversation.id)) return onSelectConversation?.(Number(conversationId));
@@ -263,7 +263,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
       source: order._source,
       id: order._source === 'shopify' ? order.shopify_order_id : order.id,
       dbId: order.id,
-      label: order.shopify_name || `#${order.id}`,
+      label: order.shopify_name || (order._source === 'bot' ? crmOrderLabel(order.id) : `#${order.id}`),
       address,
       city,
       note: order.delivery_note || (order._source === 'bot' ? order.notes : '') || '',
@@ -343,7 +343,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
     setHistoryPayment({
       source: order._source,
       id: order._source === 'shopify' ? order.shopify_order_id : order.id,
-      label: order.shopify_name || `#${order.id}`,
+      label: order.shopify_name || (order._source === 'bot' ? crmOrderLabel(order.id) : `#${order.id}`),
       total,
       paymentMethod: order.payment_method || 'transferencia',
       cashAmount: '',
@@ -433,8 +433,12 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
   const isHumanMode = conversation.agent_mode === 'human';
   const isCoordinating = conversation.agent_mode === 'coordinating';
   const isDevUser = currentUserEmail === DEV_EMAIL;
-  const HOT_STATES = ['interested', 'collecting_order'];
-  const isHotLead = HOT_STATES.includes(conversation.pipeline_state);
+  const HOT_TEMPERATURES = ['hot', 'very_hot'];
+  const isHotLead = HOT_TEMPERATURES.includes(conversation.lead_temperature) && !conversation.hot_lead_excluded;
+  const hotLeadLabel = conversation.lead_temperature === 'very_hot' ? 'Muy caliente' : 'Caliente';
+  const qualificationReasons = Array.isArray(conversation.qualification_reasons)
+    ? conversation.qualification_reasons
+    : [];
   const [clientType, setClientType] = useState(conversation.client_type || 'personal');
   const [togglingEmpresa, setTogglingEmpresa] = useState(false);
   const isEmpresa  = clientType === 'empresa';
@@ -532,7 +536,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
 
   const handleRemoveHotLead = async () => {
     try {
-      await api.patch(`/conversations/${conversation.id}/pipeline-state`, { state: 'exploring', excludeHotLead: true });
+      await api.patch(`/conversations/${conversation.id}/hot-lead-exclusion`, { excluded: true });
       onRefresh?.();
     } catch (e) { console.error(e); }
   };
@@ -1369,7 +1373,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
           {isHotLead && (
             <button
               onClick={handleRemoveHotLead}
-              title="Sacar de Hot Leads"
+              title={`${hotLeadLabel} (${conversation.lead_score || 0}/100)${qualificationReasons.length ? `: ${qualificationReasons.join(' · ')}` : ''}`}
               style={{
                 backgroundColor: 'transparent',
                 border: '1px solid #f9731666',
@@ -1383,7 +1387,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
               onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f9731620'; }}
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
             >
-              🔥 Hot Lead <X size={10} />
+              🔥 {hotLeadLabel} · {conversation.lead_score || 0} <X size={10} />
             </button>
           )}
           <button
@@ -1497,7 +1501,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                     active={optOut} danger={optOut} disabled={togglingOptOut}
                     onClick={() => { setMobileActionsOpen(false); handleToggleOptOut(); }} />
                   {isHotLead && (
-                    <MobileHeaderAction icon={<span style={{ fontSize: '15px' }}>🔥</span>} label="Quitar de Hot Leads" colors={colors}
+                    <MobileHeaderAction icon={<span style={{ fontSize: '15px' }}>🔥</span>} label={`Quitar ${hotLeadLabel}`} colors={colors}
                       onClick={() => { setMobileActionsOpen(false); handleRemoveHotLead(); }} />
                   )}
                   {isDevUser && (
@@ -1927,7 +1931,7 @@ export default function ChatWindow({ conversation, messages, onSendMessage, onTo
                             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'8px', flexWrap:'wrap', marginBottom:'6px' }}>
                               <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                                 <span style={{ fontSize:'10px', padding:'1px 6px', borderRadius:'4px', backgroundColor: isShopify ? '#0d2020' : colors.bgSub, color: isShopify ? colors.tealSoft : colors.textSecondary, border:`1px solid ${isShopify ? '#1a3d3d' : colors.border}` }}>
-                                  {isShopify ? 'Shopify' : 'Bot'}
+                                  {isShopify ? 'Shopify' : 'DR'}
                                 </span>
                                 <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}{o.shopify_name ? ` · ${o.shopify_name}` : ''}</span>
                               </div>

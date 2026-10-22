@@ -37,7 +37,17 @@ async function periodMetrics(pool, orgId, from, to) {
   // Conversaciones con al menos un mensaje entrante del cliente en el rango.
   const { rows: convs } = await pool.query(
     `SELECT c.id, c.pipeline_state, c.agent_mode, c.last_escalation_at,
-            COALESCE(contact.opt_out, FALSE) AS opted_out,
+            (c.pipeline_state = 'opted_out' OR EXISTS (
+              SELECT 1
+                FROM contacts ct
+               WHERE ct.organization_id = c.organization_id
+                 AND ct.opt_out = TRUE
+                 AND c.phone_number IS NOT NULL
+                 AND regexp_replace(ct.phone, '[^0-9]', '', 'g') <> ''
+                 AND regexp_replace(c.phone_number, '[^0-9]', '', 'g') <> ''
+                 AND RIGHT(regexp_replace(ct.phone, '[^0-9]', '', 'g'), 9)
+                     = RIGHT(regexp_replace(c.phone_number, '[^0-9]', '', 'g'), 9)
+            )) AS opted_out,
             c.created_at,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'inbound'
                 AND m.created_at >= $2::date AND m.created_at < ($3::date + INTERVAL '1 day')) AS inbound_in,
@@ -143,16 +153,16 @@ async function gradeConversation(client, conv, messages) {
   try { return JSON.parse(raw); } catch { return { puntaje: null, errores: [], estado_final: 'otro', resumen: '(no se pudo evaluar)' }; }
 }
 
-async function mapWithConcurrency(items, concurrency, mapper) {
+async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await mapper(items[index], index);
+  let cursor = 0;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await worker(items[index], index);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
   return results;
 }
 
@@ -188,14 +198,18 @@ router.post('/grade', async (req, res) => {
 
     const client = aiClient;
 
-    const graded = (await mapWithConcurrency(candidates, 4, async c => {
+    const evaluated = await mapWithConcurrency(candidates, 4, async c => {
       try {
         const msgs = await db.getMessagesByConversation(c.id, 120);
         if (!msgs.length) return null;
         const g = await gradeConversation(client, c, msgs);
         return { id: c.id, name: c.contact_name || c.phone_number, msgs: Number(c.msgs), ...g };
-      } catch (e) { return null; }
-    })).filter(Boolean);
+      } catch (e) {
+        console.warn(`[BotEval/grade] conversación ${c.id}:`, e.message);
+        return null;
+      }
+    });
+    const graded = evaluated.filter(Boolean);
 
     // Distribución de puntajes
     const distribucion = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };

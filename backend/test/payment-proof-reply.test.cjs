@@ -12,7 +12,7 @@ test('post-delivery payment reply never promises another dispatch', () => {
     amountMatches: null,
     firstName: 'Yefferzon',
   });
-  assert.match(reply, /pedido #3080/);
+  assert.match(reply, /pedido #DR-3080/);
   assert.doesNotMatch(reply, /despach|listo para/i);
 });
 

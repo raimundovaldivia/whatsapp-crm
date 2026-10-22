@@ -25,7 +25,7 @@ function mapHtml(stops, statuses, labelMode) {
 <style>
 html,body,#map{height:100%;margin:0;background:#0f172a} .leaflet-control-attribution{font-size:9px}
 .pin{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font:800 12px system-ui;border:2px solid #fff;box-shadow:0 2px 7px #0008;background:#fb923c}
-.pin.done{background:#22c55e}.pin.failed{background:#f87171}.pin.postponed{background:#a78bfa}.leaflet-popup-content{font:13px system-ui;line-height:1.35}.leaflet-popup-content b{font-size:14px}
+.pin.done{background:#22c55e}.pin.partial{background:#f59e0b}.pin.failed{background:#f87171}.pin.postponed{background:#a78bfa}.leaflet-popup-content{font:13px system-ui;line-height:1.35}.leaflet-popup-content b{font-size:14px}
 </style></head><body><div id="map"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -35,7 +35,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,att
 const coords=[];
 points.forEach(p=>{
   coords.push([p.lat,p.lng]);
-  const state=p.status==='entregado'?'done':p.status==='cancelled'||p.status==='not_delivered'?'failed':p.status==='postponed'?'postponed':'';
+  const state=p.status==='entregado'?'done':p.status==='partial'?'partial':p.status==='cancelled'||p.status==='not_delivered'?'failed':p.status==='postponed'?'postponed':'';
   const icon=L.divIcon({className:'',html:'<div class="pin '+state+'">'+p.label+'</div>',iconSize:[30,30],iconAnchor:[15,15]});
   L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup('<b>'+escapeHtml(p.label+'. '+p.name)+'</b><br>'+escapeHtml(p.address));
 });

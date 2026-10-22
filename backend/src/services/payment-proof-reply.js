@@ -11,7 +11,7 @@ function buildPaymentProofReply({ order, amountMatches, amountText = '', firstNa
   const hi = firstName ? ` ${firstName}` : '';
 
   if (delivered) {
-    const ref = `tu pedido #${order.id}`;
+    const ref = `tu pedido #DR-${order.id}`;
     if (amountMatches === true) {
       return `✅ ¡Comprobante recibido${hi}! El pago de ${amountText} por ${ref} quedó registrado. ¡Muchas gracias! 🙌`;
     }

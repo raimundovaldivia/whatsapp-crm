@@ -201,6 +201,11 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
  * @param {string} messageText   - texto del último mensaje
  */
 async function notifyAgentsNewMessage(orgId, conversation, messageText) {
+  const deliveryInbound = require('./delivery-inbound-notifications');
+  if (typeof deliveryInbound.notifyAssignedDriversForInbound === 'function') {
+    await deliveryInbound.notifyAssignedDriversForInbound(orgId, conversation, messageText)
+      .catch(err => console.warn('[Notifications] No se pudo avisar al repartidor:', err.message));
+  }
   try {
     const wc = await db.getWhatsappConfig(orgId);
     if (!wc || wc.provider !== 'kapso') return;

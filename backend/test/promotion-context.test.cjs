@@ -245,6 +245,51 @@ Haz tu pedido antes de las 12:00 y te lo entregamos el mismo día si hay stock d
   assert.match(promotion.choiceReply(promo), /1\) QUESO DE CABRA \+ BANDEJA XL 30 — \$25\.000/i);
 });
 
+test('estructura una oferta personalizada directa y reconoce la aceptación del upsell', () => {
+  const directOffer = {
+    direction: 'outbound',
+    created_at: '2026-10-16T13:25:00-03:00',
+    content: 'Hola Angely, sé que compras todas las semanas y normalmente llevas 2 bandejas L, con preferencia por blancos. Hoy, si agregas una tercera, te dejo las 3 bandejas en $28.000. Si me confirmas antes de las 15:00, todavía pueden entrar al reparto de hoy. ¿Te las dejo para Algarrobo 2886?',
+  };
+  const products = [
+    { id: 41, title: 'Huevos L blancos · Bandeja de 30', price: 9490, stock: 20, active: true },
+    { id: 42, title: 'Huevos L mixtos · Bandeja de 30', price: 9990, stock: 20, active: true },
+  ];
+  const promo = promotion.fromHistory([directOffer], products, new Date('2026-10-16T14:51:00-03:00'));
+
+  assert.equal(promo.templateName, 'oferta_directa_personalizada');
+  assert.equal(promo.active, true);
+  assert.equal(promo.validUntil, '2026-10-16');
+  assert.equal(promo.cutoff, '15:00');
+  assert.equal(promo.offers.length, 1);
+  assert.deepEqual(
+    [promo.offers[0].quantity, promo.offers[0].productId, promo.offers[0].price],
+    [3, '41', 28000],
+  );
+
+  const selected = promotion.selectedOffer('Muy bien las 3 bandejas', promo);
+  assert.equal(selected, promo.offers[0]);
+  assert.equal(promotion.selectedOffer('Muy bien, las tres bandejas', promo), promo.offers[0]);
+  assert.equal(promotion.selectedOffer('Mejor 3 bandejas XL', promo), null);
+  assert.equal(promotion.selectedOffer('Mejor 3 bandejas cafés', promo), null);
+  const items = promotion.offerOrderItems(selected);
+  assert.deepEqual(
+    [items[0].product_name, items[0].quantity, Math.round(items[0].price * items[0].quantity)],
+    ['Huevos L blancos · Bandeja de 30', 3, 28000],
+  );
+  assert.equal(pricing.priceItems(items, products).total, 28000);
+});
+
+test('no convierte un precio saliente común en una oferta personalizada', () => {
+  const message = {
+    direction: 'outbound',
+    created_at: '2026-10-16T13:25:00-03:00',
+    content: 'La bandeja L blanca cuesta $9.490. ¿Cuántas necesitas?',
+  };
+  const products = [{ id: 41, title: 'Huevos L blancos · Bandeja de 30', price: 9490, active: true }];
+  assert.equal(promotion.fromHistory([message], products, new Date('2026-10-16T14:51:00-03:00')), null);
+});
+
 test('una promoción sin vigencia explícita vence automáticamente en 24 horas', () => {
   const withoutValidity = {
     direction: 'outbound',

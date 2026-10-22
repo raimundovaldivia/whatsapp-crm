@@ -52,7 +52,18 @@ export async function unregisterForPush() {
 export function listenForRouteNotifications(onRoute) {
   const open = response => {
     const data = response?.notification?.request?.content?.data || {};
-    if (data.kind === 'delivery_route' && data.routeId) onRoute({ routeId: Number(data.routeId), routeName: data.routeName || 'Ruta' });
+    if (data.kind === 'delivery_route' && data.routeId) {
+      onRoute({ kind: 'delivery_route', routeId: Number(data.routeId), routeName: data.routeName || 'Ruta' });
+    }
+    if (data.kind === 'delivery_chat' && data.routeId && data.stopKey) {
+      onRoute({
+        kind: 'delivery_chat',
+        routeId: Number(data.routeId),
+        routeName: data.routeName || 'Ruta',
+        stopKey: String(data.stopKey),
+        stop: { customerName: data.customerName || 'Cliente' },
+      });
+    }
     Notifications.clearLastNotificationResponseAsync().catch(() => {});
   };
   const subscription = Notifications.addNotificationResponseReceivedListener(open);

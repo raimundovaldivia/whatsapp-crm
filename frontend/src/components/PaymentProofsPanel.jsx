@@ -11,6 +11,7 @@ import * as ui from '../ui.js';
 import { paymentProofsAPI } from '../utils/api.js';
 import { formatDateTime } from '../utils/dates.js';
 import { fetchPaymentProofImage } from '../utils/payment-proof-image.js';
+import { crmOrderLabel } from '../utils/order-reference.js';
 
 const STATUS_LABELS = {
   pending:       { label: 'Pendiente',      color: '#f59e0b', Icon: Clock },
@@ -27,7 +28,7 @@ const ORDER_STATUS_LABELS = {
 
 function linkedOrderReference(proof) {
   const id = proof?.linked_order_id || proof?.order_id;
-  return id ? `#BOT-${id}` : null;
+  return id ? crmOrderLabel(id) : null;
 }
 
 function linkedOrderItems(proof) {

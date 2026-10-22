@@ -577,7 +577,7 @@ async function cmdPedidos(org) {
     const total = o.total_price ? `$${Number(o.total_price).toLocaleString('es-CL')}` : '?';
     const name  = o.customer_name || o.customer_phone || '?';
     const st    = STATUS_LABEL[o.status] || o.status;
-    return `• *#${o.id}* ${name} — ${total} — _${st}_  (${date})`;
+    return `• *#DR-${o.id}* ${name} — ${total} — _${st}_  (${date})`;
   });
 
   return `📦 *Pedidos pendientes* (${pending.length})\n\n` + lines.join('\n') + '\n\n_Escribe #pagar <id> para confirmar pago_';
@@ -589,13 +589,13 @@ async function cmdPagar(org, orderId) {
     'SELECT * FROM orders WHERE id = $1 AND organization_id = $2',
     [orderId, org.id]
   );
-  if (!rows.length) return `❌ Pedido #${orderId} no encontrado.`;
+  if (!rows.length) return `❌ Pedido #DR-${orderId} no encontrado.`;
   const order = rows[0];
-  if (order.status === 'completed') return `ℹ️ El pedido #${orderId} ya está completado.`;
+  if (order.status === 'completed') return `ℹ️ El pedido #DR-${orderId} ya está completado.`;
 
   await db.updateOrder(orderId, { status: 'completed' });
   const name = order.customer_name || order.customer_phone || 'cliente';
-  return `✅ *Pedido #${orderId}* marcado como pagado.\n👤 ${name}`;
+  return `✅ *Pedido #DR-${orderId}* marcado como pagado.\n👤 ${name}`;
 }
 
 async function cmdVer(org, phone) {

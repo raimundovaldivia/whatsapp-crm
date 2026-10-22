@@ -139,6 +139,23 @@ export const adminAlertsAPI = {
   dismiss: (id) => api.delete(`/admin-alerts/${id}`).then(r => r.data),
 };
 
+export const referralsAPI = {
+  program: () => api.get('/referrals/program').then(r=>r.data),
+  prepare: () => api.post('/referrals/prepare').then(r=>r.data),
+  reconcile: () => api.post('/referrals/reconcile').then(r=>r.data),
+  approveMessages: ids => api.post('/referrals/messages/approve',{ids}).then(r=>r.data),
+  previewReward: (id,orderId) => api.post('/referrals/rewards/'+id+'/preview',{order_id:orderId}).then(r=>r.data),
+  redeemReward: (id,orderId,expectedTotal) => api.post('/referrals/rewards/'+id+'/redeem',{order_id:orderId,expected_total:expectedTotal}).then(r=>r.data),
+  command: (message,execute=false) => api.post('/referrals/command',{message,execute}).then(r=>r.data),
+  list:        (params = {}) => api.get('/referrals', { params }).then(r => r.data),
+  saveSettings: data => api.put('/referrals/settings', data).then(r => r.data.settings),
+  createCode: contactId => api.post('/referrals/codes', { contact_id: contactId }).then(r => r.data.code),
+  setCodeActive: (id, active) => api.patch(`/referrals/codes/${id}`, { active }).then(r => r.data.code),
+  createClaim: data => api.post('/referrals/claims', data).then(r => r.data.referral),
+  setStatus: (id, status, note = '') => api.patch(`/referrals/${id}/status`, { status, note }).then(r => r.data.referral),
+  suggestContacts: query => api.get('/contacts/suggest', { params: { q: query } }).then(r => r.data.data || []),
+};
+
 export const metaAPI = {
   status:       () => api.get('/meta/status').then(r => r.data),
   authUrl:      () => api.get('/meta/auth-url').then(r => r.data.url),

@@ -33,7 +33,8 @@ const { startJourneyRunner } = require('./services/campaign-journeys');
 const { startAdminWindowJob } = require('./services/admin-notify');
 const { startEscalationWatchJob } = require('./services/escalation-watch'); // Recordatorio si una escalación queda sin respuesta              // Aviso previo + cola de alertas admin
 const { startConversationModeWatchJob } = require('./services/conversation-mode-watch');
-const { startDeliveryRecoveryJob } = require('./services/delivery-recovery');
+const { startDeliveryMidnightJob } = require('./services/delivery-midnight');
+const { startCustomerFeedbackJob } = require('./services/customer-feedback');
 const { startPaymentPromiseFollowUpJob } = require('./services/payment-promises');
 const shopifyWebhookRouter = require('./routes/shopify-webhook'); // Shopify eventos
 const shopifyOAuthRouter   = require('./routes/shopify-oauth');   // Shopify OAuth flow
@@ -64,6 +65,10 @@ const metaWebhookRouter    = require('./routes/meta-webhook');      // Webhooks 
 const legalRouter          = require('./routes/legal');             // Privacidad y eliminación de datos (público)
 const marketingAttributionRouter = require('./routes/marketing-attribution'); // Rendimiento Click-to-WhatsApp
 const trackingLinksRouter   = require('./routes/tracking-links');     // Redirección pública con medición de clics
+const deliveryTrackingRouter = require('./routes/delivery-tracking'); // Seguimiento público temporal del reparto
+const customerFeedbackRouter = require('./routes/customer-feedback'); // Feedback de primera compra
+const referralsRouter      = require('./routes/referrals');        // Programa de referidos
+const referralPublicRouter = require('./routes/referral-public');  // Enlaces públicos de referidos
 
 const app    = express();
 const server = http.createServer(app);
@@ -101,6 +106,8 @@ const { rateLimit } = require('express-rate-limit');
 app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use('/store', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use('/r', rateLimit({ windowMs: 60 * 1000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.use('/referido', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.use('/seguimiento', rateLimit({ windowMs: 60 * 1000, limit: 180, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.post('/store/:slug/orders', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false }));
 
 // ─── HEALTH CHECK ────────────────────────────────────────────────
@@ -116,6 +123,8 @@ app.get('/ready', async (_req, res) => {
 
 app.use('/', legalRouter);
 app.use('/r', trackingLinksRouter);
+app.use('/seguimiento', deliveryTrackingRouter);
+app.use('/referido', referralPublicRouter);
 
 app.use('/api/commercial', require('./routes/commercial'));
 app.use('/api', require('./middleware/commercial-access').commercialAccess);
@@ -147,6 +156,8 @@ app.use('/api/store-settings', storeSettingsRouter); // Ajustes editables de la 
 app.use('/api/contacts',      contactsRouter);       // Contactos: leads y clientes
 app.use('/api/reconciliation', reconciliationRouter); // Conciliación bancaria
 app.use('/api/delivery',      deliveryRouter);        // App mobile repartidor
+app.use('/api/customer-feedback', customerFeedbackRouter); // Opiniones de clientes nuevos
+app.use('/api/referrals',    referralsRouter);       // Códigos, referidos y premios
 app.use('/api/users',         usersRouter);           // Gestión de usuarios (RBAC)
 app.use('/api/admin-alerts',  adminAlertsRouter);     // Cola de alertas al admin
 app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-enganche
@@ -198,7 +209,9 @@ setupDatabase().then(() => {
     startAdminWindowJob();
     startEscalationWatchJob();
     startConversationModeWatchJob(io);
-    startDeliveryRecoveryJob();
+    startDeliveryMidnightJob();
+    startCustomerFeedbackJob(io);
+    require('./services/referral-automation').start(io);
     startPaymentPromiseFollowUpJob(io);
   });
 }).catch(err => {
@@ -217,6 +230,7 @@ async function shutdown() {
   server.close();
   io.disconnectSockets(true);
   try {
+    require('./services/referral-automation').stop();
     require('./services/meta-purchase-sync').stopMetaPurchaseSyncJob();
     require('./services/social-stories').stopSocialStoriesJob();
     await require('./services/webhook-inbox').stopWebhookWorker();

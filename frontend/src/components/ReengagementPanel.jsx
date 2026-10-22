@@ -11,6 +11,7 @@ import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
 import { reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries } from '../utils/broadcast-drafts.mjs';
+import { crmOrderLabel } from '../utils/order-reference.js';
 
 function consolidateVisibleCandidates(rows = []) {
   const grouped = new Map();
@@ -3413,7 +3414,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 const data = contactOrders.data || {};
                 const orders = [
                   ...(data.shopifyOrders || []).map(order => ({ ...order, source: 'Shopify', date: order.shopify_created_at, status: order.financial_status, deliveryStatus: order.delivered_at ? 'ENTREGADO' : (order.crm_status || order.fulfillment_status) })),
-                  ...(data.botOrders || []).map(order => ({ ...order, source: 'Bot', date: order.created_at, status: order.status, deliveryStatus: order.delivered_at || String(order.status || '').toUpperCase() === 'PAID' ? 'ENTREGADO' : order.status })),
+                  ...(data.botOrders || []).map(order => ({ ...order, source: 'DR', date: order.created_at, status: order.status, deliveryStatus: order.delivered_at || String(order.status || '').toUpperCase() === 'PAID' ? 'ENTREGADO' : order.status })),
                 ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
                 const total = orders.reduce((sum, order) => sum + Number(order.total_price || 0), 0);
                 const statusText = value => {
@@ -3449,7 +3450,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                       return <div key={`${order.source}_${order.id || order.shopify_order_id || index}`} style={{ padding: '12px 13px', borderRadius: 10, border: `1px solid ${colors.border}`, backgroundColor: colors.bgApp }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                           <div>
-                            <span style={{ color: colors.textPrimary, fontSize: 12, fontWeight: 800 }}>{order.shopify_name || `Pedido #${order.id}`}</span>
+                            <span style={{ color: colors.textPrimary, fontSize: 12, fontWeight: 800 }}>{order.shopify_name || `Pedido ${crmOrderLabel(order.id)}`}</span>
                             <span style={{ color: colors.textMuted, fontSize: 10, marginLeft: 7 }}>{order.source} · {order.date ? new Date(order.date).toLocaleDateString('es-CL') : 'Sin fecha'}</span>
                           </div>
                           <strong style={{ color: colors.textPrimary, fontSize: 13 }}>${Number(order.total_price || 0).toLocaleString('es-CL')}</strong>

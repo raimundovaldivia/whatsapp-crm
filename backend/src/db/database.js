@@ -2188,16 +2188,24 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
   }
 }
 
-async function updateOrder(id, updates) {
-  if (updates.status === 'cancelled') {
-    try { await require('../services/campaign-offers-store').releaseOnCancel(getPool(), null, id); }
-    catch (error) { console.warn('[Campaign offers] no se pudo liberar la oferta al cancelar:', error.message); }
+async function updateOrder(id, updates, orgId = null) {
+  if (updates && updates.status === 'cancelled') {
+    try {
+      await require('../services/campaign-offers-store').releaseOnCancel(getPool(), orgId, id);
+    } catch (error) {
+      console.warn('[DB] no se pudo liberar la oferta personal:', error.message);
+    }
   }
   const keys = Object.keys(updates);
   const values = Object.values(updates);
   const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
   values.push(id);
-  return queryOne(`UPDATE orders SET ${setClause} WHERE id = $${values.length} RETURNING *`, values);
+  let where = `id = $${values.length}`;
+  if (orgId !== null && orgId !== undefined) {
+    values.push(orgId);
+    where += ` AND organization_id = $${values.length}`;
+  }
+  return queryOne(`UPDATE orders SET ${setClause} WHERE ${where} RETURNING *`, values);
 }
 
 async function getOrdersByOrg(orgId) {
@@ -2251,11 +2259,25 @@ async function getOrdersAwaitingPayment(conversationId) {
  */
 async function getRecentDeliveredOrder(conversationId, days = 7) {
   return queryOne(
-    `SELECT * FROM orders
-      WHERE conversation_id = $1
-        AND status IN ('entregado', 'paid')
-        AND COALESCE(updated_at, created_at) > NOW() - ($2 || ' days')::interval
-      ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
+    `SELECT o.*
+       FROM conversations anchor
+       JOIN orders o
+         ON o.organization_id = anchor.organization_id
+        AND (
+          o.conversation_id = anchor.id
+          OR (
+            LENGTH(regexp_replace(COALESCE(anchor.phone_number, ''), '\\D', '', 'g')) >= 9
+            AND LENGTH(regexp_replace(COALESCE(o.customer_phone, ''), '\\D', '', 'g')) >= 9
+            AND RIGHT(regexp_replace(anchor.phone_number, '\\D', '', 'g'), 9)
+                = RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 9)
+          )
+        )
+      WHERE anchor.id = $1
+        AND o.status IN ('entregado', 'paid')
+        AND COALESCE(o.updated_at, o.created_at) > NOW() - ($2 || ' days')::interval
+      ORDER BY (o.conversation_id = anchor.id) DESC,
+               COALESCE(o.updated_at, o.created_at) DESC
+      LIMIT 1`,
     [conversationId, String(days)]
   );
 }
@@ -2906,12 +2928,18 @@ async function upsertShopifyOrders(orgId, orders) {
            THEN shopify_orders.fulfillment_status
            ELSE EXCLUDED.fulfillment_status
          END,
-         total_price         = EXCLUDED.total_price,
+         total_price         = CASE
+           WHEN shopify_orders.delivery_modified IS TRUE THEN shopify_orders.total_price
+           ELSE EXCLUDED.total_price
+         END,
          customer_name       = EXCLUDED.customer_name,
          customer_email      = EXCLUDED.customer_email,
          customer_phone      = EXCLUDED.customer_phone,
          shipping_city       = EXCLUDED.shipping_city,
-         items               = EXCLUDED.items,
+         items               = CASE
+           WHEN shopify_orders.delivery_modified IS TRUE THEN shopify_orders.items
+           ELSE EXCLUDED.items
+         END,
          raw_json            = EXCLUDED.raw_json,
          shopify_created_at  = EXCLUDED.shopify_created_at,
          synced_at           = NOW()`,

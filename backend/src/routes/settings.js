@@ -20,6 +20,7 @@ const collection      = require('../services/payment-collection');
 const evolution       = require('../services/evolution-whatsapp');
 const crypto          = require('node:crypto');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const dispatchCoverage = require('../services/dispatch-coverage');
 
 router.use(requireAuth);
 router.use((req, res, next) => {
@@ -736,7 +737,24 @@ router.get('/warehouse', async (req, res) => {
     const address = await db.getSetting(req.orgId, 'warehouse_address') || '';
     const lat     = parseFloat(await db.getSetting(req.orgId, 'warehouse_lat')) || null;
     const lng     = parseFloat(await db.getSetting(req.orgId, 'warehouse_lng')) || null;
-    res.json({ success: true, warehouse: { address, lat, lng, geocoded: lat != null && lng != null } });
+    const radiusRaw = await db.getSetting(req.orgId, 'delivery_coverage_radius_km');
+    const coveragePoints = dispatchCoverage.parsePoints(
+      await db.getSetting(req.orgId, 'delivery_coverage_points')
+    );
+    const config = dispatchCoverage.coverageConfig({
+      warehouse: { address, lat, lng },
+      radiusKm: radiusRaw,
+      points: coveragePoints,
+    });
+    res.json({
+      success: true,
+      warehouse: {
+        address, lat, lng, geocoded: lat != null && lng != null,
+        coverageRadiusKm: config.radiusKm,
+        coverageEnabled: config.enabled,
+        coveragePoints,
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -745,12 +763,27 @@ router.get('/warehouse', async (req, res) => {
 router.post('/warehouse', require('../middleware/commercial-access').requireSolution('delivery'), async (req, res) => {
   try {
     const address = (req.body?.address || '').trim();
+    const radiusInput = req.body?.coverageRadiusKm;
+    const radius = radiusInput === '' || radiusInput == null ? null : Number(radiusInput);
+    if (radius !== null && (!Number.isFinite(radius) || radius < 1 || radius > 1000)) {
+      return res.status(400).json({ success: false, error: 'El radio de cobertura debe estar entre 1 y 1000 km' });
+    }
+    const rawPoints = req.body?.coveragePoints == null ? [] : req.body.coveragePoints;
+    if (!Array.isArray(rawPoints) || rawPoints.length > 20) {
+      return res.status(400).json({ success: false, error: 'Puedes configurar hasta 20 puntos adicionales' });
+    }
+    const requestedPoints = rawPoints.map((point, index) => ({
+      name: String(point?.name || `Punto ${index + 2}`).trim().slice(0, 80),
+      address: String(point?.address || '').trim().slice(0, 300),
+    })).filter(point => point.address);
     if (!address) {
       // Vaciar la bodega
       await db.setSetting(req.orgId, 'warehouse_address', '');
       await db.setSetting(req.orgId, 'warehouse_lat', '');
       await db.setSetting(req.orgId, 'warehouse_lng', '');
-      return res.json({ success: true, warehouse: { address: '', lat: null, lng: null, geocoded: false } });
+      await db.setSetting(req.orgId, 'delivery_coverage_radius_km', '');
+      await db.setSetting(req.orgId, 'delivery_coverage_points', '[]');
+      return res.json({ success: true, warehouse: { address: '', lat: null, lng: null, geocoded: false, coverageRadiusKm: null, coverageEnabled: false, coveragePoints: [] } });
     }
 
     await db.setSetting(req.orgId, 'warehouse_address', address);
@@ -758,25 +791,47 @@ router.post('/warehouse', require('../middleware/commercial-access').requireSolu
     // Geocodificar la dirección de la bodega (una sola llamada, al guardar)
     let lat = null, lng = null;
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-    if (apiKey) {
+    async function geocodeAddress(value) {
+      if (!apiKey) return { lat: null, lng: null };
       try {
         const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
-          params: { address, key: apiKey, region: 'cl', language: 'es' },
+          params: { address: value, key: apiKey, region: 'cl', language: 'es' },
           timeout: 8000,
         });
         const loc = data?.results?.[0]?.geometry?.location;
-        if (loc && data.status === 'OK') { lat = loc.lat; lng = loc.lng; }
+        if (loc && data.status === 'OK') return { lat: loc.lat, lng: loc.lng };
       } catch (e) {
         console.warn('[Settings/warehouse] geocode falló:', e.message);
       }
+      return { lat: null, lng: null };
     }
+    ({ lat, lng } = await geocodeAddress(address));
+    const coveragePoints = await Promise.all(requestedPoints.map(async point => {
+      const coordinates = await geocodeAddress(point.address);
+      return { ...point, ...coordinates, geocoded: dispatchCoverage.validPoint(coordinates) };
+    }));
     await db.setSetting(req.orgId, 'warehouse_lat', lat != null ? String(lat) : '');
     await db.setSetting(req.orgId, 'warehouse_lng', lng != null ? String(lng) : '');
+    await db.setSetting(req.orgId, 'delivery_coverage_radius_km', radius != null ? String(radius) : '');
+    await db.setSetting(req.orgId, 'delivery_coverage_points', JSON.stringify(coveragePoints));
+
+    const config = dispatchCoverage.coverageConfig({
+      warehouse: { address, lat, lng }, radiusKm: radius, points: coveragePoints,
+    });
+    const unlocatedCount = coveragePoints.filter(point => !point.geocoded).length;
+    const warningParts = [];
+    if (lat == null) warningParts.push(apiKey ? 'No se pudo ubicar la bodega — revísala.' : 'Falta GOOGLE_MAPS_API_KEY: se guardó la dirección pero sin coordenadas.');
+    if (unlocatedCount) warningParts.push(`${unlocatedCount} punto${unlocatedCount === 1 ? '' : 's'} adicional${unlocatedCount === 1 ? '' : 'es'} no se pudo ubicar.`);
 
     res.json({
       success: true,
-      warehouse: { address, lat, lng, geocoded: lat != null },
-      warning: lat == null ? (apiKey ? 'No se pudo ubicar esa dirección — revísala.' : 'Falta GOOGLE_MAPS_API_KEY: se guardó la dirección pero sin coordenadas.') : null,
+      warehouse: {
+        address, lat, lng, geocoded: lat != null,
+        coverageRadiusKm: config.radiusKm,
+        coverageEnabled: config.enabled,
+        coveragePoints,
+      },
+      warning: warningParts.join(' ') || null,
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

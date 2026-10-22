@@ -45,13 +45,22 @@ test('history sync preserves local logistics and does not recreate historical di
       UPDATE shopify_orders SET crm_status='en_camino' WHERE shopify_order_id='enroute';
       UPDATE shopify_orders SET financial_status='REFUNDED', fulfillment_status='UNFULFILLED'
         WHERE shopify_order_id='refunded';
+      UPDATE shopify_orders SET items='[{"name":"Huevos entregados","quantity":1,"price":100}]'::jsonb,
+        total_price=100, delivery_modified=TRUE WHERE shopify_order_id='delivered';
     `);
     const logistics = () => engine.query(`SELECT shopify_order_id,crm_status,delivered_at,
       delivery_date,delivery_note,dispatch_count,last_attempt_status,payment_marked_at,payment_record_source
       FROM shopify_orders ORDER BY id`);
     const before = (await logistics()).rows;
-    await db.upsertShopifyOrders(1, ['history','retry','rescheduled','delivered','cancelled','assigned','enroute'].map(id => order(id)));
+    const refreshed = ['history','retry','rescheduled','delivered','cancelled','assigned','enroute'].map(id => order(id));
+    const refreshedDelivered = refreshed.find(item => item.id === 'delivered');
+    refreshedDelivered.items = [{ name: 'Pedido remoto completo', quantity: 9, price: 999 }];
+    refreshedDelivered.totalPrice = 8991;
+    await db.upsertShopifyOrders(1, refreshed);
     assert.deepEqual((await logistics()).rows, before);
+    const localDelivered = (await engine.query("SELECT items,total_price FROM shopify_orders WHERE shopify_order_id='delivered'")).rows[0];
+    assert.equal(Number(localDelivered.total_price), 100);
+    assert.equal(localDelivered.items[0].name, 'Huevos entregados');
     const router = load('src/routes/delivery.js', {
       '../db/database': { getPool: () => new Pool() },
       '../middleware/auth': { requireAuth: noop, requireRole: () => noop },

@@ -569,7 +569,7 @@ router.post('/:id/orders', async (req, res) => {
         : '';
       const subtotalLine = discountAmount > 0
         ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
-      const summary = `🛒 *Pedido #${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
+      const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
 
       const wc = await db.getWhatsappConfig(req.orgId);
       if (wc) {
@@ -972,6 +972,8 @@ router.get('/search-by-phone', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.agent_mode,
               c.last_message_at, c.hot_lead_excluded, c.whatsapp_channel_id,
+              wc.assigned_user_id AS whatsapp_channel_assigned_user_id,
+              assigned_user.name AS whatsapp_channel_assignee,
               COALESCE(wc.name,
                 CASE WHEN cfg.provider = 'kapso' THEN 'WhatsApp Oficial (Kapso)' ELSE 'WhatsApp Oficial' END
               ) AS whatsapp_channel_name,
@@ -981,6 +983,9 @@ router.get('/search-by-phone', async (req, res) => {
               (SELECT MIN(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS first_message_at
        FROM conversations c
        LEFT JOIN whatsapp_channels wc ON wc.id = c.whatsapp_channel_id
+       LEFT JOIN users assigned_user
+         ON assigned_user.id = wc.assigned_user_id
+        AND assigned_user.organization_id = c.organization_id
        LEFT JOIN whatsapp_configs cfg ON cfg.organization_id = c.organization_id
        WHERE c.organization_id = $1
          AND c.phone_number IN (${placeholders})

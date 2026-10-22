@@ -44,6 +44,14 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const pendingRoute = useRef(null);
 
+  const openPushDestination = useCallback(destination => {
+    if (destination?.kind === 'delivery_chat') {
+      navigationRef.navigate('CustomerChat', destination);
+      return;
+    }
+    navigationRef.navigate('Route', destination);
+  }, []);
+
   // Restaurar sesión guardada y validarla contra el backend
   useEffect(() => {
     (async () => {
@@ -72,10 +80,10 @@ export default function App() {
     if (!user) return;
     registerForPush();
     return listenForRouteNotifications(route => {
-      if (navigationRef.isReady()) navigationRef.navigate('Route', route);
+      if (navigationRef.isReady()) openPushDestination(route);
       else pendingRoute.current = route;
     });
-  }, [user]);
+  }, [user, openPushDestination]);
 
   // Actualización OTA al abrir: si hay una versión nueva publicada con
   // `eas update`, se descarga y la app se reinicia sola (tarda 1-3 s con
@@ -122,7 +130,7 @@ export default function App() {
         ) : (
           <NavigationContainer ref={navigationRef} theme={navTheme} onReady={() => {
             if (pendingRoute.current) {
-              navigationRef.navigate('Route', pendingRoute.current);
+              openPushDestination(pendingRoute.current);
               pendingRoute.current = null;
             }
           }}>

@@ -399,7 +399,7 @@ router.get('/delivery-audience', requireContactsAccess, async (req, res) => {
       `SELECT * FROM (
          SELECT regexp_replace(COALESCE(o.customer_phone, c.phone_number, ''), '[^0-9]', '', 'g') AS phone,
                 COALESCE(NULLIF(o.customer_name, ''), c.contact_name, 'Cliente') AS customer_name,
-                CONCAT('#', o.id) AS order_label, o.delivery_note AS reason,
+                CONCAT('#DR-', o.id) AS order_label, o.delivery_note AS reason,
                 o.last_attempt_at AS attempted_at, 'bot' AS source
            FROM orders o
            LEFT JOIN conversations c ON c.id = o.conversation_id

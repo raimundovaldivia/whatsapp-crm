@@ -14,6 +14,7 @@ const whatsappService = require('../services/whatsapp');
 const pipeline       = require('../services/pipeline');
 const { resumeDivaOnInbound } = require('../services/conversation-mode');
 const { notifyAdminHumanPendingReply } = require('../services/notifications');
+const deliveryInboundNotifications = require('../services/delivery-inbound-notifications');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -62,6 +63,9 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
     // 3. Emitir al CRM en tiempo real
     const updatedConv = await db.getConversationById(conversation.id);
     io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: savedMsg, conversation: updatedConv });
+    if (typeof deliveryInboundNotifications.notifyAssignedDriversForInbound === 'function') {
+      deliveryInboundNotifications.notifyAssignedDriversForInbound(org.id, updatedConv, parsed.text).catch(() => {});
+    }
 
     // 4. Mantener silencio solo mientras la intervención humana siga activa.
     if (updatedConv.agent_mode !== 'ai') {

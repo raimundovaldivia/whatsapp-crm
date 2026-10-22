@@ -23,7 +23,7 @@ async function getAccounts(orgId, month) {
   const baseline = new Date(`${OPENING_DATE}T00:00:00.000Z`);
   const [ordersResult, proofsResult, movementsResult, monthlyOrdersResult] = await Promise.all([
     pool.query(
-      `SELECT 'bot' AS source, o.id::text AS id, CONCAT('#BOT-', o.id) AS label,
+      `SELECT 'bot' AS source, o.id::text AS id, CONCAT('#DR-', o.id) AS label,
               COALESCE(NULLIF(o.customer_name,''), c.contact_name, 'Cliente') AS customer_name,
               COALESCE(NULLIF(o.customer_phone,''), c.phone_number) AS phone,
               COALESCE(ct.client_type, 'personal') AS client_type,

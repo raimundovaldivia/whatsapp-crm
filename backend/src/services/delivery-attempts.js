@@ -7,7 +7,7 @@ function keyOf(order) {
   return order?.source && order?.id != null ? `${order.source}_${String(order.id)}` : null;
 }
 
-const CLOSED = new Set(['entregado', 'cancelled', 'postponed', 'not_delivered']);
+const CLOSED = new Set(['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered']);
 
 /**
  * Registra un cambio externo (administración o Diva) en la ruta donde estaba

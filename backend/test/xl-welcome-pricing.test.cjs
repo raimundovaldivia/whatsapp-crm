@@ -140,6 +140,15 @@ a.match(reply,/no tienen descuento por cantidad/);
 require('node:test')('delivery fee matches the public storefront rule',()=>{
 const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
 a.equal(p.deliveryPriceLine({},10000),'');
-a.match(p.deliveryPriceLine(p.forStore({enabled:true}),'15000'),/\$1\.500.*gratis desde \$15\.000/);
+a.match(p.deliveryPriceLine(p.forStore({enabled:true}),'15000'),/La Serena y Coquimbo.*\$1\.500.*gratis desde \$15\.000/);
 a.match(p.deliveryPriceLine(p.forStore({enabled:true}),null),/gratis desde \$10\.000/);
+});
+
+require('node:test')('answers free-delivery questions with the exact fee and both covered cities',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing'),web=p.forStore({enabled:true});
+const reply=p.deliveryPriceReply('¿El despacho es gratis?',web,'10000');
+a.equal(reply,'Sí 😊 El despacho es gratis en compras desde $10.000 en todo La Serena y Coquimbo. Si tu compra es menor a $10.000, el despacho cuesta $1.500.');
+a.match(p.deliveryPriceReply('¿Cuánto cuesta el envío?',web,'10000'),/gratis en compras desde \$10\.000/);
+a.equal(p.deliveryPriceReply('¿Despachan hoy?',web,'10000'),null);
+a.equal(p.deliveryPriceReply('¿El despacho es gratis?',{},'10000'),null);
 });

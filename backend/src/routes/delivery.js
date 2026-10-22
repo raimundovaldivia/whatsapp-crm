@@ -31,6 +31,7 @@ const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
 const { paymentBreakdown } = require('../utils/payment-breakdown');
 const deliveryNotifications = require('../services/delivery-notifications');
+const deliveryTracking = require('../services/delivery-tracking');
 const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
 const push = require('../services/push');
@@ -39,6 +40,9 @@ const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem =
   ? productIdentity.canonicalizeProductItem
   : item => item;
 const { attachAttemptHistory } = require('../services/delivery-attempts');
+const dispatchCoverage = require('../services/dispatch-coverage');
+const { crmOrderLabel, normalizeOrderLabel } = require('../utils/order-reference');
+const businessDate = require('../services/business-date');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 // Un pedido importado sin decisión logística local no vuelve a reparto si
@@ -97,9 +101,10 @@ function notifyAssignedDriver(orgId, route, message = null) {
       try { orders = JSON.parse(orders); } catch { orders = []; }
     }
     const retryCount = orders.filter(isRetryDelivery).length;
+    const outsideCount = orders.filter(order => order?.coverage?.status === 'outside').length;
     const pending = push.pushUser(orgId, route.driver_user_id, {
       title: '🚚 Nueva ruta asignada',
-      body: message || `${route.name || 'Tienes una nueva ruta'} · ${orders.length} paradas${retryCount ? ` · ⚠️ ${retryCount} reintento${retryCount === 1 ? '' : 's'} prioritario${retryCount === 1 ? '' : 's'}` : ''}`,
+      body: message || `${route.name || 'Tienes una nueva ruta'} · ${orders.length} paradas${retryCount ? ` · ⚠️ ${retryCount} reintento${retryCount === 1 ? '' : 's'} prioritario${retryCount === 1 ? '' : 's'}` : ''}${outsideCount ? ` · 📍 ${outsideCount} dirección${outsideCount === 1 ? '' : 'es'} fuera de cobertura por revisar` : ''}`,
       data: { kind: 'delivery_route', routeId: String(route.id), routeName: route.name || 'Ruta' },
     });
     pending?.catch?.(() => {});
@@ -110,8 +115,13 @@ function routeStops(route) {
   const optimized = Array.isArray(route?.optimized_route)
     ? route.optimized_route
     : JSON.parse(route?.optimized_route || '[]');
-  if (optimized.length) return optimized;
-  return Array.isArray(route?.orders) ? route.orders : JSON.parse(route?.orders || '[]');
+  const stops = optimized.length
+    ? optimized
+    : (Array.isArray(route?.orders) ? route.orders : JSON.parse(route?.orders || '[]'));
+  return stops.map(stop => ({
+    ...stop,
+    orderName: normalizeOrderLabel(stop?.orderName, stop?.source, stop?.id) || stop?.orderName,
+  }));
 }
 
 function jsonList(value) {
@@ -135,6 +145,109 @@ function jsonObject(value) {
   }
 }
 
+async function setConversationDeliveryState(client, orgId, stop, routeId, state) {
+  const phone = deliveryNotifications.phoneDigits?.(stop?.phone) || String(stop?.phone || '').replace(/\D/g, '');
+  if (!phone) return 0;
+  const { rowCount } = await client.query(
+    `UPDATE conversations
+        SET delivery_state = $1,
+            delivery_route_id = $2,
+            delivery_stop_key = $3,
+            updated_at = NOW()
+      WHERE organization_id = $4
+        AND regexp_replace(COALESCE(phone_number, ''), '[^0-9]', '', 'g') = $5`,
+    [state, Number(routeId), orderKey(stop), orgId, phone]
+  );
+  return rowCount || 0;
+}
+
+async function claimDeliveryCustomerEvent(orgId, routeId, stopKey, eventType, payload = {}) {
+  const { rows: [event] } = await getPool().query(
+    `INSERT INTO delivery_customer_events
+       (organization_id, route_id, stop_key, event_type, payload)
+     VALUES ($1, $2, $3, $4, $5::jsonb)
+     ON CONFLICT (organization_id, route_id, stop_key, event_type)
+     DO UPDATE SET
+       status = 'pending',
+       payload = EXCLUDED.payload,
+       attempt_count = delivery_customer_events.attempt_count + 1,
+       claimed_at = NOW(),
+       updated_at = NOW(),
+       last_error = NULL
+     WHERE delivery_customer_events.status = 'failed'
+        OR (delivery_customer_events.status = 'pending'
+            AND delivery_customer_events.claimed_at < NOW() - INTERVAL '5 minutes')
+     RETURNING id`,
+    [orgId, Number(routeId), stopKey, eventType, JSON.stringify(payload)]
+  );
+  return event?.id || null;
+}
+
+async function finishDeliveryCustomerEvent(orgId, eventId, status, error = null) {
+  await getPool().query(
+    `UPDATE delivery_customer_events
+        SET status = $1,
+            sent_at = CASE WHEN $1 = 'sent' THEN NOW() ELSE sent_at END,
+            last_error = $2,
+            updated_at = NOW()
+      WHERE id = $3 AND organization_id = $4`,
+    [status, error ? String(error).slice(0, 500) : null, eventId, orgId]
+  );
+}
+
+async function sendDeliveryCustomerEvent(orgId, route, stop, eventType, sender, payload = {}) {
+  const stopKey = orderKey(stop);
+  const phone = deliveryNotifications.phoneDigits?.(stop?.phone) || String(stop?.phone || '').replace(/\D/g, '');
+  if (!phone || stop?.source === 'return') return { stopKey, status: 'skipped', reason: !phone ? 'NO_PHONE' : 'RETURN' };
+  const eventId = await claimDeliveryCustomerEvent(orgId, route.id, stopKey, eventType, payload);
+  if (!eventId) return { stopKey, status: 'skipped', reason: 'ALREADY_PROCESSED' };
+  try {
+    const result = await sender();
+    await finishDeliveryCustomerEvent(orgId, eventId, 'sent');
+    if (result?.message) {
+      const conversation = result.conversationId
+        ? await db.getConversationById(result.conversationId, orgId).catch(() => null)
+        : null;
+      io?.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message: result.message, conversation });
+    }
+    return { stopKey, status: 'sent', via: result?.via || null };
+  } catch (error) {
+    await finishDeliveryCustomerEvent(orgId, eventId, 'failed', error.code || error.message).catch(() => {});
+    console.warn(`[Delivery/customer-event] ${eventType} ${stopKey}:`, error.message);
+    return { stopKey, status: 'failed', reason: error.code || error.message };
+  }
+}
+
+async function notifyConsolidatedRouteCustomers(orgId, route) {
+  const statuses = jsonObject(route.stop_statuses);
+  const terminal = new Set(['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered']);
+  const stops = routeStops(route).filter(stop => !terminal.has(statuses[orderKey(stop)]));
+  const results = [];
+  for (let index = 0; index < stops.length; index += 5) {
+    const batch = stops.slice(index, index + 5);
+    results.push(...await Promise.all(batch.map(stop => sendDeliveryCustomerEvent(
+      orgId,
+      route,
+      stop,
+      'load_consolidated',
+      async () => {
+        const trackingUrl = await deliveryTracking.createTrackingLink(orgId, route.id, orderKey(stop)).catch(error => {
+          console.warn('[Delivery tracking] No se pudo crear el enlace:', error.message);
+          return null;
+        });
+        return deliveryNotifications.sendLoadConsolidatedNotification(orgId, { ...stop, trackingUrl });
+      },
+      { routeName: route.name || null }
+    ))));
+  }
+  return {
+    sent: results.filter(item => item.status === 'sent').length,
+    failed: results.filter(item => item.status === 'failed').length,
+    skipped: results.filter(item => item.status === 'skipped').length,
+    results,
+  };
+}
+
 /**
  * Rutas antiguas (y algunos resultados de optimización) pueden conservar la
  * parada pero no su copia de `items`. La consolidación no debe quedar vacía:
@@ -146,9 +259,11 @@ async function hydrateRouteItems(pool, route, orgId) {
   const orders = jsonList(route.orders);
   const optimized = jsonList(route.optimized_route);
   const itemMap = new Map();
+  const customerMap = new Map();
 
   for (const order of orders) {
     if (Array.isArray(order?.items) && order.items.length) itemMap.set(orderKey(order), order.items);
+    if (order?.phone || order?.customerName) customerMap.set(orderKey(order), { phone: order.phone, customerName: order.customerName });
   }
 
   const all = [...orders, ...optimized];
@@ -156,26 +271,35 @@ async function hydrateRouteItems(pool, route, orgId) {
   const shopifyIds = [...new Set(all.filter(item => item?.source === 'shopify').map(item => String(item.id)).filter(Boolean))];
   const [botResult, shopifyResult] = await Promise.all([
     botIds.length
-      ? pool.query('SELECT id::text AS id, items FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
+      ? pool.query('SELECT id::text AS id, items, customer_phone, customer_name FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
       : { rows: [] },
     shopifyIds.length
-      ? pool.query('SELECT shopify_order_id AS id, items FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopifyIds])
+      ? pool.query('SELECT shopify_order_id AS id, items, customer_phone, customer_name FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopifyIds])
       : { rows: [] },
   ]);
 
   for (const row of botResult.rows) {
     const items = jsonList(row.items);
     if (items.length && !itemMap.has(`bot_${row.id}`)) itemMap.set(`bot_${row.id}`, items);
+    customerMap.set(`bot_${row.id}`, { phone: row.customer_phone, customerName: row.customer_name });
   }
   for (const row of shopifyResult.rows) {
     const items = jsonList(row.items);
     if (items.length && !itemMap.has(`shopify_${row.id}`)) itemMap.set(`shopify_${row.id}`, items);
+    customerMap.set(`shopify_${row.id}`, { phone: row.customer_phone, customerName: row.customer_name });
   }
 
   const addItems = stop => {
-    if (Array.isArray(stop?.items) && stop.items.length) return stop;
+    const customer = customerMap.get(orderKey(stop)) || {};
+    const base = {
+      ...stop,
+      orderName: normalizeOrderLabel(stop?.orderName, stop?.source, stop?.id) || stop?.orderName,
+      phone: stop?.phone || customer.phone || null,
+      customerName: stop?.customerName || customer.customerName || 'Cliente',
+    };
+    if (Array.isArray(stop?.items) && stop.items.length) return base;
     const items = itemMap.get(orderKey(stop));
-    return items?.length ? { ...stop, items } : stop;
+    return items?.length ? { ...base, items } : base;
   };
   return {
     ...route,
@@ -407,6 +531,32 @@ async function attachCoords(orgId, orders) {
   return orders;
 }
 
+async function getDispatchCoverage(orgId, warehouse = null) {
+  const readSetting = key => typeof db.getSetting === 'function'
+    ? db.getSetting(orgId, key).catch(() => null)
+    : Promise.resolve(null);
+  const [radiusKm, pointsRaw] = await Promise.all([
+    readSetting('delivery_coverage_radius_km'),
+    readSetting('delivery_coverage_points'),
+  ]);
+  let resolvedWarehouse = warehouse;
+  if (!resolvedWarehouse) {
+    const [address, latRaw, lngRaw] = await Promise.all([
+      readSetting('warehouse_address'),
+      readSetting('warehouse_lat'),
+      readSetting('warehouse_lng'),
+    ]);
+    resolvedWarehouse = { address, lat: parseFloat(latRaw), lng: parseFloat(lngRaw) };
+  }
+  return dispatchCoverage.coverageConfig({ warehouse: resolvedWarehouse, radiusKm, points: pointsRaw });
+}
+
+async function attachCoverage(orgId, orders, warehouse = null) {
+  const config = await getDispatchCoverage(orgId, warehouse);
+  for (const order of orders) order.coverage = dispatchCoverage.classify(order, config);
+  return config;
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 // pg entrega DATE como Date (medianoche local del servidor); devolver YYYY-MM-DD sin corrimientos
@@ -479,8 +629,8 @@ function prioritizeOrders(orders) {
 function normalizeShopifyOrder(row) {
   // shipping_address viene de raw_json JSONB (puede ser objeto o null)
   const addr = jsonObject(row.shipping_address);
-  const street = addr.address1 || addr.address || '';
-  const city   = addr.city || row.shipping_city || '';
+  const street = row.shipping_address1 || addr.address1 || addr.address || '';
+  const city   = row.shipping_city || addr.city || '';
   const items = jsonList(row.items).map(canonicalizeProductItem);
   return {
     id: row.id, source: 'shopify',
@@ -518,7 +668,7 @@ function normalizeBotOrder(row) {
   const items = jsonList(row.items).map(canonicalizeProductItem);
   return {
     id: String(row.id), source: 'bot',
-    orderName: `#BOT-${row.id}`,
+    orderName: crmOrderLabel(row.id),
     customerName,
     phone: row.phone || '',
     address: street, city, fullAddress: [street, city].filter(Boolean).join(', '),
@@ -561,7 +711,7 @@ function normalizeReturnTask(row) {
   const kindLabel = row.kind === 'exchange' ? 'CAMBIO' : row.kind === 'issue' ? 'PROBLEMA' : 'DEVOLUCIÓN';
   return {
     id: String(row.id), source: 'return', isReturn: true,
-    orderName: `↩ ${kindLabel} #${row.id} · Pedido ${row.order_id}`,
+    orderName: `↩ ${kindLabel} #${row.id} · Pedido ${row.order_source === 'bot' ? crmOrderLabel(row.order_id) : row.order_id}`,
     customerName: `↩ ${kindLabel} · ${customer.name || 'Cliente'}`,
     phone: customer.phone || '', address: fullAddress, city: '', fullAddress,
     items: routeItems, totalPrice: 0, status: row.status,
@@ -590,6 +740,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                customer_name,
                customer_phone        AS phone,
                shipping_city,
+               shipping_address1,
                raw_json->'shippingAddress'   AS shipping_address,
                items,
                total_price,
@@ -686,6 +837,8 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
     // frontend muestra el aviso correspondiente en vez del mapa.
     await attachCoords(req.orgId, orders).catch(err =>
       console.warn('[Delivery/orders] geocode falló:', err.message));
+    await attachCoverage(req.orgId, orders).catch(err =>
+      console.warn('[Delivery/orders] cobertura falló:', err.message));
 
     // Debug temporal: qué encontró para los pedidos bot sin dirección
     const botDebug = botRes.rows.map(r => ({
@@ -878,6 +1031,8 @@ router.post('/optimize', requireRole('owner', 'admin', 'supervisor', 'coordinado
   const whLng = parseFloat(await db.getSetting(req.orgId, 'warehouse_lng').catch(() => null));
   const warehouse = (whAddress && Number.isFinite(whLat) && Number.isFinite(whLng))
     ? { address: whAddress, lat: whLat, lng: whLng } : null;
+  await attachCoverage(req.orgId, orders, warehouse).catch(err =>
+    console.warn('[Delivery/optimize] cobertura falló:', err.message));
 
   // Sin API key o sin bodega: no se puede optimizar. Devolver orden simple,
   // dividido en tandas iguales si hay varios vehículos, para no bloquear el flujo.
@@ -968,7 +1123,7 @@ router.get('/routes', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                         created_at, sent_at, started_at, completed_at,
                         jsonb_array_length(orders) AS order_count,
                         orders, optimized_route, load_checklist,
-                        stop_statuses, stop_payments, stop_payment_amounts
+                        stop_statuses, stop_payments, stop_payment_amounts, stop_partial_deliveries
                  FROM delivery_routes
                  WHERE organization_id = $1`;
     const params = [req.orgId];
@@ -1014,7 +1169,8 @@ router.get('/routes/active', async (req, res) => {
        ORDER BY r.sent_at DESC NULLS LAST, r.created_at DESC
     `, [req.orgId, driverScope]);
 
-    res.json({ success: true, routes: rows, route: rows[0] || null });
+    const routes = await Promise.all(rows.map(route => hydrateRouteItems(pool, route, req.orgId)));
+    res.json({ success: true, routes, route: routes[0] || null });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1035,7 +1191,7 @@ router.get('/routes/history', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT r.id, r.name, r.status, r.driver_name, r.driver_user_id,
              r.orders, r.optimized_route, r.stop_statuses,
-             r.stop_payments, r.stop_payment_amounts, r.stop_notes, r.stop_extras, r.stop_times,
+             r.stop_payments, r.stop_payment_amounts, r.stop_notes, r.stop_extras, r.stop_partial_deliveries, r.stop_times,
              r.total_distance, r.total_duration, r.created_at, r.sent_at, r.started_at, r.completed_at,
              u.name AS driver_user_name
         FROM delivery_routes r
@@ -1046,7 +1202,8 @@ router.get('/routes/history', async (req, res) => {
        ORDER BY COALESCE(r.completed_at, r.sent_at, r.created_at) DESC
        LIMIT $3
     `, [req.orgId, driverScope, limit]);
-    res.json({ success: true, routes: rows });
+    const routes = await Promise.all(rows.map(route => hydrateRouteItems(pool, route, req.orgId)));
+    res.json({ success: true, routes });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1078,13 +1235,20 @@ async function routeFinancialSummary(pool, route, orgId) {
   const statuses = route.stop_statuses || {};
   const payments = route.stop_payments || {};
   const paymentAmounts = route.stop_payment_amounts || {};
+  const partials = route.stop_partial_deliveries || {};
+  const extras = route.stop_extras || {};
   let routeValue = 0, deliveredValue = 0, cashCollected = 0, transferCollected = 0, otherCollected = 0;
   for (const stop of stops) {
     const key = `${stop.source}_${stop.id}`;
-    const amount = totals.get(key) ?? (Number(stop.totalPrice || stop.total_price) || 0);
+    const partial = partials[key] && typeof partials[key] === 'object' ? partials[key] : null;
+    const extraTotal = jsonList(extras[key]).reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+    const amount = partial
+      ? (Number(partial.deliveredTotal) || 0) + (Number(partial.pendingTotal) || 0) + extraTotal
+      : (totals.get(key) ?? (Number(stop.totalPrice || stop.total_price) || 0));
+    const deliveredAmount = partial ? (Number(partial.deliveredTotal) || 0) + extraTotal : amount;
     routeValue += amount;
-    if (statuses[key] !== 'entregado') continue;
-    deliveredValue += amount;
+    if (!['entregado', 'partial'].includes(statuses[key])) continue;
+    deliveredValue += deliveredAmount;
     const method = payments[key] || orderPayments.get(key)?.payment_method;
     const saved = paymentAmounts[key] || orderPayments.get(key) || {};
     const cash = Number(saved.cash ?? saved.payment_cash_amount);
@@ -1092,9 +1256,9 @@ async function routeFinancialSummary(pool, route, orgId) {
     if (method === 'mixto') {
       cashCollected += Number.isFinite(cash) ? cash : 0;
       transferCollected += Number.isFinite(transfer) ? transfer : 0;
-    } else if (method === 'efectivo') cashCollected += Number.isFinite(cash) && cash > 0 ? cash : amount;
-    else if (method === 'transferencia') transferCollected += Number.isFinite(transfer) && transfer > 0 ? transfer : amount;
-    else otherCollected += amount;
+    } else if (method === 'efectivo') cashCollected += Number.isFinite(cash) && cash > 0 ? cash : deliveredAmount;
+    else if (method === 'transferencia') transferCollected += Number.isFinite(transfer) && transfer > 0 ? transfer : deliveredAmount;
+    else otherCollected += deliveredAmount;
   }
   const expense = expenseResult.rows[0] || { count: 0, total: 0 };
   return {
@@ -1210,7 +1374,7 @@ router.post('/routes/:id/reoptimize', requireRole('owner', 'admin', 'supervisor'
   }
 
   const pool = getPool();
-  const terminalStatuses = new Set(['entregado', 'cancelled', 'postponed', 'not_delivered']);
+  const terminalStatuses = new Set(['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered']);
   let originalRoute;
   try {
     const { rows: [route] } = await pool.query(
@@ -1395,6 +1559,7 @@ router.patch('/routes/:id/load-checklist', requireRole('owner', 'admin', 'superv
 router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   let client;
+  let started;
   try {
     client = await getPool().connect();
     await client.query('BEGIN');
@@ -1408,34 +1573,47 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
     if (!storedRoute) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
     const route = await hydrateRouteItems(client, storedRoute, req.orgId);
     if (route.status === 'in_progress') {
-      await client.query('COMMIT');
-      return res.json({ success: true, route });
-    }
-    if (route.status !== 'sent') throw Object.assign(new Error('La ruta no está lista para comenzar'), { status: 409 });
+      started = route;
+    } else {
+      if (route.status !== 'sent') throw Object.assign(new Error('La ruta no está lista para comenzar'), { status: 409 });
 
-    const statuses = route.stop_statuses || {};
-    const pendingOrders = jsonList(route.orders).filter(order => !['entregado', 'cancelled', 'postponed', 'not_delivered'].includes(statuses[orderKey(order)]));
-    const eligible = await partitionDispatchable(client, req.orgId, pendingOrders, { allowAssigned: true });
-    if (eligible.skip.length) {
-      throw Object.assign(new Error('La ruta cambió: contiene pedidos entregados, cancelados, pagados o programados para otro día. Pide al administrador que la actualice.'), { status: 409, skipped: eligible.skip });
-    }
+      const statuses = route.stop_statuses || {};
+      const pendingOrders = jsonList(route.orders).filter(order => !['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered'].includes(statuses[orderKey(order)]));
+      const eligible = await partitionDispatchable(client, req.orgId, pendingOrders, { allowAssigned: true });
+      if (eligible.skip.length) {
+        throw Object.assign(new Error('La ruta cambió: contiene pedidos entregados, cancelados, pagados o programados para otro día. Pide al administrador que la actualice.'), { status: 409, skipped: eligible.skip });
+      }
 
-    const checklist = route.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
-    const missingItems = buildLoadManifest(route).filter(item => checklist[item.name] !== true);
-    if (missingItems.length) {
-      throw Object.assign(new Error('Completa todo el checklist de carga antes de iniciar el reparto'), { status: 409, missingItems });
-    }
+      const checklist = route.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
+      const missingItems = buildLoadManifest(route).filter(item => checklist[item.name] !== true);
+      if (missingItems.length) {
+        throw Object.assign(new Error('Completa todo el checklist de carga antes de iniciar el reparto'), { status: 409, missingItems });
+      }
 
-    const { rows: [started] } = await client.query(
-      `UPDATE delivery_routes
-          SET status = 'in_progress', started_at = COALESCE(started_at, NOW())
-        WHERE id = $1 AND organization_id = $2
-        RETURNING *`,
-      [route.id, req.orgId]
-    );
-    await markOrdersEnRoute(client, req.orgId, pendingOrders);
+      const { rows: [startedRow] } = await client.query(
+        `UPDATE delivery_routes
+            SET status = 'in_progress', started_at = COALESCE(started_at, NOW())
+          WHERE id = $1 AND organization_id = $2
+          RETURNING *`,
+        [route.id, req.orgId]
+      );
+      started = { ...startedRow, orders: route.orders, optimized_route: route.optimized_route };
+      await markOrdersEnRoute(client, req.orgId, pendingOrders);
+    }
+    for (const stop of routeStops(started)) {
+      await setConversationDeliveryState(client, req.orgId, stop, started.id, 'in_transit');
+    }
     await client.query('COMMIT');
-    res.json({ success: true, route: started });
+    client.release();
+    client = null;
+    let customerNotifications;
+    try {
+      customerNotifications = await notifyConsolidatedRouteCustomers(req.orgId, started);
+    } catch (notificationError) {
+      console.error('[Delivery/start] La ruta inició, pero falló el proceso de avisos:', notificationError.message);
+      customerNotifications = { sent: 0, failed: routeStops(started).length, skipped: 0, results: [], error: 'NOTIFICATION_PROCESS_FAILED' };
+    }
+    res.json({ success: true, route: started, customerNotifications });
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
     res.status(err.status || 500).json({
@@ -1452,16 +1630,23 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
 async function getOwnedActiveStop(req, routeId, stopKey) {
   const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
   const { rows: [route] } = await getPool().query(`
-    SELECT id, status, orders, driver_user_id
+    SELECT id, status, orders, stop_statuses, driver_user_id, completed_at
       FROM delivery_routes
      WHERE id = $1 AND organization_id = $2
        AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
      LIMIT 1`, [Number(routeId), req.orgId, driverScope]);
   if (!route) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
-  if (route.status !== 'in_progress') throw Object.assign(new Error('Completa la consolidación de carga e inicia la ruta antes de atender pedidos'), { status: 409 });
   const orders = Array.isArray(route.orders) ? route.orders : JSON.parse(route.orders || '[]');
   const stop = orders.find(item => `${item.source}_${item.id}` === stopKey);
   if (!stop) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
+  const stopStatus = jsonObject(route.stop_statuses)[stopKey];
+  const completedRecently = route.status === 'completed'
+    && ['cancelled', 'postponed', 'not_delivered'].includes(stopStatus)
+    && route.completed_at
+    && Date.now() - new Date(route.completed_at).getTime() <= 7 * 24 * 60 * 60 * 1000;
+  if (route.status !== 'in_progress' && !completedRecently) {
+    throw Object.assign(new Error('El chat está disponible durante el reparto y por 7 días cuando queda una entrega por resolver'), { status: 409 });
+  }
   return { ...stop, driver_user_id: route.driver_user_id || driverScope };
 }
 
@@ -1759,7 +1944,11 @@ router.post('/routes/:id/notify-en-route', requireRole('owner', 'admin', 'superv
     const stopKey = String(req.body?.stopKey || '');
     if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
-    const result = await deliveryNotifications.sendEnRouteNotification(req.orgId, stop);
+    const trackingUrl = await deliveryTracking.createTrackingLink(req.orgId, Number(req.params.id), stopKey).catch(error => {
+      console.warn('[Delivery tracking] No se pudo crear el enlace:', error.message);
+      return null;
+    });
+    const result = await deliveryNotifications.sendEnRouteNotification(req.orgId, { ...stop, trackingUrl });
     if (result.message) {
       const conversation = await db.getConversationById(result.conversationId, req.orgId).catch(() => null);
       io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: result.message, conversation });
@@ -1772,6 +1961,29 @@ router.post('/routes/:id/notify-en-route', requireRole('owner', 'admin', 'superv
       message: error.message,
       window: error.window || null,
     });
+  }
+});
+
+// La app del repartidor publica una única ubicación para todos los enlaces
+// activos de SU ruta. Nunca acepta organization_id, stopKey ni cliente desde
+// el teléfono: ese alcance se resuelve con JWT y la asignación de la ruta.
+router.patch('/routes/:id/location', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  try {
+    const routeId = Number(req.params.id);
+    if (!Number.isInteger(routeId) || routeId <= 0) return res.status(400).json({ success: false, error: 'Ruta inválida' });
+    const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
+    const { rows: [route] } = await getPool().query(
+      `SELECT id FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2 AND status = 'in_progress'
+          AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
+        LIMIT 1`,
+      [routeId, req.orgId, driverScope]
+    );
+    if (!route) return res.status(404).json({ success: false, error: 'Ruta activa no encontrada o no asignada a ti' });
+    const location = await deliveryTracking.updateRouteLocation(req.orgId, routeId, req.body || {});
+    return res.json({ success: true, location });
+  } catch (error) {
+    return res.status(error.status || 500).json({ success: false, error: error.message });
   }
 });
 
@@ -2334,6 +2546,89 @@ router.patch('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordin
   }
 });
 
+// ─── ADMIN: Dar por terminada una ruta ───────────────────────────────────────
+//
+// POST /api/delivery/routes/:id/finish
+//
+// Cierra a mano una ruta enviada o en curso. Las paradas sin resultado pasan a
+// no_entregado y sus pedidos quedan con el mismo tratamiento que el cierre de
+// medianoche (delivery-midnight.js). Las paradas ya resueltas no se tocan.
+const MANUAL_FINISH_REASON = 'La ruta fue terminada por el administrador sin registrar la entrega';
+const RESOLVED_STOP_STATUSES = ['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered'];
+
+router.post('/routes/:id/finish', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  const routeId = Number(req.params.id);
+  if (!/^\d+$/.test(req.params.id) || !Number.isSafeInteger(routeId) || routeId < 1) {
+    return res.status(400).json({ success: false, error: 'Ruta inválida' });
+  }
+  const pool = getPool();
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const { rows: [route] } = await client.query(
+      `SELECT * FROM delivery_routes WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+      [routeId, req.orgId]
+    );
+    if (!route) throw Object.assign(new Error('Ruta no encontrada'), { status: 404 });
+    if (!['sent', 'in_progress'].includes(route.status))
+      throw Object.assign(new Error('Solo se pueden terminar rutas enviadas o en curso'), { status: 409 });
+
+    const statuses = { ...(route.stop_statuses || {}) };
+    const notes = { ...(route.stop_notes || {}) };
+    const times = { ...(route.stop_times || {}) };
+    const now = new Date().toISOString();
+    let pendingStops = 0;
+
+    for (const order of jsonList(route.orders)) {
+      const key = orderKey(order);
+      if (!key || RESOLVED_STOP_STATUSES.includes(statuses[key])) continue;
+      pendingStops += 1;
+      statuses[key] = 'not_delivered';
+      notes[key] = MANUAL_FINISH_REASON;
+      times[key] = now;
+      const id = String(order.id);
+      if (order.source === 'shopify') {
+        await client.query(
+          `UPDATE shopify_orders
+              SET crm_status = 'no_entregado', last_attempt_status = 'sin_resolver',
+                  last_attempt_at = COALESCE(last_attempt_at, NOW()), delivery_note = $3,
+                  updated_at = NOW()
+            WHERE organization_id = $1 AND shopify_order_id = $2
+              AND crm_status IN ('asignado_ruta', 'en_camino') AND delivered_at IS NULL`,
+          [req.orgId, id, MANUAL_FINISH_REASON]
+        );
+      } else if (order.source === 'bot' && /^\d+$/.test(id)) {
+        await client.query(
+          `UPDATE orders
+              SET status = 'no_entregado', last_attempt_status = 'sin_resolver',
+                  last_attempt_at = COALESCE(last_attempt_at, NOW()), delivery_note = $3,
+                  updated_at = NOW()
+            WHERE organization_id = $1 AND id = $2
+              AND status IN ('asignado_ruta', 'en_camino') AND delivered_at IS NULL`,
+          [req.orgId, Number(id), MANUAL_FINISH_REASON]
+        );
+      }
+    }
+
+    const { rows: [updated] } = await client.query(
+      `UPDATE delivery_routes
+          SET stop_statuses = $3::jsonb, stop_notes = $4::jsonb, stop_times = $5::jsonb,
+              status = 'completed', completed_at = COALESCE(completed_at, NOW())
+        WHERE id = $1 AND organization_id = $2
+        RETURNING *`,
+      [routeId, req.orgId, JSON.stringify(statuses), JSON.stringify(notes), JSON.stringify(times)]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, route: updated, pendingStops });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'No se pudo terminar la ruta' });
+  } finally {
+    client?.release();
+  }
+});
+
 // ─── ADMIN: Devolver los pedidos de una ruta cancelada a "por despachar" ───
 //
 // POST /api/delivery/routes/:id/release
@@ -2458,6 +2753,169 @@ router.delete('/routes/:id', requireRole('owner', 'admin', 'supervisor', 'coordi
 });
 
 // ─── REPARTIDOR: Actualizar estado de una parada ─────────────────────────────
+
+function cleanAddressPayload(body) {
+  const address = typeof body?.address === 'string' ? body.address.trim() : '';
+  const city = typeof body?.city === 'string' ? body.city.trim() : '';
+  if (!address || address.length > 300) {
+    throw Object.assign(new Error('La dirección es requerida y no puede superar 300 caracteres'), { status: 400 });
+  }
+  if (city.length > 100) throw Object.assign(new Error('La ciudad no puede superar 100 caracteres'), { status: 400 });
+  return { address, city, fullAddress: [address, city].filter(Boolean).join(', ') };
+}
+
+function contactPhoneVariants(phone) {
+  const clean = String(phone || '').replace(/\s+/g, '');
+  return [...new Set([
+    clean,
+    clean.startsWith('56') ? clean.slice(2) : null,
+    clean.startsWith('9') && clean.length === 9 ? `56${clean}` : null,
+    !clean.startsWith('+') && clean.startsWith('56') ? `+${clean}` : null,
+  ].filter(Boolean))];
+}
+
+async function updateStoredOrderAddress(client, { source, orderId, orgId, address, city, updateContact }) {
+  let row;
+  if (source === 'bot') {
+    const numericId = Number(orderId);
+    if (!Number.isInteger(numericId) || numericId <= 0) throw Object.assign(new Error('Pedido inválido'), { status: 400 });
+    ({ rows: [row] } = await client.query(
+      `UPDATE orders
+          SET shipping_address = $1, delivery_modified = TRUE, updated_at = NOW()
+        WHERE id = $2 AND organization_id = $3
+        RETURNING id, customer_phone`,
+      [JSON.stringify({ address, city }), numericId, orgId]
+    ));
+  } else if (source === 'shopify') {
+    ({ rows: [row] } = await client.query(
+      `UPDATE shopify_orders
+          SET shipping_address1 = $1, shipping_city = $2,
+              delivery_modified = TRUE, synced_at = NOW()
+        WHERE shopify_order_id = $3 AND organization_id = $4
+        RETURNING shopify_order_id AS id, customer_phone`,
+      [address, city || null, String(orderId), orgId]
+    ));
+  } else {
+    throw Object.assign(new Error('Solo se puede corregir la dirección de pedidos'), { status: 400 });
+  }
+  if (!row) throw Object.assign(new Error('Pedido no encontrado'), { status: 404 });
+  if (updateContact && row.customer_phone) {
+    const variants = contactPhoneVariants(row.customer_phone);
+    await client.query(
+      `UPDATE contacts
+          SET address1 = $3, address = $3, city = $4, updated_at = NOW()
+        WHERE organization_id = $1 AND phone = ANY($2::text[])`,
+      [orgId, variants, address, city || null]
+    );
+  }
+  return row;
+}
+
+async function correctedStop(orgId, stop, addressData) {
+  const next = { ...stop, ...addressData };
+  const geo = await geocodeMany(orgId, [addressData.fullAddress]);
+  const point = geo[addressKey(addressData.fullAddress)];
+  next.lat = point?.lat ?? null;
+  next.lng = point?.lng ?? null;
+  const config = await getDispatchCoverage(orgId);
+  next.coverage = dispatchCoverage.classify(next, config);
+  return next;
+}
+
+// Corrección previa al reparto desde el panel web. El backend vuelve a validar
+// organización, origen e identificador; la interfaz no concede este permiso.
+router.patch('/orders/address', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
+  let client;
+  try {
+    const source = String(req.body?.source || '');
+    const orderId = req.body?.id;
+    const addressData = cleanAddressPayload(req.body);
+    const stop = await correctedStop(req.orgId, { source, id: orderId }, addressData);
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    await updateStoredOrderAddress(client, {
+      source, orderId, orgId: req.orgId, ...addressData, updateContact: req.body?.updateContact === true,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, stop });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 500).json({ success: false, error: err.message });
+  } finally {
+    client?.release();
+  }
+});
+
+// El repartidor puede corregir una parada de SU ruta activa. La actualización
+// se aplica al pedido real y a ambas copias JSON de la ruta, con auditoría.
+router.patch('/routes/:id/stops/address', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), async (req, res) => {
+  const stopKey = req.body?.stopKey;
+  if (!stopKey || typeof stopKey !== 'string') return res.status(400).json({ success: false, error: 'Falta stopKey en el body' });
+  let client;
+  try {
+    const addressData = cleanAddressPayload(req.body);
+    const [source, orderId] = splitStopKey(stopKey);
+    const driverScope = ['repartidor', 'coordinador'].includes(req.role) ? req.userId : null;
+    const { rows: [visibleRoute] } = await getPool().query(
+      `SELECT status, orders, optimized_route
+         FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2
+          AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)`,
+      [Number(req.params.id), req.orgId, driverScope]
+    );
+    if (!visibleRoute) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+    if (!['sent', 'in_progress'].includes(visibleRoute.status)) {
+      throw Object.assign(new Error('Solo se puede corregir una dirección de una ruta activa'), { status: 409 });
+    }
+    if (![...jsonList(visibleRoute.optimized_route), ...jsonList(visibleRoute.orders)].some(stop => orderKey(stop) === stopKey)) {
+      throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
+    }
+    const freshStop = await correctedStop(req.orgId, { source, id: orderId }, addressData);
+
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    const { rows: [route] } = await client.query(
+      `SELECT id, status, orders, optimized_route
+         FROM delivery_routes
+        WHERE id = $1 AND organization_id = $2
+          AND ($3::int IS NULL OR driver_user_id = $3 OR driver_user_id IS NULL)
+        FOR UPDATE`,
+      [Number(req.params.id), req.orgId, driverScope]
+    );
+    if (!route) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
+    if (!['sent', 'in_progress'].includes(route.status)) {
+      throw Object.assign(new Error('Solo se puede corregir una dirección de una ruta activa'), { status: 409 });
+    }
+    const orders = jsonList(route.orders);
+    const optimized = jsonList(route.optimized_route);
+    const current = [...optimized, ...orders].find(stop => orderKey(stop) === stopKey);
+    if (!current) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
+    const updatedStop = { ...current, ...freshStop };
+    const replace = stop => orderKey(stop) === stopKey ? { ...stop, ...freshStop } : stop;
+
+    await updateStoredOrderAddress(client, {
+      source, orderId, orgId: req.orgId, ...addressData, updateContact: req.body?.updateContact === true,
+    });
+    const audit = JSON.stringify({
+      [stopKey]: { address: addressData.address, city: addressData.city, changedAt: new Date().toISOString(), changedBy: req.userId, role: req.role },
+    });
+    await client.query(
+      `UPDATE delivery_routes
+          SET orders = $3::jsonb,
+              optimized_route = $4::jsonb,
+              stop_address_updates = COALESCE(stop_address_updates, '{}'::jsonb) || $5::jsonb
+        WHERE id = $1 AND organization_id = $2`,
+      [route.id, req.orgId, JSON.stringify(orders.map(replace)), JSON.stringify(optimized.map(replace)), audit]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, stop: updatedStop });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(err.status || 500).json({ success: false, error: err.message });
+  } finally {
+    client?.release();
+  }
+});
 //
 // Dos formas de llamarlo:
 //   PATCH /routes/:id/stops            body: { stopKey, status, paymentMethod? }  ← usar esta
@@ -2484,6 +2942,114 @@ function splitStopKey(stopKey) {
   const i = stopKey.indexOf('_');
   if (i === -1) return [stopKey, ''];
   return [stopKey.slice(0, i), stopKey.slice(i + 1)];
+}
+
+function parseStoredItems(value) {
+  try {
+    const parsed = Array.isArray(value) ? value : JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function splitPartialItems(rawItems, deliveredQuantities, orderTotal) {
+  if (!Array.isArray(deliveredQuantities) || deliveredQuantities.length !== rawItems.length || rawItems.length === 0 || rawItems.length > 100) {
+    throw Object.assign(new Error('Indica la cantidad entregada de cada producto.'), { status: 400 });
+  }
+
+  const deliveredItems = [];
+  const pendingItems = [];
+  let orderedUnits = 0;
+  let deliveredUnits = 0;
+  let orderedSubtotal = 0;
+  let deliveredSubtotal = 0;
+
+  rawItems.forEach((item, index) => {
+    const ordered = Number(item?.quantity);
+    const delivered = Number(deliveredQuantities[index]);
+    const price = Number(item?.price) || 0;
+    if (!Number.isSafeInteger(ordered) || ordered <= 0 || ordered > 1000 ||
+        !Number.isSafeInteger(delivered) || delivered < 0 || delivered > ordered ||
+        !Number.isFinite(price) || price < 0) {
+      throw Object.assign(new Error('Las cantidades de la entrega parcial no son válidas.'), { status: 400 });
+    }
+    orderedUnits += ordered;
+    deliveredUnits += delivered;
+    orderedSubtotal += ordered * price;
+    deliveredSubtotal += delivered * price;
+    if (delivered > 0) deliveredItems.push({ ...item, quantity: delivered });
+    if (ordered - delivered > 0) pendingItems.push({ ...item, quantity: ordered - delivered });
+  });
+
+  if (!deliveredItems.length || !pendingItems.length) {
+    throw Object.assign(new Error('Una entrega parcial debe dejar al menos un producto entregado y uno pendiente.'), { status: 400 });
+  }
+
+  const cleanOrderTotal = Math.max(0, Math.round(Number(orderTotal) || 0));
+  const ratio = orderedSubtotal > 0
+    ? deliveredSubtotal / orderedSubtotal
+    : deliveredUnits / orderedUnits;
+  const deliveredTotal = Math.max(0, Math.min(cleanOrderTotal, Math.round(cleanOrderTotal * ratio)));
+  return {
+    orderedItems: rawItems,
+    deliveredItems,
+    pendingItems,
+    deliveredTotal,
+    pendingTotal: cleanOrderTotal - deliveredTotal,
+  };
+}
+
+async function createPartialRemainder(client, { orgId, routeId, stopKey, source, sourceId, order, split, deliverDate }) {
+  let conversationId = source === 'bot' ? order.conversation_id : null;
+  if (!conversationId && order.customer_phone) {
+    const phone = String(order.customer_phone).replace(/\D/g, '');
+    const { rows: [conversation] } = await client.query(
+      `SELECT id FROM conversations
+        WHERE organization_id = $1
+          AND regexp_replace(COALESCE(phone_number, ''), '[^0-9]', '', 'g') = $2
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1`,
+      [orgId, phone]
+    );
+    conversationId = conversation?.id || null;
+  }
+
+  const shippingAddress = source === 'bot'
+    ? order.shipping_address
+    : JSON.stringify({ address: order.shipping_address1 || '', city: order.shipping_city || '' });
+  const prepaid = source === 'bot'
+    ? order.status === 'paid'
+    : String(order.financial_status || '').toLowerCase() === 'paid';
+  const parentLabel = source === 'bot'
+    ? crmOrderLabel(sourceId)
+    : (normalizeOrderLabel(order.shopify_name, 'shopify', sourceId) || String(sourceId));
+  const deliveryNote = `Saldo pendiente de entrega parcial de ${parentLabel}`;
+  const { rows: [created] } = await client.query(
+    `INSERT INTO orders
+       (conversation_id, organization_id, items, customer_name, customer_phone,
+        shipping_address, total_price, status, notes, delivery_date, delivery_note,
+        partial_parent_source, partial_parent_id, partial_origin_route_id, partial_origin_stop_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,$9,$11,$12,$13,$14)
+     ON CONFLICT (organization_id, partial_origin_route_id, partial_origin_stop_key)
+       WHERE partial_origin_route_id IS NOT NULL AND partial_origin_stop_key IS NOT NULL
+     DO NOTHING
+     RETURNING id`,
+    [
+      conversationId, orgId, JSON.stringify(split.pendingItems), order.customer_name || null,
+      order.customer_phone || null, shippingAddress || null, String(split.pendingTotal),
+      prepaid ? 'paid' : 'por_despachar', deliveryNote, deliverDate,
+      source, String(sourceId), Number(routeId), stopKey,
+    ]
+  );
+  if (created) return created.id;
+  const { rows: [existing] } = await client.query(
+    `SELECT id FROM orders
+      WHERE organization_id = $1 AND partial_origin_route_id = $2 AND partial_origin_stop_key = $3`,
+    [orgId, Number(routeId), stopKey]
+  );
+  if (!existing) throw new Error('No se pudo crear el saldo pendiente de la entrega parcial');
+  return existing.id;
 }
 
 /**
@@ -2633,15 +3199,17 @@ async function applyReturnRouteStop(client, { owned, routeId, stopKey, returnId,
 }
 
 async function applyStopUpdate(req, res, id, stopKey) {
-  const { status, paymentMethod, paymentCashAmount, paymentTransferAmount, note, extras, deliverAfter } = req.body;  // status: 'entregado' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
+  const { status, paymentMethod, paymentCashAmount, paymentTransferAmount, note, extras, deliverAfter, deliveredQuantities } = req.body;  // status: 'entregado' | 'partial' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
   let cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
   // Reprogramado: el cliente pidió que se le entregue otro día.
-  const deliverDate = status === 'postponed' && /^\d{4}-\d{2}-\d{2}$/.test(String(deliverAfter || '')) ? deliverAfter : null;
-  if (status === 'postponed' && !deliverDate)
-    return res.status(400).json({ success: false, error: 'Para reprogramar hay que indicar la fecha (deliverAfter = YYYY-MM-DD)' });
+  const needsDeliveryDate = status === 'postponed' || status === 'partial';
+  const deliverDate = needsDeliveryDate ? businessDate.toISODate(deliverAfter) : null;
+  if (needsDeliveryDate && (!deliverDate || deliverDate < businessDate.todayISOChile()))
+    return res.status(400).json({ success: false, error: 'Indica una fecha válida, desde hoy, para entregar lo pendiente.' });
   if (deliverDate) {
     const [y, m, d] = deliverDate.split('-');
-    cleanNote = `📅 Reprogramado para el ${d}/${m}${cleanNote ? ` — ${cleanNote}` : ''}`.slice(0, 500);
+    const prefix = status === 'partial' ? `📦 Entrega parcial; saldo para el ${d}/${m}` : `📅 Reprogramado para el ${d}/${m}`;
+    cleanNote = `${prefix}${cleanNote ? ` — ${cleanNote}` : ''}`.slice(0, 500);
   }
   // Venta extra del repartidor (bandejas extras). No toca el pedido original:
   // se guarda en stop_extras y suma al total a cobrar de esa entrega.
@@ -2655,7 +3223,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
   let pool;
   let committed = false;
 
-  const VALID = ['entregado', 'cancelled', 'pending', 'postponed', 'not_delivered'];
+  const VALID = ['entregado', 'partial', 'cancelled', 'pending', 'postponed', 'not_delivered'];
   if (!VALID.includes(status))
     return res.status(400).json({ success: false, error: `Estado inválido. Opciones: ${VALID.join(', ')}` });
   if (['cancelled', 'not_delivered'].includes(status) && !cleanNote)
@@ -2678,9 +3246,11 @@ async function applyStopUpdate(req, res, id, stopKey) {
     if (!owned) throw Object.assign(new Error('Ruta no encontrada o no asignada a ti'), { status: 404 });
     if (owned.status !== 'in_progress') throw Object.assign(new Error('Completa la consolidación de carga e inicia la ruta antes de atender pedidos'), { status: 409 });
     const members = Array.isArray(owned.orders) ? owned.orders : JSON.parse(owned.orders || '[]');
-    if (!members.some(o => String(o.source) + '_' + String(o.id) === stopKey)) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
+    const currentStop = members.find(o => String(o.source) + '_' + String(o.id) === stopKey);
+    if (!currentStop) throw Object.assign(new Error('El pedido no pertenece a la ruta'), { status: 404 });
     const [kind, orderKey] = splitStopKey(stopKey);
     if (kind === 'return') {
+      if (status === 'partial') throw Object.assign(new Error('Las devoluciones no admiten entrega parcial.'), { status: 400 });
       const outcome = await applyReturnRouteStop(pool, {
         owned, routeId: id, stopKey, returnId: orderKey, orgId: req.orgId, userId: req.userId,
         status, paymentMethod, note: cleanNote, deliverDate,
@@ -2701,25 +3271,71 @@ async function applyStopUpdate(req, res, id, stopKey) {
     if (!['bot', 'shopify'].includes(kind)) throw Object.assign(new Error('Pedido inválido'), { status: 400 });
     const table = kind === 'bot' ? 'orders' : 'shopify_orders';
     const column = kind === 'bot' ? 'id' : 'shopify_order_id';
-    const order = await pool.query('SELECT total_price FROM ' + table + ' WHERE ' + column + ' = $1 AND organization_id = $2 FOR UPDATE', [kind === 'bot' ? Number(orderKey) : orderKey, req.orgId]);
+    const order = await pool.query('SELECT * FROM ' + table + ' WHERE ' + column + ' = $1 AND organization_id = $2 FOR UPDATE', [kind === 'bot' ? Number(orderKey) : orderKey, req.orgId]);
     if (!order.rows.length) throw Object.assign(new Error('Pedido no encontrado'), { status: 404 });
-    const deliveryTotal = Math.round((Number(order.rows[0].total_price) || 0) + cleanExtras.reduce((sum, e) => sum + e.price * e.quantity, 0));
-    const breakdown = status === 'entregado'
+    const orderRow = order.rows[0];
+    let partial = null;
+    let remainderOrderId = null;
+    if (status === 'partial') {
+      partial = splitPartialItems(parseStoredItems(orderRow.items), deliveredQuantities, orderRow.total_price);
+      remainderOrderId = await createPartialRemainder(pool, {
+        orgId: req.orgId, routeId: id, stopKey, source: kind, sourceId: orderKey,
+        order: orderRow, split: partial, deliverDate,
+      });
+      const deliveredJson = JSON.stringify(partial.deliveredItems);
+      if (kind === 'shopify') {
+        await pool.query(
+          `UPDATE shopify_orders
+              SET items = $1::jsonb, total_price = $2, delivery_modified = TRUE, updated_at = NOW()
+            WHERE shopify_order_id = $3 AND organization_id = $4`,
+          [deliveredJson, partial.deliveredTotal, String(orderKey), req.orgId]
+        );
+      } else {
+        await pool.query(
+          `UPDATE orders
+              SET items = $1, total_price = $2, delivery_modified = TRUE, updated_at = NOW()
+            WHERE id = $3 AND organization_id = $4`,
+          [deliveredJson, String(partial.deliveredTotal), Number(orderKey), req.orgId]
+        );
+      }
+    }
+    const operationalStop = {
+      ...currentStop,
+      phone: currentStop.phone || orderRow.customer_phone || null,
+      customerName: currentStop.customerName || orderRow.customer_name || 'Cliente',
+      orderName: kind === 'bot'
+        ? crmOrderLabel(orderKey)
+        : (normalizeOrderLabel(currentStop.orderName, currentStop.source, currentStop.id) || String(orderKey)),
+    };
+    const deliveryTotal = Math.round((partial ? partial.deliveredTotal : (Number(orderRow.total_price) || 0)) + cleanExtras.reduce((sum, e) => sum + e.price * e.quantity, 0));
+    const isDelivery = status === 'entregado' || status === 'partial';
+    const breakdown = isDelivery
       ? paymentBreakdown(paymentMethod, deliveryTotal, paymentCashAmount, paymentTransferAmount)
       : { cash: 0, transfer: 0 };
     const cashAmount = breakdown.cash || 0;
     const transferAmount = breakdown.transfer || 0;
     // Actualizar stop_statuses (y el medio de pago, si se entregó) en la ruta
-    const paymentJson = status === 'entregado' && paymentMethod
+    const paymentJson = isDelivery && paymentMethod
       ? JSON.stringify({ [stopKey]: paymentMethod })
       : '{}';
-    const paymentAmountsJson = status === 'entregado' && paymentMethod
+    const paymentAmountsJson = isDelivery && paymentMethod
       ? JSON.stringify({ [stopKey]: { cash: cashAmount, transfer: transferAmount } })
       : '{}';
     // Nota del repartidor por parada (se guarda si viene; si va vacía no borra la anterior)
     const noteJson = cleanNote ? JSON.stringify({ [stopKey]: cleanNote }) : '{}';
     // Venta extra por parada (solo se escribe si viene alguna)
     const extrasJson = cleanExtras.length ? JSON.stringify({ [stopKey]: cleanExtras }) : '{}';
+    const partialJson = partial ? JSON.stringify({
+      [stopKey]: {
+        orderedItems: partial.orderedItems,
+        deliveredItems: partial.deliveredItems,
+        pendingItems: partial.pendingItems,
+        deliveredTotal: partial.deliveredTotal,
+        pendingTotal: partial.pendingTotal,
+        deliveryDate: deliverDate,
+        remainder: { source: 'bot', id: remainderOrderId, orderName: crmOrderLabel(remainderOrderId) },
+      },
+    }) : '{}';
     const { rows: [route] } = await pool.query(
       `UPDATE delivery_routes
           SET stop_statuses = stop_statuses || jsonb_build_object($1::text, $2::text),
@@ -2727,11 +3343,12 @@ async function applyStopUpdate(req, res, id, stopKey) {
               stop_notes    = COALESCE(stop_notes, '{}'::jsonb) || $7::jsonb,
               stop_extras   = COALESCE(stop_extras, '{}'::jsonb) || $8::jsonb,
               stop_payment_amounts = COALESCE(stop_payment_amounts, '{}'::jsonb) || $9::jsonb,
+              stop_partial_deliveries = COALESCE(stop_partial_deliveries, '{}'::jsonb) || $10::jsonb,
               stop_times    = COALESCE(stop_times, '{}'::jsonb) || jsonb_build_object($1::text, to_jsonb(NOW()))
         WHERE id = $3 AND organization_id = $4
           AND ($5::int IS NULL OR driver_user_id = $5 OR driver_user_id IS NULL)
-        RETURNING stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, orders`,
-      [stopKey, status, parseInt(id), req.orgId, driverScope, paymentJson, noteJson, extrasJson, paymentAmountsJson]
+        RETURNING stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, stop_partial_deliveries, orders`,
+      [stopKey, status, parseInt(id), req.orgId, driverScope, paymentJson, noteJson, extrasJson, paymentAmountsJson, partialJson]
     );
     if (!route) throw new Error('Ruta no encontrada');
 
@@ -2740,7 +3357,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     // not_delivered conserva el pedido, pero lo saca de "en camino" y deja una
     // incidencia visible para que el equipo pueda avisar y reprogramar.
     const [source, orderId] = splitStopKey(stopKey);
-    const newOrderStatus = status === 'entregado' ? 'entregado'
+    const newOrderStatus = ['entregado', 'partial'].includes(status) ? 'entregado'
                          : status === 'cancelled'  ? 'cancelled'
                          : status === 'postponed'  ? 'por_despachar'
                          : status === 'not_delivered' ? 'no_entregado'
@@ -2749,11 +3366,12 @@ async function applyStopUpdate(req, res, id, stopKey) {
                         : status === 'postponed' ? 'reprogramado'
                         : status === 'not_delivered' ? 'no_entregado'
                         : null;
-    const savePayment = status === 'entregado' && !!paymentMethod;
-    const wasDelivered = status === 'entregado';   // señal de entrega, independiente del pago
+    const savePayment = isDelivery && !!paymentMethod;
+    const wasDelivered = isDelivery;   // señal de entrega, independiente del pago
     // Pago en efectivo al entregar = el pedido queda pagado de inmediato.
     // (Transferencia queda "por cobrar" hasta que llegue el comprobante.)
-    const paidByCash = status === 'entregado' && paymentMethod === 'efectivo';
+    const paidByCash = isDelivery && paymentMethod === 'efectivo';
+    const orderDeliverDate = status === 'postponed' ? deliverDate : null;
 
     if (source === 'shopify') {
       // Shopify marca "pagado" con financial_status = 'paid'.
@@ -2773,7 +3391,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
                                          WHEN $10::text IN ('cancelado_definitivo','no_entregado') AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE shopify_order_id = $2 AND organization_id = $3`,
-        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote, cashAmount, transferAmount]
+        [newOrderStatus, orderId, req.orgId, savePayment, paymentMethod || null, paidByCash, orderDeliverDate, orderDeliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote, cashAmount, transferAmount]
       );
     } else if (source === 'bot') {
       // Pedidos del bot marcan "pagado" con status = 'paid' (igual que al
@@ -2800,12 +3418,18 @@ async function applyStopUpdate(req, res, id, stopKey) {
                                          WHEN $10::text IN ('cancelado_definitivo','no_entregado') AND $11::text <> '' THEN $11
                                          ELSE delivery_note END
           WHERE id = $2 AND organization_id = $3`,
-        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, deliverDate, deliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote, cashAmount, transferAmount]
+        [newOrderStatus, parseInt(orderId), req.orgId, savePayment, paymentMethod || null, paidByCash, orderDeliverDate, orderDeliverDate ? cleanNote : null, wasDelivered, attemptStatus, cleanNote, cashAmount, transferAmount]
       );
     }
 
+    const deliveryState = status === 'entregado' ? 'completed'
+      : ['partial', 'postponed'].includes(status) ? 'rescheduled'
+      : ['cancelled', 'not_delivered'].includes(status) ? 'resolution_needed'
+      : 'in_transit';
+    await setConversationDeliveryState(pool, req.orgId, operationalStop, id, deliveryState);
+
     // ── Venta extra: sumar a la orden y marcarla como modificada en reparto ──
-    if (status === 'entregado' && cleanExtras.length) {
+    if (isDelivery && cleanExtras.length) {
       await applyExtraToOrder(pool, source, orderId, req.orgId, cleanExtras);
     }
 
@@ -2867,7 +3491,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     const statuses   = route.stop_statuses || {};
     const allDone    = orders.every(o => {
       const key = `${o.source}_${o.id}`;
-      return ['entregado', 'cancelled', 'postponed', 'not_delivered'].includes(statuses[key]);
+      return ['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered'].includes(statuses[key]);
     });
     if (allDone && orders.length > 0) {
       await pool.query(
@@ -2880,6 +3504,27 @@ async function applyStopUpdate(req, res, id, stopKey) {
     committed = true;
     pool.release();
     pool = null;
+
+    let customerFollowup = null;
+    if (['cancelled', 'postponed', 'not_delivered'].includes(status)) {
+      try {
+        customerFollowup = await sendDeliveryCustomerEvent(
+          req.orgId,
+          { id: Number(id), name: owned.name },
+          operationalStop,
+          `delivery_outcome:${status}`,
+          () => deliveryNotifications.sendDeliveryOutcomeRecovery(req.orgId, operationalStop, {
+            status,
+            note: cleanNote,
+            deliveryDate: deliverDate,
+          }),
+          { status, note: cleanNote, deliveryDate: deliverDate }
+        );
+      } catch (followupError) {
+        console.error('[Delivery/stop] El estado se guardó, pero falló el seguimiento:', followupError.message);
+        customerFollowup = { stopKey, status: 'failed', reason: 'FOLLOWUP_PROCESS_FAILED' };
+      }
+    }
 
     // ── Cobro automático por transferencia ────────────────────────────────
     // Solo si la org lo activó (setting charge_settings.autoSendOnTransfer).
@@ -2912,6 +3557,15 @@ async function applyStopUpdate(req, res, id, stopKey) {
       stopPaymentAmounts: route.stop_payment_amounts || {},
       routeStatus:   allDone && orders.length > 0 ? 'completed' : 'in_progress',
       autoCharge,
+      customerFollowup,
+      partialDelivery: partial ? {
+        deliveredItems: partial.deliveredItems,
+        pendingItems: partial.pendingItems,
+        deliveredTotal: partial.deliveredTotal,
+        pendingTotal: partial.pendingTotal,
+        deliveryDate: deliverDate,
+        remainder: { source: 'bot', id: remainderOrderId, orderName: crmOrderLabel(remainderOrderId) },
+      } : null,
     });
   } catch (err) {
     if (pool && !committed) await pool.query('ROLLBACK');
@@ -2992,7 +3646,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     // Rutas que pueden tener paradas en el rango (margen de 3 días por rutas largas)
     const { rows: routes } = await pool.query(`
       SELECT id, name, status, driver_name, driver_user_id, orders, optimized_route,
-             stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, stop_times,
+             stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, stop_partial_deliveries, stop_times,
              created_at, sent_at, completed_at
         FROM delivery_routes
        WHERE organization_id = $1
@@ -3047,7 +3701,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     // Rutas canceladas: solo las paradas que alcanzaron a marcarse.
     const { rows: cancelledRoutes } = await pool.query(`
       SELECT id, name, status, driver_name, driver_user_id, orders, optimized_route,
-             stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, stop_times,
+             stop_statuses, stop_payments, stop_payment_amounts, stop_notes, stop_extras, stop_partial_deliveries, stop_times,
              created_at, sent_at, completed_at
         FROM delivery_routes
        WHERE organization_id = $1 AND status = 'cancelled'
@@ -3064,7 +3718,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
     for (const r of routes) {
       const stops = Array.isArray(r.optimized_route) && r.optimized_route.length ? r.optimized_route : (r.orders || []);
       const statuses = r.stop_statuses || {}, pays = r.stop_payments || {}, payAmounts = r.stop_payment_amounts || {}, notes = r.stop_notes || {};
-      const extras = r.stop_extras || {}, times = r.stop_times || {};
+      const extras = r.stop_extras || {}, partials = r.stop_partial_deliveries || {}, times = r.stop_times || {};
       const routeFallbackTime = r.completed_at || r.sent_at || r.created_at;
 
       for (const st of stops) {
@@ -3081,10 +3735,13 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           : ord?.status === 'paid';
         const paymentMethod = pays[key] || ord?.payment_method || null;
         const extraList = Array.isArray(extras[key]) ? extras[key] : [];
+        const partial = partials[key] && typeof partials[key] === 'object' ? partials[key] : null;
         const extraTotal = extraList.reduce((s, e) => s + (Number(e.price) || 0) * (Number(e.quantity) || 0), 0);
-        const deliveredTotal = ord
-          ? (Number(ord.total_price) || 0)
-          : (Number(st.totalPrice) || 0) + extraTotal;
+        const deliveredTotal = partial
+          ? (Number(partial.deliveredTotal) || 0) + extraTotal
+          : ord
+            ? (Number(ord.total_price) || 0)
+            : (Number(st.totalPrice) || 0) + extraTotal;
         const savedAmounts = payAmounts[key] || {};
         const paymentCash = Number(savedAmounts.cash ?? ord?.payment_cash_amount) || (paymentMethod === 'efectivo' ? deliveredTotal : 0);
         const paymentTransfer = Number(savedAmounts.transfer ?? ord?.payment_transfer_amount) || (paymentMethod === 'transferencia' ? deliveredTotal : 0);
@@ -3094,15 +3751,25 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           route_id: r.id, route_name: r.name, route_status: r.status,
           driver_name: r.driver_name || null, driver_user_id: r.driver_user_id || null,
           stop_key: key, stop_number: st.stopNumber || null,
-          source: st.source, order_id: String(st.id), order_label: st.orderName || `#${st.id}`,
+          source: st.source,
+          order_id: String(st.id),
+          order_label: normalizeOrderLabel(st.orderName, st.source, st.id) || `#${st.id}`,
           customer_name: st.customerName || null, phone: st.phone || ord?.customer_phone || null,
           client_type: clientTypeByPhone.get(normalizePhone(st.phone || ord?.customer_phone)) || 'personal',
           address: st.fullAddress || null,
-          items: Array.isArray(st.items) ? st.items.map(i => ({ name: i.name || i.title, quantity: i.quantity })) : [],
-          total: Number(ord?.total_price ?? st.totalPrice) || 0,
+          items: Array.isArray(partial?.deliveredItems)
+            ? partial.deliveredItems.map(i => ({ name: i.name || i.title, quantity: i.quantity }))
+            : (Array.isArray(st.items) ? st.items.map(i => ({ name: i.name || i.title, quantity: i.quantity })) : []),
+          pending_items: Array.isArray(partial?.pendingItems)
+            ? partial.pendingItems.map(i => ({ name: i.name || i.title, quantity: i.quantity }))
+            : [],
+          pending_total: Number(partial?.pendingTotal) || 0,
+          remainder_order: partial?.remainder || null,
+          remainder_delivery_date: partial?.deliveryDate || null,
+          total: partial ? (Number(partial.deliveredTotal) || 0) : (Number(ord?.total_price ?? st.totalPrice) || 0),
           extras: extraList, extra_total: extraTotal,
           note: notes[key] || null,
-          status,                                   // entregado | cancelled | postponed | not_delivered | pending
+          status,                                   // entregado | partial | cancelled | postponed | not_delivered | pending
           payment_method: paymentMethod,            // efectivo | transferencia | otro | null
           payment_cash_amount: paymentCash,
           payment_transfer_amount: paymentTransfer,

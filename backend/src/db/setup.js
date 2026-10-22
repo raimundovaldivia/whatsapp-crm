@@ -1457,12 +1457,98 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS stop_payments  JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_payment_amounts JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_notes     JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_address_updates JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_extras    JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS stop_partial_deliveries JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS stop_times     JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS load_checklist JSONB DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS started_at     TIMESTAMPTZ;
+      ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS partial_parent_source TEXT,
+        ADD COLUMN IF NOT EXISTS partial_parent_id TEXT,
+        ADD COLUMN IF NOT EXISTS partial_origin_route_id INTEGER REFERENCES delivery_routes(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS partial_origin_stop_key TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_partial_remainder
+        ON orders(organization_id, partial_origin_route_id, partial_origin_stop_key)
+        WHERE partial_origin_route_id IS NOT NULL AND partial_origin_stop_key IS NOT NULL;
+      ALTER TABLE conversations
+        ADD COLUMN IF NOT EXISTS delivery_state TEXT,
+        ADD COLUMN IF NOT EXISTS delivery_route_id INTEGER,
+        ADD COLUMN IF NOT EXISTS delivery_stop_key TEXT;
+      CREATE TABLE IF NOT EXISTS delivery_customer_events (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        route_id INTEGER NOT NULL REFERENCES delivery_routes(id) ON DELETE CASCADE,
+        stop_key TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','sent','failed')),
+        payload JSONB NOT NULL DEFAULT '{}',
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, route_id, stop_key, event_type)
+      );
+      CREATE TABLE IF NOT EXISTS delivery_tracking_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        route_id INTEGER NOT NULL REFERENCES delivery_routes(id) ON DELETE CASCADE,
+        stop_key TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        latitude DOUBLE PRECISION,
+        longitude DOUBLE PRECISION,
+        accuracy_m DOUBLE PRECISION,
+        location_updated_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ NOT NULL,
+        revoked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK(latitude IS NULL OR latitude BETWEEN -90 AND 90),
+        CHECK(longitude IS NULL OR longitude BETWEEN -180 AND 180),
+        CHECK(accuracy_m IS NULL OR accuracy_m BETWEEN 0 AND 10000)
+      );
+      ALTER TABLE delivery_tracking_sessions
+        DROP CONSTRAINT IF EXISTS delivery_tracking_sessions_organization_id_route_id_stop_key_key;
       CREATE INDEX IF NOT EXISTS idx_delivery_routes_driver
         ON delivery_routes(organization_id, driver_user_id, status);
+      CREATE INDEX IF NOT EXISTS idx_delivery_customer_events_route
+        ON delivery_customer_events(organization_id, route_id, event_type, status);
+      CREATE INDEX IF NOT EXISTS idx_delivery_tracking_route
+        ON delivery_tracking_sessions(organization_id, route_id, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_delivery_tracking_stop
+        ON delivery_tracking_sessions(organization_id, route_id, stop_key);
+      CREATE TABLE IF NOT EXISTS customer_feedback_requests (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        source TEXT NOT NULL CHECK(source IN ('bot','shopify')),
+        order_id TEXT NOT NULL,
+        order_label TEXT,
+        customer_phone TEXT NOT NULL,
+        customer_name TEXT,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','sending','sent','replied','skipped','failed')),
+        scheduled_for TIMESTAMPTZ NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        sent_at TIMESTAMPTZ,
+        replied_at TIMESTAMPTZ,
+        score SMALLINT CHECK(score BETWEEN 1 AND 5),
+        sentiment TEXT CHECK(sentiment IN ('positive','negative')),
+        feedback_text TEXT,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, customer_phone)
+      );
+      CREATE INDEX IF NOT EXISTS idx_customer_feedback_due
+        ON customer_feedback_requests(status, scheduled_for);
+      CREATE INDEX IF NOT EXISTS idx_customer_feedback_org_replied
+        ON customer_feedback_requests(organization_id, replied_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_conversations_delivery_route
+        ON conversations(organization_id, delivery_route_id, delivery_state);
     `);
 
     // Antes del checklist, enviar una ruta la dejaba inmediatamente en
@@ -1853,6 +1939,8 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'store-product-favorites.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'social-stories.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-product-images.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals-rewards-v2.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'campaign-offers.sql'), 'utf8'));
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {

@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../utils/api.js';
 import { Upload, RotateCcw, Check, X, Search, Undo2, FileText } from 'lucide-react';
 import * as ui from '../ui.js';
+import { crmOrderLabel } from '../utils/order-reference.js';
 
 const CLP = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const fmtDate = d => d ? new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—';
@@ -201,7 +202,7 @@ export default function ConciliacionPanel({ colors }) {
               <span style={{ color: colors.textSecondary, fontSize: '12px', minWidth: '58px' }}>{fmtDate(m.date)}</span>
               <span style={{ color: colors.textPrimary, fontWeight: 700, minWidth: '90px', fontVariantNumeric: 'tabular-nums' }}>{CLP(m.amount)}</span>
               <span style={{ color: colors.textPrimary, fontSize: '13px', flex: 1, minWidth: '160px' }}>{m.payer || m.description}</span>
-              {view === 'matched' && (m.matched_orders || []).map(o => chip(`${o.source === 'bot' ? '#BOT-' + o.id : o.id} pagado`, colors.success))}
+              {view === 'matched' && (m.matched_orders || []).map(o => chip(`${o.source === 'bot' ? crmOrderLabel(o.id) : o.id} pagado`, colors.success))}
               {view === 'matched' && m.match_method === 'automatic_identity' && chip('Automático · identidad Santander aprendida', '#60a5fa')}
               {view === 'matched' && m.verified_proof_id && chip(`Voucher #${m.verified_proof_id} verificado · ${m.reconciliation_score || '—'}/100`, colors.success)}
               {view === 'ignored' && m.note && <span style={{ fontSize: '12px', color: colors.textMuted }}>📝 {m.note}</span>}

@@ -472,7 +472,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           const who = (updatedConv || conversation).contact_name || capturedFrom;
           const shopifyNote = result.orderUpdated?.shopifyDraftId ? '\n⚠️ Este pedido tiene Draft Order en Shopify — ajústalo allá también.' : '';
           notifyAdmin(org.id, {
-            body: `✏️ *${who}* ${ev} su pedido #${oid} desde WhatsApp.${shopifyNote}\n\nRevísalo en el CRM → Pedidos.`,
+            body: `✏️ *${who}* ${ev} su pedido #DR-${oid} desde WhatsApp.${shopifyNote}\n\nRevísalo en el CRM → Pedidos.`,
             kind: 'order',
             conversationId: capturedConvId,
           }).catch(() => {});
@@ -916,7 +916,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
     {
       const clientName  = conversation.contact_name || parsed.from;
       const orderLine   = pendingOrder
-        ? `\n📦 *Pedido:* #${pendingOrder.id} ${pendingOrder.customer_name || ''} — $${Number(pendingOrder.total_price || 0).toLocaleString('es-CL')}${wasDelivered ? ' (ya entregado — cobranza)' : ''}`
+        ? `\n📦 *Pedido:* #DR-${pendingOrder.id} ${pendingOrder.customer_name || ''} — $${Number(pendingOrder.total_price || 0).toLocaleString('es-CL')}${wasDelivered ? ' (ya entregado — cobranza)' : ''}`
         : '\n📦 *Pedido:* no encontré uno pendiente para este cliente';
       const amountLine  = analysis.amount  ? `\n💵 *Monto pagado:* $${analysis.amount?.toLocaleString('es-CL')} ${analysis.currency || ''}` : '';
       const bankLine    = analysis.bank    ? `\n🏦 *Banco:* ${analysis.bank}` : '';

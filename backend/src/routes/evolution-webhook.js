@@ -83,7 +83,14 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
         mediaId: parsed.type === 'text' ? null : evolution.mediaReference(channel.id, parsed.messageId) });
       if (message) {
         await db.updateConversationLastMessage(conversation.id, content);
-        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message, conversation: await db.getConversationById(conversation.id, org.id) });
+        const updatedConversation = await db.getConversationById(conversation.id, org.id);
+        io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message, conversation: updatedConversation });
+        if (!parsed.fromMe) {
+          const deliveryInbound = require('../services/delivery-inbound-notifications');
+          if (typeof deliveryInbound.notifyAssignedDriversForInbound === 'function') {
+            deliveryInbound.notifyAssignedDriversForInbound(org.id, updatedConversation, content).catch(() => {});
+          }
+        }
       }
       continue;
     }
