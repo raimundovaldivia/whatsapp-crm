@@ -10,8 +10,17 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
-import { reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries } from '../utils/broadcast-drafts.mjs';
+import { summarizeDraftAudience, reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries } from '../utils/broadcast-drafts.mjs';
 import { crmOrderLabel } from '../utils/order-reference.js';
+
+function DraftAudienceSummary({ prepared, excluded = [] }) {
+  const summary = summarizeDraftAudience(prepared, excluded);
+  return <div role="status" aria-label="Resumen de destinatarios" style={{ margin: '8px 0', fontSize: 12 }}>
+    <strong>{summary.total} seleccionados → {summary.prepared} borradores listos para revisar → {summary.excluded} excluidos</strong>
+    {summary.reasons.map(reason => <div key={reason.key}>{reason.count} · {reason.label}</div>)}
+    <div style={{ marginTop: 4 }}>Al enviar se vuelven a comprobar duplicados, secuencias activas y vigencia de ofertas.</div>
+  </div>;
+}
 
 function consolidateVisibleCandidates(rows = []) {
   const grouped = new Map();
@@ -3187,7 +3196,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           </details>
           {drafting && <button onClick={() => { draftRunRef.current++; setDrafting(false); }} style={{ marginTop: 8 }}>Cancelar preparación</button>}
           {draftReport && <div style={{ marginTop: 10, color: colors.textSecondary, fontSize: 12 }}>
-            {draftReport.prepared} borradores · {draftReport.excluded.length} excluidos · ningún envío automático.
+            <DraftAudienceSummary prepared={draftReport.prepared} excluded={draftReport.excluded} />
             {draftReport.excluded.map(draft => <div key={draft.phone}>{draft.name || draft.phone}: {draft.reason}</div>)}
           </div>}
         </> : <>
@@ -3503,6 +3512,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     {sendProgress.lastReason && <div style={{ marginTop: 4, fontSize: 12, color: colors.yellow }}>{sendProgress.lastReason}</div>}
                   </div>}
                   <div style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>Esta vista usa exactamente los mensajes preparados que se enviarán.</div>
+                  {individual && <DraftAudienceSummary prepared={reviewPlan.entries.length} excluded={reviewPlan.excluded} />}
                   {individual && <details style={{ marginTop: 8, color: colors.textSecondary, fontSize: 12 }}><summary>Instrucción y exclusiones</summary>
                     <p style={{ whiteSpace: 'pre-wrap' }}>{reviewPlan.instruction}</p>
                     {(reviewPlan.excluded || []).map(draft => <p key={draft.phone}>{draft.name || draft.phone}: {draft.reason}</p>)}
@@ -3541,7 +3551,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     }} style={{ width: '100%', boxSizing: 'border-box', whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }} />
                   <button disabled={sending} onClick={() => {
                     const entries = reviewPlan.entries.filter((_, i) => i !== idx);
-                    const excluded = [...(reviewPlan.excluded || []), { phone: entry.contact.phone, name: entry.contact.name, reason: 'Excluido durante la revisión.' }];
+                    const excluded = [...(reviewPlan.excluded || []), { phone: entry.contact.phone, name: entry.contact.name, reasonCode: 'manual', reason: 'Excluido durante la revisión.' }];
                     setDraftReport(previous => ({ ...previous, excluded, prepared: entries.length }));
                     setReviewPlan(entries.length ? { ...reviewPlan, entries, excluded } : null);
                     setReviewIdx(Math.max(0, Math.min(idx, entries.length - 1)));
