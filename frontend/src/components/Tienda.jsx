@@ -3,7 +3,7 @@ import { ArrowLeft, CheckCircle, ChevronDown, ChevronRight, Clock3, Filter, Hear
 import './tienda.css';
 import { eggColor, eggImage, matchesEggColor } from './egg-products.js';
 
-const API = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+import { BACKEND_URL as API } from '../utils/backend-url.js';
 const ASSETS = '/store-assets/diez-rios';
 const money = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
 const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();

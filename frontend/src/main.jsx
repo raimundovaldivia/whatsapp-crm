@@ -180,6 +180,13 @@ class AppErrorBoundary extends React.Component {
   }
 }
 
+if (import.meta.env.VITE_CRM_SANDBOX === '1') {
+  const banner = document.createElement('div');
+  banner.textContent = 'SANDBOX · Datos ficticios · WhatsApp simulado · Integraciones externas bloqueadas';
+  banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#713f12;color:white;text-align:center;padding:6px;font:12px system-ui;pointer-events:none';
+  document.body.appendChild(banner);
+}
+
 // En dominios de tienda, /admin reserva el acceso al CRM. El resto del
 // dominio sigue mostrando la tienda publica.
 ReactDOM.createRoot(document.getElementById('root')).render(

@@ -10,7 +10,7 @@ import { Bot, Send, RotateCcw, Sparkles, ExternalLink, X } from 'lucide-react';
 import { assistantAPI, setupAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
-const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+import { BACKEND_URL as BASE_URL } from '../utils/backend-url.js';
 
 // Renderiza markdown básico como texto limpio (sin librerías)
 function renderText(text) {

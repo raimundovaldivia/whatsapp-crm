@@ -1,5 +1,9 @@
 # 🤖 Aplicación comercial con WhatsApp y agentes de IA
 
+## Desarrollo en la nube
+
+Para trabajar desde el navegador con datos ficticios y servicios externos bloqueados, consulta [Desarrollo cloud aislado](docs/CLOUD_DEVELOPMENT.md). Usa `compose.sandbox.yml`; no requiere conectar Railway ni acceder a producción.
+
 Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de inteligencia artificial, ventas y pedidos. Puede usar Shopify como conexión de catálogo y operaciones, y admite Meta, Kapso, Twilio y varios números mediante Evolution API.
 
 ---

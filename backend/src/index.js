@@ -13,6 +13,9 @@
  */
 
 require('dotenv').config();
+// Sandbox must validate its database and block integrations before loading routers.
+const sandbox = process.env.CRM_SANDBOX === '1';
+if (sandbox) require('./sandbox/runtime').initialize();
 const express  = require('express');
 const http     = require('http');
 const path     = require('path');
@@ -117,7 +120,7 @@ app.get('/health', (_, res) => res.json({
 }));
 
 app.get('/ready', async (_req, res) => {
-  try { await require('./db/database').getPool().query('SELECT 1'); res.json({ status: 'ready' }); }
+  try { await require('./db/database').getPool().query('SELECT 1'); res.json({ status: 'ready', ...(sandbox ? { sandbox: true } : {}) }); }
   catch { res.status(503).json({ status: 'unavailable' }); }
 });
 
@@ -187,7 +190,8 @@ const PORT = process.env.PORT || 3001;
 
 const { setupDatabase } = require('./db/setup');
 
-setupDatabase().then(() => {
+setupDatabase().then(async () => {
+  if (sandbox) await require('./sandbox/seed').seed(require('./db/database').getPool(), process.env.SANDBOX_OWNER_PASSWORD);
   server.listen(PORT, () => {
     console.log(`\n🤖 WhatsApp CRM — Puerto ${PORT}`);
     console.log(`   WhatsApp Meta   : POST /webhook`);
@@ -196,6 +200,7 @@ setupDatabase().then(() => {
     console.log(`   WhatsApp Evolution: POST /evolution-webhook/:orgId/:channelId/:token`);
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
+    if (sandbox) return; // No scheduled jobs or webhook workers in the isolated environment.
     require('./services/webhook-inbox').startWebhookWorker();
     require('./services/attribution-backfill').backfillWhatsappAttributions()
       .catch(error => console.warn('[Attribution] No se pudo recuperar el histórico:', error.message))
