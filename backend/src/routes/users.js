@@ -77,7 +77,7 @@ router.post('/', async (req, res) => {
       displayName = name || loginId.split('@')[0];
     }
 
-    const existing = await db.getUserByEmail(loginId);
+    const existing = await db.getUserByEmailInOrg(loginId, req.orgId);
     if (existing) {
       return res.status(409).json({
         success: false,

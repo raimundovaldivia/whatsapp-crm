@@ -435,6 +435,126 @@ PROMO DIEZ RIOS: QUESO DE CABRA + BANDEJA XL 30 = $25.000
   assert.match(result.response, /QUESO DE CABRA \+ BANDEJA XL 30.*\$25\.000/is);
 });
 
+test('un sí al regalo personal enviado como texto explica todos los escalones', async () => {
+  let createdOrders = 0;
+  let savedState = null;
+  let savedDraft = null;
+  const sentAt = new Date();
+  const campaignText = `Hola 😊 Soy Rai de Diez Ríos.
+
+Hoy tienes un regalo de hasta $7.000 para usar en tu compra 🎁 Además, si haces tu pedido dentro de la próxima hora, podemos despacharlo hoy mismo 🚚
+
+¿Te gustaría aprovecharlo? Si quieres, te ayudo a elegir tus productos.`;
+  const products = [
+    { id: 'jumbo20', title: 'Huevos Jumbo blancos · Bandeja de 20', price: 9490, active: true },
+    { id: 'xl30', title: 'Huevos XL blancos · Bandeja de 30', price: 10990, active: true },
+  ];
+  const db = {
+    getConversationById: async () => ({ id: 41, organization_id: 1, phone_number: '56941000000', contact_name: 'Cliente', pipeline_state: 'exploring', agent_mode: 'ai' }),
+    getLastMessages: async () => [{ direction: 'outbound', content: campaignText, created_at: sentAt }],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Cliente', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => products,
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    createOrder: async () => { createdOrders++; },
+    updatePipelineState: async (_id, state, draft) => { savedState = state; savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 41, 'Sí');
+  assert.equal(result.newState, 'interested');
+  assert.equal(savedState, 'interested');
+  assert.equal(createdOrders, 0);
+  assert.equal(savedDraft.items, undefined);
+  assert.match(result.response, /1 bandeja → \$1\.000 de descuento/);
+  assert.match(result.response, /2 bandejas → \$4\.000 de descuento/);
+  assert.match(result.response, /3 o más bandejas → \$7\.000 de descuento/);
+  assert.match(result.response, /XL o Jumbo/i);
+
+  const sizeResult = await pipeline.processMessage(1, 41, 'XL');
+  assert.equal(sizeResult.newState, 'interested');
+  assert.equal(savedDraft.tiered_gift_size, 'XL');
+  assert.match(sizeResult.response, /cuántas bandejas.*cuántos huevos.*color/i);
+});
+
+test('la escala sigue dentro del pedido y descuenta dos bandejas Jumbo antes de pedir los datos faltantes', async () => {
+  let savedDraft = null;
+  let pricingPrompt = '';
+  const sentAt = new Date();
+  const campaignText = `Hola 😊 Soy Rai de Diez Ríos.
+
+Hoy tienes un regalo de hasta $7.000 para usar en tu compra 🎁 Además, si haces tu pedido dentro de la próxima hora, podemos despacharlo hoy mismo 🚚
+
+¿Te gustaría aprovecharlo? Si quieres, te ayudo a elegir tus productos.`;
+  const products = [{ id: 'jumbo20', title: 'Huevos Jumbo blancos · Bandeja de 20', price: 9490, active: true }];
+  const db = {
+    getConversationById: async () => ({ id: 42, organization_id: 1, phone_number: '56942000000', contact_name: 'Cliente', pipeline_state: 'collecting_order', agent_mode: 'ai' }),
+    getLastMessages: async () => [
+      { direction: 'outbound', content: campaignText, created_at: sentAt },
+      { direction: 'outbound', content: '¿Cuántas bandejas quieres y prefieres XL o Jumbo?', created_at: sentAt },
+    ],
+    getSetting: async () => null,
+    getContact: async () => ({ name: 'Cliente', contact_type: 'customer', client_type: 'personal' }),
+    getPrimaryDataSource: async () => null,
+    getCachedProducts: async () => [],
+    getProducts: async () => products,
+    getOrderDraft: async () => ({}),
+    getActiveOrderForBot: async () => null,
+    updatePipelineState: async (_id, state, draft) => { if (state === 'collecting_order') savedDraft = draft; },
+    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const pipeline = load('src/services/pipeline.js', {
+    '../db/database': db,
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false },
+    './agents/orchestrator': {
+      checkEscalation: async () => ({ escalate: false }),
+      classifyIntent: async () => ({ intent: 'order', confidence: 1 }),
+    },
+    './agents/orders': {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => ({
+        ...draft,
+        items: [{ product_name: products[0].title, quantity: 2 }],
+      }),
+      generateOrderResponse: async (_history, _message, _draft, _catalog, pricingText) => {
+        pricingPrompt = pricingText;
+        return 'Perfecto: son 2 bandejas Jumbo con tu regalo aplicado. ¿A qué dirección las enviamos?';
+      },
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => false,
+      missingFields: () => ['address'],
+    },
+    './order-pricing': require('../src/services/order-pricing'),
+    './order-quote': require('../src/services/order-quote'),
+    './scheduled-orders': {
+      isFutureOrderIntent: scheduled.isFutureOrderIntent,
+      isSoftFutureIntent: scheduled.isSoftFutureIntent,
+      extractScheduledOrderData: async () => null,
+      formatDateEs: value => value,
+    },
+    './shopify-api': { formatProductsForAI: () => '' },
+  });
+
+  const result = await pipeline.processMessage(1, 42, 'Quiero 2 bandejas Jumbo de 20 blancas');
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(savedDraft.subtotal, 18980);
+  assert.equal(savedDraft.discount_amount, 4000);
+  assert.equal(savedDraft.total, 14980);
+  assert.match(pricingPrompt, /REGALO PERSONAL APLICADO: \$4\.000/i);
+  assert.match(result.response, /dirección/i);
+});
+
 test('elegir la promo correcta tras una confirmación errónea prepara la edición del mismo pedido', async () => {
   let savedDraft = null;
   let createdOrders = 0;

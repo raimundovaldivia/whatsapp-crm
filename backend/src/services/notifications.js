@@ -12,6 +12,7 @@
 const db           = require('../db/database');
 const kapsoService = require('./kapso-whatsapp');
 const { notifyAdmin, isWindowOpen } = require('./admin-notify');
+const { client: aiClient, modelFor, responseText } = require('./ai-provider');
 
 function cleanContextText(value, max = 220) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -85,13 +86,11 @@ function fallbackConversationBrief(contextLines, reason = '') {
 async function getAdminConversationBrief(conversationId, reason = '', { allowAi = true } = {}) {
   const contextLines = await getRecentConversationContext(conversationId, 10);
   const fallback = fallbackConversationBrief(contextLines, reason);
-  if (!allowAi || !contextLines.length || !process.env.ANTHROPIC_API_KEY) return fallback;
+  if (!allowAi || !contextLines.length) return fallback;
 
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model: modelFor('fast'),
       max_tokens: 350,
       system: `Analiza una conversación de atención comercial para informar al administrador. Debes comprender la secuencia, no copiarla ni describir cada turno.
 
@@ -110,7 +109,7 @@ Reglas:
         content: `${reason ? `MOTIVO DEL AVISO: ${cleanContextText(reason, 400)}\n\n` : ''}CONVERSACIÓN (más reciente al final):\n${contextLines.join('\n')}`,
       }],
     });
-    const raw = response.content?.[0]?.text?.trim() || '';
+    const raw = responseText(response);
     const parsed = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
     return {
       requiresAction: parsed.requiresAction !== false,

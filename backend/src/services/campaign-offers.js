@@ -19,10 +19,40 @@
 
 const REQUIRED_FIELDS = ['product_id', 'offer_price', 'expires_at', 'scope', 'recipients'];
 
-const toDate = value => {
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
+// Dates without an offset are business dates/times in Chile, never server-local
+// midnight. A date alone remains valid through that business day's end.
+function toDate(value) {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  const local = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(raw);
+  const day = raw.slice(0, 10);
+  if (!require('./business-date').isValidISODate(day)) return null;
+  if (!local) {
+    if (!/T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(raw)) return null;
+    const date = new Date(raw);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const [year, month, date] = day.split('-').map(Number);
+  const hour = local[2] == null ? 23 : Number(local[2]);
+  const minute = local[3] == null ? 59 : Number(local[3]);
+  const second = local[2] == null ? 59 : Number(local[4] || 0);
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const target = Date.UTC(year, month - 1, date, hour, minute, second);
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  });
+  const localStamp = ms => {
+    const p = Object.fromEntries(formatter.formatToParts(new Date(ms)).map(part => [part.type, part.value]));
+    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  };
+  let instant = target;
+  for (let i = 0; i < 3; i++) instant += target - localStamp(instant);
+  // Reject a local hour that does not exist during a daylight-saving transition.
+  if (localStamp(instant) !== target) return null;
+  return new Date(instant + (local[2] == null ? 999 : 0));
+}
 
 function validateScope(scope) {
   if (scope === 'all_units') return null;
@@ -106,12 +136,16 @@ function applyOfferToItems(items, offer, orderId = null, now = new Date()) {
   if (!usableNew && !usableForThisOrder) return { items, applied: false };
   const cap = offer.scope && typeof offer.scope === 'object' ? offer.scope.cap_units : null;
   let remaining = cap ?? Infinity;
-  const next = items.map(item => {
-    if (String(item.product_id) !== String(offer.product_id) || remaining <= 0) return item;
-    const units = Math.min(Number(item.quantity) || 0, remaining);
+  const next = [];
+  for (const item of items) {
+    const quantity = Number(item.quantity) || 0;
+    if (String(item.product_id) !== String(offer.product_id) || remaining <= 0 || quantity <= 0) { next.push(item); continue; }
+    const units = Math.min(quantity, remaining);
     remaining -= units;
-    return { ...item, offer_id: offer.offer_id, offer_units: units, unit_price: Number(offer.offer_price), offer_applied: true };
-  });
+    next.push({ ...item, quantity: units, price: Number(offer.offer_price), unit_price: Number(offer.offer_price), offer_id: offer.id, offer_units: units, offer_applied: true });
+    // Tope parcial: el resto del pedido vuelve al precio normal.
+    if (units < quantity) next.push({ ...item, quantity: quantity - units });
+  }
   return { items: next, applied: next.some(i => i.offer_applied) };
 }
 
@@ -151,7 +185,7 @@ function toPromotionContext(offer, now = new Date()) {
   const cap = offer.scope && typeof offer.scope === 'object' ? offer.scope.cap_units : null;
   const quantities = {};
   if (cap) for (let q = 1; q <= cap; q += 1) quantities[String(q)] = price * q;
-  const expiresAt = offer.expires_at ? new Date(offer.expires_at).toISOString() : null;
+  const expiresAt = toDate(offer.expires_at)?.toISOString() || null;
   const active = offer.status === 'sent' && !isExpired(offer, now);
   return {
     templateName: 'oferta_personal_campana',
@@ -178,7 +212,33 @@ function toPromotionContext(offer, now = new Date()) {
   };
 }
 
+const isExpiredOffer = (offer, now = new Date()) => isExpired(offer, now);
+
+/** Varias ofertas vigentes (una por producto) como un solo contexto de precios. */
+function toPromotionContextMany(offers, now = new Date()) {
+  const contexts = (offers || []).map(o => toPromotionContext(o, now)).filter(Boolean);
+  if (!contexts.length) return null;
+  return {
+    ...contexts[0],
+    offerId: null,
+    offerIds: contexts.map(c => c.offerId),
+    offers: contexts.flatMap(c => c.offers),
+    specialPrices: Object.assign({}, ...contexts.map(c => c.specialPrices)),
+    active: contexts.some(c => c.active),
+  };
+}
+
+/** Lista de ofertas de un destinatario: `offers` (varias) o `offer` (una, compatibilidad). */
+function offerListFrom(item) {
+  if (Array.isArray(item?.offers)) return item.offers.filter(Boolean);
+  return item?.offer ? [item.offer] : [];
+}
+
 module.exports = {
+  offerExpiryDate: toDate,
+  offerListFrom,
+  toPromotionContextMany,
+  isExpiredOffer,
   REQUIRED_FIELDS,
   validateOfferDraft,
   supersedePending,

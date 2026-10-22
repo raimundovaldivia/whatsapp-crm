@@ -21,11 +21,8 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ success: false, error: 'La contraseña debe tener al menos 8 caracteres' });
     }
 
-    // Verificar email único
-    const existing = await db.getUserByEmail(email);
-    if (existing) {
-      return res.status(409).json({ success: false, error: 'Este email ya está registrado' });
-    }
+    // El correo solo debe ser único dentro de cada empresa (ver índice users_org_email_uq),
+    // así que una empresa nueva puede usar un correo que ya tiene cuenta en otra.
 
     // Crear slug único para la organización
     const slug = businessName.toLowerCase()
@@ -65,19 +62,40 @@ router.post('/register', async (req, res) => {
  */
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, organizationId } = req.body;
     if (!email || !password) {
       return res.status(400).json({ success: false, error: 'Email y password requeridos' });
     }
 
-    const user = await db.getUserByEmail(email);
-    if (!user || user.merged_into_user_id) {
+    // Un correo puede tener una cuenta por empresa. La contraseña se valida contra
+    // cada cuenta antes de revelar en qué empresas existe el correo.
+    const candidates = await db.getUsersByEmail(email);
+    const matches = [];
+    for (const candidate of candidates) {
+      if (await bcrypt.compare(password, candidate.password_hash)) matches.push(candidate);
+    }
+    if (matches.length === 0) {
       return res.status(401).json({ success: false, error: 'Credenciales incorrectas' });
     }
 
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) {
+    if (organizationId != null && !matches.some(m => String(m.organization_id) === String(organizationId))) {
       return res.status(401).json({ success: false, error: 'Credenciales incorrectas' });
+    }
+
+    let user = matches[0];
+    if (matches.length > 1) {
+      const chosen = organizationId != null
+        ? matches.find(m => String(m.organization_id) === String(organizationId))
+        : null;
+      if (!chosen) {
+        // Sin empresa elegida: el cliente muestra el selector y vuelve a llamar con organizationId.
+        const organizations = await Promise.all(matches.map(async m => {
+          const o = await db.getOrgById(m.organization_id);
+          return { organization_id: m.organization_id, name: o?.name || '', slug: o?.slug || '', role: m.role };
+        }));
+        return res.json({ success: true, data: { needsOrganization: true, organizations } });
+      }
+      user = chosen;
     }
 
     const org = await db.getOrgById(user.organization_id);

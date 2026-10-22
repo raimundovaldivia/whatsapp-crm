@@ -5,6 +5,7 @@ const db = require('../db/database');
 const evolution = require('../services/evolution-whatsapp');
 const { processInboundText } = require('../services/inbound-text');
 const { durableWebhook } = require('../services/webhook-inbox');
+const audioTranscription = require('../services/audio-transcription');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -130,7 +131,7 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
       const caption = parsed.text;
       parsed.text = caption || (parsed.type === 'audio' ? '🎤 [Audio]' : parsed.type === 'video' ? '🎥 [Video]' : '📎 [Documento]');
       prepareMedia = async () => {
-        if (parsed.type === 'audio' && process.env.OPENAI_API_KEY) {
+        if (parsed.type === 'audio' && audioTranscription.isConfigured()) {
           try {
             const transcript = await require('./kapso-webhook').transcribeAudio(parsed, channel, mediaService);
             if (transcript) return { text: `🎤 ${transcript}` };

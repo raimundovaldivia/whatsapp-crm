@@ -579,52 +579,38 @@ async function getPendingCharges(orgId, dateRange = {}) {
             (SELECT pp.id FROM payment_proofs pp
               WHERE pp.organization_id = o.organization_id
                 AND pp.status IN ('pending', 'pre_verified')
-                AND (
-                  pp.order_id = o.id
-                  OR (
-                    pp.conversation_id = o.conversation_id
-                    AND pp.order_id IS NOT NULL
-                    AND EXISTS (
-                      SELECT 1 FROM orders proof_order
-                       WHERE proof_order.id = pp.order_id
-                         AND proof_order.organization_id = o.organization_id
-                         AND proof_order.conversation_id = o.conversation_id
-                         AND proof_order.id <> o.id
-                         AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
-                         AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
-                         AND (
-                           proof_order.status IN ('paid', 'payment_received')
-                           OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
-                           OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
-                         )
-                    )
+                AND (pp.order_id = o.id OR (
+                  pp.conversation_id = o.conversation_id AND pp.order_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM orders proof_order
+                     WHERE proof_order.id = pp.order_id
+                       AND proof_order.organization_id = o.organization_id
+                       AND proof_order.conversation_id = o.conversation_id
+                       AND proof_order.id <> o.id
+                       AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
+                       AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
+                       AND (proof_order.status IN ('paid', 'payment_received')
+                         OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
+                         OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])')
                   )
-                )
+                ))
               ORDER BY (pp.order_id = o.id) DESC, pp.created_at DESC LIMIT 1) AS proof_id,
             (SELECT pp.status FROM payment_proofs pp
               WHERE pp.organization_id = o.organization_id
                 AND pp.status IN ('pending', 'pre_verified')
-                AND (
-                  pp.order_id = o.id
-                  OR (
-                    pp.conversation_id = o.conversation_id
-                    AND pp.order_id IS NOT NULL
-                    AND EXISTS (
-                      SELECT 1 FROM orders proof_order
-                       WHERE proof_order.id = pp.order_id
-                         AND proof_order.organization_id = o.organization_id
-                         AND proof_order.conversation_id = o.conversation_id
-                         AND proof_order.id <> o.id
-                         AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
-                         AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
-                         AND (
-                           proof_order.status IN ('paid', 'payment_received')
-                           OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
-                           OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
-                         )
-                    )
+                AND (pp.order_id = o.id OR (
+                  pp.conversation_id = o.conversation_id AND pp.order_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM orders proof_order
+                     WHERE proof_order.id = pp.order_id
+                       AND proof_order.organization_id = o.organization_id
+                       AND proof_order.conversation_id = o.conversation_id
+                       AND proof_order.id <> o.id
+                       AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
+                       AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
+                       AND (proof_order.status IN ('paid', 'payment_received')
+                         OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
+                         OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])')
                   )
-                )
+                ))
               ORDER BY (pp.order_id = o.id) DESC, pp.created_at DESC LIMIT 1) AS proof_status,
             (SELECT COUNT(*) FROM payment_proofs pp
               WHERE pp.organization_id = o.organization_id
@@ -661,27 +647,20 @@ async function getPendingCharges(orgId, dateRange = {}) {
           SELECT 1 FROM payment_proofs pp
            WHERE pp.organization_id = o.organization_id
              AND pp.status = 'verified'
-             AND (
-               pp.order_id = o.id
-               OR (
-                 pp.conversation_id = o.conversation_id
-                 AND pp.order_id IS NOT NULL
-                 AND EXISTS (
-                   SELECT 1 FROM orders proof_order
-                    WHERE proof_order.id = pp.order_id
-                      AND proof_order.organization_id = o.organization_id
-                      AND proof_order.conversation_id = o.conversation_id
-                      AND proof_order.id <> o.id
-                      AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
-                      AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
-                      AND (
-                        proof_order.status IN ('paid', 'payment_received')
-                        OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
-                        OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
-                      )
-                 )
+             AND (pp.order_id = o.id OR (
+               pp.conversation_id = o.conversation_id AND pp.order_id IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM orders proof_order
+                  WHERE proof_order.id = pp.order_id
+                    AND proof_order.organization_id = o.organization_id
+                    AND proof_order.conversation_id = o.conversation_id
+                    AND proof_order.id <> o.id
+                    AND COALESCE(NULLIF(proof_order.total_price::text, ''), '0')::numeric = COALESCE(NULLIF(o.total_price::text, ''), '0')::numeric
+                    AND ABS(EXTRACT(EPOCH FROM (proof_order.created_at - o.created_at))) <= 172800
+                    AND (proof_order.status IN ('paid', 'payment_received')
+                      OR COALESCE(proof_order.notes, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])'
+                      OR COALESCE(proof_order.delivery_note, '') ~* '(no[[:space:]]*cobrar|pagad[oa]|duplicad[oa])')
                )
-             )
+             ))
         )
 
       UNION ALL

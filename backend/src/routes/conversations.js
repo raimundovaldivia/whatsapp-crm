@@ -10,11 +10,15 @@ const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
 const paymentOptions = require('../services/payment-options');
 const { notifyAdminHandoff } = require('../services/notifications');
+const { notifyAdmin } = require('../services/admin-notify');
+const pipelineOutbound = require('../services/pipeline-outbound');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getBodyComponent, getMissingBodyParameters, renderTemplateFromComponents } = require('../utils/template-renderer.mjs');
-const { isCustomerMessagingHour, shouldSkipAutomatedFollowUp } = require('../services/outbound-policy');
+const followUp = require('../services/follow-up');
 const { reconcilePendingMessages } = require('../services/message-status-recovery');
 const { isTrackableDestination, extractTrackingTokens } = require('../services/lead-journey');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
+const inboundPolicy = require('../services/inbound-message-policy');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -130,7 +134,7 @@ router.post('/:id/tracking-links', async (req, res) => {
 router.patch('/:id/limbo-reason', async (req, res) => {
   try {
     const conversationId = Number(req.params.id);
-    const allowed = new Set(['price', 'delivery', 'payment', 'later', 'stock', 'declined', 'competitor', 'no_reply', 'unknown']);
+    const allowed = new Set(['price', 'delivery', 'payment', 'later', 'stock', 'declined', 'competitor', 'no_need', 'service', 'no_reply', 'unknown']);
     const reasonCode = String(req.body?.reason || '');
     const note = String(req.body?.note || '').trim();
     if (!Number.isInteger(conversationId) || conversationId < 1 || !allowed.has(reasonCode)) {
@@ -435,10 +439,6 @@ router.patch('/:id/pipeline-state', async (req, res) => {
   }
 });
 
-/**
- * Excluye o reincorpora una conversación de la bandeja Hot sin alterar el
- * estado operativo del bot.
- */
 router.patch('/:id/hot-lead-exclusion', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   try {
     const conversationId = Number(req.params.id);
@@ -498,43 +498,28 @@ router.get('/:id/orders', async (req, res) => {
  * Crear una orden manual desde el panel admin.
  * Body: { items: [{productId, title, price, quantity}], sendSummary: boolean }
  */
+const campaignOffers = require('../services/campaign-offers');
+const campaignOffersStore = require('../services/campaign-offers-store');
+
 router.post('/:id/orders', async (req, res) => {
   try {
     const convId = parseInt(req.params.id);
     const conv   = await db.getConversationById(convId, req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
-    const { items: rawItems = [], sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '', offerId = null } = req.body;
+    const { items: rawItems = [], offerId = null, sendSummary = true, shippingAddress = {}, discount = 0, discountType = 'percent', note = '' } = req.body;
     if (!rawItems.length) return res.status(400).json({ success: false, error: 'Agrega al menos un producto' });
     if (typeof note !== 'string' || note.trim().length > 1000) {
       return res.status(400).json({ success: false, error: 'La nota del pedido no puede superar 1000 caracteres' });
     }
 
-    // Oferta personal vigente de la conversación: su precio reemplaza al de la línea
-    // del producto ofrecido (solo unidades dentro del alcance). Se canjea al crear el pedido.
-    const offerStore = require('../services/campaign-offers-store');
-    const offerRules = require('../services/campaign-offers');
-    const personalOffer = await offerStore.latestForConversation(db.getPool(), req.orgId, convId);
-    let items = rawItems;
-    let offerToRedeem = null;
-    // Solo se aplica si el operador eligió esta oferta (offerId); nunca de forma automática.
-    if (personalOffer && personalOffer.status === 'sent' && offerId != null && Number(offerId) === Number(personalOffer.id)) {
-      const normalized = rawItems.map(i => ({ ...i, product_id: i.product_id ?? i.productId ?? i.id }));
-      const applied = offerRules.applyOfferToItems(normalized, personalOffer, null, new Date());
-      if (applied.applied) {
-        offerToRedeem = personalOffer;
-        items = applied.items.map((i, idx) => {
-          if (!i.offer_applied) return rawItems[idx];
-          const qty = parseInt(i.quantity || 1);
-          const offered = Number(i.offer_units) || 0;
-          const catalogPrice = parseFloat(rawItems[idx].price) || 0;
-          // Precio promedio por unidad si el alcance cubre solo parte de la cantidad.
-          const avg = Math.round((offered * Number(personalOffer.offer_price) + (qty - offered) * catalogPrice) / qty);
-          return { ...rawItems[idx], price: avg, offer_id: personalOffer.id };
-        });
-      }
-    }
-
+    // Oferta de campaña: sólo la última enviada, vigente, y referenciada por el pedido.
+    const campaignRows = await campaignOffersStore.activeForConversation(db.getPool(), req.orgId, convId).catch(() => []);
+    const requestedOfferIds = new Set((Array.isArray(req.body.offerIds) ? req.body.offerIds : (offerId != null ? [offerId] : [])).map(Number));
+    const offersToRedeem = campaignRows.filter(o => o.status === 'sent' && !campaignOffers.isExpiredOffer(o) && requestedOfferIds.has(Number(o.id)));
+    const normalizedItems = rawItems.map(i => ({ ...i, product_id: i.product_id ?? i.productId ?? i.id }));
+    let items = normalizedItems;
+    for (const offer of offersToRedeem) items = campaignOffers.applyOfferToItems(items, offer, null).items;
     const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
     const discountNum   = parseFloat(discount) || 0;
     const discountAmount = discountNum > 0
@@ -571,12 +556,9 @@ router.post('/:id/orders', async (req, res) => {
       totalPrice,
       note: note.trim() || null,
     });
-    if (offerToRedeem) {
-      try {
-        await offerStore.redeem(db.getPool(), req.orgId, offerToRedeem.id, order.id);
-      } catch (offerError) {
-        console.warn('[Conversations] no se pudo canjear la oferta personal:', offerError.message);
-      }
+    for (const offer of offersToRedeem) {
+      await campaignOffersStore.redeem(db.getPool(), req.orgId, offer.id, order.id)
+        .catch(error => console.warn('[Campaign offers] no se pudo canjear la oferta:', error.message));
     }
 
     // Guardar mensaje de resumen en el chat y enviarlo al cliente
@@ -1035,96 +1017,21 @@ router.post('/merge-into/:targetId', requireRole('owner', 'admin', 'supervisor')
  * Dispara el follow-up bot ahora mismo para conversaciones abandonadas de esta org.
  * El cron corre automáticamente cada 30min pero este endpoint lo activa a demanda.
  */
-router.post('/trigger-follow-up', async (req, res) => {
-  const pool = getPool();
+router.post('/trigger-follow-up', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   try {
-    if (!isCustomerMessagingHour()) {
+    const result = await followUp.runFollowUp(io, new Date(), {
+      organizationId: req.orgId,
+      minIdleHours: 2,
+      maxIdleHours: 22,
+    });
+    if (result.reason === 'outside_customer_hours') {
       return res.status(409).json({
         success: false,
         error: 'OUTSIDE_CUSTOMER_HOURS',
         message: 'Los seguimientos automáticos solo se envían entre las 09:00 y las 20:59, hora de Chile.',
       });
     }
-
-    const Anthropic    = require('@anthropic-ai/sdk');
-    const kapsoService = require('../services/kapso-whatsapp');
-    const client       = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-    // Conversaciones abandonadas: sin respuesta >2h, <22h, modo IA, no cerradas
-    // Ampliamos a cualquier pipeline_state activo (no solo interested/collecting)
-    const { rows: stalled } = await pool.query(
-      `SELECT c.id, c.phone_number, c.contact_name, c.pipeline_state, c.order_draft,
-              c.follow_up_sent_at, c.last_inbound_at
-       FROM conversations c
-       WHERE c.organization_id = $1
-         AND c.agent_mode = 'ai'
-         AND c.pipeline_state NOT IN ('done', 'future_interest', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out')
-         AND c.last_message_at < NOW() - INTERVAL '2 hours'
-         AND c.last_message_at > NOW() - INTERVAL '22 hours'
-         AND (c.follow_up_sent_at IS NULL OR c.follow_up_sent_at < NOW() - INTERVAL '6 hours')
-       ORDER BY c.last_message_at ASC
-       LIMIT 30`,
-      [req.orgId]
-    );
-
-    const wc = await db.getWhatsappConfig(req.orgId);
-    if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
-
-    const storeContext = await db.getSetting(req.orgId, 'store_context') || '';
-    let sent = 0;
-
-    const PROMPT = `Eres alguien que trabaja en una tienda y escribes a un cliente que no respondió.
-CONTEXTO TIENDA: ${storeContext}
-ÚLTIMOS MENSAJES:
-{HISTORIAL}
-Escribe UN mensaje de 1-2 líneas para retomar. Tono cálido y casual. Referencia algo específico.
-Si el cliente dijo que no necesita por ahora, que comprará cuando pueda o la conversación ya se cerró, escribe: SKIP.
-Sin comillas. Solo el mensaje.`;
-
-    const hora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
-
-    for (const conv of stalled) {
-      try {
-        const msgs = await db.getLastMessages(conv.id, 8);
-        if (!msgs.length) continue;
-        if (shouldSkipAutomatedFollowUp(msgs)) {
-          await db.updatePipelineState(conv.id, 'future_interest').catch(() => {});
-          await pool.query('UPDATE conversations SET follow_up_sent_at = NOW() WHERE id = $1', [conv.id]);
-          continue;
-        }
-
-        const historial = msgs.map(m =>
-          `${m.direction === 'inbound' ? (conv.contact_name || 'Cliente') : 'Nosotros'}: ${(m.content || '').slice(0, 200)}`
-        ).join('\n');
-
-        const response = await client.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 120,
-          system: PROMPT.replace('{HISTORIAL}', historial),
-          messages: [{ role: 'user', content: `Hora actual: ${hora}. Genera el mensaje.` }],
-        });
-
-        const text = (response.content[0]?.text || '').trim();
-        if (!text || text === 'SKIP') continue;
-
-        await kapsoService.sendTextMessage(conv.phone_number, text, wc);
-        const savedMsg = await db.saveMessage({
-          conversationId: conv.id, whatsappMessageId: null,
-          direction: 'outbound', content: text, sentBy: 'ai', agentType: 'follow_up',
-        });
-        await db.updateConversationLastMessage(conv.id, text, false);
-        await pool.query('UPDATE conversations SET follow_up_sent_at = NOW() WHERE id = $1', [conv.id]);
-
-        const updatedConv = await db.getConversationById(conv.id);
-        io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
-        sent++;
-        await new Promise(r => setTimeout(r, 1200));
-      } catch (e) {
-        console.error(`[trigger-follow-up] conv ${conv.id}:`, e.message);
-      }
-    }
-
-    res.json({ success: true, checked: stalled.length, sent });
+    res.json({ success: true, ...result });
   } catch (err) {
     console.error('[trigger-follow-up]', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -1133,8 +1040,8 @@ Sin comillas. Solo el mensaje.`;
 
 /**
  * POST /api/conversations/scan-hot-leads
- * Recalifica conversaciones recientes con reglas explicables. No cambia el
- * pipeline_state ni usa una consulta de precio como señal suficiente de hot.
+ * Guarda el estado vigente y una propuesta explicable sin modificar ninguna
+ * conversación. La aplicación queda en un paso separado y auditable.
  */
 router.post('/scan-hot-leads', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
@@ -1317,7 +1224,6 @@ router.post('/lead-qualification-runs/:runId/apply', requireRole('owner', 'admin
  */
 router.post('/:id/analyze', async (req, res) => {
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
 
@@ -1331,9 +1237,8 @@ router.post('/:id/analyze', async (req, res) => {
       return `[${time}] ${who}: ${m.content}`;
     }).join('\n');
 
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const resp = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const resp = await aiClient.messages.create({
+      model: modelFor('fast'),
       max_tokens: 1024,
       system: `Eres un analista de calidad para un CRM de WhatsApp con bot de ventas IA.
 Tu tarea: analizar conversaciones y evaluar el desempeño del bot.
@@ -1379,12 +1284,13 @@ Analiza y devuelve el JSON.`,
     });
 
     let analysis;
+    const rawText = responseText(resp);
     try {
       // El modelo a veces envuelve el JSON en ```json ... ``` — limpiar antes de parsear
-      const raw = resp.content[0].text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+      const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
       analysis = JSON.parse(raw);
     } catch {
-      analysis = { resumen: resp.content[0].text, error: 'Formato inesperado' };
+      analysis = { resumen: rawText, error: 'Formato inesperado' };
     }
 
     // Aplicar automáticamente el estado detectado al pipeline
@@ -1420,16 +1326,14 @@ Analiza y devuelve el JSON.`,
  */
 router.post('/:id/generate-improvements', async (req, res) => {
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
     const { errores = [], oportunidades = [], resumen = '' } = req.body;
 
     if (!errores.length && !oportunidades.length) {
       return res.json({ success: true, rules: [] });
     }
 
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const resp = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const resp = await aiClient.messages.create({
+      model: modelFor('fast'),
       max_tokens: 512,
       system: `Eres un experto en optimización de bots de ventas por WhatsApp.
 Tu tarea: convertir errores y oportunidades detectadas en una conversación en REGLAS CONCRETAS que el bot debe seguir de ahora en adelante.
@@ -1458,7 +1362,7 @@ Genera entre 2 y 5 reglas concretas para el bot basadas en estos errores y oport
 
     let rules = [];
     try {
-      const raw = resp.content[0].text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+      const raw = responseText(resp).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
       rules = JSON.parse(raw);
       if (!Array.isArray(rules)) rules = [];
     } catch {
@@ -1579,10 +1483,12 @@ router.post('/retry-unanswered', async (req, res) => {
       SELECT
         c.id,
         c.phone_number,
+        c.whatsapp_channel_id,
+        m.id AS last_inbound_id,
         m.content AS last_inbound
       FROM conversations c
       JOIN LATERAL (
-        SELECT content, direction, created_at
+        SELECT id, content, direction, created_at
         FROM messages
         WHERE conversation_id = c.id
         ORDER BY created_at DESC
@@ -1599,27 +1505,117 @@ router.post('/retry-unanswered', async (req, res) => {
       return res.json({ success: true, retried: 0, results: [] });
     }
 
-    // 2. Obtener config de WhatsApp y pipeline
-    const wc       = await db.getWhatsappConfig(req.orgId);
+    // 2. Obtener pipeline. La configuración de salida se resuelve por conversación
+    // para no responder un chat de Evolution desde el número oficial de Kapso.
     const pipeline = require('../services/pipeline');
 
     const results = [];
     for (const conv of rows) {
+      let lockClient = null;
       try {
+        lockClient = await pool.connect();
+        await lockClient.query('SELECT pg_advisory_lock($1, $2)', [req.orgId, conv.id]);
+        const latest = await lockClient.query(`
+          SELECT id, direction
+          FROM messages
+          WHERE conversation_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `, [conv.id]);
+        if (!latest.rows[0]
+          || latest.rows[0].direction !== 'inbound'
+          || String(latest.rows[0].id) !== String(conv.last_inbound_id)) {
+          results.push({ phone: conv.phone_number, success: false, reason: 'already_answered' });
+          continue;
+        }
+        if (inboundPolicy.isNoResponseNeeded(conv.last_inbound)) {
+          results.push({ phone: conv.phone_number, success: false, reason: 'no_response_needed' });
+          continue;
+        }
         const result = await pipeline.processMessage(req.orgId, conv.id, conv.last_inbound);
-        if (result.skipped || !result.response) continue;
+        if (result.duplicate) {
+          results.push({ phone: conv.phone_number, success: false, reason: 'duplicate' });
+          continue;
+        }
+        if (result.skipped || !result.response) {
+          results.push({ phone: conv.phone_number, success: false, reason: result.reason || 'no_response' });
+          continue;
+        }
 
         if (result?.response && !result?.duplicate) {
-          // Enviar y guardar en DB
-          const sent = await kapsoService.sendTextMessage(conv.phone_number, result.response, wc).catch(() => null);
-          await db.saveMessage({
+          const currentConversation = await db.getConversationById(conv.id, req.orgId);
+          const outboundDecision = await pipelineOutbound.evaluatePipelineResult({
+            orgId: req.orgId,
             conversationId: conv.id,
-            whatsappMessageId: sent?.messages?.[0]?.id,
+            userMessage: conv.last_inbound,
+            result,
+          });
+          if (outboundDecision.escalate) {
+            const responseWasReplaced = outboundDecision.response !== result.response;
+            await pipelineOutbound.coordinateConversation({
+              orgId: req.orgId,
+              conversationId: conv.id,
+              conversation: currentConversation || conv,
+              userMessage: conv.last_inbound,
+              reason: outboundDecision.reason,
+              botWasGoingToSay: outboundDecision.botWasGoingToSay,
+              io,
+            });
+            result.response = outboundDecision.response;
+            result.agentType = 'orchestrator';
+            result.productMedia = null;
+            if (responseWasReplaced) {
+              result.aiProvider = null;
+              result.aiModel = null;
+              result.promptVersion = 'escalation-ack-v1';
+            }
+          }
+          // Enviar y guardar en DB
+          const sendConfig = await outboundConfig(req.orgId, conv);
+          if (!sendConfig) throw new Error('WhatsApp no configurado para la conversación');
+          const sent = await whatsappProvider.sendTextMessage(conv.phone_number, result.response, sendConfig);
+          const savedOutbound = await db.saveMessage({
+            conversationId: conv.id,
+            whatsappMessageId: whatsappProvider.messageId(sent),
             direction: 'outbound',
             content: result.response,
             sentBy: 'ai',
+            agentType: result.agentType,
+            aiProvider: result.aiProvider,
+            aiModel: result.aiModel,
+            promptVersion: result.promptVersion,
           }).catch(() => {});
           await db.updateConversationLastMessage(conv.id, result.response, false).catch(() => {});
+
+          const finalConversation = await db.getConversationById(conv.id, req.orgId);
+          io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, {
+            message: savedOutbound,
+            conversation: finalConversation,
+          });
+          if (result.productMedia) {
+            await require('../services/product-media-delivery').sendSuggested({
+              suggestion: result.productMedia,
+              orgId: req.orgId,
+              conversation: finalConversation || currentConversation || conv,
+              config: sendConfig,
+              io,
+              agentType: result.agentType,
+            });
+          }
+          if (result.orderCreated) {
+            io?.to(`org_${req.orgId}`).emit(`order_created_${req.orgId}`, { conversationId: conv.id, order: result.orderCreated });
+          }
+          if (result.orderUpdated || result.orderCancelled) {
+            const changed = result.orderUpdated || result.orderCancelled;
+            io?.to(`org_${req.orgId}`).emit(`order_updated_${req.orgId}`, {
+              conversationId: conv.id,
+              orderId: changed.orderId,
+              event: result.orderUpdated ? 'updated' : 'cancelled',
+            });
+          }
+          if (result.adminNotice) {
+            notifyAdmin(req.orgId, { body: result.adminNotice, kind: 'order', conversationId: conv.id }).catch(() => {});
+          }
 
           results.push({ phone: conv.phone_number, success: true });
           console.log(`[RetryUnanswered] ✅ ${conv.phone_number}: respondido`);
@@ -1629,6 +1625,11 @@ router.post('/retry-unanswered', async (req, res) => {
       } catch (err) {
         console.error(`[RetryUnanswered] ❌ ${conv.phone_number}:`, err.message);
         results.push({ phone: conv.phone_number, success: false, reason: err.message });
+      } finally {
+        if (lockClient) {
+          await lockClient.query('SELECT pg_advisory_unlock($1, $2)', [req.orgId, conv.id]).catch(() => {});
+          lockClient.release();
+        }
       }
 
       // pequeña pausa entre mensajes para no saturar la API

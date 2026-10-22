@@ -51,10 +51,12 @@ const TERMINAL_DECLINE_PATTERNS = [
   /^por ahora no(?: necesito| gracias|, gracias| necesito, gracias)?[.!]*$/,
   /^no (?:voy a querer|agendare nada|necesito por ahora)[.!]*$/,
   /^(?:yo|te|les?) aviso[.!]*$/,
+  /^(?:muchas )?gracias[, .!]*(?:aun no[, .!]*)?(?:yo |les? )?aviso(?: con tiempo)?(?:[, .!]*ya)?(?:[, .!]*chao)?[.!]*$/,
 ];
 
 const TERMINAL_ACKNOWLEDGEMENT_PATTERNS = [
   /^(?:gracias|gracias!+|muchas gracias|mil gracias|grs|gracias gracias|grssias)[.!]*$/,
+  /^(?:muchas )?gracias[, .!]*(?:por todo|por la ayuda|excelente servicio|muy amable|a ustedes|igualmente)[.!]*$/,
   /^(?:ok|okay|oki|listo|perfecto|super|excelente)[, .!]*(?:muchas )?gracias[.!]*$/,
   /^(?:de nada|buena|vale)[.!]*$/,
 ];
@@ -70,8 +72,9 @@ function isEmojiAcknowledgement(value) {
  * aceptaciones como "sí porfa".
  */
 function isNoResponseNeeded(value) {
-  const text = normalizeInboundText(value).replace(/[¿?]/g, '').trim();
-  if (!text || text.length > 100) return false;
+  const withoutMediaLabel = String(value || '').replace(/^[🎤🎙️]+\s*/u, '');
+  const text = normalizeInboundText(withoutMediaLabel).replace(/[¿?]/g, '').trim();
+  if (!text || text.length > 180) return false;
   return isEmojiAcknowledgement(value)
     || isLikelyAutomaticReply(value)
     || TERMINAL_DECLINE_PATTERNS.some(pattern => pattern.test(text))

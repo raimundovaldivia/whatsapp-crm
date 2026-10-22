@@ -16,18 +16,20 @@ const router         = express.Router();
 const db             = require('../db/database');
 const kapsoService   = require('../services/kapso-whatsapp');
 const pipeline       = require('../services/pipeline');
-const { notifyAdminHandoff, notifyAdminHelp, notifyAdminHumanPendingReply, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
+const { notifyAdminHandoff, notifyAdminHumanPendingReply, notifyAgentsNewMessage, notifyAgentsPayment } = require('../services/notifications');
 const secretary = require('../services/admin-secretary');
 const { analyzePaymentProof }   = require('../services/analyzePaymentProof');
 const { createBotLogger }       = require('../services/bot-logger');
 const mediaCache                = require('../services/media-cache');
 const { handleAgentCommand, hasActiveCampaign } = require('../services/agent-commands');
-const guardrail                 = require('../services/response-guardrail');
+const pipelineOutbound          = require('../services/pipeline-outbound');
 const { notifyAdmin, markAdminWindowOpen } = require('../services/admin-notify');
 const { resumeDivaOnInbound, keepHumanAfterReply } = require('../services/conversation-mode');
 const { isDeliveredOrder, buildPaymentProofReply } = require('../services/payment-proof-reply');
 const campaignGuard = require('../services/broadcast-campaign-guard');
 const { isTerminalConversationReply } = require('../services/inbound-message-policy');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
+const audioTranscription = require('../services/audio-transcription');
 
 let io;
 function setSocketIO(socketIO) { io = socketIO; }
@@ -175,10 +177,10 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     console.log(`[KapsoWebhook] 📍 Ubicación de ${parsed.from} → ${label}`);
   }
 
-  // ── Audio sin transcript → transcribir si hay OPENAI_API_KEY (Whisper) ──
+  // ── Audio sin transcript → usar el proveedor de transcripción configurado ──
   // Kapso ya transcribe si la opción está activa en su panel; esto es el
   // respaldo cuando no viene transcript.
-  if (parsed.type === 'audio' && !parsed.text && await require('../services/commercial').permitted(org.id,'sales_ai') && process.env.OPENAI_API_KEY && (parsed.mediaUrl || parsed.mediaId)) {
+  if (parsed.type === 'audio' && !parsed.text && await require('../services/commercial').permitted(org.id,'sales_ai') && audioTranscription.isConfigured() && (parsed.mediaUrl || parsed.mediaId)) {
     const transcript = await transcribeAudio(parsed, whatsappConfig).catch(e => {
       console.warn('[KapsoWebhook] transcripción falló:', e.message);
       return null;
@@ -372,10 +374,15 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         // así para siempre. Ahora: acuse inmediato + recordatorio si el equipo
         // tarda (escalation-watch.js) + vuelta al bot a las 24 h.
         const escalateWithAck = async (ackText, reason, botWasGoingToSay) => {
-          await db.setAgentMode(capturedConvId, 'coordinating');
-          await db.setLastEscalation(capturedConvId, textToProcess, reason).catch(() => {});
-          io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: capturedConvId, mode: 'coordinating' });
-          notifyAdminHelp(org.id, updatedConv || conversation, botWasGoingToSay, reason).catch(() => {});
+          await pipelineOutbound.coordinateConversation({
+            orgId: org.id,
+            conversationId: capturedConvId,
+            conversation: updatedConv || conversation,
+            userMessage: textToProcess,
+            reason,
+            botWasGoingToSay,
+            io,
+          });
 
           let ackSent = null;
           try {
@@ -397,43 +404,19 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: ackMsg, conversation: convNow });
         };
 
-        if (!result.switchToHuman) {
-          const fresh = await guardrail.checkResponseFreshness(org.id, capturedConvId, result.response, {
-            orderCreated: result.orderCreated, orderUpdated: result.orderUpdated,
-          });
-          if (!fresh.ok) {
-            console.error(`[KapsoWebhook] ⛔ Dato rancio (${fresh.reason}) para ${capturedFrom}: ${fresh.detail}`);
-            log.step('guardrail', `bloqueado: ${fresh.reason}`);
-            await escalateWithAck(
-              'Déjame revisar esto con el equipo para darte la información correcta y te escribo por aquí 🙏',
-              `Dato desactualizado — ${fresh.detail}`,
-              result.response
-            );
-            log.done();
-            return;
-          }
-
-          // El bot prometió "consultar con el equipo y confirmar" pero la
-          // pipeline no escaló → esa promesa no le llega a nadie. La
-          // convertimos en escalación real: se avisa al admin y la
-          // conversación pasa a humano, usando el mismo texto como acuse.
-          if (guardrail.promisesTeamFollowup(result.response)) {
-            log.step('promise_escalate', 'el bot prometió consultar con el equipo → escalando de verdad');
-            await escalateWithAck(
-              result.response,
-              result.escalationReason || 'El bot le dijo al cliente que consultaría algo con el equipo',
-              result.response
-            );
-            log.done();
-            return;
-          }
-        }
-
-        if (result.switchToHuman) {
-          const reason = result.escalationReason || 'Necesita validación del ejecutivo';
-          const ack = result.response || 'Déjame consultarlo con el equipo y te confirmo por aquí 🙏';
-          await escalateWithAck(ack, reason, result.response);
-          log.step('switchToHuman', `admin consultado — conv ${capturedConvId} en pausa, cliente avisado`);
+        const outboundDecision = await pipelineOutbound.evaluatePipelineResult({
+          orgId: org.id,
+          conversationId: capturedConvId,
+          userMessage: textToProcess,
+          result,
+        });
+        if (outboundDecision.escalate) {
+          log.step(outboundDecision.code, outboundDecision.reason);
+          await escalateWithAck(
+            outboundDecision.response,
+            outboundDecision.reason,
+            outboundDecision.botWasGoingToSay
+          );
           log.done();
           return;
         }
@@ -465,6 +448,9 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           sentBy:            'ai',
           agentType:         result.agentType,
           status:            windowExpired ? 'failed' : 'sent',
+          aiProvider:        result.aiProvider,
+          aiModel:           result.aiModel,
+          promptVersion:     result.promptVersion,
         });
 
         await db.updateConversationLastMessage(capturedConvId, result.response);
@@ -714,7 +700,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       return;
     }
 
-    // ── 1. Descargar imagen y analizar con Claude Vision ────────────
+    // ── 1. Descargar imagen y analizar con el modelo visual activo ──
     // Kapso provee media_url directa en el webhook — usarla sin llamar getMediaUrl
     let analysis = { is_payment_proof: false };
     let data, contentType;
@@ -771,22 +757,20 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       });
 
       if (!sales) return;
-      // Analizar imagen con Claude Vision y pasar contexto al pipeline
+      // Analizar imagen con el proveedor de IA activo y pasar contexto al pipeline
       let imageContext = '[No se pudo interpretar la imagen; pide al cliente que explique su contenido]';
       if (data && contentType) {
         try {
-          const Anthropic = require('@anthropic-ai/sdk');
-          const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
           const base64img = Buffer.from(data).toString('base64');
           const visionResp = await aiClient.messages.create({
-            model: 'claude-haiku-4-5-20251001',
+            model: modelFor('vision'),
             max_tokens: 200,
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: contentType, data: base64img } },
               { type: 'text', text: 'Describe brevemente qué muestra esta imagen en 1-2 oraciones en español, sin saludar.' }
             ]}]
           });
-          imageContext = `[imagen: ${visionResp.content[0]?.text || 'imagen enviada por el cliente'}]`;
+          imageContext = `[imagen: ${responseText(visionResp, 'imagen enviada por el cliente')}]`;
         } catch (_) {}
       }
 
@@ -988,8 +972,8 @@ async function reverseGeocode({ lat, lng }) {
 }
 
 /**
- * Transcribe un audio de WhatsApp con Whisper (OpenAI). Solo se usa si hay
- * OPENAI_API_KEY y Kapso no entregó transcript. Node 18+ trae fetch/FormData/Blob.
+ * Descarga un audio de WhatsApp y lo entrega al proveedor de transcripción.
+ * El texto resultante continúa por el mismo proveedor conversacional activo.
  */
 async function transcribeAudio(parsed, whatsappConfig, service = kapsoService) {
   let data, contentType;
@@ -1000,21 +984,7 @@ async function transcribeAudio(parsed, whatsappConfig, service = kapsoService) {
     ({ data, contentType } = await service.downloadMedia(info.url, whatsappConfig));
   }
   if (!data) return null;
-  const ext = /mpeg|mp3/.test(contentType || '') ? 'mp3' : /wav/.test(contentType || '') ? 'wav' : /webm/.test(contentType || '') ? 'webm' : /ogg|opus/.test(contentType || '') ? 'ogg' : /mp4|m4a|aac/.test(contentType || '') ? 'm4a' : 'ogg';
-  const form = new FormData();
-  form.append('file', new Blob([Buffer.from(data)], { type: contentType || 'audio/ogg' }), `audio.${ext}`);
-  form.append('model', 'whisper-1');
-  form.append('language', 'es');
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-    body: form,
-    signal: AbortSignal.timeout(45000),
-  });
-  if (!res.ok) throw new Error(`Whisper HTTP ${res.status}`);
-  const json = await res.json();
-  const text = (json.text || '').trim();
-  return text || null;
+  return audioTranscription.transcribeBuffer(data, contentType);
 }
 
 module.exports = router;

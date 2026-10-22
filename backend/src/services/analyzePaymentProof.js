@@ -1,13 +1,11 @@
 /**
- * analyzePaymentProof.js — Analiza una imagen con Claude Vision
+ * analyzePaymentProof.js — Analiza una imagen con el proveedor de IA activo
  *
  * Determina si la imagen es un comprobante de transferencia bancaria y,
  * si lo es, extrae monto, fecha, banco y referencia.
  */
 
-const Anthropic = require('@anthropic-ai/sdk');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const { client, modelFor, responseText } = require('./ai-provider');
 
 function cleanText(value) {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, 250) : null;
@@ -65,7 +63,7 @@ async function analyzePaymentProof(imageBuffer, mimeType = 'image/jpeg') {
   const base64     = Buffer.from(imageBuffer).toString('base64');
 
   const response = await client.messages.create({
-    model:      'claude-haiku-4-5-20251001', // rápido y barato para clasificación
+    model:      modelFor('vision'),
     max_tokens: 250,
     messages: [{
       role: 'user',
@@ -100,7 +98,7 @@ Si NO es comprobante de pago, devuelve is_payment_proof: false y el resto null.`
     }],
   });
 
-  const raw = response.content[0]?.text || '{}';
+  const raw = responseText(response, '{}');
 
   try {
     // Intentar parsear directo

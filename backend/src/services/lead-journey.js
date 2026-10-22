@@ -1,12 +1,15 @@
 'use strict';
 
 const EXPLICIT_REASONS = [
-  { code: 'declined', label: 'No le interesa', confidence: 0.98, pattern: /\b(no gracias|no me interesa|ya no quiero|déjalo|dejalo)\b/i },
-  { code: 'price', label: 'Precio', confidence: 0.94, pattern: /\b(muy caro|est[aá] caro|se me hace caro|no me alcanza|fuera de presupuesto)\b/i },
-  { code: 'delivery', label: 'Despacho o ubicación', confidence: 0.94, pattern: /\b(no despachan|no llegan|no hacen env[ií]os?|muy lejos|no reparten)\b/i },
-  { code: 'payment', label: 'Medio de pago', confidence: 0.92, pattern: /\b(no puedo pagar|no tengo transferencia|no tengo efectivo|problema con (el )?pago)\b/i },
+  { code: 'competitor', label: 'Compró en otro lugar', confidence: 0.99, pattern: /\b(ya )?(compr[eé]|compramos|lo compr[eé]).{0,55}\b(otro medio|otro lado|otra parte|otra tienda|otro proveedor)\b/i },
+  { code: 'no_need', label: 'No lo necesita ahora', confidence: 0.97, pattern: /\b(ya no necesito|no necesito|no requiero|no lo tomar[eé]|por (ahora|el momento) no lo (tomar[eé]|quiero))\b/i },
+  { code: 'declined', label: 'No le interesa', confidence: 0.98, pattern: /\b(no gracias|no me interesa|ya no quiero|d[eé]jalo)\b/i },
+  { code: 'price', label: 'Precio', confidence: 0.94, pattern: /^(por |fue por |principalmente por )?(el )?precio$|\b(muy caro|est[aá] caro|se me hace caro|no me alcanza|fuera de presupuesto)\b/i },
+  { code: 'delivery', label: 'Despacho o ubicación', confidence: 0.94, pattern: /^(por |fue por )?(el )?(despacho|env[ií]o|reparto|entrega)$|\b(no despachan|no llegan|no hacen env[ií]os?|muy lejos|no reparten)\b/i },
+  { code: 'payment', label: 'Medio de pago', confidence: 0.92, pattern: /^(por |fue por )?(el )?pago$|\b(no puedo pagar|no tengo transferencia|no tengo efectivo|problema con (el )?pago)\b/i },
+  { code: 'service', label: 'Atención o servicio', confidence: 0.92, pattern: /^(por |fue por )?(la )?(atenci[oó]n|servicio|demora)$|\b(mala atenci[oó]n|mal servicio|se demoraron|demasiado lento)\b/i },
   { code: 'later', label: 'Lo dejará para después', confidence: 0.9, pattern: /\b(m[aá]s adelante|otro d[ií]a|despu[eé]s veo|solo estoy cotizando|s[oó]lo cotizo|te aviso)\b/i },
-  { code: 'stock', label: 'Producto o stock', confidence: 0.9, pattern: /\b(no tienen|no hay|se acab[oó]|sin stock|quer[ií]a otro)\b/i },
+  { code: 'stock', label: 'Producto o disponibilidad', confidence: 0.9, pattern: /^(por |fue por )?(la )?(disponibilidad|producto|stock)$|\b(no tienen|no hay|se acab[oó]|sin stock|quer[ií]a otro)\b/i },
 ];
 
 const STAGE_LABELS = {
@@ -21,7 +24,8 @@ const STAGE_LABELS = {
 const MANUAL_REASON_LABELS = {
   price: 'Precio', delivery: 'Despacho o ubicación', payment: 'Medio de pago',
   later: 'Lo dejará para después', stock: 'Producto o stock', declined: 'No le interesa',
-  competitor: 'Compró en otro lugar', no_reply: 'No respondió', unknown: 'Motivo desconocido',
+  competitor: 'Compró en otro lugar', no_need: 'No lo necesita ahora', service: 'Atención o servicio',
+  no_reply: 'No respondió', unknown: 'Motivo desconocido',
 };
 
 const INFERRED_REASONS = {
@@ -48,18 +52,30 @@ function classifyStage(row) {
 }
 
 function explicitReason(text) {
-  const normalized = String(text || '').trim();
-  if (!normalized) return null;
-  const match = EXPLICIT_REASONS.find(reason => reason.pattern.test(normalized));
-  return match ? { code: match.code, label: match.label, source: 'observed', confidence: match.confidence } : null;
+  const messages = String(text || '').split(/\n+/).map(value => value.trim()).filter(Boolean).reverse();
+  for (const message of messages) {
+    const match = EXPLICIT_REASONS.find(reason => reason.pattern.test(message));
+    if (match) return { code: match.code, label: match.label, source: 'observed', confidence: match.confidence };
+  }
+  return null;
 }
 
-function classifyReason(row, stage) {
+function feedbackFromRow(row = {}) {
+  try {
+    const draft = typeof row.order_draft === 'string' ? JSON.parse(row.order_draft || '{}') : (row.order_draft || {});
+    return draft.purchase_feedback || null;
+  } catch { return null; }
+}
+
+function classifyReason(row, stage, feedback = null) {
   if (stage === 'converted') {
     return { code: 'converted', label: 'Convirtió en pedido', source: 'observed', confidence: 1 };
   }
   if (MANUAL_REASON_LABELS[row.limbo_reason_code]) {
     return { code: row.limbo_reason_code, label: row.limbo_reason_note || MANUAL_REASON_LABELS[row.limbo_reason_code], source: 'manual', confidence: 1 };
+  }
+  if (feedback?.status === 'completed' && MANUAL_REASON_LABELS[feedback.reason]) {
+    return { code: feedback.reason, label: MANUAL_REASON_LABELS[feedback.reason], source: 'observed', confidence: 1 };
   }
   const observed = explicitReason(row.recent_inbound_text);
   if (observed) return observed;
@@ -70,9 +86,11 @@ function classifyReason(row, stage) {
 
 function classifyJourney(row) {
   const stage = classifyStage(row);
-  const reason = classifyReason(row, stage);
+  const feedback = feedbackFromRow(row);
+  const reason = classifyReason(row, stage, feedback);
   const silentHours = numberOrNull(row.silent_hours);
-  const active = stage !== 'converted' && silentHours !== null && silentHours < 2;
+  const feedbackCompleted = feedback?.status === 'completed';
+  const active = stage !== 'converted' && !feedbackCompleted && silentHours !== null && silentHours < 2;
   const outcome = stage === 'converted' ? 'converted' : active ? 'active' : 'limbo';
   return {
     ...row,
@@ -83,6 +101,7 @@ function classifyJourney(row) {
     reason_label: active ? 'Conversación todavía activa' : reason.label,
     reason_source: active ? 'observed' : reason.source,
     reason_confidence: active ? 1 : reason.confidence,
+    future_purchase_intent: feedback?.future_consideration ?? null,
     first_response_minutes: numberOrNull(row.first_response_minutes),
     customer_reply_minutes: numberOrNull(row.customer_reply_minutes),
     silent_hours: silentHours,
@@ -170,4 +189,4 @@ function shouldCountTrackingRequest(method, userAgent) {
   return !/(facebookexternalhit|meta-externalagent|whatsapp|twitterbot|linkedinbot|slackbot|discordbot|googlebot|bingbot|preview)/i.test(String(userAgent || ''));
 }
 
-module.exports = { classifyJourney, summarizeJourneys, isTrackableDestination, extractTrackingTokens, shouldCountTrackingRequest, STAGE_LABELS, MANUAL_REASON_LABELS };
+module.exports = { classifyJourney, summarizeJourneys, explicitReason, isTrackableDestination, extractTrackingTokens, shouldCountTrackingRequest, STAGE_LABELS, MANUAL_REASON_LABELS };

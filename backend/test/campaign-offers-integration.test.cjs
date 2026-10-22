@@ -31,23 +31,54 @@ async function setup() {
 
 const fields = { product_id: '51', offer_price: 8000, expires_at: EXPIRES, scope: 'all_units', recipients: ['56967692870'] };
 
+test('persistencia convierte el cierre local a un instante explícito, incluso con sesión UTC', async () => {
+  const { engine, pool } = await setup();
+  try {
+    await engine.exec("SET TIME ZONE 'UTC'");
+    const offer = await store.createDraft(pool, 1, 10, { ...fields, expires_at: '2026-10-20T13:00' });
+    assert.equal(new Date(offer.expires_at).toISOString(), '2026-10-20T16:00:00.000Z');
+    assert.equal(rules.isExpiredOffer(offer, new Date('2026-10-20T15:59:59Z')), false);
+    assert.equal(rules.isExpiredOffer(offer, new Date('2026-10-20T16:00:00Z')), true);
+  } finally { await engine.close(); }
+});
+
 test('la migración es idempotente y agrega las columnas nuevas', async () => {
   const { engine } = await setup();
   await engine.exec(fs.readFileSync(path.join(__dirname, '../src/db/campaign-offers.sql'), 'utf8'));
-  const cols = (await engine.query(`SELECT column_name FROM information_schema.columns WHERE table_name='personal_offers'`)).rows.map(r => r.column_name);
+  const cols = (await engine.query(`SELECT column_name FROM information_schema.columns WHERE table_name='campaign_offers'`)).rows.map(r => r.column_name);
   for (const c of ['product_id', 'offer_price', 'scope', 'superseded_at', 'expired_at', 'status']) assert.ok(cols.includes(c), c);
 });
 
-test('la última oferta enviada reemplaza a las pendientes anteriores', async () => {
+test('una oferta nueva reemplaza solo a la anterior del mismo producto', async () => {
   const { pool } = await setup();
   const a = await store.createDraft(pool, 1, 10, fields);
   await store.markSent(pool, 1, a.id, 100, T0);
   const b = await store.createDraft(pool, 1, 10, { ...fields, product_id: '50' });
   await store.markSent(pool, 1, b.id, 101, new Date('2026-10-19T14:00:00.000Z'));
-  const latest = await store.latestForConversation(pool, 1, 10);
-  assert.equal(latest.id, b.id);
-  const { rows } = await pool.query(`SELECT status FROM personal_offers WHERE id = $1`, [a.id]);
+  const active = await store.activeForConversation(pool, 1, 10);
+  assert.deepEqual(active.map(o => o.id).sort(), [a.id, b.id].sort());
+  const { rows: stillA } = await pool.query(`SELECT status FROM campaign_offers WHERE id = $1`, [a.id]);
+  assert.equal(stillA[0].status, 'sent');
+  const c = await store.createDraft(pool, 1, 10, { ...fields, offer_price: 7000 });
+  await store.markSent(pool, 1, c.id, 102, new Date('2026-10-19T15:00:00.000Z'));
+  const { rows } = await pool.query(`SELECT status FROM campaign_offers WHERE id = $1`, [a.id]);
   assert.equal(rows[0].status, 'superseded');
+});
+
+test('dos ofertas de productos distintos se aplican juntas en un solo pedido', async () => {
+  const { pool } = await setup();
+  const a = await store.createDraft(pool, 1, 10, fields);
+  await store.markSent(pool, 1, a.id, 100, T0);
+  const b = await store.createDraft(pool, 1, 10, { ...fields, product_id: '50', offer_price: 6000 });
+  await store.markSent(pool, 1, b.id, 101, T0);
+  const active = (await store.activeForConversation(pool, 1, 10)).filter(o => o.status === 'sent');
+  const promo = rules.toPromotionContextMany(active, T0);
+  assert.equal(promo.specialPrices['51'].unitPrice, 8000);
+  assert.equal(promo.specialPrices['50'].unitPrice, 6000);
+  await store.redeem(pool, 1, a.id, 500, T0);
+  await store.redeem(pool, 1, b.id, 500, T0);
+  const { rows } = await pool.query(`SELECT status, redeemed_order_id FROM campaign_offers WHERE id IN ($1,$2) ORDER BY id`, [a.id, b.id]);
+  assert.deepEqual(rows.map(r => [r.status, r.redeemed_order_id]), [['redeemed', 500], ['redeemed', 500]]);
 });
 
 test('canje y cancelación: vuelve a sent si la vigencia corresponde', async () => {
@@ -78,7 +109,7 @@ test('un despacho con problemas conserva la oferta en el pedido aunque haya venc
   await store.redeem(pool, 1, o.id, 500, T0);
   const expired = await store.expireDue(pool, 1, new Date('2026-10-20T01:00:00.000Z'));
   assert.equal(expired.length, 0, 'una oferta canjeada no se marca expirada');
-  const { rows } = await pool.query(`SELECT status, redeemed_order_id FROM personal_offers WHERE id = $1`, [o.id]);
+  const { rows } = await pool.query(`SELECT status, redeemed_order_id FROM campaign_offers WHERE id = $1`, [o.id]);
   assert.equal(rows[0].status, 'redeemed');
   assert.equal(rows[0].redeemed_order_id, 500);
 });
@@ -101,4 +132,14 @@ test('toPromotionContext entrega el precio por el mismo camino que las promocion
   assert.equal(promo.active, true);
   assert.equal(promo.specialPrices['51'].unitPrice, 8000);
   assert.equal(promo.offers[0].price, 8000);
+});
+
+test('toPromotionContextMany ignora ofertas vencidas y no mezcla precios de otros productos', async () => {
+  const sentOld = { id: 1, product_id: '51', offer_price: 8000, expires_at: '2026-10-18T00:00:00.000Z', status: 'sent', scope: 'all_units' };
+  const sentOk = { id: 2, product_id: '50', offer_price: 6000, expires_at: EXPIRES, status: 'sent', scope: 'all_units' };
+  const live = [sentOld, sentOk].filter(o => !rules.isExpiredOffer(o, T0));
+  const promo = rules.toPromotionContextMany(live, T0);
+  assert.deepEqual(Object.keys(promo.specialPrices), ['50']);
+  assert.equal(promo.specialPrices['50'].unitPrice, 6000);
+  assert.equal(rules.toPromotionContextMany([], T0), null);
 });

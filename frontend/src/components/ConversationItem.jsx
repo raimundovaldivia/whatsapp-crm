@@ -2,7 +2,7 @@ import { timeAgo } from '../utils/dates.js';
 import { Bot, User, MessagesSquare, Pin, StickyNote } from 'lucide-react';
 import { useTheme } from '../theme.js';
 
-export default function ConversationItem({ conversation, selected, onClick }) {
+export default function ConversationItem({ conversation, selected, onClick, now = Date.now() }) {
   const { colors } = useTheme();
   const { contact_name, phone_number, last_message, last_message_at, unread_count, agent_mode } = conversation;
 
@@ -22,6 +22,15 @@ export default function ConversationItem({ conversation, selected, onClick }) {
 
   const avatarColor = stringToColor(phone_number || contact_name || '');
   const qualification = qualificationView(conversation);
+  const isActiveSale = ['interested', 'collecting_order'].includes(conversation.pipeline_state);
+  const isVeryHot = conversation.pipeline_state === 'collecting_order';
+  const holdUntil = conversation.same_day_hold_until ? new Date(conversation.same_day_hold_until).getTime() : null;
+  const chileDay = value => new Date(value).toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+  const currentHold = holdUntil && chileDay(holdUntil) === chileDay(now) ? holdUntil : null;
+  const holdMinutes = currentHold ? Math.max(0, Math.ceil((currentHold - now) / 60000)) : null;
+  const closingLabel = isActiveSale && currentHold
+    ? (currentHold > now ? `⏱ Hoy · ${holdMinutes} min` : '⚠️ Revisar despacho')
+    : isActiveSale ? (isVeryHot ? '🔥 Muy caliente' : '🔥 Caliente') : null;
 
   return (
     <div
@@ -145,6 +154,14 @@ export default function ConversationItem({ conversation, selected, onClick }) {
             }}>
               {qualification.label} · {conversation.lead_score || 0}
             </span>
+          )}
+          {closingLabel && (
+            <span style={{
+              fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '10px',
+              color: currentHold && currentHold <= now ? '#fecaca' : '#fed7aa',
+              backgroundColor: currentHold && currentHold <= now ? '#dc262622' : '#f9731622',
+              border: `1px solid ${currentHold && currentHold <= now ? '#dc262666' : '#f9731666'}`,
+            }}>{closingLabel}</span>
           )}
           {conversation.attribution_first_seen_at && (
             <span title={conversation.attribution_campaign_name || conversation.attribution_headline || 'Llegó desde un anuncio'} style={{

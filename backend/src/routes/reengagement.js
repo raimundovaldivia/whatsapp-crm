@@ -1,7 +1,7 @@
 /**
  * reengagement.js — Pronóstico de compra con IA
  *
- * GET  /api/reengagement/candidates   → Claude analiza comportamiento de cada cliente
+ * GET  /api/reengagement/candidates   → la IA analiza comportamiento de cada cliente
  *                                       y predice cuándo comprará próximamente
  * POST /api/reengagement/generate     → mensaje personalizado para un cliente
  * POST /api/reengagement/send         → envía WhatsApp
@@ -13,7 +13,7 @@ const router    = express.Router();
 const db             = require('../db/database');
 const { getPool }    = require('../db/database');
 const shopifyApi = require('../services/shopify-api');
-const Anthropic = require('@anthropic-ai/sdk');
+const { client: aiClient, modelFor, responseText } = require('../services/ai-provider');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { runBacktesting, applyCalibration } = require('../services/reengagement-calibration');
 const { activateDivaForAutomatedMessage } = require('../services/conversation-mode');
@@ -430,8 +430,6 @@ async function reconcileAcceptedBroadcastMessages(orgId) {
   return recovered;
 }
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
 // Cache en memoria: sesión actual (respaldo al cache de DB)
 const analysisCache = new Map();
 const CACHE_TTL = 2 * 60 * 60 * 1000;
@@ -652,12 +650,12 @@ Incluir TODOS los ${customers.length} clientes. Ordenar por d ascendente.`;
 
   let raw = '';
   try {
-    const response = await anthropic.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 8192,
       messages:   [{ role: 'user', content: prompt }],
     });
-    raw = response.content[0]?.text?.trim() || '[]';
+    raw = responseText(response, '[]');
   } catch (apiErr) {
     console.error('[Reengagement] Error llamando a IA:', apiErr.message);
     return [];
@@ -1087,13 +1085,27 @@ router.get('/candidates', async (req, res) => {
 /* ─────────────────────────────────────────────────────────────────────
    POST /api/reengagement/generate
 ───────────────────────────────────────────────────────────────────── */
+// Valida ofertas con la misma regla del envío (la interfaz la usa en tiempo real).
+router.post('/offers/validate', async (req, res) => {
+  try {
+    const offers = Array.isArray(req.body?.offers) ? req.body.offers.slice(0, 500) : [];
+    const campaignOffers = require('../services/campaign-offers');
+    const catalog = (await db.getProducts(req.orgId, true)).map(p => ({
+      product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct,
+    }));
+    res.json({ results: offers.map(offer => campaignOffers.validateOfferDraft(offer || {}, { catalog })) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/generate', async (req, res) => {
   try {
     if (req.body?.instruction !== undefined || req.body?.phones !== undefined) {
       const drafts = require('../services/broadcast-drafts');
       drafts.validateRequest(req.body);
       await require('../services/commercial').assertModule(req.orgId, 'marketing');
-      const result = await drafts.generateDrafts(req.orgId, req.body, anthropic);
+      const result = await drafts.generateDrafts(req.orgId, req.body, aiClient);
       return res.json({ success: true, ...result });
     }
     const { phone } = req.body;
@@ -1124,12 +1136,12 @@ PROHIBIDO — no incluyas nada de esto:
 - Urgencia fabricada de cualquier tipo
 - Más de 3 líneas`;
 
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001', max_tokens: 200,
+    const response = await aiClient.messages.create({
+      model: modelFor('fast'), max_tokens: 200,
       messages: [{ role: 'user', content: prompt }],
     });
 
-    res.json({ success: true, message: response.content[0]?.text?.trim() || '', phone });
+    res.json({ success: true, message: responseText(response), phone });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'No se pudo redactar el mensaje. No se ha enviado nada.' });
   }
@@ -1208,13 +1220,13 @@ Reglas:
 Responde SOLO con un objeto JSON, sin explicaciones:
 {${varNums.map(v => `"${v}": "..."`).join(', ')}}`;
 
-    const response = await anthropic.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 200,
       messages:   [{ role: 'user', content: prompt }],
     });
 
-    const raw   = response.content[0]?.text?.trim() || '{}';
+    const raw   = responseText(response, '{}');
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) {
       console.error('[Reengagement/fill-vars] No JSON en respuesta:', raw);
@@ -1363,13 +1375,13 @@ Responde SOLO con JSON válido (sin texto extra, sin markdown):
   "vars": { "1": "valor", "2": "valor", ... }
 }`;
 
-    const response = await anthropic.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const response = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 600,
       messages:   [{ role: 'user', content: prompt }],
     });
 
-    const raw   = response.content[0]?.text?.trim() || '{}';
+    const raw   = responseText(response, '{}');
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) {
       console.error('[ai-pick-template] No JSON en respuesta:', raw);
@@ -1571,8 +1583,6 @@ router.post('/generate-templates', async (req, res) => {
     const { storeContext: providedContext } = req.body || {};
     const db    = require('../db/database.js');
     const shopifyApi = require('../services/shopify-api.js');
-    const Anthropic  = require('@anthropic-ai/sdk');
-
     // Usar contexto provisto por el usuario, o intentar Shopify
     let storeContext = '';
     let shopName = 'la tienda';
@@ -1613,7 +1623,6 @@ router.post('/generate-templates', async (req, res) => {
       }
     }
 
-    const client = new Anthropic();
     const prompt = `Eres un experto en marketing de WhatsApp para e-commerce latinoamericano.
 
 Contexto de la tienda:
@@ -1673,13 +1682,13 @@ Responde SOLO con JSON válido (sin markdown ni texto extra):
   ]
 }`;
 
-    const msg = await client.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+    const msg = await aiClient.messages.create({
+      model:      modelFor('fast'),
       max_tokens: 3500,
       messages:   [{ role: 'user', content: prompt }],
     });
 
-    const raw = msg.content[0]?.text || '';
+    const raw = responseText(msg);
     let parsed;
     try {
       parsed = JSON.parse(raw);
@@ -1946,16 +1955,27 @@ router.post('/campaigns', async (req, res) => {
       pacing.instruction = req.body.instruction.trim();
     }
     const totalCount = Number(total);
+    let scheduledFor = null;
+    if (req.body.scheduledFor) {
+      scheduledFor = new Date(req.body.scheduledFor);
+      if (sendingProvider !== 'evolution' || Number.isNaN(scheduledFor.getTime())) {
+        return res.status(400).json({ success: false, error: 'La programación solo aplica a envíos directos con hora válida' });
+      }
+      if (scheduledFor.getTime() < Date.now() - 60000 || scheduledFor.getTime() > Date.now() + 30 * 86400000) {
+        return res.status(400).json({ success: false, error: 'La hora programada debe ser dentro de los próximos 30 días' });
+      }
+    }
     if (!templateName) return res.status(400).json({ success: false, error: 'templateName requerido' });
     if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 5000) {
       return res.status(400).json({ success: false, error: 'Cantidad de destinatarios inválida' });
     }
     const { rows } = await getPool().query(
       `INSERT INTO broadcast_campaigns
-         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id, pacing_settings)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+         (organization_id, created_by, template_name, total_count, test_mode, test_phone, sending_provider, sending_channel_id, pacing_settings, scheduled_for)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.orgId, req.userId, templateName, totalCount, !!testMode,
-        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId, pacing ? JSON.stringify(pacing) : null]
+        testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId, pacing ? JSON.stringify(pacing) : null,
+        scheduledFor]
     );
     res.json({ success: true, campaign: rows[0] });
   } catch (err) {
@@ -1974,13 +1994,41 @@ router.post('/campaigns/:id/start', async (req, res) => {
     const items = req.body.items;
     if (!Array.isArray(items) || items.length !== Number(campaign.total_count) || items.length > 5000) return res.status(400).json({ error: 'Destinatarios inválidos' });
     const phones = new Set();
-    const prepared = items.map(item => {
+    const offerStore = require('../services/campaign-offers-store');
+    const campaignOffers = require('../services/campaign-offers');
+    let offerCatalog = null;
+    const prepared = [];
+    for (const item of items) {
       const phone = db.normalizePhone(item.phone);
       const message = String(item.templateName ? item.previewText || '' : item.message || '').trim();
       if (!/^[0-9]{8,15}$/.test(phone) || !message || message.length > 4096 || phones.has(phone)) throw Object.assign(new Error('Revisa los teléfonos y mensajes del lote; no debe haber destinatarios repetidos'), { status: 400 });
       phones.add(phone);
-      return { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone };
-    });
+      const row = { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone, offers: [], campaignOfferIds: [] };
+      const offerList = campaignOffers.offerListFrom(item);
+      if (offerList.length) {
+        // Validación al iniciar: si una oferta no está completa o se repite un producto, no se aprueba ni se envía el lote.
+        if (new Set(offerList.map(o => String(o.product_id))).size !== offerList.length) {
+          throw Object.assign(new Error(`Ofertas repetidas por producto para ${phone}`), { status: 400 });
+        }
+        if (!offerCatalog) {
+          offerCatalog = (await db.getProducts(req.orgId, true)).map(p => ({
+            product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct,
+          }));
+        }
+        const conversation = await db.upsertConversation(req.orgId, phone, item.contactName || 'Cliente', campaign.sending_channel_id);
+        for (const entry of offerList) {
+          const offer = { ...entry, recipients: [phone] };
+          const check = campaignOffers.validateOfferDraft(offer, { catalog: offerCatalog });
+          if (!check.ok) {
+            throw Object.assign(new Error(`Oferta incompleta para ${phone}: ${[...check.missing.map(field => `falta ${field}`), ...check.errors].join('; ')}`), { status: 400 });
+          }
+          const draft = await offerStore.createDraft(db.getPool(), req.orgId, conversation.id, offer);
+          row.offers.push(entry);
+          row.campaignOfferIds.push(draft.id);
+        }
+      }
+      prepared.push(row);
+    }
     if (campaign.pacing_settings?.generationMode === 'instruction') {
       require('../services/broadcast-drafts').validateApproval(prepared, req.body.approval);
     }
@@ -2624,9 +2672,9 @@ async function sendBulk(req, res) {
 
   const results = [];
   for (const item of items) {
+    let offerDrafts = [];
     // Normalizar teléfono: con código de país, sin "+"
     item.phone = db.normalizePhone(item.phone);
-    let offerDraft = null;
     let acceptedByProvider = false;
     let acceptedMessageId = null;
     try {
@@ -2639,22 +2687,38 @@ async function sendBulk(req, res) {
           continue;
         }
         if (!String(item.templateName ? item.previewText || '' : item.message || '').trim()) throw new Error('El mensaje directo está vacío');
-
+        // A queued offer can expire after approval while earlier recipients are sent.
+        // Check again even when its draft was already persisted at campaign start.
+        const offerRules = require('../services/campaign-offers');
+        if (offerRules.offerListFrom(item).some(offer => offerRules.isExpiredOffer(offer))) {
+          const reason = 'La oferta venció antes del envío; mensaje omitido';
+          await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: reason });
+          results.push({ phone: item.phone, success: false, skipped: true, error: reason });
+          continue;
+        }
         // Oferta personal: no se envía si faltan campos o no cumple las reglas.
         // La respuesta trae la lista de campos faltantes para completarlos en la app.
-        if (item.offer) {
+        if (item.campaignOfferIds?.length) {
+          // Borradores creados al iniciar la campaña; cada uno pasa a 'sent' solo si WhatsApp acepta.
+          offerDrafts = item.campaignOfferIds.map(id => ({ id }));
+        } else if (require('../services/campaign-offers').offerListFrom(item).length) {
+          const offerList = require('../services/campaign-offers').offerListFrom(item);
           const products = await db.getProducts(req.orgId, true);
           const catalog = products.map(p => ({ product_id: String(p.id), title: p.title, available: !p.deprecated_at, unit_cost: p.unit_cost, min_margin_pct: p.min_margin_pct }));
-          const check = require('../services/campaign-offers').validateOfferDraft(item.offer, { catalog });
-          if (!check.ok) {
-            const reasons = [...check.missing.map(f => `falta ${f}`), ...check.errors];
+          const reasons = [];
+          for (const entry of offerList) {
+            const check = require('../services/campaign-offers').validateOfferDraft(entry, { catalog });
+            if (!check.ok) reasons.push(...check.missing.map(f => `falta ${f}`), ...check.errors);
+          }
+          if (reasons.length) {
             await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: `Oferta incompleta: ${reasons.join('; ')}` });
-            results.push({ phone: item.phone, success: false, skipped: true, error: 'Oferta incompleta', missing: check.missing, errors: check.errors });
+            results.push({ phone: item.phone, success: false, skipped: true, error: 'Oferta incompleta', missing: [], errors: reasons });
             continue;
           }
-          // Borrador de oferta antes de enviar; pasa a 'sent' solo si WhatsApp la acepta.
           const offerConversation = await db.upsertConversation(req.orgId, item.phone, item.contactName || 'Cliente', sendingChannelId);
-          offerDraft = await require('../services/campaign-offers-store').createDraft(db.getPool(), req.orgId, offerConversation.id, item.offer);
+          for (const entry of offerList) {
+            offerDrafts.push(await require('../services/campaign-offers-store').createDraft(db.getPool(), req.orgId, offerConversation.id, entry));
+          }
         }
       }
 
@@ -2738,7 +2802,7 @@ async function sendBulk(req, res) {
       });
       if (direct) {
         const saved = await persistAccepted();
-        if (offerDraft) {
+        for (const offerDraft of offerDrafts) {
           try {
             await require('../services/campaign-offers-store').markSent(db.getPool(), req.orgId, offerDraft.id, saved.messageId);
           } catch (offerError) {

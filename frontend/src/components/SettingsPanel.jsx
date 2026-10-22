@@ -515,7 +515,7 @@ function EvolutionChannelsPanel({ colors }) {
           <Field label="Número (opcional)" value={form.phoneNumber} onChange={v => setForm(f => ({ ...f, phoneNumber: v }))} placeholder="56912345678" colors={colors} />
           <Field label="URL de Evolution *" value={form.evolutionApiUrl} onChange={v => setForm(f => ({ ...f, evolutionApiUrl: v }))} placeholder="https://evolution.midominio.com" colors={colors} />
           <Field label="Nombre de instancia *" value={form.evolutionInstance} onChange={v => setForm(f => ({ ...f, evolutionInstance: v }))} placeholder="ventas-principal" colors={colors} />
-          <div style={{ gridColumn: '1 / -1' }}><Field label="API Key *" value={form.evolutionApiKey} onChange={v => setForm(f => ({ ...f, evolutionApiKey: v }))} placeholder="API key de Evolution" password colors={colors} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><Field label="API Key (opcional)" value={form.evolutionApiKey} onChange={v => setForm(f => ({ ...f, evolutionApiKey: v }))} placeholder="Vacío = clave global del servidor" password colors={colors} /></div>
         </div>
         <label style={{ display: 'flex', gap: '8px', alignItems: 'center', color: colors.textSecondary, fontSize: '12px' }}>
           <input type="checkbox" checked={form.isDefault} onChange={e => setForm(f => ({ ...f, isDefault: e.target.checked }))} /> Usar como número predeterminado

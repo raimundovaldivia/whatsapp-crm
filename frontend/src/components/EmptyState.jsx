@@ -118,7 +118,7 @@ export default function EmptyState({ orgName, onChangeView }) {
       </div>
 
       <p style={{ color: colors.textMuted, fontSize: '11px', textAlign: 'center', margin: 0 }}>
-        Powered by Anthropic Claude · Cifrado de extremo a extremo
+        Asistente de IA · Cifrado de extremo a extremo
       </p>
     </div>
   );

@@ -260,10 +260,10 @@ export default function ReferralsPanel() {
                 <span style={ui.chip(colors, colors[state.color])}>{state.label}</span>
                 <span style={{ color: colors.textMuted, fontSize: 11 }}>{referral.source === 'whatsapp' ? 'WhatsApp' : 'Manual'}</span>
                 <div style={{ display: 'flex', gap: 5 }}>
-                  
-                  
+
+
                   {['pending', 'qualified'].includes(referral.status) && <button onClick={() => changeStatus(referral, 'rejected')} title="Rechazar" style={smallIcon(colors, colors.danger)}><XCircle size={16} /></button>}
-                  
+
                 </div>
               </div>
             );

@@ -308,6 +308,66 @@ test('una promoción sin vigencia explícita vence automáticamente en 24 horas'
   assert.equal(promotion.restore(promotion.snapshot(active), new Date('2026-10-02T10:01:00.000Z')).active, false);
 });
 
+test('reconoce el regalo personal de una hora y aplica la escala a bandejas XL y Jumbo', () => {
+  const message = {
+    direction: 'outbound',
+    created_at: '2026-10-15T17:00:00.000Z',
+    content: `Hola 😊 Soy Rai de Diez Ríos.
+
+Hoy tienes un regalo de hasta $7.000 para usar en tu compra 🎁 Además, si haces tu pedido dentro de la próxima hora, podemos despacharlo hoy mismo 🚚
+
+¿Te gustaría aprovecharlo? Si quieres, te ayudo a elegir tus productos.`,
+  };
+  const trayProducts = [
+    { id: 'jumbo20', title: 'Huevos Jumbo blancos · Bandeja de 20', priceMin: 9490 },
+    { id: 'xl30', title: 'Huevos XL blancos · Bandeja de 30', priceMin: 10990 },
+    { id: 'jumbo100', title: 'Huevos Jumbo · Caja de 100', priceMin: 37000 },
+  ];
+
+  const promo = promotion.fromHistory([message], trayProducts, new Date('2026-10-15T17:30:00.000Z'));
+  assert.equal(promo.oneHourTieredGift, true);
+  assert.equal(promo.active, true);
+  assert.equal(promo.expiresAt, '2026-10-15T18:00:00.000Z');
+  assert.equal(promo.offers.length, 0);
+  assert.match(promotion.choiceReply(promo), /1 bandeja → \$1\.000 de descuento/i);
+  assert.match(promotion.choiceReply(promo), /2 bandejas → \$4\.000 de descuento/i);
+  assert.match(promotion.choiceReply(promo), /3 o más bandejas → \$7\.000 de descuento/i);
+  assert.match(promotion.promptSection(promo), /Sirve aunque compre menos de 3/i);
+  assert.equal(promotion.tieredGiftSize('Quiero XL', promo), 'XL');
+  assert.equal(promotion.tieredGiftSize('Jumbo por favor', promo), 'Jumbo');
+  assert.equal(promotion.tieredGiftSize('2 Jumbo', promo), null);
+  assert.match(promotion.tieredGiftSizeReply('XL'), /cuántas bandejas.*cuántos huevos.*color/i);
+
+  for (const [productName, quantity, expectedDiscount] of [
+    ['Huevos XL blancos · Bandeja de 30', 1, 1000],
+    ['Huevos Jumbo blancos · Bandeja de 20', 2, 4000],
+    ['Huevos XL blancos · Bandeja de 30', 3, 7000],
+  ]) {
+    const priced = pricing.priceItems([{ product_name: productName, quantity }], trayProducts);
+    assert.equal(promotion.applicableTieredGiftDiscount(priced, promo, new Date('2026-10-15T17:30:00.000Z')), expectedDiscount);
+    const discounted = pricing.priceItems([{ product_name: productName, quantity }], trayProducts, { fixedDiscountAmount: expectedDiscount });
+    assert.equal(discounted.total, discounted.subtotal - expectedDiscount);
+  }
+  const box = pricing.priceItems([{ product_name: 'Huevos Jumbo · Caja de 100', quantity: 1 }], trayProducts);
+  assert.equal(promotion.applicableTieredGiftDiscount(box, promo, new Date('2026-10-15T17:30:00.000Z')), 0);
+
+  const expired = promotion.fromHistory([message], trayProducts, new Date('2026-10-15T18:00:01.000Z'));
+  assert.equal(expired.active, false);
+  assert.match(promotion.promptSection(expired), /pasaron 60 minutos/i);
+});
+
+test('la escala personal no se aplica cuando una bandeja rompe el margen mínimo', () => {
+  const message = {
+    direction: 'outbound',
+    created_at: '2026-10-15T17:00:00.000Z',
+    content: 'Hoy tienes un regalo de hasta $7.000 para usar en tu compra. Haz tu pedido dentro de la próxima hora.',
+  };
+  const unsafeCatalog = [{ id: 'xl30', title: 'Huevos XL blancos · Bandeja de 30', priceMin: 5000 }];
+  const promo = promotion.fromHistory([message], unsafeCatalog, new Date('2026-10-15T17:30:00.000Z'));
+  const priced = pricing.priceItems([{ product_name: unsafeCatalog[0].title, quantity: 1 }], unsafeCatalog);
+  assert.equal(promotion.applicableTieredGiftDiscount(priced, promo, new Date('2026-10-15T17:30:00.000Z')), 0);
+});
+
 test('la segunda aceituna al 50% cobra un envase completo y medio envase por cada par', () => {
   const oliveTemplate = {
     direction: 'outbound',

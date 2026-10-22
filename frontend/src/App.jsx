@@ -25,6 +25,7 @@ import { useSocket }  from './hooks/useSocket.js';
 import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
 import { deriveAttentionState } from './utils/conversation-attention.js';
+import { inboxConversations } from './utils/inbox-conversations.mjs';
 
 export default function App() {
   const [appState, setAppState] = useState('loading');
@@ -474,9 +475,10 @@ export default function App() {
     </ThemeCtx.Provider>
   );
 
-  const selectedConv = conversations.find(c => c.id === selectedId);
+  const visibleConversations = inboxConversations(conversations);
+  const selectedConv = visibleConversations.find(c => c.id === selectedId);
   const selectedMsgs = messages[selectedId] || [];
-  const totalUnread  = conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+  const totalUnread  = visibleConversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
 
   // En móvil: mostrar sidebar solo si no hay conversación seleccionada
   const showSidebar = !isMobile || (isMobile && !selectedId);
@@ -495,7 +497,7 @@ export default function App() {
 
       {/* Control de alertas al admin en cola (tarjeta flotante; se autooculta si no hay nada).
           Solo para roles con acceso de gestión. */}
-      {['owner', 'admin', 'supervisor'].includes(userRole) && <AdminAlertsBanner />}
+      {/* Tarjeta de avisos al admin oculta a pedido del usuario */}
 
       {/* Barra de navegación (lateral desktop / inferior móvil) */}
       <NavBar
@@ -518,7 +520,7 @@ export default function App() {
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', height: isMobile ? '100%' : '100vh' }}>
           {showSidebar && (
             <Sidebar
-              conversations={conversations}
+              conversations={visibleConversations}
               selectedId={selectedId}
               onSelect={handleSelectConversation}
               loading={loadingConvs}

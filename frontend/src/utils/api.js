@@ -111,6 +111,7 @@ export const catalogoAPI = {
 
 export const dashboardAPI = {
   getWins: () => api.get('/dashboard/wins').then(r => r.data.data),
+  getPersonalOffers: (days = 30) => api.get('/dashboard/personal-offers', { params: { days } }).then(r => r.data.data),
 };
 
 export const paymentProofsAPI = {

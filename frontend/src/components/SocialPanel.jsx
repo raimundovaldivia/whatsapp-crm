@@ -3,12 +3,14 @@ import { BarChart3, Facebook, Instagram, Link2, Loader, MessageCircle, RefreshCw
 import { metaAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { crmOrderLabel } from '../utils/order-reference.js';
+import StoriesTab from './StoriesTab.jsx';
 
 const tabs = [
   ['conexion', 'Conexión', Link2],
   ['mensajes', 'Mensajes', MessageCircle],
   ['comentarios', 'Comentarios', MessageCircle],
   ['contenido', 'Contenido', Upload],
+  ['historias', 'Historias', Instagram],
   ['ads', 'Anuncios', BarChart3],
 ];
 
@@ -63,6 +65,7 @@ export default function SocialPanel() {
             {active === 'mensajes' && <MessagesTab connected={status?.connected} connect={connect} colors={colors} />}
             {active === 'comentarios' && <CommentsTab connected={status?.connected} connect={connect} colors={colors} />}
             {active === 'contenido' && <ContentTab connected={status?.connected} connect={connect} colors={colors} />}
+            {active === 'historias' && <StoriesTab connected={status?.connected} colors={colors} />}
             {active === 'ads' && <AdsTab connected={status?.connected} connect={connect} colors={colors} />}
           </>
         )}

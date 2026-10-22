@@ -26,7 +26,7 @@ const webhookRouter        = require('./routes/webhook');         // WhatsApp (M
 const twilioWebhookRouter  = require('./routes/twilio-webhook'); // WhatsApp (Twilio)
 const kapsoWebhookRouter   = require('./routes/kapso-webhook');  // WhatsApp (Kapso)
 const evolutionWebhookRouter = require('./routes/evolution-webhook'); // WhatsApp (Evolution API)
-const { startFollowUpJob } = require('./services/follow-up');   // Job 24h follow-up
+const { startFollowUpJob, startHotClosingJob } = require('./services/follow-up');   // Jobs de seguimiento comercial
 const { startScheduledFollowUpJob } = require('./services/scheduled-follow-up'); // Job pedidos agendados
 const { startCampaignFollowUpJob } = require('./services/campaign-follow-up');
 const { startJourneyRunner } = require('./services/campaign-journeys');
@@ -164,6 +164,7 @@ app.use('/api/reengagement',  reengagementRouter);   // Mensajería masiva y re-
 app.use('/api/push',          pushRouter);           // Registro de tokens push (app Central)
 app.use('/api/bot-eval',      botEvalRouter);        // Evaluación del bot y ciclo de mejora
 app.use('/api/meta',          metaRouter);            // Conexión, mensajería, Ads y publicaciones Meta
+app.use('/api/social-stories', require('./routes/social-stories')); // Historias Instagram programadas (revisión, edición, aprobación)
 app.use('/api/marketing-attribution', marketingAttributionRouter); // Ads → WhatsApp → pedidos
 app.use('/store',             storeRouter);           // Tienda pública (sin auth)
 
@@ -199,7 +200,9 @@ setupDatabase().then(() => {
     require('./services/attribution-backfill').backfillWhatsappAttributions()
       .catch(error => console.warn('[Attribution] No se pudo recuperar el histórico:', error.message))
       .finally(() => require('./services/meta-purchase-sync').startMetaPurchaseSyncJob());
+    require('./services/social-stories').startSocialStoriesJob();
     startFollowUpJob(io);
+    startHotClosingJob(io);
     startScheduledFollowUpJob(io);
     startCampaignFollowUpJob(io);
     startJourneyRunner(io);
@@ -229,6 +232,7 @@ async function shutdown() {
   try {
     require('./services/referral-automation').stop();
     require('./services/meta-purchase-sync').stopMetaPurchaseSyncJob();
+    require('./services/social-stories').stopSocialStoriesJob();
     await require('./services/webhook-inbox').stopWebhookWorker();
     await require('./db/database').getPool().end();
     process.exit(0);

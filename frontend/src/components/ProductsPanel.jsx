@@ -9,7 +9,7 @@ import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Download, X, Package, Ext
 import { useTheme } from '../theme.js';
 import { api } from '../utils/api.js';
 
-const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true, category: '', isBusiness: false, bulkPrice: '', bulkMinQty: '' };
+const EMPTY_FORM = { title: '', description: '', price: '', comparePrice: '', sku: '', stock: '-1', imageUrl: '', active: true, category: '', isBusiness: false, bulkPrice: '', bulkMinQty: '', unitCost: '', minMarginPct: '' };
 
 /* ── Configuración de tienda ──────────────────────────────────────── */
 function StoreConfigTab({ orgSlug, colors }) {
@@ -447,6 +447,8 @@ export default function ProductsPanel({ orgSlug }) {
       category: p.category || '', isBusiness: p.is_business || false,
       bulkPrice: p.bulk_price ? String(p.bulk_price) : '',
       bulkMinQty: p.bulk_min_qty ? String(p.bulk_min_qty) : '',
+      unitCost: p.unit_cost != null ? String(p.unit_cost) : '',
+      minMarginPct: p.min_margin_pct != null ? String(p.min_margin_pct) : '',
     });
     setShowForm(true);
   };
@@ -464,6 +466,8 @@ export default function ProductsPanel({ orgSlug }) {
         category: form.category.trim() || null, isBusiness: form.isBusiness,
         bulkPrice: parseFloat(form.bulkPrice) || null,
         bulkMinQty: parseInt(form.bulkMinQty) || null,
+        unitCost: form.unitCost === '' ? null : Number(form.unitCost),
+        minMarginPct: form.minMarginPct === '' ? null : Number(form.minMarginPct),
       };
       if (editing) {
         await api.put(`/products/${editing.id}`, payload);
@@ -836,6 +840,15 @@ export default function ProductsPanel({ orgSlug }) {
                       backgroundColor: colors.bgPanel, color: colors.textPrimary, fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
               </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+                <label style={{ fontSize: 12 }}>Costo unitario ($)
+                  <input type="number" min="0" step="1" value={form.unitCost} onChange={e => setForm(f => ({ ...f, unitCost: e.target.value }))} placeholder="Ej: 4000" style={{ width: '100%' }} />
+                </label>
+                <label style={{ fontSize: 12 }}>Margen mínimo (%)
+                  <input type="number" min="0" max="99" step="0.5" value={form.minMarginPct} onChange={e => setForm(f => ({ ...f, minMarginPct: e.target.value }))} placeholder="Ej: 35" style={{ width: '100%' }} />
+                </label>
+              </div>
+              <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>Sin costo y margen, cada oferta de campaña de este producto exige confirmar el margen antes de enviarse.</div>
               {form.bulkPrice && form.bulkMinQty && (
                 <div style={{ marginTop: '8px', fontSize: '11px', color: colors.green }}>
                   ✓ El bot dirá: "Comprando {form.bulkMinQty}+ unidades → ${Number(form.bulkPrice).toLocaleString('es-CL')}/u"

@@ -2557,8 +2557,10 @@ const MANUAL_FINISH_REASON = 'La ruta fue terminada por el administrador sin reg
 const RESOLVED_STOP_STATUSES = ['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered'];
 
 router.post('/routes/:id/finish', requireRole('owner', 'admin', 'supervisor', 'coordinador'), async (req, res) => {
-  const routeId = parseInt(req.params.id, 10);
-  if (!Number.isInteger(routeId)) return res.status(400).json({ success: false, error: 'Ruta inválida' });
+  const routeId = Number(req.params.id);
+  if (!/^\d+$/.test(req.params.id) || !Number.isSafeInteger(routeId) || routeId < 1) {
+    return res.status(400).json({ success: false, error: 'Ruta inválida' });
+  }
   const pool = getPool();
   let client;
   try {
@@ -2621,7 +2623,7 @@ router.post('/routes/:id/finish', requireRole('owner', 'admin', 'supervisor', 'c
     res.json({ success: true, route: updated, pendingStops });
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
-    res.status(err.status || 500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'No se pudo terminar la ruta' });
   } finally {
     client?.release();
   }

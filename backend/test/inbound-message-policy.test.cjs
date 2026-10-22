@@ -112,3 +112,17 @@ test('distingue cierres reales de mensajes que todavía requieren atención', ()
   assert.equal(isTerminalConversationReply('Gracias', [{ direction: 'outbound', content: '¿Confirmas la dirección?' }]), false);
   assert.equal(isTerminalConversationReply('No gracias', [{ direction: 'outbound', content: '¿Quieres comprar?' }]), true);
 });
+
+test('silencia agradecimientos finales extensos y transcripciones de audio cerradas', () => {
+  const { isNoResponseNeeded } = require('../src/services/inbound-message-policy');
+  for (const text of [
+    'Gracias, excelente servicio!',
+    'Gracias! Aún no. Le aviso.',
+    '🎤 Muchas gracias, les aviso con tiempo, ya. Chao.',
+  ]) {
+    assert.equal(isNoResponseNeeded(text), true, text);
+  }
+  for (const text of ['Gracias, ¿se paga al entregar?', 'Gracias, quiero 2 Jumbo', 'Excelente, ¿a qué hora llega?']) {
+    assert.equal(isNoResponseNeeded(text), false, text);
+  }
+});

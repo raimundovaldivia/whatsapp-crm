@@ -228,8 +228,8 @@ function unitPriceFor(candidate, qty, specialPrices = {}) {
  *
  * @param {Array<{product_name, quantity}>} items
  * @param {Array} products   — productos del pipeline (sin aplanar)
- * @param {object} opts      — { specialPrices: {product_id|título → precio}, discountPct }
- * @returns {{ items, subtotal, discountPct, discountAmount, total, unmatched: string[] }}
+ * @param {object} opts      — { specialPrices: {product_id|título → precio}, discountPct, fixedDiscountAmount }
+ * @returns {{ items, subtotal, discountPct, fixedDiscountAmount, discountAmount, total, unmatched: string[] }}
  */
 function priceItems(items = [], products = [], opts = {}) {
   const catalog = flattenCatalog(products);
@@ -332,10 +332,15 @@ function priceItems(items = [], products = [], opts = {}) {
   const maxDiscountPct = Math.min(100, Math.max(0, Number(opts.maxDiscountPct ?? MAX_DISCOUNT_PCT) || 0));
   const discountPct = Math.min(maxDiscountPct, Math.max(0, Number(opts.discountPct) || 0));
   const itemDiscountAmount = categoryDiscountAmount + secondUnitDiscountAmount;
-  const discountAmount = itemDiscountAmount + Math.round((subtotal - itemDiscountAmount) * discountPct / 100);
+  const percentageDiscountAmount = Math.round((subtotal - itemDiscountAmount) * discountPct / 100);
+  const fixedDiscountAmount = Math.min(
+    Math.max(0, subtotal - itemDiscountAmount - percentageDiscountAmount),
+    Math.max(0, Math.round(Number(opts.fixedDiscountAmount) || 0))
+  );
+  const discountAmount = itemDiscountAmount + percentageDiscountAmount + fixedDiscountAmount;
   const total = subtotal - discountAmount;
 
-  return { items: merged, subtotal, discountPct, categoryDiscounts, secondUnitDiscounts, discountAmount, total, unmatched };
+  return { items: merged, subtotal, discountPct, fixedDiscountAmount, categoryDiscounts, secondUnitDiscounts, discountAmount, total, unmatched };
 }
 
 // ─── Presentación ────────────────────────────────────────────────────────────
@@ -357,9 +362,11 @@ function pricingContext(pricing) {
     return `- ${it.quantity}x ${it.name} @ ${fmt(it.price)} c/u = ${fmt(it.price * it.quantity)}`;
   });
   const out = [`Subtotal: ${fmt(pricing.subtotal)}`];
-  if (pricing.discountAmount) out.push(pricing.discountPct
-    ? `Descuento acordado: ${pricing.discountPct}% (−${fmt(pricing.discountAmount)})`
-    : `Descuento promocional por producto: −${fmt(pricing.discountAmount)}`);
+  if (pricing.discountAmount) out.push(pricing.fixedDiscountAmount
+    ? `Regalo personal aplicado: −${fmt(pricing.fixedDiscountAmount)}`
+    : (pricing.discountPct
+      ? `Descuento acordado: ${pricing.discountPct}% (−${fmt(pricing.discountAmount)})`
+      : `Descuento promocional por producto: −${fmt(pricing.discountAmount)}`));
   out.push(`TOTAL: ${fmt(pricing.total)}`);
   return `${lines.join('\n')}\n${out.join('\n')}`;
 }
@@ -367,9 +374,11 @@ function pricingContext(pricing) {
 /** Bloque que se manda al cliente al confirmar. */
 function summaryBlock(pricing) {
   const lines = [itemLines(pricing.items)];
-  if (pricing.discountAmount) lines.push(pricing.discountPct
-    ? `🏷️ Descuento ${pricing.discountPct}%: −${fmt(pricing.discountAmount)}`
-    : `🏷️ Descuento promocional: −${fmt(pricing.discountAmount)}`);
+  if (pricing.discountAmount) lines.push(pricing.fixedDiscountAmount
+    ? `🎁 Regalo personal: −${fmt(pricing.fixedDiscountAmount)}`
+    : (pricing.discountPct
+      ? `🏷️ Descuento ${pricing.discountPct}%: −${fmt(pricing.discountAmount)}`
+      : `🏷️ Descuento promocional: −${fmt(pricing.discountAmount)}`));
   lines.push(`💰 Total: ${fmt(pricing.total)}`);
   return lines.join('\n');
 }

@@ -44,13 +44,15 @@ const CUSTOMER_PAUSED_PATTERNS = [
   /\b(familiar|amigo|conocido).{0,35}\bproveedor\b/,
   /\btengo.{0,35}\bproveedor\b/,
   /\b(no necesito|no requiero|estoy abastecid[oa]|tengo suficiente)\b/,
+  /\bno lo (tomare|quiero)\b/,
+  /\b(ya )?(compre|compramos|lo compre).{0,35}\b(otro medio|otro lado|otra parte|otra tienda|otro proveedor)\b/,
   /\bno\s+(aun|todavia)\b/,
   /\bme\s+(regalaron|dieron|trajeron)\b/,
 ];
 
 const RENEWED_PURCHASE_PATTERNS = [
   /\bahora si\b/,
-  /\b(quiero|necesito|deme|dame|mandame|env(i|í)ame|anotame|agregame)\b/,
+  /\b(si quiero|quiero comprar|quiero pedir|deme|dame|mandame|env(i|í)ame|anotame|agregame)\b/,
   /\b(encargo|pedido)\b.{0,30}\b(hoy|ahora)\b/,
 ];
 

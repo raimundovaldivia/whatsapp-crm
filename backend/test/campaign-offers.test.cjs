@@ -52,6 +52,18 @@ test('rechaza vigencia pasada', () => {
   assert.match(r.errors[0], /ya pasó/);
 });
 
+test('fecha sin hora cubre el día de Chile; hora explícita vence exactamente al cierre', () => {
+  assert.equal(offers.offerExpiryDate('2026-10-20').toISOString(), '2026-10-21T02:59:59.999Z');
+  assert.equal(offers.offerExpiryDate('2026-07-20').toISOString(), '2026-07-21T03:59:59.999Z');
+  assert.equal(offers.offerExpiryDate('2026-10-20T13:00').toISOString(), '2026-10-20T16:00:00.000Z');
+  assert.equal(offers.offerExpiryDate('2026-07-20T13:00').toISOString(), '2026-07-20T17:00:00.000Z');
+  for (const value of ['2026-02-30', '2026-10-20T25:00', '2026-09-06T00:30', 'invalid', null]) assert.equal(offers.offerExpiryDate(value), null);
+  const fields = { ...complete, margin_confirmed: true, expires_at: '2026-10-20T13:00' };
+  assert.equal(offers.validateOfferDraft(fields, { catalog, now: new Date('2026-10-20T15:59:59Z') }).ok, true);
+  assert.equal(offers.validateOfferDraft(fields, { catalog, now: new Date('2026-10-20T16:00:00Z') }).ok, false);
+  assert.equal(offers.validateOfferDraft({ ...fields, expires_at: '2026-10-20' }, { catalog, now: new Date('2026-10-21T02:59:59Z') }).ok, true);
+});
+
 test('la última oferta enviada es la válida y las anteriores pendientes quedan superseded', () => {
   const first = { offer_id: 1, status: 'sent', sent_at: '2026-10-19T12:00:00.000Z', expires_at: '2026-10-19T23:59:00.000Z', product_id: '51' };
   const second = { offer_id: 2, status: 'sent', sent_at: '2026-10-19T12:30:00.000Z', expires_at: '2026-10-19T23:59:00.000Z', product_id: '50' };

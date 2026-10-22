@@ -9,9 +9,9 @@ import {
 
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
-import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel } from '../utils/broadcast-audience.mjs';
+import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
+import { reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries } from '../utils/broadcast-drafts.mjs';
 import { crmOrderLabel } from '../utils/order-reference.js';
-import { reviewFingerprint, editReviewedEntry, canApproveDrafts } from '../utils/broadcast-drafts.mjs';
 
 function consolidateVisibleCandidates(rows = []) {
   const grouped = new Map();
@@ -1290,6 +1290,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [customPurchaseDays, setCustomPurchaseDays] = useState('45');
   const [audienceType, setAudienceType] = useState('all');
   const [audienceSegment, setAudienceSegment] = useState('all');
+  const [phoneListText, setPhoneListText] = useState('');
+  const [limitCount, setLimitCount] = useState('');
   const [selected,       setSelected]       = useState(new Set());
   const [templates,      setTemplates]      = useState(parentTemplates);
   const [tplLoading,     setTplLoading]     = useState(parentTemplates.length === 0);
@@ -1310,6 +1312,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [methodsError, setMethodsError] = useState('');
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
   const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
+  const [scheduledFor, setScheduledFor] = useState('');
   const [directText, setDirectText] = useState('');
   const [directMode, setDirectMode] = useState('instruction');
   const [directInstruction, setDirectInstruction] = useState('');
@@ -1350,6 +1353,109 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [reviewIdx,      setReviewIdx]      = useState(0);
   const [guidedReview,   setGuidedReview]   = useState(false);
   const [reviewedItems,  setReviewedItems]  = useState(new Set());
+
+  const [offerProducts, setOfferProducts] = useState([]);
+  const [offerProductsError, setOfferProductsError] = useState('');
+  const [offerProductsLoading, setOfferProductsLoading] = useState(false);
+  const reviewEntry = reviewPlan?.entries?.[reviewIdx];
+  const reviewSnapshot = reviewEntry ? offersSnapshot(reviewEntry) : null;
+  const reviewNeedsCheck = reviewEntry ? offersList(reviewEntry).some((offer, k) => !offerCheckAt(reviewEntry, k)) : false;
+  async function loadOfferProducts() {
+    setOfferProductsLoading(true);
+    setOfferProductsError('');
+    try {
+      const { data } = await api.get('/products');
+      setOfferProducts(offerCatalog(data));
+    } catch (error) {
+      setOfferProductsError(error.response?.data?.error || 'No se pudo cargar el catálogo. Reintenta antes de autorizar.');
+    } finally { setOfferProductsLoading(false); }
+  }
+  useEffect(() => {
+    if (reviewPlan?.sendingProvider === 'evolution') loadOfferProducts();
+  }, [reviewPlan?.sendingProvider]);
+  // Valida en tiempo real las ofertas del mensaje que se está revisando (mismas reglas que el envío).
+  useEffect(() => {
+    if (!reviewNeedsCheck) return undefined;
+    const idx = reviewIdx;
+    const snapshot = reviewSnapshot;
+    const offers = offersList(reviewEntry);
+    const timer = setTimeout(async () => {
+      let results;
+      try {
+        const { data } = await api.post('/reengagement/offers/validate', { offers });
+        results = data.results || [];
+      } catch {
+        results = offers.map(() => ({ ok: false, missing: [], errors: ['No se pudo validar la oferta. Reintenta.'], warnings: [] }));
+      }
+      setReviewPlan(plan => plan ? setEntryOfferChecks(plan, idx, results, snapshot) : plan);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [reviewSnapshot, reviewIdx, reviewNeedsCheck]);
+
+  function offerCheckAt(entry, k) {
+    const check = entry.offerChecks?.[k];
+    return check && check.key === offerKey(offersList(entry)[k]) ? check : null;
+  }
+
+  function updateEntryOffer(idx, k, patch) {
+    setReviewPlan(plan => {
+      const offers = offersList(plan.entries[idx]).map((offer, n) => n === k ? { ...offer, ...patch } : offer);
+      return setEntryOffers(plan, idx, offers);
+    });
+  }
+
+  function addEntryOffer(idx) {
+    setReviewPlan(plan => {
+      const entry = plan.entries[idx];
+      const offers = offersList(entry);
+      if (offers.length >= MAX_OFFERS_PER_RECIPIENT) return plan;
+      return setEntryOffers(plan, idx, [...offers, { product_id: '', offer_price: null, expires_at: null, scope: 'all_units', recipients: [entry.item.phone], margin_confirmed: false }]);
+    });
+  }
+
+  function removeEntryOffer(idx, k) {
+    setReviewPlan(plan => setEntryOffers(plan, idx, offersList(plan.entries[idx]).filter((_, n) => n !== k)));
+  }
+
+  // Valida todas las ofertas del plan en bloques de 500 (límite del servidor) y guarda cada resultado.
+  async function validatePlanOffers(plan) {
+    const jobs = plan.entries.map((entry, idx) => ({ idx, snapshot: offersSnapshot(entry), offers: offersList(entry) })).filter(job => job.offers.length);
+    const flat = jobs.flatMap(job => job.offers.map((offer, k) => ({ idx: job.idx, k, offer })));
+    const byEntry = {};
+    for (let start = 0; start < flat.length; start += 500) {
+      const chunk = flat.slice(start, start + 500);
+      const { data } = await api.post('/reengagement/offers/validate', { offers: chunk.map(c => c.offer) });
+      chunk.forEach((c, n) => {
+        if (!byEntry[c.idx]) byEntry[c.idx] = [];
+        byEntry[c.idx][c.k] = data.results?.[n] || { ok: false, missing: [], errors: ['Sin respuesta de validación'], warnings: [] };
+      });
+    }
+    setReviewPlan(current => current ? jobs.reduce((p, job) => setEntryOfferChecks(p, job.idx, byEntry[job.idx] || [], job.snapshot), current) : current);
+  }
+
+  async function applyOfferEverywhere(idx, k) {
+    const fields = offersList(reviewPlan.entries[idx])[k];
+    if (!fields) return;
+    const next = applyOfferToAll(reviewPlan, fields);
+    setReviewPlan(next);
+    try {
+      await validatePlanOffers(next);
+      showToast('Oferta aplicada a todos los destinatarios', 'success');
+    } catch {
+      showToast('No se pudo validar la oferta para todos', 'error');
+    }
+  }
+
+  function offerStatusText(entry, k) {
+    const check = offerCheckAt(entry, k);
+    if (!check) return 'Validando…';
+    if (check.ok) return '✓ Oferta válida';
+    const missing = (check.missing || []).filter(f => f !== 'margin_confirmed' || !(check.warnings || []).length).map(f => OFFER_FIELD_LABELS[f] || f);
+    const parts = [];
+    if (missing.length) parts.push(`Faltan: ${missing.join(', ')}`);
+    if ((check.errors || []).length) parts.push(check.errors.join('; '));
+    return parts.join(' · ') || 'Oferta incompleta';
+  }
   const [results,        setResults]        = useState(null);
   const [toast,          setToast]          = useState(null);
   const [testMode,       setTestMode]       = useState(false);
@@ -1929,7 +2035,17 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   }
 
   const purchaseDays = purchaseAge === 'custom' ? customPurchaseDays : purchaseAge;
-  const filtered = contacts.filter(c => {
+  // Lista de números pegada a mano: solo esos números, y los que no están en contactos entran como leads.
+  const listPhones = phoneListText.trim()
+    ? new Set(phoneListText.split(/[\s,;]+/).map(normPhone).filter(p => /^569\d{8}$/.test(p)))
+    : null;
+  const knownPhones = new Set(contacts.map(c => normPhone(c.phone)));
+  const listExtras = listPhones
+    ? [...listPhones].filter(p => !knownPhones.has(p)).map(p => ({ phone: p, name: '', contact_type: 'lead', client_type: 'personal', total_orders: 0, opt_out: false, last_order_at: null, has_pending_scheduled: false, source: 'lista' }))
+    : [];
+  const pool = listPhones ? [...contacts, ...listExtras] : contacts;
+  const filtered = pool.filter(c => {
+    if (listPhones && !listPhones.has(normPhone(c.phone))) return false;
     if (search) {
       const q = search.toLowerCase();
       if (!(c.name || '').toLowerCase().includes(q) && !(c.phone || '').includes(q)) return false;
@@ -1947,7 +2063,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     return true;
   });
 
-  const audience = selectedAudience(filtered, selected);
+  const audienceAll = selectedAudience(filtered, selected);
+  // Límite opcional: se envía solo a las N personas con compra más reciente de la selección.
+  const audience = limitCount ? limitToMostRecent(audienceAll, limitCount) : audienceAll;
   const selectedCount = audience.length;
 
   function toggleAll() {
@@ -2055,9 +2173,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       const entries = drafts.filter(draft => draft.decision === 'draft').map(draft => {
         const contact = chosen.find(person => normPhone(person.phone) === normPhone(draft.phone));
         if (!contact) throw new Error('El borrador no corresponde a la selección.');
+        const offerList = (draft.offers || []).map(o => o.fields);
         return { contact, reason: draft.reason, evidence: draft.evidence, previewText: draft.message,
+          offerChecks: (draft.offers || []).map((o, k) => ({ ok: o.ok, missing: o.missing, errors: o.errors, warnings: o.warnings, key: offerKey(offerList[k]) })),
           item: { phone: testMode ? TEST_PHONE : contact.phone, originalPhone: contact.phone,
-            contactName: contact.name, message: draft.message, previewText: draft.message } };
+            contactName: contact.name, message: draft.message, previewText: draft.message, offers: offerList } };
       });
       setDraftReport({ excluded, total: chosen.length, prepared: entries.length });
       if (!entries.length) { showToast('Ningún cliente cumple las condiciones. Revisa los motivos y ajusta la instrucción.', 'error'); return; }
@@ -2072,6 +2192,37 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     } catch (error) {
       if (run === draftRunRef.current) showToast(error.response?.data?.error || error.message || 'No se pudieron preparar los borradores. No se envió nada.', 'error');
     } finally { if (run === draftRunRef.current) setDrafting(false); }
+  }
+
+  async function restorePromotionDrafts(event) {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file || sending || drafting || reviewPlan) return;
+    if (!isDirect || testMode || !selectedMethod?.available) { showToast('Selecciona Evolution conectado, sin modo prueba.', 'error'); input.value = ''; return; }
+    if (file.size > 1000000) { showToast('El archivo de borradores supera 1 MB.', 'error'); input.value = ''; return; }
+    const run = ++draftRunRef.current;
+    const chosen = [...audience];
+    setDrafting(true);
+    try {
+      const data = JSON.parse(await file.text());
+      if (run !== draftRunRef.current) return;
+      const entries = restoreDraftEntries(data, chosen);
+      setReviewIdx(0);
+      setGuidedReview(true);
+      setReviewedItems(new Set());
+      setDraftReport({ excluded: [], total: entries.length, prepared: entries.length });
+      setReviewPlan({ templateName: 'Redacción individual · Evolution', entries,
+        generationMode: 'instruction', instruction: directInstruction.trim() || 'Revisar los textos guardados y completar sus ofertas antes de autorizar.', excluded: [],
+        sendingProvider: selectedMethod.provider, sendingChannelId: selectedMethod.channelId,
+        sendingLabel: selectedMethod.label, audienceLabel: purchaseAgeLabel(purchaseDays),
+        ...directPacing, testMode: false, testPhone: '', createdAt: Date.now() });
+      showToast('Borradores recuperados. Completa las ofertas y revisa cada mensaje; no se ha enviado nada.');
+    } catch (error) {
+      if (run === draftRunRef.current) showToast(error.message || 'No se pudieron recuperar los borradores.', 'error');
+    } finally {
+      input.value = '';
+      if (run === draftRunRef.current) setDrafting(false);
+    }
   }
 
   function prepareReview() {
@@ -2151,6 +2302,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     });
   }
 
+  // En la revisión detallada, todo mensaje que se muestra (con flechas o con
+  // "Revisado · siguiente") cuenta como revisado. Antes, recorrer con flechas no
+  // contaba y el botón de envío quedaba desactivado sin explicación clara.
+  useEffect(() => {
+    if (!guidedReview || !reviewPlan?.entries?.length) return;
+    setReviewedItems(current => current.has(reviewIdx) ? current : new Set(current).add(reviewIdx));
+  }, [guidedReview, reviewIdx, reviewPlan]);
+
   function startGuidedReview() {
     setGuidedReview(true);
     setReviewIdx(0);
@@ -2192,6 +2351,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
+        ...(direct && scheduledFor ? { scheduledFor: new Date(scheduledFor).toISOString() } : {}),
         ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction } : {}),
       });
       campaignId = created.data.campaign.id;
@@ -2200,7 +2360,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         await api.post(`/reengagement/campaigns/${campaignId}/start`, { items, ...(approval ? { approval } : {}) }, { timeout: 45000 });
         setReviewPlan(null);
         setHistoryOpen(true);
-        showToast('Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
+        showToast(scheduledFor
+          ? `Campaña programada para ${new Date(scheduledFor).toLocaleString('es-CL')}. Puedes cerrar el navegador.`
+          : 'Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
         return;
       }
       let sent = 0, failed = 0, skipped = 0, pending = 0, chatsPending = 0;
@@ -2572,11 +2734,41 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 style={{ width: 150, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
             </label>)}
           </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+            Inicio programado (opcional, hora de Chile)
+            <input type="datetime-local" value={scheduledFor} disabled={sending || !!reviewPlan}
+              onChange={event => setScheduledFor(event.target.value)}
+              style={{ width: 230, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
+          </label>
+          El envío directo solo sale entre 08:00 y 21:00 (hora de Chile). Si programas una hora fuera de ese rango, espera a la siguiente ventana.
           La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.
           Se envía sólo el texto revisado, sin botones ni archivos. Puedes cerrar el navegador después de confirmar; el servidor continúa el envío.
         </div>}
       </section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
+
+        {/* Límite de cantidad: las N personas con compra más reciente */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, fontSize: 13 }}>
+          Elegir solo
+          <input type="number" min="1" step="1" value={limitCount} placeholder="todos"
+            onChange={e => setLimitCount(e.target.value)}
+            style={{ width: 90, padding: '7px 10px', borderRadius: colors.radiusMd, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px' }} />
+          personas (las de compra más reciente)
+        </label>
+
+        {/* Lista de números pegada (uno por línea o separados por coma) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 100%' }}>
+          <textarea
+            value={phoneListText}
+            onChange={e => setPhoneListText(e.target.value)}
+            placeholder="Pega números para enviar solo a esos (uno por línea o separados por coma). Ej: 56912345678"
+            rows={2}
+            style={{ width: '100%', padding: '7px 12px', borderRadius: colors.radiusMd, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }}
+          />
+          {listPhones && <div style={{ fontSize: 12, color: colors.textSecondary }}>
+            {listPhones.size} números válidos pegados · {listExtras.length} no están en contactos (entran como leads)
+          </div>}
+        </div>
 
         {/* Search */}
         <input
@@ -2623,7 +2815,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
           Segmento
           <select aria-label="Segmento del público" value={audienceSegment} disabled={sending || !!reviewPlan}
-            onChange={event => { setAudienceSegment(event.target.value); setPreviewIdx(0); }}
+            onChange={event => {
+              setAudienceSegment(event.target.value);
+              // "Sin compras" no tiene fecha de último pedido: el filtro de fecha quedaría vacío.
+              if (event.target.value === 'lead') setPurchaseAge('all');
+              setPreviewIdx(0);
+            }}
             style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
             <option value="all">Todos</option>
             <option value="lead">Sin compras</option>
@@ -2636,7 +2833,12 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
           Último pedido
           <select aria-label="Tiempo sin pedir" value={purchaseAge} disabled={sending || !!reviewPlan}
-            onChange={e => { setPurchaseAge(e.target.value); setPreviewIdx(0); }}
+            onChange={e => {
+              setPurchaseAge(e.target.value);
+              // Sin compras y fecha de último pedido son excluyentes: elegir una fecha quita "Sin compras".
+              if (e.target.value !== 'all' && audienceSegment === 'lead') setAudienceSegment('all');
+              setPreviewIdx(0);
+            }}
             style={{ padding: '7px 10px', borderRadius: 7, backgroundColor: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}` }}>
             <option value="all">Cualquier fecha</option>
             <option value="range_7_29">Entre 7 y 29 días</option>
@@ -2978,6 +3180,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
             placeholder="Ofrece reposición para mañana a particulares según cuándo y cuánto compran. Incluye aceitunas y trata de otra forma a quienes compraron una sola vez. Indica aquí los precios, cantidades disponibles y exclusiones."
             style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 12, borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5 }} />
           <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>Preparar borradores no envía mensajes. Se evalúa solamente el público seleccionado. Los precios y compromisos deben revisarse antes de autorizar.</div>
+          <details style={{ marginTop: 12, color: colors.textSecondary, fontSize: 12 }}>
+            <summary>Recuperar borradores de promoción guardados</summary>
+            <p>Carga los textos guardados de los contactos seleccionados. Conserva su orden, pero exige completar las ofertas y revisar todo de nuevo. No recupera autorizaciones ni envía mensajes.</p>
+            <input type="file" accept=".json,application/json" aria-label="Archivo de borradores de promoción" disabled={sending || drafting || !!reviewPlan || testMode} onChange={restorePromotionDrafts} />
+          </details>
           {drafting && <button onClick={() => { draftRunRef.current++; setDrafting(false); }} style={{ marginTop: 8 }}>Cancelar preparación</button>}
           {draftReport && <div style={{ marginTop: 10, color: colors.textSecondary, fontSize: 12 }}>
             {draftReport.prepared} borradores · {draftReport.excluded.length} excluidos · ningún envío automático.
@@ -3329,7 +3536,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   <textarea aria-label={`Mensaje para ${entry.contact?.name || entry.contact?.phone}`} value={entry.previewText} rows={6} maxLength={1200} disabled={sending}
                     onChange={event => {
                       setReviewPlan(plan => editReviewedEntry(plan, idx, event.target.value));
-                      setReviewedItems(current => { const next = new Set(current); next.delete(idx); return next; });
+                      // Editar un mensaje es revisarlo: no se desmarca en silencio.
+                      if (guidedReview) setReviewedItems(current => { const next = new Set(current); next.add(idx); return next; });
                     }} style={{ width: '100%', boxSizing: 'border-box', whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }} />
                   <button disabled={sending} onClick={() => {
                     const entries = reviewPlan.entries.filter((_, i) => i !== idx);
@@ -3340,10 +3548,77 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                     setReviewedItems(new Set([...reviewedItems].filter(i => i !== idx).map(i => i > idx ? i - 1 : i)));
                   }} style={{ marginTop: 7 }}>Excluir a esta persona</button>
                 </> : <div style={{ whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }}>{entry.previewText || '(Template sin cuerpo de texto)'}</div>}
+                {reviewPlan.sendingProvider === 'evolution' && (() => {
+                  const offers = offersList(entry);
+                  const duplicates = duplicateOfferProducts(entry);
+                  return (
+                  <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <strong style={{ fontSize: 12, color: colors.textPrimary }}>Ofertas de campaña ({offers.length}/{MAX_OFFERS_PER_RECIPIENT})</strong>
+                      <button type="button" disabled={sending || offers.length >= MAX_OFFERS_PER_RECIPIENT} onClick={() => addEntryOffer(idx)} style={{ fontSize: 12 }}>Agregar oferta</button>
+                    </div>
+                    {offerProductsLoading && <div role="status" style={{ fontSize: 12 }}>Cargando productos…</div>}
+                    {offerProductsError && <div role="alert" style={{ fontSize: 12 }}>
+                      {offerProductsError} <button type="button" disabled={offerProductsLoading} onClick={loadOfferProducts}>Reintentar productos</button>
+                    </div>}
+                    {!offerProductsLoading && !offerProductsError && !offerProducts.length && <div style={{ fontSize: 12 }}>No hay productos activos en el catálogo.</div>}
+                    {entry.requireOffer && !offers.length && <div style={{ fontSize: 12, color: colors.textSecondary }}>Completa las ofertas de este borrador recuperado antes de marcarlo revisado.</div>}
+                    {duplicates.length > 0 && <div style={{ fontSize: 12, color: colors.red || '#c0392b', marginBottom: 8 }}>Hay dos ofertas del mismo producto. Deja una por producto.</div>}
+                    {offers.length === 0 && <div style={{ fontSize: 12, color: colors.textSecondary }}>Sin oferta para este destinatario.</div>}
+                    {offers.map((offer, k) => {
+                      const usedElsewhere = offers.filter((o, n) => n !== k).map(o => String(o.product_id ?? ''));
+                      const check = offerCheckAt(entry, k);
+                      const ready = !!check?.ok && !duplicates.includes(String(offer.product_id ?? ''));
+                      return (
+                      <div key={k} style={{ marginTop: k ? 12 : 0, paddingTop: k ? 12 : 0, borderTop: k ? `1px solid ${colors.border}` : 'none' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <span style={{ fontSize: 12, color: colors.textSecondary }}>Oferta {k + 1}</span>
+                          <button type="button" disabled={sending} onClick={() => removeEntryOffer(idx, k)} style={{ fontSize: 12 }}>Quitar</button>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+                          <label style={{ fontSize: 12 }}>Producto
+                            <select value={offer.product_id || ''} disabled={sending} onChange={event => updateEntryOffer(idx, k, { product_id: event.target.value })} style={{ width: '100%' }}>
+                              <option value="">Selecciona…</option>
+                              {offerProducts.filter(p => String(p.id) === String(offer.product_id ?? '') || !usedElsewhere.includes(String(p.id))).map(product => <option key={product.id} value={String(product.id)}>{product.title}</option>)}
+                            </select>
+                          </label>
+                          <label style={{ fontSize: 12 }}>Precio por unidad ($)
+                            <input type="number" min="1" step="1" disabled={sending} value={offer.offer_price ?? ''} onChange={event => updateEntryOffer(idx, k, { offer_price: event.target.value === '' ? null : Number(event.target.value) })} style={{ width: '100%' }} />
+                          </label>
+                          <label style={{ fontSize: 12 }}>Vence
+                            <input type="datetime-local" step="1" aria-label={`Vencimiento de oferta ${k + 1} (hora de Chile)`} disabled={sending} value={offerExpiryInput(offer.expires_at)} onChange={event => updateEntryOffer(idx, k, { expires_at: event.target.value || null })} style={{ width: '100%' }} />
+                            <span style={{ fontSize: 10 }}>Fecha y hora de Chile</span>
+                          </label>
+                          <label style={{ fontSize: 12 }}>Tope de unidades (vacío = todas)
+                            <input type="number" min="1" step="1" disabled={sending} value={offer.scope?.cap_units ?? ''} onChange={event => updateEntryOffer(idx, k, { scope: event.target.value ? { cap_units: Number(event.target.value) } : 'all_units' })} style={{ width: '100%' }} />
+                          </label>
+                        </div>
+                        {(check?.warnings || []).some(w => w.includes('margen')) && (
+                          <label style={{ fontSize: 12, display: 'flex', gap: 6, marginTop: 8 }}>
+                            <input type="checkbox" checked={offer.margin_confirmed === true} disabled={sending} onChange={event => updateEntryOffer(idx, k, { margin_confirmed: event.target.checked })} />
+                            Confirmo el margen de este producto (no tiene costo ni margen cargados)
+                          </label>
+                        )}
+                        <div style={{ marginTop: 8, fontSize: 12, color: ready ? colors.green : colors.textSecondary }}>{offerStatusText(entry, k)}</div>
+                        <button type="button" disabled={sending || !ready} onClick={() => applyOfferEverywhere(idx, k)} style={{ marginTop: 8, fontSize: 12 }}>
+                          Aplicar esta oferta a todos ({reviewPlan.entries.length})
+                        </button>
+                      </div>
+                      );
+                    })}
+                  </div>
+                  );
+                })()}
                 <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 7 }}>Destino real: {entry.item.phone} · Puedes recorrer todos los mensajes antes de confirmar.</div>
                 {guidedReview && (
                   <div style={{ marginTop: 10, padding: '9px 11px', borderRadius: 8, backgroundColor: `${colors.green}12`, border: `1px solid ${colors.green}33`, color: colors.textSecondary, fontSize: 12, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
                     <span>Revisión detallada</span>
+                    {!guidedComplete && reviewPlan.entries.length > 1 && (
+                      <button type="button" disabled={sending} onClick={() => setReviewedItems(new Set(reviewPlan.entries.map((_, i) => i)))}
+                        style={{ border: `1px solid ${colors.green}66`, borderRadius: 6, background: 'transparent', color: colors.green, fontSize: 11, fontWeight: 700, padding: '2px 8px', cursor: 'pointer' }}>
+                        Marcar todos como revisados
+                      </button>
+                    )}
                     <strong style={{ color: guidedComplete ? colors.green : colors.textPrimary }}>{reviewedCount} de {reviewPlan.entries.length} revisados</strong>
                   </div>
                 )}
@@ -3363,9 +3638,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   </div>
                 )}
                 <button onClick={() => setReviewPlan(null)} disabled={sending} style={{ padding: '8px 15px', borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textSecondary, cursor: sending ? 'not-allowed' : 'pointer' }}>Volver y corregir</button>
-                <button onClick={confirmSend} disabled={sending || (guidedReview && !guidedComplete)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: guidedReview && !guidedComplete ? colors.bgHover : colors.green, color: guidedReview && !guidedComplete ? colors.textMuted : '#fff', fontWeight: 800, cursor: sending || (guidedReview && !guidedComplete) ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
+                <button onClick={confirmSend} disabled={sending || (guidedReview && !guidedComplete) || reviewPlan.entries.some(e => !offerReady(e))} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: guidedReview && !guidedComplete ? colors.bgHover : colors.green, color: guidedReview && !guidedComplete ? colors.textMuted : '#fff', fontWeight: 800, cursor: sending || (guidedReview && !guidedComplete) ? 'not-allowed' : 'pointer', opacity: sending ? 0.75 : 1 }}>
                   {sending ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
-                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : guidedReview && !guidedComplete ? 'Revisa y completa cada mensaje' : `${individual ? 'Autorizar' : 'Confirmar'} y enviar ${reviewPlan.entries.length}`}
+                  {sending ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : guidedReview && !guidedComplete ? 'Revisa y completa cada mensaje' : reviewPlan.entries.some(e => !offerReady(e)) ? 'Completa las ofertas para autorizar' : `${individual ? 'Autorizar' : 'Confirmar'} y enviar ${reviewPlan.entries.length}`}
                 </button>
               </div>
             </div>

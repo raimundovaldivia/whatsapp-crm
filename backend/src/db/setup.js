@@ -23,7 +23,7 @@ async function setupDatabase() {
       CREATE TABLE IF NOT EXISTS users (
         id              SERIAL PRIMARY KEY,
         organization_id INTEGER NOT NULL,
-        email           TEXT UNIQUE NOT NULL,
+        email           TEXT NOT NULL,
         password_hash   TEXT NOT NULL,
         name            TEXT,
         role            TEXT DEFAULT 'agent' CHECK(role IN ('owner','admin','agent')),
@@ -104,7 +104,7 @@ async function setupDatabase() {
         name                    TEXT NOT NULL,
         phone_number            TEXT,
         evolution_api_url       TEXT NOT NULL,
-        evolution_api_key       TEXT NOT NULL,
+        evolution_api_key       TEXT,
         evolution_instance      TEXT NOT NULL,
         webhook_token           TEXT NOT NULL,
         status                  TEXT NOT NULL DEFAULT 'pending',
@@ -118,6 +118,8 @@ async function setupDatabase() {
 
       ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS assigned_user_id INTEGER REFERENCES users(id) ON DELETE RESTRICT;
       ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS expected_phone TEXT;
+      -- La clave puede ir vacía: se usa EVOLUTION_API_KEY del servidor.
+      ALTER TABLE whatsapp_channels ALTER COLUMN evolution_api_key DROP NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_channels_assigned_user
         ON whatsapp_channels(organization_id, assigned_user_id) WHERE assigned_user_id IS NOT NULL;
 
@@ -194,6 +196,9 @@ async function setupDatabase() {
       -- Migración: media_id para mensajes con imagen o audio
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_id TEXT;
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivery_error JSONB;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_provider TEXT;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_model TEXT;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS prompt_version TEXT;
       ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_status_check;
       ALTER TABLE messages ADD CONSTRAINT messages_status_check
         CHECK(status IN ('pending','sent','delivered','read','failed'));
@@ -352,6 +357,9 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_conversations_upd    ON conversations(last_message_at DESC);
       CREATE INDEX IF NOT EXISTS idx_products_org         ON products_cache(organization_id);
       CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
+      -- Un mismo correo puede tener una cuenta por empresa (mismo dueño, dos negocios).
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS users_org_email_uq ON users(organization_id, email);
 
       -- ─── FEEDBACK DE ESCALACIÓN (reentrenamiento continuo) ──────
       CREATE TABLE IF NOT EXISTS escalation_feedback (
@@ -831,8 +839,8 @@ async function setupDatabase() {
       -- Migración: bandera para excluir manualmente de Hot Leads
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_lead_excluded BOOLEAN DEFAULT FALSE;
 
-      -- Calificación comercial separada del estado operativo del bot. Se deja
-      -- nullable para distinguir conversaciones aún no recalificadas.
+      -- Calificación comercial separada del estado operativo del bot. La
+      -- columna nullable conserva el baseline de conversaciones antiguas.
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_temperature TEXT;
       ALTER TABLE conversations ALTER COLUMN lead_temperature SET DEFAULT 'exploring';
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_score INTEGER NOT NULL DEFAULT 0;
@@ -855,8 +863,8 @@ async function setupDatabase() {
       CREATE INDEX IF NOT EXISTS idx_conversations_lead_temperature
         ON conversations(organization_id, lead_temperature, last_message_at DESC);
 
-      -- Cada recalificación masiva conserva la clasificación anterior y la
-      -- propuesta nueva antes de aplicar cambios, para poder medir precisión.
+      -- Una evaluación masiva guarda estado anterior y propuesta antes de
+      -- permitir cualquier aplicación de resultados.
       CREATE TABLE IF NOT EXISTS lead_qualification_runs (
         run_id TEXT PRIMARY KEY,
         organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -896,6 +904,65 @@ async function setupDatabase() {
         ON lead_qualification_runs(organization_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_lead_qualification_audits_run
         ON lead_qualification_audits(organization_id, run_id, proposed_temperature);
+
+      -- Beneficios de recuperación individuales. La fila conserva monto,
+      -- vigencia, costo y ancla del último mensaje entrante para que el envío
+      -- y el canje sean auditables, únicos y aislados por organización.
+      CREATE TABLE IF NOT EXISTS personal_offers (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        inbound_anchor TIMESTAMPTZ NOT NULL,
+        discount_amount INTEGER NOT NULL CHECK(discount_amount IN (1000, 3500, 4000, 7000)),
+        discount_tiers JSONB NOT NULL DEFAULT '[{"minTrays":1,"amount":1000},{"minTrays":2,"amount":4000},{"minTrays":3,"amount":7000}]'::jsonb,
+        min_trays INTEGER NOT NULL DEFAULT 1 CHECK(min_trays >= 1),
+        unit_cost INTEGER NOT NULL DEFAULT 150 CHECK(unit_cost >= 0),
+        min_margin_pct NUMERIC(5,2) NOT NULL DEFAULT 35 CHECK(min_margin_pct BETWEEN 0 AND 100),
+        price_reason_source TEXT NOT NULL CHECK(price_reason_source IN ('manual','observed')),
+        price_reason_confidence NUMERIC(4,3) NOT NULL CHECK(price_reason_confidence BETWEEN 0 AND 1),
+        status TEXT NOT NULL DEFAULT 'reserved' CHECK(status IN ('reserved','sent','redeemed','expired','failed')),
+        expires_at TIMESTAMPTZ NOT NULL,
+        message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+        redeemed_order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+        redeemed_discount_amount INTEGER,
+        redeemed_trays INTEGER,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TIMESTAMPTZ,
+        redeemed_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        UNIQUE(organization_id, conversation_id, inbound_anchor)
+      );
+      CREATE INDEX IF NOT EXISTS idx_personal_offers_org_status
+        ON personal_offers(organization_id, status, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_personal_offers_conversation
+        ON personal_offers(organization_id, conversation_id, created_at DESC);
+      ALTER TABLE personal_offers ALTER COLUMN min_margin_pct SET DEFAULT 35;
+
+      CREATE TABLE IF NOT EXISTS personal_offer_baselines (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        inventory_xl_eggs INTEGER NOT NULL CHECK(inventory_xl_eggs >= 0),
+        inventory_l_eggs INTEGER NOT NULL CHECK(inventory_l_eggs >= 0),
+        qualification_summary JSONB NOT NULL DEFAULT '{}',
+        configuration JSONB NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX IF NOT EXISTS idx_personal_offer_baselines_org
+        ON personal_offer_baselines(organization_id, captured_at DESC);
+
+      -- Cierre comercial asistido. La reserva se toma al comenzar realmente
+      -- un pedido; no depende de que el modelo recuerde la hora del primer mensaje.
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS sales_started_at TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS same_day_hold_until TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_follow_up_sent_at TIMESTAMPTZ;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_follow_up_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hot_follow_up_stage TEXT;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS follow_up_stage TEXT;
+      CREATE INDEX IF NOT EXISTS idx_conversations_hot_closing_due
+        ON conversations(agent_mode, pipeline_state, last_message_at)
+        WHERE pipeline_state IN ('interested','collecting_order');
 
       -- Migración: tipo de cliente en contactos (personal / empresa)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS client_type TEXT DEFAULT 'personal';
@@ -1201,6 +1268,8 @@ async function setupDatabase() {
         ADD COLUMN IF NOT EXISTS pause_code TEXT;
       ALTER TABLE broadcast_campaigns
         ADD COLUMN IF NOT EXISTS pause_reason TEXT;
+      ALTER TABLE broadcast_campaigns
+        ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
       ALTER TABLE broadcast_campaigns
         ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
       ALTER TABLE broadcast_campaigns
@@ -1823,10 +1892,52 @@ async function setupDatabase() {
         amount INTEGER NOT NULL, recorded_by INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+
+    // ─── INTELIGENCIA COMERCIAL: probabilidad de compra ─────────────
+    // Cada ejecución conserva un snapshot diario por conversación y versión
+    // del modelo. Esto permite contrastar la probabilidad con compras reales
+    // posteriores sin mezclar organizaciones ni sobrescribir otros días.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS conversation_purchase_scores (
+        id                    BIGSERIAL PRIMARY KEY,
+        organization_id       INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        conversation_id       INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        evaluation_date       DATE NOT NULL,
+        evaluated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        source_from            DATE NOT NULL,
+        source_to              DATE NOT NULL,
+        model_version          TEXT NOT NULL,
+        probability_24h        NUMERIC(5,2) NOT NULL CHECK(probability_24h BETWEEN 0 AND 100),
+        probability_48h        NUMERIC(5,2) NOT NULL CHECK(probability_48h BETWEEN 0 AND 100),
+        estimated_eggs         INTEGER NOT NULL DEFAULT 0 CHECK(estimated_eggs >= 0),
+        expected_eggs_24h      NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(expected_eggs_24h >= 0),
+        expected_eggs_48h      NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(expected_eggs_48h >= 0),
+        estimate_source        TEXT,
+        stage                  TEXT NOT NULL,
+        blocker                TEXT NOT NULL,
+        signals                JSONB NOT NULL DEFAULT '[]'::jsonb,
+        recommended_action     TEXT NOT NULL,
+        explanation            TEXT,
+        score_inputs           JSONB NOT NULL DEFAULT '{}'::jsonb,
+        actual_bought_24h       BOOLEAN,
+        actual_bought_48h       BOOLEAN,
+        actual_order_id         TEXT,
+        actual_eggs             INTEGER,
+        outcome_checked_at      TIMESTAMPTZ,
+        created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, conversation_id, evaluation_date, model_version, source_from, source_to)
+      );
+      CREATE INDEX IF NOT EXISTS idx_purchase_scores_org_date
+        ON conversation_purchase_scores(organization_id, evaluation_date DESC, expected_eggs_48h DESC);
+      CREATE INDEX IF NOT EXISTS idx_purchase_scores_outcomes
+        ON conversation_purchase_scores(organization_id, outcome_checked_at, evaluated_at);
+    `);
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'commercial.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'eggs-catalog-v2.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-boxes-promotional.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'store-product-favorites.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'social-stories.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-product-images.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals-rewards-v2.sql'), 'utf8'));

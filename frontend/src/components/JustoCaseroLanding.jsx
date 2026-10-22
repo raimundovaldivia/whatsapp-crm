@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import './justo-casero.css';
 
 const API = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
-const CRM_STORE_SLUG = 'diez-rios-mrs96z69';
+const CRM_STORE_SLUG = 'justo-casero-mvg75kb0';
 const FALLBACK_WHATSAPP = '56942876413';
 const PRICE_VOTES_KEY = 'justo_casero_price_votes_v1';
 

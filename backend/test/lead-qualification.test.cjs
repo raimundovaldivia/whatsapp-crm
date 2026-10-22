@@ -49,32 +49,18 @@ test('la recalificación persiste razones sin cruzar organizaciones', async () =
     const result = params?.length ? await engine.query(sql, params) : (await engine.exec(sql)).at(-1);
     return { ...result, rowCount: result.affectedRows ?? result.rows?.length ?? 0 };
   };
-  class Pool { query(...args) { return query(...args); } async end() {} }
+  class Pool { query(...args) { return query(...args); } async connect() { return { query, release() {} }; } async end() {} }
   try {
+    await load('src/db/setup.js', { pg: { Pool } }).setupDatabase();
     await engine.exec(`
-      CREATE TABLE conversations (
-        id INT PRIMARY KEY, organization_id INT NOT NULL, pipeline_state TEXT,
-        order_draft TEXT DEFAULT '{}', lead_temperature TEXT, lead_score INT DEFAULT 0,
-        qualification_reasons JSONB DEFAULT '[]', lead_signals JSONB DEFAULT '{}',
-        qualified_at TIMESTAMPTZ, last_inbound_at TIMESTAMPTZ,
-        last_message_at TIMESTAMPTZ DEFAULT NOW(), created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      CREATE TABLE messages (
-        id SERIAL PRIMARY KEY, conversation_id INT, direction TEXT, content TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      CREATE TABLE orders (
-        id SERIAL PRIMARY KEY, conversation_id INT, organization_id INT, status TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      INSERT INTO conversations (id, organization_id, pipeline_state) VALUES
-        (1, 10, 'interested'), (2, 20, 'interested');
+      INSERT INTO organizations (id, name, slug) VALUES (10, 'A', 'a'), (20, 'B', 'b');
+      INSERT INTO conversations (id, organization_id, pipeline_state, lead_temperature) VALUES
+        (1, 10, 'interested', NULL), (2, 20, 'interested', NULL);
       INSERT INTO messages (conversation_id, direction, content) VALUES
         (1, 'inbound', '¿Cuánto cuesta la bandeja XL?'),
         (2, 'inbound', 'Quiero 2 bandejas XL');
-      INSERT INTO orders (conversation_id, organization_id, status, created_at)
-        VALUES (1, 10, 'delivered', NOW() - INTERVAL '30 days');
+      INSERT INTO orders (conversation_id, organization_id, items, status, created_at)
+        VALUES (1, 10, '[]', 'entregado', NOW() - INTERVAL '30 days');
     `);
     const db = load('src/db/database.js', {
       pg: { Pool },
@@ -96,7 +82,13 @@ test('la recalificación persiste razones sin cruzar organizaciones', async () =
   }
 });
 
-test('la evaluación guarda el estado anterior sin aplicar cambios ni cruzar organizaciones', async () => {
+test('distingue una consulta de precio de una objeción de precio confirmada', () => {
+  assert.equal(qualifyLead({ messages: inbound('¿Cuánto cuesta la bandeja XL?') }).signals.priceObjection, false);
+  assert.equal(qualifyLead({ messages: inbound('Fue por el precio') }).signals.priceObjection, true);
+  assert.equal(qualifyLead({ messages: inbound('Se me hace caro') }).signals.priceObjection, true);
+});
+
+test('la evaluación guarda el estado anterior sin aplicar ni cruzar organizaciones', async () => {
   const calls = [];
   const pool = { query: async (sql, params) => {
     calls.push({ sql, params });

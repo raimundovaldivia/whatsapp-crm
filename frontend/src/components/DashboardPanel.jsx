@@ -8,7 +8,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   TrendingUp, Package, MessageSquare, Bot,
-  RefreshCw, ShoppingBag, Zap, ChevronRight,
+  RefreshCw, ShoppingBag, Zap, ChevronRight, Gift, Target,
 } from 'lucide-react';
 import { dashboardAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -153,14 +153,16 @@ function StatusBadge({ status, colors }) {
 export default function DashboardPanel({ onChangeView }) {
   const { colors, isDark } = useTheme();
   const [data, setData]     = useState(null);
+  const [offerData, setOfferData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState('');
 
   const load = async () => {
     setLoading(true); setError('');
     try {
-      const d = await dashboardAPI.getWins();
+      const [d, offers] = await Promise.all([dashboardAPI.getWins(), dashboardAPI.getPersonalOffers(30)]);
       setData(d);
+      setOfferData(offers);
     } catch (e) {
       setError('Error cargando métricas');
     } finally {
@@ -354,6 +356,91 @@ export default function DashboardPanel({ onChangeView }) {
                 </div>
               ))}
             </div>
+
+            {!loading && offerData && (
+              <div style={{ ...card, padding: '20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Gift size={17} color={colors.purple} />
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: colors.textPrimary }}>Recuperación por precio</div>
+                      <div style={{ fontSize: '10px', color: colors.textMuted }}>
+                        {offerData.baseline?.captured_at ? `Desde ${new Date(offerData.baseline.captured_at).toLocaleDateString('es-CL')} · ` : `Últimos ${offerData.periodDays} días · `}
+                        el gasto del anuncio no se descuenta nuevamente
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '20px', fontWeight: 800, color: colors.green }}>{clp(offerData.recoveredRevenue)}</div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(115px, 1fr))', gap: '8px', marginBottom: '16px' }}>
+                  {[
+                    ['Ofertas enviadas', offerData.sent],
+                    ['Respondieron', `${offerData.responseRate}%`],
+                    ['Pedidos ganados', offerData.won],
+                    ['Conversión', `${offerData.conversionRate}%`],
+                    ['Ticket promedio', clp(Math.round(offerData.averageTicket))],
+                    ['Contribución estimada*', clp(Math.round(offerData.estimatedContribution))],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ padding: '10px', borderRadius: '10px', backgroundColor: colors.bgApp, border: `1px solid ${colors.border}` }}>
+                      <div style={{ fontSize: '10px', color: colors.textMuted }}>{label}</div>
+                      <div style={{ fontSize: '17px', fontWeight: 750, color: colors.textPrimary, marginTop: '4px' }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: '9px', color: colors.textMuted, marginTop: '-8px', marginBottom: '14px' }}>
+                  * Venta recuperada menos $150 por huevo. No descuenta envase, despacho, comisiones ni impuestos.
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px' }}>
+                  <div style={{ padding: '12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: colors.textSecondary, marginBottom: '9px' }}>
+                      <Target size={13} /> Por qué se fueron
+                    </div>
+                    {[
+                      ['Precio confirmado', offerData.priceQualification?.confirmed || 0, colors.green],
+                      ['Consultó precio — no confirmado', offerData.priceQualification?.probable || 0, colors.yellow],
+                      ['Otro motivo confirmado', offerData.priceQualification?.otherKnown || 0, colors.purple],
+                      ['Motivo desconocido', offerData.priceQualification?.unknown || 0, colors.textMuted],
+                    ].map(([label, value, color]) => (
+                      <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', padding: '4px 0', color: colors.textSecondary }}>
+                        <span>{label}</span><strong style={{ color }}>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ padding: '12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: colors.textSecondary, marginBottom: '9px' }}>Pedidos recuperados por escala</div>
+                    {['1', '2', '3+'].map(tier => {
+                      const row = offerData.tiers?.find(item => item.tier === tier);
+                      return (
+                        <div key={tier} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '10px', fontSize: '11px', padding: '4px 0', color: colors.textSecondary }}>
+                          <span>{tier} bandeja{tier === '1' ? '' : 's'}</span>
+                          <strong style={{ color: colors.textPrimary }}>{row?.won || 0} pedidos</strong>
+                          <span style={{ color: colors.green }}>{clp(row?.revenue || 0)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ padding: '12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: colors.textSecondary, marginBottom: '9px' }}>Meta de inventario recuperado</div>
+                    {(offerData.inventory || []).map(item => {
+                      const pct = item.target ? Math.min(100, Math.round(item.sold * 100 / item.target)) : 0;
+                      return (
+                        <div key={item.size} style={{ marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: colors.textSecondary, marginBottom: '4px' }}>
+                            <strong style={{ color: colors.textPrimary }}>{item.size}</strong>
+                            <span>{item.sold} de {item.target} huevos · faltan {item.remaining}</span>
+                          </div>
+                          <div style={{ height: '6px', borderRadius: '999px', backgroundColor: colors.border, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, backgroundColor: colors.green, borderRadius: '999px' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* ── Feed de victorias recientes ── */}
             <div style={card}>

@@ -12,16 +12,19 @@ export default function AuthPage({ onAuth }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [orgOptions, setOrgOptions] = useState(null);
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (e, organizationId) => {
+    if (e) e.preventDefault();
     setError(''); setLoading(true);
     try {
       const data = mode === 'login'
-        ? await authAPI.login({ email: form.email, password: form.password })
+        ? await authAPI.login({ email: form.email, password: form.password, ...(organizationId != null ? { organizationId } : {}) })
         : await authAPI.register(form);
+      if (data.needsOrganization) { setOrgOptions(data.organizations); return; }
+      setOrgOptions(null);
       localStorage.setItem('crm_token', data.token);
       localStorage.setItem('crm_user',  JSON.stringify(data.user));
       localStorage.setItem('crm_org',   JSON.stringify(data.organization));
@@ -32,7 +35,7 @@ export default function AuthPage({ onAuth }) {
   };
 
   const features = [
-    { icon: <Bot size={18} />, title: 'Agente IA con Claude', desc: 'Responde clientes, sugiere productos y cierra ventas automáticamente' },
+    { icon: <Bot size={18} />, title: 'Agente de IA', desc: 'Responde clientes, sugiere productos y cierra ventas automáticamente' },
     { icon: <ShoppingBag size={18} />, title: 'Integración Shopify', desc: 'Sincroniza pedidos, catálogo y clientes en tiempo real' },
     { icon: <TrendingUp size={18} />, title: 'Re-enganche predictivo', desc: 'La IA predice cuándo un cliente volverá a comprar' },
     { icon: <Zap size={18} />, title: 'Pipeline automatizado', desc: 'Recopila datos del pedido y lo gestiona sin intervención' },
@@ -291,7 +294,21 @@ export default function AuthPage({ onAuth }) {
               </div>
             )}
 
-            <button type="submit" disabled={loading}
+            {orgOptions && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontSize: '13px', color: colors.textSecondary }}>Este correo tiene cuenta en varias empresas. Elige a cuál entrar:</div>
+                {orgOptions.map(o => (
+                  <button key={o.organization_id} type="button" disabled={loading}
+                    onClick={(e) => handleSubmit(e, o.organization_id)}
+                    style={{ padding: '12px', borderRadius: '10px', border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textPrimary, cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'left', fontSize: '14px' }}>
+                    <strong>{o.name || o.slug}</strong>
+                    <span style={{ color: colors.textSecondary, fontSize: '12px' }}> · {o.role}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {!orgOptions && <button type="submit" disabled={loading}
               style={{
                 backgroundColor: colors.green,
                 color: 'white',
@@ -314,7 +331,7 @@ export default function AuthPage({ onAuth }) {
                   <ArrowRight size={16} />
                 </>
               )}
-            </button>
+            </button>}
           </form>
 
           <button type="button" onClick={()=>setShowSolutions(true)} style={{width:'100%',marginTop:18,padding:12,borderRadius:10,border:`1px solid ${colors.border}`,background:'transparent',color:colors.green,cursor:'pointer'}}>Explorar las 7 soluciones</button>
@@ -333,7 +350,7 @@ export default function AuthPage({ onAuth }) {
           {/* Features móvil */}
           <div style={{ display: 'flex', gap: '16px', marginTop: '28px', justifyContent: 'center', flexWrap: 'wrap' }} className="auth-mobile-features">
             {[
-              { icon: <Bot size={14} color={colors.green} />, text: 'Agente IA Claude' },
+              { icon: <Bot size={14} color={colors.green} />, text: 'Agente de IA conversacional' },
               { icon: <ShoppingBag size={14} color={colors.green} />, text: 'Shopify sync' },
               { icon: <MessageSquare size={14} color={colors.green} />, text: 'CRM real-time' },
             ].map(({ icon, text }) => (

@@ -8,14 +8,12 @@
  * Modo asistente (setup_done = true):
  *   Responde preguntas, actualiza configuración, muestra stats, prueba el bot.
  *
- * Usa Claude con tool use para ejecutar acciones reales.
+ * Usa el proveedor de IA activo con tool use para ejecutar acciones reales.
  */
 
-const Anthropic  = require('@anthropic-ai/sdk');
+const { client, modelFor } = require('../ai-provider');
 const db         = require('../../db/database');
 const shopifyApi = require('../shopify-api');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ─── Herramientas disponibles ────────────────────────────────────
 
@@ -284,9 +282,9 @@ async function chat(orgId, isSetupDone, history, userMessage) {
     { role: 'user', content: userMessage },
   ];
 
-  // Primera llamada a Claude con tools
+  // Primera llamada al proveedor activo con tools
   let response = await client.messages.create({
-    model:      'claude-sonnet-4-6',
+    model:      modelFor('smart'),
     max_tokens: 400,
     system,
     tools:      TOOLS,
@@ -328,7 +326,7 @@ async function chat(orgId, isSetupDone, history, userMessage) {
     ];
 
     response = await client.messages.create({
-      model:      'claude-sonnet-4-6',
+      model:      modelFor('smart'),
       max_tokens: 400,
       system,
       tools:      TOOLS,

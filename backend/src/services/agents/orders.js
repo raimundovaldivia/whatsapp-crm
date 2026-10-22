@@ -1,7 +1,5 @@
-const Anthropic = require('@anthropic-ai/sdk');
+const { client, modelFor, responseText } = require('../ai-provider');
 const { normalizeDraft } = require('../order-pricing');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Campos requeridos para crear la orden (además de al menos un ítem)
 const REQUIRED_FIELDS = ['customer_name', 'address', 'city'];
@@ -123,13 +121,13 @@ async function generateOrderResponse(conversationHistory, userMessage, orderDraf
   }
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: modelFor('smart'),
     max_tokens: 400,
     system,
     messages,
   });
 
-  return response.content[0]?.text?.trim() || '';
+  return responseText(response);
 }
 
 /**
@@ -173,13 +171,13 @@ Solo el JSON, nada más.`;
 
   try {
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: modelFor('fast'),
       max_tokens: 400,
       system: EXTRACT_SYSTEM,
       messages: [{ role: 'user', content: recent }],
     });
 
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const extracted = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
 
     // Un template puede decir "entrega el mismo día", pero eso no significa

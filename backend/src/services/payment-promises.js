@@ -1,4 +1,3 @@
-const db = require('../db/database');
 const { getPool } = require('../db/database');
 const { resolveExplicitDeliveryDate, todayISOChile, formatDateEs } = require('./business-date');
 const { isCustomerMessagingHour } = require('./outbound-policy');

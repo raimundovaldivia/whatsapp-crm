@@ -1,7 +1,5 @@
-const Anthropic = require('@anthropic-ai/sdk');
+const { client, modelFor, responseText } = require('../ai-provider');
 const { isBareLinkMessage } = require('../inbound-message-policy');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const SIMPLE_MESSAGE_PARTS = [
   'buenos dias', 'buenas tardes', 'buenas noches', 'buen dia',
@@ -40,7 +38,7 @@ function isSimpleMessage(value) {
 
 /**
  * Agente Orquestador — Clasifica la intención del cliente
- * Usa claude-haiku (rápido y barato) para esta tarea simple
+ * Usa el modelo rápido del proveedor de IA configurado para esta tarea simple.
  */
 async function classifyIntent(userMessage, conversationHistory, pipelineState, opts = {}) {
   if (isBareLinkMessage(userMessage)) {
@@ -88,13 +86,13 @@ Nada más. Solo el JSON.`;
 
   try {
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: modelFor('fast'),
       max_tokens: 100,
       system: SYSTEM,
       messages: [...history, { role: 'user', content: userMessage }],
     });
 
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
     return {
       intent: json.intent || 'exploring',
@@ -277,13 +275,13 @@ Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgenc
 
   try {
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: modelFor('fast'),
       max_tokens: 100,
       system: ESCALATION_SYSTEM,
       messages: [{ role: 'user', content: `${recent}\nCLIENTE: ${userMessage}` }],
     });
 
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
     return {
       escalate: json.escalate === true,

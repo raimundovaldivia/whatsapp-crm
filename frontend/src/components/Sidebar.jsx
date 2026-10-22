@@ -12,10 +12,16 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const msgTimerRef                   = useRef(null);
   const [activeTab, setActiveTab]     = useState('all');
   const [providerFilter, setProviderFilter] = useState('all');
+  const [clockNow, setClockNow] = useState(Date.now());
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
   const [retrying, setRetrying]   = useState(false);
   const [retryResult, setRetryResult] = useState(null); // { sent, retried }
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(Date.now()), 30 * 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   async function handleRetryUnanswered() {
     if (retrying) return;
@@ -78,13 +84,20 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
 
   const HOT_TEMPERATURES = ['hot', 'very_hot'];
   const CLOSED_STATES = new Set(['done', 'delivered', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out', 'template_sent']);
-  const now          = Date.now();
-  const h24          = 24 * 60 * 60 * 1000;
+  const now          = clockNow;
+  const h2           = 2 * 60 * 60 * 1000;
+  const h22          = 22 * 60 * 60 * 1000;
   const isStalled    = c => {
     const last = new Date(c.last_message_at).getTime();
+    const age = now - last;
     return Boolean(c.last_message) && !CLOSED_STATES.has(c.pipeline_state)
-      && c.attention_state !== 'no_response_needed' && (now - last) > h24;
+      && c.agent_mode === 'ai' && c.last_message_direction === 'outbound'
+      && HOT_STATES.includes(c.pipeline_state)
+      && Number(c.follow_up_count || 0) < 2
+      && (!c.follow_up_stage || c.follow_up_stage !== c.pipeline_state)
+      && c.attention_state !== 'no_response_needed' && age >= h2 && age <= h22;
   };
+  const hotPriority = c => c.pipeline_state === 'collecting_order' ? 2 : c.pipeline_state === 'interested' ? 1 : 0;
 
   const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
   const coordinatingCount = conversations.filter(c => c.agent_mode === 'coordinating' && c.attention_state === 'requires_human').length;
@@ -123,6 +136,13 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     if (a.is_pinned && b.is_pinned) {
       const pinnedOrder = new Date(b.pinned_at || 0).getTime() - new Date(a.pinned_at || 0).getTime();
       if (pinnedOrder) return pinnedOrder;
+    }
+    if (activeTab === 'hot') {
+      const temperatureOrder = hotPriority(b) - hotPriority(a);
+      if (temperatureOrder) return temperatureOrder;
+      const aHold = new Date(a.same_day_hold_until || 8640000000000000).getTime();
+      const bHold = new Date(b.same_day_hold_until || 8640000000000000).getTime();
+      if (aHold !== bHold) return aHold - bHold;
     }
     return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
   });
@@ -496,7 +516,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
           { key: 'attention', label: '⚠️ Requiere atención', count: attentionCount, color: '#dc2626', dot: attentionCount > 0 },
           { key: 'unread',  label: 'No leídos',  count: unreadCount,          color: colors.dangerSoft,      dot: null },
           { key: 'hot',     label: '🔥 Hot',     count: hotCount,             color: '#f97316',      dot: null },
-          { key: 'stalled', label: '⏳ Sin cierre', count: stalledCount,      color: colors.purpleSoft,      dot: null },
+          { key: 'stalled', label: '⏳ Seguimiento', count: stalledCount,      color: colors.purpleSoft,      dot: null },
           { key: 'ai',      label: '✨ Diva',    count: aiCount,              color: colors.green,   dot: null },
           { key: 'coordinating', label: '💬 Coordinando', count: coordinatingCount, color: colors.purpleSoft, dot: coordinatingCount > 0 },
           { key: 'human',   label: '👤 Humano',  count: humanCount,           color: colors.yellow,  dot: humanUnread > 0 },
@@ -561,7 +581,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         ) : (
           <>
             {filtered.map(conv => (
-              <ConversationItem key={conv.id} conversation={conv} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />
+              <ConversationItem key={conv.id} conversation={conv} now={clockNow} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />
             ))}
 
             {/* Resultados de búsqueda en mensajes */}

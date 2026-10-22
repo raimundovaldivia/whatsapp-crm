@@ -2,12 +2,11 @@
  * scheduled-orders.js
  *
  * Detecta cuando un cliente quiere pedir para una fecha futura y extrae
- * la fecha y el producto usando Claude Haiku.
+ * la fecha y el producto usando el modelo rápido configurado.
  */
 
-const Anthropic = require('@anthropic-ai/sdk');
+const { client, modelFor, responseText } = require('./ai-provider');
 const businessDate = require('./business-date');
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Patrones en español que indican pedido futuro
 const FUTURE_ORDER_PATTERNS = [
@@ -69,12 +68,12 @@ Responde SOLO JSON: {"desiredDate":"YYYY-MM-DD","productNotes":"texto","confiden
 
   try {
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: modelFor('fast'),
       max_tokens: 100,
       system: SYSTEM,
       messages: [{ role: 'user', content: `Contexto previo:\n${context}\n\nMensaje actual: ${userMessage}` }],
     });
-    const text = response.content[0]?.text || '{}';
+    const text = responseText(response, '{}');
     const json = JSON.parse(text.match(/\{.*\}/s)?.[0] || '{}');
     const modelDate = businessDate.toISODate(json.desiredDate);
     return {

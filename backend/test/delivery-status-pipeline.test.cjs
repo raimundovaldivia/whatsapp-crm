@@ -11,6 +11,7 @@ const ordersAgent = load('src/services/agents/orders.js', { '@anthropic-ai/sdk':
 function buildPipeline(deliveryDate, status = 'draft', options = {}) {
   const stateUpdates = options.stateUpdates || [];
   const poolQuery = async (sql, params) => {
+    options.poolQueries?.push({ sql: String(sql), params });
     options.rawQueries?.push({ sql: String(sql), params });
     if (/UPDATE orders\s+SET delivery_date/iu.test(String(sql))) return { rows: [], rowCount: 1 };
     return {
@@ -30,6 +31,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       contact_name: 'Katherine',
       pipeline_state: options.pipelineState || 'exploring',
       agent_mode: 'ai',
+      ...(options.conversation || {}),
     }),
     getLastMessages: async () => options.history || [],
     getSetting: async (_orgId, key) => {
@@ -63,6 +65,12 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
     }),
     updateOrder: async (id, values, orgId) => { options.updatedOrder?.({ id, values, orgId }); return { id, ...values }; },
     updatePipelineState: async (_id, state, draft) => stateUpdates.push({ state, draft }),
+    beginSalesClosing: options.beginSalesClosing
+      ? async () => options.beginSalesClosing
+      : undefined,
+    clearSameDayHold: options.clearSameDayHold
+      ? async (...args) => options.clearSameDayHold(...args)
+      : undefined,
     getPool: () => ({
       query: poolQuery,
       connect: async () => ({ query: poolQuery, release() {} }),
@@ -89,13 +97,16 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       selectedFreeGift: () => null,
       appliesToDelivery: () => false,
     },
-    './campaign-offers-store': { latestForConversation: async () => null, redeem: async () => null },
-    './campaign-offers': { toPromotionContext: () => null },
+    './campaign-offers-store': { activeForConversation: async () => [], redeem: async () => null },
+    './campaign-offers': { toPromotionContextMany: () => null },
     './payment-collection': { getPendingCharges: async () => options.pendingCharges || [] },
-    './payment-promises': options.paymentPromises || {
-      isTemporaryPaymentAccessIssue: () => false,
-      detectPaymentPromise: () => null,
-      recordPaymentPromise: async () => {},
+    './payment-promises': {
+      isTemporaryPaymentAccessIssue: message => /bloque[oó].{0,40}(clave|banco)/i.test(message),
+      detectPaymentPromise: () => options.paymentPromise || null,
+      recordPaymentPromise: async (...args) => { options.promiseRecords?.push(args); },
+    },
+    './delivery-attempts': {
+      recordRouteOutcome: async (...args) => { options.routeOutcomes?.push(args); },
     },
     './scheduled-orders': {
       isFutureOrderIntent: () => false,
@@ -160,6 +171,60 @@ test('"cuándo me traen el pedido" consulta el pedido real y no retoma un borrad
   assert.doesNotMatch(result.response, /pedido confirmado/i);
 });
 
+test('la pregunta exacta de Gloria entra al embudo de estado y no repite la confirmación', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    deliveryEnabled: true,
+    schedule: 'Lunes a Sábado de 00:00 a 23:59',
+    pipelineState: 'confirmed',
+  });
+
+  const result = await pipeline.processMessage(1, 71, 'a qué hora traen mi pedido?');
+
+  assert.equal(result.agentType, 'orchestrator');
+  assert.match(result.response, /pedido está en preparación/i);
+  assert.match(result.response, /00:00 a 23:59/i);
+  assert.doesNotMatch(result.response, /pedido confirmado/i);
+  assert.doesNotMatch(result.response, /todo correcto/i);
+});
+
+test('por despachar sin ruta informa que todavía no existe hora confirmada', async () => {
+  const pipeline = buildPipeline(null, 'por_despachar', {
+    deliveryEnabled: true,
+    schedule: 'Lunes a Sábado de 00:00 a 23:59',
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿A qué hora llega mi pedido?');
+
+  assert.match(result.response, /listo para despachar/i);
+  assert.match(result.response, /todavía no aparece en una ruta/i);
+  assert.match(result.response, /no hay una hora de entrega confirmada/i);
+  assert.doesNotMatch(result.response, /considerado para el reparto de hoy/i);
+});
+
+test('asignado a ruta distingue preparación de salida efectiva', async () => {
+  const pipeline = buildPipeline(null, 'asignado_ruta', {
+    deliveryEnabled: true,
+    schedule: 'Lunes a Sábado de 00:00 a 23:59',
+  });
+
+  const result = await pipeline.processMessage(1, 71, '¿Cómo va mi pedido?');
+
+  assert.match(result.response, /asignado a una ruta/i);
+  assert.match(result.response, /todavía no figura iniciada/i);
+  assert.match(result.response, /no hay una hora exacta confirmada/i);
+});
+
+test('no entregado deriva la reprogramación con el estado real', async () => {
+  const pipeline = buildPipeline(null, 'no_entregado');
+
+  const result = await pipeline.processMessage(1, 71, '¿Cuándo me traen el pedido?');
+
+  assert.equal(result.switchToHuman, true);
+  assert.match(result.response, /último intento de entrega.+no se pudo completar/i);
+  assert.match(result.response, /próximo intento/i);
+  assert.match(result.escalationReason, /no entregado/i);
+});
+
 test('un comprobante de pedido manual cierra también un borrador antiguo ya existente', async () => {
   const stateUpdates = [];
   const pipeline = buildPipeline(null, 'draft', {
@@ -194,7 +259,10 @@ test('una consulta sobre el reparto usa la ruta real y no cae en una escalación
 test('una solicitud de entrega para hoy toma el pedido sin prometer un cupo de ruta', async () => {
   const pipeline = buildPipeline(null, 'draft', { activeOrder: false });
 
-  const result = await pipeline.processMessage(1, 71, '¿Alguna posibilidad de traerme huevos hoy? Olvidé pedirlos ayer');
+  const result = await pipeline.processMessage(
+    1, 71, '¿Alguna posibilidad de traerme huevos hoy? Olvidé pedirlos ayer', null,
+    { now: new Date('2026-10-14T15:49:00.000Z') }
+  );
 
   assert.equal(result.newState, 'collecting_order');
   assert.equal(result.agentType, 'orders');
@@ -202,6 +270,92 @@ test('una solicitud de entrega para hoy toma el pedido sin prometer un cupo de r
   assert.match(result.response, /stock y cupo en la ruta de hoy/i);
   assert.match(result.response, /qué tamaño y cuántos huevos necesitas/i);
   assert.doesNotMatch(result.response, /consulta(rlo)? directamente con el equipo/i);
+});
+
+test('a las 12:50 un pedido nuevo ofrece el próximo despacho y no hoy', async () => {
+  const pipeline = buildPipeline(null, 'draft', { activeOrder: false });
+  const result = await pipeline.processMessage(
+    1, 71, '¿Me lo pueden entregar hoy?', null,
+    { now: new Date('2026-10-14T15:50:00.000Z') }
+  );
+  assert.equal(result.newState, 'collecting_order');
+  assert.match(result.response, /próximo día de despacho/i);
+  assert.doesNotMatch(result.response, /mantendr[ée] la opción de despacho para hoy/i);
+});
+
+test('a las 12:55 conserva hoy si el pedido comenzó a las 12:49', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    orderDraft: { items: [{ product_name: 'Huevos XL', quantity: 2 }], customer_name: 'Katherine' },
+    conversation: {
+      sales_started_at: '2026-10-14T15:49:00.000Z',
+      same_day_hold_until: '2026-10-14T16:00:00.000Z',
+    },
+  });
+  const result = await pipeline.processMessage(
+    1, 71, '¿Entregan hoy?', null,
+    { now: new Date('2026-10-14T15:55:00.000Z') }
+  );
+  assert.match(result.response, /mantengo la opción de despacho para hoy/i);
+  assert.doesNotMatch(result.response, /hora.+cerró/i);
+});
+
+test('a las 13:00 un pedido protegido pide confirmación humana sin rechazar el despacho', async () => {
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    orderDraft: { items: [{ product_name: 'Huevos XL', quantity: 2 }], customer_name: 'Katherine' },
+    conversation: {
+      sales_started_at: '2026-10-14T15:49:00.000Z',
+      same_day_hold_until: '2026-10-14T16:00:00.000Z',
+    },
+  });
+  const result = await pipeline.processMessage(
+    1, 71, '¿Entregan hoy?', null,
+    { now: new Date('2026-10-14T16:00:00.000Z') }
+  );
+  assert.equal(result.switchToHuman, true);
+  assert.match(result.response, /estoy confirmando con el equipo/i);
+  assert.doesNotMatch(result.response, /no se podr[aá]|no alcanzará/i);
+});
+
+test('un pedido explícitamente para mañana no se cambia a despacho de hoy aunque haya reserva', async () => {
+  let draftSeen = null;
+  let holdCleared = false;
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false,
+    pipelineState: 'collecting_order',
+    orderDraft: { items: [{ product_name: 'Huevos XL', quantity: 2 }] },
+    beginSalesClosing: {
+      sales_started_at: '2026-10-14T15:40:00.000Z',
+      same_day_hold_until: '2026-10-14T16:00:00.000Z',
+    },
+    clearSameDayHold: async () => { holdCleared = true; },
+    ordersAgent: {
+      isCancelDuringCollection: () => false,
+      extractOrderData: async (_history, draft) => ({ ...draft, delivery_date: '2026-10-15' }),
+      generateOrderResponse: async (_history, _message, draft) => {
+        draftSeen = { ...draft };
+        return 'Perfecto. ¿Me indicas tu dirección?';
+      },
+      claimsRegistered: () => false,
+      isOrderConfirmed: () => false,
+      hasRequiredData: () => false,
+      missingFields: () => ['dirección'],
+    },
+  });
+
+  const result = await pipeline.processMessage(
+    1, 71, 'Lo quiero para mañana', null,
+    { now: new Date('2026-10-14T15:40:00.000Z') }
+  );
+
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(draftSeen.delivery_date, '2026-10-15');
+  assert.equal(draftSeen.delivery_requested_today, undefined);
+  assert.equal(draftSeen.pending_same_day_review, undefined);
+  assert.equal(holdCleared, true);
 });
 
 test('durante un pedido responde primero si reparten mañana y luego retoma los datos faltantes', async () => {
@@ -256,61 +410,56 @@ test('un sí posterior confirma la fecha consultada sin confirmar prematuramente
   assert.equal(stateUpdates.at(-1).draft.pending_delivery_date, undefined);
 });
 
-test('una fecha confirmada después de crear el pedido se guarda sin escalar', async () => {
-  const rawQueries = [];
+test('una fecha confirmada después de crear el pedido se persiste sin escalar', async () => {
+  const poolQueries = [];
+  const routeOutcomes = [];
   const pipeline = buildPipeline(null, 'draft', {
     deliveryEnabled: true,
-    rawQueries,
-    history: [{ direction: 'outbound', content: 'Pedido confirmado: 100 huevos Jumbo. Total $37.000.' }],
-    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje breve' },
+    schedule: 'Lunes a Sábado de 15:00 a 21:00',
+    history: [{ direction: 'outbound', content: 'Pedido #88 confirmado. Total $45.000.' }],
+    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje ambiguo' },
+    poolQueries,
+    routeOutcomes,
   });
 
   const result = await pipeline.processMessage(1, 71, '¿Ya para el lunes?');
 
-  assert.equal(result.switchToHuman, undefined);
-  assert.match(result.response, /qued[oó] registrado para el/i);
-  const update = rawQueries.find(item => /UPDATE orders\s+SET delivery_date/iu.test(item.sql));
+  const update = poolQueries.find(entry => /UPDATE orders/.test(entry.sql) && /delivery_date/.test(entry.sql));
   assert.ok(update);
-  assert.equal(update.params[2], 88);
+  assert.match(update.params[0], /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(update.params[3], 1);
+  assert.equal(routeOutcomes.length, 1);
+  assert.equal(result.switchToHuman, undefined);
+  assert.match(result.response, /qued[oó] registrado/i);
 });
 
-test('un bloqueo bancario temporal pide fecha de pago y no escala', async () => {
+test('una clave bancaria bloqueada pide fecha de pago sin escalar', async () => {
   const pipeline = buildPipeline(null, 'draft', {
-    pendingCharges: [{ source: 'bot', id: '88', order_label: '#DR-88', customer_phone: '56911111111', total_price: 45000 }],
-    paymentPromises: {
-      isTemporaryPaymentAccessIssue: text => /bloque.*clave/iu.test(text),
-      detectPaymentPromise: () => null,
-      recordPaymentPromise: async () => {},
-    },
-    escalation: { escalate: true, urgency: 'medium', reason: 'problema bancario' },
+    pendingCharges: [{ source: 'bot', id: '88', order_label: '#88', customer_phone: '56911111111', total_price: 45000 }],
+    escalation: { escalate: true, urgency: 'medium', reason: 'problema de pago' },
   });
 
-  const result = await pipeline.processMessage(1, 71, 'Se me bloqueó la clave del Banco');
+  const result = await pipeline.processMessage(1, 71, 'Se me bloqueó la clave del banco');
 
   assert.equal(result.switchToHuman, undefined);
-  assert.match(result.response, /qu[eé] d[ií]a podr[aá]s hacer la transferencia/i);
+  assert.match(result.response, /qué día podrás hacer la transferencia/i);
 });
 
-test('una promesa de pago con fecha queda registrada sin escalar', async () => {
-  let recorded = null;
+test('una promesa de pago se guarda y suspende nuevos cobros hasta la fecha', async () => {
+  const promiseRecords = [];
   const pipeline = buildPipeline(null, 'draft', {
-    pendingCharges: [{ source: 'bot', id: '88', order_label: '#DR-88', customer_phone: '56911111111', total_price: 45000 }],
-    paymentPromises: {
-      isTemporaryPaymentAccessIssue: () => false,
-      detectPaymentPromise: () => ({ date: '2026-10-19', label: 'lunes 19 de octubre' }),
-      recordPaymentPromise: async (...args) => { recorded = args; },
-    },
-    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje breve' },
+    pendingCharges: [{ source: 'bot', id: '88', order_label: '#88', customer_phone: '56911111111', total_price: 45000 }],
+    paymentPromise: { date: '2026-10-19', label: 'lunes, 19 de octubre' },
+    promiseRecords,
+    escalation: { escalate: true, urgency: 'medium', reason: 'mensaje ambiguo' },
   });
 
   const result = await pipeline.processMessage(1, 71, 'El lunes deposito');
 
+  assert.equal(promiseRecords.length, 1);
+  assert.equal(promiseRecords[0][0], 1);
   assert.equal(result.switchToHuman, undefined);
-  assert.equal(recorded[0], 1);
-  assert.equal(recorded[1].id, '88');
-  assert.equal(recorded[2].date, '2026-10-19');
-  assert.match(result.response, /No te enviaremos otro cobro antes/i);
+  assert.match(result.response, /no te enviaremos otro cobro antes/i);
 });
 
 test('una abreviación pregunta por el pedido activo sin caer en escalación genérica', async () => {

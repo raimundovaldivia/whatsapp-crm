@@ -1,4 +1,4 @@
-const Anthropic = require('@anthropic-ai/sdk');
+const { client: activeAIClient, modelFor, responseText } = require('./ai-provider');
 
 const OBJECTIVES = new Set(['promocion', 'reactivacion', 'seguimiento', 'cobranza', 'despacho', 'informativo']);
 const AUDIENCE_TYPES = new Set(['all', 'natural', 'empresa']);
@@ -130,14 +130,14 @@ async function planCampaign({ instruction, templates, currentAudience = {}, clie
   if (cleanInstruction.length > 4000) throw new Error('La descripción es demasiado extensa; resúmela en menos de 4.000 caracteres');
   const approved = (templates || []).filter(template => String(template.status || 'APPROVED').toUpperCase() === 'APPROVED');
   if (!approved.length) throw new Error('No hay templates aprobados disponibles para preparar la campaña');
-  const ai = client || new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const ai = client || activeAIClient;
   const response = await ai.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: modelFor('fast'),
     max_tokens: 2600,
     temperature: 0,
     messages: [{ role: 'user', content: plannerPrompt(cleanInstruction, approved, currentAudience) }],
   });
-  const raw = extractJson(response.content?.[0]?.text || '');
+  const raw = extractJson(responseText(response));
   return normalizePlan(raw, approved);
 }
 

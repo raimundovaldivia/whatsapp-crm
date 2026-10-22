@@ -62,6 +62,12 @@ export default function AdminAlertsBanner() {
     try { await adminAlertsAPI.dismiss(id); await load(); } catch { /* noop */ }
   };
 
+  const reopenAdminChannel = () => {
+    const phone = String(data.businessPhone || '').replace(/\D/g, '');
+    if (!phone) return;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent('Hola Diva')}`, '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <div style={{
       position: 'fixed', zIndex: 2000,
@@ -91,8 +97,7 @@ export default function AdminAlertsBanner() {
       {/* Acciones */}
       <div style={{ display: 'flex', gap: '8px', padding: '0 14px 12px' }}>
         {!data.windowOpen && data.businessPhone && (
-          <button
-            onClick={() => window.open(`https://wa.me/${data.businessPhone}?text=${encodeURIComponent('Hola Diva')}`, '_blank', 'noopener,noreferrer')}
+          <button onClick={reopenAdminChannel}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flex: 1,
               backgroundColor: AMBER, color: '#1c1206', border: 'none', borderRadius: '8px', padding: '8px',
               fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
@@ -110,7 +115,7 @@ export default function AdminAlertsBanner() {
           </button>
         )}
         <button onClick={() => setExpanded(v => !v)}
-          style={{ flex: data.windowOpen || data.businessPhone ? 'none' : 1, backgroundColor: 'transparent', color: '#fde68a',
+          style={{ flex: (data.windowOpen || data.businessPhone) ? 'none' : 1, backgroundColor: 'transparent', color: '#fde68a',
             border: '1px solid #78350f', borderRadius: '8px', padding: '8px 14px', fontSize: '12px',
             fontWeight: 600, cursor: 'pointer' }}>
           {expanded ? 'Ocultar' : 'Ver detalle'}

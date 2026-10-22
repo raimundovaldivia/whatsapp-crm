@@ -14,6 +14,7 @@ const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
 const ordersAgent  = require('./agents/orders');
+const { client: conversationalAI, modelFor: conversationalModelFor, responseText, provider: conversationalProvider } = require('./ai-provider');
 const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const campaignOffers = require('./campaign-offers');
@@ -24,18 +25,30 @@ const outboundPolicy = require('./outbound-text-policy');
 const orderInputPolicy = require('./order-input-policy');
 const deliveryCoverage = require('./delivery-coverage');
 const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
+const salesClosing = require('./sales-closing');
+const purchaseFeedback = require('./purchase-feedback');
+const personalOffers = require('./personal-offers');
+const paymentPromises = require('./payment-promises');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
 const postSaleResolution = require('./post-sale-resolution');
 const customerFeedback = require('./customer-feedback');
-const paymentPromises = require('./payment-promises');
 const { syncOrderIntoUnstartedRoutes } = require('./delivery-items');
 const { crmOrderLabel } = require('../utils/order-reference');
+
+function aiTrace(tier, promptVersion) {
+  return {
+    aiProvider: conversationalProvider,
+    aiModel: conversationalModelFor(tier),
+    promptVersion,
+  };
+}
 
 const DELIVERY_STATUS_PATTERNS = [
   /(a\s+qu[eé]\s+hora|qu[eé]\s+hora|en\s+qu[eé]\s+horario|qu[eé]\s+horario|horario\s+de\s+(entrega|reparto|despacho))\b/i,
   /\bcu[aá]ndo\b.{0,25}\b(llega|lleg[aá]|entregan?|entrega|despachan?|sale|viene|traen?|reparten)\b/i,
+  /\bc[oó]mo\s+va\b.{0,25}\b(mi|el)\s+pedido\b/i,
   /\b(ya\s+)?(va\s+en\s+camino|est[aá]\s+en\s+camino|en\s+ruta|va\s+en\s+ruta|sali[oó]\s+(mi|el)|despacharon|lo\s+mandaron|lo\s+enviaron)\b/i,
   /\b(hoy|ma[ñn]ana)\b.{0,20}\b(llega|entregan?|reparten|despachan?|lo\s+traen)\b/i,
   /\b(mi|el)\s+pedido\b.{0,30}\b(llega|viene|hora|cu[aá]ndo|en\s+camino|ruta)\b/i,
@@ -179,7 +192,7 @@ function isScheduledCancellationRequest(message, history = []) {
 // registrado y no cancelado/entregado. Incluye los que ya salieron a reparto
 // (por_despachar / en_camino) porque ahí la nota es aún más útil.
 function EDITABLE_OR_ACTIVE(status) {
-  return ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar', 'en_camino'].includes(status);
+  return ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar', 'asignado_ruta', 'en_camino', 'no_entregado'].includes(status);
 }
 
 function preserveFreshnessPreference(draft, message) {
@@ -224,14 +237,14 @@ function effectiveOrderNote(draft = {}) {
  * Procesa un mensaje entrante y genera la respuesta adecuada
  * @returns {{ response: string, agentType: string, newState: string }}
  */
-async function processMessage(orgId, conversationId, userMessage, log = null) {
+async function processMessage(orgId, conversationId, userMessage, log = null, options = {}) {
   try {
     await require('./referrals').captureInboundReferral(orgId, conversationId, userMessage);
   } catch (error) {
     // La atribución nunca debe impedir que el cliente reciba atención.
     console.warn('[Pipeline] No se pudo registrar el referido:', error.message);
   }
-  let result = await processMessageInternal(orgId, conversationId, userMessage, log);
+  let result = await processMessageInternal(orgId, conversationId, userMessage, log, options);
   if (deliveryCoverage.isCoverageRejection(result?.response)) {
     try {
       const raw = await db.getSetting(orgId, 'delivery_info');
@@ -278,7 +291,7 @@ async function processMessage(orgId, conversationId, userMessage, log = null) {
   return result;
 }
 
-async function processMessageInternal(orgId, conversationId, userMessage, log = null) {
+async function processMessageInternal(orgId, conversationId, userMessage, log = null, options = {}) {
   try { await require('./commercial').consumeBotTurn(orgId); }
   catch(error) {
     if (![403,429].includes(error.status)) throw error;
@@ -288,6 +301,8 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const noop = { step:()=>{}, context:()=>{}, intent:()=>{}, escalation:()=>{}, agent:()=>{}, error:()=>{} };
   const L = log || noop;
   const conversation = await db.getConversationById(conversationId, orgId);
+  const requestedNow = options.now ? new Date(options.now) : null;
+  const nowCl = requestedNow && !Number.isNaN(requestedNow.getTime()) ? requestedNow : new Date();
 
   // Una autorespuesta comercial no es intención de compra. Conservamos
   // template_sent para que la próxima respuesta humana active el flujo real.
@@ -340,6 +355,24 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   }
   if (inboundPolicy.isClosingAcknowledgement?.(userMessage, history, conversation?.pipeline_state)) {
     return { response: null, skipped: true, reason: 'CLOSING_ACKNOWLEDGEMENT' };
+  }
+  const storedDraft = (() => {
+    if (conversation?.order_draft && typeof conversation.order_draft === 'object') return conversation.order_draft;
+    try { return JSON.parse(conversation?.order_draft || '{}'); } catch { return {}; }
+  })();
+  const feedbackAction = purchaseFeedback.nextAction({
+    message: userMessage,
+    draft: storedDraft,
+    state: conversation?.pipeline_state || 'exploring',
+  });
+  if (feedbackAction) {
+    await db.updatePipelineState(conversationId, feedbackAction.state, feedbackAction.draft);
+    L.step('purchase_feedback', feedbackAction.draft?.purchase_feedback?.status || 'completed');
+    return {
+      response: feedbackAction.response,
+      agentType: 'orchestrator',
+      newState: feedbackAction.state,
+    };
   }
   const deliveryEnabled = await require('./commercial').permitted(orgId, 'delivery').catch(() => false);
 
@@ -469,31 +502,10 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const xlPricing = require('./xl-welcome-pricing');
   const previousXlContext = await xlPricing.context(getPool(), orgId, conversation.phone_number);
   const xlContext = isEmpresa ? previousXlContext : xlPricing.forStore(previousXlContext);
-  const leadSection = xlContext.enabled ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
-
-Este cliente es un lead nuevo, posiblemente llegó por publicidad. Tu objetivo es CERRAR LA VENTA en esta conversación.
-
-REGLA PRINCIPAL: Si el cliente ya quiere comprar sin dudar → cierra el pedido de inmediato, SIN ofrecer descuento. Los descuentos son SOLO para cuando el cliente duda o se va a ir sin comprar.
-
-⚠️ SEÑALES DE SALIDA — cuando el cliente diga cualquiera de estas frases o similares, NO te despidas. En cambio, ofrece el descuento de bienvenida:
-- "les aviso", "le aviso", "les comento", "le comento"
-- "voy a pensar", "lo voy a pensar", "lo pienso"
-- "gracias por ahora", "muchas gracias", "ok gracias"
-- "después veo", "después te escribo", "más adelante"
-- "se lo enviaré a mi mamá", "lo voy a consultar", "lo consulto con…"
-- "lo voy a ver con…", "lo veo con mi familia"
-- cualquier frase que implique "me voy a ir sin comprar ahora"
-→ Responde con el descuento: "Antes de que te vayas, como cliente nuevo te puedo dar un 5% de descuento en tu primer pedido 🎉 ¿Te animas?"
-
-Escalera de descuentos (úsala progresivamente, solo si el cliente sigue sin cerrar):
-1. Primera señal de salida o duda → ofrece 5%: "Como cliente nuevo tienes un 5% de descuento en tu primer pedido 🎉"
-2. Sigue sin cerrar después del 5% → sube a 7%: "Te subo el descuento a un 7%, quiero que puedas conocer nuestros productos"
-3. Aún no cierra después del 7% → ofrece el máximo: "Te dejo nuestro mejor precio de bienvenida: 10% — es lo máximo que puedo ofrecerte 😊"
-4. NUNCA ofrezcas más del 10% ni bajes el precio de otra forma.
-
-Revisa el historial: si ya ofreciste un nivel de descuento, NO lo repitas, pasa al siguiente nivel.
-Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido.` : '';
-
+  const personalOfferPaymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
+  let personalOffer = personalOfferPaymentMode === 'cod' && db.getActivePersonalOffer
+    ? await db.getActivePersonalOffer(orgId, conversationId).catch(() => null)
+    : null;
 
   let currentState = conversation.pipeline_state || 'exploring';
   let orderDraft = await db.getOrderDraft(conversationId);
@@ -521,16 +533,25 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
       console.warn('[Pipeline] No se pudo leer la oferta del anuncio:', error.message);
     }
   }
-  // Ofertas personales: si existe una oferta enviada a este cliente, la última
-  // enviada manda y reemplaza cualquier promoción leída del historial.
-  const personalOffer = promotionsEnabled
-    ? await campaignOffersStore.latestForConversation(db.getPool(), orgId, conversationId).catch(() => null)
+  let promotionContext = promotionsEnabled
+    ? promotions.fromHistory(promotionHistory, products) || promotions.restore(orderDraft?.promotion)
     : null;
-  const promotionContext = personalOffer
-    ? campaignOffers.toPromotionContext(personalOffer)
-    : promotionsEnabled
-      ? promotions.fromHistory(promotionHistory, products) || promotions.restore(orderDraft?.promotion)
-      : null;
+  // El último mensaje personal con escala de bandejas es una decisión comercial explícita y
+  // más reciente. Mientras siga dentro de su hora reemplaza (sin acumular) una
+  // eventual oferta automática por bandejas. Fuera de esa hora vuelve a regir
+  // la oferta personal anterior si todavía está activa.
+  // Oferta de campaña (texto libre): la última enviada y vigente reemplaza la oferta automática
+  // y la promoción por historial mientras siga vigente.
+  const campaignOfferRows = promotionsEnabled
+    ? await campaignOffersStore.activeForConversation(getPool(), orgId, conversationId).catch(() => [])
+    : [];
+  const sentCampaignOffers = campaignOfferRows.filter(o => o.status === 'sent' && !campaignOffers.isExpiredOffer(o));
+  if (sentCampaignOffers.length) {
+    personalOffer = null;
+    promotionContext = campaignOffers.toPromotionContextMany(sentCampaignOffers);
+  }
+  if (personalOffer && promotionContext?.oneHourTieredGift && promotionContext.active) personalOffer = null;
+  else if (personalOffer) promotionContext = null;
   if (!promotionsEnabled && orderDraft?.promotion) {
     orderDraft = { ...orderDraft };
     delete orderDraft.promotion;
@@ -539,6 +560,11 @@ Cuando el cliente acepte un descuento, aplícalo al calcular el total del pedido
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
   productosTexto = promotions.alignPromotedAvailability(productosTexto, promotionContext);
   const promotionSection = promotions.promptSection(promotionContext);
+  const leadSection = personalOffer
+    ? personalOffers.promptSection(personalOffer)
+    : (xlContext.enabled && !promotionContext?.active ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
+
+Este cliente es un lead nuevo, posiblemente llegó por publicidad. Defiende el valor y facilita el cierre, pero no inventes ni negocies descuentos. Los únicos beneficios válidos son los que el sistema muestre explícitamente como vigentes.` : '');
   let campaignThreadSection = '';
   try {
     const thread = conversation.phone_number
@@ -554,7 +580,11 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   }
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
-  const orderCtx = { products, specialPrices, baseSpecialPrices, isLead, promotionContext, xlContext };
+  const orderCtx = {
+    products, specialPrices, baseSpecialPrices, isLead, promotionContext,
+    xlContext: personalOffer ? { ...xlContext, enabled: false, eligible: false } : xlContext,
+    personalOffer, now: nowCl,
+  };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
@@ -594,8 +624,13 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
     const priceLine = deliveryEnabled ? xlPricing.deliveryPriceLine(xlContext, freeShippingRaw) : '';
     if (priceLine) deliverySection = `## Información de Entrega\n${priceLine}`;
   }
-  const nowCl = new Date();
   const deliveryHoursEnded = deliveryWindowEnded(deliverySchedule, nowCl);
+  const closingPolicy = salesClosing.sameDayPolicy({
+    now: nowCl,
+    startedAt: conversation.sales_started_at,
+    holdUntil: conversation.same_day_hold_until,
+  });
+  const closingSection = salesClosing.closingPromptSection(conversation, nowCl);
 
   // Instrucciones de pago — sección EXPLÍCITA para que el bot las comparta cuando el cliente pregunte
   let paymentInfoRaw = await db.getSetting(orgId, 'payment_info') || '';
@@ -682,7 +717,9 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
         sent:             'Confirmado — pendiente de pago',
         payment_received: 'Pago recibido — en preparación',
         por_despachar:    'Listo para despachar 📦',
+        asignado_ruta:    'Asignado a una ruta — aún no sale',
         en_camino:        'En camino 🚚',
+        no_entregado:     'Entrega anterior no completada — requiere reprogramación',
       };
       const statusLabel = STATUS_LABEL[activeOrder.status] || activeOrder.status;
 
@@ -713,6 +750,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
 
       activeOrderSummary = [itemsLine, totalLine, statusLabel.replace(/\*\*/g, '')].filter(Boolean).join(' · ');
 
+      const canChangeInChat = ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar'].includes(activeOrder.status);
       pendingOrderSection = `## Pedido activo del cliente ⚠️ LEE ESTO PRIMERO
 Este cliente ya tiene un pedido registrado en nuestro sistema:
 - Estado: **${statusLabel}**${itemsLine ? `\n- Productos: ${itemsLine}` : ''}${totalLine ? `\n- Total: ${totalLine}` : ''}${addrLine ? `\n- Dirección registrada: ${addrLine}` : ''}
@@ -723,7 +761,9 @@ Reglas estrictas para responder sobre este pedido:
 3. NO ofrezcas iniciar un nuevo pedido para los mismos productos.
 4. El horario general de reparto NO confirma que este pedido salga hoy. Solo puedes afirmar que sale hoy si aparece en una ruta activa o tiene un estado explícito que lo confirme.
 5. Si el horario de reparto de hoy ya terminó, NUNCA digas "esta tarde", "va para allá hoy" ni prometas una entrega hoy. Explica el estado real y pide confirmación al equipo si no aparece en una ruta.
-6. Si el cliente quiere modificar o cancelar → dile que sí se puede hacer aquí mismo y pregúntale qué quiere cambiar (el sistema lo procesa automáticamente cuando lo diga).`;
+6. ${canChangeInChat
+        ? 'Si el cliente quiere modificar o cancelar → dile que sí se puede hacer aquí mismo y pregúntale qué quiere cambiar (el sistema lo procesa automáticamente cuando lo diga).'
+        : 'Si el cliente quiere modificar o cancelar → no prometas el cambio automático; deriva al equipo porque el pedido ya entró al flujo logístico.'}`;
 
       // Compatibilidad con pedidos manuales creados antes de que createOrder
       // comenzara a cerrar el borrador automáticamente. Si el historial ya
@@ -999,7 +1039,7 @@ Reglas estrictas:
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
-  const storeCustomPrompt = [dateSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [dateSection, closingSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts].filter(Boolean).join('\n\n---\n\n');
 
   if (isSoftFutureIntent(userMessage) && !['scheduled', 'collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
     if (currentState !== 'scheduled') await db.updatePipelineState(conversationId, 'future_interest');
@@ -1096,9 +1136,7 @@ Reglas estrictas:
       return handleOrderCollection(orgId, conversationId, conversation, userMessage, history, preDraft, productosTexto, orderCtx);
     }
 
-    // Responder contextualmente con Haiku — nunca el mismo texto repetido
-    const Anthropic = require('@anthropic-ai/sdk');
-    const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    // Responder contextualmente con el modelo rápido configurado.
     const recentHistory = history.slice(-6).map(m =>
       `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`
     ).join('\n');
@@ -1123,18 +1161,18 @@ REGLAS ABSOLUTAS:
 - Varía la redacción según el historial. Máximo 2 frases y un emoji como máximo.`;
 
     try {
-      const aiResp = await aiClient.messages.create({
-        model: 'claude-haiku-4-5-20251001',
+      const aiResp = await conversationalAI.messages.create({
+        model: conversationalModelFor('fast'),
         max_tokens: 120,
         system: scheduledSystemPrompt,
         messages: [
           { role: 'user', content: `Conversación reciente:\n${recentHistory}\n\nÚltimo mensaje del cliente: "${userMessage}"` },
         ],
       });
-      const scheduledMsg = aiResp.content[0]?.text?.trim()
-        || `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar.`;
+      const scheduledMsg = responseText(aiResp,
+        `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar.`);
       L.agent('orchestrator', 0);
-      return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled' };
+      return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled', ...aiTrace('fast', 'scheduled-order-v1') };
     } catch (err) {
       console.warn('[Pipeline] scheduled Haiku error:', err.message);
       const fallback = `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar. Si necesitas cambiar algo, dímelo con gusto.`;
@@ -1249,7 +1287,7 @@ REGLAS ABSOLUTAS:
   // primero importes normales. La promoción recibida por template o por el
   // anuncio es la fuente comercial prioritaria.
   if (promotionContext?.active
-      && promotionContext.offers?.length
+      && (promotionContext.offers?.length || promotionContext.oneHourTieredGift)
       && promotions.isCurrentPriceQuestion(userMessage)) {
     const nextDraft = { ...(orderDraft || {}), promotion: promotions.snapshot(promotionContext) };
     await db.updatePipelineState(conversationId, 'interested', nextDraft);
@@ -1311,16 +1349,38 @@ REGLAS ABSOLUTAS:
   // contiene varias promociones. Antes el modelo escogía una al azar y podía
   // crear un pedido con cantidad/precio que el cliente nunca solicitó.
   if (promotionContext?.active
-      && promotionContext.offers?.length > 1
+      && (promotionContext.offers?.length > 1 || promotionContext.oneHourTieredGift)
       && promotions.isBareAffirmative(userMessage)
-      && ['template_sent', 'interested'].includes(currentState)
+      && (promotionContext.oneHourTieredGift || ['template_sent', 'interested'].includes(currentState))
       && !(orderDraft?.items?.length)) {
     const nextDraft = { ...(orderDraft || {}), promotion: promotions.snapshot(promotionContext) };
     await db.updatePipelineState(conversationId, 'interested', nextDraft);
     L.agent('sales', 0);
-    L.step('promotion_choice_required', `${promotionContext.offers.length} opciones; respuesta afirmativa sin selección`);
+    L.step('promotion_choice_required', promotionContext.oneHourTieredGift
+      ? 'escala personal; falta cantidad y calibre'
+      : `${promotionContext.offers.length} opciones; respuesta afirmativa sin selección`);
     return {
       response: promotions.choiceReply(promotionContext),
+      agentType: 'sales',
+      newState: 'interested',
+    };
+  }
+
+  // Si después de ver la escala responde sólo "XL" o "Jumbo", conservar la
+  // elección y pedir los datos que identifican el SKU sin inventar formato ni
+  // color. El siguiente turno continúa normalmente con el pedido valorizado.
+  const tieredGiftSize = promotions.tieredGiftSize?.(userMessage, promotionContext);
+  if (tieredGiftSize && !(orderDraft?.items?.length)) {
+    const nextDraft = {
+      ...(orderDraft || {}),
+      promotion: promotions.snapshot(promotionContext),
+      tiered_gift_size: tieredGiftSize,
+    };
+    await db.updatePipelineState(conversationId, 'interested', nextDraft);
+    L.agent('sales', 0);
+    L.step('tiered_gift_size_selected', tieredGiftSize);
+    return {
+      response: promotions.tieredGiftSizeReply(tieredGiftSize),
       agentType: 'sales',
       newState: 'interested',
     };
@@ -1417,17 +1477,22 @@ REGLAS ABSOLUTAS:
   if (asksForSameDayDelivery) {
     const nextDraft = {
       ...(orderDraft || {}),
-      delivery_requested_today: true,
-      notes: [orderDraft?.notes, 'Cliente solicita entrega hoy; sujeta a confirmación de stock y cupo en ruta.']
+      delivery_requested_today: closingPolicy.offerOpen,
+      notes: [orderDraft?.notes, closingPolicy.offerOpen
+        ? 'Cliente solicita entrega hoy; inició antes de las 12:50 y queda sujeto a stock y cobertura.'
+        : 'Cliente solicitó entrega hoy después de la hora para iniciar pedidos con despacho el mismo día.']
         .filter(Boolean).join(' '),
     };
     await db.updatePipelineState(conversationId, 'collecting_order', nextDraft);
+    const protectedState = closingPolicy.offerOpen && db.beginSalesClosing
+      ? await db.beginSalesClosing(orgId, conversationId).catch(() => null)
+      : null;
     L.agent('orders', 0);
-    L.step('same_day_delivery_request', deliveryHoursEnded ? 'horario terminado' : 'tomar pedido y confirmar cupo');
+    L.step('same_day_delivery_request', protectedState?.same_day_hold_until ? 'reserva hasta 13:00' : 'próximo día de despacho');
     return {
-      response: deliveryHoursEnded
-        ? 'El reparto de hoy ya terminó, así que no quiero prometerte una entrega que no alcanzará a salir. Sí puedo dejarte el pedido listo para el próximo reparto. ¿Qué tamaño y cuántos huevos necesitas?'
-        : 'Sí, podemos revisarlo 😊 Primero te tomo el pedido y confirmamos si hay stock y cupo en la ruta de hoy; no te voy a prometer la entrega hasta verificarlo. ¿Qué tamaño y cuántos huevos necesitas?',
+      response: closingPolicy.offerOpen
+        ? 'Sí 😊 Primero te tomo el pedido. Como comenzaste antes del cierre, mantendré la opción de despacho para hoy mientras lo completamos, hasta las 13:00, sujeto a confirmar stock y cupo en la ruta de hoy. ¿Qué tamaño y cuántos huevos necesitas?'
+        : 'La hora para iniciar un pedido nuevo con despacho hoy ya cerró. Sí puedo dejarlo preparado para el próximo día de despacho disponible. ¿Qué producto y cantidad necesitas?',
       agentType: 'orders',
       newState: 'collecting_order',
     };
@@ -1769,6 +1834,44 @@ REGLAS ABSOLUTAS:
     && DELIVERY_AVAILABILITY_PATTERNS.some(pattern => pattern.test(userMessage));
   if (asksDeliveryAvailabilityDuringOrder) {
     const requested = requestedDeliveryDay(userMessage, nowCl);
+    if (requested?.date === todayISOChile(nowCl)) {
+      let activeClosingPolicy = closingPolicy;
+      if (closingPolicy.offerOpen && !closingPolicy.protectedOrder && db.beginSalesClosing) {
+        const savedClosing = await db.beginSalesClosing(orgId, conversationId).catch(() => null);
+        activeClosingPolicy = salesClosing.sameDayPolicy({
+          now: nowCl,
+          startedAt: savedClosing?.sales_started_at,
+          holdUntil: savedClosing?.same_day_hold_until,
+        });
+      }
+      const nextDraft = { ...(orderDraft || {}) };
+      const missing = missingOrderData(nextDraft, conversation);
+      const missingPrompt = missing.length ? ` Para completar el pedido me falta ${joinNatural(missing)}.` : '';
+      if (activeClosingPolicy.canContinueSameDay) {
+        nextDraft.delivery_requested_today = true;
+        nextDraft.delivery_date = requested.date;
+        await db.updatePipelineState(conversationId, 'collecting_order', nextDraft);
+        L.agent('orders', 0);
+        L.step('protected_same_day_during_order', 'reserva vigente hasta 13:00');
+        return {
+          response: `Sí 😊 Como comenzaste antes del cierre, mantengo la opción de despacho para hoy mientras terminamos el pedido, sujeta a stock y cobertura.${missingPrompt}`,
+          agentType: 'orders', newState: 'collecting_order',
+        };
+      }
+      await db.updatePipelineState(conversationId, 'collecting_order', nextDraft);
+      L.agent('orders', 0);
+      L.step('same_day_closed_during_order', activeClosingPolicy.needsHumanReview ? 'requiere confirmación humana' : 'pedido nuevo después de 12:50');
+      return activeClosingPolicy.needsHumanReview
+        ? {
+          response: `Como comenzaste antes del cierre, estoy confirmando con el equipo si el despacho de hoy todavía alcanza a salir. No necesitas volver a enviarme los datos.${missingPrompt}`,
+          agentType: 'orders', newState: 'collecting_order', switchToHuman: true,
+          escalationReason: 'Pedido iniciado antes de las 12:50 consulta por despacho después de las 13:00',
+        }
+        : {
+          response: `La hora para iniciar un pedido nuevo con despacho hoy ya cerró. Puedo dejarlo preparado para el próximo día de despacho disponible.${missingPrompt}`,
+          agentType: 'orders', newState: 'collecting_order',
+        };
+    }
     const covered = requested ? scheduleCoversWeekday(deliverySchedule, requested.weekday) : null;
     const nextDraft = { ...(orderDraft || {}) };
     if (requested) {
@@ -1951,7 +2054,19 @@ REGLAS ABSOLUTAS:
         const eta = `${formatTime(lowerMinutes)}–${formatTime(upperMinutes)}`;
         routeProgress = ` Está como parada ${position + 1} de ${stops.length}; quedan ${pendingBefore} entrega${pendingBefore === 1 ? '' : 's'} antes. Calculando unos 15 minutos por parada, el rango estimado es ${eta}.`;
       }
-      response = `¡Tu pedido ya está en la ruta de hoy${hi}! 🚚${routeProgress}${win} Es una estimación y puede variar por tránsito o demoras; te avisamos cuando vaya acercándose. 😊`;
+      response = activeDeliveryRoute.status === 'in_progress'
+        ? `¡Tu pedido ya va en la ruta de hoy${hi}! 🚚${routeProgress}${win} Es una estimación y puede variar por tránsito o demoras; te avisamos cuando vaya acercándose. 😊`
+        : `Tu pedido ya está asignado a la ruta de hoy${hi} 🚚${routeProgress}${win} La ruta todavía no figura iniciada; el horario es estimado y puede variar. Te avisamos cuando vaya en camino. 😊`;
+    } else if (activeOrder.status === 'no_entregado') {
+      response = `Veo que el último intento de entrega de tu pedido no se pudo completar${hi}. Todavía no hay una nueva ruta confirmada, así que le pido al equipo revisar lo ocurrido y coordinar contigo el próximo intento. Te responden por aquí 🙏`;
+      switchToHuman = true;
+      escalationReason = `Pedido #${activeOrder.id} quedó no entregado y el cliente consulta su estado; revisar incidencia y reprogramación`;
+    } else if (activeOrder.status === 'en_camino') {
+      response = `Tu pedido figura en camino${hi} 🚚, pero no tengo una ruta activa que permita calcular una hora responsablemente. Le pido al equipo confirmar la ubicación y te responden por aquí 🙏`;
+      switchToHuman = true;
+      escalationReason = `Pedido #${activeOrder.id} figura en_camino pero no tiene una ruta activa visible para informar su avance`;
+    } else if (activeOrder.status === 'asignado_ruta') {
+      response = `Tu pedido ya está asignado a una ruta${hi} 📦, pero esa ruta todavía no figura iniciada. Aún no hay una hora exacta confirmada; te avisamos apenas vaya en camino.`;
     } else if (asksAboutTodaysRoute && todayDeliveryActivity) {
       const routeMismatch = todayDeliveryActivity.includes_order
         ? 'Tu pedido aparece en el registro de esa ruta, pero todavía no figura como entregado'
@@ -1965,8 +2080,6 @@ REGLAS ABSOLUTAS:
       response = `No veo una ruta de reparto registrada hoy que incluya tu pedido${hi}. El pedido sigue ${String(activeOrder.status) === 'por_despachar' ? 'listo para despachar' : 'en preparación'}${deliveryHoursEnded ? ' y el horario de hoy ya terminó' : ''}. Le pido al equipo revisar qué ocurrió y confirmar cuándo sale, para no darte una información incorrecta 🙏`;
       switchToHuman = true;
       escalationReason = `Pedido ${crmOrderLabel(activeOrder.id)}: cliente consulta si hubo reparto hoy, pero no hay ruta registrada que permita confirmarlo`;
-    } else if (activeOrder.status === 'por_despachar' && !deliveryHoursEnded) {
-      response = `Tu pedido está listo para salir${hi} 📦.${win} Está considerado para el reparto de hoy; cuando salga a la ruta te avisamos. 😊`;
     } else if (scheduledRelation === 'today') {
       response = deliveryHoursEnded
         ? `Tu pedido estaba agendado para hoy${hi}, pero el horario de reparto ya terminó y todavía figura en preparación, sin aparecer en una ruta. Le pido al equipo revisar qué ocurrió y confirmar el próximo despacho. Te responden por aquí 🙏`
@@ -1981,6 +2094,8 @@ REGLAS ABSOLUTAS:
       response = `El horario de reparto de hoy ya terminó${hi}. Tu pedido sigue en preparación y no aparece en una ruta activa, así que no quiero prometerte una entrega que no está confirmada. Le pido al equipo revisar si quedó para el próximo reparto y te responden por aquí 🙏`;
       switchToHuman = true;
       escalationReason = `Pedido ${crmOrderLabel(activeOrder.id)} sigue en estado ${activeOrder.status} al terminar el horario de reparto y no figura en una ruta activa`;
+    } else if (activeOrder.status === 'por_despachar') {
+      response = `Tu pedido está listo para despachar${hi} 📦, pero todavía no aparece en una ruta. Aún no hay una hora de entrega confirmada; te avisamos apenas salga a reparto.`;
     } else {
       // draft / nuevo / sent / payment_received → aún en preparación
       response = `Tu pedido está en preparación${hi} 😊.${win} Sale en el próximo reparto y te avisamos apenas vaya en camino.`;
@@ -2195,7 +2310,7 @@ REGLAS ABSOLUTAS:
     const salesResponse = await salesAgent.generateSalesResponse(history, userMessage, productosTexto, storeCustomPrompt, softOpts);
     L.agent('sales', Date.now() - tSoft);
     L.step('future_interest', 'interés sin fecha — sin presión');
-    return { response: salesResponse, agentType: 'sales', newState: 'future_interest' };
+    return { response: salesResponse, agentType: 'sales', newState: 'future_interest', ...aiTrace('smart', 'sales-v2') };
   }
 
   // Si el turno anterior ya guardó la fecha al responder una consulta sobre
@@ -2260,7 +2375,7 @@ REGLAS ABSOLUTAS:
     }
     await db.updatePipelineState(conversationId, effectiveState, undefined);
     L.agent('sales', Date.now() - tDel);
-    return { response: salesResponse, agentType: 'sales', newState: effectiveState };
+    return { response: salesResponse, agentType: 'sales', newState: effectiveState, ...aiTrace('smart', 'sales-v2') };
   }
 
   // El cliente quiere hablar con humano — salvo si ya detectamos bucle de escalación
@@ -2311,7 +2426,7 @@ REGLAS ABSOLUTAS:
 
     await db.updatePipelineState(conversationId, newState, undefined);
     L.agent('sales', Date.now() - tWarm);
-    return { response: salesResponse, agentType: 'sales', newState };
+    return { response: salesResponse, agentType: 'sales', newState, ...aiTrace('smart', 'sales-v2') };
   }
 
   // Interés, objeción, exploración, delivery, soporte → Agente de ventas
@@ -2324,7 +2439,7 @@ REGLAS ABSOLUTAS:
   }
   await db.updatePipelineState(conversationId, finalState, undefined);
   L.agent('sales', Date.now() - tGen);
-  return { response: salesResponse, agentType: 'sales', newState: finalState };
+  return { response: salesResponse, agentType: 'sales', newState: finalState, ...aiTrace('smart', 'sales-v2') };
 }
 
 /**
@@ -2343,15 +2458,13 @@ async function handlePartialDelivery(orgId, conversationId, conversation, userMe
   } catch { deliveredItems = []; }
   if (!deliveredItems.length) return null;
 
-  // 1. Entender cantidades: qué dice el cliente que pidió y qué recibió
-  const Anthropic = require('@anthropic-ai/sdk');
-  const aiClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  // 1. Entender cantidades con el proveedor conversacional configurado.
   const recent = history.slice(-8).map(m => `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`).join('\n');
   const deliveredText = deliveredItems.map(i => `${i.quantity}x ${i.name}`).join(', ');
   let claim = null;
   try {
-    const resp = await aiClient.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const resp = await conversationalAI.messages.create({
+      model: conversationalModelFor('fast'),
       max_tokens: 200,
       system: `El cliente reclama que su entrega llegó incompleta. Lo que el sistema registra como ENTREGADO: ${deliveredText}.
 Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre del producto tal como está en lo entregado>","ordered":N,"received":N}],"confident":true|false}
@@ -2360,7 +2473,7 @@ Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre
 - Solo el JSON.`,
       messages: [{ role: 'user', content: `Conversación:\n${recent}\n\nÚltimo mensaje del cliente: "${userMessage}"` }],
     });
-    claim = JSON.parse((resp.content[0]?.text || '').match(/\{[\s\S]*\}/)?.[0] || 'null');
+    claim = JSON.parse(responseText(resp).match(/\{[\s\S]*\}/)?.[0] || 'null');
   } catch (e) {
     console.warn('[Pipeline] faltante: extracción falló:', e.message);
     return null;
@@ -2503,10 +2616,21 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
  * @param {object} orderCtx — { products, specialPrices, isLead }
  */
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx = {}) {
-  const { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null } = orderCtx;
+  const { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null, personalOffer = null } = orderCtx;
+  const requestedOrderNow = orderCtx.now ? new Date(orderCtx.now) : null;
+  const orderNow = requestedOrderNow && !Number.isNaN(requestedOrderNow.getTime()) ? requestedOrderNow : new Date();
   orderDraft = pricing.normalizeDraft(orderDraft || {});
   if (['facebook', 'instagram'].includes(conversation.source_channel)) orderDraft.requires_customer_phone = true;
   if (promotionContext) orderDraft.promotion = promotions.snapshot(promotionContext);
+  const persistedClosing = db.beginSalesClosing
+    ? await db.beginSalesClosing(orgId, conversationId).catch(() => null)
+    : null;
+  const closingConversation = { ...conversation, ...(persistedClosing || {}) };
+  const orderClosingPolicy = salesClosing.sameDayPolicy({
+    now: orderNow,
+    startedAt: closingConversation.sales_started_at,
+    holdUntil: closingConversation.same_day_hold_until,
+  });
 
   // 0a. ¿Se arrepintió a mitad del pedido? Antes el estado quedaba pegado en
   //     collecting_order para siempre y cada mensaje iba al agente de pedidos.
@@ -2574,7 +2698,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       updatedDraft.phone_invalid = true;
     }
   }
-  const explicitDelivery = resolveExplicitDeliveryDate(userMessage, todayISOChile());
+  const explicitDelivery = resolveExplicitDeliveryDate(userMessage, todayISOChile(orderNow));
   if (explicitDelivery.conflict) {
     return {
       response: 'Quiero confirmar bien la fecha: el día de la semana y la fecha que indicas no coinciden. ¿Para qué fecha exacta necesitas el pedido?',
@@ -2586,6 +2710,30 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   // semana aislado no reemplaza una fecha ya acordada en turnos anteriores.
   if (explicitDelivery.date && (!updatedDraft.delivery_date || explicitDelivery.source !== 'weekday')) {
     updatedDraft.delivery_date = explicitDelivery.date;
+  }
+  const todayForOrder = todayISOChile(orderNow);
+  const requestedDeliveryDate = toISODate(updatedDraft.delivery_date);
+  const hasExplicitNonTodayDelivery = Boolean(requestedDeliveryDate && requestedDeliveryDate !== todayForOrder);
+  // La fecha de hoy se fija por código solamente para un cierre protegido. Si
+  // ya pasaron las 13:00, se conserva la solicitud pero queda pendiente de
+  // confirmación humana y no entra automáticamente a la ruta del día.
+  // Una fecha explícita distinta de hoy siempre manda: la reserva de las
+  // 13:00 no puede convertir un pedido "para mañana" en despacho de hoy.
+  if (hasExplicitNonTodayDelivery) {
+    delete updatedDraft.delivery_requested_today;
+    delete updatedDraft.pending_same_day_review;
+    if (closingConversation.same_day_hold_until && db.clearSameDayHold) {
+      await db.clearSameDayHold(orgId, conversationId).catch(() => null);
+    }
+  } else {
+    if (orderClosingPolicy.protectedOrder) updatedDraft.delivery_requested_today = true;
+    if (updatedDraft.delivery_requested_today && orderClosingPolicy.canContinueSameDay) {
+      updatedDraft.delivery_date = todayForOrder;
+      delete updatedDraft.pending_same_day_review;
+    } else if (updatedDraft.delivery_requested_today && orderClosingPolicy.needsHumanReview) {
+      if (toISODate(updatedDraft.delivery_date) === todayForOrder) delete updatedDraft.delivery_date;
+      updatedDraft.pending_same_day_review = true;
+    }
   }
   const orderNote = effectiveOrderNote(updatedDraft);
   const normalizedDeliveryDate = toISODate(updatedDraft.delivery_date);
@@ -2637,18 +2785,29 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     });
   }
 
-  // 1a. Valorizar el carrito contra el catálogo. El descuento solo aplica a
-  //     leads (es la escalera de bienvenida del prompt de ventas); para
-  //     clientes existentes cualquier descuento lo maneja el equipo.
-  let priced = pricing.priceItems(updatedDraft.items, products, {
+  // 1a. Valorizar el carrito contra el catálogo. Las promociones generales y
+  //     el beneficio personal son mutuamente excluyentes; el monto personal
+  //     se decide por código según bandejas XL/L y margen, nunca por el modelo.
+  const pricingOptions = {
     specialPrices: promotionApplies ? specialPrices : baseSpecialPrices,
     categoryDiscounts: promotionApplies ? promotionContext.categoryDiscounts : [],
     secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
     discountPct: promotionApplies && promotionContext.discountPct
       ? promotionContext.discountPct
-      : (isLead && !orderCtx.xlContext?.enabled ? updatedDraft.discount_pct : 0),
+      : (isLead && !orderCtx.xlContext?.enabled && !personalOffer ? updatedDraft.discount_pct : 0),
     maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
-  });
+  };
+  let priced = pricing.priceItems(updatedDraft.items, products, pricingOptions);
+  let personalOfferDiscount = personalOffers.applicableDiscount(priced, personalOffer, orderNow);
+  if (personalOfferDiscount) {
+    priced = pricing.priceItems(updatedDraft.items, products, { ...pricingOptions, fixedDiscountAmount: personalOfferDiscount });
+  }
+  const tieredGiftDiscount = promotionApplies
+    ? (promotions.applicableTieredGiftDiscount?.(priced, promotionContext, orderNow) || 0)
+    : 0;
+  if (tieredGiftDiscount) {
+    priced = pricing.priceItems(updatedDraft.items, products, { ...pricingOptions, fixedDiscountAmount: tieredGiftDiscount });
+  }
   const giftQualifies = freeGiftRule && promotions.giftQualifies(freeGiftRule, priced.total);
   if (giftQualifies && !selectedGift && freeGiftRule.candidates?.length === 1) {
     selectedGift = freeGiftRule.candidates[0];
@@ -2656,15 +2815,20 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   if (giftQualifies && selectedGift) {
     const giftItem = promotions.freeGiftOrderItem(selectedGift, freeGiftRule);
     if (giftItem) {
-      priced = pricing.priceItems([...priced.items, giftItem], products, {
+      const itemsWithGift = [...priced.items, giftItem];
+      priced = pricing.priceItems(itemsWithGift, products, {
         specialPrices: promotionApplies ? specialPrices : baseSpecialPrices,
         categoryDiscounts: promotionApplies ? promotionContext.categoryDiscounts : [],
         secondUnitDiscounts: promotionApplies ? promotionContext.secondUnitDiscounts : [],
         discountPct: promotionApplies && promotionContext.discountPct
           ? promotionContext.discountPct
-          : (isLead && !orderCtx.xlContext?.enabled ? updatedDraft.discount_pct : 0),
+          : (isLead && !orderCtx.xlContext?.enabled && !personalOffer ? updatedDraft.discount_pct : 0),
         maxDiscountPct: promotionApplies && promotionContext.discountPct ? 100 : undefined,
       });
+      personalOfferDiscount = personalOffers.applicableDiscount(priced, personalOffer, orderNow);
+      if (personalOfferDiscount) {
+        priced = pricing.priceItems(itemsWithGift, products, { ...pricingOptions, fixedDiscountAmount: personalOfferDiscount });
+      }
       updatedDraft.free_gift_choice = selectedGift;
       delete updatedDraft.awaiting_free_gift;
     }
@@ -2681,6 +2845,13 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   updatedDraft.subtotal = priced.subtotal;
   updatedDraft.discount_pct = priced.discountPct;
   updatedDraft.discount_amount = priced.discountAmount;
+  if (personalOfferDiscount) {
+    updatedDraft.personal_offer_id = personalOffer.id;
+    updatedDraft.personal_offer_discount_amount = personalOfferDiscount;
+  } else {
+    delete updatedDraft.personal_offer_id;
+    delete updatedDraft.personal_offer_discount_amount;
+  }
   updatedDraft.total    = priced.total;
   if (priced.unmatched.length) console.log(`[Pipeline] 🛒 Ítems sin match en catálogo: ${priced.unmatched.join(' | ')}`);
   await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
@@ -2716,10 +2887,17 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // 2. Respuesta del agente de órdenes (con el carrito valorizado en el prompt)
   const promoPricing = promotionApplies
-    ? `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal. Conserva TODOS los productos promocionados que pidió el cliente; no elimines ninguno por una marca de stock del catálogo.\n`
+    ? (promotionContext.oneHourTieredGift
+      ? `REGALO PERSONAL APLICADO: ${tieredGiftDiscount ? `$${tieredGiftDiscount.toLocaleString('es-CL')} según la cantidad de bandejas XL/Jumbo` : 'todavía no aplica porque falta una bandeja XL/Jumbo elegible'}. Usa exactamente el total calculado y continúa recopilando los datos faltantes del pedido.\n`
+      : `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal. Conserva TODOS los productos promocionados que pidió el cliente; no elimines ninguno por una marca de stock del catálogo.\n`)
     : '';
   const pricingText   = promoPricing + pricing.pricingContext(priced);
-  const agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
+  let agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
+  if (updatedDraft.pending_same_day_review
+      && !agentResponse.includes('ORDEN_CONFIRMADA')
+      && ordersAgent.hasRequiredData(updatedDraft)) {
+    agentResponse = `${agentResponse}\n\nComo comenzaste antes del cierre, cuando confirmes revisaré con el equipo si el despacho de hoy todavía alcanza a salir.`;
+  }
 
   // 3. ¿Confirmó?
   //    REGLA DURA: si el modelo le dice al cliente "tu pedido queda
@@ -2831,15 +3009,33 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           shippingAddress,
           totalPrice:      priced.total,
           note:            orderNote,
+          personalOfferId: updatedDraft.personal_offer_id || null,
+          personalOfferDiscountAmount: updatedDraft.personal_offer_discount_amount || null,
+          personalOfferTrays: updatedDraft.personal_offer_id ? personalOffers.eggTrayQuantity(priced.items) : null,
         });
+        const pendingCampaigns = await campaignOffersStore.activeForConversation(getPool(), orgId, conversationId).catch(() => []);
+        for (const pending of pendingCampaigns) {
+          if (pending.status !== 'sent' || campaignOffers.isExpiredOffer(pending)) continue;
+          if (!priced.items.some(it => String(it.product_id) === String(pending.product_id))) continue;
+          try { await campaignOffersStore.redeem(getPool(), orgId, pending.id, order.id); }
+          catch (error) { console.warn('[Campaign offers] no se pudo canjear la oferta:', error.message); }
+        }
         const orderMeta = {};
         if (updatedDraft.delivery_date) orderMeta.delivery_date = updatedDraft.delivery_date;
         if (Object.keys(orderMeta).length) await db.updateOrder(order.id, orderMeta);
         saveContact();
         await db.updatePipelineState(conversationId, 'done', {});
         console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id} (${itemsForDb.length} ítems, total ${priced.total})`);
-        const successMsg = `✅ ¡Pedido confirmado!\n\n${summary}\n${who}\n\nEl pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
-        return { response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id } };
+        const successMsg = updatedDraft.pending_same_day_review
+          ? `✅ ¡Pedido confirmado!\n\n${summary}\n${who}\n\nComo comenzaste antes del cierre, estoy confirmando con el equipo si alcanza a salir hoy. Te respondemos por aquí; no necesitas volver a enviar los datos 😊`
+          : `✅ ¡Pedido confirmado!\n\n${summary}\n${who}\n\n${updatedDraft.delivery_requested_today ? 'Mantuvimos tu solicitud de despacho para hoy. ' : ''}El pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
+        return {
+          response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id },
+          ...(updatedDraft.pending_same_day_review ? {
+            switchToHuman: true,
+            escalationReason: `Pedido #${order.id} iniciado antes de las 12:50 y completado después de las 13:00; confirmar si alcanza despacho hoy`,
+          } : {}),
+        };
       } catch (err) {
         console.error('[Pipeline] ❌ Error guardando pedido COD:', err.message);
         await db.setAgentMode(conversationId, 'coordinating');
@@ -2852,8 +3048,16 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       const result = await createShopifyOrder(orgId, conversationId, { ...updatedDraft, items: itemsForDb, total: priced.total });
       saveContact();
       await db.updatePipelineState(conversationId, 'awaiting_payment', {});
-      const successMsg = `✅ ¡Pedido creado!\n\n${summary}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n¡Te avisamos cuando esté en camino! 🚀`;
-      return { response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result };
+      const successMsg = updatedDraft.pending_same_day_review
+        ? `✅ ¡Pedido creado!\n\n${summary}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\nComo comenzaste antes del cierre, estoy confirmando con el equipo si alcanza a salir hoy. Te respondemos por aquí 😊`
+        : `✅ ¡Pedido creado!\n\n${summary}\n👤 ${updatedDraft.customer_name}\n\n💳 Completa tu pago aquí:\n${result.invoiceUrl}\n\n${updatedDraft.delivery_requested_today ? 'Mantuvimos tu solicitud de despacho para hoy. ' : ''}¡Te avisamos cuando esté en camino! 🚀`;
+      return {
+        response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result,
+        ...(updatedDraft.pending_same_day_review ? {
+          switchToHuman: true,
+          escalationReason: `Pedido Shopify iniciado antes de las 12:50 y completado después de las 13:00; confirmar si alcanza despacho hoy`,
+        } : {}),
+      };
     } catch (err) {
       const status  = err.response?.status;
       const detail  = err.response?.data ? JSON.stringify(err.response.data) : err.message;
@@ -2885,7 +3089,12 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // Aún recopilando datos — quitar la palabra clave si apareció en el texto
   const cleanResponse = agentResponse.replace(/ORDEN_CONFIRMADA/g, '').trim();
-  return { response: cleanResponse || '¡Entendido! Déjame verificar los datos.', agentType: 'orders', newState: 'collecting_order' };
+  return {
+    response: cleanResponse || '¡Entendido! Déjame verificar los datos.',
+    agentType: 'orders',
+    newState: 'collecting_order',
+    ...aiTrace('smart', 'orders-v1'),
+  };
 }
 
 /**
@@ -3006,6 +3215,9 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     shippingAddress: { address: draft.address, city: draft.city },
     totalPrice: shopifyResult.totalPrice || draft.total || null,
     note: orderNote,
+    personalOfferId: draft.personal_offer_id || null,
+    personalOfferDiscountAmount: draft.personal_offer_discount_amount || null,
+    personalOfferTrays: draft.personal_offer_id ? personalOffers.eggTrayQuantity(items) : null,
   });
   if (draft?.promotion?.offerId) {
     try {
