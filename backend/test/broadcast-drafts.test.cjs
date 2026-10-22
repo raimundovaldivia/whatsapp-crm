@@ -81,6 +81,26 @@ test('purchase cycle uses distinct Chile business dates and excludes cancelled o
   assert.equal(result.diasDesdeCompra, 1);
 });
 
+test('old unanswered campaigns do not exclude a re-engagement draft, while a recent contact or explicit decline does', () => {
+  const { drafts } = setup();
+  const oldOutbound = drafts.messageSafety([{ direction: 'outbound', content: 'Oferta enviada', created_at: '2026-10-03T15:00:00Z' }], '2026-10-22');
+  assert.equal(oldOutbound.unansweredRecentOutreach, false);
+  assert.equal(oldOutbound.explicitDecline, false);
+
+  const recentOutbound = drafts.messageSafety([{ direction: 'outbound', content: 'Oferta enviada', created_at: '2026-10-21T15:00:00Z' }], '2026-10-22');
+  assert.equal(recentOutbound.unansweredRecentOutreach, true);
+
+  const answeredOutreach = drafts.messageSafety([
+    { direction: 'outbound', content: 'Oferta anterior', created_at: '2026-10-20T15:00:00Z' },
+    { direction: 'outbound', content: 'Oferta reciente', created_at: '2026-10-21T15:00:00Z' },
+    { direction: 'inbound', content: 'Hola, lo reviso', created_at: '2026-10-21T16:00:00Z' },
+  ], '2026-10-22');
+  assert.equal(answeredOutreach.unansweredRecentOutreach, false);
+
+  const decline = drafts.messageSafety([{ direction: 'inbound', content: 'No gracias, no me escriban más.', created_at: '2026-09-01T15:00:00Z' }], '2026-10-22');
+  assert.equal(decline.explicitDecline, true);
+});
+
 test('approval binds exact message, recipient and order; generation cannot authorize', async () => {
   const { drafts } = setup();
   const items = [{ phone: '56911111111', message: 'Hola Ana, ¿necesitas huevos?' }];
