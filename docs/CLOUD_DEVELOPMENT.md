@@ -30,11 +30,11 @@ Los trabajos de seguimiento, workers de webhooks, atribución y campañas no arr
 
 ## Límites de seguridad
 
-- Compose tiene nombre `crm-sandbox`, volumen propio y red `internal: true`. PostgreSQL no publica puertos; el único puerto publicado es frontend en `127.0.0.1:8080`.
+- Compose tiene nombre `crm-sandbox`, volumen propio y red `internal: true` para backend/PostgreSQL. Ninguno publica puertos ni tiene otra red. Solo nginx (sin credenciales) tiene además una red de ingreso para publicar `127.0.0.1:8080` y reenviar al backend fijo; no actúa como proxy abierto.
 - No se carga `backend/.env` desde el host, no se interpolan credenciales del host y los Dockerfiles excluyen archivos `.env`. El backend sandbox rechaza otra dirección de DB, credenciales externas y overrides de conexión antes de cargar routers o ejecutar la preparación del esquema.
 - Hay bloqueo adicional de Axios, fetch y HTTP/HTTPS salientes. La red interna es la barrera para clientes nuevos o SDK que no usen esos adaptadores.
 - La clave JWT se genera al iniciar: las sesiones se invalidan cuando reinicia el backend. Los datos ficticios persisten sin duplicarse.
-- El editor Codespaces tiene Internet para instalar dependencias y trabajar con GitHub; los contenedores de aplicación están aislados. No agregues secretos productivos al Codespace, devcontainer ni Compose. No conectes el contenedor a otra red ni ejecutes el backend fuera de Compose con credenciales reales.
+- El editor Codespaces tiene Internet para instalar dependencias y trabajar con GitHub. Backend y DB solo tienen la red interna; nginx tiene la red adicional de ingreso. No agregues secretos productivos al Codespace, devcontainer ni Compose. No conectes el backend a otra red ni lo ejecutes fuera de Compose con credenciales reales.
 - El esquema todavía se prepara al iniciar, pero solo sobre `db:5432/crm_sandbox`. Separar migraciones productivas corresponde a otro PR.
 
 ## Verificar y reiniciar

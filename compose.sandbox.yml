@@ -43,11 +43,13 @@ services:
     volumes:
       - ./sandbox/nginx.conf:/etc/nginx/conf.d/default.conf.template:ro
     ports: ["127.0.0.1:8080:8080"]
-    networks: [isolated]
+    # Only the credential-free reverse proxy has an ingress bridge for published ports.
+    networks: [isolated, ingress]
     depends_on:
       backend: { condition: service_healthy }
 networks:
   isolated:
     internal: true
+  ingress: {}
 volumes:
   sandbox-db:
