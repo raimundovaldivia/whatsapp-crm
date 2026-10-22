@@ -23,7 +23,7 @@ jobs:
       - name: Verify private network and blocked egress
         run: |
           test "$(docker network inspect crm-sandbox_isolated --format '{{.Internal}}')" = true
-          docker compose -f compose.sandbox.yml exec -T backend node -e "fetch('https://example.com').then(()=>process.exit(1)).catch(e=>{if(e.code!=='SANDBOX_EGRESS_BLOCKED')process.exit(1)})"
+          docker compose -f compose.sandbox.yml exec -T backend node -e "require('./src/sandbox/runtime').initialize();fetch('https://example.com').then(()=>process.exit(1)).catch(e=>{if(e.code!=='SANDBOX_EGRESS_BLOCKED')process.exit(1)})"
           docker compose -f compose.sandbox.yml exec -T backend node -e "const s=require('net').connect({host:'1.1.1.1',port:443});s.on('connect',()=>process.exit(1));s.on('error',()=>process.exit(0));setTimeout(()=>{s.destroy();process.exit(0)},3000)"
       - name: Verify application, tenant isolation and simulated integrations
         run: SANDBOX_SMOKE_TOKEN_FILE=/tmp/sandbox-smoke-token node scripts/smoke-sandbox.cjs
