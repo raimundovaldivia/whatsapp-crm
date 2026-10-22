@@ -1,0 +1,46 @@
+name: Verify isolated sandbox
+on:
+  pull_request:
+  push:
+    branches: [infra/cloud-sandbox]
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --ignore-scripts --no-fund
+        working-directory: frontend
+      - run: docker compose -f compose.sandbox.yml config --quiet
+      - run: docker compose -f compose.sandbox.yml up --build -d --wait --wait-timeout 180
+      - name: Verify private network and blocked egress
+        run: |
+          test "$(docker network inspect crm-sandbox_isolated --format '{{.Internal}}')" = true
+          docker compose -f compose.sandbox.yml exec -T backend node -e "fetch('https://example.com').then(()=>process.exit(1)).catch(e=>{if(e.code!=='SANDBOX_EGRESS_BLOCKED')process.exit(1)})"
+          docker compose -f compose.sandbox.yml exec -T backend node -e "const s=require('net').connect({host:'1.1.1.1',port:443});s.on('connect',()=>process.exit(1));s.on('error',()=>process.exit(0));setTimeout(()=>{s.destroy();process.exit(0)},3000)"
+      - name: Verify application, tenant isolation and simulated integrations
+        run: SANDBOX_SMOKE_TOKEN_FILE=/tmp/sandbox-smoke-token node scripts/smoke-sandbox.cjs
+      - name: Verify Socket.IO through same-origin proxy
+        working-directory: frontend
+        run: |
+          node --input-type=module -e '
+            import { io } from "socket.io-client";
+            import { readFileSync } from "node:fs";
+            const socket = io("http://127.0.0.1:8080", { auth: { token: readFileSync("/tmp/sandbox-smoke-token", "utf8") }, transports: ["websocket"], reconnection: false });
+            const timer = setTimeout(() => process.exit(1), 15000);
+            socket.on("connect", () => { clearTimeout(timer); socket.disconnect(); });
+            socket.on("connect_error", error => { console.error(error.message); process.exit(1); });
+          '
+      - name: Sandbox logs on failure
+        if: failure()
+        run: docker compose -f compose.sandbox.yml logs --tail=100
+      - name: Remove only the disposable sandbox
+        if: always()
+        run: docker compose -f compose.sandbox.yml down --volumes

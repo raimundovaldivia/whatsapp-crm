@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+import { BACKEND_URL } from '../utils/backend-url.js';
 
 export function useSocket(orgId, onNewMessage, onAgentModeChanged, onMessageStatus, onOrderCreated, onBotTyping, onPaymentProof, onSync) {
   const socketRef = useRef(null);

@@ -1,8 +1,8 @@
 import axios from 'axios';
+import { BACKEND_URL as BASE_URL } from './backend-url.js';
 
 // En producción VITE_BACKEND_URL = URL del backend de Railway (ej: https://whatsapp-crm-api-production-f804.up.railway.app)
 // En desarrollo = localhost:3001
-const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
 const api = axios.create({ baseURL: `${BASE_URL}/api`, timeout: 12000 });
 
