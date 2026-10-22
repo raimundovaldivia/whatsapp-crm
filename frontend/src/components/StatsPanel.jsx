@@ -1,297 +1,91 @@
-/**
- * StatsPanel — Estadísticas de ventas de la empresa
- * Usa los mismos datos que OrdersPanel (shopify_orders cargados en frontend)
- * para evitar doble conteo y mantenerse consistente.
- */
-
-import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, DollarSign, ShoppingBag, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { ordersAPI, api } from '../utils/api.js';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
-const clp = (n) => `$${Number(n || 0).toLocaleString('es-CL')}`;
+const money = value => `$${Number(value || 0).toLocaleString('es-CL')}`;
+const sourceLabel = { observed: 'Expresado por el cliente', manual: 'Confirmado por el equipo', inferred: 'Inferido por el sistema', unknown: 'Sin confirmar' };
+const chileDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const shift = (day, offset) => new Date(Date.parse(`${day}T12:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
+const dateTime = value => new Date(value).toLocaleString('es-CL', { timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short' });
 
-// Solo suma shopify_orders, excluye voided/refunded (igual que OrdersPanel)
-function sumarValidos(orders) {
-  return orders.reduce((sum, o) => {
-    if (o.source === 'bot') return sum;
-    const fs = (o.financialStatus || '').toUpperCase();
-    if (fs === 'VOIDED' || fs === 'REFUNDED') return sum;
-    return sum + (Number(o.total) || 0);
-  }, 0);
-}
-
-// Normalizar shopify order (igual que OrdersPanel)
-function normalizeShopify(o) {
-  return {
-    source: 'shopify',
-    date: o.shopify_created_at ? new Date(o.shopify_created_at) : new Date(0),
-    total: Number(o.total_price || 0),
-    financialStatus: (o.financial_status || '').toUpperCase(),
-    fulfillmentStatus: (o.fulfillment_status || '').toUpperCase(),
-    items: Array.isArray(o.items) ? o.items : [],
-  };
-}
-
-// Agrupar por día local (sin conversión UTC)
-function groupByDay(orders) {
-  const map = {};
-  orders.forEach(o => {
-    const d = o.date;
-    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    if (!map[key]) map[key] = { revenue: 0, count: 0 };
-    const fs = o.financialStatus;
-    if (fs !== 'VOIDED' && fs !== 'REFUNDED') {
-      map[key].revenue += o.total;
-      map[key].count++;
-    }
-  });
-  return map;
-}
-
-// Generar rango de días (hacia atrás desde hoy)
-function dayRange(days) {
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Santiago' }));
-  const result = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    result.push({ key, label: d.toLocaleDateString('es-CL', { day: 'numeric', month: 'short' }) });
-  }
-  return result;
-}
-
-function Trend({ current, prev }) {
-  if (!prev) return null;
-  const pct = prev === 0 ? 100 : Math.round(((current - prev) / prev) * 100);
-  const up = pct > 0;
-  const flat = pct === 0;
-  return (
-    <span style={{ fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '2px',
-      color: flat ? '#888' : up ? '#4ade80' : '#f87171' }}>
-      {flat ? <Minus size={11} /> : up ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-      {flat ? '0%' : `${up ? '+' : ''}${pct}%`}
-    </span>
-  );
-}
-
-export default function StatsPanel() {
+export default function StatsPanel({ onOpenConversation }) {
   const { colors } = useTheme();
-  const [shopifyOrders, setShopifyOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [chartDays, setChartDays] = useState(30);
-
+  const [range, setRange] = useState(() => ({ from: chileDay(), to: chileDay() }));
+  const [tab, setTab] = useState('activity');
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(30);
+  const requestId = useRef(0);
   const load = useCallback(async () => {
-    setLoading(true);
+    const id = ++requestId.current;
+    setLoading(true); setError('');
     try {
-      const res = await api.get('/orders/shopify').catch(() => ({ data: { orders: [] } }));
-      setShopifyOrders((res.data?.orders || []).map(normalizeShopify));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  if (loading) {
-    return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textSecondary }}>
-        <RefreshCw size={20} style={{ animation: 'spin 1s linear infinite' }} />
-      </div>
-    );
-  }
-
-  // Períodos en hora local Chile
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Santiago' }));
-  const todayKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1)); // lunes
-  startOfWeek.setHours(0,0,0,0);
-
-  const startOfLastWeek = new Date(startOfWeek);
-  startOfLastWeek.setDate(startOfLastWeek.getDate() - 7);
-
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-
-  const inRange = (o, from, to) => o.date >= from && (!to || o.date <= to);
-
-  const todayOrders    = shopifyOrders.filter(o => {
-    const d = o.date;
-    const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    return k === todayKey;
-  });
-  const weekOrders     = shopifyOrders.filter(o => inRange(o, startOfWeek));
-  const lastWeekOrders = shopifyOrders.filter(o => inRange(o, startOfLastWeek, new Date(startOfWeek.getTime() - 1)));
-  const monthOrders    = shopifyOrders.filter(o => inRange(o, startOfMonth));
-  const lastMonthOrders= shopifyOrders.filter(o => inRange(o, startOfLastMonth, endOfLastMonth));
-
-  const ventasHoy      = sumarValidos(todayOrders);
-  const pedidosHoy     = todayOrders.filter(o => o.financialStatus !== 'VOIDED' && o.financialStatus !== 'REFUNDED').length;
-  const ventasSemana   = sumarValidos(weekOrders);
-  const pedidosSemana  = weekOrders.filter(o => o.financialStatus !== 'VOIDED' && o.financialStatus !== 'REFUNDED').length;
-  const ventasUltSem   = sumarValidos(lastWeekOrders);
-  const ventasMes      = sumarValidos(monthOrders);
-  const pedidosMes     = monthOrders.filter(o => o.financialStatus !== 'VOIDED' && o.financialStatus !== 'REFUNDED').length;
-  const ventasUltMes   = sumarValidos(lastMonthOrders);
-
-  // Ticket promedio del mes
-  const ticketMes = pedidosMes > 0 ? Math.round(ventasMes / pedidosMes) : 0;
-
-  // Gráfico de barras
-  const days = dayRange(chartDays);
-  const dayMap = groupByDay(shopifyOrders);
-  const maxRevenue = Math.max(...days.map(d => dayMap[d.key]?.revenue || 0), 1);
-
-  // Distribución por estado financiero
-  const statusCount = {};
-  shopifyOrders.filter(o => inRange(o, startOfMonth)).forEach(o => {
-    const s = o.financialStatus || 'UNKNOWN';
-    statusCount[s] = (statusCount[s] || 0) + 1;
-  });
-
-  const statusStyles = {
-    PAID:               { label: 'Pagado',      color: colors.successSoft },
-    PENDING:            { label: 'Pendiente',   color: '#facc15' },
-    REFUNDED:           { label: 'Reembolsado', color: '#94a3b8' },
-    PARTIALLY_REFUNDED: { label: 'Rem. parcial',color: '#94a3b8' },
-    VOIDED:             { label: 'Anulado',     color: colors.dangerSoft },
-    AUTHORIZED:         { label: 'Autorizado',  color: colors.tealSoft },
-  };
-
-  const card = (icon, label, value, sub, prev, current) => (
-    <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '16px 18px', border: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {icon}
-        <span style={{ fontSize: '11px', color: colors.textSecondary }}>{label}</span>
-      </div>
-      <div style={{ fontSize: '22px', fontWeight: 700, color: colors.textPrimary }}>{value}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ fontSize: '11px', color: colors.textSecondary }}>{sub}</span>
-        <Trend current={current} prev={prev} />
-      </div>
-    </div>
-  );
-
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', backgroundColor: colors.bg }}>
-      {/* Header */}
-      <div style={{ padding: '16px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-        <div>
-          <div style={{ fontSize: '16px', fontWeight: 700, color: colors.textPrimary }}>Estadísticas</div>
-          <div style={{ fontSize: '11px', color: colors.textSecondary }}>
-            {now.toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-          </div>
+      const response = await api.get('/dashboard/daily-sales', { params: range });
+      if (id === requestId.current) { setData(response.data.data); setVisibleCount(30); }
+    } catch (err) {
+      if (id === requestId.current) { setData(null); setError(err.response?.data?.error || 'No se pudieron actualizar los datos. Intenta nuevamente.'); }
+    } finally { if (id === requestId.current) setLoading(false); }
+  }, [range]);
+  useEffect(() => {
+    load();
+    const timer = setInterval(() => { if (!document.hidden) load(); }, 60000);
+    return () => { clearInterval(timer); ++requestId.current; };
+  }, [load]);
+  const selectRange = (offset, end = 0) => { const today = chileDay(); setRange({ from: shift(today, offset), to: shift(today, end) }); };
+  const panel = { background: colors.bgPanel, border: `1px solid ${colors.border}`, borderRadius: 12, padding: 18 };
+  const button = { background: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 8, padding: '8px 12px', cursor: 'pointer' };
+  const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 };
+  const field = { ...button, colorScheme: 'dark', maxWidth: '100%' };
+  const metric = (label, value, detail) => <div key={label} style={panel}><div style={{ color: colors.textSecondary, fontSize: 12 }}>{label}</div><div style={{ fontSize: 24, fontWeight: 750, margin: '8px 0' }}>{value}</div><div style={{ color: colors.textSecondary, fontSize: 12 }}>{detail}</div></div>;
+  const headerCell = { textAlign: 'left', padding: 12, borderBottom: `1px solid ${colors.border}`, fontSize: 12 };
+  const cell = { padding: 12, borderBottom: `1px solid ${colors.border}`, verticalAlign: 'top', fontSize: 13 };
+  const activity = data?.activity;
+  const cohort = data?.cohort;
+  return <div style={{ flex: 1, height: '100vh', overflowY: 'auto', background: colors.bg, color: colors.textPrimary, padding: '20px clamp(12px, 3vw, 28px)', boxSizing: 'border-box' }}>
+    <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12, flexWrap: 'wrap' }}>
+      <div><h1 style={{ margin: 0, fontSize: 22 }}>Ventas del día</h1><p style={{ color: colors.textSecondary, fontSize: 13 }}>Pedidos y conversaciones del CRM · Horario de Chile</p></div>
+      <button style={button} onClick={load} disabled={loading}><RefreshCw size={14} aria-hidden="true" /> {loading ? 'Actualizando…' : 'Actualizar'}</button>
+    </header>
+    <section style={{ ...panel, display: 'flex', gap: 12, alignItems: 'end', flexWrap: 'wrap', marginBottom: 16 }}>
+      <label style={{ display: 'grid', gap: 6 }}>Desde<input aria-label="Desde" type="date" value={range.from} max={chileDay()} onChange={e => setRange(r => ({ ...r, from: e.target.value }))} style={field} /></label>
+      <label style={{ display: 'grid', gap: 6 }}>Hasta<input aria-label="Hasta" type="date" value={range.to} max={chileDay()} onChange={e => setRange(r => ({ ...r, to: e.target.value }))} style={field} /></label>
+      <button style={button} onClick={() => selectRange(0)}>Hoy</button><button style={button} onClick={() => selectRange(-1, -1)}>Ayer</button>
+      <button style={button} onClick={() => selectRange(-6)}>7 días</button><button style={button} onClick={() => selectRange(-29)}>30 días</button>
+    </section>
+    <nav aria-label="Vistas de estadísticas" style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+      {[['activity', 'Actividad'], ['opportunities', 'Oportunidades'], ['results', 'Resultados']].map(([id, label]) => <button key={id} aria-pressed={tab === id} style={{ ...button, borderColor: tab === id ? colors.green : colors.border }} onClick={() => setTab(id)}>{label}</button>)}
+    </nav>
+    {error && <p role="alert" style={{ ...panel, color: colors.dangerSoft }}>{error}</p>}
+    {loading && <p role="status">Actualizando datos del CRM…</p>}
+    {data && !loading && <>
+      <p style={{ ...panel, lineHeight: 1.6 }}>{data.summary}<br /><small style={{ color: colors.textSecondary }}>Actualizado: {dateTime(data.generated_at)} · Se actualiza cada minuto mientras el panel está visible.</small></p>
+      {tab === 'activity' && <>
+        <div style={grid}>
+          {metric('Personas que consultaron', cohort.contacts, `${cohort.acquisition_ads} con origen en anuncio identificado · ${cohort.direct_or_unknown} directas / sin origen identificado`)}
+          {metric('Conversión de consultas', `${cohort.conversion_rate}%`, `${cohort.converted} personas con pedido posterior a su consulta`)}
+          {metric('Pedidos creados', activity.orders, `${activity.buyers} compradores únicos · excluye borradores y cancelados`)}
+          {metric('Valor de pedidos', money(activity.order_value), `Ticket promedio: ${money(activity.average_ticket)}`)}
+          {metric('Cobrado en el período', money(activity.collected), 'Pagos confirmados con fecha registrada; pueden corresponder a pedidos anteriores')}
+          {metric('Saldo pendiente actual', money(activity.receivable_current), 'Todos los pedidos vigentes del CRM, sin limitar por fecha de creación')}
+          {metric('Pendientes de entrega actuales', activity.pending_delivery_current, 'La entrega y el pago se cuentan por separado')}
         </div>
-        <button onClick={load} style={{ background: 'none', border: 'none', color: colors.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
-          <RefreshCw size={14} /> Actualizar
-        </button>
-      </div>
-
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
-        {/* Cards resumen */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-          {card(<DollarSign size={16} color={colors.green} />, 'Ventas hoy', clp(ventasHoy), `${pedidosHoy} pedidos`, null, null)}
-          {card(<DollarSign size={16} color={colors.purpleSoft} />, 'Esta semana', clp(ventasSemana), `${pedidosSemana} pedidos`, ventasUltSem, ventasSemana)}
-          {card(<DollarSign size={16} color={colors.tealSoft} />, 'Este mes', clp(ventasMes), `${pedidosMes} pedidos`, ventasUltMes, ventasMes)}
-          {card(<ShoppingBag size={16} color={colors.yellow} />, 'Ticket promedio', clp(ticketMes), 'este mes', null, null)}
-        </div>
-
-        {/* Gráfico de barras */}
-        <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '18px', border: `1px solid ${colors.border}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary }}>Ventas por día</span>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              {[7, 14, 30].map(d => (
-                <button key={d} onClick={() => setChartDays(d)}
-                  style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '11px', cursor: 'pointer', border: `1px solid ${chartDays === d ? colors.green : colors.border}`, backgroundColor: chartDays === d ? `${colors.green}20` : 'transparent', color: chartDays === d ? colors.green : colors.textSecondary }}>
-                  {d}d
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '120px' }}>
-            {days.map(({ key, label }) => {
-              const rev = dayMap[key]?.revenue || 0;
-              const pct = maxRevenue > 0 ? (rev / maxRevenue) * 100 : 0;
-              const isToday = key === todayKey;
-              return (
-                <div key={key} title={`${label}: ${clp(rev)}`}
-                  style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', height: '100%', justifyContent: 'flex-end' }}>
-                  <div style={{
-                    width: '100%', borderRadius: '3px 3px 0 0',
-                    height: `${Math.max(pct, rev > 0 ? 4 : 1)}%`,
-                    backgroundColor: isToday ? colors.green : `${colors.green}66`,
-                    transition: 'height 0.3s ease',
-                  }} />
-                  {(chartDays <= 14 || key.endsWith('-01') || key.endsWith('-08') || key.endsWith('-15') || key.endsWith('-22')) && (
-                    <span style={{ fontSize: '9px', color: colors.textSecondary, whiteSpace: 'nowrap', transform: 'rotate(-45deg)', transformOrigin: 'center', marginTop: '2px' }}>
-                      {label}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Fila inferior: comparativa semanas + distribución estados */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-
-          {/* Comparativa semana actual vs anterior */}
-          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '18px', border: `1px solid ${colors.border}` }}>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary, marginBottom: '14px' }}>Semana actual vs anterior</div>
-            {[
-              { label: 'Esta semana',  value: ventasSemana, pedidos: pedidosSemana },
-              { label: 'Sem. pasada', value: ventasUltSem,  pedidos: lastWeekOrders.filter(o => o.financialStatus !== 'VOIDED' && o.financialStatus !== 'REFUNDED').length },
-            ].map(({ label, value, pedidos }) => {
-              const maxVal = Math.max(ventasSemana, ventasUltSem, 1);
-              const pct = (value / maxVal) * 100;
-              return (
-                <div key={label} style={{ marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '12px', color: colors.textSecondary }}>{label}</span>
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: colors.textPrimary }}>{clp(value)} <span style={{ color: colors.textSecondary, fontWeight: 400 }}>({pedidos} ped.)</span></span>
-                  </div>
-                  <div style={{ height: '6px', borderRadius: '4px', backgroundColor: colors.bgHover }}>
-                    <div style={{ height: '100%', borderRadius: '4px', width: `${pct}%`, backgroundColor: label.includes('pasada') ? `${colors.green}55` : colors.green, transition: 'width 0.4s ease' }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Distribución de estados este mes */}
-          <div style={{ backgroundColor: colors.bgPanel, borderRadius: '12px', padding: '18px', border: `1px solid ${colors.border}` }}>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: colors.textPrimary, marginBottom: '14px' }}>Estado de pedidos (este mes)</div>
-            {Object.entries(statusCount).sort((a,b) => b[1]-a[1]).map(([status, count]) => {
-              const total = Object.values(statusCount).reduce((s,n) => s+n, 0);
-              const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-              const st = statusStyles[status] || { label: status, color: '#94a3b8' };
-              return (
-                <div key={status} style={{ marginBottom: '10px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '12px', color: colors.textSecondary }}>{st.label}</span>
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: colors.textPrimary }}>{count} <span style={{ color: colors.textSecondary, fontWeight: 400 }}>({pct}%)</span></span>
-                  </div>
-                  <div style={{ height: '6px', borderRadius: '4px', backgroundColor: colors.bgHover }}>
-                    <div style={{ height: '100%', borderRadius: '4px', width: `${pct}%`, backgroundColor: st.color, transition: 'width 0.4s ease' }} />
-                  </div>
-                </div>
-              );
-            })}
-            {Object.keys(statusCount).length === 0 && (
-              <div style={{ color: colors.textSecondary, fontSize: '12px' }}>Sin datos este mes</div>
-            )}
-          </div>
-
-        </div>
-      </div>
-    </div>
-  );
+        <section style={{ ...panel, marginTop: 16 }}><h2 style={{ fontSize: 16 }}>Pedidos por fecha de creación</h2><div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse' }}><thead><tr><th style={headerCell}>Fecha Chile</th><th style={headerCell}>Pedidos</th><th style={headerCell}>Valor</th></tr></thead><tbody>{data.daily.map(day => <tr key={day.day}><td style={cell}>{day.day}</td><td style={cell}>{day.orders}</td><td style={cell}>{money(day.order_value)}</td></tr>)}</tbody></table></div></section>
+      </>}
+      {tab === 'opportunities' && <>
+        <div style={grid}>{metric('En limbo', cohort.limbo, 'Sin pedido; revisar el contexto antes de contactar')}{metric('Conversaciones activas', cohort.active, 'Todavía pueden avanzar sin seguimiento adicional')}{metric('Con pedido anterior en curso', data.operational_contacts, 'Continuar en pago o entrega; no volver a vender el mismo pedido')}</div>
+        <section style={{ ...panel, marginTop: 16 }}><h2 style={{ fontSize: 16 }}>Dónde se detienen</h2>{data.reasons.length ? data.reasons.map(r => <p key={`${r.source}:${r.code}`}><strong>{r.count}</strong> · {r.label} <small style={{ color: colors.textSecondary }}>({sourceLabel[r.source]})</small></p>) : <p>No hay abandonos identificados en este período.</p>}<p style={{ color: colors.textSecondary, fontSize: 12 }}>El silencio después del precio no confirma una objeción de precio.</p></section>
+        <section style={{ ...panel, marginTop: 16 }}><h2 style={{ fontSize: 16 }}>Siguiente acción por contacto</h2><div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}><thead><tr>{['Contacto', 'Etapa y motivo', 'Siguiente acción', ''].map((h, i) => <th key={i} style={headerCell}>{h}</th>)}</tr></thead><tbody>{data.opportunities.slice(0, visibleCount).map(c => <tr key={c.conversation_id}><td style={cell}>{c.contact_name}<br /><small>{c.phone_number || 'Sin teléfono'}</small></td><td style={cell}>{c.stage_label}<br /><small style={{ color: colors.textSecondary }}>{c.reason_label} · {sourceLabel[c.reason_source]}</small></td><td style={cell}>{c.action}</td><td style={cell}><button style={button} onClick={() => onOpenConversation?.(c.conversation_id)}>Ver conversación</button></td></tr>)}</tbody></table></div>{!data.opportunities.length && <p>No hay oportunidades pendientes entre las consultas del período.</p>}{data.opportunities.length > visibleCount && <button style={button} onClick={() => setVisibleCount(n => n + 30)}>Mostrar 30 más</button>}</section>
+      </>}
+      {tab === 'results' && <>
+        <div style={grid}>{metric('Pedidos de recompra', data.results.repeat_orders, 'Pedidos con una compra anterior registrada en el CRM')}{metric('Compradores del período', activity.buyers, 'Personas únicas con pedidos creados en estas fechas')}</div>
+        <section style={{ ...panel, marginTop: 16 }}><h2 style={{ fontSize: 16 }}>Campaña anterior a cada compra</h2><p style={{ fontSize: 12, color: colors.textSecondary }}>Último anuncio identificado en los {data.attribution_window_days} días previos a cada pedido. Es una regla de atribución, no una prueba de causalidad. El origen de adquisición se conserva por separado.</p><div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}><thead><tr>{['Campaña', 'Compradores', 'Pedidos', 'Recompras', 'Valor de pedidos'].map(h => <th key={h} style={headerCell}>{h}</th>)}</tr></thead><tbody>{data.results.campaigns.map(c => <tr key={c.key}><td style={cell}>{c.label}</td><td style={cell}>{c.buyers}</td><td style={cell}>{c.orders}</td><td style={cell}>{c.repeat_orders}</td><td style={cell}>{money(c.order_value)}</td></tr>)}</tbody></table></div><p style={{ color: colors.textSecondary, fontSize: 12 }}>Un comprador puede aparecer en más de una campaña. El total de compradores únicos se calcula por separado.</p></section>
+      </>}
+      <footer style={{ ...panel, marginTop: 16, color: colors.textSecondary, fontSize: 12, lineHeight: 1.7 }}>
+        <strong>Cómo leer estas cifras</strong><br />Las consultas agrupan a cada persona con mensajes entrantes en el período; su conversión incluye pedidos posteriores hasta la última actualización. Los pedidos y cobros se agrupan por sus propias fechas. Por eso son cifras distintas.<br />Shopify no se consulta ni se suma en este panel. No se importan ni modifican pedidos al abrir Estadísticas.<br />Los saldos y entregas son actuales. Las fechas anteriores se recalculan con el estado vigente; todavía no representan cierres contables congelados.
+        {activity.confirmed_payments_without_date > 0 && <p role="status">Hay {money(activity.confirmed_payments_without_date)} confirmados sin fecha de pago verificable: reducen el saldo, pero no se asignan a un día inventado.</p>}
+      </footer>
+    </>}
+  </div>;
 }

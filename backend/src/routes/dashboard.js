@@ -8,9 +8,22 @@ const express      = require('express');
 const router       = express.Router();
 const { getPool }  = require('../db/database');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { getDailySales } = require('../services/daily-sales');
 
 router.use(requireAuth);
 router.use(requireRole('owner', 'admin'));
+
+router.get('/daily-sales', async (req, res) => {
+  try {
+    const data = await getDailySales(getPool(), req.orgId, { from: req.query.from, to: req.query.to });
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('[dashboard/daily-sales]', error.message);
+    res.status(error.status === 400 ? 400 : 500).json({ success: false,
+      error: error.status === 400 ? error.message : 'No se pudieron cargar las estadísticas del CRM' });
+  }
+});
 
 /**
  * GET /api/dashboard/wins

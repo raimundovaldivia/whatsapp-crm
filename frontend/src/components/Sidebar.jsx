@@ -3,6 +3,7 @@ import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethos
 import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
+import { isStalledConversation } from '../utils/contact-followup.mjs';
 
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
@@ -83,20 +84,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   }, [search]);
 
   const HOT_TEMPERATURES = ['hot', 'very_hot'];
-  const CLOSED_STATES = new Set(['done', 'delivered', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out', 'template_sent']);
-  const now          = clockNow;
-  const h2           = 2 * 60 * 60 * 1000;
-  const h22          = 22 * 60 * 60 * 1000;
-  const isStalled    = c => {
-    const last = new Date(c.last_message_at).getTime();
-    const age = now - last;
-    return Boolean(c.last_message) && !CLOSED_STATES.has(c.pipeline_state)
-      && c.agent_mode === 'ai' && c.last_message_direction === 'outbound'
-      && HOT_STATES.includes(c.pipeline_state)
-      && Number(c.follow_up_count || 0) < 2
-      && (!c.follow_up_stage || c.follow_up_stage !== c.pipeline_state)
-      && c.attention_state !== 'no_response_needed' && age >= h2 && age <= h22;
-  };
+  const isStalled = c => isStalledConversation(c, clockNow);
   const hotPriority = c => c.pipeline_state === 'collecting_order' ? 2 : c.pipeline_state === 'interested' ? 1 : 0;
 
   const aiCount    = conversations.filter(c => c.agent_mode === 'ai').length;
