@@ -2301,6 +2301,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     });
   }
 
+  // En la revisión detallada, todo mensaje que se muestra (con flechas o con
+  // "Revisado · siguiente") cuenta como revisado. Antes, recorrer con flechas no
+  // contaba y el botón de envío quedaba desactivado sin explicación clara.
+  useEffect(() => {
+    if (!guidedReview || !reviewPlan?.entries?.length) return;
+    setReviewedItems(current => current.has(reviewIdx) ? current : new Set(current).add(reviewIdx));
+  }, [guidedReview, reviewIdx, reviewPlan]);
+
   function startGuidedReview() {
     setGuidedReview(true);
     setReviewIdx(0);
@@ -3527,7 +3535,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   <textarea aria-label={`Mensaje para ${entry.contact?.name || entry.contact?.phone}`} value={entry.previewText} rows={6} maxLength={1200} disabled={sending}
                     onChange={event => {
                       setReviewPlan(plan => editReviewedEntry(plan, idx, event.target.value));
-                      setReviewedItems(current => { const next = new Set(current); next.delete(idx); return next; });
+                      // Editar un mensaje es revisarlo: no se desmarca en silencio.
+                      if (guidedReview) setReviewedItems(current => { const next = new Set(current); next.add(idx); return next; });
                     }} style={{ width: '100%', boxSizing: 'border-box', whiteSpace: 'pre-wrap', backgroundColor: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 14px', color: colors.textPrimary, fontSize: 13, lineHeight: 1.55 }} />
                   <button disabled={sending} onClick={() => {
                     const entries = reviewPlan.entries.filter((_, i) => i !== idx);

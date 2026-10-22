@@ -1,6 +1,7 @@
 const db = require('../db/database');
 
 // Pending jobs survive restarts. An interrupted provider request is never retried blindly.
+const MAX_CONSECUTIVE_FAILURES = 3;
 function createWorker(sendOne, pool = db.getPool()) {
   let running = false;
   async function tick() {
@@ -43,7 +44,18 @@ function createWorker(sendOne, pool = db.getPool()) {
       const uncertain = !result || result.pending || result.persistencePending;
       await pool.query(`UPDATE broadcast_jobs SET state = $2, result = $3 WHERE id = $1`,
         [job.id, uncertain ? 'unknown' : 'done', JSON.stringify(result || response.body)]);
-      if (uncertain || (!result.success && !result.skipped)) {
+      // Un resultado incierto detiene la campaña para no reenviar a ciegas. Un fallo
+      // definitivo de un destinatario (p. ej. número sin WhatsApp) no debe dejar sin
+      // enviar al resto: solo se detiene si fallan varios seguidos (proveedor caído).
+      let stop = uncertain;
+      if (!stop && !result.success && !result.skipped) {
+        const { rows: recent } = await pool.query(`SELECT result FROM broadcast_jobs
+          WHERE campaign_id = $1 AND state = 'done' ORDER BY position DESC LIMIT $2`,
+          [job.campaign_id, MAX_CONSECUTIVE_FAILURES]);
+        stop = recent.length >= MAX_CONSECUTIVE_FAILURES
+          && recent.every(r => r.result && !r.result.success && !r.result.skipped);
+      }
+      if (stop) {
         await pool.query(`UPDATE broadcast_campaigns SET status = 'interrupted', completed_at = NOW()
           WHERE id = $1 AND status = 'processing'`, [job.campaign_id]);
       } else {
