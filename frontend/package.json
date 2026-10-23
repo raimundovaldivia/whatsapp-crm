@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/components/egg-products.test.js src/utils/chat-channels.test.js src/utils/broadcast-review.test.mjs src/utils/inbox-conversations.test.mjs",
+    "test": "node --test src/components/egg-products.test.js src/utils/chat-channels.test.js src/utils/broadcast-review.test.mjs src/utils/inbox-conversations.test.mjs src/utils/justo-casero-frequency.test.mjs",
     "preview": "vite preview",
     "start": "serve -s dist -l $PORT"
   },

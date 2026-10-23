@@ -1,0 +1,23 @@
+.jc-frequency-page{width:100%;min-height:100dvh;display:grid;place-items:center;padding:40px 20px;background:#fff7e8}
+.jc-frequency-card{width:min(100%,660px);padding:40px;border:1px solid #eadbbf;border-radius:28px;background:#fffdf8;box-shadow:0 20px 60px #17324d0c}
+.jc-frequency-logo{display:block;width:210px;max-width:70%;height:auto;margin:0 0 28px}
+.jc-frequency-card h1{margin:12px 0 28px;color:#17324d;font-size:clamp(2.2rem,6vw,3.4rem);line-height:1.06;letter-spacing:-.045em}
+.jc-frequency-card fieldset{margin:0;padding:0;border:0;min-width:0}
+.jc-frequency-card legend{padding:0;color:#17324d;font-size:1.15rem;font-weight:800}
+.jc-frequency-help,.jc-frequency-privacy{color:#596775;font-size:.88rem;line-height:1.6}
+.jc-frequency-help{margin:8px 0 18px}
+.jc-frequency-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.jc-frequency-option{display:flex;align-items:center;gap:10px;padding:16px 14px;border:2px solid #e9dfcf;border-radius:14px;color:#17324d;cursor:pointer;font-size:.95rem;font-weight:700;line-height:1.4}
+.jc-frequency-option:hover{border-color:#f4b942}
+.jc-frequency-option.is-selected{border-color:#17324d;background:#fff0c7}
+.jc-frequency-option input{width:18px;height:18px;flex:none;margin:0;accent-color:#17324d}
+.jc-frequency-option:focus-within{outline:3px solid #e86a4a;outline-offset:3px}
+.jc-frequency-continue{width:100%;justify-content:center;margin-top:22px;border:0;cursor:pointer}
+.jc-frequency-continue:disabled{background:#e7e5df;color:#767b7d;cursor:not-allowed;box-shadow:none}
+.jc-frequency-privacy{margin:18px 0 0;font-size:.8rem}
+.jc-frequency-coverage{margin:18px 0 0;color:#17324d;font-size:.85rem;font-weight:700}
+.jc-frequency-bar{padding:12px 0;border-bottom:1px solid #eadbbf;background:#fff0ca;color:#17324d;font-size:.85rem}
+.jc-frequency-bar>.jc-container{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.jc-frequency-bar button{padding:8px 0;border:0;background:transparent;color:#17324d;font:inherit;font-weight:800;text-decoration:underline;cursor:pointer}
+.jc-landing .jc-size-label{font-size:clamp(2.7rem,6vw,4.8rem);line-height:1.05;letter-spacing:-.05em}
+@media(max-width:520px){.jc-frequency-page{padding:20px 12px}.jc-frequency-card{padding:26px 20px;border-radius:22px}.jc-frequency-options{grid-template-columns:1fr}.jc-frequency-logo{width:185px;margin-bottom:24px}.jc-frequency-option{padding:13px}.jc-frequency-bar>.jc-container{align-items:flex-start}.jc-frequency-bar button{padding-top:0;white-space:nowrap}}

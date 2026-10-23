@@ -284,7 +284,8 @@ PUT /api/settings
 
 ## Rutas públicas
 
-- `/justo-casero`: landing de la marca Justo Casero para vender exclusivamente cajas de huevos café XL y Jumbo. Los pedidos y votos del Radar Casero se abren por WhatsApp y entran al mismo CRM de la organización.
+- `/justo-casero`: landing de Justo Casero con venta exclusivamente online de cajas de huevos café Extra y Super Extra. Los pedidos y votos del Radar Casero se abren en el WhatsApp confirmado de la marca: +56 9 2608 2545.
+- Antes de mostrar productos exige indicar la frecuencia de compra mensual. La respuesta se valida contra opciones permitidas, se recuerda en el dispositivo y puede cambiarse. Las consultas de productos incluyen esa frecuencia en el mensaje de WhatsApp; solo se envía cuando la persona lo confirma en WhatsApp. No crea un registro de cliente ni un pedido automáticamente. Los identificadores internos XL/Jumbo se conservan para no perder votos de precio anteriores.
 - `justocasero.com`, `www.justocasero.com`, `justocasero.cl` y `www.justocasero.cl`: dominios preparados para mostrar esa landing cuando apunten a este frontend.
 
 ---
@@ -369,4 +370,4 @@ Las ofertas automáticas de recuperación conservan `personal_offers`; las ofert
 
 `backend/test/schema-compatibility.test.cjs` comprueba la repetición del setup con ofertas guardadas, la coexistencia de ambos esquemas y el aislamiento entre empresas. `backend/test/delivery-finish-route.test.cjs` comprueba el cierre manual, roles reales, identificadores inválidos, aislamiento, repetición y rollback. Son pruebas locales con PostgreSQL embebido; no ejecutan migraciones ni envíos en producción.
 
-El frontend ejecuta 13 pruebas de catálogo, canales del chat, ofertas e inbox. El workflow de GitHub las incluye antes de compilar. Para la app de repartidores, la comprobación local de CI es `EXPO_OFFLINE=1 npx expo export --platform android --max-workers 2 --output-dir dist-audit`; no crea ni publica un APK.
+El frontend ejecuta 18 pruebas de catálogo, canales del chat, ofertas, inbox y frecuencia de compra de Justo Casero. El workflow de GitHub las incluye antes de compilar. Para la app de repartidores, la comprobación local de CI es `EXPO_OFFLINE=1 npx expo export --platform android --max-workers 2 --output-dir dist-audit`; no crea ni publica un APK.
