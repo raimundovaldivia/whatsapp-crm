@@ -1,4 +1,5 @@
 const db = require('../db/database');
+const { checkSendWindow } = require('./broadcast-send-window');
 const DIRECT_INTERVAL_SECONDS = 60;
 const DIRECT_BATCH_SIZE = 10;
 const DIRECT_BATCH_PAUSE_SECONDS = 300;
@@ -45,6 +46,8 @@ async function claimDirectSlot(orgId, channelId, settings = {}, campaignId = nul
   const { intervalSeconds, batchSize, batchPauseSeconds } = pacingSettings(settings);
   const pause = Math.max(intervalSeconds, batchPauseSeconds);
   const pool = db.getPool();
+  const window = await checkSendWindow(pool);
+  if (!window.allowed) return window;
   const { rows } = await pool.query(
     `INSERT INTO broadcast_channel_pacing (organization_id, channel_id, campaign_id, batch_count, next_send_at)
      VALUES ($1, $2, $6, 1, NOW() + CASE WHEN $4 = 1 THEN $5::integer ELSE $3::integer END * INTERVAL '1 second')
