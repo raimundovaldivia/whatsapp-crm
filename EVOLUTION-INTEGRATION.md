@@ -18,6 +18,7 @@ Otras conexiones ────┘
 - Un número predeterminado para iniciar conversaciones.
 - Selección del número al crear una conversación nueva.
 - Cada conversación conserva el número por el que entró.
+- Adjuntos manuales (incluido PDF, hasta 6 MB) enviados directamente como base64. El almacenamiento público es opcional: el CRM conserva la referencia `evolution:<canal>:<mensaje en base64url>` y una copia del archivo por organización para abrirlo desde el historial.
 - Mensajes entrantes enviados al pipeline de IA, ventas y pedidos de la app.
 - Derivación a coordinación o atención humana usando el comportamiento existente.
 - Mensajes manuales, seguimientos, cobros y avisos de pedidos enviados por el canal asociado.
