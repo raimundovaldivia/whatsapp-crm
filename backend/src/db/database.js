@@ -1945,6 +1945,11 @@ async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80, exclud
   const rows = await query(
     `SELECT recent.* FROM (
        SELECT m.*,
+              EXISTS (SELECT 1 FROM broadcast_campaign_recipients bcr
+                WHERE bcr.organization_id = c.organization_id
+                  AND bcr.whatsapp_message_id = m.whatsapp_message_id
+                  AND bcr.result_status IN ('accepted', 'unknown')
+                  AND COALESCE(bcr.template_name, '') !~* '^(cobro|cobranza|pedido_salio|pedido_en_camino|payment|delivery)') AS is_marketing,
               c.whatsapp_channel_id,
               wc.name AS whatsapp_channel_name,
               wc.phone_number AS whatsapp_channel_phone,
@@ -2485,8 +2490,6 @@ async function upsertContact(orgId, { phone, name, email, address, city, region,
        notes      = COALESCE(EXCLUDED.notes,      contacts.notes),
        shopify_id = COALESCE(EXCLUDED.shopify_id, contacts.shopify_id),
        source     = COALESCE(contacts.source, EXCLUDED.source),
-       total_orders = contacts.total_orders + CASE WHEN EXCLUDED.address IS NOT NULL THEN 1 ELSE 0 END,
-       last_order_at = CASE WHEN EXCLUDED.address IS NOT NULL THEN NOW() ELSE contacts.last_order_at END,
        updated_at = NOW()`,
     [orgId, phone, normalizeName(name), email || null, address || null, city || null, region || null, notes || null, shopifyId || null,
       ['facebook', 'instagram', 'whatsapp'].includes(source) ? source : 'whatsapp']

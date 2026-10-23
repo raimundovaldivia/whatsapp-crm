@@ -15,6 +15,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === '../middleware/commercial-access') return load('src/middleware/commercial-access.js', deps, extra);
       if (name === './scheduled-orders') return load('src/services/scheduled-orders.js', { ...deps, '@anthropic-ai/sdk': class { constructor() { this.messages = { create: async () => { throw new Error('AI not mocked'); } }; } } }, extra);
       if (name === './response-guardrail') return load('src/services/response-guardrail.js', deps, extra);
+      if (name === './broadcast-purchases' || name === '../services/broadcast-purchases') return require(path.join(root, 'src/services/broadcast-purchases.js'));
       if (name === './broadcast-send-window') return require(path.join(root, 'src/services/broadcast-send-window.js'));
       if (name === './business-date' || name === '../services/business-date') return require(path.join(root, 'src/services/business-date.js'));
       if (name === './pipeline-outbound') return load('src/services/pipeline-outbound.js', deps, extra);

@@ -148,3 +148,21 @@ export function applyOfferToAll(plan, fields) {
     return { ...entry, item: { ...entry.item, offers }, offerChecks: [] };
   }) };
 }
+
+// Códigos estables agrupan exclusiones aunque el detalle incluya días o nombres.
+export function summarizeDraftAudience(prepared, excluded = []) {
+  const labels = {
+    unavailable: 'Contacto no disponible', opt_out: 'Baja o contacto excluido',
+    audience: 'Fuera del público elegido', recent_decline: 'Rechazo en las últimas 48 horas',
+    recent_issue: 'Reclamo o gestión sensible reciente', recent_campaign: 'Campaña reciente sin respuesta',
+    instruction: 'Exclusión según la instrucción', manual: 'Excluido durante la revisión',
+  };
+  const groups = new Map();
+  for (const item of excluded) {
+    const key = item.reasonCode || item.reason || 'Sin motivo informado';
+    const group = groups.get(key) || { key, label: labels[key] || item.reason || key, count: 0 };
+    group.count++;
+    groups.set(key, group);
+  }
+  return { total: prepared + excluded.length, prepared, excluded: excluded.length, reasons: [...groups.values()] };
+}

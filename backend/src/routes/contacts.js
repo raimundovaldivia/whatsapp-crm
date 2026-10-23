@@ -14,6 +14,7 @@ const { consolidateBroadcastContacts, resolveCustomerPhones } = require('../serv
 const resolveIdentityPhones = typeof resolveCustomerPhones === 'function'
   ? resolveCustomerPhones
   : async (_pool, _orgId, phone) => [phone];
+const { loadPurchases, withPurchaseStats } = require('../services/broadcast-purchases');
 const productIdentity = require('../services/product-identity');
 const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem === 'function'
   ? productIdentity.canonicalizeProductItem
@@ -374,7 +375,9 @@ router.get('/broadcast', requireContactsAccess, async (req, res) => {
         seen.set(key, { ...row, phone: key });
       }
     }
-    const contacts = consolidateBroadcastContacts([...seen.values()]);
+    const rawContacts = [...seen.values()];
+    const purchases = await loadPurchases(pool, req.orgId);
+    const contacts = withPurchaseStats(consolidateBroadcastContacts(rawContacts), rawContacts, purchases);
 
     const whatsapp = contacts.filter(c => c.source === 'whatsapp').length;
     const shopify  = contacts.filter(c => c.source === 'shopify').length;
