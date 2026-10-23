@@ -4,6 +4,32 @@ const bcrypt = require('bcryptjs');
 const db = require('../db/database');
 const { generateToken, requireAuth } = require('../middleware/auth');
 
+const publicUser = user => ({ id: user.id, email: user.email, name: user.name, role: user.role, organization_id: user.organization_id });
+const publicOrg = org => ({ id: org.id, name: org.name, slug: org.slug, setup_done: org.setup_done });
+const normalizedEmail = email => String(email || '').trim().toLowerCase();
+
+async function sessionAccounts(req) {
+  const accounts = [];
+  for (const grant of req.sessionAccounts || []) {
+    if (!Number.isSafeInteger(grant?.userId) || !Number.isSafeInteger(grant?.orgId)) continue;
+    const user = await db.getUserById(grant.userId);
+    if (!user || user.organization_id !== grant.orgId || user.role !== grant.role ||
+        Number(user.auth_version || 0) !== grant.authVersion ||
+        normalizedEmail(user.email) !== normalizedEmail(grant.email) ||
+        normalizedEmail(user.email) !== normalizedEmail(req.userEmail)) continue;
+    if (!accounts.some(account => account.id === user.id)) accounts.push(user);
+  }
+  return accounts;
+}
+
+async function accountOptions(accounts) {
+  const options = await Promise.all(accounts.map(async user => {
+    const org = await db.getOrgById(user.organization_id);
+    return org ? { organization_id: org.id, name: org.name, slug: org.slug, role: user.role } : null;
+  }));
+  return options.filter(Boolean);
+}
+
 /**
  * POST /api/auth/register
  * Registra un nuevo negocio (organización) y su usuario owner
@@ -62,8 +88,9 @@ router.post('/register', async (req, res) => {
  */
 router.post('/login', async (req, res) => {
   try {
-    const { email, password, organizationId } = req.body;
-    if (!email || !password) {
+    const { password, organizationId } = req.body;
+    const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
+    if (!email || email.length > 254 || typeof password !== 'string' || !password || password.length > 128) {
       return res.status(400).json({ success: false, error: 'Email y password requeridos' });
     }
 
@@ -99,7 +126,7 @@ router.post('/login', async (req, res) => {
     }
 
     const org = await db.getOrgById(user.organization_id);
-    const token = generateToken(user);
+    const token = generateToken(user, { accounts: matches });
 
     res.json({
       success: true,
@@ -131,6 +158,63 @@ router.get('/me', requireAuth, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Lists only accounts authorized by this session, never by email alone.
+router.get('/organizations', requireAuth, async (req, res) => {
+  try {
+    res.json({ success: true, data: { organizations: await accountOptions(await sessionAccounts(req)) } });
+  } catch {
+    res.status(500).json({ success: false, error: 'No pudimos cargar tus tiendas' });
+  }
+});
+
+// Upgrades an older session without logging out. The existing /api/auth rate
+// limiter also protects this password verification. No credentials are persisted.
+router.post('/verify-organizations', requireAuth, async (req, res) => {
+  const password = req.body?.password;
+  if (typeof password !== 'string' || !password || password.length > 128) {
+    return res.status(400).json({ success: false, error: 'Ingresa tu contraseña' });
+  }
+  try {
+    const candidates = await db.getUsersByEmail(req.userEmail);
+    const matches = [];
+    for (const candidate of candidates) {
+      if (await bcrypt.compare(password, candidate.password_hash)) matches.push(candidate);
+    }
+    if (!matches.length) return res.status(403).json({ success: false, error: 'Contraseña incorrecta' });
+    const currentAccounts = await sessionAccounts(req);
+    const user = currentAccounts.find(candidate => candidate.id === req.userId && candidate.organization_id === req.orgId);
+    if (!user) return res.status(403).json({ success: false, error: 'Verifica tu sesión nuevamente' });
+    const accounts = [...new Map([...currentAccounts, ...matches].map(account => [account.id, account])).values()];
+    res.json({ success: true, data: {
+      token: generateToken(user, { accounts, expiresAt: req.sessionExpiresAt }),
+      user: publicUser(user), organization: publicOrg(await db.getOrgById(req.orgId)),
+      organizations: await accountOptions(accounts),
+    } });
+  } catch {
+    res.status(500).json({ success: false, error: 'No pudimos verificar tus tiendas' });
+  }
+});
+
+router.post('/switch-organization', requireAuth, async (req, res) => {
+  const organizationId = req.body?.organizationId;
+  if (!Number.isSafeInteger(organizationId) || organizationId <= 0) {
+    return res.status(400).json({ success: false, error: 'Selecciona una tienda válida' });
+  }
+  try {
+    const accounts = await sessionAccounts(req);
+    const user = accounts.find(account => account.organization_id === organizationId);
+    if (!user) return res.status(403).json({ success: false, error: 'Esta sesión no tiene acceso a esa tienda. Verifica tus tiendas nuevamente.' });
+    const org = await db.getOrgById(organizationId);
+    if (!org) return res.status(403).json({ success: false, error: 'Tienda no disponible' });
+    res.json({ success: true, data: {
+      token: generateToken(user, { accounts, expiresAt: req.sessionExpiresAt }),
+      user: publicUser(user), organization: publicOrg(org),
+    } });
+  } catch {
+    res.status(500).json({ success: false, error: 'No pudimos cambiar de tienda' });
   }
 });
 

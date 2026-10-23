@@ -5,6 +5,7 @@ import {
   Truck, UserCog, Users, Wifi, WifiOff, X,
 } from 'lucide-react';
 import { useTheme } from '../theme.js';
+import StoreSwitcher from './StoreSwitcher.jsx';
 
 const ROLE_VIEWS = {
   owner:       ['chats', 'stats', 'orders', 'repartos', 'pagos', 'clientes', 'mensajeria', 'campaigns', 'social', 'referidos', 'productos', 'evaluacion', 'settings', 'users', 'solutions'],
@@ -53,7 +54,7 @@ function useNavigation({ userRole, modules }) {
   };
 }
 
-function DesktopNav({ view, onChangeView, orgName, connected, onLogout, unreadCount, pendingOrders, pendingProofs, userRole, modules }) {
+function DesktopNav({ view, onChangeView, orgName, organization, connected, onLogout, unreadCount, pendingOrders, pendingProofs, userRole, modules }) {
   const { colors, isDark, toggle } = useTheme();
   const { allowed, mainItems, moreItems } = useNavigation({ userRole, modules });
   const [openMenu, setOpenMenu] = useState(null);
@@ -131,6 +132,7 @@ function DesktopNav({ view, onChangeView, orgName, connected, onLogout, unreadCo
 
       {openMenu === 'account' && (
         <Popover title={orgName || 'Mi cuenta'} colors={colors} top={12}>
+          <StoreSwitcher organization={organization} />
           {allowed.includes('settings') && (
             <MenuRow icon={Settings} label="Configuración de la cuenta" active={view === 'settings'}
               onClick={() => goTo('settings')} colors={colors} />
@@ -145,7 +147,7 @@ function DesktopNav({ view, onChangeView, orgName, connected, onLogout, unreadCo
   );
 }
 
-function MobileNav({ view, onChangeView, unreadCount, pendingOrders, pendingProofs, userRole, modules, onLogout }) {
+function MobileNav({ view, onChangeView, organization, unreadCount, pendingOrders, pendingProofs, userRole, modules, onLogout }) {
   const { colors, isDark, toggle } = useTheme();
   const { allowed, mainItems, moreItems } = useNavigation({ userRole, modules });
   const [moreOpen, setMoreOpen] = useState(false);
@@ -171,11 +173,13 @@ function MobileNav({ view, onChangeView, unreadCount, pendingOrders, pendingProo
             position: 'absolute', left: 10, right: 10, bottom: 'calc(70px + env(safe-area-inset-bottom, 0px))',
             backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
             borderRadius: '16px', padding: '10px', boxShadow: '0 16px 40px rgba(0,0,0,.28)',
+            maxHeight: 'calc(100dvh - 100px)', overflowY: 'auto',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px 10px' }}>
               <strong style={{ color: colors.textPrimary, fontSize: '14px' }}>Más funciones</strong>
               <button aria-label="Cerrar menú" onClick={() => setMoreOpen(false)} style={iconButton(colors)}><X size={19} /></button>
             </div>
+            <StoreSwitcher organization={organization} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
               {mobileMoreItems.map(item => (
                 <MenuRow key={item.key} icon={item.icon} label={item.label} active={view === item.key}
@@ -200,10 +204,8 @@ function MobileNav({ view, onChangeView, unreadCount, pendingOrders, pendingProo
             badge={getBadge(item.key, unreadCount, pendingOrders, pendingProofs)}
             onClick={() => goTo(item.key)} colors={colors} />
         ))}
-        {(mobileMoreItems.length > 0 || allowed.includes('settings')) && (
-          <MobileItem item={{ icon: Menu, label: 'Más' }} active={moreActive || moreOpen}
-            onClick={() => setMoreOpen(!moreOpen)} colors={colors} />
-        )}
+        <MobileItem item={{ icon: Menu, label: 'Más' }} active={moreActive || moreOpen}
+          onClick={() => setMoreOpen(!moreOpen)} colors={colors} />
       </nav>
     </>
   );

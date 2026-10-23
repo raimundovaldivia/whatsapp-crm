@@ -271,14 +271,19 @@ Para pedir la opinión fuera de la ventana de 24 horas, asigna en **Configuraci�
 
 ## ⚙️ Personalizar el agente
 
-Puedes modificar las instrucciones del agente en `backend/src/services/ai-agent.js`, en la variable `BASE_SYSTEM_PROMPT`. También puedes agregar instrucciones adicionales desde la API:
+Selecciona la tienda y abre **Configuración de la cuenta → IA & Bot**. Guarda sus especificaciones técnicas, nombres comerciales y modalidad de venta en **Contexto de la tienda**; configura el tono y las instrucciones en **Personalidad del agente**. Estas reglas pertenecen al setup de esa organización, no al código compartido del bot.
 
-```bash
-PUT /api/settings
-{
-  "ai_system_prompt_extra": "Siempre menciona nuestro descuento del 10% para primera compra."
-}
-```
+El pipeline de WhatsApp y el bot social leen `store_context` y `ai_system_prompt_extra` de la organización activa. No copies reglas de una marca al contexto de otra. Los ajustes se guardan mediante las rutas existentes `/api/settings/store-context` y `/api/settings`, protegidas para owner/admin.
+
+### Cambiar de tienda sin cerrar sesión
+
+En escritorio, abre el menú de cuenta de la esquina superior izquierda y usa **Tienda activa**. En móvil, el selector está en **Más**. Cada tienda mantiene su propio catálogo, conversaciones, bot, módulos y permisos. Guarda los formularios pendientes antes de cambiar: la aplicación vuelve a cargar los datos de la tienda elegida.
+
+El login autoriza únicamente las cuentas del mismo correo cuya contraseña se verificó. Para una sesión anterior o una tienda con otra contraseña, usa **Verificar otra tienda de mi cuenta** una vez por sesión; la contraseña no se guarda. Compartir correo por sí solo nunca concede acceso.
+
+`GET /api/auth/organizations` lista los accesos vigentes de la sesión; `POST /api/auth/verify-organizations` verifica las credenciales adicionales y `POST /api/auth/switch-organization` recibe un `organizationId` entero. El servidor revalida usuario, organización, correo, rol y versión de autorización antes de emitir el token de destino, sin ampliar la fecha de vencimiento original. No necesita migraciones y conserva compatibilidad con tokens antiguos y clientes móviles.
+
+Cambiar de tienda recarga también las otras pestañas del mismo origen. Las solicitudes y respuestas de una sesión anterior se descartan para evitar que formularios, cachés o conexiones activas mezclen tiendas. La configuración del bot se guarda después de comprobar el nombre de la tienda activa.
 
 ---
 

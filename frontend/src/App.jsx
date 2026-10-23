@@ -22,7 +22,8 @@ const CampaignAttributionPanel = lazy(() => import('./components/CampaignAttribu
 const ReferralsPanel = lazy(() => import('./components/ReferralsPanel.jsx'));
 import AdminAlertsBanner    from './components/AdminAlertsBanner.jsx';
 import { useSocket }  from './hooks/useSocket.js';
-import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './utils/api.js';
+import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api, clearAuthSession } from './utils/api.js';
+import StoreSwitcher from './components/StoreSwitcher.jsx';
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
 import { deriveAttentionState } from './utils/conversation-attention.js';
 import { inboxConversations } from './utils/inbox-conversations.mjs';
@@ -88,7 +89,7 @@ export default function App() {
         else if (data.user.role === 'coordinador') setView('repartos');
         setAppState('crm');
       })
-      .catch(() => { localStorage.removeItem('crm_token'); setAppState('auth'); });
+      .catch(error => { if (error.code !== 'ERR_CANCELED') { clearAuthSession(); setAppState('auth'); } });
   }, []);
 
   const handleAuth = useCallback((data) => {
@@ -344,7 +345,7 @@ export default function App() {
   }, []);
 
   const handleLogout = useCallback(() => {
-    localStorage.clear();
+    clearAuthSession();
     setAppState('auth');
     setUser(null); setOrg(null);
     setConversations([]); setMessages({}); setSelectedId(null);
@@ -471,6 +472,7 @@ export default function App() {
         <button onClick={handleLogout} style={{ marginTop: '8px', padding: '10px 20px', borderRadius: '10px', border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, cursor: 'pointer', fontSize: '13px' }}>
           Cerrar sesión
         </button>
+        <div style={{ width: 'min(360px, 100%)' }}><StoreSwitcher organization={org} /></div>
       </div>
     </ThemeCtx.Provider>
   );
@@ -504,6 +506,7 @@ export default function App() {
         view={view}
         onChangeView={handleChangeView}
         orgName={org?.name}
+        organization={org}
         connected={connected}
         onLogout={handleLogout}
         unreadCount={totalUnread}
