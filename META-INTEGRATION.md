@@ -17,7 +17,7 @@ El CRM incluye un módulo **Facebook e Instagram** con cuatro capacidades:
    `https://whatsapp-crm-api-production-f804.up.railway.app/meta-webhook`
 4. Usar el mismo valor de `META_WEBHOOK_VERIFY_TOKEN` como token de verificación.
 5. Suscribir la página a `messages`, `messaging_postbacks` y `feed`. Para Instagram, suscribir la cuenta profesional a `messages`, `messaging_postbacks` y `comments`.
-6. Solicitar acceso avanzado a los permisos usados por la app: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `pages_messaging`, `pages_manage_posts`, `pages_manage_engagement`, `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `instagram_content_publish`, `ads_read`, `ads_management`, `business_management`, `whatsapp_business_management`, `whatsapp_business_messaging` y `whatsapp_business_manage_events`.
+6. Solicitar acceso avanzado a los permisos usados por la app: `pages_show_list`, `pages_read_engagement`, `pages_read_user_content`, `pages_manage_metadata`, `pages_messaging`, `pages_manage_posts`, `pages_manage_engagement`, `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `instagram_content_publish`, `ads_read`, `ads_management`, `business_management`, `whatsapp_business_management`, `whatsapp_business_messaging` y `whatsapp_business_manage_events`.
 
 ## Variables del backend
 
@@ -49,6 +49,12 @@ FRONTEND_URL=https://whatsapp-crm-production-c76b.up.railway.app
 Instagram debe ser una cuenta profesional (Business o Creator) vinculada a la página de Facebook. Meta no permite iniciar conversaciones frías: la persona debe haber escrito primero a la cuenta profesional.
 
 La automatización social requiere además el módulo **Ventas con IA** activo. Si Marketing o Ventas con IA no está contratado, el backend no ejecuta respuestas automáticas. Los eventos repetidos se deduplican por el identificador entregado por Meta y las respuestas propias de la página o cuenta se ignoran para evitar bucles.
+
+La autorización y la selección de activos guardan los permisos efectivamente concedidos por Meta, no solo los solicitados. Los errores al suscribir la página o Instagram se muestran en Conexión. Antes de activar comentarios, el servidor comprueba los permisos actuales; si faltan o Meta no responde, conserva el estado anterior y devuelve un error. Siempre permite apagar la automatización sin depender de Meta.
+
+Para una conexión anterior, agrega los permisos de comentarios en el caso de uso de la app y reconecta desde el CRM para concederlos. Verifica además **Webhooks → Page → feed** y **Webhooks → Instagram → comments**: la suscripción del activo no sustituye estos campos de la app. Una prueba de webhook con HTTP 200 solo acredita recepción técnica. El funcionamiento completo requiere un comentario real de otra identidad, su llegada a la bandeja y una respuesta pública en cada red.
+
+Regresión local sin red: `node --test test/meta-comment-connection.test.cjs test/social-events.test.cjs test/social-bot.test.cjs` desde `backend/`.
 
 Los mensajes privados usan el mismo pipeline de catálogo, precios, datos de despacho, confirmación, prevención de duplicados y creación de pedidos que WhatsApp. Cada identidad de Instagram o Facebook se guarda separada por organización y canal, sin convertir el identificador de Meta en un teléfono. Los comentarios permanecen públicos y nunca recopilan nombre, dirección, teléfono ni otros datos del pedido.
 
