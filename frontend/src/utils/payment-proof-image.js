@@ -1,7 +1,8 @@
 import { paymentProofsAPI } from './api.js';
+import { authSession } from './browser-session.js';
 
 export async function fetchPaymentProofImage(proofId) {
-  const token = localStorage.getItem('crm_token');
+  const token = authSession.getToken();
   const response = await fetch(paymentProofsAPI.imageUrl(proofId), {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -12,6 +13,7 @@ export async function fetchPaymentProofImage(proofId) {
   }
 
   const blob = await response.blob();
+  if (!authSession.isCurrent(token)) throw new Error('La sesión cambió');
   if (!blob.type.startsWith('image/')) {
     throw new Error('El archivo recibido no es una imagen válida');
   }

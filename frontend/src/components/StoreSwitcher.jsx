@@ -1,16 +1,25 @@
-import { useEffect, useState } from 'react';
-import { authAPI, rememberAuthSession, switchAuthSession } from '../utils/api.js';
+import { useEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
+import { authAPI } from '../utils/api.js';
+import { authSession } from '../utils/browser-session.js';
 import { useTheme } from '../theme.js';
 
-export default function StoreSwitcher({ organization }) {
+export default function StoreSwitcher({ organization, onClose }) {
   const { colors } = useTheme();
+  const dialog = useRef(null);
+  const active = useRef(true);
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [verify, setVerify] = useState(false);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    active.current = true;
+    const element = dialog.current;
+    element.showModal();
+    return () => { active.current = false; element.close(); };
+  }, []);
   useEffect(() => {
     let active = true;
     authAPI.organizations()
@@ -24,27 +33,34 @@ export default function StoreSwitcher({ organization }) {
     const id = Number(event.target.value);
     if (!id || id === organization.id || busy) return;
     setBusy(true); setError('');
-    try { switchAuthSession(await authAPI.switchOrganization(id)); }
-    catch (err) { setError(err.response?.data?.error || 'No pudimos cambiar de tienda'); setBusy(false); }
+    try {
+      const data = await authAPI.switchOrganization(id);
+      if (active.current) authSession.save(data, { switchStore: true });
+    }
+    catch (err) { if (active.current) { setError(err.response?.data?.error || 'No pudimos cambiar de tienda'); setBusy(false); } }
   }
   async function verifyStores(event) {
     event.preventDefault();
     if (busy) return;
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError('');
     try {
       const data = await authAPI.verifyOrganizations(password);
-      rememberAuthSession(data);
-      setStores(data.organizations);
-      setVerify(false);
-      setNotice(data.organizations.length > 1 ? 'Tus tiendas están listas para cambiar.' : 'Solo se verificó esta tienda con esa contraseña.');
-    } catch (err) { setError(err.response?.data?.error || 'No pudimos verificar tus tiendas'); }
-    finally { setPassword(''); setBusy(false); }
+      // Reload also reconnects the socket with the refreshed session token.
+      if (active.current) authSession.save(data, { switchStore: true });
+    } catch (err) { if (active.current) setError(err.response?.data?.error || 'No pudimos verificar tus tiendas'); }
+    finally { if (active.current) { setPassword(''); setBusy(false); } }
   }
   const input = { width: '100%', boxSizing: 'border-box', background: colors.bgApp, color: colors.textPrimary,
     border: `1px solid ${colors.borderStrong}`, borderRadius: 8, padding: '9px 10px', font: 'inherit', marginTop: 6 };
   const options = stores.length ? stores : [{ organization_id: organization.id, name: organization.name }];
   return (
-    <section aria-label="Cambiar de tienda" aria-busy={busy || loading} style={{ padding: '8px 10px 12px', fontSize: 13 }}>
+    <dialog ref={dialog} aria-labelledby="store-switch-title" aria-busy={busy || loading}
+      onCancel={event => { event.preventDefault(); onClose(); }}
+      style={{ width: 'min(440px, calc(100vw - 32px))', margin: 'auto', inset: 0, boxSizing: 'border-box', maxHeight: 'calc(100dvh - 32px)', padding: 24, borderRadius: 18, border: `1px solid ${colors.border}`, background: colors.bgPanel, color: colors.textPrimary, boxShadow: '0 24px 80px rgba(0,0,0,.4)', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
+        <h2 id="store-switch-title" style={{ margin: 0, fontSize: 20 }}>Cambiar tienda</h2>
+        <button type="button" aria-label="Cerrar cambio de tienda" onClick={onClose} style={{ border: 0, background: 'none', color: colors.textPrimary, cursor: 'pointer' }}><X size={20} /></button>
+      </div>
       <label style={{ color: colors.textSecondary, display: 'block' }}>
         Tienda activa
         <select aria-label="Tienda activa" value={organization.id} onChange={changeStore} disabled={busy || loading} style={input}>
@@ -64,8 +80,7 @@ export default function StoreSwitcher({ organization }) {
         <button type="submit" disabled={busy || !password} style={{ ...input, background: colors.green, color: 'white', cursor: 'pointer' }}>Verificar tiendas</button>
       </form>}
       {busy && <p role="status" style={{ color: colors.textSecondary }}>Preparando tu tienda…</p>}
-      {notice && <p role="status" style={{ color: colors.textSecondary }}>{notice}</p>}
       {error && <p role="alert" style={{ color: colors.red }}>{error}</p>}
-    </section>
+    </dialog>
   );
 }

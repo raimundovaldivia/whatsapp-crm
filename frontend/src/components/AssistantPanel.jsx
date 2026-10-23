@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Bot, Send, RotateCcw, Sparkles, ExternalLink, X } from 'lucide-react';
 import { assistantAPI, setupAPI } from '../utils/api.js';
+import { authSession } from '../utils/browser-session.js';
 import { useTheme } from '../theme.js';
 
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
@@ -74,7 +75,7 @@ export default function AssistantPanel({ org, onSetupComplete, onClose }) {
   }, [messages, loading]);
 
   const handleOAuth = useCallback(async (service) => {
-    const token = localStorage.getItem('crm_token');
+    const token = authSession.getToken();
     if (service === 'shopify') {
       setMessages(prev => [...prev, {
         role: 'action',

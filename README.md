@@ -2,6 +2,10 @@
 
 Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de inteligencia artificial, ventas y pedidos. Puede usar Shopify como conexión de catálogo y operaciones, y admite Meta, Kapso, Twilio y varios números mediante Evolution API.
 
+### Cambiar de tienda sin cerrar sesión
+
+En escritorio, abre el menú de cuenta y elige **Cambiar tienda**. En móvil está en **Más → Cambiar tienda**. El selector **Tienda activa** muestra las cuentas verificadas durante esta sesión. Selecciona una para abrirla con sus propios permisos y ajustes, sin volver a ingresar la contraseña. Si falta una tienda, pulsa **Verificar otra tienda de mi cuenta** e ingresa su contraseña una vez: debe usar el mismo correo. Esta verificación recarga la sesión conservando su vencimiento; vuelve a abrir el selector para elegir. Guarda antes cualquier edición pendiente; cambiar de tienda recarga también las otras pestañas abiertas. Una contraseña incorrecta o cancelar el diálogo conserva la sesión actual. No requiere otro correo, crear otra cuenta ni modificar la configuración del bot.
+
 ---
 
 ## ✨ Características
@@ -277,7 +281,7 @@ El pipeline de WhatsApp y el bot social leen `store_context` y `ai_system_prompt
 
 ### Cambiar de tienda sin cerrar sesión
 
-En escritorio, abre el menú de cuenta de la esquina superior izquierda y usa **Tienda activa**. En móvil, el selector está en **Más**. Cada tienda mantiene su propio catálogo, conversaciones, bot, módulos y permisos. Guarda los formularios pendientes antes de cambiar: la aplicación vuelve a cargar los datos de la tienda elegida.
+En escritorio, abre el menú de cuenta de la esquina superior izquierda y elige **Cambiar tienda → Tienda activa**. En móvil está en **Más → Cambiar tienda**. Cada tienda mantiene su propio catálogo, conversaciones, bot, módulos y permisos. Guarda los formularios pendientes antes de cambiar: la aplicación vuelve a cargar los datos de la tienda elegida.
 
 El login autoriza únicamente las cuentas del mismo correo cuya contraseña se verificó. Para una sesión anterior o una tienda con otra contraseña, usa **Verificar otra tienda de mi cuenta** una vez por sesión; la contraseña no se guarda. Compartir correo por sí solo nunca concede acceso.
 
@@ -358,7 +362,7 @@ El código `REF-…` puede compartirse con distintas personas. Cada `BONO-…` e
 
 En Mensajería masiva, el canal Evolution permite indicar el objetivo y las condiciones en lenguaje natural para hasta 5.000 clientes. La IA vigente redacta por cliente con su historial y conversación; preparar borradores no envía mensajes. Cada texto puede corregirse o excluirse antes de autorizar el lote. Editar un mensaje en revisión detallada lo marca como revisado; también existe una acción para marcar todos. La autorización se vincula mediante una huella a los destinatarios, textos y ofertas exactos, que se guardan en la cola existente. Las campañas detenidas mantienen su estado. Esta función envía texto y no incorpora imágenes.
 
-La selección excluye bajas, rechazos explícitos, reclamos recientes y contactos comerciales sin respuesta durante los últimos siete días. Una campaña antigua sin respuesta no equivale a una baja: queda disponible para un borrador prudente y revisión humana.
+La selección excluye bajas solicitadas expresamente, rechazos recientes durante 48 horas, reclamos recientes y contactos comerciales sin respuesta durante los últimos siete días. Un «no gracias» ante una oferta puntual y una campaña antigua sin respuesta no equivalen a una baja: quedan disponibles para un borrador prudente y revisión humana.
 
 Las ofertas son personales: se guardan por organización, conversación y producto, y se activan tras un envío aceptado. No cambian el catálogo público. El selector de productos consume la respuesta `{ products: [...] }` y permite reintentar si falla la carga. El vencimiento se edita con fecha y hora de Chile; una fecha sin hora conserva vigencia hasta el cierre de ese día. La cola omite mensajes cuyas ofertas hayan vencido antes de enviarlos.
 

@@ -1,71 +1,14 @@
 import axios from 'axios';
-import { createSessionGuard } from './session-guard.mjs';
+import { authSession } from './browser-session.js';
+import { installSessionInterceptors } from './auth-session.mjs';
 
 // En producción VITE_BACKEND_URL = URL del backend de Railway (ej: https://whatsapp-crm-api-production-f804.up.railway.app)
 // En desarrollo = localhost:3001
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
 const api = axios.create({ baseURL: `${BASE_URL}/api`, timeout: 12000 });
-const sessionGuard = createSessionGuard(localStorage);
 
-function saveSession(data) {
-  localStorage.setItem('crm_user', JSON.stringify(data.user));
-  localStorage.setItem('crm_org', JSON.stringify(data.organization));
-  localStorage.setItem('crm_token', data.token);
-}
-
-export function rememberAuthSession(data) {
-  saveSession(data);
-  sessionGuard.adopt(data.token);
-}
-
-export function switchAuthSession(data) {
-  saveSession(data);
-  // Full navigation drops component state, in-flight work and the old socket.
-  // Until navigation finishes, the guard rejects any requests from this page.
-  window.location.reload();
-}
-
-export function clearAuthSession() {
-  for (const key of ['crm_token', 'crm_user', 'crm_org']) localStorage.removeItem(key);
-  sessionGuard.adopt(null);
-}
-
-window.addEventListener('storage', event => {
-  if ((event.key === 'crm_token' || event.key === null) && !sessionGuard.isCurrent()) window.location.reload();
-});
-
-// Inyectar token JWT en cada request
-api.interceptors.request.use((config) => {
-  let token;
-  try { token = sessionGuard.token(); }
-  catch {
-    window.location.reload();
-    throw new axios.CanceledError('La tienda activa cambió');
-  }
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  config._sessionToken = token;
-  return config;
-});
-
-// Si el token expira, redirigir al login
-api.interceptors.response.use(
-  r => {
-    if (!sessionGuard.accepts(r.config._sessionToken)) throw new axios.CanceledError('La tienda activa cambió');
-    return r;
-  },
-  err => {
-    if (err.config && !sessionGuard.accepts(err.config._sessionToken)) return Promise.reject(new axios.CanceledError('La tienda activa cambió'));
-    const url = String(err.config?.url || '');
-    const isAuthAttempt = url.endsWith('/auth/login') || url.endsWith('/auth/register');
-    if (err.response?.status === 401 && !isAuthAttempt) {
-      clearAuthSession();
-      // Evita un bucle de recarga si varias solicitudes fallan a la vez.
-      if (window.location.pathname !== '/') window.location.replace('/');
-    }
-    return Promise.reject(err);
-  }
-);
+installSessionInterceptors(api, authSession, () => new axios.CanceledError('La sesión cambió'));
 
 export const authAPI = {
   register: (data) => api.post('/auth/register', data).then(r => r.data.data),

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { authSession } from '../utils/browser-session.js';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
@@ -21,6 +22,11 @@ export function useSocket(orgId, onNewMessage, onAgentModeChanged, onMessageStat
 
   useEffect(() => {
     if (!orgId) return;
+    let token;
+    try { token = authSession.getToken(); } catch { return; }
+    const deliver = (name, data) => {
+      if (authSession.isCurrent(token)) handlersRef.current[name]?.(data);
+    };
 
     const socket = io(BACKEND_URL, {
       // Polling primero permite conectar aun cuando un proxy o una red móvil
@@ -33,28 +39,29 @@ export function useSocket(orgId, onNewMessage, onAgentModeChanged, onMessageStat
       reconnectionDelayMax: 10000,
       randomizationFactor: 0.3,
       timeout: 15000,
-      auth: { token: localStorage.getItem('crm_token') },
+      auth: { token },
     });
     socketRef.current = socket;
 
     socket.on('connect', () => {
       setConnected(true);
       // Recuperar desde la API cualquier mensaje ocurrido durante el corte.
-      handlersRef.current.onSync?.();
+      deliver('onSync');
     });
 
     socket.on('disconnect', () => setConnected(false));
     socket.on('connect_error', () => setConnected(false));
 
     // Escuchar eventos con prefijo de org para aislamiento multi-tenant
-    socket.on(`new_message_${orgId}`,       data => handlersRef.current.onNewMessage?.(data));
-    socket.on(`agent_mode_changed_${orgId}`, data => handlersRef.current.onAgentModeChanged?.(data));
-    socket.on(`status_update_${orgId}`,     data => handlersRef.current.onMessageStatus?.(data));
-    socket.on(`order_created_${orgId}`,     data => handlersRef.current.onOrderCreated?.(data));
-    socket.on(`bot_typing_${orgId}`,        data => handlersRef.current.onBotTyping?.(data));
-    socket.on(`payment_proof_${orgId}`,     data => handlersRef.current.onPaymentProof?.(data));
+    socket.on(`new_message_${orgId}`,       data => deliver('onNewMessage', data));
+    socket.on(`agent_mode_changed_${orgId}`, data => deliver('onAgentModeChanged', data));
+    socket.on(`status_update_${orgId}`,     data => deliver('onMessageStatus', data));
+    socket.on(`order_created_${orgId}`,     data => deliver('onOrderCreated', data));
+    socket.on(`bot_typing_${orgId}`,        data => deliver('onBotTyping', data));
+    socket.on(`payment_proof_${orgId}`,     data => deliver('onPaymentProof', data));
 
     const reconnectIfNeeded = () => {
+      if (!authSession.isCurrent(token)) { socket.disconnect(); return; }
       if (!socket.connected) socket.connect();
     };
     const handleVisibility = () => {
