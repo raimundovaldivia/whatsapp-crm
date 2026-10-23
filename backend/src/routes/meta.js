@@ -14,7 +14,7 @@ const purchaseSync = require('../services/meta-purchase-sync');
 
 const router = express.Router();
 const SCOPES = [
-  'pages_show_list', 'pages_read_engagement', 'pages_manage_metadata',
+  'pages_show_list', 'pages_read_engagement', 'pages_read_user_content', 'pages_manage_metadata',
   'pages_messaging', 'pages_manage_posts', 'pages_manage_engagement',
   'instagram_basic', 'instagram_manage_messages', 'instagram_manage_comments', 'instagram_content_publish',
   'ads_read', 'ads_management', 'business_management',
@@ -101,16 +101,35 @@ async function fetchAssets(userToken) {
 }
 
 async function subscribeSocialWebhooks(page, instagram) {
+  const errors = [];
   if (page?.id && page?.access_token) {
     await meta.graphPost(`${page.id}/subscribed_apps`, page.access_token, {
       subscribed_fields: 'messages,messaging_postbacks,feed',
-    }).catch(error => console.warn('[Meta] Suscripción webhook Page:', meta.graphError(error)));
+    }).catch(error => errors.push(`Facebook: ${meta.graphError(error)}`));
   }
   if (instagram?.id && page?.access_token) {
     await meta.graphPost(`${instagram.id}/subscribed_apps`, page.access_token, {
       subscribed_fields: 'messages,messaging_postbacks,comments',
-    }).catch(error => console.warn('[Meta] Suscripción webhook Instagram:', meta.graphError(error)));
+    }).catch(error => errors.push(`Instagram: ${meta.graphError(error)}`));
   }
+  return errors.length ? `No se pudo activar la recepción de eventos. ${errors.join(' · ')}` : null;
+}
+
+async function grantedPermissions(userToken) {
+  const result = await meta.graphGet('me/permissions', userToken);
+  return (result.data || []).filter(item => item.status === 'granted').map(item => item.permission);
+}
+
+function missingCommentPermissions(connection, permissions) {
+  const required = ['pages_read_engagement', 'pages_manage_metadata'];
+  if (connection.page_id) required.push('pages_read_user_content', 'pages_manage_engagement');
+  if (connection.instagram_account_id) required.push('instagram_basic', 'instagram_manage_comments');
+  return required.filter(permission => !permissions.includes(permission));
+}
+
+function commentConnectionWarning(page, instagram, permissions, subscriptionError) {
+  const missing = missingCommentPermissions({ page_id: page?.id, instagram_account_id: instagram?.id }, permissions);
+  return [subscriptionError, missing.length ? `Para responder comentarios, reconecta Meta y autoriza: ${missing.join(', ')}.` : null].filter(Boolean).join(' ') || null;
 }
 
 // Callback público: Meta redirige aquí después del login.
@@ -133,6 +152,7 @@ router.get('/callback', async (req, res) => {
     });
     const userToken = long.data.access_token;
     const assets = await fetchAssets(userToken);
+    const permissions = await grantedPermissions(userToken);
     const page = assets.pages.find(p => p.instagram_business_account) || assets.pages[0] || null;
     const instagram = page?.instagram_business_account || null;
     const adAccount = assets.adAccounts[0] || null;
@@ -154,12 +174,14 @@ router.get('/callback', async (req, res) => {
          last_error=NULL, updated_at=NOW()`,
       [state.orgId, assets.profile.id, assets.profile.name, meta.encryptToken(userToken), page?.id || null,
         page?.name || null, meta.encryptToken(page?.access_token), instagram?.id || null, instagram?.username || null,
-        adAccount?.id || null, adAccount?.name || null, SCOPES, JSON.stringify({ pages: assets.pages.map(p => ({
+        adAccount?.id || null, adAccount?.name || null, permissions, JSON.stringify({ pages: assets.pages.map(p => ({
           id: p.id, name: p.name, tasks: p.tasks, instagram: p.instagram_business_account || null,
         })), adAccounts: assets.adAccounts, whatsappAccounts: assets.whatsappAccounts }), expiresAt]
     );
 
-    await subscribeSocialWebhooks(page, instagram);
+    const subscriptionError = await subscribeSocialWebhooks(page, instagram);
+    const warning = commentConnectionWarning(page, instagram, permissions, subscriptionError);
+    if (warning) await getPool().query('UPDATE meta_connections SET last_error=$1 WHERE organization_id=$2', [warning, state.orgId]);
     res.redirect(`${frontendUrl()}/?meta_success=1`);
   } catch (error) {
     console.error('[Meta OAuth]', meta.graphError(error));
@@ -354,7 +376,9 @@ router.patch('/assets', async (req, res) => {
   try {
     const connection = await getConnection(req.orgId, true);
     if (!connection) return res.status(404).json({ error: 'Meta no está conectado' });
-    const assets = await fetchAssets(meta.decryptToken(connection.user_access_token));
+    const userToken = meta.decryptToken(connection.user_access_token);
+    const assets = await fetchAssets(userToken);
+    const permissions = await grantedPermissions(userToken);
     const page = assets.pages.find(p => p.id === String(req.body.pageId));
     const ad = assets.adAccounts.find(a => a.id === String(req.body.adAccountId));
     if (req.body.pageId && !page) return res.status(400).json({ error: 'Página no autorizada' });
@@ -367,7 +391,9 @@ router.patch('/assets', async (req, res) => {
       [page?.id || null, page?.name || null, meta.encryptToken(page?.access_token), ig?.id || null,
         ig?.username || null, ad?.id || null, ad?.name || null, req.orgId]
     );
-    await subscribeSocialWebhooks(page, ig);
+    const subscriptionError = await subscribeSocialWebhooks(page, ig);
+    const warning = commentConnectionWarning(page, ig, permissions, subscriptionError);
+    await getPool().query('UPDATE meta_connections SET last_error=$1,scopes=$2 WHERE organization_id=$3', [warning, permissions, req.orgId]);
     res.json({ connection: await getConnection(req.orgId) });
   } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
 });
@@ -433,6 +459,19 @@ router.post('/threads/:id/messages', async (req, res) => {
 router.patch('/automation', async (req, res) => {
   if (typeof req.body.autoReplyMessages !== 'boolean' || typeof req.body.autoReplyComments !== 'boolean') {
     return res.status(400).json({ error: 'Indica si Diva responderá mensajes y comentarios' });
+  }
+  if (req.body.autoReplyComments) {
+    try {
+      const current = await getConnection(req.orgId, true);
+      if (!current || current.status !== 'connected' || !current.user_access_token || !current.page_id) {
+        return res.status(409).json({ error: 'Conecta Meta y selecciona la página antes de activar los comentarios.' });
+      }
+      const permissions = await grantedPermissions(meta.decryptToken(current.user_access_token));
+      const missing = missingCommentPermissions(current, permissions);
+      if (missing.length) return res.status(409).json({ error: `Faltan permisos para los comentarios. Reconecta Meta y autoriza: ${missing.join(', ')}.`, missingPermissions: missing });
+    } catch (error) {
+      return res.status(502).json({ error: `No se pudo verificar el acceso a los comentarios: ${meta.graphError(error)}` });
+    }
   }
   const { rows: [connection] } = await getPool().query(
     `UPDATE meta_connections SET auto_reply_messages=$1,auto_reply_comments=$2,updated_at=NOW()
