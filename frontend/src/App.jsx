@@ -616,7 +616,7 @@ export default function App() {
       {view === 'dashboard' && <DashboardPanel onChangeView={setView} />}
 
       {/* Vista Estadísticas */}
-      {view === 'stats' && <StatsPanel />}
+      {view === 'stats' && <StatsPanel onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }} />}
 
       {/* Vista Comprobantes de pago */}
       {view === 'pagos' && (

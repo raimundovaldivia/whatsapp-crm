@@ -23,8 +23,12 @@ y PGDATA=/var/lib/postgresql/data/pgdata. La API no tiene dominio público.
 
 El único dominio público pertenece a qa-web. Todas las rutas y upgrades exigen
 acceso QA. Usuario de acceso: `qa`; contraseña: variable QA_ACCESS_PASSWORD en
-ese servicio. Basic auth inicial crea cookie HttpOnly/Secure/SameSite=Lax para
-conservar el acceso cuando el CRM usa Authorization Bearer. /qa-health es público
+ese servicio. La pantalla `/qa-login` recibe las credenciales por POST y crea una
+cookie HttpOnly/Secure/SameSite=Lax para conservar el acceso cuando el CRM usa
+Authorization Bearer. No muestra el diálogo nativo Basic del navegador.
+Los clientes de prueba que ya usan Basic siguen siendo compatibles; las rutas API
+y WebSocket continúan restringidas. El formulario limita intentos y tamaño del
+cuerpo y exige un token CSRF firmado vinculado a una cookie de formulario. /qa-health es público
 y solo devuelve un marcador fijo, sin consultar datos. La API privada escucha
 3001. El proxy mantiene el frontend y la API en el mismo origen.
 

@@ -2,6 +2,92 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { load, handler, response, noop } = require('./helpers.cjs');
 
+test('transactional messages, failures and old temporary declines preserve customers; true opt-outs remain blocked', () => {
+  const { drafts } = setup();
+  const today = '2026-10-22';
+  const recent = '2026-10-21T15:00:00Z';
+  assert.equal(drafts.messageSafety([{ direction: 'outbound', content: 'Pedido entregado', created_at: recent }], today).unansweredRecentOutreach, false);
+  for (const campaign of [{ result_status: 'failed' }, { result_status: 'accepted', status: 'failed' }]) {
+    assert.equal(drafts.messageSafety([], today, [{ ...campaign, created_at: recent }]).unansweredRecentOutreach, false);
+  }
+  for (const content of ['No gracias, esta semana no necesito huevos.', 'No quiero comprar ahora.']) {
+    const old = { direction: 'inbound', content, created_at: '2026-09-01T15:00:00Z' };
+    assert.equal(drafts.messageSafety([old], today).explicitDecline, false);
+    assert.equal(drafts.messageSafety([old], today).recentDecline, false);
+    assert.equal(drafts.messageSafety([{ ...old, created_at: recent }], today).recentDecline, true);
+    assert.equal(drafts.messageSafety([{ ...old, created_at: recent }, { direction: 'inbound', content: 'Ahora quiero dos bandejas.', created_at: '2026-10-21T16:00:00Z' }], today).recentDecline, false);
+  }
+  for (const content of ['No me escriban más.', 'No quiero recibir más mensajes.', 'STOP', 'Darme de baja']) {
+    assert.equal(drafts.messageSafety([{ direction: 'inbound', content, created_at: '2026-09-01T15:00:00Z' }], today).explicitDecline, true);
+  }
+  assert.equal(drafts.messageSafety([], today, [{ result_status: 'unknown', created_at: recent }]).unansweredRecentOutreach, true);
+});
+
+test('100 selected customers keep 80 valid drafts and report 20 real exclusions', async () => {
+  const { drafts, database } = setup();
+  const day = require('../src/services/business-date').todayISOChile();
+  database.getContact = async (_org, phone) => ({ name: 'Cliente', opt_out: phone.endsWith('4') });
+  database.getMessagesByCustomerPhone = async () => [
+    { direction: 'inbound', content: 'No gracias, esta semana no necesito.', created_at: '2020-01-01T15:00:00Z' },
+    { direction: 'outbound', content: 'Tu pedido fue entregado.', created_at: day + 'T15:00:00Z' },
+  ];
+  database.getPool = () => ({ query: async (sql, params) => {
+    assert.equal(params[0], 7);
+    if (!sql.includes('broadcast_campaign_recipients')) return { rows: [] };
+    assert.match(sql, /r.organization_id = \$1/);
+    assert.match(sql, /destination_phone = ANY/);
+    const phone = params[1][0];
+    return { rows: phone.endsWith('5') ? [{ result_status: 'accepted', created_at: day + 'T15:00:00Z' }] :
+      phone.endsWith('6') ? [{ result_status: 'accepted', status: 'failed', created_at: day + 'T15:00:00Z' }] : [] };
+  } });
+  const ai = { messages: { create: async () => ({ content: [{ type: 'tool_use', name: 'customer_draft', input: {
+    decision: 'draft', message: 'Hola, ¿quieres conocer nuestros productos?', reason: 'Consulta de interés.',
+  } }] }) } };
+  const phones = Array.from({ length: 100 }, (_, i) => String(56910000000 + i));
+  const all = [];
+  for (let i = 0; i < phones.length; i += 10) {
+    const result = await drafts.generateDrafts(7, { instruction: 'Consulta interés en productos disponibles.', phones: phones.slice(i, i + 10) }, ai);
+    all.push(...result.drafts);
+  }
+  assert.equal(all.length, 100);
+  assert.equal(all.filter(d => d.decision === 'draft').length, 80);
+  assert.equal(all.filter(d => d.reasonCode === 'opt_out').length, 10);
+  assert.equal(all.filter(d => d.reasonCode === 'recent_campaign').length, 10);
+});
+
+test('campaign lookup executes in SQL and isolates tenant, phone, personal channels and failed deliveries', async () => {
+  const { PGlite } = require('@electric-sql/pglite');
+  const engine = new PGlite();
+  const { drafts, calls } = setup();
+  try {
+    await drafts.generateDrafts(7, { instruction: 'Consulta interés en productos.', phones: ['56911111111'] }, {
+      messages: { create: async () => ({ content: [{ type: 'tool_use', name: 'customer_draft', input: {
+        decision: 'draft', message: 'Hola, ¿necesitas huevos?', reason: 'Consulta de interés.',
+      } }] }) },
+    });
+    const sql = calls.find(call => call.sql.includes('broadcast_campaign_recipients')).sql;
+    await engine.exec(`CREATE TABLE broadcast_campaigns(id INT, organization_id INT, sending_channel_id INT);
+      CREATE TABLE whatsapp_channels(id INT, organization_id INT, assigned_user_id INT);
+      CREATE TABLE conversations(id INT, organization_id INT);
+      CREATE TABLE messages(conversation_id INT, whatsapp_message_id TEXT, status TEXT);
+      CREATE TABLE broadcast_campaign_recipients(campaign_id INT, organization_id INT, destination_phone TEXT,
+        whatsapp_message_id TEXT, result_status TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
+      INSERT INTO whatsapp_channels VALUES(1,7,NULL),(2,7,99);
+      INSERT INTO conversations VALUES(1,7),(2,8);
+      INSERT INTO broadcast_campaigns VALUES(1,7,1),(2,7,2),(3,8,NULL),(4,7,NULL);
+      INSERT INTO messages VALUES(1,'failed','failed'),(2,'other-tenant','failed');
+      INSERT INTO broadcast_campaign_recipients(campaign_id,organization_id,destination_phone,whatsapp_message_id,result_status)
+        VALUES(1,7,'56911111111','accepted','accepted'),(1,7,'56911111111','failed','accepted'),
+        (1,7,'56911111111','other-tenant','unknown'),(2,7,'56911111111','personal','accepted'),
+        (3,8,'56911111111','other','accepted'),(1,7,'56922222222','other-phone','accepted'),
+        (1,7,'56911111111','definite-failure','failed'),(4,7,'56911111111','official','accepted');`);
+    const { rows } = await engine.query(sql, [7, ['56911111111']]);
+    assert.equal(rows.length, 4);
+    assert.equal(rows.filter(row => row.status === 'failed').length, 1);
+    assert.equal(rows.find(row => row.result_status === 'unknown').status, null);
+  } finally { await engine.close(); }
+});
+
 function setup() {
   const calls = [];
   const database = {
@@ -50,7 +136,7 @@ test('individual drafting uses scoped history and never queues or sends; unknown
   assert.equal(result.requiresApproval, true);
   assert.equal(result.drafts.filter(d => d.decision === 'skip').length, 3);
   assert.equal(result.drafts[0].message.includes('aceitunas'), true);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.ok(calls.every(call => /^SELECT/.test(call.sql)));
 });
 
@@ -83,18 +169,18 @@ test('purchase cycle uses distinct Chile business dates and excludes cancelled o
 
 test('old unanswered campaigns do not exclude a re-engagement draft, while a recent contact or explicit decline does', () => {
   const { drafts } = setup();
-  const oldOutbound = drafts.messageSafety([{ direction: 'outbound', content: 'Oferta enviada', created_at: '2026-10-03T15:00:00Z' }], '2026-10-22');
+  const oldOutbound = drafts.messageSafety([], '2026-10-22', [{ result_status: 'accepted', created_at: '2026-10-03T15:00:00Z' }]);
   assert.equal(oldOutbound.unansweredRecentOutreach, false);
   assert.equal(oldOutbound.explicitDecline, false);
 
-  const recentOutbound = drafts.messageSafety([{ direction: 'outbound', content: 'Oferta enviada', created_at: '2026-10-21T15:00:00Z' }], '2026-10-22');
+  const recentOutbound = drafts.messageSafety([], '2026-10-22', [{ result_status: 'accepted', created_at: '2026-10-21T15:00:00Z' }]);
   assert.equal(recentOutbound.unansweredRecentOutreach, true);
 
   const answeredOutreach = drafts.messageSafety([
     { direction: 'outbound', content: 'Oferta anterior', created_at: '2026-10-20T15:00:00Z' },
     { direction: 'outbound', content: 'Oferta reciente', created_at: '2026-10-21T15:00:00Z' },
     { direction: 'inbound', content: 'Hola, lo reviso', created_at: '2026-10-21T16:00:00Z' },
-  ], '2026-10-22');
+  ], '2026-10-22', [{ result_status: 'accepted', created_at: '2026-10-21T15:00:00Z' }]);
   assert.equal(answeredOutreach.unansweredRecentOutreach, false);
 
   const decline = drafts.messageSafety([{ direction: 'inbound', content: 'No gracias, no me escriban más.', created_at: '2026-09-01T15:00:00Z' }], '2026-10-22');

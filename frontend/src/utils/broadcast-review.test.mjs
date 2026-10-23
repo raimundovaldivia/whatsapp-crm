@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { offerCatalog, offerExpiryInput, restoreDraftEntries, canApproveDrafts, setEntryOffers, setEntryOfferChecks, offersSnapshot } from './broadcast-drafts.mjs';
+import { summarizeDraftAudience, offerCatalog, offerExpiryInput, restoreDraftEntries, canApproveDrafts, setEntryOffers, setEntryOfferChecks, offersSnapshot } from './broadcast-drafts.mjs';
 
 test('catalog accepts the actual products envelope and excludes inactive or retired products', () => {
   const rows = [{ id: 1, active: true }, { id: 2, active: false }, { id: 3, active: true, deprecated_at: '2026-10-01' }];
@@ -49,4 +49,17 @@ test('restore rejects mismatched audience, duplicates, opt-outs, oversized text 
     assert.throws(() => restoreDraftEntries([{ phone: audience[0].phone, message }], [audience[0]]), /texto/);
   }
   assert.throws(() => restoreDraftEntries([{ phone: '56999999999', message: 'Hola' }], [audience[0]]), /selección/);
+});
+
+
+test('100 selected recipients are accounted for and exclusions group by stable reason', () => {
+  const excluded = Array.from({ length: 10 }, (_, i) => ({ reasonCode: 'recent_campaign', reason: `Campaña hace ${i} días` }));
+  excluded.push(...Array.from({ length: 10 }, () => ({ reasonCode: 'opt_out' })));
+  const summary = summarizeDraftAudience(80, excluded);
+  assert.equal(summary.total, 100);
+  assert.equal(summary.prepared, 80);
+  assert.equal(summary.excluded, 20);
+  assert.deepEqual(summary.reasons.map(r => r.count), [10, 10]);
+  assert.equal(summarizeDraftAudience(0, []).total, 0);
+  assert.equal(summarizeDraftAudience(0, [{ reason: 'Motivo anterior sin código' }]).reasons[0].label, 'Motivo anterior sin código');
 });
