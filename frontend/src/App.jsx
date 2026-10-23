@@ -91,7 +91,7 @@ export default function App() {
         else if (data.user.role === 'coordinador') setView('repartos');
         setAppState('crm');
       })
-      .catch(() => { authSession.clear(token); setAppState('auth'); });
+      .catch(error => { if (error.code !== 'ERR_CANCELED' && error.code !== 'SESSION_CHANGED') { authSession.clear(token); setAppState('auth'); } });
   }, []);
 
   const handleAuth = useCallback((data) => {

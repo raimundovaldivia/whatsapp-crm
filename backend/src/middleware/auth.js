@@ -13,14 +13,26 @@ async function authenticateToken(token) {
       user.role !== payload.role || Number(user.auth_version || 0) !== Number(payload.authVersion || 0)) {
     throw new Error('Sesión revocada');
   }
-  return user;
+  return {
+    ...user,
+    sessionAccounts: Array.isArray(payload.accounts) ? payload.accounts : [accountGrant(user)],
+    sessionExpiresAt: payload.exp,
+  };
 }
 
-function generateToken(user) {
+function accountGrant(user) {
+  return { userId: user.id, orgId: user.organization_id, role: user.role,
+    email: user.email, authVersion: Number(user.auth_version || 0) };
+}
+
+// Only pass accounts whose credentials were verified, or whose signed grants
+// have been revalidated against current users. Never accept this list from a request.
+function generateToken(user, { accounts = [user], expiresAt } = {}) {
+  const exp = expiresAt || Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
   return jwt.sign(
-    { userId: user.id, orgId: user.organization_id, role: user.role, authVersion: user.auth_version || 0 },
-    JWT_SECRET,
-    { expiresIn: '7d' }
+    { userId: user.id, orgId: user.organization_id, role: user.role, authVersion: user.auth_version || 0,
+      accounts: accounts.map(accountGrant), exp },
+    JWT_SECRET
   );
 }
 
@@ -64,6 +76,9 @@ async function requireAuth(req, res, next) {
     req.userId = user.id;
     req.orgId = user.organization_id;
     req.role = user.role;
+    req.userEmail = user.email;
+    req.sessionAccounts = user.sessionAccounts;
+    req.sessionExpiresAt = user.sessionExpiresAt;
   } catch {
     return res.status(401).json({ success: false, error: 'Token inválido o expirado' });
   }

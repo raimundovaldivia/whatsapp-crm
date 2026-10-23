@@ -14,6 +14,9 @@ export const authAPI = {
   register: (data) => api.post('/auth/register', data).then(r => r.data.data),
   login: (data) => api.post('/auth/login', data).then(r => r.data.data),
   me: () => api.get('/auth/me').then(r => r.data.data),
+  organizations: () => api.get('/auth/organizations').then(r => r.data.data),
+  verifyOrganizations: password => api.post('/auth/verify-organizations', { password }).then(r => r.data.data),
+  switchOrganization: organizationId => api.post('/auth/switch-organization', { organizationId }).then(r => r.data.data),
 };
 
 export const setupAPI = {

@@ -172,6 +172,7 @@ function MobileNav({ view, onChangeView, orgName, unreadCount, pendingOrders, pe
             position: 'absolute', left: 10, right: 10, bottom: 'calc(70px + env(safe-area-inset-bottom, 0px))',
             backgroundColor: colors.bgPanel, border: `1px solid ${colors.border}`,
             borderRadius: '16px', padding: '10px', boxShadow: '0 16px 40px rgba(0,0,0,.28)',
+            maxHeight: 'calc(100dvh - 100px)', overflowY: 'auto',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px 10px' }}>
               <strong style={{ color: colors.textPrimary, fontSize: '14px' }}>Más funciones</strong>
