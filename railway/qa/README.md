@@ -12,7 +12,20 @@ el runtime; HTTP/fetch/axios están bloqueados. Esta defensa de aplicación no e
 una política de red del proveedor. No instalar secretos de integraciones reales.
 Los trabajos automáticos están apagados; WhatsApp e IA son simulados.
 
-Cada despliegue usa un commit fijo de una rama QA; no sigue main. Configurar raíz
+Los cambios se guardan en la rama permanente `qa`. El workflow
+`.github/workflows/qa-deploy.yml` ejecuta las pruebas de backend, frontend y gateway,
+y construye ambas imágenes QA. Solo si todo pasa, avanza `qa-deploy` al mismo commit
+verificado, sin forzar ni retroceder la rama. Las ejecuciones obsoletas no promueven
+versiones anteriores. No requiere secretos de Railway en GitHub.
+
+Ambos servicios siguen `qa-deploy` con autodeploy activo y sin `commitSha` fijo.
+No cambiar la fuente de un servicio a una rama temporal: integrar el cambio en `qa`.
+Para volver a una versión anterior, revertir el cambio en `qa` y pasar por el mismo
+workflow. Los fallos de pruebas conservan la versión anterior. GitHub muestra el
+resultado en Actions → Verify and promote Railway QA. La rama `main` y los servicios
+de producción tienen un flujo independiente.
+
+Configurar raíz
 del repositorio, Dockerfiles `railway/qa/api.Dockerfile` y `railway/qa/web.Dockerfile`,
 y comandos `node src/index.js` (API) / `node gateway.cjs` (web) en los servicios.
 Healthchecks: `/ready` y `/qa_health`. El complemento actual rechaza railwayConfigFile;

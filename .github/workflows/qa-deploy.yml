@@ -1,0 +1,74 @@
+name: Verify and promote Railway QA
+
+on:
+  push:
+    branches: [qa]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TZ: UTC
+
+concurrency:
+  group: railway-qa-promotion
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    if: github.ref == 'refs/heads/qa'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: backend
+      - run: node --test --test-concurrency=2 test/*.test.cjs
+        working-directory: backend
+      - run: node --test railway/qa/gateway.test.cjs
+      - run: docker build -f railway/qa/api.Dockerfile -t crm-qa-api-check .
+
+  frontend:
+    if: github.ref == 'refs/heads/qa'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: docker build -f railway/qa/web.Dockerfile -t crm-qa-web-check .
+
+  promote:
+    if: github.ref == 'refs/heads/qa'
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const repository = { owner: context.repo.owner, repo: context.repo.repo };
+            const { data: head } = await github.rest.git.getRef({ ...repository, ref: 'heads/qa' });
+            if (head.object.sha !== context.sha) {
+              core.notice('A newer QA revision exists; this run will not promote an older revision.');
+              return;
+            }
+            await github.rest.git.updateRef({
+              ...repository, ref: 'heads/qa-deploy', sha: context.sha, force: false,
+            });
+            core.notice(`QA verified: ${context.sha}. Railway follows qa-deploy automatically.`);
