@@ -71,7 +71,7 @@ test('campaign lookup executes in SQL and isolates tenant, phone, personal chann
       CREATE TABLE conversations(id INT, organization_id INT);
       CREATE TABLE messages(conversation_id INT, whatsapp_message_id TEXT, status TEXT);
       CREATE TABLE broadcast_campaign_recipients(campaign_id INT, organization_id INT, destination_phone TEXT,
-        whatsapp_message_id TEXT, result_status TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
+        whatsapp_message_id TEXT, template_name TEXT, result_status TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
       INSERT INTO whatsapp_channels VALUES(1,7,NULL),(2,7,99);
       INSERT INTO conversations VALUES(1,7),(2,8);
       INSERT INTO broadcast_campaigns VALUES(1,7,1),(2,7,2),(3,8,NULL),(4,7,NULL);
@@ -103,7 +103,7 @@ function setup() {
       return { rows: sql.includes('shopify_orders') ? [{ date: '2026-10-06T12:00:00Z', items: [{ title: 'JUMBO20', quantity: 1 }], status: 'PAID' }] : [] };
     } }),
     getMessagesByCustomerPhone: async (org, phone, limit, excludePersonal) => {
-      assert.equal(org, 7); assert.equal(limit, 8); assert.equal(excludePersonal, true);
+      assert.equal(org, 7); assert.equal(limit, 80); assert.equal(excludePersonal, true);
       return [{ direction: 'inbound', content: 'Gracias', created_at: '2026-10-06T12:00:00Z' }];
     },
   };
