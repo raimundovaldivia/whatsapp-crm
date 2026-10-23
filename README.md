@@ -2,6 +2,10 @@
 
 Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de inteligencia artificial, ventas y pedidos. Puede usar Shopify como conexión de catálogo y operaciones, y admite Meta, Kapso, Twilio y varios números mediante Evolution API.
 
+### Cambiar de tienda sin cerrar sesión
+
+En escritorio, abre el menú de cuenta y elige **Cambiar tienda**. En móvil está en **Más → Cambiar tienda**. Ingresa la contraseña de la tienda de destino: el CRM muestra las tiendas accesibles con tu correo y esa contraseña. Selecciona una para abrirla con sus propios permisos y ajustes. Si usan claves distintas, pulsa **Usar otra contraseña**. Guarda antes cualquier edición pendiente; el cambio recarga la aplicación y las otras pestañas abiertas. Una contraseña incorrecta o cancelar el diálogo conserva la sesión actual. No requiere otro correo, crear otra cuenta ni modificar la configuración del bot.
+
 ---
 
 ## ✨ Características

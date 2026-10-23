@@ -5,6 +5,8 @@ import NavBar         from './components/NavBar.jsx';
 import Sidebar        from './components/Sidebar.jsx';
 import ChatWindow     from './components/ChatWindow.jsx';
 import EmptyState     from './components/EmptyState.jsx';
+import StoreSwitcher  from './components/StoreSwitcher.jsx';
+import { authSession } from './utils/browser-session.js';
 const SolutionsPanel = lazy(() => import('./components/SolutionsPanel.jsx'));
 const OrdersPanel = lazy(() => import('./components/OrdersPanel.jsx'));
 const CatalogoPanel = lazy(() => import('./components/CatalogoPanel.jsx'));
@@ -32,6 +34,7 @@ export default function App() {
   const [user, setUser]         = useState(null);
   const [org, setOrg]           = useState(null);
   const [view, setView]         = useState('chats');
+  const [switchingStore, setSwitchingStore] = useState(false);
 
   // Responsive
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -78,7 +81,7 @@ export default function App() {
 
   // ── Verificar sesión al inicio ──────────────────────────────────
   useEffect(() => {
-    const token = localStorage.getItem('crm_token');
+    const token = authSession.token;
     if (!token) { setAppState('auth'); return; }
     authAPI.me()
       .then(data => {
@@ -88,7 +91,7 @@ export default function App() {
         else if (data.user.role === 'coordinador') setView('repartos');
         setAppState('crm');
       })
-      .catch(() => { localStorage.removeItem('crm_token'); setAppState('auth'); });
+      .catch(() => { authSession.clear(token); setAppState('auth'); });
   }, []);
 
   const handleAuth = useCallback((data) => {
@@ -344,7 +347,8 @@ export default function App() {
   }, []);
 
   const handleLogout = useCallback(() => {
-    localStorage.clear();
+    authSession.clear();
+    setSwitchingStore(false);
     setAppState('auth');
     setUser(null); setOrg(null);
     setConversations([]); setMessages({}); setSelectedId(null);
@@ -471,6 +475,8 @@ export default function App() {
         <button onClick={handleLogout} style={{ marginTop: '8px', padding: '10px 20px', borderRadius: '10px', border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, cursor: 'pointer', fontSize: '13px' }}>
           Cerrar sesión
         </button>
+        <button onClick={() => setSwitchingStore(true)} style={{ padding: '10px 20px', borderRadius: 10, cursor: 'pointer' }}>Cambiar tienda</button>
+        {switchingStore && <StoreSwitcher user={user} organization={org} onClose={() => setSwitchingStore(false)} />}
       </div>
     </ThemeCtx.Provider>
   );
@@ -506,6 +512,7 @@ export default function App() {
         orgName={org?.name}
         connected={connected}
         onLogout={handleLogout}
+        onSwitchStore={() => setSwitchingStore(true)}
         unreadCount={totalUnread}
         pendingOrders={pendingOrders}
         pendingProofs={pendingProofs}
@@ -514,6 +521,7 @@ export default function App() {
         userRole={userRole}
         modules={modules}
       />
+      {switchingStore && <StoreSwitcher user={user} organization={org} onClose={() => setSwitchingStore(false)} />}
 
       {/* Vista Chats */}
       {view === 'chats' && (

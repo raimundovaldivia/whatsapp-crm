@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import ReturnsPanel from './ReturnsPanel.jsx';
 import CajaRepartos from './CajaRepartos.jsx';
 import { api, API_BASE } from '../utils/api.js';
+import { authSession } from '../utils/browser-session.js';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 import { Truck, Package, RotateCcw, Send, Check, X, MapPin, ChevronDown, ChevronRight, Phone, Download } from 'lucide-react';
@@ -2559,7 +2560,7 @@ function GastosRepartos({ colors }) {
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
 
-  const token = (() => { try { return localStorage.getItem('crm_token') || ''; } catch { return ''; } })();
+  const token = authSession.token || '';
   const photoUrl = id => `${API_BASE}/api/delivery/expenses/${id}/photo?_token=${encodeURIComponent(token)}`;
   const clp = n => `$${Math.round(Number(n) || 0).toLocaleString('es-CL')}`;
   const average = count ? total / count : 0;

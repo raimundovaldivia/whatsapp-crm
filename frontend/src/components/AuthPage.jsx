@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from 'react';
 const SolutionsPanel = lazy(() => import('./SolutionsPanel.jsx'));
 import { MessageSquare, Bot, ShoppingBag, Eye, EyeOff, Zap, TrendingUp, Users, ArrowRight, CheckCircle } from 'lucide-react';
 import { authAPI } from '../utils/api.js';
+import { authSession } from '../utils/browser-session.js';
 import { useTheme } from '../theme.js';
 
 export default function AuthPage({ onAuth }) {
@@ -25,9 +26,7 @@ export default function AuthPage({ onAuth }) {
         : await authAPI.register(form);
       if (data.needsOrganization) { setOrgOptions(data.organizations); return; }
       setOrgOptions(null);
-      localStorage.setItem('crm_token', data.token);
-      localStorage.setItem('crm_user',  JSON.stringify(data.user));
-      localStorage.setItem('crm_org',   JSON.stringify(data.organization));
+      authSession.save(data);
       onAuth(data);
     } catch (err) {
       setError(err.response?.data?.error || 'Error de conexión. Intenta de nuevo.');

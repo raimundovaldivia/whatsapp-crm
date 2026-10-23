@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { authSession } from './browser-session.js';
+import { installSessionInterceptors } from './auth-session.mjs';
 
 // En producción VITE_BACKEND_URL = URL del backend de Railway (ej: https://whatsapp-crm-api-production-f804.up.railway.app)
 // En desarrollo = localhost:3001
@@ -6,29 +8,7 @@ const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
 const api = axios.create({ baseURL: `${BASE_URL}/api`, timeout: 12000 });
 
-// Inyectar token JWT en cada request
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('crm_token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
-
-// Si el token expira, redirigir al login
-api.interceptors.response.use(
-  r => r,
-  err => {
-    const url = String(err.config?.url || '');
-    const isAuthAttempt = url.endsWith('/auth/login') || url.endsWith('/auth/register');
-    if (err.response?.status === 401 && !isAuthAttempt) {
-      localStorage.removeItem('crm_token');
-      localStorage.removeItem('crm_user');
-      localStorage.removeItem('crm_org');
-      // Evita un bucle de recarga si varias solicitudes fallan a la vez.
-      if (window.location.pathname !== '/') window.location.replace('/');
-    }
-    return Promise.reject(err);
-  }
-);
+installSessionInterceptors(api, authSession, () => new axios.CanceledError('La sesión cambió'));
 
 export const authAPI = {
   register: (data) => api.post('/auth/register', data).then(r => r.data.data),
