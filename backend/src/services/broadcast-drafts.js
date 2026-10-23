@@ -28,7 +28,7 @@ function validateRequest(body) {
 
 const { loadPurchases, purchaseSummary } = require('./broadcast-purchases');
 
-const EXPLICIT_DECLINE = /\b(?:no\s+me\s+(?:escriban|contacten)|no\s+me\s+manden\s+(?:m[aá]s\s+)?(?:mensajes|promociones|publicidad)|no\s+(?:quiero|deseo)\s+recibir\s+(?:m[aá]s\s+)?(?:mensajes|promociones|publicidad)|(?:dar(?:me)?|quitar(?:me)?)\s+de\s+baja|baja\s+de\s+(?:la\s+)?lista|stop)\b/i;
+const EXPLICIT_DECLINE = /\b(?:no\s+me\s+(?:escriban|escribas|escribirme|contacten|contactarme)(?:\s+m[aá]s)?|no\s+me\s+(?:manden|mande|envi[eé]n|env[ií]en)(?:\s+m[aá]s)?\s+(?:mensajes|promociones|publicidad)|no\s+(?:quiero|deseo)\s+(?:recibir\s+)?(?:m[aá]s\s+)?(?:mensajes|respuestas|contacto|promociones|publicidad)|dejen?\s+de\s+(?:escrib|contact)|(?:dar(?:me)?|quitar(?:me)?)\s+de\s+baja|baja\s+de\s+(?:la\s+)?lista|stop)\b/i;
 const TEMPORARY_DECLINE = /\b(?:no\s+(?:gracias|por\s+ahora|me\s+interesa|quiero\s+comprar|necesito\s+(?:huevos|comprar))|d[eé]jame\s+en\s+paz)\b/i;
 const RECENT_ISSUE = /\b(?:reclamo|retras(?:o|ada)|no\s+(?:lleg[oó]|recib[ií])|cobro\s+duplicado|pedido\s+(?:pendiente|incompleto)|transferencia\s+pendiente|comprobante\s+pendiente)\b/i;
 const RECENT_OUTREACH_DAYS = 7;

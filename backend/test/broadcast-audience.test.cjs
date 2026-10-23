@@ -40,3 +40,10 @@ test('campaign ranges include boundaries without overlapping or including unknow
   assert.equal(matchesPurchaseAge({},'range_7_29',now),false);
   assert.equal(matchesPurchaseAge({last_order_at:'bad'},'range_30_60',now),false);
 });
+
+test('more than 15 days uses Santiago business dates, not elapsed hours', async () => {
+  const { matchesPurchaseAge } = await import('../../frontend/src/utils/broadcast-audience.mjs');
+  const now = Date.parse('2026-10-23T12:00:00Z'); // 23 October in Santiago
+  assert.equal(matchesPurchaseAge({ last_order_at: '2026-10-08T23:30:00Z' }, '15', now), false);
+  assert.equal(matchesPurchaseAge({ last_order_at: '2026-10-08T02:30:00Z' }, '15', now), true);
+});

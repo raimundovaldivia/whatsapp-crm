@@ -282,3 +282,13 @@ test('drafts are checked against the operator price table and get the NO opt-out
   assert.equal(right.reason, 'ok');
   assert.equal(reviewDraftAgainstInstruction({ ...base, decision: 'skip' }, instruction).decision, 'skip');
 });
+
+test('only explicit requests to stop messaging are permanent exclusions', () => {
+  const { drafts } = setup();
+  for (const content of ['No gracias', 'Por ahora no', 'Te aviso cuando se acaben']) {
+    const safety = drafts.messageSafety([{ direction: 'inbound', content, created_at: '2026-10-21T15:00:00Z' }], '2026-10-22');
+    assert.equal(safety.explicitDecline, false, content);
+  }
+  const optOut = drafts.messageSafety([{ direction: 'inbound', content: 'No quiero más mensajes', created_at: '2026-10-21T15:00:00Z' }], '2026-10-22');
+  assert.equal(optOut.explicitDecline, true);
+});

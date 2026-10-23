@@ -1,3 +1,23 @@
+function chileBusinessDate(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const get = type => parts.find(part => part.type === type)?.value;
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  return year && month && day ? `${year}-${month}-${day}` : null;
+}
+
+function shiftBusinessDate(isoDate, days) {
+  const date = new Date(`${isoDate}T12:00:00Z`);
+  if (!Number.isFinite(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 export function matchesPurchaseAge(contact, days, now = Date.now()) {
   if (days === 'all') return true;
   const range = { 'range_7_29': [7, 30], 'range_30_60': [30, 61] }[days];
@@ -9,10 +29,12 @@ export function matchesPurchaseAge(contact, days, now = Date.now()) {
   const threshold = Number(days);
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > 3650) return false;
   if (!contact.last_order_at) return false;
-  const lastOrder = new Date(contact.last_order_at).getTime();
-  return Number.isFinite(lastOrder) && lastOrder < now - threshold * 86400000;
+  const lastOrderDate = chileBusinessDate(contact.last_order_at);
+  const today = chileBusinessDate(now);
+  const cutoff = today ? shiftBusinessDate(today, -threshold) : null;
+  // “Más de N días” excluye el mismo día comercial de corte.
+  return Boolean(lastOrderDate && cutoff && lastOrderDate < cutoff);
 }
-
 export function selectedAudience(contacts, selected) {
   return contacts.filter(contact => selected.has(contact.phone));
 }
