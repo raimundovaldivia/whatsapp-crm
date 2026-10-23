@@ -2762,7 +2762,7 @@ async function sendBulk(req, res) {
 
       if (direct) {
         const permit = await require('../services/broadcast-sender').claimDirectSlot(req.orgId, sendingChannelId, pacing, campaignId);
-        if (!permit.allowed) return res.status(429).json({ rateLimited: true, retryAfterSeconds: permit.retryAfterSeconds, error: 'Pausa entre mensajes directos' });
+        if (!permit.allowed) return res.status(429).json({ rateLimited: true, retryAfterSeconds: permit.retryAfterSeconds, outsideSendWindow: Boolean(permit.outsideSendWindow), error: permit.outsideSendWindow ? 'Fuera del horario de envío: 08:00 a 22:30, hora de Chile' : 'Pausa entre mensajes directos' });
         savedContent = String(item.templateName ? item.previewText : item.message).trim();
         sentResult = await require('../services/evolution-whatsapp').sendTextMessage(item.phone, savedContent, wc);
         if (!sentResult?.messageId && !sentResult?.key?.id) {

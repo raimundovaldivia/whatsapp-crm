@@ -1,3 +1,5 @@
+process.env.EVOLUTION_SEND_HOUR_START = '0';
+process.env.EVOLUTION_SEND_HOUR_END = '24';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
