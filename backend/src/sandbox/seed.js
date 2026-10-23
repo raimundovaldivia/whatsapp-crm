@@ -13,7 +13,7 @@ async function seed(pool, password) {
       const { rows: [org] } = await client.query(`INSERT INTO organizations(name,slug,setup_done)
         VALUES($1,$2,1) ON CONFLICT(slug) DO UPDATE SET setup_done=1 RETURNING id`, [`Sandbox ${label.toUpperCase()} · ficticio`, slug]);
       await client.query(`INSERT INTO users(organization_id,email,password_hash,name,role)
-        VALUES($1,$2,$3,$4,'owner') ON CONFLICT(organization_id,email) DO NOTHING`,
+        VALUES($1,$2,$3,$4,'owner') ON CONFLICT(organization_id,email) DO UPDATE SET password_hash=EXCLUDED.password_hash, auth_version=users.auth_version+1`,
       [org.id, `owner-${label}@sandbox.invalid`, hash, `Owner ficticio ${label.toUpperCase()}`]);
       await client.query(`INSERT INTO commercial_contracts(organization_id,status,modules,limits)
         VALUES($1,'active',$2::jsonb,'{"bot_turns":100,"seats":10}') ON CONFLICT(organization_id) DO NOTHING`, [org.id, JSON.stringify(KEYS)]);
