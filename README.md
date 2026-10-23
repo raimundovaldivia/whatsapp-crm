@@ -353,7 +353,7 @@ El código `REF-…` puede compartirse con distintas personas. Cada `BONO-…` e
 
 En Mensajería masiva, el canal Evolution permite indicar el objetivo y las condiciones en lenguaje natural para hasta 5.000 clientes. La IA vigente redacta por cliente con su historial y conversación; preparar borradores no envía mensajes. Cada texto puede corregirse o excluirse antes de autorizar el lote. Editar un mensaje en revisión detallada lo marca como revisado; también existe una acción para marcar todos. La autorización se vincula mediante una huella a los destinatarios, textos y ofertas exactos, que se guardan en la cola existente. Las campañas detenidas mantienen su estado. Esta función envía texto y no incorpora imágenes.
 
-La selección excluye bajas, rechazos explícitos, reclamos recientes y contactos comerciales sin respuesta durante los últimos siete días. Una campaña antigua sin respuesta no equivale a una baja: queda disponible para un borrador prudente y revisión humana.
+La selección excluye bajas solicitadas expresamente, rechazos recientes durante 48 horas, reclamos recientes y contactos comerciales sin respuesta durante los últimos siete días. Un «no gracias» ante una oferta puntual y una campaña antigua sin respuesta no equivalen a una baja: quedan disponibles para un borrador prudente y revisión humana.
 
 Las ofertas son personales: se guardan por organización, conversación y producto, y se activan tras un envío aceptado. No cambian el catálogo público. El selector de productos consume la respuesta `{ products: [...] }` y permite reintentar si falla la carga. El vencimiento se edita con fecha y hora de Chile; una fecha sin hora conserva vigencia hasta el cierre de ese día. La cola omite mensajes cuyas ofertas hayan vencido antes de enviarlos.
 
