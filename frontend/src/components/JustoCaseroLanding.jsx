@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import { PURCHASE_FREQUENCIES, PURCHASE_FREQUENCY_KEY, normalizePurchaseFrequency, purchaseFrequencyLabel, withPurchaseFrequency } from '../utils/justo-casero-frequency.mjs';
 import './justo-casero.css';
+import './justo-casero-frequency.css';
 
-const API = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
-const CRM_STORE_SLUG = 'justo-casero-mvg75kb0';
-const FALLBACK_WHATSAPP = '56942876413';
+const BUSINESS_WHATSAPP = '56926082545';
 const PRICE_VOTES_KEY = 'justo_casero_price_votes_v1';
 
 const productTests = [
@@ -15,13 +15,15 @@ const productTests = [
 
 const eggBoxes = [
   {
-    size: 'XL',
-    title: 'Caja de huevos café XL',
+    id: 'XL',
+    size: 'Extra',
+    title: 'Caja de huevos café Extra',
     text: 'Huevos café grandes y rendidores, vendidos únicamente por caja.',
   },
   {
-    size: 'Jumbo',
-    title: 'Caja de huevos café Jumbo',
+    id: 'Jumbo',
+    size: 'Super Extra',
+    title: 'Caja de huevos café Super Extra',
     text: 'Nuestra alternativa de mayor tamaño, vendida únicamente por caja.',
   },
 ];
@@ -43,32 +45,26 @@ function savedPriceVotes() {
   }
 }
 
+function savedPurchaseFrequency() {
+  try { return normalizePurchaseFrequency(localStorage.getItem(PURCHASE_FREQUENCY_KEY)); } catch { return ''; }
+}
+
 export default function JustoCaseroLanding() {
-  const [whatsapp, setWhatsapp] = useState(FALLBACK_WHATSAPP);
+  const whatsapp = BUSINESS_WHATSAPP;
   const [selection, setSelection] = useState('');
   const [otherIdea, setOtherIdea] = useState('');
   const [priceVotes, setPriceVotes] = useState(savedPriceVotes);
+  const [purchaseFrequency, setPurchaseFrequency] = useState(savedPurchaseFrequency);
+  const [frequencyChoice, setFrequencyChoice] = useState(purchaseFrequency);
 
   useEffect(() => {
-    const controller = new AbortController();
-    fetch(`${API}/store/${CRM_STORE_SLUG}/info`, { signal: controller.signal })
-      .then(response => response.ok ? response.json() : Promise.reject(new Error('store unavailable')))
-      .then(data => {
-        const configured = onlyDigits(data.whatsappPhone);
-        if (configured) setWhatsapp(configured);
-      })
-      .catch(error => {
-        if (error.name !== 'AbortError') console.warn('[Justo Casero] Se usará el WhatsApp de respaldo');
-      });
-
     const previousTitle = document.title;
     const description = document.querySelector('meta[name="description"]');
     const previousDescription = description?.getAttribute('content') || '';
     document.title = 'Justo Casero | Productos locales y precios justos';
-    description?.setAttribute('content', 'Para la casera y el casero: productos locales o de buen precio, elegidos con criterio. Partimos con huevos café XL y Jumbo.');
+    description?.setAttribute('content', 'Venta exclusivamente online de huevos Extra y Super Extra por caja. Justo Casero: atención en La Serena y Coquimbo y pedidos por WhatsApp.');
 
     return () => {
-      controller.abort();
       document.title = previousTitle;
       description?.setAttribute('content', previousDescription);
     };
@@ -80,7 +76,19 @@ export default function JustoCaseroLanding() {
     whatsapp,
     `Hola, ya compré en Justo Casero y mi voto para el próximo producto es: ${vote}.`,
   ) : '', [vote, whatsapp]);
-  const orderLink = message => whatsappHref(whatsapp, message);
+  const orderLink = message => whatsappHref(whatsapp, withPurchaseFrequency(message, purchaseFrequency));
+  const confirmFrequency = event => {
+    event.preventDefault();
+    const value = normalizePurchaseFrequency(frequencyChoice);
+    if (!value) return;
+    try { localStorage.setItem(PURCHASE_FREQUENCY_KEY, value); } catch {}
+    setPurchaseFrequency(value);
+  };
+  const changeFrequency = () => {
+    setFrequencyChoice(purchaseFrequency);
+    setPurchaseFrequency('');
+    try { localStorage.removeItem(PURCHASE_FREQUENCY_KEY); } catch {}
+  };
   const choosePriceVote = (size, answer) => {
     const next = { ...priceVotes, [size]: answer };
     setPriceVotes(next);
@@ -90,6 +98,35 @@ export default function JustoCaseroLanding() {
     whatsapp,
     `Hola, mi opinión sobre el precio cotizado de la caja de huevos café ${size} es: ${answer === 'fair' ? 'sí, me parece justo 👍' : 'creo que podría ser más bajo 👎'}.`,
   );
+
+  if (!purchaseFrequency) {
+    return (
+      <main className="jc-landing jc-frequency-page">
+        <section className="jc-frequency-card" aria-labelledby="jc-frequency-title">
+          <img className="jc-frequency-logo" src="/store-assets/justo-casero/logo.png" alt="Justo Casero" />
+          <p className="jc-kicker">Solo venta online · Por caja</p>
+          <h1 id="jc-frequency-title">Antes de elegir,<br />cuéntanos de ti.</h1>
+          <form onSubmit={confirmFrequency}>
+            <fieldset>
+              <legend>¿Cuántas veces compras huevos al mes?</legend>
+              <p className="jc-frequency-help" id="jc-frequency-help">Selecciona una respuesta para ver nuestros productos.</p>
+              <div className="jc-frequency-options">
+                {PURCHASE_FREQUENCIES.map(option => (
+                  <label className={`jc-frequency-option${frequencyChoice === option.value ? ' is-selected' : ''}`} key={option.value}>
+                    <input type="radio" name="purchase-frequency" value={option.value} checked={frequencyChoice === option.value} required aria-describedby="jc-frequency-help" onChange={() => setFrequencyChoice(option.value)} />
+                    <span>{option.label}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <button className="jc-button jc-button-primary jc-frequency-continue" type="submit" disabled={!normalizePurchaseFrequency(frequencyChoice)}>Ver productos <span aria-hidden="true">→</span></button>
+          </form>
+          <p className="jc-frequency-privacy">Recordaremos tu respuesta en este dispositivo. Si haces una consulta por WhatsApp, se incluirá en tu mensaje. Puedes cambiarla después.</p>
+          <p className="jc-frequency-coverage">Atención en La Serena y Coquimbo.</p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="jc-landing">
@@ -104,38 +141,40 @@ export default function JustoCaseroLanding() {
             <a href="#precio-justo">Precio justo</a>
             <a href="#proximo-producto">Tu voto</a>
           </nav>
-          <a className="jc-button jc-button-small" href={orderLink('Hola, quiero consultar por las cajas de huevos café XL y Jumbo de Justo Casero.')} target="_blank" rel="noreferrer">
+          <a className="jc-button jc-button-small" href={orderLink('Hola, quiero consultar por las cajas de huevos café Extra y Super Extra de Justo Casero.')} target="_blank" rel="noreferrer">
             Pedir por WhatsApp
           </a>
         </div>
       </header>
 
+      <div className="jc-frequency-bar"><div className="jc-container"><span>Tu frecuencia: <strong>{purchaseFrequencyLabel(purchaseFrequency)}</strong></span><button type="button" onClick={changeFrequency}>Cambiar respuesta</button></div></div>
+
       <main>
         <section className="jc-hero">
           <div className="jc-container jc-hero-grid">
             <div className="jc-hero-copy">
-              <div className="jc-eyebrow"><span /> Para la casera y el casero</div>
+              <div className="jc-eyebrow"><span /> Solo venta online · Para la casera y el casero</div>
               <h1>Local cuando se puede. <em>Buen precio siempre.</em></h1>
-              <p className="jc-hero-lead">Partimos con cajas de huevos café XL y Jumbo. Después iremos sumando productos locales o alternativas que realmente convengan.</p>
+              <p className="jc-hero-lead">Huevos café Extra y Super Extra por caja, con venta exclusivamente online. Haz tu pedido por WhatsApp y coordinamos la entrega contigo.</p>
               <div className="jc-hero-actions">
-                <a className="jc-button jc-button-primary" href={orderLink('Hola, quiero conocer el precio y disponibilidad de las cajas de huevos café XL y Jumbo.')} target="_blank" rel="noreferrer">
+                <a className="jc-button jc-button-primary" href={orderLink('Hola, quiero conocer el precio y disponibilidad de las cajas de huevos café Extra y Super Extra.')} target="_blank" rel="noreferrer">
                   Consultar precio por caja <span aria-hidden="true">→</span>
                 </a>
                 <a className="jc-button jc-button-ghost" href="#productos">Ver tamaños</a>
               </div>
               <p className="jc-coverage"><span className="jc-icon" aria-hidden="true">⌖</span> Atención en La Serena y Coquimbo</p>
             </div>
-            <div className="jc-hero-visual" aria-label="Cajas de huevos café XL y Jumbo">
-              <div className="jc-price-note">Huevos café<br /><strong>XL + Jumbo</strong></div>
-              <img src="/store-assets/justo-casero/hero-huevos.png" alt="Dos cajas de huevos café en tamaños XL y Jumbo" />
-              <div className="jc-hero-stamp">Venta<br />por caja</div>
+            <div className="jc-hero-visual" aria-label="Cajas de huevos café Extra y Super Extra">
+              <div className="jc-price-note">Huevos café<br /><strong>Extra + Super Extra</strong></div>
+              <img src="/store-assets/justo-casero/hero-huevos.png" alt="Dos cajas de huevos café en tamaños Extra y Super Extra" />
+              <div className="jc-hero-stamp">Venta online<br />por caja</div>
             </div>
           </div>
         </section>
 
         <section className="jc-benefits" aria-label="Características de la oferta">
           <div className="jc-container jc-benefit-grid">
-            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Hoy ofrecemos cajas de huevos café XL y Jumbo.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Hoy ofrecemos cajas de huevos café Extra y Super Extra.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">▦</span><div><h2>Selección con criterio</h2><p>Cada producto debe ser local o tener un precio que realmente convenga.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>Ustedes deciden</h2><p>La casera y el casero nos ayudan a elegir qué incorporar después.</p></div></article>
           </div>
@@ -145,7 +184,7 @@ export default function JustoCaseroLanding() {
           <div className="jc-container">
             <div className="jc-section-heading">
               <div><span className="jc-kicker">Nuestra primera categoría</span><h2>Huevos café.<br />Dos tamaños.</h2></div>
-              <p>Comenzamos con cajas de huevos café. Elige XL o Jumbo mientras preparamos los próximos productos de Justo Casero.</p>
+              <p>Comenzamos con cajas de huevos café. Elige Extra o Super Extra mientras preparamos los próximos productos de Justo Casero.</p>
             </div>
             <div className="jc-egg-grid">
               {eggBoxes.map((product, index) => (
@@ -170,14 +209,14 @@ export default function JustoCaseroLanding() {
             </div>
             <div className="jc-price-vote-grid">
               {eggBoxes.map(product => {
-                const answer = priceVotes[product.size];
+                const answer = priceVotes[product.id];
                 return (
                   <article className="jc-price-vote-card" key={product.size}>
                     <div><span>Caja de huevos café</span><strong>{product.size}</strong></div>
                     <p>¿El precio cotizado está bien?</p>
                     <div className="jc-price-vote-buttons" role="group" aria-label={`Evaluar precio de caja ${product.size}`}>
-                      <button type="button" className={answer === 'fair' ? 'is-selected is-fair' : ''} aria-pressed={answer === 'fair'} onClick={() => choosePriceVote(product.size, 'fair')}><span aria-hidden="true">👍</span> Sí, está justo</button>
-                      <button type="button" className={answer === 'high' ? 'is-selected is-high' : ''} aria-pressed={answer === 'high'} onClick={() => choosePriceVote(product.size, 'high')}><span aria-hidden="true">👎</span> Está un poco alto</button>
+                      <button type="button" className={answer === 'fair' ? 'is-selected is-fair' : ''} aria-pressed={answer === 'fair'} onClick={() => choosePriceVote(product.id, 'fair')}><span aria-hidden="true">👍</span> Sí, está justo</button>
+                      <button type="button" className={answer === 'high' ? 'is-selected is-high' : ''} aria-pressed={answer === 'high'} onClick={() => choosePriceVote(product.id, 'high')}><span aria-hidden="true">👎</span> Está un poco alto</button>
                     </div>
                     {answer && (
                       <div className="jc-price-vote-result" role="status">
@@ -198,7 +237,7 @@ export default function JustoCaseroLanding() {
             <div className="jc-centered-heading"><span className="jc-kicker">Comprar será así de fácil</span><h2>Tres pasos y listo.</h2></div>
             <ol className="jc-steps">
               <li><span>1</span><h3>Consulta</h3><p>Pide el precio vigente de las cajas de huevos café.</p></li>
-              <li><span>2</span><h3>Elige</h3><p>Indica si necesitas XL o Jumbo y cuántas cajas.</p></li>
+              <li><span>2</span><h3>Elige</h3><p>Indica si necesitas Extra o Super Extra y cuántas cajas.</p></li>
               <li><span>3</span><h3>Coordina</h3><p>Nuestro equipo recibe la conversación y gestiona tu pedido por WhatsApp.</p></li>
             </ol>
           </div>
@@ -206,8 +245,8 @@ export default function JustoCaseroLanding() {
 
         <section className="jc-contact" id="contacto">
           <div className="jc-container jc-contact-card">
-            <div><span className="jc-kicker">XL O JUMBO</span><h2>Tu caja de huevos café.</h2><p>Escríbenos para consultar el precio y la disponibilidad vigente.</p></div>
-            <a className="jc-button jc-button-dark" href={orderLink('Hola, quiero pedir una caja de huevos café. ¿Qué disponibilidad tienen en XL y Jumbo?')} target="_blank" rel="noreferrer">Abrir WhatsApp <span>→</span></a>
+            <div><span className="jc-kicker">EXTRA O SUPER EXTRA</span><h2>Tu caja de huevos café.</h2><p>Escríbenos para consultar el precio y la disponibilidad vigente.</p></div>
+            <a className="jc-button jc-button-dark" href={orderLink('Hola, quiero pedir una caja de huevos café. ¿Qué disponibilidad tienen en Extra y Super Extra?')} target="_blank" rel="noreferrer">Abrir WhatsApp <span>→</span></a>
           </div>
         </section>
 
@@ -230,7 +269,7 @@ export default function JustoCaseroLanding() {
             )}
             <div className="jc-radar-action">
               {voteLink ? <a className="jc-button jc-button-primary" href={voteLink} target="_blank" rel="noreferrer">Enviar mi voto por WhatsApp <span>→</span></a> : <span className="jc-radar-status" aria-live="polite">Elige una opción para enviar tu voto.</span>}
-              <p>Este mensaje entra al mismo CRM y queda asociado a la conversación del cliente.</p>
+              <p>Recibiremos tu sugerencia por WhatsApp y la tendremos en cuenta.</p>
             </div>
           </div>
         </section>

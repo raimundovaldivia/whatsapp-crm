@@ -84,7 +84,7 @@ function AppLoader({ stalled = false }) {
         bg: 'radial-gradient(circle at 50% 12%, #fffef9 0, #fff8ec 48%, #f9eedc 100%)',
         text: '#173249', muted: '#71685c', border: '#efdcbf', accent: '#f2644b',
         shadow: 'rgba(242, 100, 75, .20)',
-        loading: 'Estamos preparando nuestras cajas de huevos café XL y Jumbo.',
+        loading: 'Estamos preparando nuestras cajas de huevos café Extra y Super Extra.',
       }
     : isTienda
       ? {
