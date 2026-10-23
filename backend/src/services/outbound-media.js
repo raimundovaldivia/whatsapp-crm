@@ -54,14 +54,14 @@ function decodePayload({ data, mimeType, fileName, caption }) {
 
 async function send({ orgId, conversation, payload, config, sentBy = 'human', agentType = null }) {
   const media = decodePayload(payload);
-  const directUpload = ['kapso', 'meta'].includes(String(config?.provider || 'meta').toLowerCase());
+  const directUpload = ['kapso', 'meta', 'evolution'].includes(String(config?.provider || 'meta').toLowerCase());
   let mediaUrl = null;
   if (r2.isConfigured()) {
     try {
       mediaUrl = await r2.uploadBuffer(media.buffer, media.fileName, media.mimeType, `chat/${orgId}`);
     } catch (err) {
-      // Kapso y Meta aceptan el archivo directamente. La copia para el CRM no
-      // debe impedir que la foto llegue al cliente.
+      // Kapso, Meta y Evolution aceptan el archivo directamente. La copia para
+      // el CRM no debe impedir que el adjunto llegue al cliente.
       if (!directUpload) throw err;
       console.warn('[OutboundMedia] No se pudo guardar la copia pública; se usará la carga directa:', err.message);
     }

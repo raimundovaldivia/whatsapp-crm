@@ -68,7 +68,10 @@ async function sendMediaMessage(to, media, config) {
     fileName: media.fileName,
   }));
   const messageId = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id || null;
-  return { ...response.data, messageId };
+  // Evolution identifica el adjunto por canal y mensaje, no por un ID de subida.
+  // Reutilizar esa referencia permite conservarlo y abrirlo sin una URL pública.
+  const uploadedMediaId = config.id && messageId ? mediaReference(config.id, messageId) : null;
+  return { ...response.data, messageId, uploadedMediaId };
 }
 
 async function markAsRead(messageId, remoteJid, config) {
