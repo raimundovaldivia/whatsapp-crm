@@ -28,7 +28,7 @@ cookie HttpOnly/Secure/SameSite=Lax para conservar el acceso cuando el CRM usa
 Authorization Bearer. No muestra el diálogo nativo Basic del navegador.
 Los clientes de prueba que ya usan Basic siguen siendo compatibles; las rutas API
 y WebSocket continúan restringidas. El formulario limita intentos y tamaño del
-cuerpo y rechaza envíos desde otros orígenes. /qa-health es público
+cuerpo y exige un token CSRF firmado vinculado a una cookie de formulario. /qa-health es público
 y solo devuelve un marcador fijo, sin consultar datos. La API privada escucha
 3001. El proxy mantiene el frontend y la API en el mismo origen.
 

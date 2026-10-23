@@ -55,10 +55,13 @@ test('HTML login validates credentials, creates a protected cookie and preserves
   const gateway = createGateway({ password, root, upstream: 'http://127.0.0.1:' + backend.address().port, secure: false });
   await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve));
   const url = 'http://127.0.0.1:' + gateway.address().port;
-  const submit = (values, origin = url) => fetch(url + '/qa-login', { method: 'POST', redirect: 'manual', headers: { Origin: origin }, body: new URLSearchParams(values) });
+  let csrf, formCookie;
+  const submit = values => fetch(url + '/qa-login', { method: 'POST', redirect: 'manual', headers: { Origin: 'null', Cookie: formCookie }, body: new URLSearchParams({csrf,...values}) });
   try {
     const form = await fetch(url + '/qa-login');
     const html = await form.text();
+    csrf = html.match(/name="csrf" value="([a-f0-9.]+)"/)[1];
+    formCookie = form.headers.get('set-cookie').split(';')[0];
     assert.equal(form.status, 200);
     assert.equal(form.headers.get('www-authenticate'), null);
     assert.match(form.headers.get('content-security-policy'), /form-action 'self'/);
@@ -66,10 +69,12 @@ test('HTML login validates credentials, creates a protected cookie and preserves
     assert.ok(!html.includes(password)); assert.ok(!html.includes('QA PRIVATE APP'));
     for (const values of [{username:'qa',password:'wrong'}, {username:'other',password}]) {
       const rejected = await submit(values);
-      assert.equal(rejected.status, 401); assert.equal(rejected.headers.get('set-cookie'), null);
+      assert.equal(rejected.status, 401); assert.ok(!rejected.headers.get('set-cookie')?.includes('crm_qa_access='));
       assert.match(await rejected.text(), /Usuario o contraseña incorrectos/);
     }
-    assert.equal((await submit({username:'qa',password}, 'https://other.invalid')).status, 403);
+    assert.equal((await submit({username:'qa',password,csrf:'forged'})).status, 403);
+    const withoutCookie = await fetch(url + '/qa-login', {method:'POST',body:new URLSearchParams({username:'qa',password,csrf}),redirect:'manual'});
+    assert.equal(withoutCookie.status,403);
     assert.equal((await fetch(url + '/qa-login', { method:'POST', headers:{Origin:url}, body:'plain' })).status, 415);
     const result = await submit({username:'qa',password});
     assert.equal(result.status, 303); assert.equal(result.headers.get('location'), '/');
