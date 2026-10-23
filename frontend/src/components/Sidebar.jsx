@@ -83,6 +83,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   }, [search]);
 
   const HOT_TEMPERATURES = ['hot', 'very_hot'];
+  const HOT_STATES = ['interested', 'collecting_order'];
   const CLOSED_STATES = new Set(['done', 'delivered', 'scheduled', 'confirmed', 'awaiting_payment', 'opted_out', 'template_sent']);
   const now          = clockNow;
   const h2           = 2 * 60 * 60 * 1000;
