@@ -11,6 +11,48 @@ function createGateway({ password, root, upstream = 'http://qa-api.railway.inter
   const basic = 'Basic ' + Buffer.from('qa:' + password).toString('base64');
   const session = crypto.createHmac('sha256', password).update('qa-gateway-session-v1').digest('hex');
   const cookieName = 'crm_qa_access';
+  const sessionCookie = `${cookieName}=${session}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
+  const attempts = new Map();
+  function loginPage(res, status = 200, message = '') {
+    res.writeHead(status, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      'Referrer-Policy': 'no-referrer',
+    });
+    res.end(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Acceso al CRM de prueba</title><style>
+      *{box-sizing:border-box}body{margin:0;min-height:100dvh;padding:24px;display:grid;place-items:center;background:#111b21;color:#e9edef;font-family:system-ui,sans-serif}main{width:100%;max-width:420px;background:#202c33;padding:32px;border:1px solid #374045;border-radius:16px}.badge{color:#57dbb8;font-size:12px;font-weight:700;letter-spacing:.08em}h1{font-size:26px;margin:12px 0}p{color:#b4c1c9;line-height:1.6}form{display:grid;gap:18px;margin-top:24px}label{display:grid;gap:8px;font-size:14px}input,button{font:inherit;width:100%;min-height:48px;border-radius:8px;padding:12px}input{border:1px solid #667781;background:#111b21;color:#e9edef}input:focus-visible,button:focus-visible{outline:3px solid #57dbb8;outline-offset:3px}button{background:#00a884;color:#071d17;font-weight:700;border:0;cursor:pointer}.error{color:#ffb4b4}.note{font-size:13px;margin-bottom:0}@media(max-width:400px){body{padding:16px}main{padding:24px}}
+    </style></head><body><main><span class="badge">ENTORNO DE PRUEBA</span><h1>Acceso al CRM</h1><p>Ingresa para revisar y probar la app con datos ficticios.</p>${message ? `<p class="error" role="alert">${message}</p>` : ''}<form method="post" action="/qa-login"><label>Usuario<input name="username" type="text" autocomplete="username" value="qa" required maxlength="100"></label><label>Contraseña<input name="password" type="password" autocomplete="current-password" required maxlength="4096"></label><button type="submit">Entrar al entorno de prueba</button></form><p class="note">Después podrás iniciar sesión con tu cuenta de prueba del CRM.</p></main></body></html>`);
+  }
+  async function login(req, res) {
+    // Only this origin can submit the form; credentials never enter a URL or logs.
+    let origin;
+    try { origin = new URL(req.headers.origin); } catch { /* fail closed */ }
+    if (!origin || origin.host !== req.headers.host || origin.protocol !== (secure ? 'https:' : 'http:')) { res.writeHead(403); res.end('Origen no permitido'); return; }
+    if (req.headers['content-type']?.split(';')[0].trim() !== 'application/x-www-form-urlencoded') { res.writeHead(415); res.end(); return; }
+    const now = Date.now();
+    for (const [key, value] of attempts) if (value.until <= now) attempts.delete(key);
+    const key = req.socket.remoteAddress;
+    const entry = attempts.get(key) || { count: 0, until: now + 60000 };
+    if (entry.count >= 20 || (!attempts.has(key) && attempts.size >= 1000)) {
+      res.setHeader('Retry-After', '60'); loginPage(res, 429, 'Demasiados intentos. Espera un minuto e inténtalo de nuevo.'); return;
+    }
+    entry.count++; attempts.set(key, entry);
+    const chunks = [];
+    let size = 0;
+    try {
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 8192) { res.writeHead(413); res.end(); return; }
+        chunks.push(chunk);
+      }
+    } catch { if (!res.destroyed) { res.writeHead(400); res.end(); } return; }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!same(form.get('username') || '', 'qa') || !same(form.get('password') || '', password)) {
+      loginPage(res, 401, 'Usuario o contraseña incorrectos.'); return;
+    }
+    attempts.delete(key);
+    res.writeHead(303, { Location: '/', 'Set-Cookie': sessionCookie }); res.end();
+  }
   function allowed(req) {
     const cookie = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith(cookieName + '='));
     return same(req.headers.authorization || '', basic) || same(cookie?.slice(cookieName.length + 1) || '', session);
@@ -27,11 +69,25 @@ function createGateway({ password, root, upstream = 'http://qa-api.railway.inter
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     if (['/qa-health', '/qa_health'].includes(req.url)) { res.end('qa-gateway'); return; }
+    const requestPath = req.url.split('?')[0];
+    if (requestPath === '/qa-login') {
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        if (allowed(req)) { res.writeHead(303, { Location: '/' }); res.end(); }
+        else if (req.method === 'HEAD') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(); }
+        else loginPage(res);
+      } else if (req.method === 'POST') {
+        login(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end('No se pudo iniciar sesión'); });
+      } else { res.writeHead(405); res.end(); }
+      return;
+    }
     if (!allowed(req)) {
-      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="CRM QA", charset="UTF-8"' });
+      if (['GET', 'HEAD'].includes(req.method) && !proxyPath.test(req.url)) {
+        res.writeHead(303, { Location: '/qa-login' }); res.end(); return;
+      }
+      res.writeHead(401);
       res.end('QA: acceso restringido'); return;
     }
-    res.setHeader('Set-Cookie', `${cookieName}=${session}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
+    res.setHeader('Set-Cookie', sessionCookie);
     if (proxyPath.test(req.url)) {
       const request = http.request({ hostname: backend.hostname, port: backend.port, method: req.method, path: req.url, headers: headers(req) }, response => {
         const responseHeaders = { ...response.headers };
