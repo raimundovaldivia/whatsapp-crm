@@ -187,7 +187,7 @@ const PORT = process.env.PORT || 3001;
 
 const { setupDatabase } = require('./db/setup');
 
-setupDatabase().then(() => {
+require('./services/database-startup').prepareDatabase(setupDatabase).then(() => {
   server.listen(PORT, () => {
     console.log(`\n🤖 WhatsApp CRM — Puerto ${PORT}`);
     console.log(`   WhatsApp Meta   : POST /webhook`);
