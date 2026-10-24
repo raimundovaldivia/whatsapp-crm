@@ -6,7 +6,7 @@ const { PGlite } = require('@electric-sql/pglite');
 const { load, handler, response, noop } = require('./helpers.cjs');
 const policy = require('../src/services/outbound-policy');
 const NIGHT = new Date('2026-10-24T03:50:00Z');
-const MORNING = new Date('2026-10-24T12:05:00Z');
+const MORNING = new Date('2026-10-24T11:30:00Z');
 
 async function fixture(t) {
   const pg = new PGlite(); t.after(() => pg.close());
@@ -45,15 +45,29 @@ test('next Chile window, DST, no overnight sending, durable duplicate protection
   const f=await fixture(t);
   assert.equal(await f.enqueue({now:MORNING}),null);
   const m=await f.enqueue();
-  assert.equal(new Date(m.outbound_queue.dueAt).toISOString(),'2026-10-24T12:00:00.000Z');
+  assert.equal(new Date(m.outbound_queue.dueAt).toISOString(),'2026-10-24T11:30:00.000Z');
   assert.equal(m.status,'pending'); assert.equal(m.whatsapp_message_id,null);
   assert.equal((await f.enqueue()).id,m.id);
   assert.equal((await f.messages()).length,1);
   await f.worker({clock:()=>NIGHT}).tick(1); assert.equal(f.sends.length,0);
   const winter=await f.enqueue({text:'Invierno',now:new Date('2026-06-10T02:00:00Z')});
-  assert.equal(new Date(winter.outbound_queue.dueAt).toISOString(),'2026-06-10T13:00:00.000Z');
+  assert.equal(new Date(winter.outbound_queue.dueAt).toISOString(),'2026-06-10T12:30:00.000Z');
   const summer=await f.enqueue({text:'Noche',now:new Date('2026-10-25T00:00:00Z')});
-  assert.equal(new Date(summer.outbound_queue.dueAt).toISOString(),'2026-10-25T12:00:00.000Z');
+  assert.equal(new Date(summer.outbound_queue.dueAt).toISOString(),'2026-10-25T11:30:00.000Z');
+});
+
+test('queued text waits at 08:29:59 and sends at 08:30, including Chile winter',async t=>{
+  for (const [night, opening] of [['2026-10-24T03:50:00Z','2026-10-24T11:30:00Z'],['2026-06-10T04:50:00Z','2026-06-10T12:30:00Z']]) {
+    const f=await fixture(t);
+    const m=await f.enqueue({now:new Date(night)});
+    assert.equal(new Date(m.outbound_queue.dueAt).toISOString(),new Date(opening).toISOString());
+    await f.worker({clock:()=>new Date(new Date(opening).getTime()-1000)}).tick(1);
+    assert.equal(f.sends.length,0);
+    assert.equal((await f.messages())[0].outbound_queue.state,'queued');
+    await f.worker({clock:()=>new Date(opening)}).tick(1);
+    assert.equal(f.sends.length,1);
+    assert.equal((await f.messages())[0].outbound_queue.state,'sent');
+  }
 });
 
 test('validates text, tenant and owner before queueing',async t=>{

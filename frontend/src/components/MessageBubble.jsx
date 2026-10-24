@@ -105,7 +105,7 @@ export default function MessageBubble({ message, conversation }) {
         )}
         {isOutbound && waiting && (
           <div style={{ color: colors.textSecondary, fontSize: '12px', marginBottom: '4px', maxWidth: '420px' }}>
-            {queue.state === 'queued' ? `En cola · envío desde ${due}, hora de Chile (09:00–21:00)`
+            {queue.state === 'queued' ? `En cola · envío desde ${due}, hora de Chile (08:30–21:00)`
               : queue.state === 'processing' ? 'Procesando envío'
               : queue.state === 'cancelled' ? 'Envío cancelado'
               : queue.state === 'uncertain' ? 'Envío sin confirmar · revisar antes de reenviar'

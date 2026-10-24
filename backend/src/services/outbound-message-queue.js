@@ -21,7 +21,7 @@ async function publish(io, orgId, message) {
 async function deferOutsideHours(input, pool = db.getPool()) {
   const { orgId, conversationId, text, sentBy = 'ai', createdBy = null, io, now = new Date() } = input;
   validate({ orgId, conversationId, text, sentBy, createdBy });
-  if (policy.isCustomerMessagingHour(now)) return null;
+  if (policy.isChatMessagingHour(now)) return null;
   const client = await pool.connect();
   let message;
   let replaced = [];
@@ -49,10 +49,10 @@ async function deferOutsideHours(input, pool = db.getPool()) {
       SELECT c.id,'outbound',$3,'text','pending',$4,$5,$6,$7,$8,
         $9::jsonb || jsonb_build_object('dueAt',
           (((($10::timestamptz AT TIME ZONE 'America/Santiago')::date +
-            CASE WHEN EXTRACT(HOUR FROM $10::timestamptz AT TIME ZONE 'America/Santiago') >= 21 THEN 1 ELSE 0 END)
-            + TIME '09:00') AT TIME ZONE 'America/Santiago'))
+            CASE WHEN EXTRACT(HOUR FROM $10::timestamptz AT TIME ZONE 'America/Santiago') >= $12 THEN 1 ELSE 0 END)
+            + make_interval(mins => $11::int)) AT TIME ZONE 'America/Santiago'))
       FROM conversations c WHERE c.id=$2 AND c.organization_id=$1 RETURNING *`,
-    [orgId, conversationId, text.trim(), sentBy, input.agentType || null, input.aiProvider || null, input.aiModel || null, input.promptVersion || null, JSON.stringify(context), now.toISOString()]);
+    [orgId, conversationId, text.trim(), sentBy, input.agentType || null, input.aiProvider || null, input.aiModel || null, input.promptVersion || null, JSON.stringify(context), now.toISOString(), policy.CHAT_QUEUE_WINDOW_START_MINUTES, policy.CUSTOMER_WINDOW_END_HOUR]);
     message = rows[0];
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -78,7 +78,7 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, co
       AND m.outbound_queue->>'state'='processing'
       AND (m.outbound_queue->>'startedAt')::timestamptz < $2::timestamptz - INTERVAL '5 minutes' RETURNING m.*`, [orgId, clock().toISOString()]);
     for (const previous of expired.rows) await publish(io, orgId, previous);
-    if (!policy.isCustomerMessagingHour(clock())) return;
+    if (!policy.isChatMessagingHour(clock())) return;
     const { rows: [message] } = await pool.query(`UPDATE messages m SET outbound_queue=m.outbound_queue || jsonb_build_object('state','processing','startedAt',$2::text)
       WHERE m.id=(SELECT q.id FROM messages q JOIN conversations c ON c.id=q.conversation_id
         WHERE c.organization_id=$1 AND q.outbound_queue->>'state'='queued'
@@ -125,7 +125,7 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, co
         return settle(orgId, message, 'review', 'El proveedor del chat cambió; revisar el canal de envío');
       }
       // Check again at the transport boundary (a slow lookup may cross 21:00).
-      if (!policy.isCustomerMessagingHour(clock())) {
+      if (!policy.isChatMessagingHour(clock())) {
         return settle(orgId, message, 'queued', 'Esperando horario de atención', 'pending');
       }
       const result = await send(conv.phone_number, message.content, config);

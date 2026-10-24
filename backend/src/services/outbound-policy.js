@@ -1,6 +1,7 @@
 const CUSTOMER_TIME_ZONE = 'America/Santiago';
 const CUSTOMER_WINDOW_START_HOUR = 9;
 const CUSTOMER_WINDOW_END_HOUR = 21;
+const CHAT_QUEUE_WINDOW_START_MINUTES = 8 * 60 + 30;
 
 function chileTimeParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -18,9 +19,15 @@ function chileTimeParts(date = new Date()) {
  * de Chile. Intl aplica automáticamente el cambio entre horario de verano e
  * invierno, por lo que no dependemos de una diferencia UTC fija.
  */
-function isCustomerMessagingHour(date = new Date()) {
-  const hour = Number(chileTimeParts(date).hour);
-  return hour >= CUSTOMER_WINDOW_START_HOUR && hour < CUSTOMER_WINDOW_END_HOUR;
+function isCustomerMessagingHour(date = new Date(), startMinutes = CUSTOMER_WINDOW_START_HOUR * 60) {
+  const parts = chileTimeParts(date);
+  const minute = Number(parts.hour) * 60 + Number(parts.minute);
+  return minute >= startMinutes && minute < CUSTOMER_WINDOW_END_HOUR * 60;
+}
+
+// The chat queue opens at 08:30; specialized follow-ups keep their own policy.
+function isChatMessagingHour(date = new Date()) {
+  return isCustomerMessagingHour(date, CHAT_QUEUE_WINDOW_START_MINUTES);
 }
 
 function normalizeText(value = '') {
@@ -94,7 +101,9 @@ module.exports = {
   CUSTOMER_TIME_ZONE,
   CUSTOMER_WINDOW_START_HOUR,
   CUSTOMER_WINDOW_END_HOUR,
+  CHAT_QUEUE_WINDOW_START_MINUTES,
   chileTimeParts,
   isCustomerMessagingHour,
+  isChatMessagingHour,
   shouldSkipAutomatedFollowUp,
 };

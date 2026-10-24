@@ -374,7 +374,7 @@ Para estas reglas, ejecutar las pruebas del backend y `npm test` en el frontend.
 
 ### Cola de textos del chat fuera de horario
 
-Los mensajes manuales del chat (incluido iniciar una conversación y el resumen de una orden) y las respuestas de texto del pipeline se conservan en el mismo registro `messages` cuando se preparan fuera de las 09:00–20:59 de `America/Santiago`. El chat muestra «En cola» y permite cancelar antes de que comience el envío. No se consideran mensajes enviados ni se incorporan al historial del bot hasta que el proveedor acepta el envío.
+Los mensajes manuales del chat (incluido iniciar una conversación y el resumen de una orden) y las respuestas de texto del pipeline se conservan en el mismo registro `messages` cuando se preparan fuera de las 08:30–20:59 de `America/Santiago`. El chat muestra «En cola» y permite cancelar antes de que comience el envío. No se consideran mensajes enviados ni se incorporan al historial del bot hasta que el proveedor acepta el envío. El inicio a las 08:30 aplica a toda esta cola; los seguimientos y avisos especializados conservan sus horarios vigentes.
 
 El proceso de fondo comprueba destinatario, canal, permisos vigentes, cambios posteriores del chat y respaldo de las afirmaciones comerciales. Una referencia relativa de fecha que cruza medianoche requiere revisión. Los errores o resultados inciertos no provocan reenvíos automáticos; una ventana oficial de 24 horas vencida también requiere revisión, sin cambiar de canal. La cola no modifica los horarios de campañas, avisos operativos especializados ni el envío manual de adjuntos.
 
