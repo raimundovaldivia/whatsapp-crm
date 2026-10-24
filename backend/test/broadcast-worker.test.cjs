@@ -51,7 +51,7 @@ test('starting a queued campaign is atomic, idempotent and tenant scoped for Evo
   const engine = new PGlite();
   try {
     await engine.exec(`CREATE TABLE broadcast_campaigns (id BIGINT PRIMARY KEY, organization_id INT, total_count INT, scheduled_for TIMESTAMPTZ,
-      sending_provider TEXT, sending_channel_id INT, server_managed BOOLEAN DEFAULT FALSE, status TEXT DEFAULT 'processing', completed_at TIMESTAMPTZ);
+      template_name TEXT DEFAULT 'reenganche', sending_provider TEXT, sending_channel_id INT, server_managed BOOLEAN DEFAULT FALSE, status TEXT DEFAULT 'processing', completed_at TIMESTAMPTZ);
       CREATE TABLE broadcast_jobs (id SERIAL, campaign_id BIGINT, organization_id INT, position INT, item JSONB, UNIQUE(campaign_id,position));
       CREATE TABLE broadcast_campaign_recipients(campaign_id BIGINT);
       INSERT INTO broadcast_campaigns(id,organization_id,total_count,sending_provider,sending_channel_id) VALUES
@@ -70,9 +70,14 @@ test('starting a queued campaign is atomic, idempotent and tenant scoped for Evo
     res = response(); await start(req,res); assert.equal(res.code,200,JSON.stringify(res.body));
     res = response(); await start(req,res); assert.equal(res.code,200);
     assert.equal((await engine.query('SELECT * FROM broadcast_jobs')).rows.length,2);
-    res = response(); await handler(router,'post','/campaigns/3/start')({...req,params:{id:3}},res);
+    res = response(); await handler(router,'post','/campaigns/3/start')({...req,params:{id:3},body:{items:req.body.items.map(item => ({...item, templateName:'reenganche', previewText:item.message, languageCode:'es_CL', components:[{type:'body',parameters:[{type:'text',text:'cliente'}]}]}))}},res);
     assert.equal(res.code,200,JSON.stringify(res.body));
     assert.equal((await engine.query('SELECT * FROM broadcast_jobs')).rows.length,4);
+    const kapsoItem = (await engine.query('SELECT item FROM broadcast_jobs WHERE campaign_id=3 ORDER BY position')).rows[0].item;
+    assert.equal(kapsoItem.templateName,'reenganche');
+    assert.equal(kapsoItem.languageCode,'es_CL');
+    assert.equal(kapsoItem.components[0].parameters[0].text,'cliente');
+    assert.equal(kapsoItem.previewText,'Hola uno');
     res = response(); await handler(router,'post','/send-bulk')({orgId:1,body:{campaignId:1,items:req.body.items}},res);
     assert.equal(res.code,409);
     res = response(); await handler(router,'post','/campaigns/1/finish')({...req,body:{status:'completed'}},res);
@@ -138,3 +143,4 @@ test('a single failed recipient does not stop the campaign; three consecutive fa
     assert.equal((await pool.query('SELECT status FROM broadcast_campaigns WHERE id=2')).rows[0].status, 'interrupted');
   } finally { await pool.close(); }
 });
+

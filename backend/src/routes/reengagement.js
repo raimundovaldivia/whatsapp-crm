@@ -2004,6 +2004,17 @@ router.post('/campaigns/:id/start', async (req, res) => {
       if (!/^[0-9]{8,15}$/.test(phone) || !message || message.length > 4096 || phones.has(phone)) throw Object.assign(new Error('Revisa los teléfonos y mensajes del lote; no debe haber destinatarios repetidos'), { status: 400 });
       phones.add(phone);
       const row = { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone, offers: [], campaignOfferIds: [] };
+      // Kapso must retain the approved template and its per-recipient variables.
+      // A rendered preview alone is not a template request outside the 24h window.
+      if (campaign.sending_provider === 'kapso') {
+        if (!item.templateName || item.templateName !== campaign.template_name) {
+          throw Object.assign(new Error('Kapso requiere la plantilla aprobada de la campaña'), { status: 400 });
+        }
+        row.templateName = item.templateName;
+        row.languageCode = item.languageCode || 'es';
+        row.components = item.components || [];
+        row.previewText = message;
+      }
       const offerList = campaignOffers.offerListFrom(item);
       if (offerList.length) {
         // Validación al iniciar: si una oferta no está completa o se repite un producto, no se aprueba ni se envía el lote.
@@ -2069,6 +2080,20 @@ router.post('/campaigns/:id/stop', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+router.post('/campaigns/:id/resume', async (req, res) => {
+  try {
+    if (req.body?.excludeOrdersThisWeek !== undefined && typeof req.body.excludeOrdersThisWeek !== 'boolean') {
+      return res.status(400).json({ error: 'excludeOrdersThisWeek debe ser verdadero o falso' });
+    }
+    const result = await require('../services/broadcast-resume').resumeCampaign({
+      pool: getPool(), orgId: req.orgId, campaignId: req.params.id,
+      excludeOrdersThisWeek: req.body?.excludeOrdersThisWeek !== false,
+      resolveSender: require('../services/broadcast-sender').resolveSender,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
 router.post('/campaigns/:id/finish', async (req, res) => {
   try {
     const requested = req.body?.status;
@@ -2130,6 +2155,8 @@ router.get('/campaigns', async (req, res) => {
     const { rows } = await getPool().query(
       `SELECT c.*,
          (SELECT COUNT(*)::int FROM broadcast_jobs j WHERE j.campaign_id = c.id AND j.state = 'unknown') AS queue_unknown_count,
+         (SELECT COUNT(*)::int FROM broadcast_jobs j WHERE j.campaign_id = c.id AND j.state = 'pending') AS queue_pending_count,
+         (SELECT COUNT(*)::int FROM broadcast_jobs j WHERE j.campaign_id = c.id AND j.state = 'processing') AS queue_processing_count,
          COUNT(r.id)::int AS processed_count,
          GREATEST(c.total_count - COUNT(r.id), 0)::int AS pending_count,
          COUNT(*) FILTER (WHERE r.result_status = 'skipped')::int AS skipped_count,
@@ -2614,6 +2641,7 @@ router.post('/send-broadcast', async (req, res) => {
 async function sendBulk(req, res) {
   const { items, campaignId = null } = req.body;
   let pacing = req.body.pacingSettings || {};
+  let excludeOrdersThisWeek = false;
   let sendingProvider = req.body.sendingProvider || null;
   let sendingChannelId = req.body.sendingChannelId || null;
   if (!Array.isArray(items) || !items.length) {
@@ -2634,6 +2662,7 @@ async function sendBulk(req, res) {
       return res.status(409).json({ error: 'El método de envío no coincide con la campaña' });
     }
     pacing = campaign.pacing_settings || {};
+    excludeOrdersThisWeek = pacing.excludeOrdersThisWeek === true;
     sendingProvider = campaign.sending_provider || 'kapso';
     sendingChannelId = campaign.sending_channel_id || null;
     if (campaign.status === 'paused_payment') {
@@ -2678,6 +2707,12 @@ async function sendBulk(req, res) {
     let acceptedByProvider = false;
     let acceptedMessageId = null;
     try {
+      if (excludeOrdersThisWeek && await require('../services/broadcast-resume').hasOrderThisWeek(getPool(), req.orgId, item.phone)) {
+        const reason = 'Hizo un pedido esta semana (hora de Chile)';
+        await recordBroadcastRecipient(req.orgId, campaignId, item, { status: 'skipped', errorMessage: reason });
+        results.push({ phone: item.phone, success: false, skipped: true, error: reason });
+        continue;
+      }
       const isTemplate = !!item.templateName && !direct;
       if (direct) {
         const contact = await db.getContact(req.orgId, item.phone);
@@ -2973,4 +3008,5 @@ router.get('/accuracy', async (req, res) => {
 
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;
+
 
