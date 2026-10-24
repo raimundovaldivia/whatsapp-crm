@@ -197,6 +197,7 @@ require('./services/database-startup').prepareDatabase(setupDatabase).then(() =>
     console.log(`   Shopify eventos : POST /shopify-webhook/:orgId`);
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
     require('./services/webhook-inbox').startWebhookWorker();
+    require('./services/outbound-message-queue').start(io);
     require('./services/attribution-backfill').backfillWhatsappAttributions()
       .catch(error => console.warn('[Attribution] No se pudo recuperar el histórico:', error.message))
       .finally(() => require('./services/meta-purchase-sync').startMetaPurchaseSyncJob());
@@ -231,6 +232,7 @@ async function shutdown() {
   io.disconnectSockets(true);
   try {
     require('./services/referral-automation').stop();
+    require('./services/outbound-message-queue').stop();
     require('./services/meta-purchase-sync').stopMetaPurchaseSyncJob();
     require('./services/social-stories').stopSocialStoriesJob();
     await require('./services/webhook-inbox').stopWebhookWorker();

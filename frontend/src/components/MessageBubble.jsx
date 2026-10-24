@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { formatTime } from '../utils/dates.js';
 import { Bot, User, Check, CheckCheck, AlertCircle, Clock, FileText, Image } from 'lucide-react';
 import { useTheme } from '../theme.js';
-import { API_BASE } from '../utils/api.js';
+import { API_BASE, conversationsAPI } from '../utils/api.js';
 import { authSession } from '../utils/browser-session.js';
 
 /** URL autenticada para media (imagen/audio) — requiere _token en query param.
@@ -29,6 +29,17 @@ function parseTemplateContent(content) {
 export default function MessageBubble({ message, conversation }) {
   const { colors, isDark } = useTheme();
   const [mediaFailed, setMediaFailed] = useState(false);
+  const [queueError, setQueueError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const queue = message.outbound_queue;
+  const waiting = queue && queue.state !== 'sent';
+  const due = queue?.dueAt ? new Date(queue.dueAt).toLocaleString('es-CL', { timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short' }) : '';
+  const cancelQueued = async () => {
+    setCancelling(true); setQueueError('');
+    try { await conversationsAPI.cancelQueuedMessage(conversation.id, message.id); }
+    catch (error) { setQueueError(error.response?.data?.error || 'No se pudo cancelar'); }
+    finally { setCancelling(false); }
+  };
   const isOutbound = message.direction === 'outbound';
   const isAI = message.sent_by === 'ai';
   const driverName = message.agent_type?.startsWith('driver:')
@@ -81,10 +92,10 @@ export default function MessageBubble({ message, conversation }) {
           </div>
         )}
         <div style={{ fontSize: '9px', color: colors.textSecondary, marginBottom: '2px', padding: '0 4px', opacity: 0.9 }}>
-          {isOutbound ? `Enviado por ${channelLabel}` : `Recibido en ${channelLabel}`}
+          {isOutbound ? `${waiting ? 'Preparado para' : 'Enviado por'} ${channelLabel}` : `Recibido en ${channelLabel}`}
         </div>
 
-        {isOutbound && message.status === 'failed' && (
+        {isOutbound && message.status === 'failed' && !waiting && (
           <div role="alert" style={{ color: colors.red, fontSize: '12px', marginBottom: '4px', maxWidth: '420px' }}>
             No enviado. {String(message.delivery_error?.code) === '131042'
               ? 'Meta informó un problema de pago o elegibilidad. Revisa la facturación y el método de pago de WhatsApp.'
@@ -92,7 +103,18 @@ export default function MessageBubble({ message, conversation }) {
             {message.delivery_error?.code && ` (Código ${message.delivery_error.code})`}
           </div>
         )}
-        {isOutbound && message.status === 'pending' && (
+        {isOutbound && waiting && (
+          <div style={{ color: colors.textSecondary, fontSize: '12px', marginBottom: '4px', maxWidth: '420px' }}>
+            {queue.state === 'queued' ? `En cola · envío desde ${due}, hora de Chile (09:00–21:00)`
+              : queue.state === 'processing' ? 'Procesando envío'
+              : queue.state === 'cancelled' ? 'Envío cancelado'
+              : queue.state === 'uncertain' ? 'Envío sin confirmar · revisar antes de reenviar'
+              : `Pendiente de revisión · ${queue.reason || 'El chat cambió'}`}
+            {queue.state === 'queued' && <button onClick={cancelQueued} disabled={cancelling} style={{ marginLeft: '8px' }}>Cancelar envío</button>}
+            {queueError && <div role="alert">{queueError}</div>}
+          </div>
+        )}
+        {isOutbound && message.status === 'pending' && !waiting && (
           <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '4px' }}>Aceptado por WhatsApp · pendiente de confirmación de envío</div>
         )}
         {/* Burbuja */}

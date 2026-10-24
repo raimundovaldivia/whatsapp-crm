@@ -1974,7 +1974,9 @@ async function getMessagesByCustomerPhone(orgId, phoneNumber, limit = 80, exclud
 
 async function getLastMessages(conversationId, limit = 10) {
   const rows = await query(
-    'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2',
+    `SELECT * FROM messages m WHERE conversation_id = $1
+      AND COALESCE(to_jsonb(m)->'outbound_queue'->>'state','sent')='sent'
+      ORDER BY created_at DESC LIMIT $2`,
     [conversationId, limit]
   );
   return rows.reverse();
