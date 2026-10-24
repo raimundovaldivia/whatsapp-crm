@@ -22,7 +22,7 @@ function StoreConfigTab({ orgSlug, colors }) {
     store_announcement: '', store_hero_title: '', store_hero_subtitle: '',
     store_hero_tags: '', store_whatsapp_phone: '', store_free_shipping: '10000',
     admin_alert_phone: '', store_how_to_buy: '', store_about_us: '', store_public_url: '',
-    payment_mode: 'cod',
+    payment_mode: 'cod', campaign_recent_outreach_days: '7',
   });
 
   useEffect(() => {
@@ -43,6 +43,7 @@ function StoreConfigTab({ orgSlug, colors }) {
           store_about_us: s.store_about_us || '',
           store_public_url: s.store_public_url || '',
           payment_mode: s.payment_mode || 'cod',
+          campaign_recent_outreach_days: s.campaign_recent_outreach_days || '7',
         });
       })
       .catch(() => setError('Error cargando configuración'))
@@ -139,6 +140,18 @@ function StoreConfigTab({ orgSlug, colors }) {
           <div><label style={lbl}>WhatsApp de contacto (botón flotante)</label><input style={inp} value={form.store_whatsapp_phone} onChange={set('store_whatsapp_phone')} placeholder="56912345678" /><p style={hint}>Vacío = botón no aparece</p></div>
           <div><label style={lbl}>Teléfono admin (alertas de pedidos)</label><input style={inp} value={form.admin_alert_phone} onChange={set('admin_alert_phone')} placeholder="56912345678" /><p style={hint}>Recibe un WhatsApp por cada pedido nuevo</p></div>
           <div><label style={lbl}>URL pública de la tienda (para el bot)</label><input style={inp} value={form.store_public_url} onChange={set('store_public_url')} placeholder="https://crm.diezrios.cl/tienda/diezrios" /><p style={hint}>El bot usará esta URL cuando los clientes pidan el link del catálogo o al compartir productos</p></div>
+        </div>
+      </div>
+
+      {/* Mensajería */}
+      <div style={section}>
+        <div style={secHead}><Phone size={15} color={colors.green} /> Mensajería comercial</div>
+        <div style={secBody}>
+          <div>
+            <label style={lbl}>Días de espera antes de volver a contactar</label>
+            <input style={inp} type="number" min="1" max="30" value={form.campaign_recent_outreach_days} onChange={set('campaign_recent_outreach_days')} />
+            <p style={hint}>1 evita repetir una campaña el mismo día y permite volver a contactar desde el día siguiente.</p>
+          </div>
         </div>
       </div>
 

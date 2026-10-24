@@ -31,6 +31,7 @@ const STORE_KEYS = [
   'store_about_us',        // texto largo editable
   'store_public_url',      // URL pública de la tienda integrada (ej: https://crm.diezrios.cl/tienda/diezrios)
   'payment_mode',          // 'cod' = pago contra entrega | 'link' = link de pago Shopify
+  'campaign_recent_outreach_days', // 1 protege solo contra campañas repetidas el mismo día
 ];
 
 // ── GET /api/store-settings ────────────────────────────────────────
@@ -51,6 +52,12 @@ router.put('/', async (req, res) => {
   try {
     const updates = req.body || {};
     const saved = [];
+    if ('campaign_recent_outreach_days' in updates) {
+      const outreachDays = updates.campaign_recent_outreach_days === null ? '' : String(updates.campaign_recent_outreach_days);
+      if (!/^(?:[1-9]|[12]\d|30)$/.test(outreachDays)) {
+        return res.status(400).json({ error: 'La pausa entre campañas debe ser de 1 a 30 días.' });
+      }
+    }
 
     for (const key of STORE_KEYS) {
       if (key in updates) {

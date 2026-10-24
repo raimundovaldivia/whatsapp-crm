@@ -81,7 +81,7 @@ test('campaign lookup executes in SQL and isolates tenant, phone, personal chann
         (1,7,'56911111111','other-tenant','unknown'),(2,7,'56911111111','personal','accepted'),
         (3,8,'56911111111','other','accepted'),(1,7,'56922222222','other-phone','accepted'),
         (1,7,'56911111111','definite-failure','failed'),(4,7,'56911111111','official','accepted');`);
-    const { rows } = await engine.query(sql, [7, ['56911111111']]);
+    const { rows } = await engine.query(sql, [7, ['56911111111'], 7]);
     assert.equal(rows.length, 4);
     assert.equal(rows.filter(row => row.status === 'failed').length, 1);
     assert.equal(rows.find(row => row.result_status === 'unknown').status, null);
@@ -185,6 +185,34 @@ test('old unanswered campaigns do not exclude a re-engagement draft, while a rec
 
   const decline = drafts.messageSafety([{ direction: 'inbound', content: 'No gracias, no me escriban más.', created_at: '2026-09-01T15:00:00Z' }], '2026-10-22');
   assert.equal(decline.explicitDecline, true);
+});
+
+test('store campaign pause can protect only the same Chile business day', () => {
+  const { drafts } = setup();
+  const sameDay = [{ result_status: 'accepted', created_at: '2026-10-22T15:00:00Z' }];
+  const previousDay = [{ result_status: 'accepted', created_at: '2026-10-21T15:00:00Z' }];
+  assert.equal(drafts.messageSafety([], '2026-10-22', sameDay, 1).unansweredRecentOutreach, true);
+  assert.equal(drafts.messageSafety([], '2026-10-22', previousDay, 1).unansweredRecentOutreach, false);
+  assert.equal(drafts.messageSafety([], '2026-10-22', previousDay).unansweredRecentOutreach, true);
+});
+
+test('store settings validate and isolate the campaign pause', async () => {
+  const saved = [];
+  const router = load('src/routes/store-settings.js', {
+    '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+    '../db/database': {
+      getSetting: async () => null,
+      setSetting: async (orgId, key, value) => saved.push({ orgId, key, value }),
+    },
+  });
+  let res = response();
+  await handler(router, 'put', '/')({ orgId: 7, body: { campaign_recent_outreach_days: '0' } }, res);
+  assert.equal(res.code, 400);
+  assert.equal(saved.length, 0);
+  res = response();
+  await handler(router, 'put', '/')({ orgId: 7, body: { campaign_recent_outreach_days: '1' } }, res);
+  assert.equal(res.code, 200);
+  assert.deepEqual(saved, [{ orgId: 7, key: 'campaign_recent_outreach_days', value: '1' }]);
 });
 
 test('approval binds exact message, recipient and order; generation cannot authorize', async () => {
