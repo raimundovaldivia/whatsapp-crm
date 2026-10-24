@@ -1141,13 +1141,14 @@ Reglas estrictas:
       `${m.direction === 'inbound' ? 'Cliente' : 'Bot'}: ${m.content}`
     ).join('\n');
 
-    const scheduledSystemPrompt = `Eres quien atiende por WhatsApp a ${conversation.contact_name || 'un cliente'} en nombre de la tienda. Ya tiene un pedido agendado${dateLabel ? ` para el ${dateLabel}` : ''}: ${producto}.
+    const scheduledSystemPrompt = `Eres quien atiende por WhatsApp a ${conversation.contact_name || 'un cliente'} en nombre de la tienda. Tiene una solicitud agendada${dateLabel ? ` para el ${dateLabel}` : ''}: ${producto}. Todavía NO hay una orden creada ni una entrega confirmada.
 
 ${customerNoteSection || 'No hay una nota interna adicional para este cliente.'}
 
 Tu objetivo es continuar la conversación con naturalidad y cuidar el acuerdo ya registrado, no volver a venderle ni reiniciar el pedido.
 
 REGLAS ABSOLUTAS:
+- Un agendamiento es un recordatorio para completar el pedido. Nunca prometas que llegará, saldrá a reparto ni que avisaremos cuando vaya saliendo. No digas que está reservado o confirmado; falta crear la orden.
 - NO pidas dirección, horario de entrega, pago ni ningún dato adicional — eso se coordina el día del pedido.
 - Lee primero el último mensaje y responde a ESO; no recites de nuevo todos los datos del pedido.
 - Si solo agradece, confirma brevemente y cierra sin preguntas. Si ya cerraste y solo envía un emoji de aprobación, devuelve únicamente [NO_RESPONSE]. No expliques por qué guardas silencio.
@@ -1170,12 +1171,12 @@ REGLAS ABSOLUTAS:
         ],
       });
       const scheduledMsg = responseText(aiResp,
-        `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar.`);
+        `Tu solicitud sigue agendada${dateLabel ? ` para el ${dateLabel}` : ''}. Falta completar y confirmar el pedido; todavía no hay una entrega confirmada.`);
       L.agent('orchestrator', 0);
       return { response: scheduledMsg, agentType: 'orchestrator', newState: 'scheduled', ...aiTrace('fast', 'scheduled-order-v1') };
     } catch (err) {
       console.warn('[Pipeline] scheduled Haiku error:', err.message);
-      const fallback = `¡Tu pedido está apartado${dateLabel ? ` para el ${dateLabel}` : ''}! 📅 El día antes te escribimos para coordinar. Si necesitas cambiar algo, dímelo con gusto.`;
+      const fallback = `Tu solicitud sigue agendada${dateLabel ? ` para el ${dateLabel}` : ''}. Falta completar y confirmar el pedido; todavía no hay una entrega confirmada.`;
       L.agent('orchestrator', 0);
       return { response: fallback, agentType: 'orchestrator', newState: 'scheduled' };
     }
@@ -1611,7 +1612,7 @@ REGLAS ABSOLUTAS:
     L.agent('orchestrator', 0);
     L.step('scheduled', `fecha: ${extracted.desiredDate} | producto: ${extracted.productNotes}`);
     return {
-      response: `¡Perfecto! Te dejo agendado para el ${dateLabel} el pedido de ${extracted.productNotes} 📅 Ese día te avisamos cuando vaya saliendo.`,
+      response: `Dejo agendado un recordatorio para el ${dateLabel}: ${extracted.productNotes} 📅 Ese día te escribimos para completar y confirmar el pedido. Todavía no hay una orden creada ni una entrega confirmada.`,
       agentType: 'orchestrator',
       newState: 'scheduled',
     };
@@ -2899,14 +2900,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     agentResponse = `${agentResponse}\n\nComo comenzaste antes del cierre, cuando confirmes revisaré con el equipo si el despacho de hoy todavía alcanza a salir.`;
   }
 
-  // 3. ¿Confirmó?
-  //    REGLA DURA: si el modelo le dice al cliente "tu pedido queda
-  //    registrado" / "todo listo" sin emitir ORDEN_CONFIRMADA, ese texto NO
-  //    sale. Se trata como confirmación: con datos completos se crea el pedido
-  //    de verdad (y el cliente recibe el resumen real); si falta algo, se pide.
+  // Una afirmación del bot no sustituye la confirmación del cliente. Si el
+  // modelo anuncia un cierre sin confirmación, se muestra un resumen pendiente.
   const claimed = ordersAgent.claimsRegistered(agentResponse);
-  if (claimed) console.warn(`[Pipeline] ⚠️  El agente afirmó "pedido registrado" sin ORDEN_CONFIRMADA — forzando cierre real (conv ${conversationId})`);
-  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft) || claimed;
+  const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft);
   const allMatched = priced.items.length > 0 && priced.items.every(it => it.matched);
 
   if (confirmed && ordersAgent.hasRequiredData(updatedDraft) && allMatched) {
@@ -3071,7 +3068,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   }
 
   // Confirmó pero hay ítems que no calzan con el catálogo → pedir aclaración (sin crear pedido)
-  if (confirmed && ordersAgent.hasRequiredData(updatedDraft) && !allMatched) {
+  if ((confirmed || claimed) && ordersAgent.hasRequiredData(updatedDraft) && !allMatched) {
     const amb = priced.items.find(it => it.ambiguous);
     const dudosos = priced.items.filter(it => !it.matched && !it.ambiguous).map(it => it.name);
     const askMsg = amb
@@ -3081,10 +3078,18 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   }
 
   // Si la IA dijo ORDEN_CONFIRMADA pero faltan datos, pedirlos amablemente
-  if (confirmed && !ordersAgent.hasRequiredData(updatedDraft)) {
+  if ((confirmed || claimed) && !ordersAgent.hasRequiredData(updatedDraft)) {
     const missing = ordersAgent.missingFields(updatedDraft);
     const missingMsg = `Casi listo 😊 Solo me falta: ${missing.join(', ')}. ¿Me lo puedes confirmar?`;
     return { response: missingMsg, agentType: 'orders', newState: 'collecting_order' };
+  }
+
+  if (claimed) {
+    const requestedDate = updatedDraft.delivery_date ? `\n📅 Fecha solicitada: ${formatDateEs(updatedDraft.delivery_date)}` : '';
+    return {
+      response: `Revisa el resumen antes de crear tu pedido:\n\n${pricing.summaryBlock(priced)}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}${requestedDate}\n\n¿Todo correcto? El pedido todavía no está creado y la entrega está pendiente de confirmación.`,
+      agentType: 'orders', newState: 'collecting_order',
+    };
   }
 
   // Aún recopilando datos — quitar la palabra clave si apareció en el texto

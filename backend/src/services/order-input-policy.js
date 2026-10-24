@@ -13,8 +13,11 @@ function ambiguousQuantityToken(value = '') {
 }
 
 function isBareAffirmative(value = '') {
-  const text = normalize(value).replace(/[,.!¿?]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return /^(?:si+|sii+|claro|dale|ok(?:ay)?|bueno|perfecto|correcto|confirmo)(?:\s+(?:por\s+favor|porfa|gracias))?$/.test(text);
+  // Reconocer la frase completa, sin un límite de 20 caracteres ni prefijos
+  // abiertos ("si cambio...", "ok pero..."). No contiene productos nuevos.
+  if (/[¿?]/u.test(String(value))) return false;
+  const text = normalize(value).replace(/[,.!;:¡\p{Emoji_Modifier}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  return /^(?:si+|yes|claro|dale|ok(?:ay|ey|a)?|bueno|perfecto|correcto|confirmo|adelante|procede|listo|vamos?|por supuesto|de acuerdo|todo correcto|👍)(?: (?:si+|claro|por supuesto|de acuerdo|todo correcto|(?:lo|la|los|las) espero|(?:aca|aqui) estoy|estoy en casa|(?:muchas )?gracias|por favor|porfa|👍|😊))*$/u.test(text);
 }
 
 function itemName(item = {}) {
