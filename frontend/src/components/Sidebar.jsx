@@ -1,15 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge, RotateCcw, AlertCircle } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
+import VirtualizedList from './VirtualizedList.jsx';
+import { inboxMessageResults } from '../utils/inbox-conversations.mjs';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
 export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
   const [search, setSearch]           = useState('');
-  const [msgResults, setMsgResults]   = useState([]); // resultados de búsqueda en mensajes
+  const [messageSearch, setMessageSearch] = useState({ query: '', results: [] });
+  const msgResults = messageSearch.query === search.trim() ? messageSearch.results : [];
   const [msgLoading, setMsgLoading]   = useState(false);
-  const msgTimerRef                   = useRef(null);
   const [activeTab, setActiveTab]     = useState('all');
   const [providerFilter, setProviderFilter] = useState('all');
   const [clockNow, setClockNow] = useState(Date.now());
@@ -67,19 +69,23 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const [mergingAll, setMergingAll]         = useState(false);
   const [mergeAllResult, setMergeAllResult] = useState(null);
 
-  // Búsqueda de mensajes con debounce
+  // Cancel obsolete searches so late responses cannot replace current results.
   useEffect(() => {
-    clearTimeout(msgTimerRef.current);
-    if (search.trim().length < 2) { setMsgResults([]); setMsgLoading(false); return; }
+    const query = search.trim();
+    if (query.length < 2) { setMsgLoading(false); return; }
+    const controller = new AbortController();
     setMsgLoading(true);
-    msgTimerRef.current = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       try {
-        const res = await api.get(`/conversations/search-messages?q=${encodeURIComponent(search.trim())}`);
-        setMsgResults(res.data.data || []);
-      } catch { setMsgResults([]); }
-      finally { setMsgLoading(false); }
+        const res = await api.get(`/conversations/search-messages?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        if (!controller.signal.aborted) setMessageSearch({ query, results: res.data.data || [] });
+      } catch {
+        if (!controller.signal.aborted) setMessageSearch({ query, results: [] });
+      } finally {
+        if (!controller.signal.aborted) setMsgLoading(false);
+      }
     }, 450);
-    return () => clearTimeout(msgTimerRef.current);
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [search]);
 
   const HOT_TEMPERATURES = ['hot', 'very_hot'];
@@ -116,7 +122,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
   const metaCount = conversations.filter(isMeta).length;
   const evolutionCount = conversations.filter(isEvolution).length;
 
-  const filtered = conversations.filter(c => {
+  const filtered = useMemo(() => conversations.filter(c => {
     if (!matchesProvider(c)) return false;
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
     if (activeTab === 'coordinating' && (c.agent_mode !== 'coordinating' || c.attention_state !== 'requires_human')) return false;
@@ -146,7 +152,16 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       if (aHold !== bHold) return aHold - bHold;
     }
     return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
-  });
+  }), [conversations, activeTab, providerFilter, search, clockNow]);
+
+  const messageMatches = useMemo(() => search.trim().length >= 2
+    ? inboxMessageResults(conversations, filtered, msgResults, providerFilter) : [],
+    [conversations, filtered, messageSearch, providerFilter, search]);
+  const listItems = useMemo(() => [
+    ...filtered.map(conversation => ({ key: `conversation:${conversation.id}`, conversation })),
+    ...(messageMatches.length && filtered.length ? [{ key: 'message-results-heading', heading: true }] : []),
+    ...messageMatches.map(message => ({ key: `message:${message.id}`, message })),
+  ], [filtered, messageMatches]);
 
   const [triggering, setTriggering] = useState(false);
 
@@ -570,96 +585,71 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         )}
       </div>
 
-      {/* Lista */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary, fontSize: '14px' }}>Cargando...</div>
-        ) : filtered.length === 0 && msgResults.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>
-            <MessageSquare size={40} color={colors.textMuted} style={{ marginBottom: '12px' }} />
-            <div style={{ fontSize: '14px' }}>{search ? 'Sin resultados' : 'Sin conversaciones aún'}</div>
-          </div>
-        ) : (
-          <>
-            {filtered.map(conv => (
-              <ConversationItem key={conv.id} conversation={conv} now={clockNow} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />
-            ))}
-
-            {/* Resultados de búsqueda en mensajes */}
-            {search.trim().length >= 2 && (
-              <>
-                {/* Separador solo si hay resultados de conversaciones arriba */}
-                {filtered.length > 0 && msgResults.filter(r => {
-                  const conversation = conversations.find(c => c.id === r.id) || r;
-                  return matchesProvider(conversation) && !filtered.find(f => f.id === r.id);
-                }).length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px 4px' }}>
-                    <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
-                    <span style={{ fontSize: '10px', color: colors.textMuted, fontWeight: 600, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Mensajes</span>
-                    <div style={{ flex: 1, height: '1px', backgroundColor: colors.border }} />
+      {/* Only mount rows near the viewport; search and counts still cover every chat. */}
+      {loading || listItems.length === 0 ? (
+        <div style={{ flex: 1, overflowY: 'auto', textAlign: 'center', padding: '40px', color: colors.textSecondary }}>
+          {loading ? 'Cargando...' : (
+            <>
+              <MessageSquare size={40} color={colors.textMuted} style={{ marginBottom: '12px' }} />
+              <div style={{ fontSize: '14px' }}>{msgLoading ? 'Buscando mensajes...' : search ? 'Sin resultados' : 'Sin conversaciones aún'}</div>
+            </>
+          )}
+        </div>
+      ) : (
+        <VirtualizedList key={JSON.stringify([search, activeTab, providerFilter])} items={listItems}
+          renderItem={item => {
+            if (item.conversation) {
+              const conv = item.conversation;
+              return <ConversationItem conversation={conv} now={clockNow} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />;
+            }
+            if (item.heading) return (
+              <div style={{ padding: '8px 14px', fontSize: '10px', color: colors.textMuted, textTransform: 'uppercase' }}>Mensajes</div>
+            );
+            const r = item.message;
+            const q = search.trim().toLowerCase();
+            const content = r.matched_content || '';
+            const idx = content.toLowerCase().indexOf(q);
+            let snippet = content;
+            if (idx >= 0) {
+              const start = Math.max(0, idx - 30);
+              const end   = Math.min(content.length, idx + q.length + 50);
+              snippet = (start > 0 ? '...' : '') + content.slice(start, end) + (end < content.length ? '...' : '');
+            }
+            const parts = snippet.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+            const name = r.contact_name && r.contact_name !== r.phone_number ? r.contact_name : r.phone_number;
+            const initials = name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+            const isSelected = r.id === selectedId;
+            return (
+              <div key={r.id} onClick={() => onSelect(r.id)}
+                style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: `1px solid ${colors.border}`,
+                  backgroundColor: isSelected ? colors.bgHover : 'transparent',
+                  transition: 'background 0.1s',
+                }}
+                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = colors.bgHover; }}
+                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: colors.tealSoft, flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, color: 'white', fontSize: '12px' }}>
+                    {initials}
                   </div>
-                )}
-                {/* Mostrar resultados de mensajes que no aparecen ya en la lista normal */}
-                {msgResults
-                  .filter(r => {
-                    const conversation = conversations.find(c => c.id === r.id) || r;
-                    return matchesProvider(conversation) && !filtered.find(f => f.id === r.id);
-                  })
-                  .map(r => {
-                    const q = search.trim().toLowerCase();
-                    const content = r.matched_content || '';
-                    const idx = content.toLowerCase().indexOf(q);
-                    let snippet = content;
-                    if (idx >= 0) {
-                      const start = Math.max(0, idx - 30);
-                      const end   = Math.min(content.length, idx + q.length + 50);
-                      snippet = (start > 0 ? '...' : '') + content.slice(start, end) + (end < content.length ? '...' : '');
-                    }
-                    const parts = snippet.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
-                    const name = r.contact_name && r.contact_name !== r.phone_number ? r.contact_name : r.phone_number;
-                    const initials = name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
-                    const isSelected = r.id === selectedId;
-                    return (
-                      <div key={r.id} onClick={() => onSelect(r.id)}
-                        style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: `1px solid ${colors.border}`,
-                          backgroundColor: isSelected ? colors.bgHover : 'transparent',
-                          transition: 'background 0.1s',
-                        }}
-                        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = colors.bgHover; }}
-                        onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: colors.tealSoft, flexShrink: 0,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, color: 'white', fontSize: '12px' }}>
-                            {initials}
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 600, fontSize: '13px', color: colors.textPrimary,
-                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
-                            <div style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '2px', lineHeight: '1.4',
-                              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                              {r.direction === 'inbound' ? '← ' : '→ '}
-                              {parts.map((p, i) =>
-                                p.toLowerCase() === q
-                                  ? <mark key={i} style={{ backgroundColor: colors.amberStrong + '55', color: colors.textPrimary, borderRadius: '2px', padding: '0 1px' }}>{p}</mark>
-                                  : <span key={i}>{p}</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                {msgResults.filter(r => !filtered.find(f => f.id === r.id)).length === 0 && filtered.length === 0 && !msgLoading && (
-                  <div style={{ textAlign: 'center', padding: '30px', color: colors.textSecondary }}>
-                    <MessageSquare size={32} color={colors.textMuted} style={{ marginBottom: '8px' }} />
-                    <div style={{ fontSize: '13px' }}>Sin resultados</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: colors.textPrimary,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+                    <div style={{ fontSize: '11px', color: colors.textSecondary, marginTop: '2px', lineHeight: '1.4',
+                      display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {r.direction === 'inbound' ? '← ' : '→ '}
+                      {parts.map((p, i) =>
+                        p.toLowerCase() === q
+                          ? <mark key={i} style={{ backgroundColor: colors.amberStrong + '55', color: colors.textPrimary, borderRadius: '2px', padding: '0 1px' }}>{p}</mark>
+                          : <span key={i}>{p}</span>
+                      )}
+                    </div>
                   </div>
-                )}
-              </>
-            )}
-          </>
-        )}
-      </div>
+                </div>
+              </div>
+            );
+          }} />
+      )}
 
       {/* Footer */}
       <div style={{
@@ -673,3 +663,4 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
     </>
   );
 }
+
