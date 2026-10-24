@@ -54,6 +54,8 @@ La autorización y la selección de activos guardan los permisos efectivamente c
 
 Para una conexión anterior, agrega los permisos de comentarios en el caso de uso de la app y reconecta desde el CRM para concederlos. Verifica además **Webhooks → Page → feed** y **Webhooks → Instagram → comments**: la suscripción del activo no sustituye estos campos de la app. Una prueba de webhook con HTTP 200 solo acredita recepción técnica. El funcionamiento completo requiere un comentario real de otra identidad, su llegada a la bandeja y una respuesta pública en cada red.
 
+`GET /api/meta/auth-url` usa `purpose=social` por defecto y no solicita permisos de WhatsApp: una app que no admite WhatsApp no debe bloquear la conexión de Facebook e Instagram. El flujo nativo de WhatsApp en Configuración y el botón **Autorizar WhatsApp** de Compradores reales usan `purpose=whatsapp` para añadir esos tres permisos opcionales. El backend rechaza otros valores y conserva los controles de organización, rol y módulo. Una reconexión conserva la página y cuenta publicitaria seleccionadas; si dejan de estar disponibles, no las sustituye por activos de otro negocio y muestra un aviso para la página.
+
 Regresión local sin red: `node --test test/meta-comment-connection.test.cjs test/social-events.test.cjs test/social-bot.test.cjs` desde `backend/`.
 
 Los mensajes privados usan el mismo pipeline de catálogo, precios, datos de despacho, confirmación, prevención de duplicados y creación de pedidos que WhatsApp. Cada identidad de Instagram o Facebook se guarda separada por organización y canal, sin convertir el identificador de Meta en un teléfono. Los comentarios permanecen públicos y nunca recopilan nombre, dirección, teléfono ni otros datos del pedido.
