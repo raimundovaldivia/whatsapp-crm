@@ -213,13 +213,22 @@ router.post('/:id/payment-options', async (req, res) => {
 router.post('/:id/messages', async (req, res) => {
   try {
     const { text } = req.body;
-    if (!text?.trim()) return res.status(400).json({ success: false, error: 'Texto vacío' });
+    if (typeof text !== 'string' || !text.trim() || text.trim().length > 4096) return res.status(400).json({ success: false, error: 'El mensaje debe tener entre 1 y 4096 caracteres' });
 
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
     const wc = await outboundConfig(req.orgId, conv);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
+
+    const queued = await require('../services/outbound-message-queue').deferOutsideHours({
+      orgId: req.orgId, conversationId: conv.id, text, sentBy: 'human', createdBy: req.userId, sendingProvider: wc.provider || 'meta', io,
+    });
+    if (queued) {
+      await db.setAgentMode(conv.id, 'human');
+      io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode: 'human' });
+      return res.status(202).json({ success: true, queued: true, data: queued });
+    }
 
     // Enviar por el proveedor correcto según configuración
     let sentResult;
@@ -259,6 +268,21 @@ router.post('/:id/messages', async (req, res) => {
     console.error('[Conv] Error enviando:', err);
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+router.delete('/:id/messages/:messageId/queue', requireRole('owner', 'admin', 'supervisor', 'agent'), async (req, res) => {
+  try {
+    const ids = [Number(req.params.id), Number(req.params.messageId)];
+    if (!ids.every(id => Number.isSafeInteger(id) && id > 0)) return res.status(400).json({ error: 'Mensaje inválido' });
+    const { rows: [message] } = await getPool().query(`UPDATE messages m SET status='failed',
+      outbound_queue=m.outbound_queue || '{"state":"cancelled","reason":"Cancelado por el equipo"}'::jsonb
+      FROM conversations c WHERE c.id=m.conversation_id AND c.organization_id=$1 AND c.id=$2 AND m.id=$3
+      AND m.outbound_queue->>'state'='queued' RETURNING m.*`, [req.orgId, ...ids]);
+    if (!message) return res.status(409).json({ error: 'El mensaje ya no está en cola o no está disponible' });
+    const conversation = await db.getConversationById(ids[0], req.orgId);
+    io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message, conversation });
+    res.json({ success: true, data: message });
+  } catch { res.status(500).json({ error: 'No se pudo cancelar el mensaje' }); }
 });
 
 /** POST /api/conversations/:id/media — foto o documento desde el CRM. */
@@ -388,6 +412,14 @@ router.post('/start', async (req, res) => {
     const selectedChannelId = wc.provider === 'evolution' ? wc.id : null;
     const existingConversation = await db.upsertConversation(req.orgId, phoneNorm, name?.trim() || null, selectedChannelId);
     const convId = existingConversation.id;
+
+    const queued = await require('../services/outbound-message-queue').deferOutsideHours({
+      orgId: req.orgId, conversationId: convId, text, sentBy: 'human', createdBy: req.userId, sendingProvider: wc.provider || 'meta', io,
+    });
+    if (queued) {
+      await db.setAgentMode(convId, 'human');
+      return res.status(202).json({ success: true, queued: true, data: { conversationId: convId, message: queued, conversation: await db.getConversationById(convId, req.orgId) } });
+    }
 
     // Enviar por el proveedor correcto
     let sentResult;
@@ -570,6 +602,11 @@ router.post('/:id/orders', async (req, res) => {
       const subtotalLine = discountAmount > 0
         ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
       const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
+
+      const queued = await require('../services/outbound-message-queue').deferOutsideHours({
+        orgId: req.orgId, conversationId: convId, text: summary, sentBy: 'human', createdBy: req.userId, io,
+      });
+      if (queued) return res.json({ success: true, order, queued: true });
 
       const wc = await db.getWhatsappConfig(req.orgId);
       if (wc) {

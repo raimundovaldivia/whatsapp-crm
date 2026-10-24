@@ -372,7 +372,15 @@ La revisión permite recuperar textos desde un JSON con `contacts: [{ phone, mes
 
 Para estas reglas, ejecutar las pruebas del backend y `npm test` en el frontend. Las regresiones cubren horario de invierno/verano, almacenamiento UTC, ofertas vencidas en cola, carga del catálogo y recuperación sin autorización heredada. Los imports de las pruebas admiten rutas Windows.
 
-### Compatibilidad y verificación de la integración
+### Cola de textos del chat fuera de horario
+
+Los mensajes manuales del chat (incluido iniciar una conversación y el resumen de una orden) y las respuestas de texto del pipeline se conservan en el mismo registro `messages` cuando se preparan fuera de las 09:00–20:59 de `America/Santiago`. El chat muestra «En cola» y permite cancelar antes de que comience el envío. No se consideran mensajes enviados ni se incorporan al historial del bot hasta que el proveedor acepta el envío.
+
+El proceso de fondo comprueba destinatario, canal, permisos vigentes, cambios posteriores del chat y respaldo de las afirmaciones comerciales. Una referencia relativa de fecha que cruza medianoche requiere revisión. Los errores o resultados inciertos no provocan reenvíos automáticos; una ventana oficial de 24 horas vencida también requiere revisión, sin cambiar de canal. La cola no modifica los horarios de campañas, avisos operativos especializados ni el envío manual de adjuntos.
+
+Despliegue: requiere aplicar **solo** `backend/src/db/outbound-message-queue.sql`, de forma autorizada, antes de iniciar esta versión cuando `SKIP_DATABASE_SETUP=1`. La migración incremental agrega `messages.outbound_queue` y su índice, admite repetición y no modifica registros existentes. No ejecutar el setup completo sobre producción para activar esta función. Verificación local: `node --test test/outbound-message-queue.test.cjs`.
+
+### Compatibilidad de ofertas y repartos
 
 Las ofertas automáticas de recuperación conservan `personal_offers`; las ofertas por producto de campañas utilizan `campaign_offers`. Los datos, restricciones e integraciones de ambas tablas se conservan. Los esquemas SQL vigentes de `main` no se reemplazan por las versiones anteriores de la rama; referidos agrega sus extensiones incrementales existentes.
 

@@ -130,8 +130,12 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
 
   const beforeSend = await db.getConversationById(conversation.id);
   if (!beforeSend || beforeSend.agent_mode === 'human') return;
-  const sentResult = await provider.sendTextMessage(parsed.from, result.response, whatsappConfig);
-  const outMsg = await db.saveMessage({
+  const queued = await require('./outbound-message-queue').deferOutsideHours({
+    orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', sendingProvider: whatsappConfig.provider || 'meta',
+    agentType: result.agentType, aiProvider: result.aiProvider, aiModel: result.aiModel, promptVersion: result.promptVersion, io,
+  });
+  const sentResult = queued ? null : await provider.sendTextMessage(parsed.from, result.response, whatsappConfig);
+  const outMsg = queued || await db.saveMessage({
     conversationId: conversation.id,
     whatsappMessageId: provider.messageId(sentResult),
     direction: 'outbound',
@@ -142,12 +146,12 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     aiModel: result.aiModel,
     promptVersion: result.promptVersion,
   });
-  await db.updateConversationLastMessage(conversation.id, result.response);
+  if (!queued) await db.updateConversationLastMessage(conversation.id, result.response);
 
   updatedConv = await db.getConversationById(conversation.id);
   io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: updatedConv });
 
-  if (result.productMedia) {
+  if (!queued && result.productMedia) {
     await require('./product-media-delivery').sendSuggested({
       suggestion: result.productMedia,
       orgId: org.id,

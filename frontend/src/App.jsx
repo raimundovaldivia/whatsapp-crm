@@ -229,6 +229,14 @@ export default function App() {
       return updated.sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
     });
     if (message) {
+      if (message.outbound_queue) {
+        setMessages(prev => {
+          const existing = prev[conversation.id] || [];
+          return { ...prev, [conversation.id]: existing.some(m => m.id === message.id)
+            ? existing.map(m => m.id === message.id ? { ...m, ...message } : m) : [...existing, message] };
+        });
+        return;
+      }
       if (seenMessageIds.current.has(message.id)) {
         seenMessageIds.current.delete(message.id);
         return;
@@ -334,6 +342,7 @@ export default function App() {
       if (existing.some(m => m.id === msg.id)) return prev;
       return { ...prev, [convId]: [...existing, msg] };
     });
+    if (msg.outbound_queue) return;
     setConversations(prev =>
       prev.map(c => c.id === convId ? { ...c, last_message: text, last_message_at: new Date().toISOString() } : c)
         .sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at))

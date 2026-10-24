@@ -10,6 +10,7 @@ function load(file, deps = {}, extra = {}) {
     setInterval: () => ({ unref(){} }), clearInterval(){}, setTimeout, clearTimeout,
     require(name) {
       if (Object.hasOwn(deps, name)) return deps[name];
+      if (name === './outbound-message-queue' || name === '../services/outbound-message-queue') return { deferOutsideHours: async () => null };
       if (name === '../services/solution-catalog' || name === './solution-catalog') return load('src/services/solution-catalog.js', deps, extra);
       if (name === '../services/conversation-mode' || name === './conversation-mode') return require(path.join(root, 'src/services/conversation-mode.js'));
       if (name === '../middleware/commercial-access') return load('src/middleware/commercial-access.js', deps, extra);

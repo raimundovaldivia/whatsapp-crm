@@ -384,6 +384,10 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
             io,
           });
 
+          const queuedAck = await require('../services/outbound-message-queue').deferOutsideHours({
+            orgId: org.id, conversationId: capturedConvId, text: ackText, sentBy: 'ai', agentType: 'orchestrator', sendingProvider: 'kapso', io,
+          });
+          if (queuedAck) return;
           let ackSent = null;
           try {
             ackSent = await kapsoService.sendTextMessage(capturedFrom, ackText, whatsappConfig);
@@ -422,12 +426,18 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         }
 
         // Enviar respuesta por WhatsApp via Kapso
+        const queued = await require('../services/outbound-message-queue').deferOutsideHours({
+          orgId: org.id, conversationId: capturedConvId, text: result.response, sentBy: 'ai', sendingProvider: 'kapso',
+          agentType: result.agentType, aiProvider: result.aiProvider, aiModel: result.aiModel, promptVersion: result.promptVersion, io,
+        });
         let sentResult = null;
         let windowExpired = false;
         const tSend = Date.now();
         try {
-          sentResult = await kapsoService.sendTextMessage(capturedFrom, result.response, whatsappConfig);
-          log.sent(Date.now() - tSend);
+          if (!queued) {
+            sentResult = await kapsoService.sendTextMessage(capturedFrom, result.response, whatsappConfig);
+            log.sent(Date.now() - tSend);
+          }
         } catch (sendErr) {
           if (sendErr.is24hWindow) {
             windowExpired = true;
@@ -438,7 +448,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           }
         }
 
-        const outMsg = await db.saveMessage({
+        const outMsg = queued || await db.saveMessage({
           conversationId:    capturedConvId,
           whatsappMessageId: sentResult?.messages?.[0]?.id || null,
           direction:         'outbound',
@@ -453,7 +463,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           promptVersion:     result.promptVersion,
         });
 
-        await db.updateConversationLastMessage(capturedConvId, result.response);
+        if (!queued) await db.updateConversationLastMessage(capturedConvId, result.response);
 
         if (result.orderCreated) {
           io?.to(`org_${org.id}`).emit(`order_created_${org.id}`, {
@@ -481,7 +491,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         const finalConv = await db.getConversationById(capturedConvId);
         io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
-        if (!windowExpired && result.productMedia) {
+        if (!queued && !windowExpired && result.productMedia) {
           await require('../services/product-media-delivery').sendSuggested({
             suggestion: result.productMedia,
             orgId: org.id,

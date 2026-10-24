@@ -82,14 +82,17 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
     if (result.skipped || !result.response) return;
 
     // 6. Enviar respuesta por Twilio
-    const sentResult = await twilioService.sendTextMessage(
+    const queued = await require('../services/outbound-message-queue').deferOutsideHours({
+      orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', agentType: result.agentType, sendingProvider: 'twilio', io,
+    });
+    const sentResult = queued ? null : await twilioService.sendTextMessage(
       parsed.from,
       result.response,
       whatsappConfig
     );
 
     // 7. Guardar respuesta en DB
-    const outMsg = await db.saveMessage({
+    const outMsg = queued || await db.saveMessage({
       conversationId:    conversation.id,
       whatsappMessageId: sentResult?.messageId || null,
       direction:         'outbound',
@@ -98,7 +101,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
       agentType:         result.agentType,
     });
 
-    await db.updateConversationLastMessage(conversation.id, result.response);
+    if (!queued) await db.updateConversationLastMessage(conversation.id, result.response);
 
     if (result.switchToHuman) {
       io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'coordinating' });

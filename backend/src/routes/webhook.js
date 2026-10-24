@@ -147,14 +147,17 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
     if (result.skipped || !result.response) return;
 
     // 7. Enviar respuesta por WhatsApp
-    const sentResult = await whatsappService.sendTextMessage(
+    const queued = await require('../services/outbound-message-queue').deferOutsideHours({
+      orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', agentType: result.agentType, sendingProvider: 'meta', io,
+    });
+    const sentResult = queued ? null : await whatsappService.sendTextMessage(
       parsed.from,
       result.response,
       whatsappConfig
     );
 
     // 8. Guardar respuesta en DB
-    const outMsg = await db.saveMessage({
+    const outMsg = queued || await db.saveMessage({
       conversationId: conversation.id,
       whatsappMessageId: sentResult?.messages?.[0]?.id || null,
       direction: 'outbound',
@@ -163,7 +166,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
       agentType: result.agentType,
     });
 
-    await db.updateConversationLastMessage(conversation.id, result.response);
+    if (!queued) await db.updateConversationLastMessage(conversation.id, result.response);
 
     // 8. Si el pipeline indica cambiar a modo humano
     if (result.switchToHuman) {
@@ -173,7 +176,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('meta'), re
     const finalConv = await db.getConversationById(conversation.id);
     io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
 
-    if (result.productMedia) {
+    if (!queued && result.productMedia) {
       await require('../services/product-media-delivery').sendSuggested({
         suggestion: result.productMedia,
         orgId: org.id,
