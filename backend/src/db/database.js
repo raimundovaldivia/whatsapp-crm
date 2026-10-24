@@ -1245,23 +1245,28 @@ async function getOrderDraft(id) {
  * Retorna true si lo logró (este proceso crea el pedido), false si ya lo hizo otro.
  * Previene pedidos duplicados cuando dos mensajes llegan casi simultáneamente.
  */
-async function claimOrderCreation(conversationId) {
-  // Verificar si ya existe un pedido para esta conversación en los últimos 10 minutos
-  // Esto evita duplicados cuando el pipeline se ejecuta dos veces seguidas
-  const { rows: recentOrders } = await pool.query(
-    `SELECT id FROM orders
-     WHERE conversation_id = $1
-       AND created_at > NOW() - INTERVAL '10 minutes'
-     LIMIT 1`,
-    [conversationId]
-  );
-  if (recentOrders.length > 0) return false; // ya existe un pedido reciente
-
+async function claimOrderCreation(conversationId, { orgId = null, additionalOrderId = null } = {}) {
+  // Recheck persisted orders at the atomic claim, even when a stale cart or an
+  // AI classification sends delivery coordination back into order collection.
+  // An explicitly requested additional purchase may coexist with ONE known
+  // active order; a newer order created by another turn still blocks it.
   const { rowCount } = await pool.query(
-    `UPDATE conversations
+    `UPDATE conversations c
      SET pipeline_state = 'done', updated_at = NOW()
-     WHERE id = $1 AND pipeline_state = 'collecting_order'`,
-    [conversationId]
+     WHERE c.id = $1 AND ($2::integer IS NULL OR c.organization_id = $2)
+       AND c.pipeline_state = 'collecting_order'
+       AND NOT EXISTS (
+         SELECT 1 FROM orders o
+          WHERE o.organization_id = c.organization_id
+            AND o.conversation_id = c.id
+            AND ($3::bigint IS NULL OR o.id <> $3)
+            AND o.status NOT IN ('cancelled', 'canceled')
+            AND (o.created_at > NOW() - INTERVAL '10 minutes'
+              OR (o.status IN ('draft','nuevo','sent','payment_received','por_despachar','asignado_ruta','en_camino','no_entregado')
+                AND (COALESCE(o.updated_at, o.created_at) > NOW() - INTERVAL '7 days'
+                  OR o.delivery_date >= (NOW() AT TIME ZONE 'America/Santiago')::date)))
+       )`,
+    [conversationId, orgId, additionalOrderId]
   );
   return rowCount > 0; // true = ganamos el lock, false = ya lo creó otro proceso
 }
@@ -2052,8 +2057,13 @@ async function getProductsCacheAge(orgId) {
 
 // ─── ORDERS ───────────────────────────────────────────────────────
 
-async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice, status = 'draft', note = null, personalOfferId = null, personalOfferDiscountAmount = null, personalOfferTrays = null }) {
-  const order = await queryOne(
+async function createOrder({ conversationId, organizationId, items, customerName, customerPhone, shippingAddress, totalPrice, status = 'draft', note = null, personalOfferId = null, personalOfferDiscountAmount = null, personalOfferTrays = null, creationGuard = null }) {
+  const insert = async (sql, params) => creationGuard
+    ? require('../services/order-creation-policy').persistBotOrder(pool, {
+        orgId: organizationId, conversationId, additionalOrderId: creationGuard.additionalOrderId || null,
+      }, sql, params)
+    : queryOne(sql, params);
+  const order = await insert(
     `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status, notes, delivery_note)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING *`,
     [conversationId, organizationId, JSON.stringify(items), customerName, customerPhone, JSON.stringify(shippingAddress), totalPrice, status, note || null]
@@ -3116,3 +3126,4 @@ module.exports = {
   // Agentes WA
   getUserByWhatsappPhone, updateUserWaPhone, updateUserNotifications, getAgentsWithNotification, touchUserWaWindow,
 };
+

@@ -601,3 +601,20 @@ test('una cancelación no modifica automáticamente un pedido que ya salió a re
   assert.match(result.response, /ya salió a reparto/i);
   assert.match(result.escalationReason, /pedido #DR-88/i);
 });
+
+
+for (const message of ['Porfi no venga tarde', 'Porfavor no llegan tan tarde', 'No lleguen tarde por favor']) {
+  test(`preferencia de Gerlinde con borrador antiguo: ${message}`, async () => {
+    const queries = [];
+    const pipeline = buildPipeline(null, 'draft', {
+      pipelineState: 'collecting_order', poolQueries: queries,
+      orderDraft: { items: [{ product_name: 'Huevos XL mixtos', quantity: 1 }] },
+      escalation: { escalate: true, urgency: 'low', reason: 'no debe escalar' },
+    });
+    const result = await pipeline.processMessage(1, 71, message);
+    assert.match(result.response, /preferencia para la entrega/i);
+    assert.equal(result.orderCreated, undefined);
+    assert.ok(queries.some(q => /UPDATE orders/.test(q.sql) && q.params[0] === message && q.params[2] === 88 && q.params[3] === 1));
+    assert.ok(!queries.some(q => /INSERT INTO orders/.test(q.sql)));
+  });
+}
