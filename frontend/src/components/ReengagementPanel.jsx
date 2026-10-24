@@ -1314,6 +1314,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [varFallback, setVarFallback] = useState([]); // valor si el contacto no tiene el dato
   const [sendProgress, setSendProgress] = useState({ done: 0, total: 0 });
   const [sending,        setSending]        = useState(false);
+  const [resumingCampaign, setResumingCampaign] = useState(null);
+  const [excludeOrdersOnResume, setExcludeOrdersOnResume] = useState(true);
   const sendingRef = useRef(false);
   const stopSendingRef = useRef(false);
   const [sendingMethods, setSendingMethods] = useState([]);
@@ -1743,6 +1745,19 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       showToast('Pendientes detenidos. Un mensaje que ya estaba en envío puede terminar.');
       await loadCampaigns();
     } catch (error) { showToast(error.response?.data?.error || 'No se pudo detener el lote', 'error'); }
+  }
+
+  async function resumeServerCampaign(campaign) {
+    if (resumingCampaign !== null) return;
+    setResumingCampaign(campaign.id);
+    try {
+      const { data } = await api.post(`/reengagement/campaigns/${campaign.id}/resume`, {
+        excludeOrdersThisWeek: excludeOrdersOnResume,
+      });
+      showToast(`Campaña reanudada: ${data.pending} pendientes. Los mensajes ya procesados no se repiten.${excludeOrdersOnResume ? ' Se excluirán los pedidos de esta semana.' : ''}`);
+      await loadCampaigns();
+    } catch (error) { showToast(error.response?.data?.error || 'No se pudo reanudar la campaña', 'error'); }
+    finally { setResumingCampaign(null); }
   }
 
   async function toggleCampaignDetails(campaign) {
@@ -2343,7 +2358,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     sendingRef.current = true;
     stopSendingRef.current = false;
     const direct = reviewPlan.sendingProvider === 'evolution';
-    const serverManaged = direct || Boolean(scheduledFor);
+    const serverManaged = direct || reviewPlan.sendingProvider === 'kapso' || Boolean(scheduledFor);
     const items = reviewPlan.entries.map(entry => entry.item);
     let campaignId = null;
     let handedToServer = false;
@@ -3065,6 +3080,19 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   {campaign.status === 'processing' ? 'Enviando desde el servidor · puedes cerrar el navegador' : campaign.status === 'completed' ? 'Envío finalizado' : 'Envío detenido'}
                   {Number(campaign.queue_unknown_count) > 0 && <div style={{ color: colors.yellow }}>Hay mensajes pendientes de revisión. No los reenvíes sin confirmar su estado.</div>}
                   {campaign.status === 'processing' && <button style={{ marginLeft: 12 }} onClick={() => stopServerCampaign(campaign)}>Detener pendientes</button>}
+                  {campaign.status === 'interrupted' && Number(campaign.queue_pending_count) > 0 && (
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      <label><input type="checkbox" checked={excludeOrdersOnResume}
+                        disabled={resumingCampaign !== null}
+                        onChange={event => setExcludeOrdersOnResume(event.target.checked)} /> Excluir pedidos de esta semana (Chile)</label>
+                      <button onClick={() => resumeServerCampaign(campaign)}
+                        disabled={resumingCampaign !== null || Number(campaign.queue_unknown_count) > 0 || Number(campaign.queue_processing_count) > 0}>
+                        {String(resumingCampaign) === String(campaign.id) ? 'Reanudando…' : `Reanudar ${campaign.queue_pending_count} pendientes`}
+                      </button>
+                      <span style={{ color: colors.textMuted }}>Conserva el avance. No reenvía aceptados, fallidos ni omitidos.</span>
+                      {Number(campaign.queue_processing_count) > 0 && <span>Espera a que termine el mensaje que estaba en envío.</span>}
+                    </div>
+                  )}
                 </div>}
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${colors.border}`, padding: 10, maxHeight: 240, overflowY: 'auto' }}>
@@ -3664,3 +3692,4 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     </div>
   );
 }
+
