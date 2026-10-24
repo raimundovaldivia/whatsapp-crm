@@ -186,7 +186,7 @@ test('API echo arriving before send acknowledgement is not a phone intervention'
   let resolveSend;
   const service = load('src/services/evolution-whatsapp.js', {
     axios: { create: () => ({ post: () => new Promise(resolve => { resolveSend = resolve; }) }) },
-  });
+  }, { process: { env: { EVOLUTION_ALLOWED_ORIGINS: 'https://example.test' } } });
   const config = {id: 9, organization_id: 1, evolution_api_url:'https://example.test', evolution_api_key:'test', evolution_instance:'ventas'};
   const sending = service.sendTextMessage('56911112222', 'Hola', config);
   await Promise.resolve();
