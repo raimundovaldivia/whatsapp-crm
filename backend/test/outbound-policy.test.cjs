@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   chileTimeParts,
   isCustomerMessagingHour,
+  isChatMessagingHour,
   shouldSkipAutomatedFollowUp,
 } = require('../src/services/outbound-policy');
 
@@ -17,6 +18,17 @@ test('permite desde las 09:00 hasta las 20:59 y bloquea desde las 21:00', () => 
   assert.equal(isCustomerMessagingHour(new Date('2026-09-28T12:00:00.000Z')), true);
   assert.equal(isCustomerMessagingHour(new Date('2026-09-28T23:59:00.000Z')), true);
   assert.equal(isCustomerMessagingHour(new Date('2026-09-29T00:00:00.000Z')), false);
+});
+
+test('cola del chat abre a las 08:30 con horario chileno de verano e invierno', () => {
+  for (const offset of ['-03:00', '-04:00']) {
+    const day = offset === '-03:00' ? '2026-10-24' : '2026-06-10';
+    assert.equal(isChatMessagingHour(new Date(`${day}T08:29:59${offset}`)), false);
+    assert.equal(isChatMessagingHour(new Date(`${day}T08:30:00${offset}`)), true);
+    assert.equal(isChatMessagingHour(new Date(`${day}T20:59:59${offset}`)), true);
+    assert.equal(isChatMessagingHour(new Date(`${day}T21:00:00${offset}`)), false);
+    assert.equal(isCustomerMessagingHour(new Date(`${day}T08:30:00${offset}`)), false);
+  }
 });
 
 test('no insiste cuando el cliente ya postergó la compra', () => {
