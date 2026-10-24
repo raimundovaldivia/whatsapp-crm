@@ -364,6 +364,8 @@ En Mensajería masiva, el canal Evolution permite indicar el objetivo y las cond
 
 La selección excluye bajas solicitadas expresamente, rechazos recientes durante 48 horas, reclamos recientes y contactos comerciales sin respuesta durante los últimos siete días. Un «no gracias» ante una oferta puntual y una campaña antigua sin respuesta no equivalen a una baja: quedan disponibles para un borrador prudente y revisión humana.
 
+Las campañas revisadas pueden programarse desde Mensajería masiva tanto con Evolution como con Kapso. La app guarda los destinatarios y textos exactos en la cola persistente de la organización; el trabajador del servidor empieza al llegar `scheduled_for`, por lo que el navegador puede cerrarse. La programación no omite las bajas, duplicados, campañas activas ni demás controles del envío normal.
+
 Las ofertas son personales: se guardan por organización, conversación y producto, y se activan tras un envío aceptado. No cambian el catálogo público. El selector de productos consume la respuesta `{ products: [...] }` y permite reintentar si falla la carga. El vencimiento se edita con fecha y hora de Chile; una fecha sin hora conserva vigencia hasta el cierre de ese día. La cola omite mensajes cuyas ofertas hayan vencido antes de enviarlos.
 
 El inbox y sus contadores muestran conversaciones con un mensaje real. Las conversaciones reservadas para ofertas pendientes permanecen disponibles para la campaña y aparecen automáticamente al guardarse el primer mensaje. El filtro solo afecta la vista del CRM: no borra registros, modifica la cola ni necesita reiniciar el servidor de envíos. También conserva mensajes multimedia sin texto de vista previa.

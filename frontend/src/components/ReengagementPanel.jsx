@@ -2343,6 +2343,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     sendingRef.current = true;
     stopSendingRef.current = false;
     const direct = reviewPlan.sendingProvider === 'evolution';
+    const serverManaged = direct || Boolean(scheduledFor);
     const items = reviewPlan.entries.map(entry => entry.item);
     let campaignId = null;
     let handedToServer = false;
@@ -2360,11 +2361,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
-        ...(direct && scheduledFor ? { scheduledFor: new Date(scheduledFor).toISOString() } : {}),
+        ...(scheduledFor ? { scheduledFor: new Date(scheduledFor).toISOString() } : {}),
         ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction } : {}),
       });
       campaignId = created.data.campaign.id;
-      if (direct) {
+      if (serverManaged) {
         handedToServer = true;
         await api.post(`/reengagement/campaigns/${campaignId}/start`, { items, ...(approval ? { approval } : {}) }, { timeout: 45000 });
         setReviewPlan(null);
@@ -2730,7 +2731,8 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </button>}
         {methodsError && <div role="alert" style={{ width: '100%', color: colors.red, fontSize: 12 }}>{methodsError}</div>}
         {reviewPlan && <div style={{ width: '100%', fontSize: 12 }}>Cierra la revisión para cambiar el método de envío.</div>}
-        {selectedMethod?.provider === 'evolution' && <div style={{ fontSize: 12, marginTop: 6 }}>
+        {selectedMethod && <div style={{ fontSize: 12, marginTop: 6 }}>
+          {selectedMethod.provider === 'evolution' && <>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 8 }}>
             {[
               ['intervalSeconds', 'Tiempo entre mensajes (segundos)', 1, 86400],
@@ -2743,15 +2745,17 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                 style={{ width: 150, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
             </label>)}
           </div>
+          </>}
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
             Inicio programado (opcional, hora de Chile)
             <input type="datetime-local" value={scheduledFor} disabled={sending || !!reviewPlan}
               onChange={event => setScheduledFor(event.target.value)}
               style={{ width: 230, padding: 8, background: colors.bgCard, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
           </label>
-          El envío directo solo sale entre 08:00 y 21:00 (hora de Chile). Si programas una hora fuera de ese rango, espera a la siguiente ventana.
-          La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.
-          Se envía sólo el texto revisado, sin botones ni archivos. Puedes cerrar el navegador después de confirmar; el servidor continúa el envío.
+          {selectedMethod.provider === 'evolution'
+            ? <>El envío directo solo sale entre 08:00 y 21:00 (hora de Chile). Si programas una hora fuera de ese rango, espera a la siguiente ventana. La pausa entre lotes reemplaza el intervalo habitual si es mayor. Luego continúa automáticamente.</>
+            : <>La campaña oficial queda guardada en el servidor y comienza a la hora programada.</>}
+          {' '}Puedes cerrar el navegador después de confirmar; el servidor continúa el envío.
         </div>}
       </section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>

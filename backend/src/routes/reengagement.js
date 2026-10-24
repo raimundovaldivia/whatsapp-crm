@@ -1958,8 +1958,8 @@ router.post('/campaigns', async (req, res) => {
     let scheduledFor = null;
     if (req.body.scheduledFor) {
       scheduledFor = new Date(req.body.scheduledFor);
-      if (sendingProvider !== 'evolution' || Number.isNaN(scheduledFor.getTime())) {
-        return res.status(400).json({ success: false, error: 'La programación solo aplica a envíos directos con hora válida' });
+      if (!['kapso', 'evolution'].includes(sendingProvider) || Number.isNaN(scheduledFor.getTime())) {
+        return res.status(400).json({ success: false, error: 'La programación necesita un canal compatible y una hora válida' });
       }
       if (scheduledFor.getTime() < Date.now() - 60000 || scheduledFor.getTime() > Date.now() + 30 * 86400000) {
         return res.status(400).json({ success: false, error: 'La hora programada debe ser dentro de los próximos 30 días' });
@@ -1975,7 +1975,7 @@ router.post('/campaigns', async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.orgId, req.userId, templateName, totalCount, !!testMode,
         testPhone ? db.normalizePhone(testPhone) : null, sendingProvider, sendingChannelId, pacing ? JSON.stringify(pacing) : null,
-        scheduledFor]
+        scheduledFor ? scheduledFor.toISOString() : null]
     );
     res.json({ success: true, campaign: rows[0] });
   } catch (err) {
@@ -1989,8 +1989,8 @@ router.post('/campaigns/:id/start', async (req, res) => {
     const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
     if (!campaign) return res.status(404).json({ error: 'Campaña no encontrada' });
     if (campaign.server_managed) return res.json({ success: true, campaign });
-    if (campaign.sending_provider !== 'evolution' || campaign.status !== 'processing') return res.status(409).json({ error: 'Campaña no disponible para envío en segundo plano' });
-    await require('../services/broadcast-sender').resolveSender(req.orgId, 'evolution', campaign.sending_channel_id);
+    if (!['kapso', 'evolution'].includes(campaign.sending_provider) || campaign.status !== 'processing') return res.status(409).json({ error: 'Campaña no disponible para envío en segundo plano' });
+    await require('../services/broadcast-sender').resolveSender(req.orgId, campaign.sending_provider, campaign.sending_channel_id);
     const items = req.body.items;
     if (!Array.isArray(items) || items.length !== Number(campaign.total_count) || items.length > 5000) return res.status(400).json({ error: 'Destinatarios inválidos' });
     const phones = new Set();

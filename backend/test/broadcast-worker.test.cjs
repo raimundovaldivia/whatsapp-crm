@@ -46,7 +46,7 @@ test('durable queue survives workers, serializes a campaign, respects waits and 
   } finally { await pool.close(); }
 });
 
-test('starting a queued campaign is atomic, idempotent and tenant scoped; browsers cannot send or finish it', async () => {
+test('starting a queued campaign is atomic, idempotent and tenant scoped for Evolution and Kapso; browsers cannot send or finish it', async () => {
   const { handler, response, noop } = require('./helpers.cjs');
   const engine = new PGlite();
   try {
@@ -54,7 +54,8 @@ test('starting a queued campaign is atomic, idempotent and tenant scoped; browse
       sending_provider TEXT, sending_channel_id INT, server_managed BOOLEAN DEFAULT FALSE, status TEXT DEFAULT 'processing', completed_at TIMESTAMPTZ);
       CREATE TABLE broadcast_jobs (id SERIAL, campaign_id BIGINT, organization_id INT, position INT, item JSONB, UNIQUE(campaign_id,position));
       CREATE TABLE broadcast_campaign_recipients(campaign_id BIGINT);
-      INSERT INTO broadcast_campaigns(id,organization_id,total_count,sending_provider,sending_channel_id) VALUES(1,1,2,'evolution',3),(2,1,2,'evolution',3);`);
+      INSERT INTO broadcast_campaigns(id,organization_id,total_count,sending_provider,sending_channel_id) VALUES
+        (1,1,2,'evolution',3),(2,1,2,'evolution',3),(3,1,2,'kapso',NULL);`);
     const pool = {query: (...args) => engine.query(...args), connect: async () => ({query: (...args) => engine.query(...args), release() {}})};
     const router = load('src/routes/reengagement.js', {
       '@anthropic-ai/sdk': class Anthropic {}, '../middleware/auth': { requireAuth:noop, requireRole:()=>noop },
@@ -69,12 +70,43 @@ test('starting a queued campaign is atomic, idempotent and tenant scoped; browse
     res = response(); await start(req,res); assert.equal(res.code,200,JSON.stringify(res.body));
     res = response(); await start(req,res); assert.equal(res.code,200);
     assert.equal((await engine.query('SELECT * FROM broadcast_jobs')).rows.length,2);
+    res = response(); await handler(router,'post','/campaigns/3/start')({...req,params:{id:3}},res);
+    assert.equal(res.code,200,JSON.stringify(res.body));
+    assert.equal((await engine.query('SELECT * FROM broadcast_jobs')).rows.length,4);
     res = response(); await handler(router,'post','/send-bulk')({orgId:1,body:{campaignId:1,items:req.body.items}},res);
     assert.equal(res.code,409);
     res = response(); await handler(router,'post','/campaigns/1/finish')({...req,body:{status:'completed'}},res);
     assert.equal(res.code,404);
     res = response(); await handler(router,'post','/campaigns/1/stop')(req,res);
     assert.equal(res.body.campaign.status,'interrupted');
+  } finally { await engine.close(); }
+});
+
+test('Kapso campaigns accept a future start time and persist it for the server worker', async () => {
+  const { handler, response, noop } = require('./helpers.cjs');
+  const engine = new PGlite();
+  try {
+    await engine.exec(`CREATE TABLE broadcast_campaigns (
+      id BIGSERIAL PRIMARY KEY, organization_id INT, created_by INT, template_name TEXT,
+      total_count INT, test_mode BOOLEAN, test_phone TEXT, sending_provider TEXT,
+      sending_channel_id INT, pacing_settings JSONB, scheduled_for TIMESTAMPTZ,
+      server_managed BOOLEAN DEFAULT FALSE, status TEXT DEFAULT 'processing'
+    );`);
+    const pool = { query: (...args) => engine.query(...args) };
+    const router = load('src/routes/reengagement.js', {
+      '@anthropic-ai/sdk': class Anthropic {}, '../middleware/auth': { requireAuth:noop, requireRole:()=>noop },
+      '../db/database': { getPool:()=>pool, normalizePhone:p=>p },
+      '../services/broadcast-sender': { resolveSender:async()=>({ provider:'kapso' }) },
+    });
+    const create = handler(router,'post','/campaigns');
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const res = response();
+    await create({ orgId:7, userId:4, body:{ templateName:'reenganche', total:320, sendingProvider:'kapso', scheduledFor:future } },res);
+    assert.equal(res.code,200,JSON.stringify(res.body));
+    const campaign = (await engine.query('SELECT * FROM broadcast_campaigns')).rows[0];
+    assert.equal(campaign.organization_id,7);
+    assert.equal(campaign.total_count,320);
+    assert.equal(new Date(campaign.scheduled_for).toISOString(),future);
   } finally { await engine.close(); }
 });
 
