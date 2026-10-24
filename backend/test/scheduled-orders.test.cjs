@@ -61,6 +61,8 @@ test('pipeline agenda una respuesta a template con fecha antes de iniciar un ped
   assert.equal(state, 'scheduled');
   assert.equal(scheduledOrder.desiredDate, '2026-09-30');
   assert.equal(scheduledOrder.productNotes, '1 caja de 100 Huevos Jumbo');
+  assert.match(result.response, /recordatorio.*completar y confirmar/is);
+  assert.doesNotMatch(result.response, /vaya saliendo|te llegan|está apartado/i);
   assert.equal(immediateOrders, 0);
   scheduledOrder = null;
   const tentative = await pipeline.processMessage(1, 7, 'Lo tendré en cuenta para la próxima semana');
@@ -714,6 +716,8 @@ test('una conversación ya agendada recibe contexto humano y reglas contra repet
   assert.match(capturedSystem, /no volver a venderle ni reiniciar el pedido/i);
   assert.match(capturedSystem, /Si solo agradece, confirma brevemente y cierra sin preguntas/i);
   assert.match(capturedSystem, /no recites de nuevo todos los datos/i);
+  assert.match(capturedSystem, /NO hay una orden creada ni una entrega confirmada/i);
+  assert.match(capturedSystem, /Nunca prometas que llegará/i);
 });
 
 

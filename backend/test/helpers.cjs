@@ -22,7 +22,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './outbound-text-policy') return require(path.join(root, 'src/services/outbound-text-policy.js'));
       if (name === './outbound-policy') return require(path.join(root, 'src/services/outbound-policy.js'));
       if (name === './inbound-message-policy') return require(path.join(root, 'src/services/inbound-message-policy.js'));
-      if (name === './order-input-policy') return require(path.join(root, 'src/services/order-input-policy.js'));
+      if (name === './order-input-policy' || name === '../order-input-policy') return require(path.join(root, 'src/services/order-input-policy.js'));
       if (name === './delivery-coverage') return require(path.join(root, 'src/services/delivery-coverage.js'));
       if (name === './post-sale-resolution') return require(path.join(root, 'src/services/post-sale-resolution.js'));
       if (name === '../services/dispatch-coverage' || name === './dispatch-coverage') return require(path.join(root, 'src/services/dispatch-coverage.js'));

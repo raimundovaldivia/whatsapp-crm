@@ -14,11 +14,13 @@ async function evaluatePipelineResult({ orgId, conversationId, userMessage, resu
     return { escalate: false, result };
   }
 
-  if (!result.switchToHuman) {
+  // Incluso una escalación puede contener una promesa sin orden persistida.
+  {
     const fresh = await guardrail.checkResponseFreshness(orgId, conversationId, result.response, {
       userMessage,
       orderCreated: result.orderCreated,
       orderUpdated: result.orderUpdated,
+      newState: result.newState,
     });
     if (!fresh.ok) {
       return {
@@ -30,7 +32,7 @@ async function evaluatePipelineResult({ orgId, conversationId, userMessage, resu
       };
     }
 
-    if (guardrail.promisesTeamFollowup(result.response)) {
+    if (!result.switchToHuman && guardrail.promisesTeamFollowup(result.response)) {
       return {
         escalate: true,
         response: result.response,

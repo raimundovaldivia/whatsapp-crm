@@ -15,9 +15,9 @@
  * respalda lo que el bot está a punto de decir, el mensaje no sale y se
  * escala al ejecutivo.
  *
- * PRINCIPIO DE DISEÑO: solo bloquea con evidencia positiva de contradicción.
- * La ausencia de datos nunca bloquea — un falso positivo deja al cliente sin
- * respuesta, que es peor que un mensaje genérico.
+ * Los cierres y promesas de entrega requieren una orden persistida. Ante
+ * ausencia de respaldo o error de consulta, se usa la respuesta segura del
+ * pipeline saliente; el cliente no recibe una promesa que no podemos cumplir.
  */
 
 const { getPool } = require('../db/database');
@@ -56,6 +56,26 @@ const FUTURE_CLAIM_PATTERNS = [
 // Ventana de texto (caracteres) en la que una fecha se considera parte de la promesa
 const CLAIM_WINDOW = 70;
 
+function claimsDelivery(response) {
+  const patterns = [
+    /\bte\s+(?:(?:lo|la|los|las)\s+)?(?:llegan?|llegar[aá]n?|entregamos|entregaremos|despachamos|despacharemos|llevamos|llevaremos)\b/iu,
+    /\b(?:enviamos|enviaremos|recibir[aá]s)\s+(?:tu|su|el)\s+pedido\b/iu,
+    /\b(?:tu|su|el)\s+pedido\s+(?:llega|llegar[aá]|sale|saldr[aá])\b/iu,
+    /\b(?:avisamos|avisaremos|aviso)\s+(?:apenas|cuando)\s+(?:(?:tu|el)\s+pedido\s+)?(?:vaya\s+saliendo|salga|est[eé]\s+en\s+camino)\b/iu,
+    /^\s*(?:📅\s*)?entrega(?:\s+confirmada)?\s*:/iu,
+  ];
+  return String(response || '').split(/(?<=[.!?])\s+|\n/u).some(sentence => {
+    if (/[¿?]/u.test(sentence)) return false;
+    return patterns.some(pattern => {
+      const match = pattern.exec(sentence);
+      if (!match) return false;
+      const prefix = sentence.slice(0, match.index);
+      return !/\bno\s*$/iu.test(prefix)
+        && !/\bno\s+(?:puedo|podemos)\s+(?:confirmar|asegurar|garantizar)\b/iu.test(prefix);
+    });
+  });
+}
+
 /**
  * Afirmaciones sobre el estado de un pedido. Cada una declara qué tiene que
  * ser verdad en la DB para que el bot pueda decirla.
@@ -88,7 +108,7 @@ const STATE_CLAIMS = [
     // "pedido confirmado", "registré tu pedido"…
     // ("todo listo" a secas se maneja en el pipeline, no aquí: solo es
     // sospechoso dentro de la toma de pedido.)
-    pattern: /(ya\s+(tenemos|tengo)\s+(tu|su)\s+pedido|pedido\s+(registrado|confirmado|anotado|ingresado|tomado)|(queda|qued[oó]|est[aá])\s+(registrad|anotad|confirmad|ingresad)|(registr|anot|confirm|ingres)(é|e|amos)\s+(tu|su|el)\s+pedido)/iu,
+    pattern: /(te\s+confirmo\s+(?:tu|el)\s+pedido|ya\s+(tenemos|tengo)\s+(tu|su)\s+pedido|pedido\s+(registrado|confirmado|anotado|ingresado|tomado)|(queda|qued[oó]|est[aá])\s+(registrad|anotad|confirmad|ingresad)|(registr|anot|confirm|ingres)(é|e|amos)\s+(tu|su|el)\s+pedido)/iu,
     requires: 'order_reciente',
     describe: 'le confirma un pedido registrado',
   },
@@ -183,7 +203,7 @@ async function loadConversationFacts(orgId, conversationId) {
   // y el mensaje de confirmación sale en el mismo turno. Sin esto, la
   // afirmación "pedido confirmado" no encontraba un pedido activo y el
   // guardrail escalaba al ejecutivo justo al confirmar.
-  const ACTIVE = ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar', 'en_camino'];
+  const ACTIVE = ['draft', 'nuevo', 'sent', 'payment_received', 'por_despachar', 'asignado_ruta', 'en_camino'];
 
   const ageDays = ts => ts ? (Date.now() - new Date(ts).getTime()) / 86400000 : null;
 
@@ -218,7 +238,9 @@ async function checkResponseFreshness(orgId, conversationId, response, turn = {}
   if (!response || typeof response !== 'string') return { ok: true };
   const outboundPolicy = checkOutboundText(response);
   if (!outboundPolicy.ok) return outboundPolicy;
-
+  const deliveryPromise = claimsDelivery(response);
+  const claims = STATE_CLAIMS.filter(c => c.pattern.test(response));
+  const requiresPersistedOrder = deliveryPromise || claims.some(c => ['order_reciente', 'order_activa'].includes(c.requires));
 
   try {
     // 1. Fechas ya pasadas dentro de una promesa a futuro.
@@ -233,10 +255,18 @@ async function checkResponseFreshness(orgId, conversationId, response, turn = {}
     }
 
     // 2. Afirmaciones de estado: ¿las respalda la DB?
-    const claims = STATE_CLAIMS.filter(c => c.pattern.test(response));
-    if (claims.length === 0) return { ok: true };
+    if (claims.length === 0 && !deliveryPromise) return { ok: true };
 
     const facts = await loadConversationFacts(orgId, conversationId);
+    const actedNow = !!(turn.orderCreated || turn.orderUpdated);
+    const pendingOrder = ['collecting_order', 'scheduled', 'future_interest'].includes(turn.newState);
+    if (deliveryPromise && !actedNow && (pendingOrder || !facts.orderActiva || facts.orderEdadDias > MAX_STALE_DAYS)) {
+      return {
+        ok: false,
+        reason: 'entrega_sin_orden',
+        detail: 'El mensaje promete una entrega, pero no hay una orden vigente que respalde ese despacho. Un agendamiento o borrador no confirma la entrega.',
+      };
+    }
 
     for (const claim of claims) {
       if (claim.requires === 'scheduled_vigente') {
@@ -250,7 +280,9 @@ async function checkResponseFreshness(orgId, conversationId, response, turn = {}
       }
 
       if (claim.requires === 'order_activa') {
-        // Sin pedido en la DB no se bloquea: puede venir de Shopify o del CRM.
+        if (!actedNow && (!facts.hayOrder || pendingOrder)) {
+          return { ok: false, reason: 'entrega_sin_orden', detail: `El bot ${claim.describe}, pero no hay una orden vigente para ese despacho.` };
+        }
         if (facts.hayOrder && !facts.orderActiva) {
           return {
             ok: false,
@@ -272,8 +304,7 @@ async function checkResponseFreshness(orgId, conversationId, response, turn = {}
         // un pedido creado/actualizado en este turno, o uno creado hoy para
         // esta conversación. Si no, es un cierre "de palabra" sin pedido —
         // el caso que deja al cliente esperando algo que nunca se registró.
-        const actedNow   = !!(turn && (turn.orderCreated || turn.orderUpdated));
-        const orderDeHoy = facts.hayOrder && facts.orderCreadaDias != null && facts.orderCreadaDias < 1;
+        const orderDeHoy = !pendingOrder && facts.orderActiva && facts.orderCreadaDias != null && facts.orderCreadaDias < 1;
         if (!actedNow && !orderDeHoy) {
           return {
             ok: false,
@@ -295,9 +326,10 @@ async function checkResponseFreshness(orgId, conversationId, response, turn = {}
 
     return { ok: true };
   } catch (err) {
-    // El guardrail nunca debe ser el motivo de que el cliente quede sin
-    // respuesta: si la validación falla, se deja pasar el mensaje.
     console.error('[Guardrail] Error validando frescura:', err.message);
+    if (requiresPersistedOrder) {
+      return { ok: false, reason: 'orden_no_verificada', detail: 'No se pudo verificar la orden que respalda la confirmación o entrega.' };
+    }
     return { ok: true };
   }
 }
@@ -324,6 +356,7 @@ function promisesTeamFollowup(response) {
 module.exports = {
   checkResponseFreshness,
   promisesTeamFollowup,
+  claimsDelivery,
   // exportados para pruebas
   findPastDatesInFutureClaims,
   resolveDayMonth,

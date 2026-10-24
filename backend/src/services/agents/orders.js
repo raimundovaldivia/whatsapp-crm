@@ -1,5 +1,6 @@
 const { client, modelFor, responseText } = require('../ai-provider');
 const { normalizeDraft } = require('../order-pricing');
+const { isBareAffirmative } = require('../order-input-policy');
 
 // Campos requeridos para crear la orden (además de al menos un ítem)
 const REQUIRED_FIELDS = ['customer_name', 'address', 'city'];
@@ -58,16 +59,18 @@ Si en DATOS RECOPILADOS aparece "editing_order_id", el cliente está CAMBIANDO u
 ━━━ RESUMEN Y CONFIRMACIÓN ━━━
 Cuando tengas TODOS los datos y todos los ítems estén en el catálogo, muestra un resumen claro y pregunta "¿Todo correcto?" ANTES de pedir el método de pago:
 
-"¡Listo! Te confirmo el pedido:
+"Revisa el resumen antes de crear tu pedido:
 📦 [cantidad]x [Producto] — $[subtotal línea]
 📦 [cantidad]x [Producto] — $[subtotal línea]
 💰 Total: $[total]
 👤 [Nombre]
 📍 [Dirección], [Ciudad]
 [Si requires_customer_phone=true: 📞 [Teléfono]]
-[Si existe delivery_date: 📅 Entrega: fecha solicitada]
+[Si existe delivery_date: 📅 Fecha solicitada: fecha solicitada]
 
 ¿Todo correcto?"
+
+Este resumen todavía NO es una orden creada. No digas "te confirmo el pedido", "ya está registrado", "te llega" ni prometas despacho. La confirmación real la envía el sistema solo después de guardar la orden.
 
 Si hay descuento acordado, agrega la línea "🏷️ Descuento X%" antes del total, con el monto que dice PEDIDO VALORIZADO.
 IMPORTANTE: NO preguntes el método de pago hasta que el cliente confirme el resumen.
@@ -234,12 +237,8 @@ function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
 
   // Fallback: el cliente confirma Y ya tenemos todos los datos (el resumen ya fue mostrado)
   if (hasRequiredData(orderDraft)) {
-    const confirmWords = ['sí', 'si', 'yes', 'confirmo', 'correcto', 'adelante', 'procede', 'dale', 'listo', 'ok', 'okey', 'oka', 'vamo', 'vamos', '👍'];
     const lowerMsg = userMessage.toLowerCase().trim();
-    const isShortConfirmation = lowerMsg.length <= 20;
-    if (isShortConfirmation && confirmWords.some(w => lowerMsg === w || lowerMsg.startsWith(w) || lowerMsg === w + '!' || lowerMsg === w + '.')) {
-      return true;
-    }
+    if (isBareAffirmative(userMessage)) return true;
 
     const paymentPhrases = ['listo el pago', 'ya pagué', 'ya pague', 'hice la transferencia',
       'hice el pago', 'ya transferí', 'ya transferi', 'transferido', 'pago realizado',
@@ -258,10 +257,11 @@ function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
  * El modelo a veces "cierra" la venta en palabras ("Tu pedido queda
  * registrado", "todo listo!") sin emitir ORDEN_CONFIRMADA, y el pedido nunca
  * se crea. Regla del sistema: ninguna de estas frases puede salir si no hay
- * un pedido creado en la DB. Quien llama decide qué hacer (crear el pedido si
- * hay datos, o pedir lo que falta), pero el texto tal cual nunca se envía.
+ * un pedido creado en la DB. Quien llama conserva la confirmación del cliente
+ * como requisito; sin ella muestra un resumen pendiente, no fuerza la venta.
  */
 const REGISTERED_CLAIM_PATTERNS = [
+  /\bte\s+confirmo\s+(?:tu|el)\s+pedido\b/iu,
   /\b(queda|qued[oó]|est[aá]|ya\s+est[aá]|lo\s+dejo|lo\s+dejamos|te\s+lo\s+dejo)\s+(registrad|anotad|confirmad|ingresad|agendad|list)/iu,
   /\bpedido\s+(registrado|confirmado|anotado|ingresado|listo|hecho|tomado)\b/iu,
   /\b(registr|anot|confirm|ingres)(é|e|amos|ado|ada)\s+(tu|su|el)\s+pedido\b/iu,
