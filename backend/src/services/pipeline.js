@@ -23,6 +23,7 @@ const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, form
 const inboundPolicy = require('./inbound-message-policy');
 const outboundPolicy = require('./outbound-text-policy');
 const orderInputPolicy = require('./order-input-policy');
+const { requestsAdditionalOrder } = require('./order-creation-policy');
 const deliveryCoverage = require('./delivery-coverage');
 const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
 const salesClosing = require('./sales-closing');
@@ -1797,6 +1798,60 @@ REGLAS ABSOLUTAS:
   const explicitActiveOrderCancellation = !!activeOrder
     && ordersAgent.isCancelDuringCollection(userMessage);
 
+  // ── Preferencia / restricción de horario de entrega ────────────────────
+  // "a las 15:00", "no tan tarde", "temprano", "tengo restricción de horario",
+  // "déjenlo en conserjería". Con un pedido activo, el bot lo ANOTA en el
+  // pedido y te avisa, en vez de deflectar con "el equipo coordina" (que
+  // obligaba a coordinar todo a mano) o de decir "pedido actualizado" en falso.
+  const DELIVERY_PREF_PATTERNS = [
+    /\ba\s+las?\s*\d{1,2}([:.]\d{2})?\s*(hrs?|horas?|am|pm|de la (ma[ñn]ana|tarde|noche))?\b/i,
+    /\b\d{1,2}[:.]\d{2}\b/,
+    /\b(antes|despu[eé]s)\s+de\s+las?\s*\d{1,2}/i,
+    /\bentre\s+las?\s*\d{1,2}\s*(y|a)\s*(las?\s*)?\d{1,2}/i,
+    /\bno\s+(?:(?:venga[n]?|llegue[n]?|llegan|vengan|vay[ae]n?)\s+)?(?:tan\s+)?tarde\b/i,
+    /\bno\s+tan\s+temprano\b/i,
+    /\b(m[aá]s\s+)?(temprano|tempranito)\b/i,
+    /\b(en|por)\s+la\s+(ma[ñn]ana|tarde|noche)\b/i,
+    /\b(al\s+)?mediod[ií]a\b/i,
+    /\btengo\s+(una\s+)?restricci[oó]n\b/i,
+    /\brestricci[oó]n\s+de\s+horario\b/i,
+    /\b(d[eé]jalo|d[eé]jenlo|dejar|entregar|toca(r)?|timbre|conserjer[ií]a|port[oó]n|reja)\b.{0,30}\b(timbre|conserjer[ií]a|port[oó]n|reja|vecin|casa|depto|departamento)\b/i,
+  ];
+  // No confundir con cambiar productos o cancelar: esas van por su propio flujo.
+  const looksLikeProductChange = /\b(agrega|añade|anade|quita|saca|cambia|otra|otro|m[aá]s|bandeja|caja|docena|talla|xl|jumbo|huevos?|aceitunas?)\b/i.test(userMessage);
+  const looksLikeCancel = ordersAgent.isCancelDuringCollection(userMessage) || intentResult?.intent === 'cancel_order';
+  const isDeliveryPref = activeOrder
+    && EDITABLE_OR_ACTIVE(activeOrder.status)
+    && userMessage.length <= 500
+    && !looksLikeProductChange
+    && !looksLikeCancel
+    && DELIVERY_PREF_PATTERNS.some(p => p.test(userMessage));
+
+  if (isDeliveryPref) {
+    const pref = userMessage.trim().slice(0, 200);
+    const first = (conversation.contact_name || activeOrder.customer_name || '').trim().split(/\s+/)[0] || '';
+    const hi = first ? ` ${first}` : '';
+    try {
+      const stamp = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' });
+      await getPool().query(
+        `UPDATE orders
+            SET delivery_note = $1,
+                notes = COALESCE(notes, '') || $2,
+                updated_at = NOW()
+          WHERE id = $3 AND organization_id = $4`,
+        [pref, `\n[bot] Preferencia de horario del cliente (${stamp}): "${pref}"`, activeOrder.id, orgId]
+      ).catch(() => {});
+    } catch (e) { console.warn('[Pipeline] no se pudo anotar preferencia de horario:', e.message); }
+    L.agent('orders', 0);
+    L.step('delivery_pref', `pedido ${crmOrderLabel(activeOrder.id)}: "${pref}"`);
+    return {
+      response: `¡Anotado${hi}! 📝 Le paso al equipo tu preferencia para la entrega ("${pref}") y lo tienen en cuenta al coordinar el despacho. ¿Algo más?`,
+      agentType: 'orders',
+      newState: currentState,
+      adminNotice: `🕒 *Preferencia de entrega* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido ${crmOrderLabel(activeOrder.id)}: "${pref}"`,
+    };
+  }
+
   L.escalation(escalationResult.escalate, escalationResult.urgency, escalationResult.reason);
 
   const isDeliveryStatusInquiry = !!activeOrder
@@ -2109,59 +2164,6 @@ REGLAS ABSOLUTAS:
       newState: currentState,
       switchToHuman,
       ...(escalationReason ? { escalationReason } : {}),
-    };
-  }
-
-  // ── Preferencia / restricción de horario de entrega ────────────────────
-  // "a las 15:00", "no tan tarde", "temprano", "tengo restricción de horario",
-  // "déjenlo en conserjería". Con un pedido activo, el bot lo ANOTA en el
-  // pedido y te avisa, en vez de deflectar con "el equipo coordina" (que
-  // obligaba a coordinar todo a mano) o de decir "pedido actualizado" en falso.
-  const DELIVERY_PREF_PATTERNS = [
-    /\ba\s+las?\s*\d{1,2}([:.]\d{2})?\s*(hrs?|horas?|am|pm|de la (ma[ñn]ana|tarde|noche))?\b/i,
-    /\b\d{1,2}[:.]\d{2}\b/,
-    /\b(antes|despu[eé]s)\s+de\s+las?\s*\d{1,2}/i,
-    /\bentre\s+las?\s*\d{1,2}\s*(y|a)\s*(las?\s*)?\d{1,2}/i,
-    /\bno\s+tan\s+(tarde|temprano)\b/i,
-    /\b(m[aá]s\s+)?(temprano|tempranito)\b/i,
-    /\b(en|por)\s+la\s+(ma[ñn]ana|tarde|noche)\b/i,
-    /\b(al\s+)?mediod[ií]a\b/i,
-    /\btengo\s+(una\s+)?restricci[oó]n\b/i,
-    /\brestricci[oó]n\s+de\s+horario\b/i,
-    /\b(d[eé]jalo|d[eé]jenlo|dejar|entregar|toca(r)?|timbre|conserjer[ií]a|port[oó]n|reja)\b.{0,30}\b(timbre|conserjer[ií]a|port[oó]n|reja|vecin|casa|depto|departamento)\b/i,
-  ];
-  // No confundir con cambiar productos o cancelar: esas van por su propio flujo.
-  const looksLikeProductChange = /\b(agrega|añade|anade|quita|saca|cambia|otra|otro|m[aá]s|bandeja|caja|docena|talla|xl|jumbo|huevos?|aceitunas?)\b/i.test(userMessage);
-  const looksLikeCancel = ordersAgent.isCancelDuringCollection(userMessage) || intent === 'cancel_order';
-  const isDeliveryPref = activeOrder
-    && EDITABLE_OR_ACTIVE(activeOrder.status)
-    && userMessage.length <= 160
-    && !looksLikeProductChange
-    && !looksLikeCancel
-    && DELIVERY_PREF_PATTERNS.some(p => p.test(userMessage));
-
-  if (isDeliveryPref) {
-    const pref = userMessage.trim().slice(0, 200);
-    const first = (conversation.contact_name || activeOrder.customer_name || '').trim().split(/\s+/)[0] || '';
-    const hi = first ? ` ${first}` : '';
-    try {
-      const stamp = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' });
-      await getPool().query(
-        `UPDATE orders
-            SET delivery_note = $1,
-                notes = COALESCE(notes, '') || $2,
-                updated_at = NOW()
-          WHERE id = $3 AND organization_id = $4`,
-        [pref, `\n[bot] Preferencia de horario del cliente (${stamp}): "${pref}"`, activeOrder.id, orgId]
-      ).catch(() => {});
-    } catch (e) { console.warn('[Pipeline] no se pudo anotar preferencia de horario:', e.message); }
-    L.agent('orders', 0);
-    L.step('delivery_pref', `pedido ${crmOrderLabel(activeOrder.id)}: "${pref}"`);
-    return {
-      response: `¡Anotado${hi}! 📝 Le paso al equipo tu preferencia para la entrega ("${pref}") y lo tienen en cuenta al coordinar el despacho. ¿Algo más?`,
-      agentType: 'orders',
-      newState: currentState,
-      adminNotice: `🕒 *Preferencia de entrega* — ${conversation.contact_name || activeOrder.customer_name || conversation.phone_number}, pedido ${crmOrderLabel(activeOrder.id)}: "${pref}"`,
     };
   }
 
@@ -2621,6 +2623,23 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const requestedOrderNow = orderCtx.now ? new Date(orderCtx.now) : null;
   const orderNow = requestedOrderNow && !Number.isNaN(requestedOrderNow.getTime()) ? requestedOrderNow : new Date();
   orderDraft = pricing.normalizeDraft(orderDraft || {});
+  // A persisted active order outranks stale collection state. Only a customer
+  // request for another order can authorize a separate purchase. Editing uses
+  // the existing update path and never creates another order.
+  const existingOrder = await db.getActiveOrderForBot(conversationId);
+  if (existingOrder && !orderDraft.editing_order_id) {
+    if (requestsAdditionalOrder(userMessage)) {
+      orderDraft.additional_order_for_id = existingOrder.id;
+    }
+    if (String(orderDraft.additional_order_for_id || '') !== String(existingOrder.id)) {
+      await db.updatePipelineState(conversationId, 'done', {});
+      return {
+        response: `Ya tienes el pedido ${crmOrderLabel(existingOrder.id)} registrado. ¿Quieres modificar ese pedido o hacer otro pedido aparte?`,
+        agentType: 'orders', newState: 'done',
+      };
+    }
+  }
+
   if (['facebook', 'instagram'].includes(conversation.source_channel)) orderDraft.requires_customer_phone = true;
   if (promotionContext) orderDraft.promotion = promotions.snapshot(promotionContext);
   const persistedClosing = db.beginSalesClosing
@@ -2675,6 +2694,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
   );
+  // This permission comes only from customer input, never model extraction.
+  const additionalOrderForId = orderDraft.additional_order_for_id;
+  delete updatedDraft.additional_order_for_id;
+  if (additionalOrderForId) updatedDraft.additional_order_for_id = additionalOrderForId;
   const unexpectedAffirmativeItems = orderInputPolicy.unexpectedItemsFromBareAffirmative(
     userMessage,
     orderDraft,
@@ -2985,7 +3008,17 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     }
 
     // ── Lock atómico anti-duplicado ────────────────────────────────
-    const claimed = await db.claimOrderCreation(conversationId);
+    const currentActiveOrder = await db.getActiveOrderForBot(conversationId);
+    if (currentActiveOrder && String(updatedDraft.additional_order_for_id || '') !== String(currentActiveOrder.id)) {
+      await db.updatePipelineState(conversationId, 'done', {});
+      return {
+        response: `Tu pedido ${crmOrderLabel(currentActiveOrder.id)} ya está registrado. Para evitar duplicarlo, dime si quieres modificarlo o hacer otro pedido aparte.`,
+        agentType: 'orders', newState: 'done',
+      };
+    }
+    const claimed = await db.claimOrderCreation(conversationId, {
+      orgId, additionalOrderId: currentActiveOrder?.id || null,
+    });
     if (!claimed) {
       console.warn(`[Pipeline] ⚠️  Pedido duplicado bloqueado para conv ${conversationId}`);
       return { response: null, agentType: 'orders', newState: 'confirmed', duplicate: true };
@@ -3009,6 +3042,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           personalOfferId: updatedDraft.personal_offer_id || null,
           personalOfferDiscountAmount: updatedDraft.personal_offer_discount_amount || null,
           personalOfferTrays: updatedDraft.personal_offer_id ? personalOffers.eggTrayQuantity(priced.items) : null,
+          creationGuard: { additionalOrderId: currentActiveOrder?.id || null },
         });
         const pendingCampaigns = await campaignOffersStore.activeForConversation(getPool(), orgId, conversationId).catch(() => []);
         for (const pending of pendingCampaigns) {
@@ -3034,6 +3068,11 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           } : {}),
         };
       } catch (err) {
+        if (err.code === 'ORDER_ALREADY_EXISTS') {
+          await db.updatePipelineState(conversationId, 'done', {});
+          return { response: `Tu pedido ${crmOrderLabel(err.orderId)} ya está registrado; no creé otro pedido.`,
+            agentType: 'orders', newState: 'done', duplicate: true };
+        }
         console.error('[Pipeline] ❌ Error guardando pedido COD:', err.message);
         await db.setAgentMode(conversationId, 'coordinating');
         return { response: techErrorMsg, agentType: 'orders', newState: 'collecting_order', switchToHuman: true, escalationReason: `Error creando pedido: ${err.message}` };
@@ -3042,7 +3081,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
     // ── Link de pago: crear draft en Shopify + guardar en DB ───────
     try {
-      const result = await createShopifyOrder(orgId, conversationId, { ...updatedDraft, items: itemsForDb, total: priced.total });
+      const result = await createShopifyOrder(orgId, conversationId, { ...updatedDraft, items: itemsForDb, total: priced.total, creationGuard: { additionalOrderId: currentActiveOrder?.id || null } });
       saveContact();
       await db.updatePipelineState(conversationId, 'awaiting_payment', {});
       const successMsg = updatedDraft.pending_same_day_review
@@ -3223,6 +3262,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     personalOfferId: draft.personal_offer_id || null,
     personalOfferDiscountAmount: draft.personal_offer_discount_amount || null,
     personalOfferTrays: draft.personal_offer_id ? personalOffers.eggTrayQuantity(items) : null,
+    creationGuard: draft.creationGuard || null,
   });
   if (draft?.promotion?.offerId) {
     try {
@@ -3249,3 +3289,4 @@ module.exports = {
   _customerNoteContext: customerNoteContext,
   _effectiveOrderNote: effectiveOrderNote,
 };
+

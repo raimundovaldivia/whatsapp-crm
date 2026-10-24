@@ -227,15 +227,11 @@ Solo el JSON, nada más.`;
 
 /**
  * Verifica si el cliente confirmó la orden.
- * IMPORTANTE: Solo confiamos en ORDEN_CONFIRMADA del agente.
- * La comprobación del mensaje del cliente es un fallback defensivo
- * que solo aplica si ya tenemos TODOS los datos (resumen ya fue mostrado).
+ * La señal del modelo no sustituye una confirmación real del cliente.
+ * Una consulta o preferencia de entrega nunca autoriza guardar una compra.
  */
 function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
-  // El agente emite la señal interna → confianza total
-  if (agentResponse.includes('ORDEN_CONFIRMADA')) return true;
-
-  // Fallback: el cliente confirma Y ya tenemos todos los datos (el resumen ya fue mostrado)
+  // El cliente confirma Y ya tenemos todos los datos.
   if (hasRequiredData(orderDraft)) {
     const lowerMsg = userMessage.toLowerCase().trim();
     if (isBareAffirmative(userMessage)) return true;
@@ -321,7 +317,7 @@ function isValidCustomerPhone(value) {
  * (evita mostrar IDs internos que confunden al modelo)
  */
 function filterDraftForDisplay(draft) {
-  const { found_in_contacts, found_in_shopify, shopify_customer_id, pricing, promotion, subtotal, total, discount_amount, ...display } = draft;
+  const { found_in_contacts, found_in_shopify, shopify_customer_id, additional_order_for_id, pricing, promotion, subtotal, total, discount_amount, ...display } = draft;
   if (Array.isArray(display.items)) {
     display.items = display.items.map(it => ({ product_name: it.name || it.product_name, quantity: it.quantity }));
   }
@@ -329,3 +325,4 @@ function filterDraftForDisplay(draft) {
 }
 
 module.exports = { generateOrderResponse, extractOrderData, isOrderConfirmed, isCancelDuringCollection, claimsRegistered, hasRequiredData, missingFields, normalizeCustomerPhone, isValidCustomerPhone };
+

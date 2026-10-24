@@ -33,7 +33,7 @@ test('las confirmaciones largas tampoco permiten inventar productos nuevos', () 
 
 function fixture(options = {}) {
   const calls = { orders: [], states: [], claims: 0 };
-  const current = options.draft || draft();
+  let current = options.draft || draft();
   const db = {
     getConversationById: async () => ({ id: 91, organization_id: 7, phone_number: '56911111111', pipeline_state: 'collecting_order', agent_mode: 'ai' }),
     getLastMessages: async () => options.history || [{ direction: 'outbound', content: '📦 1x Huevos XL cafés · Bandeja de 30 — $12.990\n💰 Total: $12.990\n¿Todo correcto?' }],
@@ -43,11 +43,11 @@ function fixture(options = {}) {
     getProducts: async () => [{ id: 7, title: 'Huevos XL cafés · Bandeja de 30', price: 12990, stock: 20, active: true }],
     getCachedProducts: async () => [],
     getOrderDraft: async () => current,
-    getActiveOrderForBot: async () => null,
-    updatePipelineState: async (...args) => calls.states.push(args),
+    getActiveOrderForBot: async () => typeof options.activeOrder === 'function' ? options.activeOrder() : (options.activeOrder || null),
+    updatePipelineState: async (...args) => { calls.states.push(args); if (args[2] !== undefined) current = args[2]; },
     setAgentMode: async () => {},
     getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
-    claimOrderCreation: async () => { calls.claims++; return !options.duplicate; },
+    claimOrderCreation: async (_id, claimOptions) => { calls.claimOptions = claimOptions; calls.claims++; return !options.duplicate; },
     createOrder: async value => {
       if (options.failSave) throw new Error('Simulated database failure');
       calls.orders.push(value); return { id: 812 };
@@ -123,4 +123,45 @@ test('un producto ambiguo sigue requiriendo aclaración antes de guardar', async
   assert.equal(f.calls.orders.length, 0);
   assert.equal(result.newState, 'collecting_order');
   assert.match(result.response, /confirmar un producto/i);
+});
+
+
+const active = () => ({ id: 450, status: 'draft', customer_name: 'Cliente de prueba',
+  created_at: new Date(Date.now() - 5 * 3600000).toISOString(),
+  items: [{ name: 'Huevos XL cafés · Bandeja de 30', quantity: 1, price: 12990 }],
+  total_price: 12990, shipping_address: { address: 'Calle de prueba 123', city: 'La Serena' } });
+
+test('la señal ORDEN_CONFIRMADA nunca autoriza una consulta ni una preferencia de entrega', () => {
+  for (const message of ['Porfi no venga tarde', 'Son de gallinas libres?', '¿Cuándo llega?', 'No confirmo']) {
+    assert.equal(agent.isOrderConfirmed('ORDEN_CONFIRMADA', message, draft()), false, message);
+  }
+});
+
+test('un borrador antiguo no crea otro pedido ante un sí sin intención de otra compra', async () => {
+  const f = fixture({ activeOrder: active(), response: 'ORDEN_CONFIRMADA' });
+  const result = await f.pipeline.processMessage(7, 91, 'Sí');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(f.calls.claims, 0);
+  assert.match(result.response, /pedido.*DR-450.*registrado/i);
+});
+
+test('permite otro pedido explícito, conserva autorización entre turnos y lo confirma con el cliente', async () => {
+  const f = fixture({ activeOrder: active() });
+  const review = await f.pipeline.processMessage(7, 91, 'Quiero hacer otro pedido aparte igual');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(review.newState, 'collecting_order');
+  const result = await f.pipeline.processMessage(7, 91, 'Sí, todo correcto');
+  assert.equal(f.calls.orders.length, 1);
+  assert.equal(result.orderCreated.orderId, 812);
+  assert.equal(f.calls.claimOptions.orgId, 7);
+  assert.equal(f.calls.claimOptions.additionalOrderId, 450);
+});
+
+test('vuelve a comprobar pedidos antes de guardar si otro proceso registró uno durante el turno', async () => {
+  let reads = 0;
+  const f = fixture({ activeOrder: () => ++reads < 3 ? null : active() });
+  const result = await f.pipeline.processMessage(7, 91, 'Sí, todo correcto');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(f.calls.claims, 0);
+  assert.match(result.response, /evitar duplicarlo/i);
 });
