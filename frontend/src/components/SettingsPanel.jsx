@@ -631,7 +631,7 @@ function WhatsAppTab() {
 
   const connectMeta = async () => {
     setError('');
-    try { window.location.assign(await metaAPI.authUrl()); }
+    try { window.location.assign(await metaAPI.authUrl('whatsapp')); }
     catch (err) { setError(err.response?.data?.error || 'No se pudo iniciar la autorización de Meta'); }
   };
 

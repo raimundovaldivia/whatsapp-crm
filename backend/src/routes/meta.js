@@ -18,6 +18,8 @@ const SCOPES = [
   'pages_messaging', 'pages_manage_posts', 'pages_manage_engagement',
   'instagram_basic', 'instagram_manage_messages', 'instagram_manage_comments', 'instagram_content_publish',
   'ads_read', 'ads_management', 'business_management',
+];
+const WHATSAPP_SCOPES = [
   'whatsapp_business_management', 'whatsapp_business_messaging', 'whatsapp_business_manage_events',
 ];
 
@@ -153,9 +155,14 @@ router.get('/callback', async (req, res) => {
     const userToken = long.data.access_token;
     const assets = await fetchAssets(userToken);
     const permissions = await grantedPermissions(userToken);
-    const page = assets.pages.find(p => p.instagram_business_account) || assets.pages[0] || null;
+    const previous = await getConnection(state.orgId);
+    const page = previous
+      ? assets.pages.find(p => p.id === previous.page_id) || null
+      : assets.pages.find(p => p.instagram_business_account) || assets.pages[0] || null;
     const instagram = page?.instagram_business_account || null;
-    const adAccount = assets.adAccounts[0] || null;
+    const adAccount = previous
+      ? assets.adAccounts.find(a => a.id === previous.ad_account_id) || null
+      : assets.adAccounts[0] || null;
     const expiresAt = long.data.expires_in ? new Date(Date.now() + Number(long.data.expires_in) * 1000) : null;
 
     await getPool().query(
@@ -180,7 +187,9 @@ router.get('/callback', async (req, res) => {
     );
 
     const subscriptionError = await subscribeSocialWebhooks(page, instagram);
-    const warning = commentConnectionWarning(page, instagram, permissions, subscriptionError);
+    const missingAsset = previous?.page_id && !page
+      ? 'La página seleccionada antes de reconectar no está disponible. Revisa los permisos y selecciona la página correcta.' : null;
+    const warning = [missingAsset, commentConnectionWarning(page, instagram, permissions, subscriptionError)].filter(Boolean).join(' ') || null;
     if (warning) await getPool().query('UPDATE meta_connections SET last_error=$1 WHERE organization_id=$2', [warning, state.orgId]);
     res.redirect(`${frontendUrl()}/?meta_success=1`);
   } catch (error) {
@@ -199,6 +208,8 @@ router.get('/callback', async (req, res) => {
 router.use(requireAuth, requireRole('owner', 'admin'), requireSolution('marketing'));
 
 router.get('/auth-url', (req, res) => {
+  const purpose = req.query?.purpose ?? 'social';
+  if (!['social', 'whatsapp'].includes(purpose)) return res.status(400).json({ error: 'Propósito de conexión no válido' });
   try {
     const appId = meta.requiredEnv('META_APP_ID');
     const state = jwt.sign({ orgId: req.orgId, userId: req.userId }, JWT_SECRET, {
@@ -206,7 +217,7 @@ router.get('/auth-url', (req, res) => {
     });
     const params = new URLSearchParams({
       client_id: appId, redirect_uri: callbackUrl(), state,
-      response_type: 'code', scope: SCOPES.join(','), auth_type: 'rerequest',
+      response_type: 'code', scope: (purpose === 'whatsapp' ? [...SCOPES, ...WHATSAPP_SCOPES] : SCOPES).join(','), auth_type: 'rerequest',
     });
     res.json({ url: `https://www.facebook.com/${meta.GRAPH_VERSION}/dialog/oauth?${params}` });
   } catch (error) {

@@ -141,7 +141,7 @@ export const referralsAPI = {
 
 export const metaAPI = {
   status:       () => api.get('/meta/status').then(r => r.data),
-  authUrl:      () => api.get('/meta/auth-url').then(r => r.data.url),
+  authUrl:      (purpose = 'social') => api.get('/meta/auth-url', { params: { purpose } }).then(r => r.data.url),
   assets:       () => api.get('/meta/assets').then(r => r.data),
   selectAssets: data => api.patch('/meta/assets', data).then(r => r.data),
   activateWhatsApp: data => api.post('/meta/whatsapp/activate', data).then(r => r.data),
