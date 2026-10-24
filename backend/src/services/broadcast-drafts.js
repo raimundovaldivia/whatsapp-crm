@@ -31,7 +31,13 @@ const { loadPurchases, purchaseSummary } = require('./broadcast-purchases');
 const EXPLICIT_DECLINE = /\b(?:no\s+me\s+(?:escriban|escribas|escribirme|contacten|contactarme)(?:\s+m[aá]s)?|no\s+me\s+(?:manden|mande|envi[eé]n|env[ií]en)(?:\s+m[aá]s)?\s+(?:mensajes|promociones|publicidad)|no\s+(?:quiero|deseo)\s+(?:recibir\s+)?(?:m[aá]s\s+)?(?:mensajes|respuestas|contacto|promociones|publicidad)|dejen?\s+de\s+(?:escrib|contact)|(?:dar(?:me)?|quitar(?:me)?)\s+de\s+baja|baja\s+de\s+(?:la\s+)?lista|stop)\b/i;
 const TEMPORARY_DECLINE = /\b(?:no\s+(?:gracias|por\s+ahora|me\s+interesa|quiero\s+comprar|necesito\s+(?:huevos|comprar))|d[eé]jame\s+en\s+paz)\b/i;
 const RECENT_ISSUE = /\b(?:reclamo|retras(?:o|ada)|no\s+(?:lleg[oó]|recib[ií])|cobro\s+duplicado|pedido\s+(?:pendiente|incompleto)|transferencia\s+pendiente|comprobante\s+pendiente)\b/i;
-const RECENT_OUTREACH_DAYS = 7;
+const DEFAULT_RECENT_OUTREACH_DAYS = 7;
+
+function recentOutreachDays(value) {
+  if (value === null || value === undefined || value === '') return DEFAULT_RECENT_OUTREACH_DAYS;
+  const days = Number.parseInt(String(value), 10);
+  return Number.isInteger(days) && days >= 1 && days <= 30 ? days : DEFAULT_RECENT_OUTREACH_DAYS;
+}
 
 function daysSinceMessage(message, today) {
   const date = message?.created_at ? todayISOChile(new Date(message.created_at)) : null;
@@ -43,7 +49,7 @@ function daysSinceMessage(message, today) {
 // El silencio no es una baja. Las campañas antiguas sin respuesta se pueden
 // revisar con un mensaje prudente; solo protegemos la ventana corta para evitar
 // contactos consecutivos y los problemas que el cliente acaba de plantear.
-function messageSafety(messages, today, campaigns = []) {
+function messageSafety(messages, today, campaigns = [], outreachDays = DEFAULT_RECENT_OUTREACH_DAYS) {
   const inbound = messages.filter(message => message.direction === 'inbound');
   // getMessagesByCustomerPhone entrega el tramo reciente en orden cronológico.
   const lastInbound = inbound.at(-1) || null;
@@ -58,7 +64,7 @@ function messageSafety(messages, today, campaigns = []) {
   const lastOutboundAt = lastOutbound?.created_at ? new Date(lastOutbound.created_at).getTime() : 0;
   const unansweredRecentOutreach = lastOutboundDays != null
     && lastOutboundDays >= 0
-    && lastOutboundDays < RECENT_OUTREACH_DAYS
+    && lastOutboundDays < recentOutreachDays(outreachDays)
     && lastOutboundAt > lastInboundAt;
   const explicitDecline = inbound.some(message => {
     const body = text(message.body || message.content, 600);
@@ -74,12 +80,12 @@ function messageSafety(messages, today, campaigns = []) {
     && TEMPORARY_DECLINE.test(text(lastInbound?.body || lastInbound?.content, 600));
   const recentIssue = lastInboundDays != null
     && lastInboundDays >= 0
-    && lastInboundDays < RECENT_OUTREACH_DAYS
+    && lastInboundDays < DEFAULT_RECENT_OUTREACH_DAYS
     && RECENT_ISSUE.test(text(lastInbound?.body || lastInbound?.content, 600));
   return { explicitDecline, recentDecline, recentIssue, unansweredRecentOutreach, lastOutboundDays };
 }
 
-async function customerContext(orgId, phone, audienceType, today) {
+async function customerContext(orgId, phone, audienceType, today, outreachDays) {
   const contact = await db.getContact(orgId, phone);
   if (!contact) return { phone, decision: 'skip', reasonCode: 'unavailable', reason: 'Cliente no disponible en esta empresa.' };
   const name = text(contact.name || 'Cliente', 100);
@@ -101,10 +107,10 @@ async function customerContext(orgId, phone, audienceType, today) {
       WHERE r.organization_id = $1 AND r.destination_phone = ANY($2::text[])
         AND r.result_status IN ('accepted', 'unknown') AND wc.assigned_user_id IS NULL
         AND COALESCE(r.template_name, '') !~* '^(cobro|cobranza|pedido_salio|pedido_en_camino|payment|delivery)'
-        AND r.created_at >= NOW() - INTERVAL '7 days'
-      ORDER BY r.created_at DESC LIMIT 20`, [orgId, variants]),
+        AND r.created_at >= NOW() - ($3::int * INTERVAL '1 day')
+      ORDER BY r.created_at DESC LIMIT 20`, [orgId, variants, outreachDays]),
   ]);
-  const safety = messageSafety(messages, today, campaigns.rows);
+  const safety = messageSafety(messages, today, campaigns.rows, outreachDays);
   if (safety.explicitDecline) {
     return { phone, name, decision: 'skip', reasonCode: 'opt_out', reason: 'El cliente pidió no recibir nuevos mensajes.' };
   }
@@ -115,12 +121,15 @@ async function customerContext(orgId, phone, audienceType, today) {
     return { phone, name, decision: 'skip', reasonCode: 'recent_issue', reason: 'El cliente tiene un reclamo o gestión sensible reciente por resolver.' };
   }
   if (safety.unansweredRecentOutreach) {
-    return { phone, name, decision: 'skip', reasonCode: 'recent_campaign', reason: `Recibió una campaña hace ${Math.round(safety.lastOutboundDays)} día(s) y aún no responde; se respeta una pausa de ${RECENT_OUTREACH_DAYS} días.` };
+    const reason = outreachDays === 1
+      ? 'Recibió una campaña hoy y aún no responde; esta tienda no repite campañas el mismo día.'
+      : `Recibió una campaña hace ${Math.round(safety.lastOutboundDays)} día(s) y aún no responde; se respeta una pausa de ${outreachDays} días.`;
+    return { phone, name, decision: 'skip', reasonCode: 'recent_campaign', reason };
   }
   return { phone, name, context: {
     nombre: name, tipo: contact.client_type === 'empresa' ? 'empresa' : 'persona',
     compras: purchaseSummary(orders, today),
-    criterioDeContacto: 'No hay baja, rechazo puntual en las últimas 48 horas, reclamo reciente ni campaña comercial registrada sin respuesta durante los últimos 7 días. Los mensajes de atención y los envíos fallidos no activan esa pausa. Los mensajes antiguos sin respuesta no son una baja ni desinterés confirmado.',
+    criterioDeContacto: `No hay baja, rechazo puntual en las últimas 48 horas, reclamo reciente ni campaña comercial registrada sin respuesta durante los últimos ${outreachDays} día(s). Los mensajes de atención y los envíos fallidos no activan esa pausa. Los mensajes antiguos sin respuesta no son una baja ni desinterés confirmado.`,
     conversacionReciente: messages.map(message => ({ direccion: message.direction, texto: text(message.body || message.content, 600), fecha: message.created_at })),
   } };
 }
@@ -202,7 +211,12 @@ function reviewDraftAgainstInstruction(draft, instruction) {
 async function generateDrafts(orgId, body, aiClient) {
   const request = validateRequest(body);
   const today = todayISOChile();
-  const [store, organization] = await Promise.all([db.getSetting(orgId, 'store_context'), db.getOrgById(orgId)]);
+  const [store, organization, outreachSetting] = await Promise.all([
+    db.getSetting(orgId, 'store_context'),
+    db.getOrgById(orgId),
+    db.getSetting(orgId, 'campaign_recent_outreach_days'),
+  ]);
+  const outreachDays = recentOutreachDays(outreachSetting);
   const catalog = (await db.getProducts(orgId, true)).map(p => ({
     product_id: String(p.id), title: text(p.title, 120), available: !p.deprecated_at,
     unit_cost: p.unit_cost ?? null, min_margin_pct: p.min_margin_pct ?? null,
@@ -210,7 +224,7 @@ async function generateDrafts(orgId, body, aiClient) {
   const drafts = [];
   // One generation per customer; neighbouring customers' conversations are never shared.
   for (const phone of request.phones) {
-    const customer = await customerContext(orgId, phone, request.audienceType, today);
+    const customer = await customerContext(orgId, phone, request.audienceType, today, outreachDays);
     if (customer.decision === 'skip') { drafts.push(customer); continue; }
     const response = await aiClient.messages.create({
       model: modelFor('smart'), max_tokens: 900,
@@ -222,7 +236,7 @@ No copies un cuerpo común ni cambies sólo el saludo. La diferencia debe venir 
 Usa tono breve y natural, una propuesta pertinente y una pregunta sencilla. No vuelques todo el catálogo.
 No presentes como frecuencia una compra única. Si compró recientemente, no presupongas necesidad; si lleva mucho tiempo, consulta su interés sin dar una reposición por hecha.
 Incluye los complementos que pida el operador, con preferencia conocida si existe. No inventes preferencias, cantidades, precios, descuentos, disponibilidad ni compromisos de entrega. Un precio histórico no es una oferta vigente.
-Cuando falte un dato del cliente, usa el valor por defecto que indique la instrucción; no devuelvas skip por datos opcionales faltantes. Los controles de baja, rechazo reciente, reclamo y pausa comercial ya se aplicaron antes de redactar. Devuelve skip sólo si la instrucción del operador excluye expresamente a esta persona. No inventes exclusiones por probabilidad de compra, falta de historial, mensajes de atención o envíos fallidos. Un «no gracias» antiguo a una oferta puntual no es una baja permanente. La falta de respuesta a campañas antiguas NO es rechazo, baja, desinterés confirmado ni conversación pendiente: no la uses para devolver skip. Los mensajes salientes sin respuesta de más de 7 días pueden recibir un reenganche prudente.
+Cuando falte un dato del cliente, usa el valor por defecto que indique la instrucción; no devuelvas skip por datos opcionales faltantes. Los controles de baja, rechazo reciente, reclamo y pausa comercial ya se aplicaron antes de redactar. Devuelve skip sólo si la instrucción del operador excluye expresamente a esta persona. No inventes exclusiones por probabilidad de compra, falta de historial, mensajes de atención o envíos fallidos. Un «no gracias» antiguo a una oferta puntual no es una baja permanente. La falta de respuesta a campañas antiguas NO es rechazo, baja, desinterés confirmado ni conversación pendiente: no la uses para devolver skip. Los mensajes salientes sin respuesta de al menos ${outreachDays} día(s) pueden recibir un reenganche prudente.
 Si la instrucción trae una tabla de precios, copia los totales exactamente de la tabla y calcula el ahorro como precio de 1 bandeja × cantidad − total. No mezcles tallas, colores ni cantidades de huevos.
 Ofertas: si la instrucción define ofertas concretas, llena "offers" con una entrada por producto (máximo 5, un solo precio por producto), sólo con lo que diga textualmente: product_id (exactamente uno de catalogoProductos), offer_price (entero, precio final por unidad en pesos), expires_at (YYYY-MM-DDTHH:mm en hora de Chile cuando se indica hora de cierre; YYYY-MM-DD sólo cuando vale hasta el fin del día) y cap_units (entero si hay tope de unidades, null si no hay tope). Conserva siempre la hora explícita: "hasta las 13:00" no es fin del día. Cada dato que no aparezca va en null: nunca lo inventes ni lo deduzcas. Si la instrucción no define ofertas, usa offers []. El mensaje menciona sólo las ofertas presentes en "offers".
 La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa fecha. No reveles cálculos de frecuencia, notas internas ni datos de terceros al cliente.`,

@@ -1903,6 +1903,7 @@ function TiendaTab() {
     store_whatsapp_phone: '',
     store_free_shipping: '10000',
     admin_alert_phone:   '',
+    campaign_recent_outreach_days: '7',
   });
 
   const card = ui.card(colors, { backgroundColor: colors.bgPanel, borderRadius: '14px', overflow: 'hidden', marginBottom: '16px', padding: undefined });
@@ -1939,6 +1940,7 @@ function TiendaTab() {
           store_whatsapp_phone: s.store_whatsapp_phone || '',
           store_free_shipping: s.store_free_shipping || '10000',
           admin_alert_phone:   s.admin_alert_phone   || '',
+          campaign_recent_outreach_days: s.campaign_recent_outreach_days || '7',
         });
       })
       .catch(err => setError(err.response?.data?.error || 'Error cargando configuración'))
@@ -2039,6 +2041,20 @@ function TiendaTab() {
           <div><label style={lbl}>Teléfono admin (alertas de pedidos)</label>
             <input style={inp} value={form.admin_alert_phone} onChange={e => set('admin_alert_phone')(e.target.value)} placeholder="56912345678" />
             <p style={hint}>Recibe un mensaje de WhatsApp cada vez que entra un pedido</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Mensajería comercial */}
+      <div style={card}>
+        <div style={cardHeader}>
+          <Phone size={16} color={colors.green} />
+          <span style={{ color: colors.textPrimary, fontSize: '15px', fontWeight: 600 }}>Mensajería comercial</span>
+        </div>
+        <div style={cardBody}>
+          <div><label style={lbl}>Días de espera antes de volver a contactar</label>
+            <input style={inp} type="number" min="1" max="30" value={form.campaign_recent_outreach_days} onChange={e => set('campaign_recent_outreach_days')(e.target.value)} />
+            <p style={hint}>1 evita repetir una campaña el mismo día y permite volver a contactar desde el día siguiente.</p>
           </div>
         </div>
       </div>
