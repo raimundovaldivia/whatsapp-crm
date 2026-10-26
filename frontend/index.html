@@ -9,7 +9,7 @@
       (() => {
         const host = window.location.hostname;
         const parts = window.location.pathname.split('/').filter(Boolean);
-        const tracking = parts[0] === 'seguimiento';
+        const tracking = parts[0] === 'seguimiento' || (parts[0] === 'tienda' && parts[2] === 'seguimiento');
         const isAdmin = parts[0] === 'admin';
         const justo = !isAdmin && ['justocasero.com', 'www.justocasero.com', 'justocasero.cl', 'www.justocasero.cl'].includes(host);
         const diezRios = !isAdmin && ['diezrios.com', 'www.diezrios.com'].includes(host);

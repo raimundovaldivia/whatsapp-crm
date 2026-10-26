@@ -1,6 +1,8 @@
 const express = require('express');
 const { randomBytes } = require('node:crypto');
 const tracking = require('../services/delivery-tracking');
+const { lookupOrder } = require('../services/public-order-status');
+const { rateLimit } = require('express-rate-limit');
 
 const router = express.Router();
 
@@ -8,6 +10,22 @@ router.use((_req, res, next) => {
   res.set('Cache-Control', 'no-store, max-age=0');
   res.set('Referrer-Policy', 'no-referrer');
   next();
+});
+
+router.post('/consultar', rateLimit({
+  windowMs: 15 * 60 * 1000, limit: 10,
+  standardHeaders: 'draft-8', legacyHeaders: false,
+  message: { error: 'Has realizado varias consultas. Vuelve a intentarlo en 15 minutos.' },
+}), async (req, res) => {
+  try {
+    const order = await lookupOrder(req.body);
+    if (!order) return res.status(404).json({ error: 'No encontramos un pedido con esos datos en esta tienda. Revisa el teléfono y el número de pedido.' });
+    return res.json(order);
+  } catch (error) {
+    // No registrar teléfono, número de pedido ni detalles de consultas SQL.
+    if (error.status === 400) return res.status(400).json({ error: 'Revisa el teléfono y el número de pedido.' });
+    return res.status(503).json({ error: 'No pudimos consultar el pedido. Inténtalo nuevamente.' });
+  }
 });
 
 router.get('/:token/status', async (req, res) => {

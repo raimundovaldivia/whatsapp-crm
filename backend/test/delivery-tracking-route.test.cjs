@@ -6,6 +6,7 @@ const { load, handler, response } = require('./helpers.cjs');
 const token = 'a'.repeat(43);
 function fixture(state) {
   return load('src/routes/delivery-tracking.js', {
+    'express-rate-limit': require('express-rate-limit'),
     '../services/delivery-tracking': {
       TOKEN_PATTERN: /^[A-Za-z0-9_-]{32,96}$/,
       getTrackingStatus: async () => {

@@ -3,10 +3,16 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { fetchTrackingStatus } from '../utils/delivery-tracking.mjs';
 import './delivery-tracking.css';
+import OrderStatusLookup from './OrderStatusLookup.jsx';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
-export default function DeliveryTracking({ token }) {
+export default function DeliveryTracking({ token, lookup }) {
+  if (lookup) return <OrderStatusLookup backendUrl={BACKEND_URL} storeSlug={lookup.storeSlug} />;
+  return <LiveDeliveryTracking token={token} />;
+}
+
+function LiveDeliveryTracking({ token }) {
   const [state, setState] = useState(null);
   const [failed, setFailed] = useState(false);
   const mapElement = useRef(null);
@@ -77,6 +83,7 @@ export default function DeliveryTracking({ token }) {
       <p role="status" aria-live="polite">{status}</p>
       <div ref={mapElement} className="delivery-tracking-map" hidden={!showMap} aria-label="Ubicación del repartidor" />
       {(!state || state.active) && <p className="delivery-tracking-note">La ubicación se actualiza mientras el repartidor mantiene activa la app de despacho. El enlace deja de funcionar al cerrar la entrega.</p>}
+      <a className="order-lookup-back" href="/seguimiento">Consultar un pedido por teléfono</a>
     </div>
   </main>;
 }

@@ -1,8 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { trackingTokenFromPath, fetchTrackingStatus } from './delivery-tracking.mjs';
+import { trackingTokenFromPath, fetchTrackingStatus, trackingLookupFromPath, fetchOrderStatus } from './delivery-tracking.mjs';
 
 const token = 'a'.repeat(43);
+
+test('consulta sin token y por tienda en host compartido, conservando enlaces de reparto', () => {
+  assert.deepEqual(trackingLookupFromPath('/seguimiento'), { storeSlug:null });
+  assert.deepEqual(trackingLookupFromPath('/seguimiento/'), { storeSlug:null });
+  assert.deepEqual(trackingLookupFromPath('/tienda/store-a/seguimiento'), { storeSlug:'store-a' });
+  for (const path of ['/seguimiento/'+token, '/seguimiento/corto', '/tienda/../seguimiento', '/admin']) {
+    assert.equal(trackingLookupFromPath(path), null);
+  }
+});
+
+test('teléfono y referencia viajan solo en POST, sin credenciales ni referrer', async () => {
+  const input = { phone:'911111111', orderNumber:'DR-1', storeSlug:'store-a' };
+  let call;
+  const result = await fetchOrderStatus('https://api.example/', input, undefined, async (...args) => {
+    call=args; return { ok:true, json:async()=>({status:'received'}) };
+  });
+  assert.equal(call[0], 'https://api.example/seguimiento/consultar');
+  assert.equal(call[1].method,'POST');
+  assert.deepEqual(JSON.parse(call[1].body),input);
+  assert.equal(call[1].credentials,'omit');
+  assert.equal(call[1].cache,'no-store');
+  assert.equal(call[1].referrerPolicy,'no-referrer');
+  assert.equal(result.status,'received');
+});
+
+test('búsqueda distingue datos incorrectos, límite y error temporal sin mostrar errores internos', async () => {
+  for (const [status, message] of [[400,/Revisa/],[404,/No encontramos/],[429,/15 minutos/],[503,/nuevamente/]]) {
+    await assert.rejects(fetchOrderStatus('',{},undefined,async()=>({ok:false,status})),message);
+  }
+});
 
 test('reconoce seguimiento antes del catálogo y reserva enlaces inválidos', () => {
   assert.equal(trackingTokenFromPath('/seguimiento/' + token), token);

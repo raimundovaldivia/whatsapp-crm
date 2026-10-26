@@ -4,7 +4,7 @@ const App = React.lazy(() => import('./App.jsx'))
 const Tienda = React.lazy(() => import('./components/Tienda.jsx'))
 const JustoCaseroLanding = React.lazy(() => import('./components/JustoCaseroLanding.jsx'))
 const DeliveryTracking = React.lazy(() => import('./components/DeliveryTracking.jsx'))
-import { trackingTokenFromPath } from './utils/delivery-tracking.mjs'
+import { trackingTokenFromPath, trackingLookupFromPath } from './utils/delivery-tracking.mjs'
 import './index.css'
 
 const ASSET_RELOAD_KEY = 'resel_asset_reload_at'
@@ -24,7 +24,8 @@ const JUSTO_CASERO_DOMAINS = new Set([
 
 const pathParts = window.location.pathname.split('/').filter(Boolean)
 const trackingToken = trackingTokenFromPath(window.location.pathname)
-const isTracking = trackingToken !== null
+const trackingLookup = trackingLookupFromPath(window.location.pathname)
+const isTracking = trackingToken !== null || trackingLookup !== null
 const domainSlug = STORE_DOMAINS[window.location.hostname]
 const isAdmin = pathParts[0] === 'admin'
 const isJustoCasero = !isAdmin && (JUSTO_CASERO_DOMAINS.has(window.location.hostname) || pathParts[0] === 'justo-casero')
@@ -200,7 +201,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AppErrorBoundary>
       <React.Suspense fallback={<AppLoader />}>
-        {isTracking ? <DeliveryTracking token={trackingToken} /> : isJustoCasero ? <JustoCaseroLanding /> : isTienda ? <Tienda slug={domainSlug || pathParts[1]} /> : <App />}
+        {isTracking ? <DeliveryTracking token={trackingToken} lookup={trackingLookup} /> : isJustoCasero ? <JustoCaseroLanding /> : isTienda ? <Tienda slug={domainSlug || pathParts[1]} /> : <App />}
       </React.Suspense>
     </AppErrorBoundary>
   </React.StrictMode>,
