@@ -4,7 +4,15 @@ const db = require('../db/database');
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,96}$/;
 const TERMINAL_STOPS = new Set(['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered']);
 
-function publicBaseUrl() {
+async function publicBaseUrl(orgId) {
+  const storeUrl = await db.getSetting(orgId, 'store_public_url');
+  if (typeof storeUrl === 'string' && storeUrl.length <= 2048) {
+    try {
+      const url = new URL(storeUrl.trim());
+      // El catálogo puede incluir una ruta; el seguimiento vive en la raíz.
+      if (url.protocol === 'https:' && !url.username && !url.password) return url.origin;
+    } catch { /* Una configuración antigua inválida conserva el enlace de la API. */ }
+  }
   return String(process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL || '')
     .trim()
     .replace(/\/$/, '');
@@ -20,9 +28,11 @@ function validStopKey(value) {
 }
 
 async function createTrackingLink(orgId, routeId, stopKey, { lifetimeHours = 12 } = {}) {
-  const baseUrl = publicBaseUrl();
   const key = validStopKey(stopKey);
-  if (!baseUrl || !key || !Number.isInteger(Number(routeId)) || Number(routeId) <= 0) return null;
+  if (!key || !Number.isSafeInteger(Number(orgId)) || Number(orgId) <= 0
+    || !Number.isSafeInteger(Number(routeId)) || Number(routeId) <= 0) return null;
+  const baseUrl = await publicBaseUrl(orgId);
+  if (!baseUrl) return null;
 
   const token = crypto.randomBytes(32).toString('base64url');
   const hash = tokenHash(token);
