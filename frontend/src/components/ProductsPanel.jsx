@@ -139,7 +139,7 @@ function StoreConfigTab({ orgSlug, colors }) {
           </div>
           <div><label style={lbl}>WhatsApp de contacto (botón flotante)</label><input style={inp} value={form.store_whatsapp_phone} onChange={set('store_whatsapp_phone')} placeholder="56912345678" /><p style={hint}>Vacío = botón no aparece</p></div>
           <div><label style={lbl}>Teléfono admin (alertas de pedidos)</label><input style={inp} value={form.admin_alert_phone} onChange={set('admin_alert_phone')} placeholder="56912345678" /><p style={hint}>Recibe un WhatsApp por cada pedido nuevo</p></div>
-          <div><label style={lbl}>URL pública de la tienda (para el bot)</label><input style={inp} value={form.store_public_url} onChange={set('store_public_url')} placeholder="https://crm.diezrios.cl/tienda/diezrios" /><p style={hint}>El bot usará esta URL cuando los clientes pidan el link del catálogo o al compartir productos</p></div>
+          <div><label style={lbl}>URL pública de la tienda</label><input style={inp} value={form.store_public_url} onChange={set('store_public_url')} placeholder="https://diezrios.com" /><p style={hint}>El bot comparte esta URL para el catálogo y usa su dominio en los enlaces de seguimiento. Debe ser una dirección HTTPS conectada a esta tienda.</p></div>
         </div>
       </div>
 

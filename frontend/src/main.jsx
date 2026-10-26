@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client'
 const App = React.lazy(() => import('./App.jsx'))
 const Tienda = React.lazy(() => import('./components/Tienda.jsx'))
 const JustoCaseroLanding = React.lazy(() => import('./components/JustoCaseroLanding.jsx'))
+const DeliveryTracking = React.lazy(() => import('./components/DeliveryTracking.jsx'))
+import { trackingTokenFromPath } from './utils/delivery-tracking.mjs'
 import './index.css'
 
 const ASSET_RELOAD_KEY = 'resel_asset_reload_at'
@@ -21,6 +23,8 @@ const JUSTO_CASERO_DOMAINS = new Set([
 ])
 
 const pathParts = window.location.pathname.split('/').filter(Boolean)
+const trackingToken = trackingTokenFromPath(window.location.pathname)
+const isTracking = trackingToken !== null
 const domainSlug = STORE_DOMAINS[window.location.hostname]
 const isAdmin = pathParts[0] === 'admin'
 const isJustoCasero = !isAdmin && (JUSTO_CASERO_DOMAINS.has(window.location.hostname) || pathParts[0] === 'justo-casero')
@@ -35,7 +39,13 @@ function applyInitialPageIdentity() {
         ? { title: 'Tienda', icon: null, color: '#173b2b' }
         : { title: 'Resel', icon: null, color: '#0c1a20' }
 
-  document.title = identity.title
+  document.title = isTracking ? 'Seguimiento de tu pedido' : identity.title
+  if (isTracking && !document.querySelector('meta[name="referrer"]')) {
+    const referrer = document.createElement('meta')
+    referrer.name = 'referrer'
+    referrer.content = 'no-referrer'
+    document.head.appendChild(referrer)
+  }
   const favicon = document.querySelector('link[rel="icon"]')
   if (favicon && identity.icon) {
     favicon.setAttribute('href', identity.icon)
@@ -77,6 +87,10 @@ window.addEventListener('vite:preloadError', event => {
 })
 
 function AppLoader({ stalled = false }) {
+  if (isTracking) return <main style={{ minHeight: '100dvh', width: '100%', padding: 24, background: '#f8faf7', color: '#172b22' }} role="status">
+    <h1>Seguimiento de tu pedido</h1>
+    <p>{stalled ? 'No pudimos abrir el seguimiento. Vuelve a cargar la página.' : 'Preparando el seguimiento…'}</p>
+  </main>
   const light = localStorage.getItem('crm_theme') === 'light'
   const brand = isJustoCasero
     ? {
@@ -186,7 +200,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AppErrorBoundary>
       <React.Suspense fallback={<AppLoader />}>
-        {isJustoCasero ? <JustoCaseroLanding /> : isTienda ? <Tienda slug={domainSlug || pathParts[1]} /> : <App />}
+        {isTracking ? <DeliveryTracking token={trackingToken} /> : isJustoCasero ? <JustoCaseroLanding /> : isTienda ? <Tienda slug={domainSlug || pathParts[1]} /> : <App />}
       </React.Suspense>
     </AppErrorBoundary>
   </React.StrictMode>,

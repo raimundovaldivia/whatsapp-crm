@@ -249,9 +249,13 @@ Endpoints protegidos para `owner`, `admin` y `supervisor`:
 
 ### Seguimiento de despacho
 
-- Requiere `CRM_PUBLIC_URL` (o `PUBLIC_URL`/`BACKEND_URL`) apuntando al backend público.
+- Usa el dominio HTTPS de `store_public_url` de la organización (Configuración de la tienda → URL pública). Por ejemplo, `https://diezrios.com` genera `https://diezrios.com/seguimiento/<token>`; si la URL incluye una ruta de catálogo, solo se usa su origen.
+- El dominio debe servir este frontend y figurar en `FRONTEND_URL` del backend (incluye las variantes con/sin `www` que se usen). La página pública `/seguimiento/:token` tiene prioridad sobre el catálogo y consulta el endpoint existente de la API mediante `VITE_BACKEND_URL`, sin sesión CRM ni cookies.
+- Si no hay URL HTTPS válida por tienda, conserva `CRM_PUBLIC_URL` (o `PUBLIC_URL`/`BACKEND_URL`) del backend. Los enlaces de Railway ya enviados siguen disponibles hasta su vencimiento original. No se cambia la URL general usada por webhooks.
 - El enlace usa un token aleatorio; la base guarda solo su hash. No muestra nombre, teléfono, dirección ni identidad del repartidor.
 - La ubicación se publica únicamente para una ruta `in_progress` y deja de estar disponible al cerrar esa parada, terminar la ruta, revocar el enlace o después de 12 horas.
+- Al cerrar el enlace se retira el mapa y se detienen las consultas en la página de la tienda. Los errores temporales permiten reintentar. Las solicitudes de mapas comparten solo el origen como referencia, nunca la ruta con el token.
+- Publicar primero el frontend y luego la API que genera las nuevas URLs; no requiere migración. Verificar `store_public_url` por tienda antes de activar el cambio. Pruebas locales: `node --test test/delivery-tracking.test.cjs test/delivery-tracking-route.test.cjs test/delivery-notifications.test.cjs` en backend y `npm test` en frontend.
 - En Meta/Twilio con la ventana de 24 horas cerrada, el template Utility aprobado debe incorporar el enlace como variable o botón; un template antiguo sin esa variable seguirá avisando la salida, pero no podrá mostrar el enlace.
 
 Para pedir la opinión fuera de la ventana de 24 horas, asigna en **Configuración → Templates** un template Utility para **Opinión primera compra** con `{{1}}` Nombre y `{{2}}` Pedido. Sin ese template el proceso reintenta y no envía texto libre fuera de la ventana permitida.
