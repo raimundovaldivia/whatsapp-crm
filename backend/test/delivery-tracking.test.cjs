@@ -97,8 +97,9 @@ test('enlaces previos conservan su token y ocultan ubicación al vencer, revocar
     stop_key: 'bot_324', latitude: -29.95, longitude: -71.34, accuracy_m: 15,
     location_updated_at: new Date().toISOString(), expires_at: new Date(Date.now() + 3600000).toISOString(),
     revoked_at: null, route_status: 'in_progress', stop_statuses: {},
+    orders: [{ source: 'bot', id: 324 }], order_status: 'en_camino',
   };
-  for (const changes of [{}, { expires_at: '2000-01-01' }, { revoked_at: new Date().toISOString() }, { route_status: 'completed' }, { stop_statuses: { bot_324: 'cancelled' } }]) {
+  for (const changes of [{}, { expires_at: '2000-01-01' }, { revoked_at: new Date().toISOString() }, { route_status: 'completed' }, { stop_statuses: { bot_324: 'cancelled' } }, { orders: [] }, { order_status: 'entregado' }, { order_status: 'cancelled' }]) {
     const f = fixture([{ ...row, ...changes }]);
     const state = await f.service.getTrackingStatus('a'.repeat(43));
     const active = Object.keys(changes).length === 0;
