@@ -9,7 +9,7 @@
  * optimización con Google Maps). Sin coordenadas, la lista ocupa toda la
  * pantalla en vez de mostrar un mapa vacío de otra ciudad.
  */
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal, TextInput,
   Image, Alert, ScrollView, ActivityIndicator,
@@ -18,8 +18,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
-import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute, reorderRouteStops, updateDriverLocation } from '../services/api';
+import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute, reorderRouteStops } from '../services/api';
 import { routeStops as stopsOf } from '../utils/routeMap';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
@@ -167,32 +166,6 @@ export default function RouteScreen({ route: navRoute, navigation }) {
   }, [routeId, navigation]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
-
-  // Seguimiento en primer plano: se activa únicamente durante una ruta en
-  // curso y se detiene al terminarla o salir de esta pantalla.
-  useEffect(() => {
-    if (route?.status !== 'in_progress') return undefined;
-    let alive = true;
-    let subscription = null;
-    (async () => {
-      try {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (!permission.granted || !alive) return;
-        subscription = await Location.watchPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-          timeInterval: 15000,
-          distanceInterval: 30,
-        }, position => {
-          if (!alive) return;
-          updateDriverLocation(routeId, position.coords).catch(() => {});
-        });
-      } catch (_) {}
-    })();
-    return () => {
-      alive = false;
-      subscription?.remove();
-    };
-  }, [route?.status, routeId]);
 
   if (loading && !route) {
     return (
