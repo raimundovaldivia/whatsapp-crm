@@ -136,9 +136,9 @@ export async function validateSession() {
  * Rutas activas del repartidor ('sent' o 'in_progress').
  * Devuelve { routes: [...], route: <la más reciente> }.
  */
-export async function getActiveRoutes() {
-  const client = await getClient();
-  const res = await client.get('/api/delivery/routes/active');
+export async function getActiveRoutes(expectedSession = null, signal) {
+  const client = expectedSession ? await driverLocationClient(expectedSession) : await getClient();
+  const res = await client.get('/api/delivery/routes/active', { signal });
   return {
     routes: res.data?.routes || (res.data?.route ? [res.data.route] : []),
     route:  res.data?.route  || null,
@@ -188,13 +188,24 @@ export async function startRoute(routeId) {
 }
 
 /** Actualiza la ubicación visible en los enlaces temporales de la ruta. */
-export async function updateDriverLocation(routeId, location) {
-  const client = await getClient();
+async function driverLocationClient(expected) {
+  const current = await getSavedSession();
+  if (!expected.token || current.token !== expected.token || current.baseUrl !== expected.baseUrl
+    || current.user?.id !== expected.user?.id || current.user?.organization_id !== expected.user?.organization_id) {
+    throw Object.assign(new Error('La sesión cambió'), { code: 'SESSION_CHANGED' });
+  }
+  // Fix the identity for the request even if another login resets the shared client.
+  return axios.create({ baseURL: expected.baseUrl, timeout: 10000,
+    headers: { Authorization: `Bearer ${expected.token}` } });
+}
+
+export async function updateDriverLocation(routeId, location, expectedSession = null, signal) {
+  const client = expectedSession ? await driverLocationClient(expectedSession) : await getClient();
   const res = await client.patch(`/api/delivery/routes/${routeId}/location`, {
     latitude: location.latitude,
     longitude: location.longitude,
     accuracy: location.accuracy,
-  });
+  }, { signal });
   return res.data?.location || null;
 }
 

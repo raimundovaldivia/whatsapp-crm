@@ -182,3 +182,12 @@ parámetro de ruta.
   dirección.
 - **Sin señal:** las marcas de entrega no se encolan offline. Si falla, la
   app avisa y hay que reintentar con señal.
+## Seguimiento del cliente
+
+La app comparte una ubicación reciente cada 15 segundos mientras está en primer plano y tiene rutas `in_progress` asignadas al usuario. El seguimiento vive en la sesión de la app, por lo que cambiar entre rutas, paradas y chat no lo interrumpe. La primera lectura no requiere movimiento. El aviso inferior distingue permiso denegado, GPS apagado, falta de posición, conexión fallida, ausencia de enlaces y envío confirmado por el servidor.
+
+La posición no se guarda ni se acumula para enviar después: al volver de otra app se obtiene una lectura nueva. Se cancela al salir de la sesión y no se envía a rutas de otros repartidores ni a rutas cerradas. El API existente conserva la validación por organización, rol y asignación.
+
+El APK 1.4.0 solo tiene permisos de ubicación en primer plano. Al abrir Maps, bloquear el teléfono o minimizar Despachos, el seguimiento se pausa; al regresar se reanuda. Mantenerlo en segundo plano requiere un APK con los permisos y servicio nativo correspondientes, no solo una actualización OTA.
+
+Prueba local: `node --test backend/test/mobile-driver-location.test.cjs` desde la raíz del repositorio. Usa GPS, reloj y transporte simulados; no demuestra recepción real desde un teléfono. Para publicar, exportar Android y comprobar los canales `preview` y `production` de EAS: desplegar la web/API no publica automáticamente la app.

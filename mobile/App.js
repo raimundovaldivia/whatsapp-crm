@@ -16,6 +16,7 @@ import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
+import DriverLocationStatus from './src/components/DriverLocationStatus';
 
 import LoginScreen   from './src/screens/LoginScreen';
 import OrdersScreen  from './src/screens/OrdersScreen';
@@ -128,6 +129,7 @@ export default function App() {
         {!user ? (
           <LoginScreen onLogin={(data) => setUser(data.user || { name: '' })} />
         ) : (
+          <View style={{ flex: 1 }}>
           <NavigationContainer ref={navigationRef} theme={navTheme} onReady={() => {
             if (pendingRoute.current) {
               openPushDestination(pendingRoute.current);
@@ -197,6 +199,8 @@ export default function App() {
 
           </Stack.Navigator>
           </NavigationContainer>
+          <DriverLocationStatus user={user} />
+          </View>
         )}
       </SafeAreaProvider>
     </GestureHandlerRootView>
