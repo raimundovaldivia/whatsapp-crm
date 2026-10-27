@@ -19,7 +19,7 @@ En escritorio, abre el menú de cuenta y elige **Cambiar tienda**. En móvil est
 - 📦 **Cache de productos** — evita llamadas excesivas a la API de Shopify
 - 📊 **Contador de no leídos** — igual que WhatsApp
 - 🔍 **Buscador** — filtra conversaciones por nombre, teléfono o mensaje
-- 🚚 **Seguimiento de reparto** — al iniciar una ruta, el cliente recibe un enlace temporal para ver la ubicación del repartidor
+- 🚚 **Seguimiento de reparto** — en `/seguimiento`, el cliente consulta con teléfono y número de pedido el estado, las fechas y el medio/estado de pago registrado. Durante el reparto puede ver el mapa si existe seguimiento vigente; se actualiza cada 15 segundos y se oculta al finalizar la entrega. Los enlaces temporales enviados por WhatsApp conservan su funcionamiento. La ubicación requiere que el repartidor mantenga activa su app y no se muestra después del vencimiento o cierre de la ruta.
 - 🧾 **Identificación de pedidos** — los pedidos creados en el CRM se muestran como `#DR-<número>`; los números propios de Shopify se conservan
 - 💸 **Cobranza con compromisos** — comprobantes, pedidos marcados “no cobrar” y promesas con fecha detienen recordatorios duplicados; el seguimiento se reanuda en la fecha acordada
 - 📅 **Confirmación de reparto** — una fecha indicada después de confirmar el pedido se guarda en el pedido y actualiza las rutas aún no iniciadas

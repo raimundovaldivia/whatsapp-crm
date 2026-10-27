@@ -1,6 +1,7 @@
 const db = require('../db/database');
 const commercial = require('./commercial');
 const { crmOrderLabel } = require('../utils/order-reference');
+const { createOrderTrackingToken } = require('./delivery-tracking');
 
 function invalid() {
   return Object.assign(new Error('Revisa el teléfono y el número de pedido.'), { status: 400 });
@@ -65,6 +66,20 @@ function publicStatus(row, routeStatus) {
   return ['pending', 'Estado por confirmar'];
 }
 
+function publicPayment(row, shopify = false) {
+  const methods = { efectivo: 'Efectivo', transferencia: 'Transferencia', mixto: 'Efectivo y transferencia', otro: 'Otro medio' };
+  const method = Object.hasOwn(methods, row.payment_method) ? row.payment_method : null;
+  const recorded = String(shopify ? row.financial_status || '' : row.status || '').toLowerCase();
+  const states = { paid: 'Pagado', payment_received: 'Pagado', pending: 'Pendiente de pago',
+    authorized: 'Pago autorizado, pendiente de cobro', partially_paid: 'Pago parcial',
+    refunded: 'Reembolsado', partially_refunded: 'Reembolso parcial', voided: 'Pago anulado' };
+  let status = Object.hasOwn(states, recorded) ? recorded : 'unknown';
+  if (status === 'payment_received') status = 'paid';
+  if (!shopify && ['nuevo', 'draft', 'sent', 'por_despachar', 'asignado_ruta', 'en_camino', 'no_entregado', 'entregado'].includes(recorded)) status = 'pending';
+  return { status, statusLabel: states[status] || 'Estado de pago por confirmar',
+    method, methodLabel: method ? methods[method] : 'Medio no registrado' };
+}
+
 async function lookupOrder(input) {
   const lookup = validateLookup(input);
   const pool = db.getPool();
@@ -76,12 +91,12 @@ async function lookupOrder(input) {
   const phoneMatch = "regexp_replace(customer_phone, '[^0-9]', '', 'g') = ANY($3::text[])";
   const { rows } = lookup.crmId
     ? await pool.query(
-      `SELECT id, status, delivered_at, last_attempt_status, delivery_date::text AS delivery_date,
+      `SELECT id, status, payment_method, delivered_at, last_attempt_status, delivery_date::text AS delivery_date,
               (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date::text AS ordered_date
          FROM orders WHERE organization_id = $1 AND id = $2 AND ${phoneMatch} LIMIT 1`,
       [store.id, lookup.crmId, phones])
     : await pool.query(
-      `SELECT shopify_order_id AS id, shopify_name, crm_status AS status, delivered_at, last_attempt_status,
+      `SELECT shopify_order_id AS id, shopify_name, crm_status AS status, payment_method, financial_status, delivered_at, last_attempt_status,
               raw_json->>'cancelled_at' IS NOT NULL AS cancelled, delivery_date::text AS delivery_date,
               (shopify_created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date::text AS ordered_date
          FROM shopify_orders WHERE organization_id = $1
@@ -98,13 +113,19 @@ async function lookupOrder(input) {
       [store.id, `${lookup.crmId ? 'bot' : 'shopify'}_${row.id}`]);
     routeStatus = routes[0]?.status;
   }
-  const [status, statusLabel] = publicStatus(row, routeStatus);
+  let [status, statusLabel] = publicStatus(row, routeStatus);
+  const canTrack = status === 'in_transit' || (status === 'received' && ['paid', 'payment_received'].includes(row.status));
+  const trackingToken = canTrack
+    ? await createOrderTrackingToken(store.id, `${lookup.crmId ? 'bot' : 'shopify'}_${row.id}`).catch(() => null)
+    : null;
+  if (trackingToken) [status, statusLabel] = ['in_transit', 'En camino'];
   return {
     storeName: store.name,
     orderNumber: lookup.crmId ? crmOrderLabel(row.id) : row.shopify_name,
     status, statusLabel, orderedDate: row.ordered_date || null,
     deliveryDate: row.delivery_date || null,
+    payment: publicPayment(row, !lookup.crmId), trackingToken,
   };
 }
 
-module.exports = { lookupOrder, validateLookup, publicStatus };
+module.exports = { lookupOrder, validateLookup, publicStatus, publicPayment };

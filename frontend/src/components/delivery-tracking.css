@@ -24,3 +24,7 @@
 .order-lookup-result dl { display: grid; gap: 7px; margin-top: 20px; }
 .order-lookup-result dt { font-size: .85rem; }
 .order-lookup-result dd { margin: 0 0 10px; color: #172b22; font-weight: 600; }
+.order-lookup-payment { border-top: 1px solid #e1e8df; margin-top: 16px; padding-top: 12px; }
+.order-lookup-payment h3 { font-size: 1rem; color: #172b22; }
+.order-lookup-result .delivery-tracking-map { height: 340px; min-height: 260px; }
+.order-lookup-result .live-delivery-map { margin-top: 24px; }
