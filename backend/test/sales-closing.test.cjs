@@ -5,6 +5,18 @@ const closing = require('../src/services/sales-closing');
 // Octubre de 2026: Chile continental está en UTC-3.
 const atChile = value => new Date(`${value}-03:00`);
 
+test('una tienda puede configurar cierre a las 15:00 inclusive sin heredar las 13:00', () => {
+  const options = { cutoffTime: '15:00', startedAt: atChile('2026-10-29T14:30:00') };
+  assert.equal(closing.sameDayPolicy({ ...options, now: atChile('2026-10-29T15:00:59') }).canContinueSameDay, true);
+  const closed = closing.sameDayPolicy({ ...options, now: atChile('2026-10-29T15:01:00') });
+  assert.equal(closed.canContinueSameDay, false);
+  assert.equal(closed.needsHumanReview, true);
+  const prompt = closing.closingPromptSection({}, atChile('2026-10-29T14:30:00'), options);
+  assert.match(prompt, /15:00 inclusive/);
+  assert.doesNotMatch(prompt, /12:50|13:00/);
+  assert.equal(closing.sameDayPolicy({ cutoffTime: '15:00', now: atChile('2026-11-01T12:00:00') }).offerOpen, false);
+});
+
 test('permite iniciar a las 12:49 y crea una ventana hasta las 13:00', () => {
   const now = atChile('2026-10-14T12:49:00');
   const result = closing.sameDayPolicy({ now });

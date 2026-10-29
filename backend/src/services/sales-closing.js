@@ -32,21 +32,32 @@ function sameChileDay(first, second) {
   return chileParts(first).isoDate === chileParts(second).isoDate;
 }
 
-function startedBeforeOfferCutoff(startedAt, now = new Date()) {
+function cutoffs(cutoffTime) {
+  if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(String(cutoffTime || ''))) {
+    const [hours, minutes] = cutoffTime.split(':').map(Number);
+    // La hora configurada incluye todo ese minuto: "hasta las 15:00 inclusive".
+    const limit = hours * 60 + minutes + 1;
+    return { offer: limit, order: limit, offerLabel: cutoffTime, orderLabel: cutoffTime };
+  }
+  return { offer: SAME_DAY_OFFER_CUTOFF_MINUTES, order: SAME_DAY_ORDER_CUTOFF_MINUTES, offerLabel: '12:50', orderLabel: '13:00' };
+}
+
+function startedBeforeOfferCutoff(startedAt, now = new Date(), cutoffTime = null) {
   if (!startedAt) return false;
   const started = new Date(startedAt);
   if (Number.isNaN(started.getTime()) || !sameChileDay(started, now)) return false;
   const parts = chileParts(started);
   return parts.weekday >= 1 && parts.weekday <= 6
-    && parts.totalMinutes < SAME_DAY_OFFER_CUTOFF_MINUTES;
+    && parts.totalMinutes < cutoffs(cutoffTime).offer;
 }
 
-function sameDayPolicy({ now = new Date(), startedAt = null, holdUntil = null } = {}) {
+function sameDayPolicy({ now = new Date(), startedAt = null, holdUntil = null, cutoffTime = null } = {}) {
   const current = chileParts(now);
+  const cutoff = cutoffs(cutoffTime);
   const dispatchDay = current.weekday >= 1 && current.weekday <= 6;
-  const offerOpen = dispatchDay && current.totalMinutes < SAME_DAY_OFFER_CUTOFF_MINUTES;
-  const orderOpen = dispatchDay && current.totalMinutes < SAME_DAY_ORDER_CUTOFF_MINUTES;
-  const startedInTime = startedBeforeOfferCutoff(startedAt, now);
+  const offerOpen = dispatchDay && current.totalMinutes < cutoff.offer;
+  const orderOpen = dispatchDay && current.totalMinutes < cutoff.order;
+  const startedInTime = startedBeforeOfferCutoff(startedAt, now, cutoffTime);
   const holdDate = holdUntil ? new Date(holdUntil) : null;
   const hasHold = !!holdDate && !Number.isNaN(holdDate.getTime()) && sameChileDay(holdDate, now);
   const holdActive = hasHold && holdDate.getTime() > new Date(now).getTime();
@@ -62,7 +73,7 @@ function sameDayPolicy({ now = new Date(), startedAt = null, holdUntil = null } 
     canContinueSameDay: orderOpen && (offerOpen || startedInTime || holdActive),
     needsHumanReview: protectedOrder && !orderOpen,
     minutesUntilOrderCutoff: orderOpen
-      ? Math.max(0, SAME_DAY_ORDER_CUTOFF_MINUTES - current.totalMinutes)
+      ? Math.max(0, cutoff.order - current.totalMinutes)
       : 0,
   };
 }
@@ -131,20 +142,22 @@ function buildHotFollowUpMessage(conversation = {}, now = new Date()) {
   return `${greeting}${request.charAt(0).toUpperCase()}${request.slice(1)}`;
 }
 
-function closingPromptSection(conversation = {}, now = new Date()) {
+function closingPromptSection(conversation = {}, now = new Date(), { cutoffTime = null } = {}) {
+  const cutoff = cutoffs(cutoffTime);
   const policy = sameDayPolicy({
     now,
+    cutoffTime,
     startedAt: conversation.sales_started_at,
     holdUntil: conversation.same_day_hold_until,
   });
   if (policy.canContinueSameDay && policy.protectedOrder && !policy.offerOpen) {
-    return `## Protección de cierre comercial\nEl cliente comenzó el pedido antes de las 12:50. Mantén la opción de despacho para hoy mientras completa el pedido, hasta las 13:00. No le digas que perdió el despacho ni cambies el acuerdo por haber respondido después de las 12:50. Pide únicamente el dato pendiente.`;
+    return `## Protección de cierre comercial\nEl cliente comenzó el pedido antes del cierre. Mantén la opción de despacho para hoy mientras completa el pedido, hasta las ${cutoff.orderLabel}. No le digas que perdió el despacho por haber respondido después del inicio del cierre. Pide únicamente el dato pendiente.`;
   }
   if (policy.offerOpen) {
-    return `## Cierre comercial de hoy\nTodavía se puede iniciar un pedido con opción de despacho para hoy. Deja de ofrecerla a clientes nuevos desde las 12:50. El cierre real para completar pedidos protegidos es a las 13:00.`;
+    return `## Cierre comercial de hoy\nTodavía se puede iniciar un pedido con opción de despacho para hoy. Hora límite para iniciar: ${cutoff.offerLabel}${cutoffTime ? ' inclusive' : ''}. Hora límite para completar: ${cutoff.orderLabel}${cutoffTime ? ' inclusive' : ''}. Sujeto a disponibilidad y cobertura.`;
   }
   if (policy.needsHumanReview) {
-    return `## Pedido iniciado antes del corte, pendiente de revisión\nEl pedido comenzó antes de las 12:50 pero ya pasaron las 13:00. Continúa ayudando a completar los datos, no le digas que perdió el despacho y no prometas hoy. Indica que estás confirmando el despacho con el equipo y deriva a atención humana.`;
+    return `## Pedido iniciado antes del corte, pendiente de revisión\nEl pedido comenzó antes del cierre pero ya pasó la hora límite de ${cutoff.orderLabel}. Continúa ayudando a completar los datos, no le digas que perdió el despacho y no prometas hoy. Indica que estás confirmando el despacho con el equipo y deriva a atención humana.`;
   }
   return `## Cierre comercial de hoy\nYa pasó la hora para ofrecer despacho el mismo día. Para pedidos nuevos, ofrece el próximo día de despacho disponible; no digas “mañana” sin verificar el calendario.`;
 }

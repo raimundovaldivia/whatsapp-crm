@@ -50,7 +50,7 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
     },
     getContact: async () => ({ name: 'Katherine Andrea Bravo Becerra', contact_type: 'customer', client_type: 'personal' }),
     getPrimaryDataSource: async () => null,
-    getCachedProducts: async () => options.products || [],
+    getCachedProducts: async () => (options.products || []).map(product => ({ raw_json: JSON.stringify(product) })),
     getProducts: async () => options.products || [],
     getOrderDraft: async () => options.orderDraft || {},
     getActiveOrderForBot: async () => options.activeOrder === false ? null : ({
@@ -327,6 +327,7 @@ test('un pedido explícitamente para mañana no se cambia a despacho de hoy aunq
     activeOrder: false,
     pipelineState: 'collecting_order',
     orderDraft: { items: [{ product_name: 'Huevos XL', quantity: 2 }] },
+    products: [{ id: 'xl', title: 'Huevos XL', priceMin: 12990, inventoryQuantity: 10 }],
     beginSalesClosing: {
       sales_started_at: '2026-10-14T15:40:00.000Z',
       same_day_hold_until: '2026-10-14T16:00:00.000Z',

@@ -1211,14 +1211,17 @@ function IATab({ onSwitchTab }) {
 
   // Info de entrega estructurada
   const [schedule,       setSchedule]       = useState('');
+  const [cutoffTime, setCutoffTime] = useState('');
   const [zone,           setZone]           = useState('');
   const [minimum,        setMinimum]        = useState('');
   const [paymentMethods, setPaymentMethods] = useState('');
   const [paymentInfo,    setPaymentInfo]    = useState(''); // instrucciones de pago para el bot
   const [deliverySaved,  setDeliverySaved]  = useState(false);
+  const [salesEnabled, setSalesEnabled] = useState(true);
+  const [botReadiness, setBotReadiness] = useState(null);
 
   // Modo de pago: 'link' (link Shopify) | 'cod' (despacho por pagar)
-  const [paymentMode, setPaymentMode] = useState('link');
+  const [paymentMode, setPaymentMode] = useState('cod');
 
   // Teléfono del admin para alertas de modo humano
   const [adminAlertPhone, setAdminAlertPhone] = useState('');
@@ -1263,16 +1266,20 @@ function IATab({ onSwitchTab }) {
       setupAPI.shopifyStatus().catch(() => null),
       setupAPI.whatsappStatus().catch(() => null),
       storeSettingsAPI.getDeliveryInfo().catch(() => ({ info: {} })),
-    ]).then(([settings, ctx, shopify, whatsapp, delivery]) => {
+      api.get('/settings/bot-readiness').catch(() => null),
+    ]).then(([settings, ctx, shopify, whatsapp, delivery, readiness]) => {
       const d = settings.data?.data;
       if (d) {
         setAiEnabled(d.ai_enabled_global !== false);
+        setSalesEnabled(d.bot_sales_enabled !== false);
         setExtraPrompt(d.ai_system_prompt_extra || '');
       }
       setStoreContext(ctx.context || '');
+      setBotReadiness(readiness?.data || null);
       setSetupStatus({ shopify, whatsapp });
       const di = delivery.info || {};
       setSchedule(di.schedule || '');
+      setCutoffTime(di.cutoffTime || '');
       setZone(di.zone || '');
       setMinimum(di.minimum || '');
       setPaymentMethods(di.paymentMethods || '');
@@ -1281,7 +1288,7 @@ function IATab({ onSwitchTab }) {
       if (d?.admin_alert_phone) setAdminAlertPhone(d.admin_alert_phone);
       if (d?.scheduled_dispatch_template !== undefined) setDispatchTemplate(d.scheduled_dispatch_template || '');
       setDriverSell(d?.driver_sell_enabled === true);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch(() => setError('No se pudo cargar la configuración del bot. Recarga antes de guardar.')).finally(() => setLoading(false));
   }, []);
 
   // Auto-guardar contexto en DB con debounce 1.5s
@@ -1291,23 +1298,23 @@ function IATab({ onSwitchTab }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try { await storeSettingsAPI.saveStoreContext(val); setCtxSaved(true); setTimeout(() => setCtxSaved(false), 2500); }
-      catch {}
+      catch (err) { setError(err.response?.data?.error || 'No se pudo guardar el contexto de la tienda.'); }
     }, 1500);
   };
 
   // Auto-guardar delivery info con debounce 1s
   const handleDeliveryChange = (field, val) => {
-    const setters = { schedule: setSchedule, zone: setZone, minimum: setMinimum, paymentMethods: setPaymentMethods };
+    const setters = { schedule: setSchedule, zone: setZone, minimum: setMinimum, paymentMethods: setPaymentMethods, cutoffTime: setCutoffTime };
     setters[field]?.(val);
     setDeliverySaved(false);
     if (deliveryTimer.current) clearTimeout(deliveryTimer.current);
     deliveryTimer.current = setTimeout(async () => {
-      const current = { schedule, zone, minimum, paymentMethods, [field]: val };
+      const current = { schedule, zone, minimum, paymentMethods, cutoffTime, [field]: val };
       try {
         await storeSettingsAPI.saveDeliveryInfo(current);
         setDeliverySaved(true);
         setTimeout(() => setDeliverySaved(false), 2500);
-      } catch {}
+      } catch (err) { setError(err.response?.data?.error || 'No se pudieron guardar las condiciones de entrega.'); }
     }, 1000);
   };
 
@@ -1385,12 +1392,15 @@ function IATab({ onSwitchTab }) {
 
   const save = async () => {
     setSaving(true); setError(''); setSuccess('');
+    clearTimeout(saveTimer.current);
+    clearTimeout(deliveryTimer.current);
     try {
-      await Promise.all([
-        api.put('/settings', { ai_enabled_global: aiEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone, scheduled_dispatch_template: dispatchTemplate, driver_sell_enabled: driverSell }),
-        storeSettingsAPI.saveStoreContext(storeContext),
-        storeSettingsAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods }),
-      ]);
+      await storeSettingsAPI.saveDeliveryInfo({ schedule, zone, minimum, paymentMethods, cutoffTime });
+      await storeSettingsAPI.saveStoreContext(storeContext);
+      // Aplicar la activación solo después de guardar sus condiciones.
+      await api.put('/settings', { ai_enabled_global: aiEnabled, bot_sales_enabled: salesEnabled, ai_system_prompt_extra: extraPrompt, payment_mode: paymentMode, payment_info: paymentInfo, admin_alert_phone: adminAlertPhone, scheduled_dispatch_template: dispatchTemplate, driver_sell_enabled: driverSell });
+      const readiness = await api.get('/settings/bot-readiness');
+      setBotReadiness(readiness.data);
       setSuccess('✅ Configuración guardada correctamente');
     } catch (err) {
       setError(err.response?.data?.error || 'Error al guardar');
@@ -1490,10 +1500,10 @@ function IATab({ onSwitchTab }) {
           {/* Toggle IA global */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.bgApp, borderRadius: '10px', padding: '14px 16px' }}>
             <div>
-              <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>IA activada globalmente</div>
+              <div style={{ color: colors.textPrimary, fontSize: '14px', fontWeight: 600 }}>{aiEnabled ? 'Bot activado' : 'Bot apagado'}</div>
               <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '2px' }}>El bot responde automáticamente a nuevos mensajes de WhatsApp</div>
             </div>
-            <button onClick={() => setAiEnabled(v => !v)}
+            <button role="switch" aria-label="Activar bot" aria-checked={aiEnabled} onClick={() => setAiEnabled(v => !v)}
               style={{ width: '44px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
                 backgroundColor: aiEnabled ? colors.green : colors.borderStrong,
                 position: 'relative', transition: 'background-color 0.2s', flexShrink: 0 }}>
@@ -1503,6 +1513,20 @@ function IATab({ onSwitchTab }) {
           </div>
 
           {/* ── Info de entrega estructurada ──────────────────────── */}
+          <div style={{ backgroundColor: colors.bgApp, borderRadius: '12px', padding: '16px', border: `1px solid ${colors.border}` }}>
+            <label style={{ display: 'flex', gap: '10px', color: colors.textPrimary }}>
+              <input type="checkbox" checked={salesEnabled} onChange={e => setSalesEnabled(e.target.checked)} />
+              Permitir crear pedidos desde el bot
+            </label>
+            <p style={hintStyle}>Al desactivarlo, el bot puede atender consultas pero no cerrar pedidos. Guarda la configuración para aplicar el cambio.</p>
+            {botReadiness ? <>
+              <p style={{ color: colors.textSecondary, fontSize: '13px' }}>{botReadiness.activeProducts} productos activos para el bot</p>
+              {botReadiness.warnings?.length > 0
+                ? <ul style={{ color: colors.textSecondary, fontSize: '13px', paddingLeft: '20px' }}>{botReadiness.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
+                : <p style={hintStyle}>Catálogo y condiciones cargados. Verifica que sus valores estén aprobados antes de vender.</p>}
+            </> : <p style={hintStyle}>No se pudo comprobar el catálogo y las condiciones. Vuelve a cargar la configuración.</p>}
+          </div>
+
           <div style={{ backgroundColor: colors.bgApp, borderRadius: '12px', padding: '16px', border: `1px solid ${colors.border}` }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
@@ -1525,6 +1549,11 @@ function IATab({ onSwitchTab }) {
                   placeholder="Lun–Vie 9am–6pm, Sáb 9am–1pm"
                   style={{ ...inp, borderColor: schedule ? `${colors.green}44` : colors.borderStrong }}
                 />
+              </div>
+              <div>
+                <label style={labelStyle} htmlFor="bot-order-cutoff">Hora límite para pedir (Chile)</label>
+                <input id="bot-order-cutoff" type="time" value={cutoffTime} onChange={e => handleDeliveryChange('cutoffTime', e.target.value)} style={inp} />
+                <p style={hintStyle}>Incluye ese minuto. Después, el bot solicita el próximo reparto o una revisión del equipo.</p>
               </div>
               {/* Zona */}
               <div>
