@@ -3,8 +3,8 @@ import './justo-casero.css';
 
 const API = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 const CRM_STORE_SLUG = 'justo-casero-mvg75kb0';
-const FALLBACK_WHATSAPP = '56942876413';
-const PRICE_VOTES_KEY = 'justo_casero_price_votes_v1';
+const FALLBACK_WHATSAPP = '56926082545';
+const PRICE_VOTES_KEY = 'justo_casero_price_votes_v2';
 
 const productTests = [
   { id: 'lacteos', icon: '🧀', label: 'Quesos y lácteos locales', detail: 'Productos cercanos, frescos y con buena procedencia.' },
@@ -15,14 +15,18 @@ const productTests = [
 
 const eggBoxes = [
   {
-    size: 'XL',
-    title: 'Caja de huevos café XL',
-    text: 'Huevos café grandes y rendidores, vendidos únicamente por caja.',
+    size: 'Extra',
+    units: 180,
+    sku: 'JC-EXTRA-180',
+    title: 'Huevos Extra de color · Caja de 180',
+    text: '180 huevos de color, calibre Extra de 61–68 g. Venta por caja.',
   },
   {
-    size: 'Jumbo',
-    title: 'Caja de huevos café Jumbo',
-    text: 'Nuestra alternativa de mayor tamaño, vendida únicamente por caja.',
+    size: 'Súper Extra',
+    units: 100,
+    sku: 'JC-SUPER-EXTRA-100',
+    title: 'Huevos Súper Extra de color · Caja de 100',
+    text: '100 huevos de color, calibre Súper Extra / Especial de 69–76 g. Venta por caja.',
   },
 ];
 
@@ -45,6 +49,7 @@ function savedPriceVotes() {
 
 export default function JustoCaseroLanding() {
   const [whatsapp, setWhatsapp] = useState(FALLBACK_WHATSAPP);
+  const [catalog, setCatalog] = useState(null);
   const [selection, setSelection] = useState('');
   const [otherIdea, setOtherIdea] = useState('');
   const [priceVotes, setPriceVotes] = useState(savedPriceVotes);
@@ -61,11 +66,18 @@ export default function JustoCaseroLanding() {
         if (error.name !== 'AbortError') console.warn('[Justo Casero] Se usará el WhatsApp de respaldo');
       });
 
+    fetch(API + '/store/' + CRM_STORE_SLUG + '/products', { signal: controller.signal })
+      .then(response => response.ok ? response.json() : Promise.reject(new Error('catalog unavailable')))
+      .then(data => setCatalog(Array.isArray(data.products) ? data.products : null))
+      .catch(error => {
+        if (error.name !== 'AbortError') console.warn('[Justo Casero] Consulta disponibilidad por WhatsApp');
+      });
+
     const previousTitle = document.title;
     const description = document.querySelector('meta[name="description"]');
     const previousDescription = description?.getAttribute('content') || '';
     document.title = 'Justo Casero | Productos locales y precios justos';
-    description?.setAttribute('content', 'Para la casera y el casero: productos locales o de buen precio, elegidos con criterio. Partimos con huevos café XL y Jumbo.');
+    description?.setAttribute('content', 'Justo Casero: huevos Extra en cajas de 180 y Súper Extra en cajas de 100. Reparto en La Serena urbana y pedidos por WhatsApp.');
 
     return () => {
       controller.abort();
@@ -104,7 +116,7 @@ export default function JustoCaseroLanding() {
             <a href="#precio-justo">Precio justo</a>
             <a href="#proximo-producto">Tu voto</a>
           </nav>
-          <a className="jc-button jc-button-small" href={orderLink('Hola, quiero consultar por las cajas de huevos café XL y Jumbo de Justo Casero.')} target="_blank" rel="noreferrer">
+          <a className="jc-button jc-button-small" href={orderLink('Hola, quiero consultar por las cajas Extra de 180 y Súper Extra de 100 de Justo Casero.')} target="_blank" rel="noreferrer">
             Pedir por WhatsApp
           </a>
         </div>
@@ -116,18 +128,18 @@ export default function JustoCaseroLanding() {
             <div className="jc-hero-copy">
               <div className="jc-eyebrow"><span /> Para la casera y el casero</div>
               <h1>Local cuando se puede. <em>Buen precio siempre.</em></h1>
-              <p className="jc-hero-lead">Partimos con cajas de huevos café XL y Jumbo. Después iremos sumando productos locales o alternativas que realmente convengan.</p>
+              <p className="jc-hero-lead">Huevos de color en dos formatos: Extra de 180 y Súper Extra de 100. Después iremos sumando productos locales o alternativas que realmente convengan.</p>
               <div className="jc-hero-actions">
-                <a className="jc-button jc-button-primary" href={orderLink('Hola, quiero conocer el precio y disponibilidad de las cajas de huevos café XL y Jumbo.')} target="_blank" rel="noreferrer">
+                <a className="jc-button jc-button-primary" href={orderLink('Hola, quiero conocer el precio y disponibilidad de Extra de 180 y Súper Extra de 100 huevos.')} target="_blank" rel="noreferrer">
                   Consultar precio por caja <span aria-hidden="true">→</span>
                 </a>
                 <a className="jc-button jc-button-ghost" href="#productos">Ver tamaños</a>
               </div>
-              <p className="jc-coverage"><span className="jc-icon" aria-hidden="true">⌖</span> Atención en La Serena y Coquimbo</p>
+              <p className="jc-coverage"><span className="jc-icon" aria-hidden="true">⌖</span> Reparto incluido en La Serena urbana</p>
             </div>
-            <div className="jc-hero-visual" aria-label="Cajas de huevos café XL y Jumbo">
-              <div className="jc-price-note">Huevos café<br /><strong>XL + Jumbo</strong></div>
-              <img src="/store-assets/justo-casero/hero-huevos.png" alt="Dos cajas de huevos café en tamaños XL y Jumbo" />
+            <div className="jc-hero-visual" aria-label="Cajas Extra de 180 y Súper Extra de 100 huevos">
+              <div className="jc-price-note">Huevos de color<br /><strong>Extra + Súper Extra</strong></div>
+              <img src="/store-assets/justo-casero/hero-huevos.png" alt="Huevos de color vendidos por caja" />
               <div className="jc-hero-stamp">Venta<br />por caja</div>
             </div>
           </div>
@@ -135,7 +147,7 @@ export default function JustoCaseroLanding() {
 
         <section className="jc-benefits" aria-label="Características de la oferta">
           <div className="jc-container jc-benefit-grid">
-            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Hoy ofrecemos cajas de huevos café XL y Jumbo.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Extra de 180 y Súper Extra de 100 huevos de color.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">▦</span><div><h2>Selección con criterio</h2><p>Cada producto debe ser local o tener un precio que realmente convenga.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>Ustedes deciden</h2><p>La casera y el casero nos ayudan a elegir qué incorporar después.</p></div></article>
           </div>
@@ -145,18 +157,25 @@ export default function JustoCaseroLanding() {
           <div className="jc-container">
             <div className="jc-section-heading">
               <div><span className="jc-kicker">Nuestra primera categoría</span><h2>Huevos café.<br />Dos tamaños.</h2></div>
-              <p>Comenzamos con cajas de huevos café. Elige XL o Jumbo mientras preparamos los próximos productos de Justo Casero.</p>
+              <p>Elige el calibre y la cantidad que necesitas: Extra en cajas de 180 o Súper Extra en cajas de 100. Precios por caja, con reparto incluido en La Serena urbana.</p>
             </div>
             <div className="jc-egg-grid">
-              {eggBoxes.map((product, index) => (
+              {eggBoxes.map((product, index) => {
+                const activeProduct = catalog?.find(item => item?.sku === product.sku);
+                const price = Number(activeProduct?.price);
+                const available = activeProduct && (Number(activeProduct.stock) === -1 || Number(activeProduct.stock) > 0);
+                return (
                 <article className={`jc-egg-card jc-egg-card-${index + 1}`} key={product.size}>
                   <span className="jc-card-number">0{index + 1}</span>
-                  <span className="jc-size-label" aria-hidden="true">{product.size}</span>
+                  <span className="jc-size-label" aria-hidden="true">{product.units}</span>
                   <h3>{product.title}</h3>
                   <p>{product.text}</p>
+                  {activeProduct && Number.isFinite(price) && price > 0 && <strong className="jc-box-price">${price.toLocaleString('es-CL')} por caja</strong>}
+                  <p>{catalog === null ? 'Consulta precio y disponibilidad por WhatsApp.' : available ? 'Disponible. Reparto incluido en La Serena urbana.' : 'Temporalmente no disponible. Consulta por el próximo ingreso.'}</p>
                   <a href={orderLink(`Hola, quiero consultar precio y disponibilidad de la ${product.title}.`)} target="_blank" rel="noreferrer">Consultar por {product.size} <span>→</span></a>
                 </article>
-              ))}
+                );
+              })}
             </div>
           </div>
         </section>
@@ -198,16 +217,16 @@ export default function JustoCaseroLanding() {
             <div className="jc-centered-heading"><span className="jc-kicker">Comprar será así de fácil</span><h2>Tres pasos y listo.</h2></div>
             <ol className="jc-steps">
               <li><span>1</span><h3>Consulta</h3><p>Pide el precio vigente de las cajas de huevos café.</p></li>
-              <li><span>2</span><h3>Elige</h3><p>Indica si necesitas XL o Jumbo y cuántas cajas.</p></li>
-              <li><span>3</span><h3>Coordina</h3><p>Nuestro equipo recibe la conversación y gestiona tu pedido por WhatsApp.</p></li>
+              <li><span>2</span><h3>Elige</h3><p>Indica Extra de 180 o Súper Extra de 100, la cantidad de cajas y tu dirección.</p></li>
+              <li><span>3</span><h3>Confirma</h3><p>Revisa el resumen y confírmalo por WhatsApp. Recibirás el número de tu pedido. Pagas en efectivo o transferencia al recibir.</p></li>
             </ol>
           </div>
         </section>
 
         <section className="jc-contact" id="contacto">
           <div className="jc-container jc-contact-card">
-            <div><span className="jc-kicker">XL O JUMBO</span><h2>Tu caja de huevos café.</h2><p>Escríbenos para consultar el precio y la disponibilidad vigente.</p></div>
-            <a className="jc-button jc-button-dark" href={orderLink('Hola, quiero pedir una caja de huevos café. ¿Qué disponibilidad tienen en XL y Jumbo?')} target="_blank" rel="noreferrer">Abrir WhatsApp <span>→</span></a>
+            <div><span className="jc-kicker">EXTRA O SÚPER EXTRA</span><h2>Tu caja de huevos de color.</h2><p>Repartimos de lunes a sábado, de 15:00 a 21:00. Pedidos hasta las 15:00 inclusive; después, para el siguiente día de reparto disponible. Fuera de La Serena urbana, consulta cobertura y costo antes de comprar.</p></div>
+            <a className="jc-button jc-button-dark" href={orderLink('Hola, quiero pedir una caja de huevos de color. ¿Qué disponibilidad tienen en Extra de 180 y Súper Extra de 100?')} target="_blank" rel="noreferrer">Abrir WhatsApp <span>→</span></a>
           </div>
         </section>
 
