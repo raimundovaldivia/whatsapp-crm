@@ -7,7 +7,7 @@ const product = { id: 7, title: 'Huevos Extra de color · Caja de 180', price: 4
 const draft = { customer_name: 'Prueba', address: 'Calle 123', city: 'La Serena', items: [{ product_name: product.title, quantity: 1 }] };
 
 function fixture({ products = [product], settings = {}, permitted = ['sales_ai'] } = {}) {
-  const writes = [], extractions = [];
+  const writes = [], extractions = [], salesCalls = [];
   const db = {
     getSetting: async (_org, key) => settings[key] ?? (key === 'catalog_source' ? 'local' : null),
     setSetting: async (...args) => writes.push(args),
@@ -21,6 +21,11 @@ function fixture({ products = [product], settings = {}, permitted = ['sales_ai']
     '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
     '../services/commercial': { permitted: async (_org, key) => permitted.includes(key) },
     '../services/shopify-api': { formatProductsForAI: products => products.map(p => p.title).join('\n') },
+    '../services/agents/orchestrator': { classifyIntent: async () => ({ intent: 'exploring' }) },
+    '../services/agents/sales': {
+      generateSalesResponse: async (...args) => { salesCalls.push(args); return 'Consulta de producto'; },
+      isReadyToOrder: () => false,
+    },
     '../services/agents/orders': {
       ...agent,
       extractOrderData: async (history, previous) => { extractions.push(history); return { ...previous, ...draft }; },
@@ -32,8 +37,23 @@ function fixture({ products = [product], settings = {}, permitted = ['sales_ai']
     await handler(router, method, path)({ orgId: 2, body }, res);
     return res;
   };
-  return { invoke, writes, extractions, db };
+  return { invoke, writes, extractions, salesCalls, db };
 }
+
+test('cada consulta recibe el estado vigente aunque el historial diga lo contrario', async () => {
+  const settings = { bot_sales_enabled: 'false' };
+  const f = fixture({ settings });
+  const body = { message: '¿Puedo pedir una caja?', history: [{ role: 'assistant', content: 'Las ventas están pendientes de habilitación.' }] };
+  await f.invoke('post', '/test-bot', body);
+  assert.match(f.salesCalls[0][3], /VENTAS PAUSADAS/);
+  settings.bot_sales_enabled = 'true';
+  await f.invoke('post', '/test-bot', body);
+  assert.match(f.salesCalls[1][3], /VENTAS HABILITADAS/);
+  assert.doesNotMatch(f.salesCalls[1][3], /VENTAS PAUSADAS/);
+  assert.match(f.salesCalls[1][3], /prioridad sobre mensajes anteriores/);
+  assert.equal(f.salesCalls[1][0][0].content, body.history[0].content);
+  assert.equal(f.writes.length, 0);
+});
 
 test('el simulador usa catálogo local, incluye el mensaje actual y exige revisar antes de confirmar', async () => {
   const f = fixture();
