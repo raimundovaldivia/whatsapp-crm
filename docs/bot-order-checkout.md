@@ -1,5 +1,13 @@
 # Cierre de pedidos del bot
 
+La web de Justo Casero muestra los formatos Extra de 180 y Súper Extra de 100.
+Consulta precios y disponibilidad por SKU en el catálogo público de su propia
+tienda. Si no puede cargarlo, solicita consultar por WhatsApp sin inventar precio
+o stock. El número de respaldo también pertenece a Justo Casero, incluido el
+primer render anterior a recibir la configuración. Cambiar un precio en el CRM
+no requiere modificar el código de la web. La opinión sobre precios usa una
+nueva clave local para no reutilizar votos de los antiguos formatos XL/Jumbo.
+
 WhatsApp y el simulador leen el mismo catálogo (`bot-catalog`). Una tienda con
 `catalog_source=local` nunca recupera productos de Shopify si su catálogo local
 está vacío. Las condiciones comerciales de `delivery_info` están disponibles
