@@ -102,7 +102,7 @@ PRODUCTOS DISPONIBLES:
  * Agente de Órdenes — Recopila datos y confirma el pedido
  * @param {string} pricingText — salida de order-pricing.pricingContext()
  */
-async function generateOrderResponse(conversationHistory, userMessage, orderDraft, productosTexto, pricingText = '') {
+async function generateOrderResponse(conversationHistory, userMessage, orderDraft, productosTexto, pricingText = '', storeContext = '') {
   const productContext = productosTexto || 'Sin catálogo disponible.';
   const draftContext = Object.keys(orderDraft).length > 0
     ? JSON.stringify(filterDraftForDisplay(orderDraft), null, 2)
@@ -111,7 +111,8 @@ async function generateOrderResponse(conversationHistory, userMessage, orderDraf
   const system = ORDERS_SYSTEM
     .replace('{ORDER_DRAFT}', draftContext)
     .replace('{PRICING}', pricingText || 'Aún no hay productos en el pedido.')
-    .replace('{PRODUCTOS}', productContext);
+    .replace('{PRODUCTOS}', productContext)
+    + (storeContext ? `\n\nCONDICIONES DE ESTA TIENDA:\n${storeContext}\nRespeta estas condiciones durante la recopilación y el cierre. No prometas precios, disponibilidad, pagos o reparto que no estén confirmados.` : '');
 
   // Más historial para el agente de pedidos — necesita recordar el contexto completo
   const messages = conversationHistory.slice(-20).map(m => ({
@@ -233,13 +234,13 @@ Solo el JSON, nada más.`;
 function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
   // El cliente confirma Y ya tenemos todos los datos.
   if (hasRequiredData(orderDraft)) {
-    const lowerMsg = userMessage.toLowerCase().trim();
+    const lowerMsg = String(userMessage || '').toLowerCase().trim().replace(/[.!¡]+$/u, '').trim();
     if (isBareAffirmative(userMessage)) return true;
 
     const paymentPhrases = ['listo el pago', 'ya pagué', 'ya pague', 'hice la transferencia',
       'hice el pago', 'ya transferí', 'ya transferi', 'transferido', 'pago realizado',
       'ya deposité', 'ya deposite', 'acabo de pagar', 'listo pagué', 'listo pague'];
-    if (paymentPhrases.some(p => lowerMsg.includes(p))) {
+    if (paymentPhrases.includes(lowerMsg)) {
       return true;
     }
   }
@@ -290,13 +291,21 @@ function isCancelDuringCollection(userMessage) {
  */
 function hasRequiredData(draft) {
   const phoneReady = !draft?.requires_customer_phone || isValidCustomerPhone(draft.customer_phone);
-  return phoneReady && REQUIRED_FIELDS.every(f => draft[f]) && Array.isArray(draft.items) && draft.items.length > 0;
+  return phoneReady && REQUIRED_FIELDS.every(f => typeof draft?.[f] === 'string' && draft[f].trim())
+    && hasDeliveryAddress(draft) && Array.isArray(draft.items) && draft.items.length > 0;
+}
+
+function hasDeliveryAddress(draft = {}) {
+  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\b(?:radio|urbano|urbana)\b/g, '').replace(/\s+/g, ' ').trim();
+  const address = normalize(draft.address);
+  return address.length >= 5 && address !== normalize(draft.city)
+    && !/^(?:pendiente|por confirmar|por definir|sin direccion)$/.test(address);
 }
 
 /** Campos que faltan, en palabras para el cliente. */
 function missingFields(draft) {
   const labels = { customer_name: 'nombre completo', address: 'dirección', city: 'ciudad' };
-  const missing = REQUIRED_FIELDS.filter(f => !draft[f]).map(f => labels[f]);
+  const missing = REQUIRED_FIELDS.filter(f => typeof draft?.[f] !== 'string' || !draft[f].trim() || (f === 'address' && !hasDeliveryAddress(draft))).map(f => labels[f]);
   if (draft?.requires_customer_phone && !isValidCustomerPhone(draft.customer_phone)) missing.push('teléfono de contacto');
   if (!Array.isArray(draft.items) || draft.items.length === 0) missing.unshift('producto');
   return missing;

@@ -44,11 +44,12 @@ test('media downloads use the configured Evolution endpoint, never untrusted med
   await assert.rejects(service.downloadMessageMedia(parsed, config), /10 MB/);
 });
 
-function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, scheduleResponse = null, onProcess = () => {}, history = [] } = {}) {
+function inboundHarness({ mode = 'ai', permitted = true, duplicate = false, scheduleResponse = null, onProcess = () => {}, history = [], setting = () => null } = {}) {
   const saved = [], sent = [], pipelineCalls = [], queries = [];
   const conv = { id: 5, agent_mode: mode, agent_mode_changed_at: new Date().toISOString() };
   const service = load('src/services/inbound-text.js', {
     '../db/database': {
+      getSetting: async (_org, name) => setting(name),
       upsertConversation: async (...args) => { assert.equal(args[3], 9); return conv; },
       getConversationById: async () => conv,
       getLastMessages: async () => [...history, ...saved],
@@ -78,6 +79,23 @@ test('voice transcript reaches the sales pipeline and history; reply stays on it
   assert.equal(h.queries[0][1][2], 1);
   assert.equal(h.sent[0][2], config);
   assert.equal(h.saved[1].whatsappMessageId, 'OUT1');
+});
+
+test('el interruptor global conserva el mensaje en CRM sin transcribir ni responder', async () => {
+  const h = inboundHarness({ setting: name => name === 'ai_enabled_global' ? 'false' : null });
+  await h.invoke(() => assert.fail('No transcribir con IA apagada'));
+  assert.equal(h.saved.length, 1);
+  assert.equal(h.saved[0].direction, 'inbound');
+  assert.equal(h.pipelineCalls.length, 0);
+  assert.equal(h.sent.length, 0);
+});
+
+test('apagar el bot mientras genera la respuesta impide enviarla', async () => {
+  let enabled = 'true';
+  const h = inboundHarness({ setting: () => enabled, onProcess: () => { enabled = 'false'; } });
+  await h.invoke(null, 'Hola');
+  assert.equal(h.pipelineCalls.length, 1);
+  assert.equal(h.sent.length, 0);
 });
 
 test('duplicate, human-controlled and unsubscribed audio messages do not invoke AI or send replies', async () => {

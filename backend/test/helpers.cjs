@@ -9,7 +9,13 @@ function load(file, deps = {}, extra = {}) {
     console: { log(){}, warn(){}, error(){} },
     setInterval: () => ({ unref(){} }), clearInterval(){}, setTimeout, clearTimeout,
     require(name) {
+      if (name === '../db/database') {
+        const database = deps[name] || {};
+        database.getSetting ||= async () => null;
+        return database;
+      }
       if (Object.hasOwn(deps, name)) return deps[name];
+      if (['./bot-catalog', '../services/bot-catalog', './order-checkout', '../services/order-checkout', '../services/order-pricing'].includes(name)) return require(path.join(root, 'src/services', name.split('/').at(-1)));
       if (name === './outbound-message-queue' || name === '../services/outbound-message-queue') return { deferOutsideHours: async () => null };
       if (name === '../services/solution-catalog' || name === './solution-catalog') return load('src/services/solution-catalog.js', deps, extra);
       if (name === '../services/conversation-mode' || name === './conversation-mode') return require(path.join(root, 'src/services/conversation-mode.js'));

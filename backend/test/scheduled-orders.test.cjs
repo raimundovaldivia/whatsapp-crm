@@ -267,7 +267,7 @@ for (const scenario of [
   assert.equal(savedDraft.items[0].price, 37000);
   assert.equal(savedDraft.items[0].locked_quote, true);
   assert.equal(savedDraft.total, 37000);
-  assert.match(result.response, /100 Jumbo.*37\.000/i);
+  assert.match(result.response, /100 huevos Jumbo.*37\.000/i);
 });
 
 test('aceptar un upsell directo crea el borrador de tres bandejas al precio ofrecido', async () => {
@@ -338,7 +338,7 @@ test('aceptar un upsell directo crea el borrador de tres bandejas al precio ofre
   assert.equal(savedDraft.items[0].product_id, '41');
   assert.equal(savedDraft.items[0].quantity, 3);
   assert.equal(savedDraft.total, 28000);
-  assert.match(result.response, /3 bandejas L blancas.*\$28\.000/i);
+  assert.match(result.response, /3x Huevos L blancos.*\$28\.000/i);
 });
 
 test('una preferencia de frescura se conserva como nota del pedido promocional', async () => {

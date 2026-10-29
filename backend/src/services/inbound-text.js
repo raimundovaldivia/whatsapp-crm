@@ -53,6 +53,9 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     deliveryInboundNotifications.notifyAssignedDriversForInbound(org.id, updatedConv, parsed.text).catch(() => {});
   }
 
+  // El mensaje entrante siempre llega al CRM, incluso con el bot apagado.
+  if (await db.getSetting(org.id, 'ai_enabled_global') === 'false') return;
+
   if (updatedConv.agent_mode !== 'ai') {
     const recentHistory = await db.getLastMessages(conversation.id, 20).catch(() => []);
     if (isTerminalConversationReply(parsed.text, recentHistory)) {
@@ -84,6 +87,7 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
     }
   }
   const respond = async () => {
+    if (await db.getSetting(org.id, 'ai_enabled_global') === 'false') return;
     const beforeResponse = await db.getConversationById(conversation.id);
     if (!beforeResponse || beforeResponse.agent_mode !== 'ai') return;
     let textToProcess = parsed.text;
@@ -129,6 +133,7 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
   }
 
   const beforeSend = await db.getConversationById(conversation.id);
+  if (await db.getSetting(org.id, 'ai_enabled_global') === 'false') return;
   if (!beforeSend || beforeSend.agent_mode === 'human') return;
   const queued = await require('./outbound-message-queue').deferOutsideHours({
     orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', sendingProvider: whatsappConfig.provider || 'meta',

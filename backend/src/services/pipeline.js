@@ -239,6 +239,9 @@ function effectiveOrderNote(draft = {}) {
  * @returns {{ response: string, agentType: string, newState: string }}
  */
 async function processMessage(orgId, conversationId, userMessage, log = null, options = {}) {
+  if (await db.getSetting(orgId, 'ai_enabled_global') === 'false') {
+    return { response: null, skipped: true, reason: 'AI_DISABLED' };
+  }
   try {
     await require('./referrals').captureInboundReferral(orgId, conversationId, userMessage);
   } catch (error) {
@@ -394,67 +397,10 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   // Para clientes "personal": se excluyen los productos is_business=TRUE
   const ds = await db.getPrimaryDataSource(orgId);
   const shop = ds?.config?.storeUrl;
-  const catalogSource = await db.getSetting(orgId, 'catalog_source');
   let products = [];
   let productosTexto = '';
   try {
-    // Algunas organizaciones administran el stock directamente en el CRM.
-    // Cuando catalog_source=local, esa tabla es autoritativa: no volver al
-    // caché de Shopify si está vacía, porque reviviría productos eliminados.
-    if (catalogSource === 'local') {
-      const ownProducts = await db.getProducts(orgId, true);
-      const visibleOwn = isEmpresa ? ownProducts : ownProducts.filter(p => !p.is_business);
-      products = visibleOwn.map(p => ({
-        id: String(p.id), title: p.title, description: p.description,
-        priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
-        compare_price: p.compare_price ?? null,
-        bulk_price: p.bulk_price ?? null,
-        bulk_min_qty: p.bulk_min_qty ?? null,
-        inventoryQuantity: p.stock ?? null,
-        imageUrl: p.image_url || null,
-        handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
-        productType: p.category || '',
-      }));
-      console.log(`[Pipeline] 📦 Catálogo local autoritativo (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
-    } else {
-      // Por defecto, products_cache conserva variantes y stock de Shopify.
-      const cached = await db.getCachedProducts(orgId);
-      if (cached?.length) {
-      // Filtrar productos empresa si el cliente es personal
-        const visibleCached = isEmpresa ? cached : cached.filter(p => !p.is_business);
-        products = visibleCached.map(p => {
-          if (p.raw_json) {
-            try { return JSON.parse(p.raw_json); } catch (_) {}
-          }
-          return {
-            id: p.external_id, title: p.title, description: p.description,
-            priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
-            inventoryQuantity: p.inventory_quantity,
-            sku: p.sku, imageUrl: p.image_url, tags: p.tags,
-            productType: p.product_type, handle: p.handle,
-          };
-        });
-        console.log(`[Pipeline] 📦 Catálogo desde DB/caché (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
-      } else {
-        // Fallback: tabla products propia del CRM
-        const ownProducts = await db.getProducts(orgId, true);
-        if (ownProducts?.length) {
-          const visibleOwn = isEmpresa ? ownProducts : ownProducts.filter(p => !p.is_business);
-          products = visibleOwn.map(p => ({
-            id: String(p.id), title: p.title, description: p.description,
-            priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
-            compare_price: p.compare_price ?? null,
-            bulk_price: p.bulk_price ?? null,
-            bulk_min_qty: p.bulk_min_qty ?? null,
-            inventoryQuantity: p.stock ?? null,
-            imageUrl: p.image_url || null,
-            handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
-            productType: p.category || '',
-          }));
-          console.log(`[Pipeline] 📦 Catálogo desde tabla products propia (${products.length} productos${isEmpresa ? ', cliente EMPRESA' : ''})`);
-        }
-      }
-    }
+    products = await require('./bot-catalog').loadBotCatalog(db, orgId, { business: isEmpresa });
     if (products.length) {
       productosTexto = shopifyApi.formatProductsForAI(products, shop, tiendaUrl);
     }
@@ -601,13 +547,16 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
       botRulesSection = `## Reglas aprendidas de conversaciones anteriores\nSigue SIEMPRE estas reglas — fueron definidas a partir de errores reales detectados en conversaciones pasadas:\n${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
     }
   } catch { /* JSON inválido — ignorar */ }
-  const deliveryRaw   = deliveryEnabled ? await db.getSetting(orgId, 'delivery_info') : null;
+  const deliveryRaw   = await db.getSetting(orgId, 'delivery_info');
   const freeShippingRaw = deliveryEnabled && xlContext.web ? await db.getSetting(orgId, 'store_free_shipping') : null;
   let deliverySection = '';
+  let cutoffTime = null;
   let deliverySchedule = '';   // el horario tal cual, para responder "¿a qué hora llega?" con dato real
   if (deliveryRaw) {
     try {
       const d = JSON.parse(deliveryRaw);
+      cutoffTime = d.cutoffTime || null;
+      orderCtx.cutoffTime = cutoffTime;
       deliverySchedule = (d.schedule || '').trim();
       const lines = [];
       if (d.schedule)       lines.push(`📅 Horarios de entrega: ${d.schedule}`);
@@ -628,10 +577,11 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   const deliveryHoursEnded = deliveryWindowEnded(deliverySchedule, nowCl);
   const closingPolicy = salesClosing.sameDayPolicy({
     now: nowCl,
+    cutoffTime,
     startedAt: conversation.sales_started_at,
     holdUntil: conversation.same_day_hold_until,
   });
-  const closingSection = salesClosing.closingPromptSection(conversation, nowCl);
+  const closingSection = salesClosing.closingPromptSection(conversation, nowCl, { cutoffTime });
 
   // Instrucciones de pago — sección EXPLÍCITA para que el bot las comparta cuando el cliente pregunte
   let paymentInfoRaw = await db.getSetting(orgId, 'payment_info') || '';
@@ -1041,6 +991,7 @@ Reglas estrictas:
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
   const storeCustomPrompt = [dateSection, closingSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts].filter(Boolean).join('\n\n---\n\n');
+  orderCtx.storeContext = storeCustomPrompt;
 
   if (isSoftFutureIntent(userMessage) && !['scheduled', 'collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
     if (currentState !== 'scheduled') await db.updatePipelineState(conversationId, 'future_interest');
@@ -1481,7 +1432,7 @@ REGLAS ABSOLUTAS:
       ...(orderDraft || {}),
       delivery_requested_today: closingPolicy.offerOpen,
       notes: [orderDraft?.notes, closingPolicy.offerOpen
-        ? 'Cliente solicita entrega hoy; inició antes de las 12:50 y queda sujeto a stock y cobertura.'
+        ? 'Cliente solicita entrega hoy; inició antes del cierre y queda sujeto a stock y cobertura.'
         : 'Cliente solicitó entrega hoy después de la hora para iniciar pedidos con despacho el mismo día.']
         .filter(Boolean).join(' '),
     };
@@ -1490,10 +1441,10 @@ REGLAS ABSOLUTAS:
       ? await db.beginSalesClosing(orgId, conversationId).catch(() => null)
       : null;
     L.agent('orders', 0);
-    L.step('same_day_delivery_request', protectedState?.same_day_hold_until ? 'reserva hasta 13:00' : 'próximo día de despacho');
+    L.step('same_day_delivery_request', protectedState?.same_day_hold_until ? 'reserva hasta la hora límite configurada' : 'próximo día de despacho');
     return {
       response: closingPolicy.offerOpen
-        ? 'Sí 😊 Primero te tomo el pedido. Como comenzaste antes del cierre, mantendré la opción de despacho para hoy mientras lo completamos, hasta las 13:00, sujeto a confirmar stock y cupo en la ruta de hoy. ¿Qué tamaño y cuántos huevos necesitas?'
+        ? `Sí 😊 Primero te tomo el pedido. Como comenzaste antes del cierre, mantendré la opción de despacho para hoy mientras lo completamos, hasta las ${cutoffTime || '13:00'}, sujeto a confirmar stock y cupo en la ruta de hoy. ¿Qué tamaño y cuántos huevos necesitas?`
         : 'La hora para iniciar un pedido nuevo con despacho hoy ya cerró. Sí puedo dejarlo preparado para el próximo día de despacho disponible. ¿Qué producto y cantidad necesitas?',
       agentType: 'orders',
       newState: 'collecting_order',
@@ -1896,6 +1847,7 @@ REGLAS ABSOLUTAS:
         const savedClosing = await db.beginSalesClosing(orgId, conversationId).catch(() => null);
         activeClosingPolicy = salesClosing.sameDayPolicy({
           now: nowCl,
+          cutoffTime,
           startedAt: savedClosing?.sales_started_at,
           holdUntil: savedClosing?.same_day_hold_until,
         });
@@ -1908,7 +1860,7 @@ REGLAS ABSOLUTAS:
         nextDraft.delivery_date = requested.date;
         await db.updatePipelineState(conversationId, 'collecting_order', nextDraft);
         L.agent('orders', 0);
-        L.step('protected_same_day_during_order', 'reserva vigente hasta 13:00');
+        L.step('protected_same_day_during_order', 'reserva vigente hasta la hora límite configurada');
         return {
           response: `Sí 😊 Como comenzaste antes del cierre, mantengo la opción de despacho para hoy mientras terminamos el pedido, sujeta a stock y cobertura.${missingPrompt}`,
           agentType: 'orders', newState: 'collecting_order',
@@ -1916,12 +1868,12 @@ REGLAS ABSOLUTAS:
       }
       await db.updatePipelineState(conversationId, 'collecting_order', nextDraft);
       L.agent('orders', 0);
-      L.step('same_day_closed_during_order', activeClosingPolicy.needsHumanReview ? 'requiere confirmación humana' : 'pedido nuevo después de 12:50');
+      L.step('same_day_closed_during_order', activeClosingPolicy.needsHumanReview ? 'requiere confirmación humana' : 'pedido nuevo después de la hora límite');
       return activeClosingPolicy.needsHumanReview
         ? {
           response: `Como comenzaste antes del cierre, estoy confirmando con el equipo si el despacho de hoy todavía alcanza a salir. No necesitas volver a enviarme los datos.${missingPrompt}`,
           agentType: 'orders', newState: 'collecting_order', switchToHuman: true,
-          escalationReason: 'Pedido iniciado antes de las 12:50 consulta por despacho después de las 13:00',
+          escalationReason: 'Pedido iniciado antes del cierre consulta por despacho después de la hora límite',
         }
         : {
           response: `La hora para iniciar un pedido nuevo con despacho hoy ya cerró. Puedo dejarlo preparado para el próximo día de despacho disponible.${missingPrompt}`,
@@ -2648,6 +2600,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const closingConversation = { ...conversation, ...(persistedClosing || {}) };
   const orderClosingPolicy = salesClosing.sameDayPolicy({
     now: orderNow,
+    cutoffTime: orderCtx.cutoffTime,
     startedAt: closingConversation.sales_started_at,
     holdUntil: closingConversation.same_day_hold_until,
   });
@@ -2660,6 +2613,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       ? 'Entendido, dejo tu pedido tal como estaba 😊 ¿Te ayudo con algo más?'
       : 'Entendido, no hay problema 😊 Si más adelante quieres pedir, aquí estoy.';
     return { response: msg, agentType: 'orders', newState: 'exploring' };
+  }
+
+  if (await db.getSetting(orgId, 'bot_sales_enabled') === 'false') {
+    return { response: 'Por ahora atendemos consultas. Las ventas están pendientes de habilitación por la tienda; todavía no puedo crear ni confirmar pedidos.', agentType: 'orders', newState: 'collecting_order' };
   }
 
   // 0b. Siempre fusionar datos del cliente desde CRM/Shopify — no solo la primera vez.
@@ -2861,10 +2818,16 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     delete updatedDraft.awaiting_free_gift;
   }
   priced = require('./xl-welcome-pricing').applyQuote(priced, orderCtx.xlContext);
-  // Si el cliente está confirmando un resumen que ya mostró un precio total,
-  // conservar esa cotización. Evita cambiar una promoción entre "¿Todo correcto?"
-  // y el mensaje final de pedido confirmado.
-  priced = require('./order-quote').preserveConfirmedQuote(priced, history);
+  // Validar el catálogo vigente antes de pedir o aceptar una confirmación.
+  const checkout = require('./order-checkout');
+  const productIssue = checkout.catalogIssue(priced, products);
+  if (productIssue) {
+    delete updatedDraft._reviewed_order;
+    await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
+    return { response: productIssue, agentType: 'orders', newState: 'collecting_order' };
+  }
+  // Los precios vigentes/promociones se calculan arriba. Si cambiaron desde el
+  // resumen, se solicita una nueva confirmación en vez de recuperar texto viejo.
   updatedDraft.items    = priced.items;
   updatedDraft.subtotal = priced.subtotal;
   updatedDraft.discount_pct = priced.discountPct;
@@ -2916,7 +2879,14 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       : `PROMOCIÓN APLICADA: ${promotionContext.templateName}. Usa estos importes y no el precio normal. Conserva TODOS los productos promocionados que pidió el cliente; no elimines ninguno por una marca de stock del catálogo.\n`)
     : '';
   const pricingText   = promoPricing + pricing.pricingContext(priced);
-  let agentResponse = await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText);
+  const ready = ordersAgent.hasRequiredData(updatedDraft);
+  const acceptedReview = checkout.matchesReview(orderDraft, updatedDraft, priced, history);
+  if (ready && !(acceptedReview && ordersAgent.isOrderConfirmed('', userMessage, updatedDraft))) {
+    updatedDraft._reviewed_order = checkout.signature(updatedDraft, priced);
+    await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
+    return { response: checkout.reviewReply(updatedDraft, priced), agentType: 'orders', newState: 'collecting_order' };
+  }
+  let agentResponse = ready ? 'ORDEN_CONFIRMADA' : await ordersAgent.generateOrderResponse(history, userMessage, updatedDraft, productosTexto, pricingText, orderCtx.storeContext || '');
   if (updatedDraft.pending_same_day_review
       && !agentResponse.includes('ORDEN_CONFIRMADA')
       && ordersAgent.hasRequiredData(updatedDraft)) {
@@ -2929,7 +2899,9 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const confirmed = ordersAgent.isOrderConfirmed(agentResponse, userMessage, updatedDraft);
   const allMatched = priced.items.length > 0 && priced.items.every(it => it.matched);
 
-  if (confirmed && ordersAgent.hasRequiredData(updatedDraft) && allMatched) {
+  if (confirmed && acceptedReview && ready && allMatched) {
+    if (await db.getSetting(orgId, 'ai_enabled_global') === 'false') return { response: null, skipped: true, reason: 'AI_DISABLED' };
+    if (await db.getSetting(orgId, 'bot_sales_enabled') === 'false') return { response: 'La tienda pausó las ventas mientras revisábamos el pedido. Todavía no he creado el pedido.', agentType: 'orders', newState: 'collecting_order' };
     const itemsForDb = priced.items.map(it => ({
       name: it.name, title: it.name, quantity: it.quantity, price: it.price,
       product_id: it.product_id || null, variant_id: it.variant_id || null,
@@ -3058,13 +3030,13 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         await db.updatePipelineState(conversationId, 'done', {});
         console.log(`[Pipeline] ✅ Pedido COD guardado en DB: ${order.id} (${itemsForDb.length} ítems, total ${priced.total})`);
         const successMsg = updatedDraft.pending_same_day_review
-          ? `✅ ¡Pedido confirmado!\n\n${summary}\n${who}\n\nComo comenzaste antes del cierre, estoy confirmando con el equipo si alcanza a salir hoy. Te respondemos por aquí; no necesitas volver a enviar los datos 😊`
-          : `✅ ¡Pedido confirmado!\n\n${summary}\n${who}\n\n${updatedDraft.delivery_requested_today ? 'Mantuvimos tu solicitud de despacho para hoy. ' : ''}El pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
+          ? `✅ ¡Pedido confirmado! ${crmOrderLabel(order.id)}\n\n${summary}\n${who}\n\nComo comenzaste antes del cierre, estoy confirmando con el equipo si alcanza a salir hoy. Te respondemos por aquí; no necesitas volver a enviar los datos 😊`
+          : `✅ ¡Pedido confirmado! ${crmOrderLabel(order.id)}\n\n${summary}\n${who}\n\n${updatedDraft.delivery_requested_today ? 'Mantuvimos tu solicitud de despacho para hoy. ' : ''}El pago es al momento del despacho. ¡Te avisamos cuando esté en camino! 🚀`;
         return {
           response: successMsg, agentType: 'orders', newState: 'confirmed', orderCreated: { orderId: order.id },
           ...(updatedDraft.pending_same_day_review ? {
             switchToHuman: true,
-            escalationReason: `Pedido #${order.id} iniciado antes de las 12:50 y completado después de las 13:00; confirmar si alcanza despacho hoy`,
+            escalationReason: `Pedido #${order.id} iniciado antes del cierre y completado después de la hora límite; confirmar si alcanza despacho hoy`,
           } : {}),
         };
       } catch (err) {
@@ -3091,7 +3063,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         response: successMsg, agentType: 'orders', newState: 'awaiting_payment', orderCreated: result,
         ...(updatedDraft.pending_same_day_review ? {
           switchToHuman: true,
-          escalationReason: `Pedido Shopify iniciado antes de las 12:50 y completado después de las 13:00; confirmar si alcanza despacho hoy`,
+          escalationReason: 'Pedido Shopify iniciado antes del cierre y completado después de la hora límite; confirmar si alcanza despacho hoy',
         } : {}),
       };
     } catch (err) {
@@ -3117,7 +3089,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   }
 
   // Si la IA dijo ORDEN_CONFIRMADA pero faltan datos, pedirlos amablemente
-  if ((confirmed || claimed) && !ordersAgent.hasRequiredData(updatedDraft)) {
+  if ((confirmed || claimed || agentResponse.includes('ORDEN_CONFIRMADA')) && !ordersAgent.hasRequiredData(updatedDraft)) {
     const missing = ordersAgent.missingFields(updatedDraft);
     const missingMsg = `Casi listo 😊 Solo me falta: ${missing.join(', ')}. ¿Me lo puedes confirmar?`;
     return { response: missingMsg, agentType: 'orders', newState: 'collecting_order' };

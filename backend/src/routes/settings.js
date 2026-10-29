@@ -39,9 +39,10 @@ router.get('/', async (req, res) => {
     try { if (botRulesRaw) bot_improvement_rules = JSON.parse(botRulesRaw); } catch {}
 
     const settings = {
-      ai_enabled_global:      (await db.getSetting(req.orgId, 'ai_enabled_global')) === 'true',
+      ai_enabled_global:      (await db.getSetting(req.orgId, 'ai_enabled_global')) !== 'false',
+      bot_sales_enabled:      (await db.getSetting(req.orgId, 'bot_sales_enabled')) !== 'false',
       ai_system_prompt_extra: (await db.getSetting(req.orgId, 'ai_system_prompt_extra')) || '',
-      payment_mode:           (await db.getSetting(req.orgId, 'payment_mode')) || 'link',
+      payment_mode:           (await db.getSetting(req.orgId, 'payment_mode')) || 'cod',
       payment_info:           (await db.getSetting(req.orgId, 'payment_info')) || '',
       admin_alert_phone:           (await db.getSetting(req.orgId, 'admin_alert_phone')) || '',
       scheduled_dispatch_template: (await db.getSetting(req.orgId, 'scheduled_dispatch_template')) || '',
@@ -60,6 +61,11 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
   try {
     const { ai_enabled_global, ai_system_prompt_extra, payment_mode, payment_info, admin_alert_phone, bot_improvement_rules, scheduled_dispatch_template, driver_sell_enabled } = req.body;
+    for (const field of ['ai_enabled_global', 'bot_sales_enabled', 'driver_sell_enabled']) {
+      if (req.body[field] !== undefined && typeof req.body[field] !== 'boolean') return res.status(400).json({ error: `${field} debe ser verdadero o falso` });
+    }
+    if (payment_mode !== undefined && !['cod', 'link'].includes(payment_mode)) return res.status(400).json({ error: 'Modo de pago inválido' });
+    if (req.body.bot_sales_enabled !== undefined) await db.setSetting(req.orgId, 'bot_sales_enabled', String(req.body.bot_sales_enabled));
     if (ai_enabled_global !== undefined)
       await db.setSetting(req.orgId, 'ai_enabled_global', ai_enabled_global ? 'true' : 'false');
     if (ai_system_prompt_extra !== undefined)
@@ -141,14 +147,10 @@ router.post('/test-bot', require('../middleware/commercial-access').requireSolut
 
     // ── Cargar catálogo y configuración ──────────────────────────
     const ds = await db.getPrimaryDataSource(req.orgId);
-    let productosTexto = '';
-    if (ds?.config?.accessToken) {
-      try {
-        const { shop, token } = shopifyApi.credentialsFrom(ds);
-        const r = await shopifyApi.getProducts(shop, token, { limit: 250 });
-        productosTexto = shopifyApi.formatProductsForAI(r.products || [], shop);
-      } catch {}
-    }
+    const products = await require('../services/bot-catalog').loadBotCatalog(db, req.orgId);
+    const productosTexto = shopifyApi.formatProductsForAI(products, ds?.config?.storeUrl);
+    const pricing = require('../services/order-pricing');
+    const checkout = require('../services/order-checkout');
 
     const storeContext = await db.getSetting(req.orgId, 'store_context') || '';
     const extraPrompt  = await db.getSetting(req.orgId, 'ai_system_prompt_extra') || '';
@@ -165,31 +167,50 @@ router.post('/test-bot', require('../middleware/commercial-access').requireSolut
         if (lines.length) deliverySection = `## Entrega\n${lines.join('\n')}`;
       } catch {}
     }
-    const storeCustomPrompt = [deliverySection, storeContext, extraPrompt].filter(Boolean).join('\n\n---\n\n');
+    const paymentMode = (await db.getSetting(req.orgId, 'payment_mode')) || 'cod';
+    const paymentInfo = (await db.getSetting(req.orgId, 'payment_info')) || '';
+    const botRules = (await db.getSetting(req.orgId, 'bot_improvement_rules')) || '';
+    const storeCustomPrompt = [deliverySection, storeContext, extraPrompt, paymentInfo, botRules,
+      paymentMode === 'cod' ? 'Pago al recibir. No generar enlaces de pago.' : 'Pago mediante enlace.'].filter(Boolean).join('\n\n---\n\n');
 
     // Convertir historial al formato interno del pipeline
     const convHistory = history.map(m => ({
       direction: m.role === 'user' ? 'inbound' : 'outbound',
       content:   m.content,
     }));
+    const lastMessage = convHistory.at(-1);
+    if (lastMessage?.direction !== 'inbound' || lastMessage.content !== message) convHistory.push({ direction: 'inbound', content: message });
 
     let response, agentType, newState = pipelineState, newOrderDraft = { ...orderDraft };
 
     // ── Agente de órdenes (recopilando datos) ─────────────────────
     if (pipelineState === 'collecting_order') {
       newOrderDraft = await ordersAgent.extractOrderData(convHistory, orderDraft);
-      const agentResponse = await ordersAgent.generateOrderResponse(convHistory, message, newOrderDraft, productosTexto);
-      const confirmed = ordersAgent.isOrderConfirmed(agentResponse, message);
-
-      if (confirmed && ordersAgent.hasRequiredData(newOrderDraft)) {
-        const paymentMode = (await db.getSetting(req.orgId, 'payment_mode')) || 'link';
+      const priced = pricing.priceItems(newOrderDraft.items || [], products);
+      const issue = checkout.catalogIssue(priced, products);
+      const salesEnabled = (await db.getSetting(req.orgId, 'bot_sales_enabled')) !== 'false';
+      const ready = ordersAgent.hasRequiredData(newOrderDraft);
+      const confirmed = ordersAgent.isOrderConfirmed('', message, newOrderDraft)
+        && checkout.matchesReview(orderDraft, newOrderDraft, priced, convHistory);
+      if (!salesEnabled || issue) {
+        delete newOrderDraft._reviewed_order;
+        response = !salesEnabled ? 'Las ventas están pendientes de habilitación por la tienda. El bot todavía no puede crear ni confirmar pedidos.' : issue;
+        newState = 'collecting_order';
+      } else if (confirmed && ready) {
         const payMsg = paymentMode === 'cod'
           ? 'confirmaría el pedido con despacho por pagar (sin link de pago).'
           : 'generaría el link de pago de Shopify y lo enviaría al cliente.';
-        response = `✅ *(Modo prueba — pedido no procesado)*\n\nEn producción, el bot ${payMsg}\n\n📦 *${newOrderDraft.product_name}* x${newOrderDraft.quantity}\n👤 ${newOrderDraft.customer_name}\n📍 ${newOrderDraft.address}, ${newOrderDraft.city}`;
+        response = `✅ Modo prueba — pedido no guardado ni enviado por WhatsApp.\n\nEl cierre superó la validación del carrito y la confirmación. En producción, el bot ${payMsg}\n\n${pricing.summaryBlock(priced)}\n👤 ${newOrderDraft.customer_name}\n📍 ${newOrderDraft.address}, ${newOrderDraft.city}`;
         newState = 'test_complete';
+      } else if (ready) {
+        newOrderDraft._reviewed_order = checkout.signature(newOrderDraft, priced);
+        response = checkout.reviewReply(newOrderDraft, priced);
+        newState = 'collecting_order';
       } else {
-        response = agentResponse.replace(/ORDEN_CONFIRMADA/g, '').trim() || '¡Déjame verificar los datos!';
+        const agentResponse = await ordersAgent.generateOrderResponse(convHistory, message, newOrderDraft, productosTexto, pricing.pricingContext(priced), storeCustomPrompt);
+        response = agentResponse.includes('ORDEN_CONFIRMADA') || ordersAgent.claimsRegistered(agentResponse)
+          ? `Para continuar necesito: ${ordersAgent.missingFields(newOrderDraft).join(', ')}.`
+          : agentResponse;
         newState = 'collecting_order';
       }
       agentType = 'orders';
@@ -200,7 +221,7 @@ router.post('/test-bot', require('../middleware/commercial-access').requireSolut
       const salesResponse = await salesAgent.generateSalesResponse(convHistory, message, productosTexto, storeCustomPrompt);
       response  = salesResponse;
       agentType = 'sales';
-      newState  = salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : pipelineState;
+      newState  = intent === 'wants_to_order' || salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : pipelineState;
     }
 
     res.json({ response, agentType, newState, orderDraft: newOrderDraft });
@@ -718,10 +739,21 @@ router.get('/delivery-info', async (req, res) => {
   }
 });
 
-router.post('/delivery-info', require('../middleware/commercial-access').requireSolution('delivery'), async (req, res) => {
+router.post('/delivery-info', async (req, res) => {
   try {
-    const { schedule = '', zone = '', minimum = '', paymentMethods = '' } = req.body;
-    await db.setSetting(req.orgId, 'delivery_info', JSON.stringify({ schedule, zone, minimum, paymentMethods }));
+    // Son condiciones comerciales del bot. No concede acceso a rutas ni a
+    // conductores del módulo logístico.
+    if (!await commercial.permitted(req.orgId, 'sales_ai') && !await commercial.permitted(req.orgId, 'delivery')) {
+      return res.status(403).json({ error: 'Necesitas Ventas con IA o Reparto para configurar las condiciones de entrega' });
+    }
+    const { schedule = '', zone = '', minimum = '', paymentMethods = '', cutoffTime } = req.body;
+    if ([schedule, zone, minimum, paymentMethods].some(value => typeof value !== 'string' || value.length > 2000)) {
+      return res.status(400).json({ error: 'Las condiciones de entrega deben ser textos de hasta 2000 caracteres' });
+    }
+    if (cutoffTime != null && (typeof cutoffTime !== 'string' || (cutoffTime !== '' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(cutoffTime)))) return res.status(400).json({ error: 'Hora límite inválida' });
+    const previousRaw = await db.getSetting(req.orgId, 'delivery_info');
+    const previous = previousRaw ? JSON.parse(previousRaw) : {};
+    await db.setSetting(req.orgId, 'delivery_info', JSON.stringify({ schedule, zone, minimum, paymentMethods, cutoffTime: cutoffTime ?? previous.cutoffTime ?? '' }));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -729,6 +761,24 @@ router.post('/delivery-info', require('../middleware/commercial-access').require
 });
 
 /* ─── Cobranza por transferencia ──────────────────────────────────────────── */
+
+router.get('/bot-readiness', async (req, res) => {
+  try {
+    const products = await require('../services/bot-catalog').loadBotCatalog(db, req.orgId);
+    const raw = await db.getSetting(req.orgId, 'delivery_info');
+    const delivery = raw ? JSON.parse(raw) : {};
+    const warnings = [];
+    if (!products.length) warnings.push('No hay productos activos en el catálogo del bot.');
+    if (products.some(p => !(Number(p.priceMin) > 0))) warnings.push('Hay productos sin un precio válido.');
+    if (products.some(p => p.inventoryQuantity == null)) warnings.push('Hay productos con stock pendiente de definir.');
+    if (products.length && products.every(p => p.inventoryQuantity != null && Number(p.inventoryQuantity) <= 0)) warnings.push('No hay stock disponible.');
+    if (!delivery.zone?.trim()) warnings.push('Faltan zonas y condiciones de costo del reparto.');
+    if (!delivery.schedule?.trim()) warnings.push('Faltan días, horario y hora límite para pedir.');
+    if (!delivery.cutoffTime) warnings.push('La hora límite de cierre automático todavía usa el valor general de 13:00.');
+    if (!delivery.paymentMethods?.trim()) warnings.push('Faltan los medios de pago aceptados.');
+    res.json({ success: true, activeProducts: products.length, warnings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 /* ─── Bodega / punto de partida de los repartos ───────────────────────────── */
 
