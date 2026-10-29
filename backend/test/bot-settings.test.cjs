@@ -6,7 +6,7 @@ const agent = load('src/services/agents/orders.js', { '../ai-provider': {} });
 const product = { id: 7, title: 'Huevos Extra de color · Caja de 180', price: 44900, stock: 10 };
 const draft = { customer_name: 'Prueba', address: 'Calle 123', city: 'La Serena', items: [{ product_name: product.title, quantity: 1 }] };
 
-function fixture({ products = [product], settings = {}, permitted = ['sales_ai'] } = {}) {
+function fixture({ products = [product], settings = {}, permitted = ['sales_ai'], salesReply = 'Consulta de producto' } = {}) {
   const writes = [], extractions = [], salesCalls = [];
   const db = {
     getSetting: async (_org, key) => settings[key] ?? (key === 'catalog_source' ? 'local' : null),
@@ -23,7 +23,7 @@ function fixture({ products = [product], settings = {}, permitted = ['sales_ai']
     '../services/shopify-api': { formatProductsForAI: products => products.map(p => p.title).join('\n') },
     '../services/agents/orchestrator': { classifyIntent: async () => ({ intent: 'exploring' }) },
     '../services/agents/sales': {
-      generateSalesResponse: async (...args) => { salesCalls.push(args); return 'Consulta de producto'; },
+      generateSalesResponse: async (...args) => { salesCalls.push(args); return salesReply; },
       isReadyToOrder: () => false,
     },
     '../services/agents/orders': {
@@ -67,6 +67,32 @@ test('el simulador usa catálogo local, incluye el mensaje actual y exige revisa
   assert.match(second.body.response, /pedido no guardado ni enviado/);
   assert.doesNotMatch(second.body.response, /undefined/);
   assert.equal(f.writes.length, 0);
+});
+
+test('corrige el aviso falso observado conservando el precio y respetando una pausa real', async () => {
+  const salesReply = 'La Súper Extra de 100 huevos está a $29.900, con reparto incluido en La Serena urbana. Sobre pedidos: la venta sigue pendiente de habilitación por la tienda, así que no puedo crear ni confirmar pedidos nuevos por ahora. ¿Te ayudo con algo más?';
+  for (const enabled of [true, false]) {
+    const f = fixture({ settings: { bot_sales_enabled: String(enabled) }, salesReply });
+    const result = await f.invoke('post', '/test-bot', { message: '¿Cuánto cuesta y reciben pedidos?' });
+    assert.equal(result.code, 200);
+    if (enabled) {
+      assert.match(result.body.response, /\$29\.900/);
+      assert.match(result.body.response, /ventas están habilitadas/);
+      assert.doesNotMatch(result.body.response, /pendiente de habilitación|no puedo crear/);
+    } else assert.equal(result.body.response, salesReply);
+    assert.equal(result.body.newState, 'exploring');
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test('el control conserva impedimentos reales de stock y afirmaciones históricas', async () => {
+  const { enforceSalesState } = require('../src/services/bot-operating-context');
+  const db = { getSetting: async () => assert.fail('Una respuesta sin aviso de pausa no necesita otra consulta') };
+  for (const reply of [
+    'Antes las ventas estaban pendientes de habilitación. Ahora estamos recibiendo pedidos.',
+    'No puedo confirmar tu pedido porque no queda stock de ese formato.',
+    'Las ventas ya no están pendientes de habilitación.',
+  ]) assert.equal(await enforceSalesState(db, 2, reply), reply);
 });
 
 test('simulador no cierra con catálogo vacío ni con ventas pausadas', async () => {
