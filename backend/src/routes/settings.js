@@ -770,8 +770,8 @@ router.get('/bot-readiness', async (req, res) => {
     const warnings = [];
     if (!products.length) warnings.push('No hay productos activos en el catálogo del bot.');
     if (products.some(p => !(Number(p.priceMin) > 0))) warnings.push('Hay productos sin un precio válido.');
-    if (products.some(p => p.inventoryQuantity == null)) warnings.push('Hay productos con stock pendiente de definir.');
-    if (products.length && products.every(p => p.inventoryQuantity != null && Number(p.inventoryQuantity) <= 0)) warnings.push('No hay stock disponible.');
+    if (products.some(p => p.inventoryQuantity == null || Number(p.inventoryQuantity) === -1)) warnings.push('Hay productos con stock sin límite. Revisa si corresponde o carga las cantidades disponibles.');
+    if (products.length && products.every(p => p.inventoryQuantity != null && Number(p.inventoryQuantity) === 0)) warnings.push('No hay stock disponible.');
     if (!delivery.zone?.trim()) warnings.push('Faltan zonas y condiciones de costo del reparto.');
     if (!delivery.schedule?.trim()) warnings.push('Faltan días, horario y hora límite para pedir.');
     if (!delivery.cutoffTime) warnings.push('La hora límite de cierre automático todavía usa el valor general de 13:00.');

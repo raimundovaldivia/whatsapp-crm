@@ -218,3 +218,10 @@ test('la comuna o una zona de cobertura no sustituyen la dirección de entrega',
   }
   assert.equal(agent.hasRequiredData({ ...draft(), address: 'Parcela 12, sector Altovalsol' }), true);
 });
+
+test('se conserva el stock sin límite que admite el catálogo, sin confundirlo con agotado', async () => {
+  const f = fixture({ products: [{ id: 7, title: 'Huevos XL cafés · Bandeja de 30', price: 12990, stock: -1 }] });
+  const result = await f.pipeline.processMessage(7, 91, 'Sí, confirmo el pedido');
+  assert.equal(f.calls.orders.length, 1);
+  assert.equal(result.newState, 'confirmed');
+});

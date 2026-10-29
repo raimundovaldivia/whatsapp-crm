@@ -20,7 +20,7 @@ function catalogIssue(priced, products) {
     const variant = item.variant_id == null ? null : product.variants?.find(v => String(v.id) === String(item.variant_id));
     const stock = variant ? (variant.inventoryQuantity ?? variant.stock) : (product.inventoryQuantity ?? product.stock);
     if (product.active === false || product.available === false || variant?.available === false
-        || (stock != null && (!Number.isFinite(Number(stock)) || Number(stock) < item.quantity))) {
+        || (stock != null && Number(stock) !== -1 && (!Number.isFinite(Number(stock)) || Number(stock) < item.quantity))) {
       return `No hay disponibilidad suficiente de "${item.name}" para esa cantidad. Todavía no he creado el pedido. ¿Quieres ajustar la cantidad o consultar otra opción?`;
     }
   }
