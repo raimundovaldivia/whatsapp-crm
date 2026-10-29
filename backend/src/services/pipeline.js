@@ -13,6 +13,7 @@ const { getPool } = require('../db/database');
 const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
+const { salesStateContext } = require('./bot-operating-context');
 const ordersAgent  = require('./agents/orders');
 const { client: conversationalAI, modelFor: conversationalModelFor, responseText, provider: conversationalProvider } = require('./ai-provider');
 const pricing      = require('./order-pricing');
@@ -536,6 +537,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
   const storeContext  = await db.getSetting(orgId, 'store_context') || '';
   const extraPrompt   = await db.getSetting(orgId, 'ai_system_prompt_extra') || '';
+  const currentSalesState = await salesStateContext(db, orgId);
   const cheeseWeight = await db.getSetting(orgId, 'goat_cheese_weight');
   const catalogFacts = cheeseWeight ? `Ficha general confirmada: cada pieza de queso de cabra fresco pasteurizado pesa ${cheeseWeight}. Esta especificación prevalece sobre pesos antiguos del historial, catálogo importado o promociones. No afirmes que pesa 800 g ni que tiene un peso fijo. No extrapoles este dato al queso de vaca ni a presentaciones especiales acordadas con clientes.` : '';
 
@@ -990,7 +992,7 @@ Reglas estrictas:
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
-  const storeCustomPrompt = [dateSection, closingSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [dateSection, closingSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts, currentSalesState].filter(Boolean).join('\n\n---\n\n');
   orderCtx.storeContext = storeCustomPrompt;
 
   if (isSoftFutureIntent(userMessage) && !['scheduled', 'collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {

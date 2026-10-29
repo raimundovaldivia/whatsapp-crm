@@ -14,6 +14,7 @@ const db              = require('../db/database');
 const shopifyApi      = require('../services/shopify-api');
 const orchestrator    = require('../services/agents/orchestrator');
 const salesAgent      = require('../services/agents/sales');
+const { salesStateContext } = require('../services/bot-operating-context');
 const ordersAgent     = require('../services/agents/orders');
 const kapsoPlatform   = require('../services/kapso-platform');
 const collection      = require('../services/payment-collection');
@@ -170,8 +171,9 @@ router.post('/test-bot', require('../middleware/commercial-access').requireSolut
     const paymentMode = (await db.getSetting(req.orgId, 'payment_mode')) || 'cod';
     const paymentInfo = (await db.getSetting(req.orgId, 'payment_info')) || '';
     const botRules = (await db.getSetting(req.orgId, 'bot_improvement_rules')) || '';
+    const currentSalesState = await salesStateContext(db, req.orgId);
     const storeCustomPrompt = [deliverySection, storeContext, extraPrompt, paymentInfo, botRules,
-      paymentMode === 'cod' ? 'Pago al recibir. No generar enlaces de pago.' : 'Pago mediante enlace.'].filter(Boolean).join('\n\n---\n\n');
+      paymentMode === 'cod' ? 'Pago al recibir. No generar enlaces de pago.' : 'Pago mediante enlace.', currentSalesState].filter(Boolean).join('\n\n---\n\n');
 
     // Convertir historial al formato interno del pipeline
     const convHistory = history.map(m => ({

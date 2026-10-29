@@ -1,5 +1,10 @@
 # Cierre de pedidos del bot
 
+El agente de ventas y el simulador reciben en cada turno el estado vigente de
+`bot_sales_enabled`, leído para la organización activa. Este dato prevalece
+sobre mensajes anteriores sobre una pausa: reactivar ventas no requiere borrar
+la conversación. Los controles de catálogo y confirmación siguen aplicándose.
+
 La web de Justo Casero muestra los formatos Extra de 180 y Súper Extra de 100.
 Consulta precios y disponibilidad por SKU en el catálogo público de su propia
 tienda. Si no puede cargarlo, solicita consultar por WhatsApp sin inventar precio
