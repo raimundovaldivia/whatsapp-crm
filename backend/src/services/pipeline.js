@@ -13,7 +13,7 @@ const { getPool } = require('../db/database');
 const shopifyApi  = require('./shopify-api');
 const orchestrator = require('./agents/orchestrator');
 const salesAgent   = require('./agents/sales');
-const { salesStateContext } = require('./bot-operating-context');
+const { salesStateContext, enforceSalesState } = require('./bot-operating-context');
 const ordersAgent  = require('./agents/orders');
 const { client: conversationalAI, modelFor: conversationalModelFor, responseText, provider: conversationalProvider } = require('./ai-provider');
 const pricing      = require('./order-pricing');
@@ -250,6 +250,13 @@ async function processMessage(orgId, conversationId, userMessage, log = null, op
     console.warn('[Pipeline] No se pudo registrar el referido:', error.message);
   }
   let result = await processMessageInternal(orgId, conversationId, userMessage, log, options);
+  if (result?.response) {
+    const response = await enforceSalesState(db, orgId, result.response);
+    if (response !== result.response) {
+      log?.step?.('sales_state_guard', 'Aviso antiguo de ventas pausadas corregido con el estado vigente');
+      result = { ...result, response };
+    }
+  }
   if (deliveryCoverage.isCoverageRejection(result?.response)) {
     try {
       const raw = await db.getSetting(orgId, 'delivery_info');

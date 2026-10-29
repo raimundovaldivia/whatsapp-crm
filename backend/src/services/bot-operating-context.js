@@ -13,4 +13,19 @@ async function salesStateContext(db, orgId) {
   ].join('\n');
 }
 
-module.exports = { salesStateContext };
+const PAUSED_SALES_CLAIM = /\bventas?\s+(?:(?:todavía|aún|por ahora|sigue|siguen|está|están|continúa|continúan)\s+){0,3}(?:pendientes?\s+de\s+habilitaci[oó]n|pausadas?|sin\s+habilitar)\b/iu;
+const GENERAL_ORDER_BLOCK = /\bno\s+(?:puedo|podemos)\s+(?:crear\s+ni\s+confirmar|confirmar\s+ni\s+crear)\s+(?:nuevos\s+)?pedidos(?:\s+nuevos)?\b/iu;
+
+// El modelo puede repetir el aviso antiguo pese al contexto actualizado.
+// Contrastar esa afirmación con la configuración antes de enviarla.
+async function enforceSalesState(db, orgId, response) {
+  if (!PAUSED_SALES_CLAIM.test(String(response || ''))) return response;
+  if ((await db.getSetting(orgId, 'bot_sales_enabled')) === 'false') return response;
+  const parts = String(response).split(/(?<=[.!?])\s+|\n+/u)
+    .filter(part => part.trim() && !PAUSED_SALES_CLAIM.test(part) && !GENERAL_ORDER_BLOCK.test(part));
+  const question = parts.findIndex(part => /[¿?]/u.test(part));
+  parts.splice(question < 0 ? parts.length : question, 0, 'Las ventas están habilitadas; sí estamos recibiendo pedidos.');
+  return parts.join('\n');
+}
+
+module.exports = { salesStateContext, enforceSalesState };

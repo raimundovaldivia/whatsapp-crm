@@ -4,6 +4,11 @@ El agente de ventas y el simulador reciben en cada turno el estado vigente de
 `bot_sales_enabled`, leído para la organización activa. Este dato prevalece
 sobre mensajes anteriores sobre una pausa: reactivar ventas no requiere borrar
 la conversación. Los controles de catálogo y confirmación siguen aplicándose.
+Además, antes de enviar una afirmación de ventas pausadas se vuelve a consultar
+el permiso vigente. Si el modelo repite esa pausa cuando la tienda ya habilitó
+ventas, se corrige únicamente ese aviso y se conserva la información comercial
+restante. Una pausa real, falta de stock o datos incompletos siguen bloqueando
+el cierre según sus controles habituales.
 
 La web de Justo Casero muestra los formatos Extra de 180 y Súper Extra de 100.
 Consulta precios y disponibilidad por SKU en el catálogo público de su propia

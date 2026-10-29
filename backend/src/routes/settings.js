@@ -14,7 +14,7 @@ const db              = require('../db/database');
 const shopifyApi      = require('../services/shopify-api');
 const orchestrator    = require('../services/agents/orchestrator');
 const salesAgent      = require('../services/agents/sales');
-const { salesStateContext } = require('../services/bot-operating-context');
+const { salesStateContext, enforceSalesState } = require('../services/bot-operating-context');
 const ordersAgent     = require('../services/agents/orders');
 const kapsoPlatform   = require('../services/kapso-platform');
 const collection      = require('../services/payment-collection');
@@ -226,6 +226,7 @@ router.post('/test-bot', require('../middleware/commercial-access').requireSolut
       newState  = intent === 'wants_to_order' || salesAgent.isReadyToOrder(salesResponse) ? 'collecting_order' : pipelineState;
     }
 
+    response = await enforceSalesState(db, req.orgId, response);
     res.json({ response, agentType, newState, orderDraft: newOrderDraft });
   } catch (err) {
     console.error('[TestBot]', err.message);
