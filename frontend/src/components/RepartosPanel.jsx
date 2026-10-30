@@ -266,8 +266,10 @@ function WarehouseEditor({ colors, warehouse, onSaved }) {
       <div style={{ width: '100%', paddingLeft: 20, color: warehouse.coverageEnabled ? colors.textMuted : '#fbbf24' }}>
         {warehouse.coverageEnabled
           ? `Cobertura: ${warehouse.coverageRadiusKm} km desde ${validCoveragePoints(warehouse).filter(p => p.geocoded).length + 1} punto(s)`
-          : '⚠️ Configura el radio para detectar direcciones fuera de ruta'}
+          : !warehouse.geocoded ? '⚠️ Falta ubicar la bodega en el mapa para activar la cobertura'
+            : '⚠️ Configura el radio para detectar direcciones fuera de ruta'}
       </div>
+      {msg && <div role="alert" style={{ width: '100%', paddingLeft: 20, color: '#fbbf24' }}>{msg}</div>}
     </div>
   );
 }
