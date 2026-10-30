@@ -844,6 +844,13 @@ router.post('/warehouse', require('../middleware/commercial-access').requireSolu
     // Geocodificar la dirección de la bodega (una sola llamada, al guardar)
     let lat = null, lng = null;
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    const geocodingWarnings = new Set();
+    const geocodingMessages = {
+      REQUEST_DENIED: 'Google Maps rechazó el acceso para ubicar direcciones. Revisa la clave, las APIs habilitadas y la facturación de mapas.',
+      OVER_QUERY_LIMIT: 'Google Maps alcanzó su límite de consultas. Revisa la cuota de mapas.',
+      OVER_DAILY_LIMIT: 'Google Maps alcanzó su límite diario o requiere revisar su facturación.',
+      ZERO_RESULTS: 'Google Maps no encontró la dirección. Agrega calle, número y comuna.',
+    };
     async function geocodeAddress(value) {
       if (!apiKey) return { lat: null, lng: null };
       try {
@@ -853,8 +860,10 @@ router.post('/warehouse', require('../middleware/commercial-access').requireSolu
         });
         const loc = data?.results?.[0]?.geometry?.location;
         if (loc && data.status === 'OK') return { lat: loc.lat, lng: loc.lng };
+        geocodingWarnings.add(geocodingMessages[data?.status] || 'Google Maps no pudo resolver la ubicación. Revisa la dirección o inténtalo nuevamente.');
       } catch (e) {
         console.warn('[Settings/warehouse] geocode falló:', e.message);
+        geocodingWarnings.add('No se pudo conectar con Google Maps. Inténtalo nuevamente.');
       }
       return { lat: null, lng: null };
     }
@@ -875,6 +884,7 @@ router.post('/warehouse', require('../middleware/commercial-access').requireSolu
     const warningParts = [];
     if (lat == null) warningParts.push(apiKey ? 'No se pudo ubicar la bodega — revísala.' : 'Falta GOOGLE_MAPS_API_KEY: se guardó la dirección pero sin coordenadas.');
     if (unlocatedCount) warningParts.push(`${unlocatedCount} punto${unlocatedCount === 1 ? '' : 's'} adicional${unlocatedCount === 1 ? '' : 'es'} no se pudo ubicar.`);
+    warningParts.push(...geocodingWarnings);
 
     res.json({
       success: true,

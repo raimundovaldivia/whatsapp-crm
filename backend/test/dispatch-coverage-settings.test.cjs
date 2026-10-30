@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load, handler, response, noop } = require('./helpers.cjs');
 
-function fixture() {
+function fixture(geocodeStatus = 'OK') {
   const values = new Map();
   let writes = 0;
   const db = {
@@ -10,7 +10,7 @@ function fixture() {
     setSetting: async (orgId, key, value) => { writes++; values.set(`${orgId}:${key}`, value); },
   };
   const axios = { get: async (_url, { params }) => ({
-    data: { status: 'OK', results: [{ geometry: { location: params.address.includes('Ovalle')
+    data: { status: geocodeStatus, error_message: 'private provider detail', results: [{ geometry: { location: params.address.includes('Ovalle')
       ? { lat: -30.598, lng: -71.200 }
       : { lat: -29.9027, lng: -71.2519 } } }] },
   }) };
@@ -54,4 +54,21 @@ test('rechaza radios inválidos antes de escribir configuración', async () => {
   await handler(f.router, 'post', '/warehouse')({ orgId: 7, body: { address: 'Bodega', coverageRadiusKm: 0 } }, res);
   assert.equal(res.code, 400);
   assert.equal(f.writes, 0);
+});
+
+test('distingue acceso a mapas, cuota y dirección sin exponer detalles del proveedor', async () => {
+  for (const [status, expected] of [
+    ['REQUEST_DENIED', /rechazó el acceso/],
+    ['OVER_QUERY_LIMIT', /límite de consultas/],
+    ['ZERO_RESULTS', /no encontró la dirección/],
+  ]) {
+    const f = fixture(status);
+    const res = response();
+    await handler(f.router, 'post', '/warehouse')({ orgId: 7, body: { address: 'Bodega', coverageRadiusKm: 50 } }, res);
+    assert.equal(res.code, 200);
+    assert.equal(res.body.warehouse.geocoded, false);
+    assert.equal(res.body.warehouse.coverageEnabled, false);
+    assert.match(res.body.warning, expected);
+    assert.doesNotMatch(JSON.stringify(res.body), /private provider detail|synthetic-key/);
+  }
 });
