@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ReturnsPanel from './ReturnsPanel.jsx';
 import CajaRepartos from './CajaRepartos.jsx';
+import RouteDispatchControls from './RouteDispatchControls.jsx';
 import { api, API_BASE } from '../utils/api.js';
 import { authSession } from '../utils/browser-session.js';
 import { useTheme } from '../theme.js';
@@ -2434,6 +2435,14 @@ function HistorialRepartos({ colors }) {
                       </div>
                     );
                   })()}
+                  {['sent', 'in_progress', 'completed'].includes(route.status) && <RouteDispatchControls
+                    route={route} colors={colors}
+                    loadReady={(() => {
+                      const details = buildManifestDetails(route.optimized_route?.length ? route.optimized_route : route.orders);
+                      return details.length > 0 && details.every(item => route.load_checklist?.[item.name] === true);
+                    })()}
+                    onUpdated={updated => setRoutes(previous => previous.map(item => item.id === route.id ? { ...item, ...updated } : item))}
+                  />}
                   {/* Paradas de la ruta (compacto). El detalle de pagos, notas,
                       ventas extra y cobranza vive en 📦 Despachos — aquí solo
                       qué lleva la ruta y su estado, para operar sobre ella. */}
