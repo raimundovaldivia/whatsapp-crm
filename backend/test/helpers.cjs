@@ -34,6 +34,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './delivery-coverage') return require(path.join(root, 'src/services/delivery-coverage.js'));
       if (name === './post-sale-resolution') return require(path.join(root, 'src/services/post-sale-resolution.js'));
       if (name === '../services/dispatch-coverage' || name === './dispatch-coverage') return require(path.join(root, 'src/services/dispatch-coverage.js'));
+      if (name === '../services/delivery-geocoding') return require(path.join(root, 'src/services/delivery-geocoding.js'));
       if (name === '../services/conversation-attention') return require(path.join(root, 'src/services/conversation-attention.js'));
       if (name === '../services/lead-qualification') return require(path.join(root, 'src/services/lead-qualification.js'));
       if (name === '../services/sales-closing' || name === './sales-closing') return require(path.join(root, 'src/services/sales-closing.js'));
