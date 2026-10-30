@@ -442,9 +442,8 @@ async function releaseOrdersFromRoute(client, orgId, orders) {
 // GOOGLE_MAPS_API_KEY que la optimización (Geocoding API) y cachea el resultado
 // en geocode_cache para no pagar la misma dirección dos veces.
 
-function addressKey(addr) {
-  return (addr || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 300);
-}
+const deliveryGeocoding = require('../services/delivery-geocoding');
+const { addressKey } = deliveryGeocoding;
 
 function validGeoPoint(point) {
   const lat = Number(point?.lat);
@@ -456,68 +455,10 @@ function validGeoPoint(point) {
 }
 
 async function geocodeMany(orgId, addresses) {
-  const pool   = getPool();
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-  const unique = [...new Set(addresses.map(addressKey).filter(Boolean))];
-  const result = {}; // addressKey → { lat, lng } | null
-
-  if (unique.length === 0) return result;
-
-  // 1. Lo que ya está en caché
-  const { rows: cached } = await pool.query(
-    `SELECT address_key, lat, lng, found FROM geocode_cache
-      WHERE organization_id = $1 AND address_key = ANY($2)`,
-    [orgId, unique]
-  );
-  const cachedKeys = new Set();
-  for (const r of cached) {
-    cachedKeys.add(r.address_key);
-    result[r.address_key] = r.found && r.lat != null ? { lat: r.lat, lng: r.lng } : null;
-  }
-
-  // 2. Lo que falta, geocodificar (si hay API key)
-  const pending = unique.filter(k => !cachedKeys.has(k));
-  if (pending.length === 0 || !apiKey) return result;
-
-  // Concurrencia limitada para no disparar 50 llamadas de golpe
-  const CHUNK = 5;
-  for (let i = 0; i < pending.length; i += CHUNK) {
-    const slice = pending.slice(i, i + CHUNK);
-    await Promise.all(slice.map(async (key) => {
-      try {
-        const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
-          params: { address: key, key: apiKey, region: 'cl', language: 'es' },
-          timeout: 8000,
-        });
-        const loc = data?.results?.[0]?.geometry?.location;
-        if (loc && data.status === 'OK') {
-          result[key] = { lat: loc.lat, lng: loc.lng };
-          await pool.query(
-            `INSERT INTO geocode_cache (organization_id, address_key, lat, lng, found)
-             VALUES ($1, $2, $3, $4, TRUE)
-             ON CONFLICT (organization_id, address_key)
-             DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng, found = TRUE, created_at = NOW()`,
-            [orgId, key, loc.lat, loc.lng]
-          );
-        } else {
-          result[key] = null;
-          // Cachear el "no encontrado" para no reintentar en cada carga
-          await pool.query(
-            `INSERT INTO geocode_cache (organization_id, address_key, found)
-             VALUES ($1, $2, FALSE)
-             ON CONFLICT (organization_id, address_key)
-             DO UPDATE SET found = FALSE, created_at = NOW()`,
-            [orgId, key]
-          );
-        }
-      } catch (err) {
-        result[key] = null; // no cachear errores de red: se reintenta luego
-        console.warn(`[Geocode] "${key.slice(0, 40)}" falló:`, err.message);
-      }
-    }));
-  }
-
-  return result;
+  return deliveryGeocoding.geocodeMany({
+    pool: getPool(), axios, apiKey: process.env.GOOGLE_MAPS_API_KEY, orgId, addresses,
+    log: code => console.warn('[Geocode]', code),
+  });
 }
 
 /** Agrega lat/lng a cada pedido según su fullAddress. Muta y devuelve la lista. */
