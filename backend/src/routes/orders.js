@@ -1250,7 +1250,12 @@ router.patch('/history-payment', async (req, res) => {
 router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
-    const validStatuses = ['draft', 'sent', 'paid', 'cancelled'];
+    // Keep the individual card actions compatible with the operational states
+    // already supported by the order list and bulk editor.
+    const validStatuses = ['nuevo', 'por_despachar', 'en_camino', 'no_entregado', 'entregado', 'draft', 'sent', 'payment_received', 'paid', 'cancelled'];
+    if (!/^[1-9]\d*$/.test(String(req.params.id)) || !Number.isSafeInteger(Number(req.params.id))) {
+      return res.status(400).json({ success: false, error: 'Pedido inválido' });
+    }
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ success: false, error: `Estado inválido. Opciones: ${validStatuses.join(', ')}` });
     }
@@ -1261,7 +1266,12 @@ router.patch('/:id/status', async (req, res) => {
     );
     if (!order) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
 
-    const updated = await db.updateOrder(order.id, { status });
+    const updates = { status, updated_at: new Date() };
+    // Delivery is independent from payment. Retain the original completion time
+    // on retries, and never mark cash or a transfer as paid from this action.
+    if (status === 'entregado') updates.delivered_at = order.delivered_at || new Date();
+    const updated = await db.updateOrder(order.id, updates, req.orgId);
+    if (!updated) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
     res.json({ success: true, data: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
