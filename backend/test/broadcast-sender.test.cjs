@@ -39,7 +39,11 @@ test('direct pacing serializes concurrent tabs, pauses each batch and survives r
 });
 
 test('sender checks tenant, provider and connection and exposes no credentials', async () => {
-  const sender = load('src/services/broadcast-sender.js', { '../db/database': {
+  const sender = load('src/services/broadcast-sender.js', {
+    './evolution-connection': {
+      refreshChannel: async (org, id) => { if (org !== 1 || id !== 3) throw new Error('Conexión no disponible'); return { state: 'disconnected' }; },
+      refreshedChannels: async () => [{ id: 3, provider: 'evolution', status: 'connected', evolution_api_key: 'secret' }],
+    }, '../db/database': {
     getWhatsappConfig: async () => ({ provider: 'kapso', api_key: 'secret' }),
     getWhatsappChannel: async (org, id) => org === 1 && id === 3 ? { provider: 'evolution', status: 'disconnected' } : null,
     listWhatsappChannels: async () => [{ id: 3, provider: 'evolution', status: 'connected', evolution_api_key: 'secret' }],

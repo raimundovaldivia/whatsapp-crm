@@ -1324,6 +1324,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [sendingMethods, setSendingMethods] = useState([]);
   const [methodsLoading, setMethodsLoading] = useState(true);
   const [methodsError, setMethodsError] = useState('');
+  const methodsRequestRef = useRef(false);
   const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
   const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
   const [scheduledFor, setScheduledFor] = useState('');
@@ -1340,21 +1341,26 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const messageReady = isDirect ? (isInstruction ? directInstruction.trim().length >= 10 : !!directText.trim()) : !!selTpl;
   const [waitSeconds, setWaitSeconds] = useState(0);
   const selectedMethod = sendingMethods.find(m => (m.channelId ? `evolution:${m.channelId}` : 'kapso') === sendingMethodKey);
-  const loadSendingMethods = useCallback(async () => {
-    setMethodsLoading(true);
+  const loadSendingMethods = useCallback(async (background = false) => {
+    if (methodsRequestRef.current) return;
+    methodsRequestRef.current = true;
+    if (!background) setMethodsLoading(true);
     setMethodsError('');
     try {
       const { data } = await api.get('/reengagement/sending-methods');
       setSendingMethods(data.methods || []);
     } catch (error) {
       setMethodsError(error.response?.data?.error || 'No se pudieron cargar las conexiones.');
+      setSendingMethods(current => current.map(method => ({ ...method, available: false })));
     } finally {
+      methodsRequestRef.current = false;
       setMethodsLoading(false);
     }
   }, []);
   useEffect(() => {
     loadSendingMethods();
-    return () => { stopSendingRef.current = true; };
+    const timer = setInterval(() => loadSendingMethods(true), 15000);
+    return () => { clearInterval(timer); stopSendingRef.current = true; };
   }, [loadSendingMethods]);
   async function waitForNextSend(seconds) {
     for (let remaining = Math.ceil(seconds); remaining > 0 && !stopSendingRef.current; remaining--) {
@@ -2737,13 +2743,13 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
               <div style={{ fontSize: 13, fontWeight: 800 }}>{isSelected ? '✓ ' : ''}{method.label}</div>
               <div style={{ fontSize: 11, marginTop: 4, color: colors.textSecondary }}>
                 {methodsLoading ? 'Consultando conexión…' : !method.available
-                  ? (methodsError ? 'Conexión sin verificar' : 'No conectado · revisar Ajustes')
+                  ? (method.warning || (methodsError ? 'Conexión sin verificar' : 'No conectado · revisar Ajustes'))
                   : method.provider === 'evolution' ? 'Lotes y pausas configurables' : 'Plantillas de WhatsApp'}
               </div>
             </button>;
           })}
         </div>
-        {!sending && !reviewPlan && <button type="button" onClick={loadSendingMethods} disabled={methodsLoading}
+        {!sending && !reviewPlan && <button type="button" onClick={() => loadSendingMethods()} disabled={methodsLoading}
           style={{ background: 'transparent', border: `1px solid ${colors.border}`, color: colors.textSecondary, borderRadius: 6, padding: '7px 10px', cursor: 'pointer' }}>
           {methodsLoading ? 'Cargando…' : 'Actualizar conexiones'}
         </button>}
