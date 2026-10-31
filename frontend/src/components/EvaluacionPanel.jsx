@@ -115,7 +115,7 @@ export default function EvaluacionPanel() {
         <input type="date" value={to} onChange={e => setTo(e.target.value)} style={inp} />
         <button onClick={loadMetrics} disabled={loadingM} style={btn(c.blue || '#38bdf8')}>{loadingM ? 'Calculando…' : 'Calcular métricas'}</button>
         <button onClick={runGrade} disabled={loadingG} style={btn(c.green || '#22c55e')}>{loadingG ? 'Evaluando con IA…' : 'Evaluar calidad (IA)'}</button>
-        <button onClick={loadPurchaseProbability} disabled={loadingP} style={btn(c.blue || '#38bdf8')}>{loadingP ? 'Cargando…' : 'Ver probabilidad de compra'}</button>
+        <button onClick={loadPurchaseProbability} disabled={loadingP} style={btn(c.blue || '#38bdf8')}>{loadingP ? 'Cargando…' : 'Ver prioridad comercial'}</button>
         <button onClick={recalculatePurchaseProbability} disabled={loadingP} style={btn(c.green || '#22c55e')}>{loadingP ? 'Reevaluando…' : 'Reevaluar conversaciones'}</button>
       </div>
 
@@ -126,21 +126,19 @@ export default function EvaluacionPanel() {
         <div style={{ marginBottom: 20, border: `1px solid ${c.border}`, borderRadius: 12, padding: 14, backgroundColor: c.bgSub }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 10 }}>
             <div>
-              <div style={{ color: c.textPrimary, fontWeight: 800, fontSize: 15 }}>Probabilidad de compra</div>
+              <div style={{ color: c.textPrimary, fontWeight: 800, fontSize: 15 }}>Prioridad comercial · modelo de reglas</div>
               <div style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>
                 Modelo {purchase.modelVersion} · evaluación {purchase.evaluationDate || 'sin ejecutar'} · los mensajes se redactan desde cada conversación, no desde una plantilla.
               </div>
             </div>
             <div style={{ color: c.textMuted, fontSize: 11, maxWidth: 420 }}>
-              La probabilidad es una estimación inicial explicable. Se calibra al observar si cada persona compra dentro de 24 o 48 horas.
+              Puntajes sin calibración probabilística validada. 60/100 no significa 60% de probabilidad de compra. Los resultados históricos permiten evaluar el modelo, pero no garantizan ventas hoy.
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
             {card('Conversaciones evaluadas', purchase.summary.evaluated || 0, null)}
-            {card('Probabilidad alta', purchase.summary.highProbability || 0, '60% o más', c.success)}
-            {card('Huevos esperados 24 h', purchase.summary.expectedEggs24h || 0, null, c.success)}
-            {card('Huevos esperados 48 h', purchase.summary.expectedEggs48h || 0, null, c.success)}
-            {card('Probabilidad promedio 48 h', `${purchase.summary.averageProbability48h || 0}%`, null)}
+            {card('Prioridad alta', purchase.summary.highProbability || 0, '60/100 o más; sin calibrar', c.success)}
+            {card('Puntaje promedio 48 h', `${purchase.summary.averageProbability48h || 0}/100`, null)}
             {purchase.summary.brierScore48h != null && card('Error Brier 48 h', purchase.summary.brierScore48h, `${purchase.summary.outcomesChecked} resultados observados`)}
           </div>
           {purchase.prospects?.length > 0 ? (
@@ -148,7 +146,7 @@ export default function EvaluacionPanel() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860, fontSize: 12 }}>
                 <thead>
                   <tr style={{ backgroundColor: c.bgCard, color: c.textMuted, textAlign: 'left' }}>
-                    {['Contacto', 'P. 24 h', 'P. 48 h', 'Huevos probables', 'Huevos esperados', 'Lectura', 'Próxima acción'].map(label => (
+                    {['Contacto', 'Puntaje 24 h', 'Puntaje 48 h', 'Volumen estimado (huevos)', 'Lectura', 'Próxima acción'].map(label => (
                       <th key={label} style={{ padding: '8px 10px', borderBottom: `1px solid ${c.border}` }}>{label}</th>
                     ))}
                   </tr>
@@ -159,10 +157,9 @@ export default function EvaluacionPanel() {
                       <td style={{ padding: '8px 10px', color: c.textPrimary, fontWeight: 650 }}>
                         {row.contact_name || row.phone_number}<div style={{ color: c.textMuted, fontSize: 10, fontWeight: 400 }}>{row.phone_number}</div>
                       </td>
-                      <td style={{ padding: '8px 10px', color: Number(row.probability_24h) >= 60 ? c.success : c.textSecondary, fontWeight: 800 }}>{Math.round(Number(row.probability_24h))}%</td>
-                      <td style={{ padding: '8px 10px', color: Number(row.probability_48h) >= 60 ? c.success : c.textSecondary, fontWeight: 800 }}>{Math.round(Number(row.probability_48h))}%</td>
+                      <td style={{ padding: '8px 10px', color: Number(row.probability_24h) >= 60 ? c.success : c.textSecondary, fontWeight: 800 }}>{Math.round(Number(row.probability_24h))}/100</td>
+                      <td style={{ padding: '8px 10px', color: Number(row.probability_48h) >= 60 ? c.success : c.textSecondary, fontWeight: 800 }}>{Math.round(Number(row.probability_48h))}/100</td>
                       <td style={{ padding: '8px 10px', color: c.textSecondary }}>{row.estimated_eggs}</td>
-                      <td style={{ padding: '8px 10px', color: c.success, fontWeight: 800 }}>{Math.round(Number(row.expected_eggs_48h))}</td>
                       <td style={{ padding: '8px 10px', color: c.textMuted, maxWidth: 250 }}>{row.explanation}</td>
                       <td style={{ padding: '8px 10px', color: c.textSecondary, maxWidth: 280 }}>{row.recommended_action}</td>
                     </tr>

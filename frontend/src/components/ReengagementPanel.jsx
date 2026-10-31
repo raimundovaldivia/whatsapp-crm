@@ -1,4 +1,5 @@
 import JourneyDetails from './JourneyDetails.jsx';
+import ConversationReviewPanel from './ConversationReviewPanel.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   UserCheck, RefreshCw, Sparkles, Send, Clock,
@@ -532,7 +533,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         )}
 
         {calibration && !loading && (
-          <Tooltip text={`Accuracy histórica: ${Math.round((calibration.accuracyRate||0)*100)}% · ${calibration.totalPredictions} predicciones · factor ${calibration.calibrationFactor}`} position="bottom">
+          <Tooltip text={`Acierto histórico de fecha de recompra; no es probabilidad de comprar hoy. ${calibration.totalPredictions} predicciones · factor ${calibration.calibrationFactor}`} position="bottom">
             <span style={{
               backgroundColor: calibration.accuracyRate >= 0.70 ? colors.greenTint : calibration.accuracyRate >= 0.50 ? `${colors.yellow}22` : `${colors.red}22`,
               color: calibration.accuracyRate >= 0.70 ? colors.green : calibration.accuracyRate >= 0.50 ? colors.yellow : colors.red,
@@ -540,7 +541,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
               borderRadius: '5px', padding: '2px 7px', fontSize: '10px', fontWeight: 700,
               cursor: 'default', flexShrink: 0,
             }}>
-              {Math.round((calibration.accuracyRate||0)*100)}% preciso
+              {Math.round((calibration.accuracyRate||0)*100)}% acierto de fecha
             </span>
           </Tooltip>
         )}
@@ -563,6 +564,7 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
         <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderRadius: colors.radiusMd, padding: '2px', border: `1px solid ${colors.border}`, gap: '2px', flexShrink: 0 }}>
           {[
             { key: 'masivo', label: '📢 Envío masivo' },
+            { key: 'review', label: 'Revisar chats' },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setMainTab(key)} style={{
               padding: '5px 12px', borderRadius: colors.radiusSm, border: 'none', cursor: 'pointer',
@@ -656,9 +658,10 @@ export default function ReengagementPanel({ filterPhone = null, onClearFilter = 
       {mainTab === 'masivo' && (
         <BroadcastPanel colors={colors} testPhone={testPhone} parentTemplates={templates} />
       )}
+      {mainTab === 'review' && <ConversationReviewPanel />}
 
       {/* ── Modo IA Predictiva ── */}
-      {mainTab !== 'masivo' && <>
+      {mainTab === 'ia' && <>
 
       {/* Tabs + filtro de confianza */}
       {!loading && !error && totalCandidates > 0 && (

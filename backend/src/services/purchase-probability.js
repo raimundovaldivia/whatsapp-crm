@@ -246,6 +246,8 @@ function scoreConversation({ messages = [], pipelineState = 'exploring', clientT
 
   return {
     modelVersion: MODEL_VERSION,
+    calibrated: false,
+    scoreType: 'heuristic',
     probability24h: clamp(probability24h, 0, 99),
     probability48h: clamp(probability48h, 0, 99),
     estimatedEggs: estimate.eggs,
