@@ -655,7 +655,7 @@ export default function App() {
 
       {/* Vista Ajustes */}
       {view === 'settings' && <SettingsPanel />}
-      {view === 'social' && <SocialPanel />}
+      {view === 'social' && <SocialPanel storeName={org?.name} />}
       {view === 'solutions' && ['owner','admin'].includes(userRole) && <SolutionsPanel />}
 
       {/* Vista Equipo (admin/owner only) */}

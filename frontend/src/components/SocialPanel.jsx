@@ -23,7 +23,7 @@ function ErrorBox({ children }) {
   return <div style={{ padding: 10, borderRadius: 8, color: '#fca5a5', background: '#7f1d1d33', fontSize: 13 }}>{children}</div>;
 }
 
-export default function SocialPanel() {
+export default function SocialPanel({ storeName = 'tu tienda' }) {
   const { colors } = useTheme();
   const [active, setActive] = useState('conexion');
   const [status, setStatus] = useState(null);
@@ -49,7 +49,7 @@ export default function SocialPanel() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 22 }}>
           <div>
             <h1 style={{ margin: 0, color: colors.textPrimary, fontSize: 22 }}>Facebook e Instagram</h1>
-            <p style={{ color: colors.textSecondary, margin: '5px 0 0', fontSize: 13 }}>Mensajes, publicaciones y rendimiento de anuncios de Diez Ríos.</p>
+            <p style={{ color: colors.textSecondary, margin: '5px 0 0', fontSize: 13 }}>Mensajes, publicaciones y rendimiento de anuncios de {storeName}.</p>
           </div>
           {status?.connected && <span style={{ color: colors.green, fontSize: 12 }}>● Meta conectado</span>}
         </div>
@@ -61,7 +61,7 @@ export default function SocialPanel() {
         <ErrorBox>{error}</ErrorBox>
         {loading ? <div style={{ padding: 40, color: colors.textSecondary, textAlign: 'center' }}><Loader size={22} /> Cargando…</div> : (
           <>
-            {active === 'conexion' && <ConnectionTab status={status} connect={connect} reload={load} colors={colors} setError={setError} />}
+            {active === 'conexion' && <ConnectionTab status={status} connect={connect} reload={load} colors={colors} setError={setError} storeName={storeName} />}
             {active === 'mensajes' && <MessagesTab connected={status?.connected} connect={connect} colors={colors} />}
             {active === 'comentarios' && <CommentsTab connected={status?.connected} connect={connect} colors={colors} />}
             {active === 'contenido' && <ContentTab connected={status?.connected} connect={connect} colors={colors} />}
@@ -74,7 +74,7 @@ export default function SocialPanel() {
   );
 }
 
-function ConnectionTab({ status, connect, reload, colors, setError }) {
+function ConnectionTab({ status, connect, reload, colors, setError, storeName }) {
   const c = status?.connection;
   const [assets, setAssets] = useState(null);
   const [pageId, setPageId] = useState(c?.page_id || '');
@@ -110,7 +110,7 @@ function ConnectionTab({ status, connect, reload, colors, setError }) {
     <Card colors={colors}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{ display: 'flex', gap: 6 }}><Facebook color="#1877f2" /><Instagram color="#e1306c" /></div>
-        <div style={{ flex: 1 }}><strong style={{ color: colors.textPrimary }}>{c?.facebook_user_name || 'Meta Business'}</strong><div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3 }}>{status?.connected ? 'Autorización activa' : 'Autoriza una cuenta administradora de los activos de Diez Ríos.'}</div></div>
+        <div style={{ flex: 1 }}><strong style={{ color: colors.textPrimary }}>{c?.facebook_user_name || 'Meta Business'}</strong><div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3 }}>{status?.connected ? 'Autorización activa' : `Autoriza una cuenta administradora de los activos de ${storeName}.`}</div></div>
         <button onClick={connect} style={primary(colors)}>{status?.connected ? 'Reconectar' : 'Conectar Meta'}</button>
       </div>
     </Card>
@@ -121,7 +121,7 @@ function ConnectionTab({ status, connect, reload, colors, setError }) {
         <Asset colors={colors} icon={<BarChart3 color={colors.green} />} title="Cuenta publicitaria" value={c.ad_account_name || 'No seleccionada'} />
       </div>
       {assets && <Card colors={colors}>
-        <strong style={{ color: colors.textPrimary, fontSize: 13 }}>Activos de Diez Ríos</strong>
+        <strong style={{ color: colors.textPrimary, fontSize: 13 }}>Activos de {storeName}</strong>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 10, marginTop: 12 }}>
           <label style={label(colors)}>Página de Facebook<select value={pageId} onChange={e => setPageId(e.target.value)} style={{ ...input(colors), marginTop: 5 }}><option value="">Seleccionar…</option>{assets.pages.map(p => <option key={p.id} value={p.id}>{p.name}{p.instagram?.username ? ` · @${p.instagram.username}` : ''}</option>)}</select></label>
           <label style={label(colors)}>Cuenta publicitaria<select value={adAccountId} onChange={e => setAdAccountId(e.target.value)} style={{ ...input(colors), marginTop: 5 }}><option value="">Seleccionar…</option>{assets.adAccounts.map(a => <option key={a.id} value={a.id}>{a.name} · {a.id}</option>)}</select></label>
