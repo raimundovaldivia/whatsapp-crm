@@ -19,6 +19,7 @@ const ordersAgent     = require('../services/agents/orders');
 const kapsoPlatform   = require('../services/kapso-platform');
 const collection      = require('../services/payment-collection');
 const evolution       = require('../services/evolution-whatsapp');
+const evolutionConnection = require('../services/evolution-connection');
 const crypto          = require('node:crypto');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const dispatchCoverage = require('../services/dispatch-coverage');
@@ -331,7 +332,7 @@ router.patch('/whatsapp/display-phone', async (req, res) => {
 router.get('/whatsapp/channels', async (req, res) => {
   try {
     const [evolutionChannels, official] = await Promise.all([
-      db.listWhatsappChannels(req.orgId),
+      evolutionConnection.refreshedChannels(req.orgId),
       db.getWhatsappConfig(req.orgId),
     ]);
     const channels = [];
@@ -426,46 +427,22 @@ router.post('/whatsapp/channels', async (req, res) => {
 
 router.get('/whatsapp/channels/:id/qr', async (req, res) => {
   try {
-    const channel = await db.getWhatsappChannel(req.orgId, Number(req.params.id));
-    if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
-    if (channel.assigned_user_id) return res.status(409).json({ success: false, error: 'Gestiona este WhatsApp desde Equipo' });
-    const [connection, qr] = await Promise.all([
-      evolution.getConnectionState(channel).catch(() => null),
-      evolution.getConnectQr(channel).catch(() => null),
-    ]);
-    const state = evolution.normalizeConnectionState(connection);
-    await db.updateWhatsappChannelStatus(req.orgId, channel.id, state);
-    res.json({ success: true, data: { state, qr } });
+    const { channel, state, warning } = await evolutionConnection.refreshChannel(req.orgId, Number(req.params.id), { force: true });
+    const qr = state === 'connected' ? null : await evolution.getConnectQr(channel);
+    res.json({ success: true, data: { state, qr }, warning });
   } catch (err) {
-    res.status(502).json({ success: false, error: err.response?.data?.message || err.message });
+    res.status(err.status || 502).json({ success: false, error: 'No se pudo comprobar o vincular el canal Evolution. Reintenta.' });
   }
 });
 
 /** Consulta liviana para que la pantalla detecte el QR completado sin pedir otro QR. */
 router.get('/whatsapp/channels/:id/status', async (req, res) => {
   try {
-    const channel = await db.getWhatsappChannel(req.orgId, Number(req.params.id));
-    if (!channel) return res.status(404).json({ success: false, error: 'Canal no encontrado' });
-    if (channel.assigned_user_id) return res.status(409).json({ success: false, error: 'Gestiona este WhatsApp desde Equipo' });
-    const connection = await evolution.getConnectionState(channel);
-    const state = evolution.normalizeConnectionState(connection);
-    const updated = await db.updateWhatsappChannelStatus(req.orgId, channel.id, state);
-
-    let webhookWarning = null;
-    if (state === 'connected' && channel.status !== 'connected') {
-      const publicUrl = process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL;
-      if (publicUrl) {
-        const webhookUrl = `${publicUrl.replace(/\/$/, '')}/evolution-webhook/${req.orgId}/${channel.id}/${channel.webhook_token}`;
-        try { await evolution.configureWebhook(channel, webhookUrl); }
-        catch (err) { webhookWarning = `WhatsApp está conectado, pero no se pudo registrar el webhook: ${err.response?.data?.message || err.message}`; }
-      } else {
-        webhookWarning = 'WhatsApp está conectado, pero falta CRM_PUBLIC_URL para registrar el webhook.';
-      }
-    }
-
-    res.json({ success: true, data: { channel: updated, state }, warning: webhookWarning });
+    const { channel, state, warning, checkedAt } = await evolutionConnection.refreshChannel(req.orgId, Number(req.params.id));
+    const { evolution_api_key, webhook_token, ...publicChannel } = channel;
+    res.json({ success: true, data: { channel: publicChannel, state, checkedAt }, warning });
   } catch (err) {
-    res.status(502).json({ success: false, error: err.response?.data?.message || err.message });
+    res.status(err.status || 502).json({ success: false, error: err.message });
   }
 });
 

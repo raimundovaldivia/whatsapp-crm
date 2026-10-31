@@ -233,9 +233,9 @@ function parseConnectionUpdate(body) {
   return { status, phoneNumber };
 }
 
-async function getConnectionState(config) {
+async function getConnectionState(config, options = {}) {
   const { instance } = credentials(config);
-  const response = await client(config).get(`/instance/connectionState/${encodeURIComponent(instance)}`);
+  const response = await client(config).get(`/instance/connectionState/${encodeURIComponent(instance)}`, options);
   return response.data;
 }
 
@@ -264,7 +264,7 @@ async function getConnectQr(config) {
   return response.data;
 }
 
-async function configureWebhook(config, webhookUrl) {
+async function configureWebhook(config, webhookUrl, options = {}) {
   const { instance } = credentials(config);
   const response = await client(config).post(`/webhook/set/${encodeURIComponent(instance)}`, {
     webhook: {
@@ -274,7 +274,7 @@ async function configureWebhook(config, webhookUrl) {
       webhookBase64: false,
       events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
     },
-  });
+  }, options);
   return response.data;
 }
 

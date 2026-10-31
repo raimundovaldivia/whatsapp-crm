@@ -408,6 +408,7 @@ function EvolutionChannelsPanel({ colors }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [qr, setQr] = useState(null);
+  const [qrChannelId, setQrChannelId] = useState(null);
   const [form, setForm] = useState({
     name: '', phoneNumber: '', evolutionApiUrl: '', evolutionApiKey: '', evolutionInstance: '', isDefault: false,
   });
@@ -423,30 +424,27 @@ function EvolutionChannelsPanel({ colors }) {
   useEffect(() => { load(); }, []);
 
   useEffect(() => {
-    const waiting = channels.filter(channel => channel.status !== 'connected');
-    if (!waiting.length) return undefined;
+    let stopped = false;
+    let pending = false;
     const timer = setInterval(async () => {
-      const results = await Promise.all(waiting.map(async channel => {
-        try {
-          const response = await api.get(`/settings/whatsapp/channels/${channel.id}/status`, { timeout: 15000 });
-          return { id: channel.id, ...response.data?.data, warning: response.data?.warning || null };
-        } catch { return null; }
-      }));
-      const valid = results.filter(Boolean);
-      if (!valid.length) return;
-      setChannels(current => current.map(channel => {
-        const result = valid.find(item => item.id === channel.id);
-        return result?.channel || channel;
-      }));
-      const connected = valid.find(result => result.state === 'connected');
-      if (connected) {
-        setQr(null);
-        if (connected.warning) setError(connected.warning);
-        else setSuccess('WhatsApp conectado y webhook configurado correctamente.');
-      }
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [channels.map(channel => `${channel.id}:${channel.status}`).join('|')]);
+      if (pending) return;
+      pending = true;
+      try {
+        const response = await api.get('/settings/whatsapp/channels', { timeout: 20000 });
+        if (stopped) return;
+        const latest = response.data?.data || [];
+        setChannels(latest);
+      } catch {
+        if (!stopped) setError('No se pudo actualizar la conexión de WhatsApp. Reintenta la consulta.');
+      } finally { pending = false; }
+    }, 15000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, []);
+
+  useEffect(() => {
+    const connected = channels.find(channel => channel.id === qrChannelId && channel.status === 'connected' && !channel.connection_warning);
+    if (connected && qr) { setQr(null); setSuccess('WhatsApp conectado y recepción de respuestas configurada.'); }
+  }, [channels, qr, qrChannelId]);
 
   const qrImage = (value) => {
     const raw = value?.base64 || value?.qrcode?.base64 || value?.code || null;
@@ -458,6 +456,7 @@ function EvolutionChannelsPanel({ colors }) {
     setSaving(true); setError(''); setSuccess(''); setQr(null);
     try {
       const r = await api.post('/settings/whatsapp/channels', form, { timeout: 30000 });
+      setQrChannelId(r.data?.data?.channel?.id || null);
       setQr(r.data?.data?.qr || null);
       setSuccess(r.data?.warning || 'Número agregado. Escanea el QR si todavía no está conectado.');
       setForm({ name: '', phoneNumber: '', evolutionApiUrl: form.evolutionApiUrl, evolutionApiKey: form.evolutionApiKey, evolutionInstance: '', isDefault: false });
@@ -471,7 +470,9 @@ function EvolutionChannelsPanel({ colors }) {
     setError(''); setQr(null);
     try {
       const r = await api.get(`/settings/whatsapp/channels/${id}/qr`, { timeout: 20000 });
+      setQrChannelId(id);
       setQr(r.data?.data?.qr || null);
+      if (r.data?.warning) setError(r.data.warning);
       if (r.data?.data?.state === 'connected') setSuccess('El número ya está conectado.');
       await load();
     } catch (err) { setError(err.response?.data?.error || 'No se pudo obtener el QR'); }
@@ -503,7 +504,8 @@ function EvolutionChannelsPanel({ colors }) {
             <MessageCircle size={17} color={ch.status === 'connected' ? colors.green : colors.yellow} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: colors.textPrimary, fontSize: '13px', fontWeight: 600 }}>{ch.name}{ch.is_default ? ' · Predeterminado' : ''}</div>
-              <div style={{ color: colors.textMuted, fontSize: '11px' }}>{ch.phone_number || ch.evolution_instance} · {ch.status}</div>
+              <div style={{ color: colors.textMuted, fontSize: '11px' }}>{ch.phone_number || ch.evolution_instance} · {ch.status === 'unverified' ? 'Conexión sin verificar' : ch.status}</div>
+              {ch.connection_warning && <div role="alert" style={{ color: colors.yellow, fontSize: '11px', marginTop: 4 }}>{ch.connection_warning}</div>}
             </div>
             {!ch.is_default && <button onClick={() => makeDefault(ch.id)} style={{ background: 'none', color: colors.green, border: `1px solid ${colors.green}55`, borderRadius: '6px', padding: '6px 8px', cursor: 'pointer', fontSize: '11px' }}>Usar por defecto</button>}
             <button onClick={() => requestQr(ch.id)} title="Conectar o revisar estado" style={{ background: colors.bgSub, color: colors.textSecondary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '6px', cursor: 'pointer' }}><QrCode size={15} /></button>

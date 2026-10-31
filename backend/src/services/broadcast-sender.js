@@ -7,9 +7,9 @@ const error = (message, status = 400) => Object.assign(new Error(message), { sta
 async function resolveSender(orgId, provider, channelId) {
   if (provider === 'evolution') {
     if (!Number.isSafeInteger(Number(channelId)) || Number(channelId) < 1) throw error('Selecciona una conexión directa');
-    const channel = await db.getWhatsappChannel(orgId, Number(channelId));
-    if (!channel || channel.provider !== 'evolution') throw error('Conexión no disponible', 404);
-    if (channel.status !== 'connected') throw error('La conexión directa está desconectada. Conéctala en Ajustes.', 409);
+    const { channel, state, warning } = await require('./evolution-connection').refreshChannel(orgId, Number(channelId), { force: true });
+    if (state !== 'connected') throw error('La conexión directa está desconectada. Conéctala en Ajustes.', 409);
+    if (warning) throw error(warning, 503);
     return channel;
   }
   if (provider !== 'kapso') throw error('Método de envío inválido');
@@ -18,12 +18,13 @@ async function resolveSender(orgId, provider, channelId) {
   return config;
 }
 async function sendingMethods(orgId) {
-  const [config, channels] = await Promise.all([db.getWhatsappConfig(orgId), db.listWhatsappChannels(orgId)]);
+  const [config, channels] = await Promise.all([db.getWhatsappConfig(orgId), require('./evolution-connection').refreshedChannels(orgId)]);
   return [
     { provider: 'kapso', channelId: null, label: 'Kapso · API oficial', available: config?.provider === 'kapso' },
     ...channels.filter(c => c.provider === 'evolution').map(c => ({
       provider: 'evolution', channelId: c.id, label: `Directo · ${c.name || c.phone_number || 'Evolution'}`,
-      available: c.status === 'connected', intervalSeconds: DIRECT_INTERVAL_SECONDS,
+      available: c.status === 'connected' && !c.connection_warning, connectionStatus: c.status,
+      warning: c.connection_warning || null, checkedAt: c.checked_at, intervalSeconds: DIRECT_INTERVAL_SECONDS,
       batchSize: DIRECT_BATCH_SIZE, batchPauseSeconds: DIRECT_BATCH_PAUSE_SECONDS,
     })),
   ];
