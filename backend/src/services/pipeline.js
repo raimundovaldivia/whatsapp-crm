@@ -1949,7 +1949,10 @@ REGLAS ABSOLUTAS:
   // El costo de reparto es una regla comercial exacta. Responderlo en código
   // evita que la IA omita el cobro bajo el umbral o limite la cobertura a una
   // sola de las dos comunas.
-  const deliveryPriceReply = deliveryEnabled
+  // Una compra o modificación con una consulta de reparto debe conservar la
+  // acción y sus productos en el flujo de pedidos, sin devolver solo la FAQ.
+  const hasOrderIntent = ['wants_to_order', 'modify_order', 'cancel_order'].includes(intentResult?.intent);
+  const deliveryPriceReply = deliveryEnabled && !hasOrderIntent && !looksLikeCancel
     ? xlPricing.deliveryPriceReply(userMessage, xlContext, freeShippingRaw)
     : null;
   if (deliveryPriceReply) {

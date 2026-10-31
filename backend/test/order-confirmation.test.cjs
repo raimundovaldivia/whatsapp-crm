@@ -37,7 +37,7 @@ function fixture(options = {}) {
   const calls = { orders: [], states: [], claims: 0, extractions: 0 };
   let current = options.draft || draft();
   const db = {
-    getConversationById: async () => ({ id: 91, organization_id: 7, phone_number: options.channel ? null : '56911111111', source_channel: options.channel || 'whatsapp', pipeline_state: 'collecting_order', agent_mode: 'ai' }),
+    getConversationById: async () => ({ id: 91, organization_id: 7, phone_number: options.channel ? null : '56911111111', source_channel: options.channel || 'whatsapp', pipeline_state: options.state || 'collecting_order', agent_mode: 'ai' }),
     getLastMessages: async () => options.history || [{ direction: 'outbound', content: '📦 1x Huevos XL cafés · Bandeja de 30 — $12.990\n💰 Total: $12.990\n¿Todo correcto?' }],
     getSetting: async (_org, key) => options.settings?.[key] ?? (key === 'catalog_source' ? 'local' : null),
     getContact: async () => null,
@@ -60,7 +60,7 @@ function fixture(options = {}) {
   };
   const pipeline = load('src/services/pipeline.js', {
     '../db/database': db,
-    './commercial': { consumeBotTurn: async () => {}, permitted: async () => false },
+    './commercial': { consumeBotTurn: async () => {}, permitted: async () => !!options.deliveryEnabled },
     './inbound-message-policy': { isLikelyAutomaticReply: () => false, isGiftedStockReply: () => false, isBareLinkMessage: () => false },
     './shopify-api': { formatProductsForAI: () => '' },
     './agents/orchestrator': { checkEscalation: async () => ({ escalate: false }), classifyIntent: async () => ({ intent: 'wants_to_order', confidence: 1 }) },
@@ -75,11 +75,64 @@ function fixture(options = {}) {
     './order-pricing': require('../src/services/order-pricing'),
     './order-quote': require('../src/services/order-quote'),
     './promotion-context': require('../src/services/promotion-context'),
-    './xl-welcome-pricing': { context: async () => ({ enabled: false, eligible: false }), forStore: value => value, prompt: () => '', applyQuote: value => value },
+    './xl-welcome-pricing': options.webPricing
+      ? { ...require('../src/services/xl-welcome-pricing'), context: async () => require('../src/services/xl-welcome-pricing').forStore({ enabled: true }) }
+      : { context: async () => ({ enabled: false, eligible: false }), forStore: value => value, prompt: () => '', applyQuote: value => value },
     './scheduled-orders': { isFutureOrderIntent: () => false, isSoftFutureIntent: () => false, extractScheduledOrderData: async () => ({}), formatDateEs: value => value },
   });
   return { pipeline, calls };
 }
+
+for (const channel of ['facebook', 'instagram', 'whatsapp']) {
+  test(`${channel}: la compra inicial con una nota de reparto conserva los productos y continúa sin repetirla`, async () => {
+    const history = [];
+    const options = { channel, state: 'exploring', deliveryEnabled: true, webPricing: true, draft: {}, history,
+      response: '¿Me indicas tu nombre, dirección y teléfono?',
+      extract: previous => ({ ...previous, items: draft().items, notes: 'PRUEBA INTERNA, NO COBRAR NI DESPACHAR' }),
+    };
+    const f = fixture(options);
+    const first = await f.pipeline.processMessage(7, 91, 'Hola, quiero comprar 1 bandeja de 30 huevos XL cafés. Es una prueba interna, sin cobro ni despacho.');
+    assert.equal(first.agentType, 'orders');
+    assert.equal(first.newState, 'collecting_order');
+    assert.equal(f.calls.extractions, 1);
+    assert.equal(f.calls.orders.length, 0);
+    assert.doesNotMatch(first.response, /despacho es gratis/);
+    assert.equal(f.calls.states.at(-1)[2].items[0].quantity, 1);
+    history.push({ direction: 'outbound', content: first.response });
+    options.state = 'collecting_order';
+    options.extract = previous => ({ ...previous, customer_name: 'Prueba', address: 'Plaza de prueba s/n, La Serena', city: 'La Serena', customer_phone: '56911111111' });
+    const review = await f.pipeline.processMessage(7, 91, 'Nombre Prueba. Dirección Plaza de prueba s/n, La Serena. Teléfono 56911111111. Sin cobro ni despacho.');
+    assert.match(review.response, /antes de crear tu pedido/);
+    assert.equal(f.calls.orders.length, 0);
+    assert.equal((review.response.match(/La Serena/g) || []).length, 1);
+    history.push({ direction: 'outbound', content: review.response });
+    const confirmation = await f.pipeline.processMessage(7, 91, 'Sí, todo correcto. Confirmo el pedido de prueba.');
+    assert.equal(confirmation.newState, 'confirmed');
+    assert.equal(f.calls.orders.length, 1);
+    assert.equal(f.calls.orders[0].organizationId, 7);
+    assert.match(confirmation.response, /DR-812/);
+  });
+}
+
+test('una consulta de tarifa junto a una compra no descarta el pedido; sola conserva el borrador', async () => {
+  const f = fixture({ state: 'exploring', draft: {}, history: [], deliveryEnabled: true, webPricing: true,
+    extract: previous => ({ ...previous, items: draft().items }), response: '¿Me indicas tu nombre?',
+  });
+  const result = await f.pipeline.processMessage(7, 91, 'Quiero 1 bandeja XL cafés de 30. ¿El despacho es gratis?');
+  assert.equal(result.agentType, 'orders');
+  assert.equal(result.newState, 'collecting_order');
+  assert.equal(f.calls.extractions, 1);
+  assert.equal(f.calls.orders.length, 0);
+
+  const existing = { ...draft(), notes: 'Entregar en conserjería' };
+  const inquiry = fixture({ draft: existing, deliveryEnabled: true, webPricing: true });
+  const answer = await inquiry.pipeline.processMessage(7, 91, '¿Cuánto cuesta el envío?');
+  assert.match(answer.response, /despacho es gratis/);
+  assert.equal(answer.newState, 'collecting_order');
+  assert.deepEqual(inquiry.calls.states.at(-1)[2], existing);
+  assert.equal(inquiry.calls.extractions, 0);
+  assert.equal(inquiry.calls.orders.length, 0);
+});
 
 for (const message of ['Siiii , por supuesto los espero', 'Si por supuesto, acá estoy']) {
   test(`el pipeline guarda la orden antes de confirmar: ${message}`, async () => {

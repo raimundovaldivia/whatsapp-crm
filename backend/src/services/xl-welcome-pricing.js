@@ -219,9 +219,15 @@ function deliveryPriceLine(ctx, rawThreshold) {
 function deliveryPriceReply(message, ctx, rawThreshold) {
   if (!ctx?.web) return null;
   const text = normalize(message);
-  const mentionsDelivery = /\b(despacho|delivery|envio|reparto)\b/.test(text);
-  const asksPrice = /\b(gratis|gratuito|sin costo|cobran|cobro|cuesta|costo|valor|precio)\b/.test(text);
-  if (!mentionsDelivery || !asksPrice) return null;
+  // Relacionar la tarifa con el reparto, no dos palabras aisladas de una
+  // compra (por ejemplo, «sin cobro ni despacho» en una nota de prueba).
+  const service = '(?:despachos?|delivery|envios?|repartos?)';
+  const asksPrice = [
+    `\\b(?:precio|valor|costo|cobro|tarifa)\\s+(?:(?:de|del|por|el|un)\\s+){0,3}${service}\\b`,
+    `\\b(?:cuanto\\s+(?:(?:me|nos|se)\\s+)?(?:cuesta|vale|sale)|(?:(?:me|nos)\\s+)?cobran)\\s+(?:(?:por|el|un)\\s+){0,3}${service}\\b`,
+    `\\b${service}\\s+(?:(?:es|son|sera|tiene|tienen|con|algun|un)\\s+){0,3}(?:gratis|gratuito|sin costo|costo|cobro|precio|valor)\\b`,
+  ].some(pattern => new RegExp(pattern).test(text));
+  if (!asksPrice) return null;
   const threshold = deliveryThreshold(rawThreshold);
   return `Sí 😊 El despacho es gratis en compras desde ${money(threshold)} en todo La Serena y Coquimbo. Si tu compra es menor a ${money(threshold)}, el despacho cuesta $1.500.`;
 }
