@@ -28,6 +28,7 @@ const {
 } = require('../utils/template-renderer.mjs');
 
 router.use(requireAuth, requireRole('owner', 'admin', 'supervisor'));
+router.use('/reviews', require('./conversation-reviews'));
 
 const SERVER_QUEUE = Symbol('serverQueue');
 let io;

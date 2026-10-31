@@ -71,6 +71,7 @@ function load(file, deps = {}, extra = {}) {
       if (['../services/delivery-items','./delivery-items','../services/delivery-attempts','./delivery-attempts','../services/merge-conversations','../services/meta-events'].includes(name)) return load('src/services/' + name.split('/').at(-1) + '.js', deps, extra);
       if (name === '../services/driver-whatsapp') return { route: async () => null };
       if (name === './order-returns') return load('src/routes/order-returns.js', deps, extra);
+      if (name === './conversation-reviews') return require('express').Router();
       if (name === './campaign-offers' || name === '../services/campaign-offers') return require(path.join(root, 'src/services/campaign-offers.js'));
       if (name === './campaign-offers-store' || name === '../services/campaign-offers-store') return {
         latestForConversation: async () => null, activeForConversation: async () => [], createDraft: async () => null, markSent: async () => null,
