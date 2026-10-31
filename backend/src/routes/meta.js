@@ -156,13 +156,11 @@ router.get('/callback', async (req, res) => {
     const assets = await fetchAssets(userToken);
     const permissions = await grantedPermissions(userToken);
     const previous = await getConnection(state.orgId);
-    const page = previous
-      ? assets.pages.find(p => p.id === previous.page_id) || null
-      : assets.pages.find(p => p.instagram_business_account) || assets.pages[0] || null;
+    // A Meta administrator can own several stores. Authorization does not select
+    // a store's assets; only preserve a selection already made for this tenant.
+    const page = assets.pages.find(p => p.id === previous?.page_id) || null;
     const instagram = page?.instagram_business_account || null;
-    const adAccount = previous
-      ? assets.adAccounts.find(a => a.id === previous.ad_account_id) || null
-      : assets.adAccounts[0] || null;
+    const adAccount = assets.adAccounts.find(a => a.id === previous?.ad_account_id) || null;
     const expiresAt = long.data.expires_in ? new Date(Date.now() + Number(long.data.expires_in) * 1000) : null;
 
     await getPool().query(
@@ -189,7 +187,9 @@ router.get('/callback', async (req, res) => {
     const subscriptionError = await subscribeSocialWebhooks(page, instagram);
     const missingAsset = previous?.page_id && !page
       ? 'La página seleccionada antes de reconectar no está disponible. Revisa los permisos y selecciona la página correcta.' : null;
-    const warning = [missingAsset, commentConnectionWarning(page, instagram, permissions, subscriptionError)].filter(Boolean).join(' ') || null;
+    const selectionRequired = !page && !missingAsset
+      ? 'Autorización lista. Selecciona la página de Facebook de esta tienda para vincular su Instagram y recibir mensajes.' : null;
+    const warning = [missingAsset, selectionRequired, commentConnectionWarning(page, instagram, permissions, subscriptionError)].filter(Boolean).join(' ') || null;
     if (warning) await getPool().query('UPDATE meta_connections SET last_error=$1 WHERE organization_id=$2', [warning, state.orgId]);
     res.redirect(`${frontendUrl()}/?meta_success=1`);
   } catch (error) {

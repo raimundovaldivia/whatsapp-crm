@@ -121,12 +121,46 @@ test('reconectar sin el activo anterior no suscribe otra marca ni reemplaza su c
   assert.match(queries.find(q => /SET last_error/.test(q.sql)).params[0], /página seleccionada.*no está disponible/);
 });
 
-test('una conexión nueva mantiene la selección inicial compatible', async () => {
-  const { router, queries } = fixture({ connection: false });
+test('una conexión nueva exige elegir activos aunque Meta entregue una sola página o varias marcas', async () => {
+  for (const pages of [[], [{ id: 'page-7', access_token: 'test-page-token', instagram_business_account: { id: 'ig-7' } }],
+    [{ id: 'other-page', instagram_business_account: { id: 'other-ig' } }, { id: 'page-7' }]]) {
+    const { router, queries, calls } = fixture({ connection: false, pages, adAccounts: [{ id: 'other-ad' }] });
+    const res = response();
+    await handler(router, 'get', '/callback')({ query: { state: 'test-state', code: 'test-code' } }, res);
+    assert.equal(res.location, 'https://crm.example/?meta_success=1');
+    const insert = queries.find(q => /INSERT INTO meta_connections/.test(q.sql));
+    assert.equal(insert.params[0], 7);
+    for (const index of [4, 7, 9]) assert.equal(insert.params[index], null);
+    assert.equal(calls.some(path => path.endsWith('/subscribed_apps')), false);
+    assert.match(queries.find(q => /SET last_error/.test(q.sql)).params[0], /Selecciona.*página.*tienda/);
+  }
+});
+
+test('guardar la selección explícita usa la página elegida y la organización actual', async () => {
+  const { router, queries, calls } = fixture({ pages: [
+    { id: 'other-page', instagram_business_account: { id: 'other-ig' } },
+    { id: 'page-7', access_token: 'test-page-token', instagram_business_account: { id: 'ig-7' } },
+  ] });
   const res = response();
-  await handler(router, 'get', '/callback')({ query: { state: 'test-state', code: 'test-code' } }, res);
-  assert.equal(res.location, 'https://crm.example/?meta_success=1');
-  assert.equal(queries.find(q => /INSERT INTO meta_connections/.test(q.sql)).params[4], 'page-7');
+  await handler(router, 'patch', '/assets')({ orgId: 7, body: { pageId: 'page-7', adAccountId: '' } }, res);
+  assert.equal(res.code, 200);
+  const update = queries.find(q => /SET page_id/.test(q.sql));
+  assert.equal(update.params[0], 'page-7');
+  assert.equal(update.params[3], 'ig-7');
+  assert.equal(update.params[5], null);
+  assert.equal(update.params[7], 7);
+  assert.match(update.sql, /WHERE organization_id=\$8/);
+  assert.ok(calls.includes('ig-7/subscribed_apps'));
+  assert.equal(calls.includes('other-page/subscribed_apps'), false);
+});
+
+test('guardar una página no autorizada no cambia ni suscribe activos', async () => {
+  const { router, queries, calls } = fixture();
+  const res = response();
+  await handler(router, 'patch', '/assets')({ orgId: 7, body: { pageId: 'unknown-page' } }, res);
+  assert.equal(res.code, 400);
+  assert.equal(queries.some(q => /UPDATE/.test(q.sql)), false);
+  assert.equal(calls.some(path => path.endsWith('/subscribed_apps')), false);
 });
 
 test('no activa comentarios con permisos declarados pero denegados por Meta', async () => {
