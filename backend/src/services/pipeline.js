@@ -2668,6 +2668,9 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     confirmsReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
   ));
+  updatedDraft.customer_name = orderInputPolicy.resolveCustomerName(
+    userMessage, orderDraft.customer_name, updatedDraft.customer_name
+  );
   // This permission comes only from customer input, never model extraction.
   const additionalOrderForId = orderDraft.additional_order_for_id;
   delete updatedDraft.additional_order_for_id;

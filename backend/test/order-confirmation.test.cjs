@@ -84,6 +84,30 @@ function fixture(options = {}) {
 }
 
 for (const channel of ['facebook', 'instagram', 'whatsapp']) {
+  test(`${channel}: el nombre actual gana al historial desde la primera compra y confirma una sola vez`, async () => {
+    const history = [{ direction: 'outbound', content: 'Pedido anterior confirmado para Cliente anterior' }];
+    const options = { channel, state: 'confirmed', history,
+      draft: { ...draft(), customer_name: 'Cliente anterior', customer_phone: '56911111111' },
+      extract: previous => ({ ...previous, ...draft(), customer_phone: '56911111111', customer_name: 'Cliente anterior' }),
+    };
+    const f = fixture(options);
+    const review = await f.pipeline.processMessage(7, 91,
+      'Hola, quiero comprar 1 bandeja de 30 huevos XL cafés. Es una prueba interna a nombre de PRUEBA NOMBRE INSTAGRAM, sin cobro ni despacho.');
+    assert.match(review.response, /PRUEBA NOMBRE INSTAGRAM/);
+    assert.doesNotMatch(review.response, /Cliente anterior/);
+    assert.equal(f.calls.orders.length, 0);
+    history.push({ direction: 'outbound', content: review.response });
+    options.state = 'collecting_order';
+    const confirmation = await f.pipeline.processMessage(7, 91, 'Sí, todo correcto. Confirmo el pedido de prueba.');
+    assert.equal(f.calls.orders.length, 1);
+    assert.equal(f.calls.orders[0].customerName, 'PRUEBA NOMBRE INSTAGRAM');
+    assert.equal(f.calls.orders[0].organizationId, 7);
+    assert.equal(f.calls.orders[0].conversationId, 91);
+    assert.equal(f.calls.extractions, 1);
+    assert.match(confirmation.response, /PRUEBA NOMBRE INSTAGRAM/);
+    assert.equal(confirmation.newState, 'confirmed');
+  });
+
   test(`${channel}: la compra inicial con una nota de reparto conserva los productos y continúa sin repetirla`, async () => {
     const history = [];
     const options = { channel, state: 'exploring', deliveryEnabled: true, webPricing: true, draft: {}, history,
@@ -132,6 +156,22 @@ test('una consulta de tarifa junto a una compra no descarta el pedido; sola cons
   assert.deepEqual(inquiry.calls.states.at(-1)[2], existing);
   assert.equal(inquiry.calls.extractions, 0);
   assert.equal(inquiry.calls.orders.length, 0);
+});
+
+test('aportar la dirección no restaura el nombre anterior extraído del historial', async () => {
+  const history = [];
+  const f = fixture({ channel: 'instagram', history,
+    draft: { ...draft(), address: '', customer_name: 'Cliente Nuevo', customer_phone: '56911111111' },
+    extract: previous => ({ ...previous, address: 'Calle Nueva 456', customer_name: 'Cliente anterior' }),
+  });
+  const review = await f.pipeline.processMessage(7, 91, 'Mi dirección es Calle Nueva 456, La Serena. Pago en efectivo.');
+  assert.match(review.response, /Cliente Nuevo/);
+  assert.doesNotMatch(review.response, /Cliente anterior/);
+  assert.equal(f.calls.orders.length, 0);
+  history.push({ direction: 'outbound', content: review.response });
+  await f.pipeline.processMessage(7, 91, 'Sí, todo correcto. Confirmo el pedido de prueba.');
+  assert.equal(f.calls.orders.length, 1);
+  assert.equal(f.calls.orders[0].customerName, 'Cliente Nuevo');
 });
 
 for (const message of ['Siiii , por supuesto los espero', 'Si por supuesto, acá estoy']) {

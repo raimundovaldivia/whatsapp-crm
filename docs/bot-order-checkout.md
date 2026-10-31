@@ -39,6 +39,14 @@ junto al «sí» siguen procesándose y requieren revisar el nuevo resumen. Tamb
 se reconoce «Sí, todo correcto. Confirmo el pedido de prueba» como una afirmación
 completa; añadir cambios o condiciones impide el cierre directo.
 
+El nombre indicado explícitamente en el mensaje actual («a nombre de», «me
+llamo», «mi nombre es» o «Nombre:») prevalece sobre el borrador, el contacto y
+los resúmenes de compras anteriores, desde el primer turno. Si luego se aporta
+dirección o pago, una extracción del historial no puede restaurar otro nombre
+ausente de ese mensaje. Otras formulaciones de cambio de nombre siguen usando
+el extractor cuando el nombre propuesto aparece en el texto actual. Se conserva
+el dato conocido como respaldo y la confirmación única del resumen revisado.
+
 La dirección guarda la calle separada de la ciudad. Se eliminan únicamente
 componentes completos de ciudad repetidos al final y separados por comas; no se
 recortan nombres de calles que contengan la ciudad. Las firmas de resúmenes

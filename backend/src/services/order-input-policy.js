@@ -12,6 +12,40 @@ function ambiguousQuantityToken(value = '') {
   return match?.[0] || null;
 }
 
+// Only unambiguous, current customer declarations override model extraction.
+// Old summaries and contact/profile names are fallbacks, not new instructions.
+function explicitCustomerName(value = '') {
+  const clauses = String(value).normalize('NFC').split(/[,;!\n]+|(?<!\b[A-ZÁÉÍÓÚÜÑ])\./u);
+  let name = null;
+  for (const clause of clauses) {
+    if (/[¿?]/u.test(clause)) continue;
+    const match = clause.match(/\b(?:(?:a\s+nombre\s+de|mi\s+nombre\s+es|me\s+llamo)\s+|nombre\s*(?:del\s+cliente)?\s*:\s*)(.+)$/iu);
+    if (!match) continue;
+    const before = normalize(clause.slice(0, match.index));
+    if (/\b(?:no|ni|nunca|antes|anterior|anteriormente|ayer|si)\b/u.test(before)) continue;
+    const candidate = match[1].split(/\s+(?:(?:y|pero)\s+)?(?:sin\s+cobro|sin\s+despacho|con\s+(?:entrega|despacho)|para\s+(?:hoy|mañana)|por\s+favor\b|porfa\b|gracias\b|quiero\b|necesito\b|quisiera\b|vivo\b|pago\b|mi\s+(?:direcci[oó]n|tel[eé]fono)\b)/iu)[0].trim();
+    if (candidate.length > 120 || candidate.split(/\s+/u).length > 12) continue;
+    if (!/^[\p{L}\p{M}][\p{L}\p{M}\p{N}'’.\- ]*$/u.test(candidate)) continue;
+    if (/^(?:quien|cual|pendiente|por confirmar|nombre|telefono|direccion)$/u.test(normalize(candidate))) continue;
+    name = candidate.replace(/\s+/gu, ' ');
+  }
+  return name;
+}
+
+function resolveCustomerName(message, previousName, extractedName) {
+  const explicit = explicitCustomerName(message);
+  if (explicit) return explicit;
+  // A later address/payment message cannot restore a name from an old order.
+  // Other natural wording remains supported when the model's name is actually
+  // present in the current message, or there is no previously collected name.
+  const words = value => normalize(value).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const candidate = words(extractedName || '');
+  if (!previousName || (candidate && ` ${words(message)} `.includes(` ${candidate} `))) {
+    return extractedName || previousName;
+  }
+  return previousName;
+}
+
 function isBareAffirmative(value = '') {
   // Reconocer la frase completa, sin un límite de 20 caracteres ni prefijos
   // abiertos ("si cambio...", "ok pero..."). No contiene productos nuevos.
@@ -71,6 +105,8 @@ function isWholesaleInquiry(value = '') {
 }
 
 module.exports = {
+  explicitCustomerName,
+  resolveCustomerName,
   ambiguousQuantityToken,
   isBareAffirmative,
   unexpectedItemsFromBareAffirmative,
