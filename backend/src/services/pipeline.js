@@ -2656,10 +2656,15 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       ...history,
     ];
   }
-  const updatedDraft = preserveFreshnessPreference(
-    await ordersAgent.extractOrderData(extractHistory, orderDraft),
+  const checkout = require('./order-checkout');
+  // A complete affirmative accepts the reviewed draft; it supplies no new
+  // order data for the model to reinterpret. Mixed corrections still extract.
+  const confirmsReviewedDraft = Boolean(orderDraft._reviewed_order)
+    && ordersAgent.hasRequiredData(orderDraft) && orderInputPolicy.isBareAffirmative(userMessage);
+  const updatedDraft = checkout.normalizeDraft(preserveFreshnessPreference(
+    confirmsReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
-  );
+  ));
   // This permission comes only from customer input, never model extraction.
   const additionalOrderForId = orderDraft.additional_order_for_id;
   delete updatedDraft.additional_order_for_id;
@@ -2828,7 +2833,6 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   }
   priced = require('./xl-welcome-pricing').applyQuote(priced, orderCtx.xlContext);
   // Validar el catálogo vigente antes de pedir o aceptar una confirmación.
-  const checkout = require('./order-checkout');
   const productIssue = checkout.catalogIssue(priced, products);
   if (productIssue) {
     delete updatedDraft._reviewed_order;
@@ -2922,7 +2926,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     const deliveryLine = updatedDraft.delivery_date ? `\n📅 Entrega: ${formatDateEs(updatedDraft.delivery_date)}` : '';
     const customerPhone = updatedDraft.customer_phone || conversation.phone_number;
     const phoneLine = updatedDraft.requires_customer_phone ? `\n📞 ${customerPhone}` : '';
-    const who = `👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}${phoneLine}${deliveryLine}`;
+    const who = `👤 ${updatedDraft.customer_name}\n📍 ${checkout.formatAddress(updatedDraft)}${phoneLine}${deliveryLine}`;
 
     const saveContact = () => customerPhone ? Promise.all([
       db.upsertContact(orgId, {

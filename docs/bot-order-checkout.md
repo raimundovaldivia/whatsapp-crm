@@ -33,6 +33,19 @@ y el resumen efectivamente enviado. `ORDEN_CONFIRMADA` y las afirmaciones del
 modelo no autorizan una compra. El número del pedido se entrega después de que
 la base de datos lo guarda, conservando los controles de duplicados existentes.
 
+Una afirmación completa sobre un resumen ya revisado conserva sus datos: no
+vuelve a extraerlos del historial con el modelo. Las correcciones o condiciones
+junto al «sí» siguen procesándose y requieren revisar el nuevo resumen. También
+se reconoce «Sí, todo correcto. Confirmo el pedido de prueba» como una afirmación
+completa; añadir cambios o condiciones impide el cierre directo.
+
+La dirección guarda la calle separada de la ciudad. Se eliminan únicamente
+componentes completos de ciudad repetidos al final y separados por comas; no se
+recortan nombres de calles que contengan la ciudad. Las firmas de resúmenes
+anteriores admiten esa equivalencia de formato, manteniendo la revisión ante
+cambios reales de dirección, ciudad, teléfono, notas, fecha, productos o precio.
+El catálogo y el stock vigente se comprueban incluso al reutilizar el resumen.
+
 `ai_enabled_global=false` conserva los mensajes entrantes en CRM y detiene el
 procesamiento y el envío automáticos. `bot_sales_enabled=false` permite consultas
 sin crear pedidos. Los valores ausentes conservan el comportamiento previo.
