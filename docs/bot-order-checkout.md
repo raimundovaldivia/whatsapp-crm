@@ -46,6 +46,13 @@ anteriores admiten esa equivalencia de formato, manteniendo la revisión ante
 cambios reales de dirección, ciudad, teléfono, notas, fecha, productos o precio.
 El catálogo y el stock vigente se comprueban incluso al reutilizar el resumen.
 
+La respuesta rápida de tarifa de reparto exige una relación explícita entre
+precio y despacho. Mencionar ambos en partes distintas del mensaje, como
+«sin cobro ni despacho», no interrumpe la compra ni la captura de datos.
+Una intención de compra, modificación o cancelación reconocida mantiene su
+flujo aunque incluya una consulta de tarifa; las consultas de reparto aisladas
+siguen respondiéndose con el umbral de la tienda y conservan el borrador.
+
 `ai_enabled_global=false` conserva los mensajes entrantes en CRM y detiene el
 procesamiento y el envío automáticos. `bot_sales_enabled=false` permite consultas
 sin crear pedidos. Los valores ausentes conservan el comportamiento previo.

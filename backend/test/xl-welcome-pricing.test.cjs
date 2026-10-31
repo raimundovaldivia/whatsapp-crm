@@ -152,3 +152,17 @@ a.match(p.deliveryPriceReply('¿Cuánto cuesta el envío?',web,'10000'),/gratis 
 a.equal(p.deliveryPriceReply('¿Despachan hoy?',web,'10000'),null);
 a.equal(p.deliveryPriceReply('¿El despacho es gratis?',{},'10000'),null);
 });
+
+require('node:test')('delivery price replies require a tariff question instead of unrelated words',()=>{
+const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing'),web=p.forStore({enabled:true});
+for(const message of ['Precio del envío', '¿Cuánto me cobran por el reparto?', '¿El envío tiene algún costo?', 'delivery gratis?', '¿Cuánto sale el despacho?']) {
+  a.match(p.deliveryPriceReply(message,web,'15000'),/gratis en compras desde \$15\.000/,message);
+}
+for(const message of [
+  'Hola, quiero comprar 1 bandeja de 30 huevos XL mixtos. Es una prueba interna PRUEBA MESSENGER DR3010, sin cobro ni despacho.',
+  'Dirección: Plaza de prueba s/n, La Serena. Pago al recibir. PRUEBA INTERNA, NO COBRAR NI DESPACHAR.',
+  'Sin cobro ni despacho', '¿Cuál es el precio de una bandeja con reparto?',
+  'La bandeja cuesta $11.990. Quiero despacho', 'Retiro sin costo, no necesito envío',
+  'Quiero comprar una bandeja y pagar en efectivo al despacho',
+]) a.equal(p.deliveryPriceReply(message,web,'10000'),null,message);
+});
