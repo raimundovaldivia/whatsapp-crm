@@ -11,7 +11,8 @@ const draft = () => ({
 
 test('acepta confirmaciones completas sin limitar la longitud', () => {
   for (const message of ['Siiii , por supuesto los espero', 'Si por supuesto, acá estoy',
-    'Sí, todo correcto, muchas gracias', 'Dale, por favor, los espero', '👍🏽', 'ok', 'correcto', 'Sí, confirmo el pedido', 'Confirmo el resumen']) {
+    'Sí, todo correcto, muchas gracias', 'Dale, por favor, los espero', '👍🏽', 'ok', 'correcto', 'Sí, confirmo el pedido', 'Confirmo el resumen',
+    'Sí, todo correcto. Confirmo el pedido de prueba.']) {
     assert.equal(agent.isOrderConfirmed('¿Todo correcto?', message, draft()), true, message);
     assert.equal(agent.isOrderConfirmed('¿Todo correcto?', message, { items: [] }), false, message);
   }
@@ -20,7 +21,8 @@ test('acepta confirmaciones completas sin limitar la longitud', () => {
 test('una pregunta, condición, negativa o modificación no confirma por un prefijo', () => {
   for (const message of ['si cambio la dirección', 'simplemente estoy consultando', '¿Sí?',
     'Sí, pero cambia a dos bandejas', 'Ok, no lo envíes', 'Si llegan mañana confirmo',
-    'No confirmo', 'Sí, los espero pero no hoy', 'Listo, cancelen el pedido', 'por supuesto que no', 'No hice la transferencia', '¿Ya pagué?', 'Ya pagué pero cancela']) {
+    'No confirmo', 'Sí, los espero pero no hoy', 'Listo, cancelen el pedido', 'por supuesto que no', 'No hice la transferencia', '¿Ya pagué?', 'Ya pagué pero cancela',
+    'Sí, confirmo el pedido de prueba pero cambia a dos', 'Confirmo el pedido de prueba si llega mañana']) {
     assert.equal(agent.isOrderConfirmed('¿Todo correcto?', message, draft()), false, message);
   }
 });
@@ -32,10 +34,10 @@ test('las confirmaciones largas tampoco permiten inventar productos nuevos', () 
 });
 
 function fixture(options = {}) {
-  const calls = { orders: [], states: [], claims: 0 };
+  const calls = { orders: [], states: [], claims: 0, extractions: 0 };
   let current = options.draft || draft();
   const db = {
-    getConversationById: async () => ({ id: 91, organization_id: 7, phone_number: '56911111111', pipeline_state: 'collecting_order', agent_mode: 'ai' }),
+    getConversationById: async () => ({ id: 91, organization_id: 7, phone_number: options.channel ? null : '56911111111', source_channel: options.channel || 'whatsapp', pipeline_state: 'collecting_order', agent_mode: 'ai' }),
     getLastMessages: async () => options.history || [{ direction: 'outbound', content: '📦 1x Huevos XL cafés · Bandeja de 30 — $12.990\n💰 Total: $12.990\n¿Todo correcto?' }],
     getSetting: async (_org, key) => options.settings?.[key] ?? (key === 'catalog_source' ? 'local' : null),
     getContact: async () => null,
@@ -64,7 +66,10 @@ function fixture(options = {}) {
     './agents/orchestrator': { checkEscalation: async () => ({ escalate: false }), classifyIntent: async () => ({ intent: 'wants_to_order', confidence: 1 }) },
     './agents/orders': {
       ...agent,
-      extractOrderData: async (_history, previous) => previous,
+      extractOrderData: async (_history, previous) => {
+        calls.extractions++;
+        return options.extract ? options.extract(previous, calls.extractions) : previous;
+      },
       generateOrderResponse: async () => options.response || '¿Todo correcto?',
     },
     './order-pricing': require('../src/services/order-pricing'),
@@ -224,4 +229,58 @@ test('se conserva el stock sin límite que admite el catálogo, sin confundirlo 
   const result = await f.pipeline.processMessage(7, 91, 'Sí, confirmo el pedido');
   assert.equal(f.calls.orders.length, 1);
   assert.equal(result.newState, 'confirmed');
+});
+
+for (const channel of ['instagram', 'facebook']) {
+  test(`${channel}: una sola confirmación conserva el resumen y guarda la ciudad una vez`, async () => {
+    const history = [];
+    const f = fixture({ channel, history, draft: {
+      ...draft(), address: 'Plaza de Armas s/n, La Serena, La Serena',
+      requires_customer_phone: true, customer_phone: '56911111111',
+      notes: 'PRUEBA INTERNA, NO COBRAR NI DESPACHAR',
+    }, extract: (previous, count) => count === 1 ? previous : {
+      ...previous, address: 'Dirección inventada 999', notes: 'Otra nota',
+      items: [{ ...previous.items[0], quantity: 2 }],
+    } });
+    const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+    assert.equal(f.calls.orders.length, 0);
+    assert.equal((review.response.match(/La Serena/g) || []).length, 1);
+    history.push({ direction: 'outbound', content: review.response });
+    const confirmed = await f.pipeline.processMessage(7, 91, 'Sí, todo correcto. Confirmo el pedido de prueba.');
+    assert.equal(f.calls.orders.length, 1);
+    assert.equal(f.calls.extractions, 1, 'confirmar no reinterpreta el resumen revisado');
+    assert.equal(f.calls.orders[0].shippingAddress.address, 'Plaza de Armas s/n');
+    assert.equal(f.calls.orders[0].shippingAddress.city, 'La Serena');
+    assert.equal(f.calls.orders[0].items[0].quantity, 1);
+    assert.equal((confirmed.response.match(/La Serena/g) || []).length, 1);
+    assert.match(confirmed.response, /DR-812/);
+  });
+}
+
+test('una modificación junto al sí requiere revisar la nueva dirección antes de guardar', async () => {
+  const history = [];
+  const f = fixture({ history, extract: (previous, count) => count === 1 ? previous : {
+    ...previous, address: 'Otra calle 456, La Serena',
+  } });
+  const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+  history.push({ direction: 'outbound', content: review.response });
+  const changed = await f.pipeline.processMessage(7, 91, 'Sí, pero cambia la dirección a Otra calle 456');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(f.calls.extractions, 2);
+  assert.match(changed.response, /Otra calle 456, La Serena/);
+  assert.match(changed.response, /todavía no está creado/);
+});
+
+test('confirmar un resumen guardado sigue comprobando el precio y el stock vigentes', async () => {
+  for (const change of [{ price: 14990 }, { stock: 0 }]) {
+    const history = [];
+    const products = [{ id: 7, title: 'Huevos XL cafés · Bandeja de 30', price: 12990, stock: 20 }];
+    const f = fixture({ history, products });
+    const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+    history.push({ direction: 'outbound', content: review.response });
+    Object.assign(products[0], change);
+    const result = await f.pipeline.processMessage(7, 91, 'Sí, confirmo el pedido');
+    assert.equal(f.calls.orders.length, 0);
+    assert.notEqual(result.newState, 'confirmed');
+  }
 });

@@ -3,6 +3,32 @@ const { parseConfirmedSummary } = require('./order-quote');
 
 const key = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
+function streetAddress(address, city) {
+  if (typeof address !== 'string' || !key(city)) return address;
+  const parts = address.split(',').map(part => part.trim()).filter(Boolean);
+  // Only remove complete trailing city components; preserve street names,
+  // numbers and references that merely contain the city's name.
+  while (parts.length > 1 && key(parts.at(-1)) === key(city)) parts.pop();
+  return parts.join(', ');
+}
+
+function normalizeDraft(draft) {
+  return { ...draft, address: streetAddress(draft.address, draft.city) };
+}
+
+function formatAddress(draft) {
+  const address = streetAddress(draft.address, draft.city);
+  return [address, key(address) === key(draft.city) ? null : draft.city].filter(Boolean).join(', ');
+}
+
+function canonicalReview(reviewed) {
+  try {
+    const value = JSON.parse(reviewed);
+    value.address = key(streetAddress(value.address, value.city));
+    return JSON.stringify(value);
+  } catch { return null; }
+}
+
 // Se usa antes del modelo y de cualquier cotización del historial. Un resumen
 // anterior nunca puede volver disponible un producto retirado del catálogo.
 function catalogIssue(priced, products) {
@@ -31,13 +57,13 @@ function signature(draft, priced) {
   return JSON.stringify({
     items: priced.items.map(i => [key(i.name), Number(i.quantity), Number(i.price)]),
     total: Number(priced.total), name: key(draft.customer_name),
-    address: key(draft.address), city: key(draft.city),
+    address: key(streetAddress(draft.address, draft.city)), city: key(draft.city),
     phone: String(draft.customer_phone || ''), date: String(draft.delivery_date || ''), notes: key(draft.notes),
   });
 }
 
 function matchesReview(previous, current, priced, history = []) {
-  if (previous._reviewed_order && previous._reviewed_order !== signature(current, priced)) return false;
+  if (previous._reviewed_order && canonicalReview(previous._reviewed_order) !== signature(current, priced)) return false;
   // Compatibilidad con conversaciones abiertas antes de este cambio: el último
   // mensaje saliente debe ser el resumen, con los mismos productos y total.
   const lastOutbound = [...history].reverse().find(m => m.direction === 'outbound');
@@ -51,14 +77,15 @@ function matchesReview(previous, current, priced, history = []) {
     && summary.items.every((i, n) => key(i.name) === key(priced.items[n].name)
       && i.quantity === Number(priced.items[n].quantity)
       && i.lineTotal === Number(priced.items[n].price) * i.quantity)
-    && ['customer_name', 'address', 'city', 'customer_phone', 'delivery_date'].every(field => key(previous[field]) === key(current[field])));
+    && key(streetAddress(previous.address, previous.city)) === key(streetAddress(current.address, current.city))
+    && ['customer_name', 'city', 'customer_phone', 'delivery_date'].every(field => key(previous[field]) === key(current[field])));
 }
 
 function reviewReply(draft, priced) {
   const phone = draft.requires_customer_phone ? `\n📞 ${draft.customer_phone}` : '';
   const date = draft.delivery_date ? `\n📅 Fecha solicitada: ${draft.delivery_date}` : '';
   const note = draft.notes ? `\n📝 Indicaciones: ${draft.notes}` : '';
-  return `Revisa el resumen antes de crear tu pedido:\n\n${pricing.summaryBlock(priced)}\n👤 ${draft.customer_name}\n📍 ${draft.address}, ${draft.city}${phone}${date}${note}\n\n¿Todo correcto? El pedido todavía no está creado y la entrega está pendiente de confirmación.`;
+  return `Revisa el resumen antes de crear tu pedido:\n\n${pricing.summaryBlock(priced)}\n👤 ${draft.customer_name}\n📍 ${formatAddress(draft)}${phone}${date}${note}\n\n¿Todo correcto? El pedido todavía no está creado y la entrega está pendiente de confirmación.`;
 }
 
-module.exports = { catalogIssue, signature, matchesReview, reviewReply };
+module.exports = { catalogIssue, signature, matchesReview, reviewReply, normalizeDraft, formatAddress };
