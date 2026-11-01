@@ -1,5 +1,23 @@
 const axios = require('axios');
 
+// Only the platform operator may select destinations that receive Evolution keys.
+// Empty configuration deliberately fails closed, including for existing channels.
+function validateEndpoint(value, env = process.env) {
+  const fail = () => { throw Object.assign(new Error('Servidor Evolution no autorizado por la plataforma'), { code: 'EVOLUTION_ENDPOINT_DENIED' }); };
+  let url;
+  try { url = new URL(String(value || '').trim()); } catch { return fail(); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return fail();
+  const allowed = String(env.EVOLUTION_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const origins = allowed.map(value => {
+    let origin;
+    try { origin = new URL(value); } catch { return fail(); }
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/') return fail();
+    return origin.origin;
+  });
+  if (!origins.includes(url.origin)) return fail();
+  return url.href.replace(/\/+$/, '');
+}
+
 // Remember API echoes, including webhooks arriving before the HTTP send returns.
 const outboundRequests = new Map();
 const outboundIds = new Map();
@@ -26,7 +44,7 @@ async function isApiMessage(messageId, config) {
 
 
 function credentials(config = {}) {
-  const baseUrl = String(config.evolution_api_url || '').trim().replace(/\/+$/, '');
+  const baseUrl = validateEndpoint(config.evolution_api_url);
   // Clave por canal si existe; si no, la clave global del servidor de Evolution.
   const apiKey = String(config.evolution_api_key || process.env.EVOLUTION_API_KEY || '').trim();
   const instance = String(config.evolution_instance || '').trim();
@@ -43,6 +61,7 @@ function client(config) {
   return axios.create({
     baseURL: baseUrl,
     timeout: 15000,
+    maxRedirects: 0, // Never forward a platform key to a redirected destination.
     headers: { apikey: apiKey, 'Content-Type': 'application/json' },
   });
 }
@@ -279,6 +298,7 @@ async function configureWebhook(config, webhookUrl, options = {}) {
 }
 
 module.exports = {
+  validateEndpoint,
   isApiMessage, mediaReference, downloadMessageMedia, downloadMediaReference,
   sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
   parseConnectionUpdate, normalizeConnectionState,

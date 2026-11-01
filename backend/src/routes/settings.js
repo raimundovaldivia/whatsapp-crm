@@ -367,16 +367,14 @@ router.post('/whatsapp/channels', async (req, res) => {
     if (!channelApiKey && !process.env.EVOLUTION_API_KEY) {
       return res.status(400).json({ success: false, error: 'Falta la API Key de Evolution en el servidor' });
     }
-    let parsedUrl;
-    try { parsedUrl = new URL(evolutionApiUrl); } catch { return res.status(400).json({ success: false, error: 'La URL de Evolution no es válida' }); }
-    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-      return res.status(400).json({ success: false, error: 'Evolution debe usar una URL HTTP o HTTPS' });
-    }
+    let approvedUrl;
+    try { approvedUrl = evolution.validateEndpoint(evolutionApiUrl); }
+    catch { return res.status(400).json({ success: false, error: 'Servidor Evolution no autorizado por la plataforma' }); }
 
     const webhookToken = crypto.randomBytes(24).toString('hex');
     const config = {
       provider: 'evolution',
-      evolution_api_url: parsedUrl.toString().replace(/\/$/, ''),
+      evolution_api_url: approvedUrl,
       evolution_api_key: channelApiKey || null,
       evolution_instance: evolutionInstance.trim(),
     };
