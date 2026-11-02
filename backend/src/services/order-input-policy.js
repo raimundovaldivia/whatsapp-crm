@@ -51,7 +51,21 @@ function isBareAffirmative(value = '') {
   // abiertos ("si cambio...", "ok pero..."). No contiene productos nuevos.
   if (/[¿?]/u.test(String(value))) return false;
   const text = normalize(value).replace(/[,.!;:¡\p{Emoji_Modifier}]+/gu, ' ').replace(/\s+/g, ' ').trim();
-  return /^(?:si+|yes|claro|dale|ok(?:ay|ey|a)?|bueno|perfecto|correcto|confirmo(?: (?:el|mi|este) (?:pedido|resumen)(?: de prueba)?)?|adelante|procede|listo|vamos?|por supuesto|de acuerdo|todo correcto|👍)(?: (?:si+|claro|confirmo(?: (?:el|mi|este) (?:pedido|resumen)(?: de prueba)?)?|por supuesto|de acuerdo|todo correcto|(?:lo|la|los|las) espero|(?:aca|aqui) estoy|estoy en casa|(?:muchas )?gracias|por favor|porfa|👍|😊))*$/u.test(text);
+  const approval = '(?:si+|yes|claro|dale|ok(?:ay|ey|a)?|bueno|perfecto|correcto|confirmo(?: (?:el|mi|este) (?:pedido|resumen)(?: de prueba)?)?|adelante|procede|listo|vamos?|por supuesto|de acuerdo|(?:esta )?todo (?:correcto|bien)|esta (?:correcto|bien)|necesito (?:que )?me lo envien|👍)';
+  const courtesy = '(?:(?:lo|la|los|las) espero|(?:aca|aqui) estoy|estoy en casa|(?:muchas )?gracias|por favor|porfa|😊)';
+  return new RegExp(`^${approval}(?: (?:${approval}|${courtesy}))*$`, 'u').test(text);
+}
+
+// Solo consultas de pago completas: una corrección añadida debe ir al extractor.
+function isCheckoutPaymentQuestion(value = '') {
+  const text = normalize(value).replace(/[¿?¡!.,;:]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  return /^(?:(?:puedo|se puede) (?:transferir|pagar (?:por|con) transferencia)|(?:como|donde) (?:pago|transfiero)|(?:me (?:das|envias|mandas) (?:los )?)?datos (?:para transferir|bancarios))(?: por favor| gracias| porfa)?$/u.test(text);
+}
+
+function isRepeatedSummaryComplaint(value = '') {
+  const text = normalize(value);
+  return /\b(?:mismo mensaje|mismo resumen|lo mismo)\b/.test(text)
+    && /\b(?:veces|repit\w*|repet\w*|vuelv\w*|otra vez|nuevamente)\b/.test(text);
 }
 
 function itemName(item = {}) {
@@ -109,6 +123,8 @@ module.exports = {
   resolveCustomerName,
   ambiguousQuantityToken,
   isBareAffirmative,
+  isCheckoutPaymentQuestion,
+  isRepeatedSummaryComplaint,
   unexpectedItemsFromBareAffirmative,
   isWholesaleInquiry,
   _sameItem: sameItem,

@@ -604,6 +604,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
       paymentInfoRaw = String(chargeSettings?.bankDetails || '');
     } catch { /* configuración ausente o inválida */ }
   }
+  orderCtx.hasTransferInstructions = Boolean(paymentInfoRaw.trim());
   const paymentSection = paymentInfoRaw.trim()
     ? `## Instrucciones de Pago ⚠️ IMPORTANTE\nCuando el cliente pregunte cómo pagar, dónde transferir, los datos bancarios, o cualquier duda sobre el pago → copia y pega EXACTAMENTE esta información:\n\n${paymentInfoRaw.trim()}\n\nNO inventes ni modifiques esta información.`
     : '';
@@ -2631,6 +2632,16 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     return { response: 'Por ahora atendemos consultas. Las ventas están pendientes de habilitación por la tienda; todavía no puedo crear ni confirmar pedidos.', agentType: 'orders', newState: 'collecting_order' };
   }
 
+  const handoffCheckout = async () => {
+    await db.setAgentMode(conversationId, 'coordinating');
+    return {
+      response: 'Disculpa, no resolví tu consulta. Le paso al equipo el pedido y lo que nos escribiste para que te ayuden por aquí; no necesitas repetir tus datos. Todavía no he creado el pedido.',
+      agentType: 'orders', newState: 'collecting_order', switchToHuman: true,
+      escalationReason: 'Consulta pendiente durante la revisión del pedido; evitar repetir el resumen',
+    };
+  };
+  if (orderInputPolicy.isRepeatedSummaryComplaint(userMessage)) return handoffCheckout();
+
   // 0b. Siempre fusionar datos del cliente desde CRM/Shopify — no solo la primera vez.
   try {
     const ds = await db.getPrimaryDataSource(orgId);
@@ -2660,12 +2671,13 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     ];
   }
   const checkout = require('./order-checkout');
-  // A complete affirmative accepts the reviewed draft; it supplies no new
-  // order data for the model to reinterpret. Mixed corrections still extract.
-  const confirmsReviewedDraft = Boolean(orderDraft._reviewed_order)
-    && ordersAgent.hasRequiredData(orderDraft) && orderInputPolicy.isBareAffirmative(userMessage);
+  // A complete affirmative or payment question supplies no new order data
+  // for the model to reinterpret. Mixed corrections still extract.
+  const preservesReviewedDraft = Boolean(orderDraft._reviewed_order)
+    && ordersAgent.hasRequiredData(orderDraft) && (orderInputPolicy.isBareAffirmative(userMessage)
+      || orderInputPolicy.isCheckoutPaymentQuestion(userMessage));
   const updatedDraft = checkout.normalizeDraft(preserveFreshnessPreference(
-    confirmsReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),
+    preservesReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
   ));
   updatedDraft.customer_name = orderInputPolicy.resolveCustomerName(
@@ -2901,6 +2913,20 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   const ready = ordersAgent.hasRequiredData(updatedDraft);
   const acceptedReview = checkout.matchesReview(orderDraft, updatedDraft, priced, history);
   if (ready && !(acceptedReview && ordersAgent.isOrderConfirmed('', userMessage, updatedDraft))) {
+    if (acceptedReview) {
+      const lastOutbound = [...history].reverse().find(m => m.direction === 'outbound');
+      if (orderInputPolicy.isCheckoutPaymentQuestion(userMessage) && orderCtx.hasTransferInstructions
+          && lastOutbound?.content !== checkout.PAYMENT_REVIEW_REPLY) {
+        return { response: checkout.PAYMENT_REVIEW_REPLY, agentType: 'orders', newState: 'collecting_order' };
+      }
+      // Un agradecimiento o aprobación parcial recibe una indicación breve.
+      // Una consulta sin resolver o un segundo intento sale del bucle al equipo.
+      if (!checkout.isReviewFollowup(lastOutbound?.content)
+          && /^(?:gracias|muchas gracias|por favor|porfa|si esta direccion)[\s.!]*$/iu.test(userMessage.trim())) {
+        return { response: checkout.REVIEW_REMINDER, agentType: 'orders', newState: 'collecting_order' };
+      }
+      return handoffCheckout();
+    }
     updatedDraft._reviewed_order = checkout.signature(updatedDraft, priced);
     await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
     return { response: checkout.reviewReply(updatedDraft, priced), agentType: 'orders', newState: 'collecting_order' };
