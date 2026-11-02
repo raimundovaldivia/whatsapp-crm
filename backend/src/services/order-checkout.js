@@ -3,6 +3,10 @@ const { parseConfirmedSummary } = require('./order-quote');
 
 const key = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
+const REVIEW_REMINDER = 'El resumen sigue igual y el pedido aún no está creado. Para aprobarlo, responde «confirmo el pedido»; si necesitas cambiar algo, dime qué dato.';
+const PAYMENT_REVIEW_REPLY = 'Sí, la tienda tiene habilitada la transferencia. Primero confirmemos el pedido; después puedes solicitar los datos de pago por este chat. ¿Confirmas el pedido del resumen anterior?';
+const isReviewFollowup = text => [REVIEW_REMINDER, PAYMENT_REVIEW_REPLY].includes(String(text || ''));
+
 function streetAddress(address, city) {
   if (typeof address !== 'string' || !key(city)) return address;
   const parts = address.split(',').map(part => part.trim()).filter(Boolean);
@@ -66,7 +70,9 @@ function matchesReview(previous, current, priced, history = []) {
   if (previous._reviewed_order && canonicalReview(previous._reviewed_order) !== signature(current, priced)) return false;
   // Compatibilidad con conversaciones abiertas antes de este cambio: el último
   // mensaje saliente debe ser el resumen, con los mismos productos y total.
-  const lastOutbound = [...history].reverse().find(m => m.direction === 'outbound');
+  // Solo nuestras aclaraciones de cierre pueden interponerse. Una pregunta
+  // distinta, una campaña o una intervención humana invalidan este contexto.
+  const lastOutbound = [...history].reverse().find(m => m.direction === 'outbound' && !isReviewFollowup(m.content));
   if (previous._reviewed_order) {
     return Boolean(lastOutbound && /todo correcto/i.test(lastOutbound.content)
       && key(lastOutbound.content).includes(key(pricing.summaryBlock(priced))));
@@ -88,4 +94,5 @@ function reviewReply(draft, priced) {
   return `Revisa el resumen antes de crear tu pedido:\n\n${pricing.summaryBlock(priced)}\n👤 ${draft.customer_name}\n📍 ${formatAddress(draft)}${phone}${date}${note}\n\n¿Todo correcto? El pedido todavía no está creado y la entrega está pendiente de confirmación.`;
 }
 
-module.exports = { catalogIssue, signature, matchesReview, reviewReply, normalizeDraft, formatAddress };
+module.exports = { catalogIssue, signature, matchesReview, reviewReply, normalizeDraft, formatAddress,
+  REVIEW_REMINDER, PAYMENT_REVIEW_REPLY, isReviewFollowup };

@@ -9,6 +9,75 @@ const draft = () => ({
   items: [{ product_name: 'Huevos XL cafés · Bandeja de 30', quantity: 1 }],
 });
 
+for (const message of ['Todo bien', 'Esta correcto', 'Sí correcto', 'Si correcto\nGracias',
+  'Sí, necesito me lo envíen\nPor favor', 'Está todo correcto', 'Dale perfecto']) {
+  test(`confirmación habitual cierra el resumen enviado sin reinterpretarlo: ${message}`, async () => {
+    const history = [];
+    const f = fixture({ history, extract: (previous, count) => count === 1 ? previous : {
+      ...previous, items: [{ ...previous.items[0], quantity: 3 }],
+    } });
+    const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+    history.push({ direction: 'outbound', content: review.response });
+    const result = await f.pipeline.processMessage(7, 91, message);
+    assert.equal(f.calls.orders.length, 1);
+    assert.equal(f.calls.extractions, 1);
+    assert.equal(f.calls.orders[0].items[0].quantity, 1);
+    assert.equal(f.calls.orders[0].organizationId, 7);
+    assert.match(result.response, /DR-812/);
+  });
+}
+
+test('las nuevas afirmaciones no aceptan condiciones, preguntas ni cambios', () => {
+  for (const message of ['Todo bien pero cambia a dos', 'Está correcto?', 'Si correcto pero no lo envíes',
+    'Sí necesito que lo envíen mañana', 'Si esta dirección', 'Si necesito que llegue hoy',
+    'Todo bien si llega mañana', 'Gracias', 'Por favor']) {
+    assert.equal(agent.isOrderConfirmed('ORDEN_CONFIRMADA', message, draft()), false, message);
+  }
+});
+
+for (const message of ['Me han enviado 6 veces el mismo mensaje', 'Respondo y me vuelven a enviar lo mismo']) {
+  test(`reclamo por repetición conserva borrador y deriva sin otro resumen: ${message}`, async () => {
+    const f = fixture();
+    const result = await f.pipeline.processMessage(7, 91, message);
+    assert.equal(f.calls.orders.length, 0);
+    assert.equal(f.calls.extractions, 0);
+    assert.equal(result.switchToHuman, true);
+    assert.doesNotMatch(result.response, /Revisa el resumen|¿Todo correcto/);
+  });
+}
+
+test('pregunta de pago se responde sin repetir y permite una sola confirmación posterior', async () => {
+  const history = [];
+  const f = fixture({ history, settings: { payment_info: 'Banco de prueba: cuenta ficticia' },
+    extract: (previous, count) => count === 1 ? previous : { ...previous, address: 'Otra calle 456' } });
+  const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+  history.push({ direction: 'outbound', content: review.response });
+  const reply = await f.pipeline.processMessage(7, 91, 'Puedo transferir?');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(f.calls.extractions, 1);
+  assert.match(reply.response, /transferencia/i);
+  assert.doesNotMatch(reply.response, /Revisa el resumen|📦/);
+  history.push({ direction: 'outbound', content: reply.response });
+  const result = await f.pipeline.processMessage(7, 91, 'Todo bien');
+  assert.equal(f.calls.orders.length, 1);
+  assert.match(result.response, /DR-812/);
+});
+
+test('una respuesta ambigua no repite el resumen ni crea una orden; insistir deriva', async () => {
+  const history = [];
+  const f = fixture({ history });
+  const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+  history.push({ direction: 'outbound', content: review.response });
+  const reminder = await f.pipeline.processMessage(7, 91, 'Gracias');
+  assert.equal(f.calls.orders.length, 0);
+  assert.doesNotMatch(reminder.response, /Revisa el resumen|📦/);
+  history.push({ direction: 'outbound', content: reminder.response });
+  const result = await f.pipeline.processMessage(7, 91, 'No entiendo');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(result.switchToHuman, true);
+  assert.doesNotMatch(result.response, /Revisa el resumen|📦/);
+});
+
 test('acepta confirmaciones completas sin limitar la longitud', () => {
   for (const message of ['Siiii , por supuesto los espero', 'Si por supuesto, acá estoy',
     'Sí, todo correcto, muchas gracias', 'Dale, por favor, los espero', '👍🏽', 'ok', 'correcto', 'Sí, confirmo el pedido', 'Confirmo el resumen',
@@ -189,12 +258,68 @@ for (const message of ['Siiii , por supuesto los espero', 'Si por supuesto, acá
 }
 
 test('una frase del bot no crea una orden sin la confirmación del cliente', async () => {
-  const f = fixture({ response: 'Te confirmo el pedido: te llegan mañana.' });
+  const f = fixture({ history: [], response: 'Te confirmo el pedido: te llegan mañana.' });
   const result = await f.pipeline.processMessage(7, 91, 'Bandeja café');
   assert.equal(f.calls.orders.length, 0);
   assert.equal(result.newState, 'collecting_order');
   assert.match(result.response, /antes de crear tu pedido/i);
   assert.doesNotMatch(result.response, /te confirmo el pedido|te llegan/i);
+});
+
+test('sin instrucciones de transferencia no inventa medios de pago ni repite el resumen', async () => {
+  const f = fixture();
+  const result = await f.pipeline.processMessage(7, 91, 'Puedo transferir?');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(result.switchToHuman, true);
+  assert.doesNotMatch(result.response, /Revisa el resumen|puedes pagar por transferencia/i);
+});
+
+test('insistir en la consulta de pago deriva en vez de repetir la aclaración', async () => {
+  const history = [];
+  const f = fixture({ history, settings: { charge_settings: JSON.stringify({ bankDetails: 'Cuenta ficticia' }) } });
+  const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+  history.push({ direction: 'outbound', content: review.response });
+  const payment = await f.pipeline.processMessage(7, 91, 'Puedo transferir?');
+  history.push({ direction: 'outbound', content: payment.response });
+  const result = await f.pipeline.processMessage(7, 91, 'Puedo transferir?');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(result.switchToHuman, true);
+  assert.notEqual(result.response, payment.response);
+});
+
+test('pago con una corrección sigue extrayendo y exige revisar el cambio', async () => {
+  const history = [];
+  const f = fixture({ history, settings: { payment_info: 'Cuenta ficticia' },
+    extract: (previous, count) => count === 1 ? previous : { ...previous, address: 'Otra calle 456' } });
+  const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+  history.push({ direction: 'outbound', content: review.response });
+  const result = await f.pipeline.processMessage(7, 91, 'Puedo transferir? Cambia la dirección a Otra calle 456');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(f.calls.extractions, 2);
+  assert.match(result.response, /Otra calle 456/);
+  assert.match(result.response, /Revisa el resumen/);
+});
+
+test('otra aprobación después del cierre no duplica el pedido', async () => {
+  const options = {};
+  const f = fixture(options);
+  await f.pipeline.processMessage(7, 91, 'Todo bien');
+  options.activeOrder = active();
+  await f.pipeline.processMessage(7, 91, 'Sí correcto');
+  assert.equal(f.calls.orders.length, 1);
+  assert.equal(f.calls.claims, 1);
+});
+
+test('las nuevas afirmaciones conservan el bloqueo atómico y el fallo de persistencia', async () => {
+  const duplicate = fixture({ duplicate: true });
+  const blocked = await duplicate.pipeline.processMessage(7, 91, 'Esta correcto');
+  assert.equal(duplicate.calls.orders.length, 0);
+  assert.equal(blocked.duplicate, true);
+  const failed = fixture({ failSave: true });
+  const result = await failed.pipeline.processMessage(7, 91, 'Todo bien');
+  assert.equal(failed.calls.orders.length, 0);
+  assert.equal(result.switchToHuman, true);
+  assert.doesNotMatch(result.response, /pedido confirmado/i);
 });
 
 test('si guardar falla no se confirma ni se promete entrega', async () => {

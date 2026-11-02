@@ -39,6 +39,24 @@ junto al «sí» siguen procesándose y requieren revisar el nuevo resumen. Tamb
 se reconoce «Sí, todo correcto. Confirmo el pedido de prueba» como una afirmación
 completa; añadir cambios o condiciones impide el cierre directo.
 
+También se reconocen «Todo bien», «Está correcto», «Sí correcto» y «Sí, necesito
+me lo envíen», incluso con un agradecimiento en una segunda línea. La frase
+completa debe ser afirmativa: preguntas, condiciones, cambios de fecha o producto
+y la aprobación únicamente de una dirección no autorizan crear el pedido.
+
+Una consulta aislada sobre transferencia conserva el borrador revisado y recibe
+una respuesta breve cuando la tienda tiene instrucciones de pago configuradas
+en `payment_info` o `charge_settings.bankDetails`. Sin esa configuración se deriva
+al equipo sin inventar datos. Preguntar por pago no confirma ni acredita un pago.
+Un agradecimiento recibe como máximo una indicación breve para confirmar; una
+consulta no resuelta o un reclamo por mensajes repetidos pasa a `coordinating`
+con el borrador conservado. No se vuelve a enviar el resumen completo sin cambios.
+
+Las dos aclaraciones breves del sistema conservan la revisión únicamente si el
+historial contiene el resumen enviado y el pedido sigue igual. Cualquier otra
+intervención saliente invalida ese contexto. Precio, stock, cambios de datos,
+fallos de escritura y bloqueo de duplicados mantienen sus controles anteriores.
+
 El nombre indicado explícitamente en el mensaje actual («a nombre de», «me
 llamo», «mi nombre es» o «Nombre:») prevalece sobre el borrador, el contacto y
 los resúmenes de compras anteriores, desde el primer turno. Si luego se aporta

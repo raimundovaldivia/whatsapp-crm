@@ -41,3 +41,17 @@ test('un resumen anterior sin firma admite solo la misma dirección y los mismos
   assert.equal(checkout.matchesReview(previous, draft, priced, history), true);
   assert.equal(checkout.matchesReview(previous, { ...draft, address: 'Otra calle 456' }, priced, history), false);
 });
+
+test('aclaraciones breves conservan solo un resumen enviado y vigente', () => {
+  const previous = { ...draft, _reviewed_order: checkout.signature(draft, priced) };
+  for (const text of [checkout.PAYMENT_REVIEW_REPLY, checkout.REVIEW_REMINDER]) {
+    const followup = { direction: 'outbound', content: text };
+    assert.equal(checkout.matchesReview(previous, draft, priced, [...history, followup]), true);
+    assert.equal(checkout.matchesReview(previous, draft, priced, [followup]), false);
+    assert.equal(checkout.matchesReview(previous, draft, { ...priced, total: 20000 }, [...history, followup]), false);
+    for (const content of ['¿Quieres cancelar el pedido?', 'Otra promoción', 'Pedido confirmado']) {
+      assert.equal(checkout.matchesReview(previous, draft, priced, [...history, { direction: 'outbound', content }, followup]), false);
+    }
+    assert.equal(checkout.matchesReview(previous, { ...draft, notes: 'Otra nota' }, priced, [...history, followup]), false);
+  }
+});
