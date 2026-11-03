@@ -50,6 +50,7 @@ function savedPriceVotes() {
 export default function JustoCaseroLanding() {
   const [whatsapp, setWhatsapp] = useState(FALLBACK_WHATSAPP);
   const [catalog, setCatalog] = useState(null);
+  const [purchaseInstructions, setPurchaseInstructions] = useState('');
   const [selection, setSelection] = useState('');
   const [otherIdea, setOtherIdea] = useState('');
   const [priceVotes, setPriceVotes] = useState(savedPriceVotes);
@@ -61,6 +62,7 @@ export default function JustoCaseroLanding() {
       .then(data => {
         const configured = onlyDigits(data.whatsappPhone);
         if (configured) setWhatsapp(configured);
+        setPurchaseInstructions(typeof data.howToBuy === 'string' ? data.howToBuy.trim() : '');
       })
       .catch(error => {
         if (error.name !== 'AbortError') console.warn('[Justo Casero] Se usará el WhatsApp de respaldo');
@@ -220,6 +222,12 @@ export default function JustoCaseroLanding() {
               <li><span>2</span><h3>Elige</h3><p>Indica Extra de 180 o Súper Extra de 100, la cantidad de cajas y tu dirección.</p></li>
               <li><span>3</span><h3>Confirma</h3><p>Revisa el resumen y confírmalo por WhatsApp. Recibirás el número de tu pedido. Pagas en efectivo o transferencia al recibir.</p></li>
             </ol>
+            {purchaseInstructions && (
+              <article className="jc-price-vote-card" style={{ marginTop: 24 }} aria-labelledby="jc-payment-heading">
+                <h3 id="jc-payment-heading" style={{ marginTop: 0 }}>Pago contra entrega y datos para transferir</h3>
+                <p style={{ whiteSpace: 'pre-line', overflowWrap: 'anywhere', lineHeight: 1.8, fontWeight: 400 }}>{purchaseInstructions}</p>
+              </article>
+            )}
           </div>
         </section>
 
@@ -259,3 +267,4 @@ export default function JustoCaseroLanding() {
     </div>
   );
 }
+
