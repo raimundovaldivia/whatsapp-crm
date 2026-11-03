@@ -1913,6 +1913,10 @@ export default function ChatWindow({ conversation, messages, availableConversati
                         try { items = Array.isArray(o.items) ? o.items : (typeof o.items === 'string' ? JSON.parse(o.items || '[]') : []); } catch { items = []; }
                         if (!Array.isArray(items)) items = [];
                         const isShopify = o._source === 'shopify';
+                        // Usar el número comercial de Shopify o la referencia pública del CRM.
+                        const numeroPedido = isShopify
+                          ? (o.shopify_name || null)
+                          : (o.id != null ? crmOrderLabel(o.id) : null);
                         const fs = isShopify ? (o.financial_status||'').toUpperCase() : (o.status||'').toUpperCase();
                         const isPaid = isShopify ? fs === 'PAID' : ['PAID', 'PAYMENT_RECEIVED'].includes(fs);
                         const canMarkPaid = !isPaid && !['CANCELLED', 'VOIDED', 'REFUNDED'].includes(fs);
@@ -1929,11 +1933,16 @@ export default function ChatWindow({ conversation, messages, availableConversati
                         return (
                           <div key={`${o._source}_${o.id || o.shopify_order_id || i}`} style={{ backgroundColor:colors.bg, borderRadius:'10px', padding:'12px 14px', border:`1px solid ${colors.border}` }}>
                             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'8px', flexWrap:'wrap', marginBottom:'6px' }}>
-                              <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                              <div style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap' }}>
                                 <span style={{ fontSize:'10px', padding:'1px 6px', borderRadius:'4px', backgroundColor: isShopify ? '#0d2020' : colors.bgSub, color: isShopify ? colors.tealSoft : colors.textSecondary, border:`1px solid ${isShopify ? '#1a3d3d' : colors.border}` }}>
                                   {isShopify ? 'Shopify' : 'DR'}
                                 </span>
-                                <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}{o.shopify_name ? ` · ${o.shopify_name}` : ''}</span>
+                                <span style={{ fontSize:'12px', color:colors.textSecondary }}>{fecha}</span>
+                                {numeroPedido && (
+                                  <span style={{ fontSize:'11px', fontWeight:700, color:colors.textPrimary, backgroundColor:colors.bgSub, borderRadius:'4px', padding:'2px 6px', whiteSpace:'nowrap' }}>
+                                    Pedido {numeroPedido}
+                                  </span>
+                                )}
                               </div>
                               <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:'6px', flexWrap:'wrap' }}>
                                 <button
