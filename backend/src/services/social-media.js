@@ -4,6 +4,9 @@ const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const sharp = require('sharp');
 
+// SVG is not an accepted upload; block its decoder before inspecting metadata.
+sharp.block({ operation: ['VipsForeignLoadSvg'] });
+
 const MAX_BYTES = 6 * 1024 * 1024;
 const TTL_SECONDS = 7 * 24 * 60 * 60;
 const MAX_FILES = 100;
