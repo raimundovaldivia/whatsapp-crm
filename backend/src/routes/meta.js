@@ -11,6 +11,7 @@ const socialEvents = require('../services/social-events');
 const socialCrm = require('../services/social-crm');
 const { summarizeInsights } = require('../services/ad-attribution');
 const purchaseSync = require('../services/meta-purchase-sync');
+const socialMedia = require('../services/social-media');
 
 const router = express.Router();
 const SCOPES = [
@@ -205,7 +206,23 @@ router.get('/callback', async (req, res) => {
   }
 });
 
+// A short-lived capability URL lets Meta fetch only the prepared public image.
+// Session tokens and arbitrary filesystem paths are never accepted here.
+async function serveMedia(req, res) {
+  try {
+    const image = await socialMedia.read(req.params.token, JWT_SECRET);
+    res.set({ 'Content-Type': 'image/jpeg', 'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex', 'Content-Security-Policy': "default-src 'none'" });
+    res.send(image);
+  } catch (error) { res.status(error.status || 500).json({ error: 'Imagen no disponible.' }); }
+}
+
 router.use(requireAuth, requireRole('owner', 'admin'), requireSolution('marketing'));
+
+router.post('/media', async (req, res) => {
+  try { res.status(201).json(await socialMedia.create(req.orgId, req.body?.base64, JWT_SECRET)); }
+  catch (error) { res.status(error.status || 500).json({ error: error.status ? error.message : 'No se pudo guardar la imagen. Inténtalo nuevamente.' }); }
+});
 
 router.get('/auth-url', (req, res) => {
   const purpose = req.query?.purpose ?? 'social';
@@ -732,3 +749,4 @@ router.post('/publish', async (req, res) => {
 
 module.exports = router;
 module.exports.SCOPES = SCOPES;
+module.exports.serveMedia = serveMedia;

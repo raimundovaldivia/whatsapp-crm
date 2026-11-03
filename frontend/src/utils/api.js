@@ -159,6 +159,7 @@ export const metaAPI = {
   adsAnalytics: params => api.get('/meta/ads/analytics', { params }).then(r => r.data),
   insights:     params => api.get('/meta/ads/insights', { params }).then(r => r.data),
   campaigns:    () => api.get('/meta/ads/campaigns').then(r => r.data.campaigns),
+  uploadImage:  base64 => api.post('/meta/media', { base64 }, { timeout: 60000 }).then(r => r.data),
   publish:      data => api.post('/meta/publish', data, { timeout: 45000 }).then(r => r.data),
 };
 

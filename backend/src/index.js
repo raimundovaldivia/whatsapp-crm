@@ -108,6 +108,7 @@ app.use('/store', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 
 app.use('/r', rateLimit({ windowMs: 60 * 1000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use('/referido', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use('/seguimiento', rateLimit({ windowMs: 60 * 1000, limit: 180, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.use('/social-media', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.post('/store/:slug/orders', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false }));
 
 // ─── HEALTH CHECK ────────────────────────────────────────────────
@@ -125,6 +126,7 @@ app.use('/', legalRouter);
 app.use('/r', trackingLinksRouter);
 app.use('/seguimiento', deliveryTrackingRouter);
 app.use('/referido', referralPublicRouter);
+app.get('/social-media/:token.jpg', metaRouter.serveMedia);
 
 app.use('/api/commercial', require('./routes/commercial'));
 app.use('/api', require('./middleware/commercial-access').commercialAccess);
