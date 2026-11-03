@@ -6,6 +6,14 @@ Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de 
 
 En escritorio, abre el menú de cuenta y elige **Cambiar tienda**. En móvil está en **Más → Cambiar tienda**. El selector **Tienda activa** muestra las cuentas verificadas durante esta sesión. Selecciona una para abrirla con sus propios permisos y ajustes, sin volver a ingresar la contraseña. Si falta una tienda, pulsa **Verificar otra tienda de mi cuenta** e ingresa su contraseña una vez: debe usar el mismo correo. Esta verificación recarga la sesión conservando su vencimiento; vuelve a abrir el selector para elegir. Guarda antes cualquier edición pendiente; cambiar de tienda recarga también las otras pestañas abiertas. Una contraseña incorrecta o cancelar el diálogo conserva la sesión actual. No requiere otro correo, crear otra cuenta ni modificar la configuración del bot.
 
+### Subir imágenes para Facebook e Instagram
+
+En **Facebook e Instagram → Contenido**, usa **Subir imagen**, revisa la vista previa, escribe el texto y elige **Publicar ahora**. Admite JPG, PNG o WebP de hasta 6 MB y 16 millones de píxeles, sin animación. La carga conserva el encuadre, convierte a JPEG y elimina metadatos; no publica por sí sola. La opción de pegar un enlace de imagen o video sigue disponible. Instagram requiere una cuenta profesional vinculada a la página de Facebook.
+
+La carga `POST /api/meta/media` exige una sesión de propietario o administrador con acceso a Marketing; usa la tienda de la sesión. En producción requiere el volumen persistente `RAILWAY_VOLUME_MOUNT_PATH` y `CRM_PUBLIC_URL` como origen HTTPS del backend. Guarda un máximo de 100 imágenes vigentes por tienda, procesa hasta dos imágenes a la vez y una por tienda. Meta descarga cada imagen mediante `/social-media/:token.jpg`: el enlace firmado permite leer solo esa imagen durante siete días, sin conceder acceso a la sesión ni a otros archivos. No compartas ese enlace si no deseas compartir la imagen. Las cargas posteriores eliminan los archivos vencidos de la misma tienda. No requiere cambios en la base de datos.
+
+Verificación focalizada: `cd backend && node --test test/social-media.test.cjs`; interfaz: `cd frontend && npm test && npm run build`.
+
 ---
 
 ## ✨ Características
