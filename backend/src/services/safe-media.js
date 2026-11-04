@@ -23,7 +23,7 @@ async function publicTarget(value) {
 async function downloadMedia(value, config = {}) {
   for (let redirects = 0; redirects <= 5; redirects++) {
     const { url, address } = await publicTarget(value);
-    const headers = KEY_HOSTS.has(url.hostname)
+    const headers = !config.publicOnly && KEY_HOSTS.has(url.hostname)
       ? { 'X-API-Key': config.kapso_api_key || process.env.KAPSO_API_KEY } : {};
     const resp = await axios.get(url.href, {
       headers, proxy: false, responseType: 'arraybuffer', maxRedirects: 0,

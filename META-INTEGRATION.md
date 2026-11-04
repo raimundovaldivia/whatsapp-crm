@@ -8,6 +8,19 @@ El CRM incluye un módulo **Facebook e Instagram** con cuatro capacidades:
 - publicación de texto, imágenes, videos y Reels;
 - resumen de rendimiento de Meta Ads de los últimos 30 días.
 
+## Programación de publicaciones
+
+En **Facebook e Instagram → Contenido → Programar publicaciones → Nueva publicación**, elegir la red, el formato, el texto, la URL pública del archivo y la fecha/hora de Chile (`America/Santiago`). Facebook admite texto, imagen, video y Reel; Instagram admite imagen, video y Reel. Las historias conservan su pestaña y flujo anteriores. Los videos de Instagram se envían como Reels.
+
+**Revisar programación** guarda un borrador. Solo **Aprobar y programar** autoriza su envío automático. Se requieren al menos cinco minutos de anticipación. Editar elimina la aprobación anterior; cancelar impide el envío mientras no haya comenzado. La lista muestra pendientes y resultados y se actualiza cada 30 segundos. Los archivos deben permanecer accesibles públicamente por HTTPS hasta la publicación; Meta valida su formato al procesarlos.
+
+Se reutilizan `/api/social-stories`, `social_scheduled_posts`, la auditoría y el trabajador existente. La extensión incremental `backend/src/db/social-post-scheduling.sql` se aplica **después de `social-stories.sql` y antes de actualizar el backend**. Conserva registros previos y agrega formato, texto, revisión y destino aprobado; no debe modificarse la migración antigua. No ejecutar el setup completo para actualizar producción. Esta preparación no aplica migraciones remotas ni despliega.
+
+Solo owner/admin con Marketing pueden administrar la cola. Antes de enviar se comprueban nuevamente el módulo, la pertenencia y rol del aprobador y la cuenta de destino. Las ediciones/aprobaciones usan revisiones para impedir sobrescrituras concurrentes; las reservas de envío usan `FOR UPDATE SKIP LOCKED`. El trabajador revisa cada minuto y procesa hasta cinco publicaciones, reclamándolas individualmente. La hora efectiva puede retrasarse por procesamiento de Meta o trabajos anteriores. Un resultado incierto o proceso interrumpido queda fallido y no se reintenta automáticamente: revisar la red antes de crear otra programación.
+
+La publicación inmediata y la programada comparten transporte. Los Reels de Facebook usan inicio, carga por URL y finalización; Instagram espera a que el contenedor esté preparado antes de publicar. Contratos consultados: [colección oficial de Meta para Facebook](https://www.postman.com/meta/facebook/documentation/r56bjfd/facebook-api?entity=request-23987686-0b79260c-96bd-49de-875b-6076213785fc) y [colección oficial de Meta para Instagram](https://www.postman.com/meta/instagram/documentation/6yqw8pt/instagram-api?entity=request-23987686-3fe78620-2258-44b6-893f-42d76c7200d7). No se ha verificado el envío con cuentas reales.
+
+
 ## Configuración en Meta for Developers
 
 1. Crear o reutilizar una app de tipo Business y agregar Facebook Login for Business, Messenger, Instagram Graph API y Marketing API.

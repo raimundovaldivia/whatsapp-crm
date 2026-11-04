@@ -307,6 +307,7 @@ function CommentsTab({ connected, connect, colors }) {
 }
 
 export function ContentTab({ connected, connection, connect, colors }) {
+  const [mode, setMode] = useState('now');
   const instagramReady = !!connection?.page_id && !!connection?.instagram_account_id;
   const [platform, setPlatform] = useState(instagramReady ? 'both' : 'facebook');
   const [message, setMessage] = useState('');
@@ -353,8 +354,12 @@ export function ContentTab({ connected, connection, connect, colors }) {
     if (operation.current) return;
     setResults({}); setNotice(''); setMessage(''); setMediaUrl(''); setImageName(''); setMediaType('image');
   };
-  if (!connected) return <ConnectNeeded connect={connect} colors={colors} />;
-  return <Card colors={colors} style={{ display: 'grid', gap: 13 }}>
+  return <div style={{ display: 'grid', gap: 14 }}>
+    <div style={{ display: 'flex', gap: 8 }}>
+      <button disabled={busy} onClick={() => setMode('now')} style={platformButton(mode === 'now', colors)}>Publicación inmediata</button>
+      <button disabled={busy} onClick={() => setMode('schedule')} style={platformButton(mode === 'schedule', colors)}>Programar publicaciones</button>
+    </div>
+    {mode === 'schedule' ? <StoriesTab connected={connected} colors={colors} scope="content" /> : !connected ? <ConnectNeeded connect={connect} colors={colors} /> : <Card colors={colors} style={{ display: 'grid', gap: 13 }}>
     <div role="group" aria-label="Redes donde publicar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <button type="button" aria-pressed={platform === 'facebook'} disabled={locked} onClick={() => setPlatform('facebook')} style={platformButton(platform === 'facebook', colors)}><Facebook size={16} /> Facebook</button>
       <button type="button" aria-pressed={platform === 'instagram'} disabled={locked || !instagramReady} onClick={() => setPlatform('instagram')} style={platformButton(platform === 'instagram', colors)}><Instagram size={16} /> Instagram</button>
@@ -378,7 +383,7 @@ export function ContentTab({ connected, connection, connect, colors }) {
       <label style={label(colors)}>URL pública de imagen o video<input disabled={locked} value={mediaUrl} onChange={e => { setMediaUrl(e.target.value); setImageName(''); }} style={{ ...input(colors), marginTop: 5 }} placeholder="https://…" /></label>
       <p style={{ color: colors.textMuted, fontSize: 11 }}>El archivo del enlace debe estar disponible públicamente.</p>
     </details>
-    {platform !== 'facebook' && <label style={label(colors)}>Formato<select disabled={locked || !!imageName} value={mediaType} onChange={e => setMediaType(e.target.value)} style={{ ...input(colors), marginTop: 5 }}><option value="image">Imagen</option><option value="video">Video</option><option value="reel">Reel</option></select></label>}
+    {<label style={label(colors)}>Formato<select disabled={locked || !!imageName} value={mediaType} onChange={e => setMediaType(e.target.value)} style={{ ...input(colors), marginTop: 5 }}><option value="image">Imagen</option><option value="video">Video</option><option value="reel">Reel</option></select></label>}
     {!attempted && platform !== 'facebook' && !mediaUrl.trim() && <p style={{ color: colors.textSecondary, fontSize: 12, margin: 0 }}>Agrega una imagen o un video para publicar en Instagram.</p>}
     {notice && <div role="alert" style={{ color: colors.dangerSoft, fontSize: 13 }}>{notice}</div>}
     {attempted && <div aria-live="polite" style={{ display: 'grid', gap: 8 }}>{targets.map(target => {
@@ -391,7 +396,8 @@ export function ContentTab({ connected, connection, connect, colors }) {
     })}</div>}
     {(!attempted || retryable.length > 0) && <button disabled={busy || !!validation} onClick={publish} style={primary(colors)}>{working ? <Loader size={15} /> : <Upload size={15} />} {working ? 'Publicando…' : attempted ? 'Reintentar solo ' + retryable.map(target => SOCIAL_NAMES[target]).join(' e ') : platform === 'both' ? 'Publicar en ambas redes' : 'Publicar ahora'}</button>}
     {attempted && <button disabled={busy} onClick={startNew} style={secondary(colors)}>Nueva publicación</button>}
-  </Card>;
+  </Card>}
+  </div>;
 }
 
 function AdsTab({ connected, connect, colors }) {
