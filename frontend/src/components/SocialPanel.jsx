@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, Facebook, Instagram, Link2, Loader, MessageCircle, RefreshCw, Send, Unplug, Upload } from 'lucide-react';
-import { metaAPI } from '../utils/api.js';
+import { conversationsAPI, metaAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { crmOrderLabel } from '../utils/order-reference.js';
 import StoriesTab from './StoriesTab.jsx';
@@ -226,10 +226,26 @@ function MessagesTab({ connected, connect, colors }) {
   const [threads, setThreads] = useState([]); const [selected, setSelected] = useState(null);
   const [messages, setMessages] = useState([]); const [text, setText] = useState(''); const [error, setError] = useState('');
   const [unansweredOnly, setUnansweredOnly] = useState(false);
-  const refresh = async () => { try { setThreads(await metaAPI.threads()); } catch (e) { setError(e.response?.data?.error || e.message); } };
+  const [changingMode, setChangingMode] = useState(false);
+  const refresh = async () => { try {
+    const next = await metaAPI.threads();
+    setThreads(next);
+    setSelected(current => current ? next.find(t => t.id === current.id) || null : null);
+  } catch (e) { setError(e.response?.data?.error || e.message); } };
   useEffect(() => { if (connected) refresh(); }, [connected]);
   const open = async t => { setSelected(t); setMessages(await metaAPI.messages(t.id)); };
   const send = async () => { if (!text.trim()) return; try { const m = await metaAPI.sendMessage(selected.id, text); setMessages(v => [...v, m]); setText(''); } catch (e) { setError(e.response?.data?.error || e.message); } };
+  const changeMode = async () => {
+    if (!selected?.crm_conversation_id || changingMode) return;
+    const threadId = selected.id;
+    setChangingMode(true); setError('');
+    try {
+      const conversation = await conversationsAPI.setAgentMode(selected.crm_conversation_id, selected.agent_mode === 'ai' ? 'human' : 'ai');
+      const update = thread => thread?.id === threadId ? { ...thread, agent_mode: conversation.agent_mode } : thread;
+      setSelected(update); setThreads(items => items.map(update));
+    } catch (e) { setError(e.response?.data?.error || e.message); }
+    finally { setChangingMode(false); }
+  };
   if (!connected) return <ConnectNeeded connect={connect} colors={colors} />;
   const visibleThreads = unansweredOnly ? threads.filter(thread => thread.last_message_direction === 'inbound') : threads;
   return <Card colors={colors} style={{ padding: 0, minHeight: 520, display: 'grid', gridTemplateColumns: 'minmax(220px,32%) 1fr', overflow: 'hidden' }}>
@@ -239,6 +255,11 @@ function MessagesTab({ connected, connect, colors }) {
       {visibleThreads.map(t => <button key={t.id} onClick={async () => { await open(t); setThreads(items => items.map(item => item.id === t.id ? { ...item, unread_count: 0 } : item)); }} style={{ width: '100%', textAlign: 'left', border: 0, borderBottom: `1px solid ${colors.border}`, background: selected?.id === t.id ? colors.bgHover : 'transparent', padding: 13, cursor: 'pointer' }}><strong style={{ color: colors.textPrimary, display: 'flex', justifyContent: 'space-between', gap: 8 }}>{t.contact_name || t.external_user_id}{Number(t.unread_count || 0) > 0 && <span style={{ color: '#fff', background: colors.green, borderRadius: 999, minWidth: 18, height: 18, padding: '0 5px', fontSize: 10, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t.unread_count}</span>}</strong><span style={{ color: colors.textMuted, fontSize: 11, display: 'block' }}>{t.channel === 'instagram' ? 'Instagram' : 'Facebook'} · {t.last_message || ''}</span>{t.order_id && <span style={{ color: colors.green, fontSize: 10, display: 'block', marginTop: 4 }}>Pedido #DR-{t.order_id} · {t.order_status}</span>}</button>)}
     </div>
     <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {selected?.crm_conversation_id && <div style={{ padding: '10px 14px', borderBottom: `1px solid ${colors.border}`, color: colors.textPrimary, fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <span>{selected.agent_mode === 'ai' ? 'Bot activo en esta conversación' : selected.agent_mode === 'coordinating' ? 'Pendiente de atención del equipo' : 'Atención humana'}</span>
+        <button onClick={changeMode} disabled={changingMode || !selected.agent_mode} style={secondary(colors)}>{changingMode ? 'Guardando…' : selected.agent_mode === 'ai' ? 'Pausar bot' : 'Reactivar bot'}</button>
+        <span style={{ width: '100%', color: colors.textMuted }}>Al reactivarlo responderá al próximo mensaje del cliente. Conserva los datos del pedido y requiere que las respuestas automáticas de la tienda estén activadas.</span>
+      </div>}
       {!selected ? <div style={{ margin: 'auto', color: colors.textMuted }}>Selecciona una conversación</div> : <>{selected.order_id && <div style={{ padding: '9px 14px', borderBottom: `1px solid ${colors.border}`, color: colors.green, fontSize: 12 }}>Pedido #DR-{selected.order_id} creado en el CRM · {selected.order_status}</div>}<div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>{messages.map(m => <div key={m.id} style={{ maxWidth: '75%', margin: `6px ${m.direction === 'outbound' ? '0 6px auto' : 'auto 0 6px'}`, background: m.direction === 'outbound' ? (m.status === 'failed' ? '#7f1d1d' : colors.green) : colors.bgHover, color: m.direction === 'outbound' ? '#fff' : colors.textPrimary, padding: '9px 11px', borderRadius: 10, fontSize: 13 }}>{m.content}{m.status === 'failed' && <div style={{ fontSize: 10, marginTop: 4 }}>No se pudo enviar</div>}</div>)}</div><ErrorBox>{error}</ErrorBox><div style={{ padding: 12, borderTop: `1px solid ${colors.border}`, display: 'flex', gap: 8 }}><input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Responder…" style={input(colors)} /><button onClick={send} style={primary(colors)}><Send size={15} /></button></div></>}
     </div>
   </Card>;

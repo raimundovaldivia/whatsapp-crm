@@ -433,11 +433,12 @@ router.delete('/connection', async (req, res) => {
 
 router.get('/threads', async (req, res) => {
   const { rows } = await getPool().query(
-    `SELECT t.*,
+    `SELECT t.*, c.agent_mode,
        (SELECT content FROM meta_messages m WHERE m.thread_id=t.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) last_message,
        (SELECT direction FROM meta_messages m WHERE m.thread_id=t.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) last_message_direction,
        latest_order.id AS order_id,latest_order.status AS order_status,latest_order.total_price AS order_total
        FROM meta_threads t
+       LEFT JOIN conversations c ON c.id=t.crm_conversation_id AND c.organization_id=t.organization_id
        LEFT JOIN LATERAL (
          SELECT o.id,o.status,o.total_price FROM orders o
           WHERE o.organization_id=$1 AND o.conversation_id=t.crm_conversation_id

@@ -6,6 +6,12 @@ Una aplicación comercial que centraliza WhatsApp, atención humana, agentes de 
 
 En escritorio, abre el menú de cuenta y elige **Cambiar tienda**. En móvil está en **Más → Cambiar tienda**. El selector **Tienda activa** muestra las cuentas verificadas durante esta sesión. Selecciona una para abrirla con sus propios permisos y ajustes, sin volver a ingresar la contraseña. Si falta una tienda, pulsa **Verificar otra tienda de mi cuenta** e ingresa su contraseña una vez: debe usar el mismo correo. Esta verificación recarga la sesión conservando su vencimiento; vuelve a abrir el selector para elegir. Guarda antes cualquier edición pendiente; cambiar de tienda recarga también las otras pestañas abiertas. Una contraseña incorrecta o cancelar el diálogo conserva la sesión actual. No requiere otro correo, crear otra cuenta ni modificar la configuración del bot.
 
+### Atención automática en Facebook e Instagram
+
+En **Facebook e Instagram → Mensajes**, cada conversación vinculada al CRM muestra si la atiende el bot o el equipo. **Reactivar bot** vuelve a responder desde el próximo mensaje del cliente, conservando su borrador; **Pausar bot** deja esa conversación en atención humana. El control afecta solo a la conversación de la tienda actual y requiere que las respuestas automáticas generales estén activadas. No reenvía mensajes anteriores ni crea pedidos por sí solo.
+
+Verificación del control: `cd backend && node --test test/social-conversation-mode.test.cjs test/social-orders.test.cjs test/order-confirmation.test.cjs`.
+
 ### Subir imágenes para Facebook e Instagram
 
 En **Facebook e Instagram → Contenido**, usa **Subir imagen**, revisa la vista previa, escribe el texto y elige **Publicar ahora**. Admite JPG, PNG o WebP de hasta 6 MB y 16 millones de píxeles, sin animación. La carga conserva el encuadre, convierte a JPEG y elimina metadatos; no publica por sí sola. La opción de pegar un enlace de imagen o video sigue disponible. Instagram requiere una cuenta profesional vinculada a la página de Facebook.
