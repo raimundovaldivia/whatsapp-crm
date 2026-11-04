@@ -700,44 +700,19 @@ router.get('/ads/campaigns', async (req, res) => {
   } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
 });
 
-async function waitUntilMediaReady(containerId, token) {
-  for (let attempt = 0; attempt < 15; attempt += 1) {
-    const status = await meta.graphGet(containerId, token, { fields: 'status_code,status' });
-    if (status.status_code === 'FINISHED') return;
-    if (status.status_code === 'ERROR' || status.status_code === 'EXPIRED') throw new Error(status.status || 'Meta no pudo procesar el contenido multimedia');
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-  throw new Error('El contenido multimedia sigue procesándose en Meta; inténtalo nuevamente en unos minutos');
-}
-
 router.post('/publish', async (req, res) => {
   try {
     const { platform, message, mediaUrl, mediaType = 'image' } = req.body;
+    if (!['facebook', 'instagram'].includes(platform)) return res.status(400).json({ error: 'Plataforma inválida' });
+    const { validateContent, publishContent } = require('../services/social-publishing');
+    const post = { platform, message, image_url: mediaUrl || '', media_type: platform === 'facebook' && !mediaUrl ? 'text' : mediaType };
+    const invalid = validateContent(post);
+    if (invalid) return res.status(400).json({ error: invalid });
     const connection = await getConnection(req.orgId, true);
     if (!connection) return res.status(400).json({ error: 'Meta no está conectado' });
-    const pageToken = meta.decryptToken(connection.page_access_token);
-    if (platform === 'facebook') {
-      if (!connection.page_id) return res.status(400).json({ error: 'Selecciona una página de Facebook' });
-      const isVideo = mediaType === 'video' || mediaType === 'reel';
-      const endpoint = mediaUrl ? `${connection.page_id}/${isVideo ? 'videos' : 'photos'}` : `${connection.page_id}/feed`;
-      const result = await meta.graphPost(endpoint, pageToken, mediaUrl
-        ? (isVideo ? { file_url: mediaUrl, description: message || '' } : { url: mediaUrl, caption: message || '' })
-        : { message });
-      return res.json({ success: true, id: result.post_id || result.id });
-    }
-    if (platform === 'instagram') {
-      if (!connection.instagram_account_id || !mediaUrl) return res.status(400).json({ error: 'Instagram requiere una cuenta profesional y una URL pública de imagen o video' });
-      const isVideo = mediaType === 'video' || mediaType === 'reel';
-      const container = await meta.graphPost(`${connection.instagram_account_id}/media`, pageToken, {
-        ...(isVideo ? { video_url: mediaUrl, media_type: mediaType === 'reel' ? 'REELS' : 'VIDEO' } : { image_url: mediaUrl }),
-        caption: message || '',
-      });
-      await waitUntilMediaReady(container.id, pageToken);
-      const result = await meta.graphPost(`${connection.instagram_account_id}/media_publish`, pageToken, { creation_id: container.id });
-      return res.json({ success: true, id: result.id });
-    }
-    res.status(400).json({ error: 'Plataforma inválida' });
-  } catch (error) { res.status(502).json({ error: meta.graphError(error) }); }
+    const id = await publishContent(connection, post);
+    res.json({ success: true, id });
+  } catch (error) { res.status(502).json({ error: error.response || error.request ? 'No se pudo confirmar la publicación. Revisa la red antes de reintentar.' : error.message }); }
 });
 
 module.exports = router;

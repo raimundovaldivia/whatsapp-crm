@@ -92,9 +92,11 @@ test('Meta media credentials are stripped on redirects and lookalike hosts, and 
   assert.equal(calls[1].opts.headers.Authorization, undefined);
   await media.downloadMedia('https://lookaside.fbsbx.com.evil.invalid/file', config);
   assert.equal(calls[2].opts.headers.Authorization, undefined);
+  await media.downloadMedia('https://lookaside.fbsbx.com/redirect', { ...config, publicOnly: true });
+  for (const call of calls.slice(3)) assert.equal(Object.keys(call.opts.headers).length, 0);
   privateAddress = true;
   await assert.rejects(media.downloadMedia('https://lookaside.fbsbx.com/file', config), /no público/);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 5);
 });
 
 test('activation validates ownership, same number and subscription before replacing Kapso', async () => {

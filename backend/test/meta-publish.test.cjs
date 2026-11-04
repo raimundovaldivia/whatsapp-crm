@@ -8,7 +8,7 @@ function fixture(statuses = ['IN_PROGRESS', 'FINISHED']) {
   for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
     router[method] = (path, ...handlers) => routes.set(method + ' ' + path, handlers.at(-1));
   }
-  const loaded = load('src/routes/meta.js', {
+  const deps = {
     express: { Router: () => router },
     jsonwebtoken: {},
     '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
@@ -16,7 +16,7 @@ function fixture(statuses = ['IN_PROGRESS', 'FINISHED']) {
     '../db/database': { getPool: () => ({ async query(sql, params) {
       assert.match(sql, /WHERE organization_id = \$1/);
       assert.deepEqual(Array.from(params), [7]);
-      return { rows: [{ page_id: 'page-7', instagram_account_id: 'ig-7', page_access_token: 'encrypted-test-token' }] };
+      return { rows: [{ status: 'connected', page_id: 'page-7', instagram_account_id: 'ig-7', page_access_token: 'encrypted-test-token' }] };
     } }) },
     '../services/meta-platform': {
       decryptToken(value) { assert.equal(value, 'encrypted-test-token'); return 'test-token'; },
@@ -38,7 +38,13 @@ function fixture(statuses = ['IN_PROGRESS', 'FINISHED']) {
         return { id: 'published-7' };
       },
     },
-  }, { setTimeout(resolve, delay) { waits.push(delay); resolve(); } });
+  };
+  const extra = { setTimeout(resolve, delay) { waits.push(delay); resolve(); } };
+  deps['../services/social-publishing'] = load('src/services/social-publishing.js', {
+    './meta-platform': deps['../services/meta-platform'],
+    './safe-media': { publicTarget: async () => ({}) },
+  }, extra);
+  const loaded = load('src/routes/meta.js', deps, extra);
   return { publish: routes.get('post /publish'), calls, waits, loaded };
 }
 
@@ -61,7 +67,7 @@ test('Instagram mantiene la espera de videos y reels', async () => {
     await f.publish({ orgId: 7, body: { platform: 'instagram', mediaType, mediaUrl: 'https://example.com/video.mp4' } }, res);
     assert.equal(res.code, 200);
     assert.equal(f.calls[0].data.video_url, 'https://example.com/video.mp4');
-    assert.equal(f.calls[0].data.media_type, mediaType === 'reel' ? 'REELS' : 'VIDEO');
+    assert.equal(f.calls[0].data.media_type, 'REELS');
     assert.deepEqual(f.calls.map(c => c.kind === 'post' ? c.path : c.status), ['ig-7/media', 'FINISHED', 'ig-7/media_publish']);
   }
 });
@@ -84,5 +90,5 @@ test('el procesamiento pendiente tiene un límite y no publica ni crea contenedo
   assert.equal(res.code, 502);
   assert.equal(f.calls.filter(c => c.path === 'ig-7/media').length, 1);
   assert.equal(f.calls.filter(c => c.path === 'ig-7/media_publish').length, 0);
-  assert.equal(f.calls.filter(c => c.kind === 'status').length, 15);
+  assert.equal(f.calls.filter(c => c.kind === 'status').length, 60);
 });

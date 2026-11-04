@@ -26,7 +26,8 @@ async function downloadMedia(value, config = {}) {
     const { url, address } = await publicTarget(value);
     // Recompute credentials for every redirect; never forward a Meta token to
     // arbitrary public URLs or a Kapso key to Meta's CDN.
-    const headers = config.provider === 'meta' && META_MEDIA_HOSTS.has(url.hostname) && config.access_token
+    const headers = config.publicOnly ? {}
+      : config.provider === 'meta' && META_MEDIA_HOSTS.has(url.hostname) && config.access_token
       ? { Authorization: `Bearer ${config.access_token}` }
       : KEY_HOSTS.has(url.hostname) ? { 'X-API-Key': config.kapso_api_key || process.env.KAPSO_API_KEY } : {};
     const resp = await axios.get(url.href, {

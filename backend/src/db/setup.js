@@ -1938,6 +1938,7 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-boxes-promotional.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'store-product-favorites.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'social-stories.sql'), 'utf8'));
+    await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'social-post-scheduling.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'egg-product-images.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals-rewards-v2.sql'), 'utf8'));
