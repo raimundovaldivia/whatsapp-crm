@@ -1959,7 +1959,7 @@ router.post('/campaigns', async (req, res) => {
     let scheduledFor = null;
     if (req.body.scheduledFor) {
       scheduledFor = new Date(req.body.scheduledFor);
-      if (!['kapso', 'evolution'].includes(sendingProvider) || Number.isNaN(scheduledFor.getTime())) {
+      if (!['kapso', 'meta', 'evolution'].includes(sendingProvider) || Number.isNaN(scheduledFor.getTime())) {
         return res.status(400).json({ success: false, error: 'La programación necesita un canal compatible y una hora válida' });
       }
       if (scheduledFor.getTime() < Date.now() - 60000 || scheduledFor.getTime() > Date.now() + 30 * 86400000) {
@@ -1990,7 +1990,7 @@ router.post('/campaigns/:id/start', async (req, res) => {
     const campaign = await getBroadcastCampaign(req.orgId, req.params.id);
     if (!campaign) return res.status(404).json({ error: 'Campaña no encontrada' });
     if (campaign.server_managed) return res.json({ success: true, campaign });
-    if (!['kapso', 'evolution'].includes(campaign.sending_provider) || campaign.status !== 'processing') return res.status(409).json({ error: 'Campaña no disponible para envío en segundo plano' });
+    if (!['kapso', 'meta', 'evolution'].includes(campaign.sending_provider) || campaign.status !== 'processing') return res.status(409).json({ error: 'Campaña no disponible para envío en segundo plano' });
     await require('../services/broadcast-sender').resolveSender(req.orgId, campaign.sending_provider, campaign.sending_channel_id);
     const items = req.body.items;
     if (!Array.isArray(items) || items.length !== Number(campaign.total_count) || items.length > 5000) return res.status(400).json({ error: 'Destinatarios inválidos' });
@@ -2007,7 +2007,7 @@ router.post('/campaigns/:id/start', async (req, res) => {
       const row = { phone, message, contactName: item.contactName || null, originalPhone: item.originalPhone || phone, offers: [], campaignOfferIds: [] };
       // Kapso must retain the approved template and its per-recipient variables.
       // A rendered preview alone is not a template request outside the 24h window.
-      if (campaign.sending_provider === 'kapso') {
+      if (['kapso', 'meta'].includes(campaign.sending_provider)) {
         if (!item.templateName || item.templateName !== campaign.template_name) {
           throw Object.assign(new Error('Kapso requiere la plantilla aprobada de la campaña'), { status: 400 });
         }

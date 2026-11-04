@@ -369,18 +369,10 @@ router.post('/whatsapp/activate', async (req, res) => {
     const phone = account?.phone_numbers?.find(item => String(item.id) === phoneId);
     if (!account || !phone) return res.status(400).json({ error: 'El número seleccionado no pertenece a los activos autorizados' });
 
-    // Suscribe el WABA a los webhooks de esta app. La URL y el token de
-    // verificación se configuran una sola vez en Meta for Developers.
-    await meta.graphPost(`${wabaId}/subscribed_apps`, token);
     const existing = await db.getWhatsappConfig(req.orgId);
     const verifyToken = process.env.WEBHOOK_VERIFY_TOKEN || existing?.webhook_verify_token || crypto.randomBytes(24).toString('hex');
-    await db.upsertWhatsappConfig(req.orgId, {
-      provider: 'meta',
-      phoneNumberId: phoneId,
-      businessAccountId: wabaId,
-      accessToken: token,
-      webhookVerifyToken: verifyToken,
-      displayPhoneNumber: String(phone.display_phone_number || '').replace(/\D/g, '') || null,
+    await require('../services/meta-whatsapp-connection').activate(req.orgId, {
+      phoneNumberId: phoneId, businessAccountId: wabaId, accessToken: token, webhookVerifyToken: verifyToken,
     });
 
     res.json({
@@ -396,7 +388,7 @@ router.post('/whatsapp/activate', async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(502).json({ error: meta.graphError(error) });
+    res.status(error.status || 502).json({ error: meta.graphError(error) });
   }
 });
 

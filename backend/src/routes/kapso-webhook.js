@@ -40,15 +40,15 @@ function schedulePipeline(orgId, conversationId, fn) {
   require('../services/webhook-inbox').defer(orgId + ':' + conversationId, fn);
 }
 
-async function preserveInboundMedia(orgId, message, parsed, whatsappConfig) {
+async function preserveInboundMedia(orgId, message, parsed, whatsappConfig, service = kapsoService) {
   if (!message || (!parsed.mediaUrl && !parsed.mediaId)) return;
   const mediaRef = parsed.mediaUrl || parsed.mediaId;
   const cacheKey = `${orgId}:${mediaRef}`;
   try {
     let media = mediaCache.get(cacheKey);
     if (!media) {
-      const url = parsed.mediaUrl || (await kapsoService.getMediaUrl(parsed.mediaId, whatsappConfig)).url;
-      media = await kapsoService.downloadMedia(url, whatsappConfig);
+      const url = parsed.mediaUrl || (await service.getMediaUrl(parsed.mediaId, whatsappConfig)).url;
+      media = await service.downloadMedia(url, whatsappConfig);
       mediaCache.set(cacheKey, media.data, media.contentType);
     }
     await db.saveMessageMediaBlob(orgId, message.id, media.data, media.contentType);
@@ -63,40 +63,27 @@ async function preserveInboundMedia(orgId, message, parsed, whatsappConfig) {
  * POST /kapso-webhook
  * Kapso envía JSON; ya está parseado por express.json() en index.js
  */
-router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), require('../services/webhook-inbox').durableWebhook('kapso', async (req, res) => {
-  // Responder 200 inmediatamente (Kapso reintenta si no recibe respuesta rápida)
+async function handleOfficialWebhook(req, res, provider = 'kapso', service = kapsoService) {
   res.sendStatus(200);
-
   const body = req.body;
-
-  // En Kapso v2 el evento va en el HEADER X-Webhook-Event (no en el body)
-  // Fallback a body.event por compatibilidad futura
   const event = req.headers['x-webhook-event'] || body?.event;
-
-  const msgType = body?.message?.type || '—';
-  console.log(`[KapsoWebhook] ← ${event || '(sin evento)'} | type:${msgType} | phone_number_id: ${body?.phone_number_id || '?'}`);
-
-  if (!event) {
-    console.warn('[KapsoWebhook] Sin X-Webhook-Event ni body.event. Ignorando.');
-    return;
-  }
-
-  // ── Identificar la organización por phone_number_id ──────────────────
-  const phoneNumberId = body?.phone_number_id;
-  if (!phoneNumberId) {
-    console.warn('[KapsoWebhook] Payload sin phone_number_id:', JSON.stringify(body).slice(0, 200));
-    return;
-  }
-
+  if (provider === 'kapso' && !event) return;
+  if (provider === 'meta' && body?.object !== 'whatsapp_business_account') return;
+  const phoneNumberId = provider === 'meta'
+    ? body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id
+    : body?.phone_number_id;
+  if (!phoneNumberId) return;
   const orgResult = await db.getOrgByPhoneNumberId(phoneNumberId);
-  if (!orgResult) {
-    console.warn(`[KapsoWebhook] phone_number_id '${phoneNumberId}' no registrado en DB.`);
-    return;
-  }
+  if (!orgResult) return;
+  // Signed Kapso deliveries already persisted before cutover still belong to
+  // this number. Drain them via the new transport; message IDs deduplicate
+  // overlapping Meta deliveries. New Kapso requests fail at authentication.
+  const activeProvider = orgResult.whatsappConfig?.provider;
+  if (activeProvider !== provider && !(provider === 'kapso' && activeProvider === 'meta')) return;
   const { org, whatsappConfig } = orgResult;
 
   // ── Actualizar estado de mensaje (delivered/read/failed) ─────────────
-  const statusUpdate = kapsoService.parseStatusUpdate(body, event);
+  const statusUpdate = service.parseStatusUpdate(body, event);
   if (statusUpdate) {
     const updated = await db.updateMessageStatus(statusUpdate.messageId, statusUpdate.status, statusUpdate.error, org.id);
     if (updated) io?.to(`org_${org.id}`).emit(`status_update_${org.id}`, { ...statusUpdate, error: updated.delivery_error });
@@ -119,7 +106,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   }
 
   // ── Parsear mensaje entrante ─────────────────────────────────────────
-  const parsed = kapsoService.parseWebhookMessage(body, event);
+  const parsed = service.parseWebhookMessage(body, event);
   if (!parsed) {
     if (event === 'whatsapp.message.received') {
       console.warn('[KapsoWebhook] parseWebhookMessage retornó null — body.message:', JSON.stringify(body?.message).slice(0, 600));
@@ -140,7 +127,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     // las alertas que quedaron en cola mientras el canal estaba cerrado.
     markAdminWindowOpen(org.id, whatsappConfig).catch(e =>
       console.warn('[KapsoWebhook] drenado de cola admin falló:', e.message));
-    await handleAdminReply(org, whatsappConfig, parsed);
+    await handleAdminReply(org, whatsappConfig, parsed, service);
     return;
   }
 
@@ -162,7 +149,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   // ── Imagen o documento-imagen entrante → posible comprobante de pago ────
   // WhatsApp puede enviar imágenes como type:'image' o type:'document' (PNG/JPG como archivo)
   if ((parsed.type === 'image' || parsed.type === 'document') && (parsed.mediaId || parsed.mediaUrl)) {
-    await handlePaymentProof(org, whatsappConfig, parsed);
+    await handlePaymentProof(org, whatsappConfig, parsed, { service });
     return;
   }
 
@@ -181,7 +168,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
   // Kapso ya transcribe si la opción está activa en su panel; esto es el
   // respaldo cuando no viene transcript.
   if (parsed.type === 'audio' && !parsed.text && await require('../services/commercial').permitted(org.id,'sales_ai') && audioTranscription.isConfigured() && (parsed.mediaUrl || parsed.mediaId)) {
-    const transcript = await transcribeAudio(parsed, whatsappConfig).catch(e => {
+    const transcript = await transcribeAudio(parsed, whatsappConfig, service).catch(e => {
       console.warn('[KapsoWebhook] transcripción falló:', e.message);
       return null;
     });
@@ -204,10 +191,11 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       sentBy:            'client',
       mediaId:           mediaRef,
     });
-    await preserveInboundMedia(org.id, inboundMediaMessage, parsed, whatsappConfig);
+    if (!inboundMediaMessage) return;
+    await preserveInboundMedia(org.id, inboundMediaMessage, parsed, whatsappConfig, service);
     await db.updateConversationLastMessage(conversation.id, label, true);
     await db.updateLastInbound(conversation.id);
-    await kapsoService.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
+    await service.markAsRead(parsed.messageId, whatsappConfig).catch(() => {});
     // En modo humano activo el ejecutivo lo ve en el CRM. Si ese hilo ya
     // terminó, Diva retoma también los adjuntos sin transcripción.
     if (!await require('../services/commercial').permitted(org.id,'sales_ai')) {
@@ -228,7 +216,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     const reply = isVideo
       ? 'Recibí tu video, pero no puedo verlo por aquí 😊 ¿Me cuentas por escrito qué necesitas?'
       : '¡Hola! No puedo escuchar audios 😊 ¿Puedes escribirme lo que necesitas?';
-    const sentMsg = await kapsoService.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
+    const sentMsg = await service.sendTextMessage(parsed.from, reply, whatsappConfig).catch(() => null);
     if (sentMsg) {
       await db.saveMessage({
         conversationId:    conversation.id,
@@ -261,8 +249,9 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       whatsappMessageId: parsed.messageId,
       direction:         'inbound',
       content:           parsed.text,
+      type:              parsed.type === 'audio' ? 'audio' : 'text',
       sentBy:            'client',
-      mediaId:           parsed.mediaId,
+      mediaId:           parsed.mediaUrl || parsed.mediaId,
     });
 
     // Si el mensaje ya estaba en DB (otro webhook / otra instancia lo procesó primero),
@@ -271,6 +260,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
       console.log(`[KapsoWebhook] ⚠️ Mensaje duplicado ignorado: ${parsed.messageId}`);
       return;
     }
+    if (parsed.type === 'audio') await preserveInboundMedia(org.id, savedMsg, parsed, whatsappConfig, service);
 
     if (parsed.attribution) {
       await db.saveWhatsappAttribution({
@@ -285,7 +275,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
 
     await db.updateConversationLastMessage(conversation.id, parsed.text, true);
     await db.updateLastInbound(conversation.id);
-    await kapsoService.markAsRead(parsed.messageId, whatsappConfig);
+    await service.markAsRead(parsed.messageId, whatsappConfig);
 
     // 3. Emitir al CRM en tiempo real (el mensaje siempre aparece inmediatamente)
     const updatedConv = await db.getConversationById(conversation.id);
@@ -385,12 +375,12 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
           });
 
           const queuedAck = await require('../services/outbound-message-queue').deferOutsideHours({
-            orgId: org.id, conversationId: capturedConvId, text: ackText, sentBy: 'ai', agentType: 'orchestrator', sendingProvider: 'kapso', io,
+            orgId: org.id, conversationId: capturedConvId, text: ackText, sentBy: 'ai', agentType: 'orchestrator', sendingProvider: activeProvider, io,
           });
           if (queuedAck) return;
           let ackSent = null;
           try {
-            ackSent = await kapsoService.sendTextMessage(capturedFrom, ackText, whatsappConfig);
+            ackSent = await service.sendTextMessage(capturedFrom, ackText, whatsappConfig);
           } catch (e) {
             if (!e.is24hWindow) console.warn('[KapsoWebhook] no se pudo enviar acuse de escalación:', e.message);
           }
@@ -427,7 +417,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
 
         // Enviar respuesta por WhatsApp via Kapso
         const queued = await require('../services/outbound-message-queue').deferOutsideHours({
-          orgId: org.id, conversationId: capturedConvId, text: result.response, sentBy: 'ai', sendingProvider: 'kapso',
+          orgId: org.id, conversationId: capturedConvId, text: result.response, sentBy: 'ai', sendingProvider: activeProvider,
           agentType: result.agentType, aiProvider: result.aiProvider, aiModel: result.aiModel, promptVersion: result.promptVersion, io,
         });
         let sentResult = null;
@@ -435,7 +425,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
         const tSend = Date.now();
         try {
           if (!queued) {
-            sentResult = await kapsoService.sendTextMessage(capturedFrom, result.response, whatsappConfig);
+            sentResult = await service.sendTextMessage(capturedFrom, result.response, whatsappConfig);
             log.sent(Date.now() - tSend);
           }
         } catch (sendErr) {
@@ -520,13 +510,15 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), r
     console.error('[KapsoWebhook] Error procesando mensaje entrante:', outerErr.message);
     throw outerErr;
   }
-}));
+}
+
+router.post('/', require('../middleware/webhook-auth').verifyWebhook('kapso'), require('../services/webhook-inbox').durableWebhook('kapso', handleOfficialWebhook));
 
 /**
  * Maneja respuestas del admin desde su WhatsApp personal.
  * Cuando el admin responde, su mensaje se reenvía al cliente pendiente más reciente.
  */
-async function handleAdminReply(org, whatsappConfig, parsed) {
+async function handleAdminReply(org, whatsappConfig, parsed, service = kapsoService) {
   if (!parsed.text) return;
   const salesEnabled = await require('../services/commercial').permitted(org.id, 'sales_ai');
 
@@ -571,7 +563,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     const result = await secretary.processAdminMessage(org.id, parsed.text, pending);
 
     if (!result) {
-      await kapsoService.sendTextMessage(parsed.from, 'ℹ️ Sin conversación activa.', whatsappConfig).catch(() => {});
+      await service.sendTextMessage(parsed.from, 'ℹ️ Sin conversación activa.', whatsappConfig).catch(() => {});
       return;
     }
 
@@ -580,7 +572,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     // ── TAKEOVER: admin quiere atender directamente ───────────────────
     if (type === 'takeover') {
       const handoffMsg = 'En un momento alguien del equipo te escribe directamente 🙏';
-      const sentHandoff = await kapsoService.sendTextMessage(session.customerPhone, handoffMsg, whatsappConfig).catch(() => null);
+      const sentHandoff = await service.sendTextMessage(session.customerPhone, handoffMsg, whatsappConfig).catch(() => null);
       if (sentHandoff) {
         const hMsg = await db.saveMessage({
           conversationId:    session.convId,
@@ -600,7 +592,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
       if (pending) await db.markAdminReplyHandled(pending.id);
       secretary.closeSession(org.id);
 
-      await kapsoService.sendTextMessage(
+      await service.sendTextMessage(
         parsed.from,
         `${adminMessage}\n\nRespondé aquí para escribirle a *${session.customerName}*, o atiéndelo desde el CRM.`,
         whatsappConfig
@@ -610,13 +602,13 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
 
     // ── ANSWER: el admin preguntó algo sobre el cliente — solo responderle a él ──
     if (type === 'answer') {
-      await kapsoService.sendTextMessage(parsed.from, adminMessage, whatsappConfig).catch(() => {});
+      await service.sendTextMessage(parsed.from, adminMessage, whatsappConfig).catch(() => {});
       // La sesión sigue abierta — el admin continúa la conversación
       return;
     }
 
     // ── SEND: enviar al cliente el mensaje generado ───────────────────
-    const sentMsg = await kapsoService.sendTextMessage(session.customerPhone, customerMessage, whatsappConfig);
+    const sentMsg = await service.sendTextMessage(session.customerPhone, customerMessage, whatsappConfig);
 
     const outMsg = await db.saveMessage({
       conversationId:    session.convId,
@@ -646,7 +638,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
 
     // Confirmar al admin qué se mandó
     const preview = customerMessage.slice(0, 100);
-    await kapsoService.sendTextMessage(
+    await service.sendTextMessage(
       parsed.from,
       `${adminMessage}\n\n📤 _"${preview}${customerMessage.length > 100 ? '...' : ''}"_\n\nDiva envió tu respuesta a *${session.customerName}* y dejó el chat en atención humana para que puedas continuar el hilo.`,
       whatsappConfig
@@ -657,7 +649,7 @@ async function handleAdminReply(org, whatsappConfig, parsed) {
     if (nextPending) {
       const nextConv = await db.getConversationById(nextPending.conversation_id).catch(() => null);
       const nextName = nextConv?.contact_name || nextPending.customer_phone;
-      await kapsoService.sendTextMessage(
+      await service.sendTextMessage(
         parsed.from,
         `📨 Hay otro cliente esperando: *${nextName}*\n"${nextPending.context || '(sin contexto)'}"\n\nRespondé cuando quieras.`,
         whatsappConfig
@@ -685,6 +677,8 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
     if (!payments && !sales) {
       const conversation = await db.upsertConversation(org.id,parsed.from,parsed.contactName,channelId);
       const message = await db.saveMessage({conversationId:conversation.id,whatsappMessageId:parsed.messageId,direction:'inbound',content:'📷 [Imagen]',type:'image',sentBy:'client',mediaId:parsed.mediaUrl || parsed.mediaId});
+      if (!message) return;
+      if (whatsappConfig.provider === 'meta') await preserveInboundMedia(org.id, message, parsed, whatsappConfig, service);
       await db.updateConversationLastMessage(conversation.id,'📷 [Imagen]',true);
       await db.updateLastInbound(conversation.id);
       eventIo?.to(`org_${org.id}`).emit(`new_message_${org.id}`,{message,conversation:await db.getConversationById(conversation.id)});
@@ -756,6 +750,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
         mediaId:           mediaRef,
       });
       if (!imageMessage) return;
+      if (whatsappConfig.provider === 'meta') await preserveInboundMedia(org.id, imageMessage, parsed, whatsappConfig, service);
       await db.updateConversationLastMessage(conversation.id, '📷 [Imagen]', true);
       await db.updateLastInbound(conversation.id);
 
@@ -841,6 +836,7 @@ async function handlePaymentProof(org, whatsappConfig, parsed, options = {}) {
       mediaId:           mediaRef,
     });
     if (!proofMessage) return;
+    if (whatsappConfig.provider === 'meta') await preserveInboundMedia(org.id, proofMessage, parsed, whatsappConfig, service);
     await db.updateConversationLastMessage(conversation.id, '📸 [Comprobante de pago]', true);
     await db.updateLastInbound(conversation.id);
 
@@ -1002,3 +998,5 @@ module.exports.setSocketIO = setSocketIO;
 
 module.exports.handlePaymentProof = handlePaymentProof;
 module.exports.transcribeAudio = transcribeAudio;
+
+module.exports.handleOfficialWebhook = handleOfficialWebhook;

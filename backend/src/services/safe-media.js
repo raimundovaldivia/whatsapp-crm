@@ -4,6 +4,7 @@ const ipaddr = require('ipaddr.js');
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const KEY_HOSTS = new Set(['api.kapso.ai', 'app.kapso.ai']);
+const META_MEDIA_HOSTS = new Set(['lookaside.fbsbx.com', 'graph.facebook.com']);
 // Resolve once and pin the connection to a public address, including redirects.
 async function publicTarget(value) {
   const url = new URL(value);
@@ -23,8 +24,12 @@ async function publicTarget(value) {
 async function downloadMedia(value, config = {}) {
   for (let redirects = 0; redirects <= 5; redirects++) {
     const { url, address } = await publicTarget(value);
-    const headers = !config.publicOnly && KEY_HOSTS.has(url.hostname)
-      ? { 'X-API-Key': config.kapso_api_key || process.env.KAPSO_API_KEY } : {};
+    // Recompute credentials for every redirect; never forward a Meta token to
+    // arbitrary public URLs or a Kapso key to Meta's CDN.
+    const headers = config.publicOnly ? {}
+      : config.provider === 'meta' && META_MEDIA_HOSTS.has(url.hostname) && config.access_token
+      ? { Authorization: `Bearer ${config.access_token}` }
+      : KEY_HOSTS.has(url.hostname) ? { 'X-API-Key': config.kapso_api_key || process.env.KAPSO_API_KEY } : {};
     const resp = await axios.get(url.href, {
       headers, proxy: false, responseType: 'arraybuffer', maxRedirects: 0,
       maxContentLength: MAX_BYTES, maxBodyLength: MAX_BYTES, timeout: 20000,

@@ -28,9 +28,10 @@ function streamInfo(provider, body, event) {
     ? (provider === 'meta-social' ? String(sender).replace(/[^a-z0-9_-]/gi, '') : String(sender).replace(/[^0-9]/g, ''))
     : 'organization';
   const incoming = (provider === 'kapso' && event === 'whatsapp.message.received')
+    || (provider === 'meta' && !!value?.messages?.length)
     || (provider === 'evolution' && String(event).toLowerCase().replace(/_/g, '.') === 'messages.upsert' && !evolutionData?.key?.fromMe);
   const evolutionText = evolutionData?.message?.conversation || evolutionData?.message?.extendedTextMessage?.text;
-  const opener = /^(hola+|holi+|buenas+(\s+(tardes|d[ií]as|noches))?|buen\s+d[ií]a|buenos\s+d[ií]as|hey)[\s!.,?¡¿]*$/iu.test(body.message?.text?.body || evolutionText || '');
+  const opener = /^(hola+|holi+|buenas+(\s+(tardes|d[ií]as|noches))?|buen\s+d[ií]a|buenos\s+d[ií]as|hey)[\s!.,?¡¿]*$/iu.test(body.message?.text?.body || value?.messages?.[0]?.text?.body || evolutionText || '');
   return { key: key || 'organization', delay: incoming ? (opener ? 12 : 8) : 0 };
 }
 function durableWebhook(provider, handler) {

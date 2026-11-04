@@ -583,7 +583,7 @@ test('durable streams batch messages, isolate workers and survive new arrivals d
 test('Meta signature checks whole batch and persists every message/status under the correct tenant',async()=>{
   const f=await fixture();
   try {
-    const payload={object:'whatsapp_business_account',entry:[{changes:[{value:{metadata:{phone_number_id:'a'},messages:[{id:'m1',from:'111',type:'text',text:{body:'one'}},{id:'m2',from:'111',type:'text',text:{body:'two'}}],statuses:[{id:'out',recipient_id:'111',status:'read'}]}}]},{changes:[{value:{metadata:{phone_number_id:'b'},messages:[{id:'m3',from:'333',type:'text',text:{body:'three'}}]}}]}]};
+    const payload={object:'whatsapp_business_account',entry:[{changes:[{value:{metadata:{phone_number_id:'a'},messages:[{id:'m1',from:'56911112222',type:'text',text:{body:'one'}},{id:'m2',from:'56911112222',type:'text',text:{body:'two'}}],statuses:[{id:'out',recipient_id:'56911112222',status:'read'}]}}]},{changes:[{value:{metadata:{phone_number_id:'b'},messages:[{id:'m3',from:'56933334444',type:'text',text:{body:'three'}}]}}]}]};
     const raw=Buffer.from(JSON.stringify(payload)),secret='meta-test';
     const auth=load('src/middleware/webhook-auth.js',{'../db/database':{getOrgByPhoneNumberId:async id=>({org:{id:id==='a'?1:2},whatsappConfig:{provider:'meta'}})}},{process:{env:{META_APP_SECRET:secret}}});
     const req={body:payload,rawBody:raw,headers:{'x-hub-signature-256':'sha256='+crypto.createHmac('sha256',secret).update(raw).digest('hex')},params:{}};
@@ -593,9 +593,11 @@ test('Meta signature checks whole batch and persists every message/status under 
     const router=load('src/routes/webhook.js',{
       '../services/webhook-inbox':worker,'../middleware/webhook-auth':{verifyWebhook:()=>noop},
       '../services/whatsapp':{...wa,markAsRead:async()=>{}},
-      '../services/notifications':{notifyAdminHumanPendingReply:async()=>{}},
+      '../services/notifications':{notifyAdminHumanPendingReply:async()=>{},notifyAgentsNewMessage:async()=>{}},
+      '../services/conversation-mode':{resumeDivaOnInbound:async()=>false},
       '../db/database':{
         getOrgByPhoneNumberId:async id=>({org:{id:id==='a'?1:2,name:id},whatsappConfig:{provider:'meta'}}),
+        touchUserWaWindow:async()=>{},getUserByWhatsappPhone:async()=>null,touchLead:async()=>{},updateLastInbound:async()=>{},getLastMessages:async()=>[],
         updateMessageStatus:async id=>{seen.push(id)},upsertConversation:async(org)=>({id:org}),
         saveMessage:async data=>{seen.push(data.whatsappMessageId);return {id:1}},
         updateConversationLastMessage:async()=>{},getConversationById:async()=>({agent_mode:'human'}),minutesSinceLastHumanReply:async()=>0,
@@ -604,6 +606,7 @@ test('Meta signature checks whole batch and persists every message/status under 
     const receive=handler(router,'post','/');
     await receive(req,response());await receive(req,response());
     assert.equal((await f.query('SELECT COUNT(*)::int n FROM webhook_inbox')).rows[0].n,4);
+    await f.query("UPDATE webhook_streams SET available_at=NOW()-INTERVAL '1 second'");
     await worker.processNext();await worker.processNext();assert.deepEqual(seen.sort(),['m1','m2','m3','out']);
     const bad=response();await auth.verifyWebhook('meta')({...req,rawBody:Buffer.from('{}')},bad,()=>assert.fail('invalid signature'));assert.equal(bad.code,401);
   } finally {await f.engine.close();}

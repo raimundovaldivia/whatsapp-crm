@@ -53,6 +53,8 @@ function is24hWindowError(err) {
 }
 
 async function sendTextMessage(to, text, config) {
+  // Compatibility for callers predating whatsapp-provider: never use Kapso credentials for Meta.
+  if (config?.provider === 'meta') return require('./whatsapp').sendTextMessage(to, text, config);
   const { phone_number_id } = config;
   // Preferir la API Key de la org; si no existe (flujo Setup Links), usar la key de plataforma
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
@@ -105,6 +107,8 @@ function normalizeMediaError(err) {
 }
 
 async function sendMediaMessage(to, media, config) {
+  // Compatibility for callers predating whatsapp-provider: never use Kapso credentials for Meta.
+  if (config?.provider === 'meta') return require('./whatsapp').sendMediaMessage(to, media, config);
   const { phone_number_id } = config;
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   if (!apiKey) throw new Error('No hay Kapso API Key disponible');
@@ -156,6 +160,8 @@ async function sendMediaMessage(to, media, config) {
  * @param {object} config    - Config de la org (kapso_api_key, phone_number_id)
  */
 async function markAsRead(messageId, config) {
+  // Compatibility for callers predating whatsapp-provider: never use Kapso credentials for Meta.
+  if (config?.provider === 'meta') return require('./whatsapp').markAsRead(messageId, config);
   const { phone_number_id } = config;
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   if (!apiKey) return; // Sin key, saltar silenciosamente
@@ -415,6 +421,8 @@ function verifySignature(rawBody, signature, secret) {
  * @returns {Array} Lista de templates
  */
 async function getTemplates(config) {
+  // Compatibility for callers predating whatsapp-provider: never use Kapso credentials for Meta.
+  if (config?.provider === 'meta') return require('./whatsapp').getTemplates(config);
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   const wabaId = config.business_account_id || process.env.KAPSO_WABA_ID;
 
@@ -446,6 +454,8 @@ async function getTemplates(config) {
  *   [{ type: 'body', parameters: [{ type: 'text', text: 'Juan' }] }]
  */
 async function sendTemplate(to, templateName, languageCode = 'es', components = [], config) {
+  // Compatibility for callers predating whatsapp-provider: never use Kapso credentials for Meta.
+  if (config?.provider === 'meta') return require('./whatsapp').sendTemplate(to, templateName, languageCode, components, config);
   const { phone_number_id } = config;
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   if (!apiKey) throw new Error('No hay Kapso API Key disponible');
@@ -545,6 +555,8 @@ async function startBroadcast(broadcastId, config) {
  * @param {Object} config       - { kapso_api_key, business_account_id }
  */
 async function createTemplate(templateData, config) {
+  // Compatibility for callers predating whatsapp-provider: never use Kapso credentials for Meta.
+  if (config?.provider === 'meta') return require('./whatsapp').createTemplate(templateData, config);
   const wabaId = config.business_account_id || process.env.KAPSO_WABA_ID;
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   if (!wabaId) throw new Error('business_account_id requerido para crear templates');
@@ -575,6 +587,8 @@ async function createTemplate(templateData, config) {
  * La URL expira, pero el media_id es permanente.
  */
 async function getMediaUrl(mediaId, config) {
+  // Compatibility for callers predating whatsapp-provider: never use Kapso credentials for Meta.
+  if (config?.provider === 'meta') return require('./whatsapp').getMediaUrl(mediaId, config);
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   const resp = await axios.get(
     `${BASE_URL}/${API_VER}/${mediaId}`,

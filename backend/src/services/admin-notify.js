@@ -69,7 +69,7 @@ async function notifyAdmin(orgId, { body, kind = 'help', conversationId = null, 
   if (!adminPhone) return { sent: false, queued: false, reason: 'sin_admin_phone' };
 
   const cfg = wc || await db.getWhatsappConfig(orgId).catch(() => null);
-  if (!cfg || cfg.provider !== 'kapso') return { sent: false, queued: false, reason: 'sin_kapso' };
+  if (!cfg || !['kapso', 'meta'].includes(cfg.provider)) return { sent: false, queued: false, reason: 'sin_kapso' };
 
   // La ventana se conoce por el último mensaje entrante del admin. Evitar un
   // intento inútil contra Meta también permite que los callers hagan la misma
@@ -158,7 +158,7 @@ async function drainAdminOutbox(orgId, wc = null) {
   if (rows.length === 0) return { drained: 0 };
 
   const cfg = wc || await db.getWhatsappConfig(orgId).catch(() => null);
-  if (!cfg || cfg.provider !== 'kapso') return { drained: 0, reason: 'sin_kapso' };
+  if (!cfg || !['kapso', 'meta'].includes(cfg.provider)) return { drained: 0, reason: 'sin_kapso' };
 
   const adminPhone = rows[0].admin_phone;
   const batch = rows.slice(0, MAX_DRAIN);
@@ -315,7 +315,7 @@ async function sweepAdminWindowWarnings() {
   for (const orgId of orgs) {
     try {
       const wc = await db.getWhatsappConfig(orgId).catch(() => null);
-      if (!wc || wc.provider !== 'kapso') continue;
+      if (!wc || !['kapso', 'meta'].includes(wc.provider)) continue;
       const adminPhone = await db.getSetting(orgId, 'admin_alert_phone').catch(() => null);
       await warnAdminPhone(orgId, wc, adminPhone);
       await warnUserWindows(orgId, wc, adminPhone);

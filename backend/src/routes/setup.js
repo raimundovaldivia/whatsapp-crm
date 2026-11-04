@@ -34,6 +34,7 @@ router.use(requireAuth, requireRole('owner', 'admin'));
 router.post('/whatsapp', requireAuth, async (req, res) => {
   try {
     const { provider = 'meta' } = req.body;
+    if (!['meta', 'kapso', 'twilio'].includes(provider)) return res.status(400).json({ success: false, error: 'Proveedor inválido' });
 
     if (provider === 'twilio') {
       const { twilioAccountSid, twilioAuthToken, twilioPhoneNumber } = req.body;
@@ -102,25 +103,13 @@ router.post('/whatsapp', requireAuth, async (req, res) => {
         return res.status(400).json({ success: false, error: 'Faltan campos Meta requeridos' });
       }
 
-      await db.upsertWhatsappConfig(req.orgId, {
-        provider: 'meta',
+      await require('../services/meta-whatsapp-connection').activate(req.orgId, {
         phoneNumberId, businessAccountId, accessToken, webhookVerifyToken,
       });
-
-      // Test rápido del token (no bloquea si falla)
-      let tokenWarning = null;
-      try {
-        await axios.get('https://graph.facebook.com/v19.0/me', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-      } catch {
-        tokenWarning = 'El token podría estar expirado. Genera uno permanente desde Usuarios del sistema en Meta.';
-      }
-
-      res.json({ success: true, message: 'WhatsApp Meta configurado', warning: tokenWarning });
+      res.json({ success: true, message: 'WhatsApp Meta configurado' });
     }
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 502).json({ success: false, error: err.message });
   }
 });
 

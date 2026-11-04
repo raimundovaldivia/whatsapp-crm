@@ -12,15 +12,15 @@ async function resolveSender(orgId, provider, channelId) {
     if (warning) throw error(warning, 503);
     return channel;
   }
-  if (provider !== 'kapso') throw error('Método de envío inválido');
+  if (!['kapso', 'meta'].includes(provider)) throw error('Método de envío inválido');
   const config = await db.getWhatsappConfig(orgId);
-  if (!config || config.provider !== 'kapso') throw error('Kapso no está configurado', 409);
+  if (!config || config.provider !== provider) throw error('El proveedor de esta campaña ya no está conectado. Prepara el envío con la conexión actual.', 409);
   return config;
 }
 async function sendingMethods(orgId) {
   const [config, channels] = await Promise.all([db.getWhatsappConfig(orgId), require('./evolution-connection').refreshedChannels(orgId)]);
   return [
-    { provider: 'kapso', channelId: null, label: 'Kapso · API oficial', available: config?.provider === 'kapso' },
+    { provider: config?.provider === 'meta' ? 'meta' : 'kapso', channelId: null, label: config?.provider === 'meta' ? 'Meta · API oficial directa' : 'Kapso · API oficial', available: ['kapso', 'meta'].includes(config?.provider) },
     ...channels.filter(c => c.provider === 'evolution').map(c => ({
       provider: 'evolution', channelId: c.id, label: `Directo · ${c.name || c.phone_number || 'Evolution'}`,
       available: c.status === 'connected' && !c.connection_warning, connectionStatus: c.status,

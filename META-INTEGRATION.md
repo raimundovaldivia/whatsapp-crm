@@ -37,7 +37,7 @@ La publicación inmediata y la programada comparten transporte. Los Reels de Fac
 ```env
 META_APP_ID=
 META_APP_SECRET=
-META_GRAPH_VERSION=v25.0
+META_GRAPH_VERSION=v26.0
 META_WEBHOOK_VERIFY_TOKEN=
 META_TOKEN_ENCRYPTION_KEY=
 CRM_PUBLIC_URL=https://whatsapp-crm-api-production-f804.up.railway.app
@@ -45,6 +45,28 @@ FRONTEND_URL=https://whatsapp-crm-production-c76b.up.railway.app
 ```
 
 `META_TOKEN_ENCRYPTION_KEY` debe tener al menos 32 caracteres. Si se omite, el sistema deriva la clave desde `JWT_SECRET`. Los tokens de usuario y de página se guardan cifrados con AES-256-GCM.
+
+## WhatsApp Cloud API directo, conservando el número
+
+La conexión `meta` usa Graph API directamente y comparte con Kapso el procesador durable: agrupación de entradas consecutivas, control humano, confirmación de pedidos, audios, imágenes y comprobantes. Los adaptadores anteriores delegan a Meta cuando la tienda tiene `provider=meta`; plantillas, cobranza y avisos al equipo también usan esa conexión. El webhook exige HMAC con `META_APP_SECRET` antes de persistir. No hay migración de esquema.
+
+Preparación y cambio:
+
+El modelo de cuentas de Meta desplegado en octubre de 2026 separa la cuenta de WhatsApp (número) de la cuenta de mensajes (antiguo WABA: plantillas, facturación y webhook). En la fase actual siguen vigentes los Phone Number ID y endpoints existentes. Los envíos indican `messaging_account_id` usando `business_account_id` de la organización para evitar selección ambigua cuando el número comparte integraciones. Configuraciones antiguas sin WABA conservan la resolución automática de Meta; la activación nueva exige una cuenta validada. La convivencia también requiere revisar el enrutamiento de conversaciones. Fuente: [evolución del modelo](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution) y [envío y facturación](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution/messaging).
+
+1. Agregar **Conectarte con los clientes a través de WhatsApp** a la app existente. Autorizar los activos necesarios conservando los activos sociales ya utilizados.
+2. Confirmar acceso a la misma cuenta WABA y Phone Number ID. No eliminar, volver a registrar ni sustituir el número. Si cambia el ID, este flujo bloquea el cambio: requiere una migración del número revisada por separado.
+3. Configurar el objeto `whatsapp_business_account` en Meta, callback `${CRM_PUBLIC_URL}/webhook`, campo `messages` y el `WEBHOOK_VERIFY_TOKEN` del backend administrado como secreto. Es distinto del webhook social `/meta-webhook`.
+4. Verificar facturación directa, permisos y vigencia del token. Para operación permanente usar un usuario del sistema autorizado; OAuth no convierte un token de usuario en permanente.
+5. Publicar la compatibilidad del CRM antes del cambio. En Ajustes → WhatsApp seleccionar Meta y el número existente. Los tres puntos de entrada (`setup/whatsapp`, `settings/whatsapp`, `meta/whatsapp/activate`) validan cuenta, número, tienda, credenciales y webhook activo antes de reemplazar Kapso. La suscripción WABA debe ser confirmada por Meta. Un error conserva la configuración anterior.
+6. Con autorización operativa, comprobar entrada/salida, adjuntos, entrega y una plantilla con un número interno. Las pruebas locales no acreditan entrega real.
+7. Revisar adjuntos históricos antes de cancelar Kapso: los archivos archivados permanecen en el CRM, pero enlaces antiguos no descargados pueden depender del proveedor. Conservar una configuración de recuperación segura hasta terminar; el cambio reemplaza las credenciales activas y no guarda una copia de Kapso.
+
+Las entregas Kapso firmadas y persistidas antes del cambio se drenan por el nuevo transporte y se deduplican por ID. Las nuevas entregas Kapso se rechazan cuando Meta está activo. Los mensajes salientes y campañas pendientes que nombran Kapso requieren revisión; no se reanudan automáticamente bajo otro proveedor. Las campañas nuevas ofrecen Meta. El broadcast administrado por Kapso y su consulta histórica de estados siguen siendo exclusivos de Kapso; Meta recibe estados por webhook.
+
+Verificación local: `node --test test/meta-whatsapp-direct.test.cjs test/admin-notify-window.test.cjs test/security.test.cjs test/regressions.test.cjs`, suite completa, pruebas/build del frontend y `npm run check` de la raíz. Usa mocks y PostgreSQL embebido; no envía mensajes ni modifica Meta.
+
+Referencias: [suscripciones de la app](https://developers.facebook.com/docs/graph-api/reference/app/subscriptions/), [webhooks de WhatsApp](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/overview/) y [tarifas](https://business.whatsapp.com/products/platform-pricing). Eliminar Kapso evita su cuota; no elimina los cargos de Meta.
 
 ## Activación para Diez Ríos
 
