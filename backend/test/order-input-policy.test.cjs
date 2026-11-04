@@ -2,6 +2,32 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const policy = require('../src/services/order-input-policy');
 
+const reviewedNotes = notes => ({ notes, _reviewed_order: JSON.stringify({ notes }) });
+test('confirmación con indicaciones repetidas exige cláusulas completas ya revisadas', () => {
+  const draft = reviewedNotes('PRUEBA INTERNA, NO PREPARAR, NO COBRAR NI DESPACHAR. Pago en efectivo al recibir. No tocar el timbre.');
+  for (const message of [
+    'Sí, todo correcto. Confirmo este pedido de prueba. No preparar, cobrar ni despachar.',
+    'Confirmo el pedido. No preparar, no cobrar ni despachar.',
+    'Sí, no preparar, cobrar ni despachar.',
+    'Sí, todo correcto. Pago en efectivo al recibir.',
+    'Confirmo el pedido. No tocar el timbre.',
+  ]) assert.equal(policy.isReviewedAffirmative(message, draft), true, message);
+  for (const message of [
+    'No preparar, cobrar ni despachar.', 'Sí. Cobrar y despachar.',
+    'Sí. No preparar, cobrar ni despachar mañana.', 'Sí. Pago en efectivo.',
+    'Sí. Pago en efectivo al recibir. Agrega otra caja.',
+    'Sí. No preparar, cobrar ni despachar. No confirmo.',
+    'Sí, pero cambia la dirección.', 'Confirmo si llega mañana.',
+    'Sí. ¿Pago en efectivo al recibir?', 'Sí. Tocar el timbre.',
+  ]) assert.equal(policy.isReviewedAffirmative(message, draft), false, message);
+  for (const value of [{}, { notes: draft.notes }, { ...draft, _reviewed_order: 'invalid' },
+    { ...draft, notes: 'Pago con tarjeta' }]) {
+    assert.equal(policy.isReviewedAffirmative('Sí. No preparar, cobrar ni despachar.', value), false);
+  }
+  assert.equal(policy.isReviewedAffirmative('Sí. Si llega mañana.', reviewedNotes('Si llega mañana.')), false);
+  assert.equal(policy.isReviewedAffirmative('Sí. No confirmo.', reviewedNotes('No confirmo.')), false);
+});
+
 test('el nombre declarado en la compra actual tiene prioridad sobre el historial', () => {
   for (const [message, expected] of [
     ['Quiero 1 bandeja. Es una prueba interna a nombre de PRUEBA INICIO INSTAGRAM, sin cobro ni despacho.', 'PRUEBA INICIO INSTAGRAM'],

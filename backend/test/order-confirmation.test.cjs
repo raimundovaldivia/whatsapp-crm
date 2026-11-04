@@ -9,6 +9,54 @@ const draft = () => ({
   items: [{ product_name: 'Huevos XL cafés · Bandeja de 30', quantity: 1 }],
 });
 
+for (const channel of ['instagram', 'facebook', 'whatsapp']) {
+  test(`${channel}: confirmar y reiterar indicaciones revisadas crea una sola orden sin derivar`, async () => {
+    const history = [];
+    const notes = 'PRUEBA INTERNA, NO PREPARAR, NO COBRAR NI DESPACHAR. Pago en efectivo al recibir.';
+    const f = fixture({ channel, history, draft: { ...draft(), customer_phone: '56911111111', notes },
+      extract: (previous, count) => count === 1 ? previous : { ...previous, notes: '', customer_name: 'Nombre antiguo' } });
+    const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+    history.push({ direction: 'outbound', content: review.response });
+    const result = await f.pipeline.processMessage(7, 91, 'Sí, todo correcto. Confirmo este pedido de prueba. No preparar, cobrar ni despachar.');
+    assert.equal(f.calls.orders.length, 1);
+    assert.equal(f.calls.extractions, 1);
+    assert.ok(f.calls.orders[0].note.includes(notes));
+    assert.equal(f.calls.orders[0].customerName, 'Cliente de prueba');
+    assert.equal(result.switchToHuman, undefined);
+    assert.equal(result.newState, 'confirmed');
+    assert.match(result.response, /DR-812/);
+  });
+}
+
+test('reiterar indicaciones conserva revisión enviada, precio, stock y bloqueo de duplicados', async () => {
+  for (const scenario of ['reviewNotSent', 'priceChanged', 'outOfStock', 'duplicate', 'failSave']) {
+    const history = [];
+    const products = [{ id: 7, title: 'Huevos XL cafés · Bandeja de 30', price: 12990, stock: 20 }];
+    const f = fixture({ history, products, duplicate: scenario === 'duplicate', failSave: scenario === 'failSave',
+      draft: { ...draft(), notes: 'No tocar el timbre.' } });
+    const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+    if (scenario !== 'reviewNotSent') history.push({ direction: 'outbound', content: review.response });
+    if (scenario === 'priceChanged') products[0].price = 14990;
+    if (scenario === 'outOfStock') products[0].stock = 0;
+    const result = await f.pipeline.processMessage(7, 91, 'Confirmo el pedido. No tocar el timbre.');
+    assert.equal(f.calls.orders.length, 0, scenario);
+    assert.doesNotMatch(result.response || '', /¡Pedido confirmado!/, scenario);
+  }
+});
+
+test('una indicación nueva junto a la confirmación se revisa antes de crear el pedido', async () => {
+  const history = [];
+  const f = fixture({ history, draft: { ...draft(), notes: 'No tocar el timbre.' },
+    extract: (previous, count) => count === 1 ? previous : { ...previous, notes: 'Llamar antes de llegar.' } });
+  const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+  history.push({ direction: 'outbound', content: review.response });
+  const result = await f.pipeline.processMessage(7, 91, 'Confirmo el pedido. Llamar antes de llegar.');
+  assert.equal(f.calls.orders.length, 0);
+  assert.equal(f.calls.extractions, 2);
+  assert.match(result.response, /Llamar antes de llegar/);
+  assert.equal(result.switchToHuman, undefined);
+});
+
 for (const message of ['Todo bien', 'Esta correcto', 'Sí correcto', 'Si correcto\nGracias',
   'Sí, necesito me lo envíen\nPor favor', 'Está todo correcto', 'Dale perfecto']) {
   test(`confirmación habitual cierra el resumen enviado sin reinterpretarlo: ${message}`, async () => {

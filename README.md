@@ -12,6 +12,8 @@ En **Facebook e Instagram → Mensajes**, cada conversación vinculada al CRM mu
 
 Verificación del control: `cd backend && node --test test/social-conversation-mode.test.cjs test/social-orders.test.cjs test/order-confirmation.test.cjs`.
 
+El cliente puede confirmar y reiterar indicaciones que ya aparecen en el resumen (por ejemplo, «Confirmo el pedido. No tocar el timbre»). Se conservan esas notas y no se repite la confirmación ni se deriva al equipo solo por reiterarlas. Las indicaciones nuevas, preguntas o cambios siguen requiriendo revisión; se mantienen los controles de precio, stock, resumen enviado y duplicados. Verificación: `cd backend && node --test test/order-confirmation.test.cjs test/order-input-policy.test.cjs test/order-checkout.test.cjs`.
+
 ### Subir imágenes para Facebook e Instagram
 
 En **Facebook e Instagram → Contenido**, usa **Subir imagen**, revisa la vista previa, escribe el texto y elige **Publicar ahora**. Admite JPG, PNG o WebP de hasta 6 MB y 16 millones de píxeles, sin animación. La carga conserva el encuadre, convierte a JPEG y elimina metadatos; no publica por sí sola. La opción de pegar un enlace de imagen o video sigue disponible. Instagram requiere una cuenta profesional vinculada a la página de Facebook.

@@ -56,6 +56,36 @@ function isBareAffirmative(value = '') {
   return new RegExp(`^${approval}(?: (?:${approval}|${courtesy}))*$`, 'u').test(text);
 }
 
+// Compare complete instructions, never substrings ("pago" is not "no pago").
+// A shared "no" in a coordinated list keeps its scope over every action.
+function instructionClauses(value = '') {
+  const text = normalize(String(value).replace(/\n/g, ';')).replace(
+    /\bno\s+(?:preparar|cobrar|despachar)\b(?:\s*(?:,|ni|y)\s*(?:no\s+)?(?:preparar|cobrar|despachar)\b)+/gu,
+    list => list.match(/preparar|cobrar|despachar/gu).map(action => `no ${action}`).join(';')
+  );
+  return text.split(/[.;,!]+/u).map(part => part.trim()).filter(Boolean);
+}
+
+function isReviewedAffirmative(value = '', draft = {}) {
+  if (isBareAffirmative(value)) return true;
+  if (!draft._reviewed_order || String(value).length > 1000 || /[¿?]/u.test(value)) return false;
+  let reviewed;
+  try { reviewed = JSON.parse(draft._reviewed_order); } catch { return false; }
+  if (!reviewed?.notes || normalize(reviewed.notes) !== normalize(draft.notes)) return false;
+  const approved = new Set(instructionClauses(reviewed.notes));
+  const words = String(value).trim().split(/\s+/u);
+  for (let i = words.length - 1; i > 0; i--) {
+    if (!isBareAffirmative(words.slice(0, i).join(' '))) continue;
+    const rest = words.slice(i).join(' ').replace(/^[,;.!\s]+/u, '');
+    // Unresolved conditions, changes or withdrawals still need clarification,
+    // even if those words were accidentally included in an earlier note.
+    if (/\b(?:si|pero|depende|cambia\w*|cancel\w*|anul\w*)\b|\bno\s+(?:confirmo|quiero|acepto)\b/u.test(normalize(rest))) return false;
+    const instructions = instructionClauses(rest);
+    return instructions.length > 0 && instructions.every(part => approved.has(part));
+  }
+  return false;
+}
+
 // Solo consultas de pago completas: una corrección añadida debe ir al extractor.
 function isCheckoutPaymentQuestion(value = '') {
   const text = normalize(value).replace(/[¿?¡!.,;:]+/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -123,6 +153,7 @@ module.exports = {
   resolveCustomerName,
   ambiguousQuantityToken,
   isBareAffirmative,
+  isReviewedAffirmative,
   isCheckoutPaymentQuestion,
   isRepeatedSummaryComplaint,
   unexpectedItemsFromBareAffirmative,
