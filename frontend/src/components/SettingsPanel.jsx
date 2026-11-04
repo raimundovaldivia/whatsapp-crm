@@ -550,6 +550,7 @@ function WhatsAppTab() {
   const [accessToken,        setAccessToken]        = useState('');
   const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
   const [webhookBaseUrl,     setWebhookBaseUrl]     = useState('');
+  const [metaDedicatedApp,   setMetaDedicatedApp]   = useState(false);
   const [metaStatus,         setMetaStatus]         = useState(null);
   const [metaAssets,         setMetaAssets]         = useState(null);
   const [metaWabaId,         setMetaWabaId]         = useState('');
@@ -591,6 +592,7 @@ function WhatsAppTab() {
       setAccessToken(d.accessToken || '');
       setWebhookVerifyToken(d.webhookVerifyToken || '');
       setWebhookBaseUrl(d.webhookBaseUrl || '');
+      setMetaDedicatedApp(Boolean(d.metaDedicatedApp));
       setTwilioSid(d.twilioAccountSid || '');
       setTwilioToken(d.twilioAuthToken || '');
       setTwilioPhone(d.twilioPhoneNumber || '');
@@ -885,7 +887,7 @@ function WhatsAppTab() {
             </>
           ) : provider === 'meta' ? (
             <>
-              <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${metaStatus?.connected ? colors.green + '55' : colors.border}`, borderRadius: '10px', padding: '14px 16px' }}>
+              {!metaDedicatedApp && <div style={{ backgroundColor: colors.bgApp, border: `1px solid ${metaStatus?.connected ? colors.green + '55' : colors.border}`, borderRadius: '10px', padding: '14px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   <MessageCircle size={18} color={metaStatus?.connected ? colors.green : colors.textSecondary} />
                   <div style={{ flex: 1, minWidth: '190px' }}>
@@ -938,10 +940,10 @@ function WhatsAppTab() {
                     Token de verificación: <code>{metaActivation.webhookVerifyToken}</code>
                   </div>
                 )}
-              </div>
+              </div>}
 
               <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '12px 14px', fontSize: '12px', color: colors.textSecondary, lineHeight: 1.7 }}>
-                Configuración manual de respaldo. Obtén estos datos en{' '}
+                {metaDedicatedApp ? 'WhatsApp usa una aplicación propia del negocio. Completa los datos de esa aplicación en ' : 'Configuración manual de respaldo. Obtén estos datos en '}
                 <a href="https://developers.facebook.com/apps" target="_blank" rel="noreferrer" style={{ color: colors.green }}>Meta for Developers</a>
                 {' '}→ tu app → WhatsApp → Configuración de la API.
               </div>

@@ -293,6 +293,7 @@ router.get('/whatsapp', async (req, res) => {
         accessToken:        mask(wc.access_token),
         webhookVerifyToken: mask(wc.webhook_verify_token),
         webhookBaseUrl:     (process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL || '').replace(/\/$/, ''),
+        metaDedicatedApp:   Boolean(process.env.META_WHATSAPP_APP_ID || process.env.META_WHATSAPP_APP_SECRET),
         // Twilio
         twilioAccountSid:   mask(wc.twilio_account_sid),
         twilioAuthToken:    mask(wc.twilio_auth_token),

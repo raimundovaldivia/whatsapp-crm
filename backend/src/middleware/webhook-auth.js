@@ -12,7 +12,8 @@ function verifyWebhook(provider) {
   return async (req, res, next) => {
     try {
       if (provider === 'meta') {
-        if (!validHmac(req.rawBody, req.headers['x-hub-signature-256'], process.env.META_APP_SECRET, 'hex', 'sha256=')) return res.sendStatus(401);
+        const { appSecret } = require('../services/meta-whatsapp-app').getWhatsAppApp();
+        if (!validHmac(req.rawBody, req.headers['x-hub-signature-256'], appSecret, 'hex', 'sha256=')) return res.sendStatus(401);
         const events = require('../services/meta-events').splitMetaPayload(req.body);
         const configs = new Map();
         req.webhookDeliveries = [];

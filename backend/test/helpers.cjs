@@ -15,6 +15,7 @@ function load(file, deps = {}, extra = {}) {
         return database;
       }
       if (Object.hasOwn(deps, name)) return deps[name];
+      if (name === './meta-whatsapp-app' || name === '../services/meta-whatsapp-app') return load('src/services/meta-whatsapp-app.js', deps, extra);
       if (name === './kapso-webhook') return load('src/routes/kapso-webhook.js', deps, extra);
       if (['./bot-catalog', '../services/bot-catalog', './bot-operating-context', '../services/bot-operating-context', './order-checkout', '../services/order-checkout', '../services/order-pricing'].includes(name)) return require(path.join(root, 'src/services', name.split('/').at(-1)));
       if (name === './outbound-message-queue' || name === '../services/outbound-message-queue') return { deferOutsideHours: async () => null };
