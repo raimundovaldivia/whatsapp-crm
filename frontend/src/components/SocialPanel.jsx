@@ -332,6 +332,21 @@ export function ContentTab({ connected, connect, colors }) {
     event.preventDefault();
     void uploadFile(file);
   };
+  const pasteFromClipboard = async () => {
+    if (busy) return;
+    setNotice('');
+    try {
+      if (!navigator.clipboard?.read) throw new Error('Pega la imagen en el campo Texto o usa Subir imagen.');
+      const items = await navigator.clipboard.read();
+      const item = items.find(value => value.types.some(type => type.startsWith('image/')));
+      const type = item?.types.find(value => value.startsWith('image/'));
+      if (!type) throw new Error('Copia una imagen antes de pulsar Pegar imagen.');
+      const blob = await item.getType(type);
+      await uploadFile(new File([blob], 'imagen-pegada.' + type.split('/')[1], { type }));
+    } catch (error) {
+      setNotice(error.name === 'NotAllowedError' ? 'Permite pegar la imagen cuando el navegador lo solicite, o usa Subir imagen.' : error.message);
+    }
+  };
   const publish = async () => {
     if (busy) return;
     setWorking(true); setNotice('');
@@ -349,6 +364,7 @@ export function ContentTab({ connected, connect, colors }) {
     <div style={{ display: 'grid', gap: 8 }}>
       <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Elegir imagen para la publicación" onChange={upload} disabled={busy} style={{ display: 'none' }} />
       <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} style={secondary(colors)}>{uploading ? <Loader size={15} /> : <Upload size={15} />} {uploading ? 'Subiendo imagen…' : imageName ? 'Cambiar imagen' : 'Subir imagen'}</button>
+      <button type="button" disabled={busy} onClick={pasteFromClipboard} style={secondary(colors)}>Pegar imagen</button>
       <p style={{ color: colors.textMuted, fontSize: 12, margin: 0 }}>JPG, PNG o WebP · hasta 6 MB. También puedes copiar una imagen y pegarla en el campo Texto.</p>
       {imageName && <figure style={{ margin: 0, display: 'grid', gap: 8 }}>
         <img src={mediaUrl} alt="Vista previa de la publicación" style={{ width: '100%', maxWidth: 320, maxHeight: 400, objectFit: 'contain', borderRadius: 8 }} />
