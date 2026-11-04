@@ -712,10 +712,10 @@ async function waitUntilMediaReady(containerId, token) {
   for (let attempt = 0; attempt < 15; attempt += 1) {
     const status = await meta.graphGet(containerId, token, { fields: 'status_code,status' });
     if (status.status_code === 'FINISHED') return;
-    if (status.status_code === 'ERROR' || status.status_code === 'EXPIRED') throw new Error(status.status || 'Meta no pudo procesar el video');
+    if (status.status_code === 'ERROR' || status.status_code === 'EXPIRED') throw new Error(status.status || 'Meta no pudo procesar el contenido multimedia');
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
-  throw new Error('El video sigue procesándose en Meta; inténtalo nuevamente en unos minutos');
+  throw new Error('El contenido multimedia sigue procesándose en Meta; inténtalo nuevamente en unos minutos');
 }
 
 router.post('/publish', async (req, res) => {
@@ -740,7 +740,7 @@ router.post('/publish', async (req, res) => {
         ...(isVideo ? { video_url: mediaUrl, media_type: mediaType === 'reel' ? 'REELS' : 'VIDEO' } : { image_url: mediaUrl }),
         caption: message || '',
       });
-      if (isVideo) await waitUntilMediaReady(container.id, pageToken);
+      await waitUntilMediaReady(container.id, pageToken);
       const result = await meta.graphPost(`${connection.instagram_account_id}/media_publish`, pageToken, { creation_id: container.id });
       return res.json({ success: true, id: result.id });
     }
