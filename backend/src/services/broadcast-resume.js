@@ -10,7 +10,7 @@ async function resumeCampaign({ pool, orgId, campaignId, excludeOrdersThisWeek =
       WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [campaignId, orgId])).rows[0];
     if (!campaign) throw Object.assign(new Error('Campaña no encontrada'), { status: 404 });
     if (!campaign.server_managed) throw conflict('Esta campaña antigua no conserva una cola de pendientes. Debes preparar un nuevo envío.');
-    if (!['kapso', 'evolution'].includes(campaign.sending_provider)) throw conflict('Proveedor no compatible con reanudación');
+    if (!['kapso', 'meta', 'evolution'].includes(campaign.sending_provider)) throw conflict('Proveedor no compatible con reanudación');
     if (!['interrupted', 'processing'].includes(campaign.status)) {
       throw conflict(campaign.status === 'paused_payment'
         ? 'Primero resuelve el problema de pago de Meta y revisa los fallidos.'
@@ -29,7 +29,7 @@ async function resumeCampaign({ pool, orgId, campaignId, excludeOrdersThisWeek =
     if (counts.processing) throw conflict('Espera a que termine el mensaje que estaba en envío');
     if (counts.unknown) throw conflict('Hay envíos por confirmar. Revisa su estado antes de reanudar para evitar duplicados.');
     if (!counts.pending) throw conflict('No quedan destinatarios pendientes para reanudar');
-    if (campaign.sending_provider === 'kapso' && counts.missing_template) {
+    if (['kapso', 'meta'].includes(campaign.sending_provider) && counts.missing_template) {
       throw conflict('La cola antigua de Kapso no conserva la plantilla y sus variables. Prepara un nuevo envío con los pendientes.');
     }
     await resolveSender(orgId, campaign.sending_provider, campaign.sending_channel_id);

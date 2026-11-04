@@ -2,14 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load } = require('./helpers.cjs');
 
-function loadAdminNotify({ lastInbound, sends, queries }) {
+function loadAdminNotify({ lastInbound, sends, queries, provider = 'kapso' }) {
   const db = {
     getSetting: async (_orgId, key) => {
       if (key === 'admin_alert_phone') return '56990000000';
       if (key === 'admin_window_last_inbound') return lastInbound;
       return null;
     },
-    getWhatsappConfig: async () => ({ provider: 'kapso' }),
+    getWhatsappConfig: async () => ({ provider }),
     getPool: () => ({
       query: async (sql, params) => {
         queries.push({ sql, params });
@@ -70,4 +70,13 @@ test('admin notify intenta texto libre cuando la ventana está abierta', async (
   assert.equal(sends[0][0], '56990000000');
   assert.equal(sends[0][1], 'Aviso listo');
   assert.equal(queries.length, 0);
+});
+
+for (const open of [true, false]) test(`Meta directo conserva avisos al equipo con ventana ${open ? 'abierta' : 'cerrada'}`, async () => {
+  const sends = [], queries = [];
+  const service = loadAdminNotify({ provider: 'meta', lastInbound: open ? new Date().toISOString() : '2020-01-01T00:00:00Z', sends, queries });
+  const result = await service.notifyAdmin(7, { body: 'Aviso de prueba', kind: 'payment' });
+  assert.equal(result.sent, open); assert.equal(result.queued, !open);
+  assert.equal(sends.length, open ? 1 : 0);
+  if (open) assert.equal(sends[0][2].provider, 'meta');
 });

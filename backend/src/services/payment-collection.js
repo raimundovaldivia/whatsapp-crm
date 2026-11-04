@@ -92,8 +92,10 @@ const CHARGE_TEMPLATE_BODY =
 
 function kapsoCreds(wc) {
   return {
-    apiKey: wc?.kapso_api_key || process.env.KAPSO_API_KEY,
-    wabaId: wc?.business_account_id || process.env.KAPSO_WABA_ID,
+    apiKey: wc?.provider === 'meta' ? wc.access_token : (wc?.kapso_api_key || process.env.KAPSO_API_KEY),
+    wabaId: wc?.business_account_id || (wc?.provider === 'kapso' ? process.env.KAPSO_WABA_ID : null),
+    baseUrl: wc?.provider === 'meta' ? require('./meta-platform').GRAPH_URL : 'https://api.kapso.ai/meta/whatsapp/v24.0',
+    headers: wc?.provider === 'meta' ? { Authorization: `Bearer ${wc.access_token}` } : { 'X-API-Key': wc?.kapso_api_key || process.env.KAPSO_API_KEY },
   };
 }
 
@@ -108,8 +110,8 @@ function kapsoCreds(wc) {
 async function submitChargeTemplate(orgId, { resubmit = false } = {}) {
   await require('./commercial').assertModule(orgId,'payments');
   const wc = await db.getWhatsappConfig(orgId);
-  if (!wc || wc.provider !== 'kapso') return { ok: false, error: 'La creación de templates solo está disponible con Kapso.' };
-  const { apiKey, wabaId } = kapsoCreds(wc);
+  if (!wc || !['kapso', 'meta'].includes(wc.provider)) return { ok: false, error: 'Se necesita una conexión oficial de WhatsApp.' };
+  const { apiKey, wabaId, baseUrl, headers } = kapsoCreds(wc);
   if (!apiKey) return { ok: false, error: 'Falta la API Key de Kapso (Ajustes → WhatsApp).' };
   if (!wabaId) return { ok: false, error: 'Falta el WABA ID (Ajustes → WhatsApp).' };
 
@@ -118,8 +120,7 @@ async function submitChargeTemplate(orgId, { resubmit = false } = {}) {
   const oneLine  = v => String(v || '').replace(/\s+/g, ' ').trim();
   const bankSample = oneLine(settings.bankDetails) || 'Banco Ejemplo, Cta. Cte. 123456789, RUT 76.123.456-7';
   const name = CHARGE_TEMPLATE_NAME;
-  const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
-  const base = `https://api.kapso.ai/meta/whatsapp/v24.0/${wabaId}/message_templates`;
+  const base = `${baseUrl}/${wabaId}/message_templates`;
 
   if (resubmit) {
     try { await axios.delete(`${base}?name=${encodeURIComponent(name)}`, { headers }); }
@@ -167,13 +168,13 @@ async function fetchTemplateStatus(orgId, name = null) {
   const tplName = name || settings.waTemplate;
   if (!tplName) return { ok: false, error: 'No hay template configurado' };
   const wc = await db.getWhatsappConfig(orgId);
-  const { apiKey, wabaId } = kapsoCreds(wc);
+  const { apiKey, wabaId, baseUrl, headers } = kapsoCreds(wc);
   if (!apiKey || !wabaId) return { ok: false, error: 'Kapso no configurado' };
 
   const axios = require('axios');
   const { data } = await axios.get(
-    `https://api.kapso.ai/meta/whatsapp/v24.0/${wabaId}/message_templates?limit=100&name=${encodeURIComponent(tplName)}`,
-    { headers: { 'X-API-Key': apiKey } }
+    `${baseUrl}/${wabaId}/message_templates?limit=100&name=${encodeURIComponent(tplName)}`,
+    { headers, timeout: 20000 }
   );
   const list = (data?.data || data || []).filter(t => t.name === tplName);
   if (!list.length) {
@@ -385,7 +386,7 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
 
     // Fuera de la ventana de 24h solo se pueden mandar templates aprobados.
     // Si la org configuró uno, se usa; si no, queda en "Por cobrar" para reintentar.
-    if (!settings.waTemplate || wc.provider !== 'kapso' || ['REJECTED', 'MISSING'].includes(settings.waTemplateStatus)) {
+    if (!settings.waTemplate || !['kapso', 'meta'].includes(wc.provider) || ['REJECTED', 'MISSING'].includes(settings.waTemplateStatus)) {
       return { ok: false, reason: 'ventana_24h', message: text };
     }
     try {

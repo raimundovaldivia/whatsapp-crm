@@ -15,6 +15,7 @@ function load(file, deps = {}, extra = {}) {
         return database;
       }
       if (Object.hasOwn(deps, name)) return deps[name];
+      if (name === './kapso-webhook') return load('src/routes/kapso-webhook.js', deps, extra);
       if (['./bot-catalog', '../services/bot-catalog', './bot-operating-context', '../services/bot-operating-context', './order-checkout', '../services/order-checkout', '../services/order-pricing'].includes(name)) return require(path.join(root, 'src/services', name.split('/').at(-1)));
       if (name === './outbound-message-queue' || name === '../services/outbound-message-queue') return { deferOutsideHours: async () => null };
       if (name === '../services/solution-catalog' || name === './solution-catalog') return load('src/services/solution-catalog.js', deps, extra);
@@ -28,7 +29,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './pipeline-outbound') return load('src/services/pipeline-outbound.js', deps, extra);
       if (name === './outbound-text-policy') return require(path.join(root, 'src/services/outbound-text-policy.js'));
       if (name === './outbound-policy') return require(path.join(root, 'src/services/outbound-policy.js'));
-      if (name === './inbound-message-policy') return require(path.join(root, 'src/services/inbound-message-policy.js'));
+      if (name === './inbound-message-policy' || name === '../services/inbound-message-policy') return require(path.join(root, 'src/services/inbound-message-policy.js'));
       if (name === './order-creation-policy') return require(path.join(root, 'src/services/order-creation-policy.js'));
       if (name === './order-input-policy' || name === '../order-input-policy') return require(path.join(root, 'src/services/order-input-policy.js'));
       if (name === './delivery-coverage') return require(path.join(root, 'src/services/delivery-coverage.js'));

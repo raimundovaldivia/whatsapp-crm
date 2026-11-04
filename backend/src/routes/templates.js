@@ -99,8 +99,10 @@ router.get('/', async (req, res) => {
     }
 
     // Sin filtro de estado: traer todos (APPROVED, PENDING, REJECTED)
-    const apiKey = wc.kapso_api_key || process.env.KAPSO_API_KEY;
-    const wabaId = wc.business_account_id || process.env.KAPSO_WABA_ID;
+    const apiKey = wc.provider === 'meta' ? wc.access_token : (wc.kapso_api_key || process.env.KAPSO_API_KEY);
+    const templateBase = wc.provider === 'meta' ? require('../services/meta-platform').GRAPH_URL : 'https://api.kapso.ai/meta/whatsapp/v24.0';
+    const headers = wc.provider === 'meta' ? { Authorization: `Bearer ${apiKey}` } : { 'X-API-Key': apiKey };
+    const wabaId = wc.business_account_id || (wc.provider === 'kapso' ? process.env.KAPSO_WABA_ID : null);
 
     if (!wabaId) {
       return res.status(400).json({
@@ -111,8 +113,8 @@ router.get('/', async (req, res) => {
 
     const axios = require('axios');
     const response = await axios.get(
-      `https://api.kapso.ai/meta/whatsapp/v24.0/${wabaId}/message_templates?limit=100`,
-      { headers: { 'X-API-Key': apiKey } }
+      `${templateBase}/${wabaId}/message_templates?limit=100`,
+      { headers, timeout: 20000 }
     );
 
     const templates = (response.data?.data || response.data || []).map(t => {
@@ -172,7 +174,7 @@ router.get('/', async (req, res) => {
      footer?:    "Responde STOP para darte de baja",
    }
 ───────────────────────────────────────────────────────────────────── */
-router.post('/', async (req, res) => {
+router.post('/', requireRole('owner', 'admin'), async (req, res) => {
   try {
     const { name, language, category, header, body, footer, varSamples } = req.body;
 
@@ -192,8 +194,10 @@ router.post('/', async (req, res) => {
     const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
-    const apiKey = wc.kapso_api_key || process.env.KAPSO_API_KEY;
-    const wabaId = wc.business_account_id || process.env.KAPSO_WABA_ID;
+    const apiKey = wc.provider === 'meta' ? wc.access_token : (wc.kapso_api_key || process.env.KAPSO_API_KEY);
+    const templateBase = wc.provider === 'meta' ? require('../services/meta-platform').GRAPH_URL : 'https://api.kapso.ai/meta/whatsapp/v24.0';
+    const headers = wc.provider === 'meta' ? { Authorization: `Bearer ${apiKey}` } : { 'X-API-Key': apiKey };
+    const wabaId = wc.business_account_id || (wc.provider === 'kapso' ? process.env.KAPSO_WABA_ID : null);
 
     if (!apiKey) return res.status(400).json({ success: false, error: 'Kapso API Key no configurada' });
     if (!wabaId) return res.status(400).json({ success: false, error: 'WABA ID no configurado' });
@@ -240,7 +244,7 @@ router.post('/', async (req, res) => {
 
     const axios = require('axios');
     const response = await axios.post(
-      `https://api.kapso.ai/meta/whatsapp/v24.0/${wabaId}/message_templates`,
+      `${templateBase}/${wabaId}/message_templates`,
       {
         name:       name.trim(),
         language:   language.trim(),
@@ -249,7 +253,7 @@ router.post('/', async (req, res) => {
       },
       {
         headers: {
-          'X-API-Key':    apiKey,
+          ...headers,
           'Content-Type': 'application/json',
         },
       }
@@ -268,14 +272,16 @@ router.post('/', async (req, res) => {
    DELETE /api/templates/:name
    Elimina un template por nombre (o ID si se pasa como parámetro).
 ───────────────────────────────────────────────────────────────────── */
-router.delete('/:name', async (req, res) => {
+router.delete('/:name', requireRole('owner', 'admin'), async (req, res) => {
   try {
     const templateName = req.params.name;
     const wc = await db.getWhatsappConfig(req.orgId);
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
-    const apiKey = wc.kapso_api_key || process.env.KAPSO_API_KEY;
-    const wabaId = wc.business_account_id || process.env.KAPSO_WABA_ID;
+    const apiKey = wc.provider === 'meta' ? wc.access_token : (wc.kapso_api_key || process.env.KAPSO_API_KEY);
+    const templateBase = wc.provider === 'meta' ? require('../services/meta-platform').GRAPH_URL : 'https://api.kapso.ai/meta/whatsapp/v24.0';
+    const headers = wc.provider === 'meta' ? { Authorization: `Bearer ${apiKey}` } : { 'X-API-Key': apiKey };
+    const wabaId = wc.business_account_id || (wc.provider === 'kapso' ? process.env.KAPSO_WABA_ID : null);
 
     if (!apiKey || !wabaId) {
       return res.status(400).json({ success: false, error: 'Kapso API Key o WABA ID no configurados' });
@@ -283,8 +289,8 @@ router.delete('/:name', async (req, res) => {
 
     const axios = require('axios');
     await axios.delete(
-      `https://api.kapso.ai/meta/whatsapp/v24.0/${wabaId}/message_templates?name=${encodeURIComponent(templateName)}`,
-      { headers: { 'X-API-Key': apiKey } }
+      `${templateBase}/${wabaId}/message_templates?name=${encodeURIComponent(templateName)}`,
+      { headers, timeout: 20000 }
     );
 
     console.log(`[Templates/DELETE] Org ${req.orgId} eliminó template "${templateName}"`);

@@ -292,6 +292,7 @@ router.get('/whatsapp', async (req, res) => {
         businessAccountId:  wc.business_account_id   || '',
         accessToken:        mask(wc.access_token),
         webhookVerifyToken: mask(wc.webhook_verify_token),
+        webhookBaseUrl:     (process.env.CRM_PUBLIC_URL || process.env.PUBLIC_URL || process.env.BACKEND_URL || '').replace(/\/$/, ''),
         // Twilio
         twilioAccountSid:   mask(wc.twilio_account_sid),
         twilioAuthToken:    mask(wc.twilio_auth_token),
@@ -538,8 +539,8 @@ router.get('/whatsapp/test', async (req, res) => {
       const phoneId = wc.phone_number_id;
       const token   = wc.access_token;
       if (!phoneId || !token) return res.json({ success: false, error: 'Faltan Phone Number ID o Access Token en la DB' });
-      const r = await axios.get(`https://graph.facebook.com/v18.0/${phoneId}`, {
-        params: { access_token: token }, timeout: 8000,
+      const r = await axios.get(`${require('../services/meta-platform').GRAPH_URL}/${phoneId}`, {
+        headers: { Authorization: `Bearer ${token}` }, timeout: 8000,
       });
       const name = r.data?.verified_name || r.data?.display_phone_number || phoneId;
       res.json({ success: true, message: `Meta WhatsApp OK · ${name}` });
@@ -557,6 +558,7 @@ router.get('/whatsapp/test', async (req, res) => {
 router.put('/whatsapp', async (req, res) => {
   try {
     const { provider = 'meta' } = req.body;
+    if (!['meta', 'kapso', 'twilio'].includes(provider)) return res.status(400).json({ success: false, error: 'Proveedor inválido' });
 
     if (provider === 'twilio') {
       const { twilioAccountSid, twilioAuthToken, twilioPhoneNumber } = req.body;
@@ -582,20 +584,18 @@ router.put('/whatsapp', async (req, res) => {
         status: 'connected',
       });
     } else {
-      const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken, displayPhoneNumber } = req.body;
+      const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken } = req.body;
       if (!phoneNumberId || !accessToken || !webhookVerifyToken) {
         return res.status(400).json({ success: false, error: 'Meta requiere Phone Number ID, Access Token y Webhook Verify Token' });
       }
-      await db.upsertWhatsappConfig(req.orgId, {
-        provider: 'meta',
+      await require('../services/meta-whatsapp-connection').activate(req.orgId, {
         phoneNumberId, businessAccountId, accessToken, webhookVerifyToken,
-        displayPhoneNumber: displayPhoneNumber || null, status: 'connected',
       });
     }
 
     res.json({ success: true, message: `WhatsApp (${provider}) actualizado correctamente` });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 502).json({ success: false, error: err.message });
   }
 });
 

@@ -549,6 +549,7 @@ function WhatsAppTab() {
   const [businessAccountId,  setBusinessAccountId]  = useState('');
   const [accessToken,        setAccessToken]        = useState('');
   const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
+  const [webhookBaseUrl,     setWebhookBaseUrl]     = useState('');
   const [metaStatus,         setMetaStatus]         = useState(null);
   const [metaAssets,         setMetaAssets]         = useState(null);
   const [metaWabaId,         setMetaWabaId]         = useState('');
@@ -589,6 +590,7 @@ function WhatsAppTab() {
       setBusinessAccountId(d.businessAccountId || '');
       setAccessToken(d.accessToken || '');
       setWebhookVerifyToken(d.webhookVerifyToken || '');
+      setWebhookBaseUrl(d.webhookBaseUrl || '');
       setTwilioSid(d.twilioAccountSid || '');
       setTwilioToken(d.twilioAuthToken || '');
       setTwilioPhone(d.twilioPhoneNumber || '');
@@ -944,7 +946,7 @@ function WhatsAppTab() {
                 {' '}→ tu app → WhatsApp → Configuración de la API.
               </div>
               <Field label="Phone Number ID *" value={phoneNumberId} onChange={setPhoneNumberId} placeholder="123456789012345" hint="ID numérico del número de WhatsApp registrado" colors={colors} />
-              <Field label="Business Account ID" value={businessAccountId} onChange={setBusinessAccountId} placeholder="123456789012345" hint="ID de tu cuenta de WhatsApp Business (opcional)" colors={colors} />
+              <Field label="Business Account ID" value={businessAccountId} onChange={setBusinessAccountId} placeholder="123456789012345" hint="ID de tu cuenta de WhatsApp Business (requerido)" colors={colors} />
               <Field label="Access Token *" value={accessToken} onChange={setAccessToken} placeholder="EAAxxxxx..." hint="Token de acceso permanente (usuario del sistema recomendado)" password colors={colors} />
               <Field label="Webhook Verify Token *" value={webhookVerifyToken} onChange={setWebhookVerifyToken} placeholder="mi_token_secreto" hint="Cadena que usas para verificar el webhook en Meta" password colors={colors} />
             </>
@@ -981,7 +983,7 @@ function WhatsAppTab() {
                 : 'Configura esta URL en Twilio Dashboard → Messaging → Sandbox Settings → When a message comes in:'}
             </p>
             <div style={{ backgroundColor: colors.bgApp, borderRadius: '8px', padding: '10px 14px', fontFamily: 'monospace', fontSize: '12px', color: colors.green, wordBreak: 'break-all' }}>
-              {window.location.origin.replace(':5173', ':3001')}{provider === 'twilio' ? '/twilio-webhook' : '/webhook'}
+              {webhookBaseUrl ? `${webhookBaseUrl}${provider === 'twilio' ? '/twilio-webhook' : '/webhook'}` : 'Configura la URL pública del backend para obtener el webhook.'}
             </div>
             {provider === 'meta' && (
               <p style={{ color: colors.textMuted, fontSize: '11px', margin: 0 }}>

@@ -1447,7 +1447,7 @@ router.get('/media/:mediaRef', async (req, res) => {
       mediaCache.set(cacheKey, data, contentType);
       await db.saveMessageMediaBlob(req.orgId, rows[0].id, data, contentType).catch(() => {});
     } else {
-      const apiKey = whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY;
+      const apiKey = whatsappConfig?.provider === 'meta' ? whatsappConfig.access_token : (whatsappConfig?.kapso_api_key || process.env.KAPSO_API_KEY);
       if (!ref.startsWith('https://') && !apiKey) return res.status(503).json({ error: 'WhatsApp no configurado' });
       const url = ref.startsWith('https://') ? ref : (await kapsoSvc.getMediaUrl(ref, whatsappConfig)).url;
       ({ data, contentType } = await kapsoSvc.downloadMedia(url, whatsappConfig));

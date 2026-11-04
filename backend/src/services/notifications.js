@@ -155,7 +155,7 @@ async function notifyAdminHandoff(orgId, conversation, reason = 'El cliente soli
     if (!adminPhone) return;
 
     const wc = await db.getWhatsappConfig(orgId);
-    if (!wc || wc.provider !== 'kapso') return;
+    if (!wc || !['kapso', 'meta'].includes(wc.provider)) return;
 
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';
@@ -208,7 +208,7 @@ async function notifyAgentsNewMessage(orgId, conversation, messageText) {
   }
   try {
     const wc = await db.getWhatsappConfig(orgId);
-    if (!wc || wc.provider !== 'kapso') return;
+    if (!wc || !['kapso', 'meta'].includes(wc.provider)) return;
 
     // Los modos humano/coordinando ya tienen un aviso analizado y accionable.
     // Mandar además el texto crudo produce dos alertas por el mismo mensaje.
@@ -318,7 +318,7 @@ async function notifyAdminHumanPendingReply(orgId, conversation, messageText) {
 async function notifyAgentsPayment(orgId, clientName, clientPhone, amount) {
   try {
     const wc = await db.getWhatsappConfig(orgId);
-    if (!wc || wc.provider !== 'kapso') return;
+    if (!wc || !['kapso', 'meta'].includes(wc.provider)) return;
 
     const agents = await db.getAgentsWithNotification(orgId, 'payments');
     if (!agents.length) return;
@@ -362,7 +362,7 @@ async function notifyAdminHelp(orgId, conversation, botWasGoingToSay, reason) {
     if (!adminPhone) return;
 
     const wc = await db.getWhatsappConfig(orgId);
-    if (!wc || wc.provider !== 'kapso') return;
+    if (!wc || !['kapso', 'meta'].includes(wc.provider)) return;
 
     const clientName  = conversation.contact_name || conversation.phone_number || 'Cliente';
     const clientPhone = conversation.phone_number || '';

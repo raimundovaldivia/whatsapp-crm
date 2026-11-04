@@ -1829,9 +1829,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         testMode: false,
         testPhone: null,
         paymentRetry: true,
-        sendingProvider: 'kapso',
+        sendingProvider: sendingMethods.find(m => ['meta', 'kapso'].includes(m.provider) && m.available)?.provider || campaign.sending_provider,
         sendingChannelId: null,
-        sendingLabel: 'Kapso · API oficial',
+        sendingLabel: 'WhatsApp · API oficial',
         sourceCampaignId: campaign.id,
         createdAt: Date.now(),
       });
@@ -1861,9 +1861,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       showToast(`No está disponible el template aprobado ${templateName}`, 'error');
       return;
     }
-    const kapsoMethod = sendingMethods.find(method => method.provider === 'kapso' && method.available);
+    const kapsoMethod = sendingMethods.find(method => ['kapso', 'meta'].includes(method.provider) && method.available);
     if (!kapsoMethod) {
-      showToast('Kapso no está conectado para revisar esta campaña', 'error');
+      showToast('WhatsApp oficial no está conectado para revisar esta campaña', 'error');
       return;
     }
     const recipients = (followUpPreview?.recipients || [])
@@ -1912,7 +1912,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     setReviewPlan({
       templateName: template.name,
       entries,
-      sendingProvider: 'kapso',
+      sendingProvider: kapsoMethod.provider,
       sendingChannelId: kapsoMethod.channelId || null,
       sendingLabel: kapsoMethod.label,
       audienceLabel: segment === 'over_30'
@@ -2367,7 +2367,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     sendingRef.current = true;
     stopSendingRef.current = false;
     const direct = reviewPlan.sendingProvider === 'evolution';
-    const serverManaged = direct || reviewPlan.sendingProvider === 'kapso' || Boolean(scheduledFor);
+    const serverManaged = direct || ['kapso', 'meta'].includes(reviewPlan.sendingProvider) || Boolean(scheduledFor);
     const items = reviewPlan.entries.map(entry => entry.item);
     let campaignId = null;
     let handedToServer = false;
