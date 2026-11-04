@@ -2671,10 +2671,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     ];
   }
   const checkout = require('./order-checkout');
-  // A complete affirmative or payment question supplies no new order data
-  // for the model to reinterpret. Mixed corrections still extract.
+  // Approval may reiterate instructions already reviewed without supplying
+  // new order data for the model to reinterpret. Mixed corrections still extract.
   const preservesReviewedDraft = Boolean(orderDraft._reviewed_order)
-    && ordersAgent.hasRequiredData(orderDraft) && (orderInputPolicy.isBareAffirmative(userMessage)
+    && ordersAgent.hasRequiredData(orderDraft) && (orderInputPolicy.isReviewedAffirmative(userMessage, orderDraft)
       || orderInputPolicy.isCheckoutPaymentQuestion(userMessage));
   const updatedDraft = checkout.normalizeDraft(preserveFreshnessPreference(
     preservesReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),

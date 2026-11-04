@@ -1,6 +1,6 @@
 const { client, modelFor, responseText } = require('../ai-provider');
 const { normalizeDraft } = require('../order-pricing');
-const { isBareAffirmative } = require('../order-input-policy');
+const { isReviewedAffirmative } = require('../order-input-policy');
 
 // Campos requeridos para crear la orden (además de al menos un ítem)
 const REQUIRED_FIELDS = ['customer_name', 'address', 'city'];
@@ -235,7 +235,7 @@ function isOrderConfirmed(agentResponse, userMessage, orderDraft = {}) {
   // El cliente confirma Y ya tenemos todos los datos.
   if (hasRequiredData(orderDraft)) {
     const lowerMsg = String(userMessage || '').toLowerCase().trim().replace(/[.!¡]+$/u, '').trim();
-    if (isBareAffirmative(userMessage)) return true;
+    if (isReviewedAffirmative(userMessage, orderDraft)) return true;
 
     const paymentPhrases = ['listo el pago', 'ya pagué', 'ya pague', 'hice la transferencia',
       'hice el pago', 'ya transferí', 'ya transferi', 'transferido', 'pago realizado',
