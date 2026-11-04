@@ -312,9 +312,7 @@ export function ContentTab({ connected, connect, colors }) {
   const [uploading, setUploading] = useState(false); const [imageName, setImageName] = useState('');
   const fileInput = useRef(null);
   const busy = working || uploading;
-  const upload = async event => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
+  const uploadFile = async file => {
     if (!file || busy) return;
     setUploading(true); setNotice('');
     try {
@@ -322,6 +320,32 @@ export function ContentTab({ connected, connect, colors }) {
       setMediaUrl(result.url); setMediaType('image'); setImageName(file.name);
     } catch (error) { setNotice(error.response?.data?.error || error.message); }
     finally { setUploading(false); }
+  };
+  const upload = event => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    void uploadFile(file);
+  };
+  const pasteImage = event => {
+    const file = Array.from(event.clipboardData?.files || []).find(item => item.type.startsWith('image/'));
+    if (!file) return;
+    event.preventDefault();
+    void uploadFile(file);
+  };
+  const pasteFromClipboard = async () => {
+    if (busy) return;
+    setNotice('');
+    try {
+      if (!navigator.clipboard?.read) throw new Error('Pega la imagen en el campo Texto o usa Subir imagen.');
+      const items = await navigator.clipboard.read();
+      const item = items.find(value => value.types.some(type => type.startsWith('image/')));
+      const type = item?.types.find(value => value.startsWith('image/'));
+      if (!type) throw new Error('Copia una imagen antes de pulsar Pegar imagen.');
+      const blob = await item.getType(type);
+      await uploadFile(new File([blob], 'imagen-pegada.' + type.split('/')[1], { type }));
+    } catch (error) {
+      setNotice(error.name === 'NotAllowedError' ? 'Permite pegar la imagen cuando el navegador lo solicite, o usa Subir imagen.' : error.message);
+    }
   };
   const publish = async () => {
     if (busy) return;
@@ -336,11 +360,12 @@ export function ContentTab({ connected, connect, colors }) {
   if (!connected) return <ConnectNeeded connect={connect} colors={colors} />;
   return <Card colors={colors} style={{ display: 'grid', gap: 13 }}>
     <div style={{ display: 'flex', gap: 8 }}><button disabled={busy} onClick={() => setPlatform('facebook')} style={platformButton(platform === 'facebook', colors)}><Facebook size={16} /> Facebook</button><button disabled={busy} onClick={() => setPlatform('instagram')} style={platformButton(platform === 'instagram', colors)}><Instagram size={16} /> Instagram</button></div>
-    <label style={label(colors)}>Texto<textarea disabled={working} value={message} onChange={e => setMessage(e.target.value)} rows={5} style={{ ...input(colors), resize: 'vertical', marginTop: 5 }} placeholder="Escribe la publicación…" /></label>
+    <label style={label(colors)}>Texto<textarea disabled={working} value={message} onChange={e => setMessage(e.target.value)} onPaste={pasteImage} rows={5} style={{ ...input(colors), resize: 'vertical', marginTop: 5 }} placeholder="Escribe la publicación…" /></label>
     <div style={{ display: 'grid', gap: 8 }}>
       <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Elegir imagen para la publicación" onChange={upload} disabled={busy} style={{ display: 'none' }} />
       <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} style={secondary(colors)}>{uploading ? <Loader size={15} /> : <Upload size={15} />} {uploading ? 'Subiendo imagen…' : imageName ? 'Cambiar imagen' : 'Subir imagen'}</button>
-      <p style={{ color: colors.textMuted, fontSize: 12, margin: 0 }}>JPG, PNG o WebP · hasta 6 MB. La foto se prepara para Facebook e Instagram.</p>
+      <button type="button" disabled={busy} onClick={pasteFromClipboard} style={secondary(colors)}>Pegar imagen</button>
+      <p style={{ color: colors.textMuted, fontSize: 12, margin: 0 }}>JPG, PNG o WebP · hasta 6 MB. También puedes copiar una imagen y pegarla en el campo Texto.</p>
       {imageName && <figure style={{ margin: 0, display: 'grid', gap: 8 }}>
         <img src={mediaUrl} alt="Vista previa de la publicación" style={{ width: '100%', maxWidth: 320, maxHeight: 400, objectFit: 'contain', borderRadius: 8 }} />
         <figcaption style={{ color: colors.textSecondary, fontSize: 12, overflowWrap: 'anywhere' }}>{imageName} · Lista para publicar</figcaption>
