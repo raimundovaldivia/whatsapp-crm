@@ -9,8 +9,12 @@ function requestOptions(config) {
 }
 
 async function postMessage(config, payload) {
+  const accountId = config?.business_account_id;
+  if (accountId && !/^\d+$/.test(accountId)) throw new Error('Cuenta de mensajes de Meta inválida');
+  // Explicit billing/template scope when the same number has several integrations.
+  const body = accountId ? { ...payload, messaging_account_id: accountId } : payload;
   try {
-    const response = await axios.post(`${BASE_URL}/${config.phone_number_id}/messages`, payload, requestOptions(config));
+    const response = await axios.post(`${BASE_URL}/${config.phone_number_id}/messages`, body, requestOptions(config));
     return response.data;
   } catch (error) {
     if (Number(error.response?.data?.error?.code) === 131047) error.is24hWindow = true;

@@ -39,6 +39,8 @@ La conexión `meta` usa Graph API directamente y comparte con Kapso el procesado
 
 Preparación y cambio:
 
+El modelo de cuentas de Meta desplegado en octubre de 2026 separa la cuenta de WhatsApp (número) de la cuenta de mensajes (antiguo WABA: plantillas, facturación y webhook). En la fase actual siguen vigentes los Phone Number ID y endpoints existentes. Los envíos indican `messaging_account_id` usando `business_account_id` de la organización para evitar selección ambigua cuando el número comparte integraciones. Configuraciones antiguas sin WABA conservan la resolución automática de Meta; la activación nueva exige una cuenta validada. La convivencia también requiere revisar el enrutamiento de conversaciones. Fuente: [evolución del modelo](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution) y [envío y facturación](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution/messaging).
+
 1. Agregar **Conectarte con los clientes a través de WhatsApp** a la app existente. Autorizar los activos necesarios conservando los activos sociales ya utilizados.
 2. Confirmar acceso a la misma cuenta WABA y Phone Number ID. No eliminar, volver a registrar ni sustituir el número. Si cambia el ID, este flujo bloquea el cambio: requiere una migración del número revisada por separado.
 3. Configurar el objeto `whatsapp_business_account` en Meta, callback `${CRM_PUBLIC_URL}/webhook`, campo `messages` y el `WEBHOOK_VERIFY_TOKEN` del backend administrado como secreto. Es distinto del webhook social `/meta-webhook`.

@@ -35,7 +35,9 @@ test('Meta sends text and templates directly, lists approved templates and scope
   assert.equal((await wa.getTemplates(config)).length, 1);
   await wa.getMediaUrl('12345', config);
   assert.equal(calls[0][0], `${graph.GRAPH_URL}/${config.phone_number_id}/messages`);
+  assert.equal(calls[0][1].messaging_account_id, config.business_account_id);
   assert.equal(calls[1][1].type, 'template');
+  assert.equal(calls[1][1].messaging_account_id, config.business_account_id);
   assert.equal(calls[3][1].params.phone_number_id, config.phone_number_id);
   for (const call of calls) {
     const options = call.at(-1);
@@ -43,6 +45,21 @@ test('Meta sends text and templates directly, lists approved templates and scope
     assert.equal(options.headers['X-API-Key'], undefined); assert.ok(options.timeout);
   }
   await assert.rejects(wa.getMediaUrl('../me', config), /inválido/);
+});
+
+test('Meta scopes media sends to the configured messaging account and preserves legacy configurations', async () => {
+  const calls = [];
+  const wa = load('src/services/whatsapp.js', { './meta-platform': graph, axios: {
+    post: async (...args) => { calls.push(args); return { data: { messages: [{ id: 'out' }] } }; },
+  } });
+  await wa.sendMediaMessage('56911112222', { type: 'image', mediaUrl: 'https://example.com/photo.jpg' }, config);
+  await wa.sendTextMessage('56911112222', 'Otra tienda', { ...config, business_account_id: '87654321' });
+  await wa.sendTextMessage('56911112222', 'Anterior', { ...config, business_account_id: null });
+  assert.equal(calls[0][1].messaging_account_id, config.business_account_id);
+  assert.equal(calls[1][1].messaging_account_id, '87654321');
+  assert.equal(Object.hasOwn(calls[2][1], 'messaging_account_id'), false);
+  await assert.rejects(wa.sendTextMessage('56911112222', 'Inválido', { ...config, business_account_id: '../me' }), /inválida/);
+  assert.equal(calls.length, 3);
 });
 
 test('Meta preserves the expired-window signal so collection can use an approved template', async () => {
