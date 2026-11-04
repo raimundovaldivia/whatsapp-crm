@@ -5,6 +5,7 @@ import { useTheme } from '../theme.js';
 import { crmOrderLabel } from '../utils/order-reference.js';
 import StoriesTab from './StoriesTab.jsx';
 import { readSocialImage } from '../utils/social-image.js';
+import { createSocialPublisher, SOCIAL_NAMES, socialTargets, validateSocialDraft } from '../utils/social-publish.js';
 
 const tabs = [
   ['conexion', 'Conexión', Link2],
@@ -65,7 +66,7 @@ export default function SocialPanel({ storeName = 'tu tienda' }) {
             {active === 'conexion' && <ConnectionTab status={status} connect={connect} reload={load} colors={colors} setError={setError} storeName={storeName} />}
             {active === 'mensajes' && <MessagesTab connected={status?.connected} connect={connect} colors={colors} />}
             {active === 'comentarios' && <CommentsTab connected={status?.connected} connect={connect} colors={colors} />}
-            {active === 'contenido' && <ContentTab connected={status?.connected} connect={connect} colors={colors} />}
+            {active === 'contenido' && <ContentTab connected={status?.connected} connection={status?.connection} connect={connect} colors={colors} />}
             {active === 'historias' && <StoriesTab connected={status?.connected} colors={colors} />}
             {active === 'ads' && <AdsTab connected={status?.connected} connect={connect} colors={colors} />}
           </>
@@ -305,56 +306,91 @@ function CommentsTab({ connected, connect, colors }) {
   </div>;
 }
 
-export function ContentTab({ connected, connect, colors }) {
-  const [platform, setPlatform] = useState('facebook'); const [message, setMessage] = useState('');
-  const [mediaUrl, setMediaUrl] = useState(''); const [mediaType, setMediaType] = useState('image');
-  const [working, setWorking] = useState(false); const [notice, setNotice] = useState('');
-  const [uploading, setUploading] = useState(false); const [imageName, setImageName] = useState('');
+export function ContentTab({ connected, connection, connect, colors }) {
+  const instagramReady = !!connection?.page_id && !!connection?.instagram_account_id;
+  const [platform, setPlatform] = useState(instagramReady ? 'both' : 'facebook');
+  const [message, setMessage] = useState('');
+  const [mediaUrl, setMediaUrl] = useState('');
+  const [mediaType, setMediaType] = useState('image');
+  const [working, setWorking] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [imageName, setImageName] = useState('');
+  const [results, setResults] = useState({});
   const fileInput = useRef(null);
+  const operation = useRef(false);
+  const publisher = useRef(null);
+  if (!publisher.current) publisher.current = createSocialPublisher(data => metaAPI.publish(data));
   const busy = working || uploading;
+  const attempted = Object.keys(results).length > 0;
+  const locked = busy || attempted;
+  const targets = socialTargets(platform);
+  const retryable = targets.filter(target => results[target]?.state === 'failed');
+  const draft = { platform, message, mediaUrl, mediaType };
+  const validation = validateSocialDraft(draft);
   const upload = async event => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || busy) return;
+    if (!file || locked || operation.current) return;
+    operation.current = true;
     setUploading(true); setNotice('');
     try {
       const result = await metaAPI.uploadImage(await readSocialImage(file));
       setMediaUrl(result.url); setMediaType('image'); setImageName(file.name);
     } catch (error) { setNotice(error.response?.data?.error || error.message); }
-    finally { setUploading(false); }
+    finally { operation.current = false; setUploading(false); }
   };
   const publish = async () => {
-    if (busy) return;
+    if (operation.current || busy || (attempted && !retryable.length)) return;
+    if (validation) { setNotice(validation); return; }
+    operation.current = true;
     setWorking(true); setNotice('');
-    try {
-      const result = await metaAPI.publish({ platform, message, mediaUrl, mediaType });
-      setNotice(`Publicado correctamente (${result.id})`);
-      setMessage(''); setMediaUrl(''); setImageName('');
-    } catch (error) { setNotice(error.response?.data?.error || error.message); }
-    finally { setWorking(false); }
+    try { setResults(await publisher.current(draft, results)); }
+    catch (error) { setNotice(error.response?.data?.error || error.message); }
+    finally { operation.current = false; setWorking(false); }
+  };
+  const startNew = () => {
+    if (operation.current) return;
+    setResults({}); setNotice(''); setMessage(''); setMediaUrl(''); setImageName(''); setMediaType('image');
   };
   if (!connected) return <ConnectNeeded connect={connect} colors={colors} />;
   return <Card colors={colors} style={{ display: 'grid', gap: 13 }}>
-    <div style={{ display: 'flex', gap: 8 }}><button disabled={busy} onClick={() => setPlatform('facebook')} style={platformButton(platform === 'facebook', colors)}><Facebook size={16} /> Facebook</button><button disabled={busy} onClick={() => setPlatform('instagram')} style={platformButton(platform === 'instagram', colors)}><Instagram size={16} /> Instagram</button></div>
-    <label style={label(colors)}>Texto<textarea disabled={working} value={message} onChange={e => setMessage(e.target.value)} rows={5} style={{ ...input(colors), resize: 'vertical', marginTop: 5 }} placeholder="Escribe la publicación…" /></label>
+    <div role="group" aria-label="Redes donde publicar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <button type="button" aria-pressed={platform === 'facebook'} disabled={locked} onClick={() => setPlatform('facebook')} style={platformButton(platform === 'facebook', colors)}><Facebook size={16} /> Facebook</button>
+      <button type="button" aria-pressed={platform === 'instagram'} disabled={locked || !instagramReady} onClick={() => setPlatform('instagram')} style={platformButton(platform === 'instagram', colors)}><Instagram size={16} /> Instagram</button>
+      <button type="button" aria-pressed={platform === 'both'} disabled={locked || !instagramReady} onClick={() => setPlatform('both')} style={platformButton(platform === 'both', colors)}><Facebook size={16} /><Instagram size={16} /> Facebook e Instagram</button>
+    </div>
+    <p style={{ color: colors.textSecondary, fontSize: 12, margin: 0 }}>{platform === 'both' ? 'El mismo texto y archivo se publicarán en ambas redes.' : 'Publicar en ' + SOCIAL_NAMES[platform] + '.'}{connection?.page_name && platform !== 'instagram' && ' Facebook: ' + connection.page_name + '.'}{connection?.instagram_username && platform !== 'facebook' && ' Instagram: @' + connection.instagram_username + '.'}</p>
+    {!instagramReady && <p style={{ color: colors.textSecondary, fontSize: 12, margin: 0 }}>Para publicar en ambas redes, vincula el Instagram profesional de esta tienda en Conexión.</p>}
+    <label style={label(colors)}>Texto<textarea disabled={locked} value={message} onChange={e => setMessage(e.target.value)} rows={5} style={{ ...input(colors), resize: 'vertical', marginTop: 5 }} placeholder="Escribe la publicación…" /></label>
     <div style={{ display: 'grid', gap: 8 }}>
-      <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Elegir imagen para la publicación" onChange={upload} disabled={busy} style={{ display: 'none' }} />
-      <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} style={secondary(colors)}>{uploading ? <Loader size={15} /> : <Upload size={15} />} {uploading ? 'Subiendo imagen…' : imageName ? 'Cambiar imagen' : 'Subir imagen'}</button>
+      <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Elegir imagen para la publicación" onChange={upload} disabled={locked} style={{ display: 'none' }} />
+      <button type="button" disabled={locked} onClick={() => fileInput.current?.click()} style={secondary(colors)}>{uploading ? <Loader size={15} /> : <Upload size={15} />} {uploading ? 'Subiendo imagen…' : imageName ? 'Cambiar imagen' : 'Subir imagen'}</button>
       <p style={{ color: colors.textMuted, fontSize: 12, margin: 0 }}>JPG, PNG o WebP · hasta 6 MB. La foto se prepara para Facebook e Instagram.</p>
       {imageName && <figure style={{ margin: 0, display: 'grid', gap: 8 }}>
         <img src={mediaUrl} alt="Vista previa de la publicación" style={{ width: '100%', maxWidth: 320, maxHeight: 400, objectFit: 'contain', borderRadius: 8 }} />
         <figcaption style={{ color: colors.textSecondary, fontSize: 12, overflowWrap: 'anywhere' }}>{imageName} · Lista para publicar</figcaption>
-        <button type="button" disabled={busy} onClick={() => { setMediaUrl(''); setImageName(''); }} style={secondary(colors)}>Quitar imagen</button>
+        <button type="button" disabled={locked} onClick={() => { setMediaUrl(''); setImageName(''); }} style={secondary(colors)}>Quitar imagen</button>
         <p style={{ color: colors.textMuted, fontSize: 11, margin: 0 }}>Publícala dentro de 7 días. Después tendrás que volver a subirla.</p>
       </figure>}
     </div>
     <details><summary style={{ color: colors.textSecondary, fontSize: 12, cursor: 'pointer' }}>Usar un enlace de imagen o video</summary>
-      <label style={label(colors)}>URL pública de imagen o video<input disabled={busy} value={mediaUrl} onChange={e => { setMediaUrl(e.target.value); setImageName(''); }} style={{ ...input(colors), marginTop: 5 }} placeholder="https://…" /></label>
+      <label style={label(colors)}>URL pública de imagen o video<input disabled={locked} value={mediaUrl} onChange={e => { setMediaUrl(e.target.value); setImageName(''); }} style={{ ...input(colors), marginTop: 5 }} placeholder="https://…" /></label>
       <p style={{ color: colors.textMuted, fontSize: 11 }}>El archivo del enlace debe estar disponible públicamente.</p>
     </details>
-    {platform === 'instagram' && <label style={label(colors)}>Formato<select disabled={busy || !!imageName} value={mediaType} onChange={e => setMediaType(e.target.value)} style={{ ...input(colors), marginTop: 5 }}><option value="image">Imagen</option><option value="video">Video</option><option value="reel">Reel</option></select></label>}
-    {notice && <div role={notice.startsWith('Publicado') ? 'status' : 'alert'} style={{ color: notice.startsWith('Publicado') ? colors.green : '#fca5a5', fontSize: 13 }}>{notice}</div>}
-    <button disabled={busy || (!message.trim() && !mediaUrl.trim()) || (platform === 'instagram' && !mediaUrl.trim())} onClick={publish} style={primary(colors)}>{working ? <Loader size={15} /> : <Upload size={15} />} {working ? 'Publicando…' : 'Publicar ahora'}</button>
+    {platform !== 'facebook' && <label style={label(colors)}>Formato<select disabled={locked || !!imageName} value={mediaType} onChange={e => setMediaType(e.target.value)} style={{ ...input(colors), marginTop: 5 }}><option value="image">Imagen</option><option value="video">Video</option><option value="reel">Reel</option></select></label>}
+    {!attempted && platform !== 'facebook' && !mediaUrl.trim() && <p style={{ color: colors.textSecondary, fontSize: 12, margin: 0 }}>Agrega una imagen o un video para publicar en Instagram.</p>}
+    {notice && <div role="alert" style={{ color: colors.dangerSoft, fontSize: 13 }}>{notice}</div>}
+    {attempted && <div aria-live="polite" style={{ display: 'grid', gap: 8 }}>{targets.map(target => {
+      const result = results[target];
+      if (!result) return null;
+      return <div key={target} role={result.state === 'published' ? 'status' : 'alert'} style={{ padding: 12, border: '1px solid ' + colors.border, borderRadius: 8, fontSize: 13, color: result.state === 'published' ? colors.green : colors.warning }}>
+        <strong>{SOCIAL_NAMES[target]}: {result.state === 'published' ? 'Publicado correctamente' : result.state === 'failed' ? 'No publicado' : 'Confirmación pendiente'}</strong>
+        {result.state !== 'published' && <div style={{ marginTop: 5, color: colors.textSecondary }}>{result.error}{result.state === 'unknown' && ' Revisa esa red antes de volver a publicar: el envío pudo completarse.'}</div>}
+      </div>;
+    })}</div>}
+    {(!attempted || retryable.length > 0) && <button disabled={busy || !!validation} onClick={publish} style={primary(colors)}>{working ? <Loader size={15} /> : <Upload size={15} />} {working ? 'Publicando…' : attempted ? 'Reintentar solo ' + retryable.map(target => SOCIAL_NAMES[target]).join(' e ') : platform === 'both' ? 'Publicar en ambas redes' : 'Publicar ahora'}</button>}
+    {attempted && <button disabled={busy} onClick={startNew} style={secondary(colors)}>Nueva publicación</button>}
   </Card>;
 }
 
