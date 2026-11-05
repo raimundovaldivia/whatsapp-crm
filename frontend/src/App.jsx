@@ -614,6 +614,8 @@ export default function App() {
       {/* Vista Clientes */}
       {view === 'clientes' && (
         <ClientesPanel
+          key={org?.id}
+          showEggRepurchase={org?.slug === 'diez-rios-mrs96z69' && ['owner', 'admin', 'supervisor'].includes(user?.role)}
           onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
         />
       )}

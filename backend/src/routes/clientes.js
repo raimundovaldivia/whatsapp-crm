@@ -12,9 +12,21 @@ const router      = express.Router();
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.use(requireAuth);
+
+router.get('/egg-repurchase', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const data = await require('../services/egg-repurchase').readForStore(getPool(), req.orgId);
+    if (!data) return res.status(404).json({ error: 'Informe no disponible en esta tienda.' });
+    res.json({ day: data.day, updatedAt: new Date(data.at), profiles: data.profiles, aliases: data.aliases });
+  } catch (error) {
+    console.error('[Clientes/egg-repurchase]', error.message);
+    res.status(503).json({ error: 'No se pudo calcular la recompra de huevos.' });
+  }
+});
 
 /** Convierte una fila de contacts al formato que espera el frontend */
 function contactToCustomer(c) {

@@ -1,3 +1,4 @@
+import { EggPurchaseDetail, EggRepurchaseList, useEggRepurchase } from './EggRepurchase.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users, Search, RefreshCw, MessageSquare, ShoppingBag,
@@ -117,11 +118,12 @@ function formatDate(dateStr) {
 const PAGE_SIZE = 50;
 const LEADS_PAGE_SIZE = 100;
 
-export default function ClientesPanel({ onOpenConversation }) {
+export default function ClientesPanel({ onOpenConversation, showEggRepurchase = false }) {
   const { colors, isDark } = useTheme();
 
   // Tabs: 'clientes' = Shopify customers | 'leads' = WhatsApp leads from contacts DB
   const [tab, setTab] = useState('clientes');
+  const repurchase = useEggRepurchase(showEggRepurchase);
 
   // ── Clientes (Shopify) state ──
   const [allCustomers, setAllCustomers] = useState([]);
@@ -523,6 +525,7 @@ export default function ClientesPanel({ onOpenConversation }) {
           {[
             { key: 'clientes', label: 'Clientes Shopify', icon: <ShoppingBag size={12} /> },
             { key: 'leads',    label: 'Leads WhatsApp',   icon: <Zap size={12} /> },
+            ...(showEggRepurchase ? [{ key: 'eggs', label: 'Recompra de huevos', icon: null }] : []),
             { key: 'repeat',   label: '🔁 Despachos repetidos', icon: null },
           ].map(({ key, label, icon }) => (
             <button key={key} onClick={() => setTab(key)}
@@ -538,7 +541,7 @@ export default function ClientesPanel({ onOpenConversation }) {
             </button>
           ))}
 
-          {!isLeads && allCustomers.length > 0 && (
+          {tab === 'clientes' && allCustomers.length > 0 && (
             <span style={{ backgroundColor: colors.bgHover, color: colors.textSecondary, borderRadius: '12px', padding: '2px 8px', fontSize: '12px' }}>
               {loading ? `${loadingProgress.loaded} cargando...` : `${allCustomers.length} total`}
             </span>
@@ -555,7 +558,7 @@ export default function ClientesPanel({ onOpenConversation }) {
             <Search size={14} color={colors.textSecondary} />
             <input
               type="text"
-              placeholder={isLeads ? 'Buscar por nombre o teléfono...' : 'Buscar por nombre, email o teléfono...'}
+              placeholder={isLeads || tab === 'eggs' ? 'Buscar por nombre o teléfono...' : 'Buscar por nombre, email o teléfono...'}
               value={isLeads ? leadsSearch : search}
               onChange={e => isLeads ? setLeadsSearch(e.target.value) : setSearch(e.target.value)}
               style={{ background: 'none', border: 'none', color: colors.textPrimary, fontSize: '13px', outline: 'none', width: '220px' }}
@@ -580,22 +583,24 @@ export default function ClientesPanel({ onOpenConversation }) {
               </button>
             </>
           )}
-          {!isLeads && (
+          {!isLeads && tab !== 'eggs' && (
             <button onClick={syncShopify} disabled={syncing} title="Sincronizar clientes desde Shopify"
               style={{ padding: '6px 12px', borderRadius: '8px', backgroundColor: syncing ? colors.bgHover : `${colors.green}18`, border: `1px solid ${colors.green}33`, cursor: syncing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', color: colors.green, fontSize: '12px', fontWeight: 600 }}>
               <RefreshCw size={12} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
               {syncing ? 'Sincronizando...' : 'Sync Shopify'}
             </button>
           )}
-          <button onClick={isLeads ? () => loadLeads(1, leadsSearch) : loadAll} title="Recargar desde DB local"
+          {tab !== 'eggs' && <button onClick={isLeads ? () => loadLeads(1, leadsSearch) : loadAll} title="Recargar desde DB local"
             style={{ padding: '8px', borderRadius: '8px', backgroundColor: colors.bgHover, border: 'none', cursor: 'pointer', display: 'flex' }}>
             <RefreshCw size={14} color={colors.textSecondary} />
-          </button>
+          </button>}
         </div>
       </div>
 
+      {tab === 'eggs' && showEggRepurchase && <EggRepurchaseList report={repurchase} search={search} colors={colors} />}
+
       {/* Stats — Clientes tab */}
-      {!isLeads && tab !== 'repeat' && allCustomers.length > 0 && (
+      {tab === 'clientes' && allCustomers.length > 0 && (
         <div style={{ display: 'flex', backgroundColor: colors.bgApp, borderBottom: `1px solid ${colors.border}` }}>
           {[
             { label: 'Clientes totales', value: allCustomers.length,                                          icon: <Users size={14} /> },
@@ -615,7 +620,7 @@ export default function ClientesPanel({ onOpenConversation }) {
       )}
 
       {/* Banner: primera vez, necesita sync */}
-      {!isLeads && tab !== 'repeat' && needsSync && !loading && (
+      {tab === 'clientes' && needsSync && !loading && (
         <div style={{ backgroundColor: `${colors.green}15`, borderBottom: `1px solid ${colors.green}33`, padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <RefreshCw size={16} color={colors.green} />
           <span style={{ color: colors.textPrimary, fontSize: '13px' }}>
@@ -649,7 +654,7 @@ export default function ClientesPanel({ onOpenConversation }) {
       )}
 
       {/* ═══ CLIENTES TAB ═══ */}
-      {!isLeads && tab !== 'repeat' && (
+      {tab === 'clientes' && (
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {loading && allCustomers.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '80px', color: colors.textSecondary }}>
@@ -771,6 +776,7 @@ export default function ClientesPanel({ onOpenConversation }) {
                       <tr key={`${c.id}-detail`} style={{ backgroundColor: colors.bgApp }}>
                         <td colSpan={7} style={{ padding: '12px 16px 16px 62px', borderBottom: `2px solid ${colors.green}33` }}>
                           <div style={{ display: 'flex', gap: '32px', flexWrap: 'wrap' }}>
+                            {showEggRepurchase && <EggPurchaseDetail report={repurchase} phone={c.phone} colors={colors} />}
                             {c.lastOrder && (
                               <div>
                                 <div style={{ color: colors.textSecondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Último pedido</div>
