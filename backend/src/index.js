@@ -186,6 +186,7 @@ app.use((err, _req, res, _next) => {
 
 // ─── ARRANCAR ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
+let eggRepurchaseTimer;
 
 const { setupDatabase } = require('./db/setup');
 
@@ -214,6 +215,7 @@ require('./services/database-startup').prepareDatabase(setupDatabase).then(() =>
     startConversationModeWatchJob(io);
     startDeliveryMidnightJob();
     startCustomerFeedbackJob(io);
+    eggRepurchaseTimer = require('./services/egg-repurchase').start(require('./db/database').getPool());
     require('./services/referral-automation').start(io);
     startPaymentPromiseFollowUpJob(io);
   });
@@ -231,6 +233,7 @@ async function shutdown() {
   const deadline = setTimeout(() => process.exit(1), 30000);
   deadline.unref();
   server.close();
+  clearInterval(eggRepurchaseTimer);
   io.disconnectSockets(true);
   try {
     require('./services/referral-automation').stop();

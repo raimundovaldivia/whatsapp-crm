@@ -8,13 +8,16 @@ function isPurchase(order) {
     .includes(String(order.status || '').toUpperCase()) && Boolean(order.date) && Number.isFinite(new Date(order.date).getTime());
 }
 
-async function loadPurchases(pool, orgId, phones = null) {
+async function loadOrderLedger(pool, orgId, phones = null, includeDetails = false) {
   const normalized = phones ? [...new Set(phones.map(normalizePhone).filter(Boolean))] : null;
   const phoneSql = column => `CASE WHEN regexp_replace(COALESCE(${column}, ''), '[^0-9]', '', 'g') ~ '^9[0-9]{8}$'
     THEN '56' || regexp_replace(${column}, '[^0-9]', '', 'g')
     ELSE regexp_replace(COALESCE(${column}, ''), '[^0-9]', '', 'g') END`;
   const [shopify, local] = await Promise.all([
     pool.query(`SELECT shopify_order_id AS id, customer_phone AS phone, shopify_created_at AS date, items,
+        ${includeDetails ? `customer_name AS name, total_price AS total, crm_status AS dispatch,
+          delivery_date::text AS delivery_day, delivered_at, financial_status AS payment,
+          fulfillment_status AS fulfillment,` : ''}
         CASE WHEN LOWER(COALESCE(crm_status, '')) = 'cancelled' THEN 'CANCELLED'
           WHEN LOWER(COALESCE(financial_status, '')) IN ('refunded','voided') THEN financial_status
           WHEN delivered_at IS NOT NULL OR LOWER(COALESCE(fulfillment_status, '')) = 'fulfilled'
@@ -23,6 +26,8 @@ async function loadPurchases(pool, orgId, phones = null) {
         AND ($2::text[] IS NULL OR ${phoneSql('customer_phone')} = ANY($2::text[]))`, [orgId, normalized]),
     pool.query(`SELECT o.id, o.shopify_order_id, COALESCE(NULLIF(o.customer_phone, ''), c.phone_number) AS phone,
         o.created_at AS date, o.items, o.status
+        ${includeDetails ? `, o.customer_name AS name, o.total_price AS total, o.status AS dispatch,
+          o.delivery_date::text AS delivery_day, o.delivered_at, o.payment_marked_at` : ''}
       FROM orders o LEFT JOIN conversations c ON c.id = o.conversation_id AND c.organization_id = o.organization_id
       WHERE o.organization_id = $1 AND o.created_at IS NOT NULL
         AND ($2::text[] IS NULL OR ${phoneSql("COALESCE(NULLIF(o.customer_phone, ''), c.phone_number)")} = ANY($2::text[]))`, [orgId, normalized]),
@@ -38,7 +43,12 @@ async function loadPurchases(pool, orgId, phones = null) {
     const key = order.shopify_order_id ? `shopify:${shopifyId(order.shopify_order_id)}` : `crm:${order.id}`;
     if (!records.has(key)) records.set(key, { ...order, phone: normalizePhone(order.phone) });
   }
-  return [...records.values()].filter(isPurchase).sort((a, b) => new Date(b.date) - new Date(a.date));
+  return [...records.values()];
+}
+
+async function loadPurchases(pool, orgId, phones = null) {
+  const ledger = await loadOrderLedger(pool, orgId, phones);
+  return ledger.filter(isPurchase).sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 function purchaseSummary(orders, today) {
@@ -80,4 +90,4 @@ function withPurchaseStats(contacts, rawContacts, orders) {
   });
 }
 
-module.exports = { loadPurchases, purchaseSummary, withPurchaseStats, isPurchase };
+module.exports = { loadPurchases, loadOrderLedger, purchaseSummary, withPurchaseStats, isPurchase };
