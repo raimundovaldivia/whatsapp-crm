@@ -30,6 +30,8 @@ test('tomorrow bookings, open orders, non-delivery and opt-outs keep due custome
   assert.equal(profile(weekly, [], [{phone:'911112222'}]).hasOrder, true);
   assert.equal(profile(weekly,[{phone,opt_out:true}]).due, false);
   assert.equal(profile(weekly, [], [], [{phone}]).recentOutreach, true);
+  const replied = buildProfiles(weekly, [], [], [], day, [{phone:'911112222'}]).profiles[0];
+  assert.equal(replied.recentReply, true); assert.equal(replied.orders, 3);
   assert.equal(profile([...weekly, order(day+'T12:00:00Z', {dispatch:'draft'})]).hasOrder,true);
 });
 

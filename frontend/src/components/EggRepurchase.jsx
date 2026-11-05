@@ -42,6 +42,7 @@ export function useEggRepurchase(enabled) {
 function status(p) {
   if (p.optOut) return 'Baja comercial';
   if (p.hasOrder) return 'Pedido reciente o en curso';
+  if (p.recentReply) return 'Respuesta en últimas 48 h · revisar chat';
   if (p.recentOutreach) return 'Campaña en últimas 48 h';
   if (p.purchaseDays < 3) return 'Historial limitado';
   if (p.irregular) return 'Intervalo variable';

@@ -32,7 +32,7 @@ function median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-function buildProfiles(ledger, contacts, scheduled, recentOutreach, day) {
+function buildProfiles(ledger, contacts, scheduled, recentOutreach, day, replies = []) {
   const identities = buildCustomerIdentityMap(contacts);
   const canonical = value => {
     const phone = normalizePhone(value);
@@ -41,6 +41,7 @@ function buildProfiles(ledger, contacts, scheduled, recentOutreach, day) {
   const customers = new Map();
   const hold = new Set(scheduled.map(r => canonical(r.phone)));
   const optOut = new Set(contacts.filter(c => c.opt_out).map(c => canonical(c.phone)));
+  const recentReplies = new Set(replies.map(r => canonical(r.phone)));
   const recentlyContacted = new Set(recentOutreach.map(r => canonical(r.phone)));
   for (const order of ledger) {
     const phone = canonical(order.phone);
@@ -84,10 +85,10 @@ function buildProfiles(ledger, contacts, scheduled, recentOutreach, day) {
     const irregular = gaps.length > 1 && median(gaps.map(gap => Math.abs(gap - interval))) > Math.max(2, interval * 0.35);
     profiles.push({ phone: c.phone, name: c.name, orders: c.orders, purchaseDays: dates.length,
       lastDate: dates[0], elapsed, interval, expected, irregular, lastProduct: c.lastProduct,
-      hasOrder: hold.has(c.phone), optOut: optOut.has(c.phone), recentOutreach: recentlyContacted.has(c.phone),
+      recentReply: recentReplies.has(c.phone), hasOrder: hold.has(c.phone), optOut: optOut.has(c.phone), recentOutreach: recentlyContacted.has(c.phone),
       due: near && !hold.has(c.phone) && !optOut.has(c.phone) });
   }
-  profiles.sort((a, b) => Number(b.due) - Number(a.due) || Number(a.recentOutreach) - Number(b.recentOutreach) ||
+  profiles.sort((a, b) => Number(b.due) - Number(a.due) || Number(b.recentReply) - Number(a.recentReply) || Number(a.recentOutreach) - Number(b.recentOutreach) ||
     Number(a.irregular) - Number(b.irregular) || Math.abs(a.elapsed - a.interval) - Math.abs(b.elapsed - b.interval) || b.purchaseDays - a.purchaseDays);
   return { day, profiles, aliases: Object.fromEntries([...identities].filter(([a,b]) => a !== b && customers.has(b))) };
 }
@@ -99,15 +100,20 @@ async function getSnapshot(pool, orgId, refresh = false) {
   if (!refresh && snapshot?.orgId === orgId && snapshot.day === day && Date.now() - snapshot.at < REFRESH_MS) return snapshot;
   if (running?.orgId === orgId && running.day === day) return running.promise;
   const promise = (async () => {
-    const [orders, contacts, scheduled, campaigns] = await Promise.all([
+    const [orders, contacts, scheduled, campaigns, replies] = await Promise.all([
       loadOrderLedger(pool, orgId, null, true),
       pool.query('SELECT phone, name, email, address, address1, city, shopify_id, last_order_at, opt_out FROM contacts WHERE organization_id=$1', [orgId]),
       pool.query("SELECT phone FROM scheduled_orders WHERE organization_id=$1 AND status='pending' AND desired_date >= $2::date", [orgId, day]),
       pool.query(`SELECT DISTINCT destination_phone AS phone FROM broadcast_campaign_recipients
         WHERE organization_id=$1 AND result_status IN ('accepted','unknown') AND created_at >= NOW() - INTERVAL '48 hours'
           AND COALESCE(template_name,'') !~* '^(cobro|cobranza|pedido_salio|pedido_en_camino|payment|delivery)'`, [orgId]),
+      pool.query(`SELECT DISTINCT c.phone_number AS phone FROM messages m
+        JOIN conversations c ON c.id=m.conversation_id AND c.organization_id=$1
+        LEFT JOIN whatsapp_channels wc ON wc.id=c.whatsapp_channel_id AND wc.organization_id=$1
+        WHERE m.direction='inbound' AND m.created_at >= NOW() - INTERVAL '48 hours'
+          AND m.status IS DISTINCT FROM 'failed' AND wc.assigned_user_id IS NULL`, [orgId]),
     ]);
-    const result = { ...buildProfiles(orders, contacts.rows, scheduled.rows, campaigns.rows, day), orgId, at: Date.now() };
+    const result = { ...buildProfiles(orders, contacts.rows, scheduled.rows, campaigns.rows, day, replies.rows), orgId, at: Date.now() };
     snapshot = result;
     return result;
   })();
