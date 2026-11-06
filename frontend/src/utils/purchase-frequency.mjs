@@ -2,7 +2,13 @@ export const cadenceLabels = { unknown: 'Sin frecuencia', weekly: 'Hasta 10 día
 export const statusLabels = { followup: 'Para seguimiento', overdue: 'Pasó su fecha estimada', due: 'Próximos 3 días', upcoming: 'Más adelante', insufficient: 'Historial insuficiente' };
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-export const FREQUENCY_FOLLOWUP_INSTRUCTION = 'Genera un WhatsApp breve y cercano para cada cliente según los productos de su última compra, los días transcurridos y su frecuencia de compra. Adapta la pregunta a si se acerca su próxima compra estimada, ya pasó o compró recientemente. Si el historial es insuficiente o variable, no atribuyas hábitos. No afirmes que se quedó sin producto ni inventes precios, promociones, stock o entregas. Termina con una pregunta sencilla para saber si necesita ayuda con una nueva compra.';
+export const FREQUENCY_FOLLOWUP_INSTRUCTION = 'Prepara un seguimiento con los productos, presentaciones y cantidades exactas de la última compra registrada. Usa la frecuencia solo para adaptar la pregunta. Si el historial es insuficiente o variable, no atribuyas hábitos. No cambies bandejas por cajas, no conviertas unidades ni agregues productos de compras anteriores. No supongas gustos, consumo, entrega ni necesidad de reposición. Sin ofertas ni compromisos de disponibilidad. Si el detalle está incompleto, excluye el borrador para revisión.';
+
+export function purchaseProductLabel(item) {
+  const quantity = Number.isFinite(item?.cantidad) && item.cantidad > 0
+    ? item.cantidad.toLocaleString('es-CL', { useGrouping: false, maximumFractionDigits: 20 }) : 'Cantidad sin registro';
+  return `${quantity} × ${item?.producto || 'Producto sin registro'}`;
+}
 
 export function frequencyDraftRequest(phones) {
   return { phones: [...phones], instruction: FREQUENCY_FOLLOWUP_INSTRUCTION, audienceType: 'all', contextSource: 'purchase_frequency' };

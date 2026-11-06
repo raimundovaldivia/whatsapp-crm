@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { filterFrequencyCustomers, latestConversationId, selectableFrequencyCustomers, toggleFrequencySelection, frequencyBroadcastContacts, initialEvolutionMethod } from './purchase-frequency.mjs';
 import { renderDirectMessage } from './direct-message.mjs';
-import { frequencyDraftRequest, FREQUENCY_FOLLOWUP_INSTRUCTION } from './purchase-frequency.mjs';
+import { frequencyDraftRequest, FREQUENCY_FOLLOWUP_INSTRUCTION, purchaseProductLabel } from './purchase-frequency.mjs';
 
 test('automatic drafting sends explicit phones and a frequency source, leaving history to the server', () => {
   const phones = ['56911111111', '56922222222'];
@@ -12,6 +12,14 @@ test('automatic drafting sends explicit phones and a frequency source, leaving h
   assert.equal(request.phones.length, 2);
   assert.match(request.instruction, /última compra/);
   assert.match(request.instruction, /historial es insuficiente o variable/);
+});
+
+test('purchase evidence shows purchased units separately from pack size without inventing missing quantities', () => {
+  assert.equal(purchaseProductLabel({ producto: 'Huevos Jumbo mixtos · Bandeja de 20', cantidad: 2 }), '2 × Huevos Jumbo mixtos · Bandeja de 20');
+  assert.equal(purchaseProductLabel({ producto: 'Queso 900 g', cantidad: 1.5 }), '1,5 × Queso 900 g');
+  for (const cantidad of [null, undefined, 0, -1, Infinity]) {
+    assert.equal(purchaseProductLabel({ producto: 'Huevos', cantidad }), 'Cantidad sin registro × Huevos');
+  }
 });
 
 const customers = [

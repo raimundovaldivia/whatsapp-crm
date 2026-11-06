@@ -7,6 +7,68 @@ const frequency = require('../src/services/purchase-frequency');
 const businessDate = require('../src/services/business-date');
 const today = '2026-11-06';
 
+test('automatic follow-up preserves latest products, units and pack sizes instead of earlier purchases or inferred tastes', () => {
+  const drafts = load('src/services/broadcast-drafts.js');
+  const evidence = purchases.purchaseSummary([
+    { date: '2026-07-27T21:11:00Z', status: 'paid', items: [{ title: 'Huevos XL · Bandeja de 30', quantity: 2 }] },
+    { date: '2026-10-05T23:38:00Z', status: 'paid', items: [{ title: 'Huevos Jumbo · Caja de 100', quantity: 1 }] },
+    { date: '2026-10-23T19:08:00Z', status: 'paid', items: [{ title: 'Huevos Jumbo · Caja de 100', quantity: 1 }] },
+    { date: '2026-10-15T18:25:00Z', status: 'delivered', items: [{ title: 'Aceitunas', quantity: 1 }] },
+    { date: '2026-10-27T20:59:00Z', status: 'delivered', items: [{ title: 'Huevos Jumbo mixtos · Bandeja de 20', quantity: 2 }] },
+  ], today);
+  const result = drafts.frequencyDraft({ phone: '56911111111', name: 'Cliente Ejemplo', context: { compras: evidence,
+    conversacionReciente: [{ texto: 'Quiero una caja de 100. Le gustaron las aceitunas.' }] } });
+  assert.equal(result.message, 'Hola Cliente, ¿cómo estás?\n\nEn tu última compra pediste:\n• 2 × Huevos Jumbo mixtos · Bandeja de 20\n\n¿Te gustaría hacer un nuevo pedido o necesitas ayuda con algo distinto?');
+  assert.doesNotMatch(result.message, /100|40|aceitunas|gustaron|gustó|sirvi|consum|recibi|acab/i);
+  assert.equal(result.offers.length, 0);
+  assert.equal(result.evidence, evidence);
+  assert.equal(result.evidence.pedidos[0].detalleCompleto, true);
+});
+
+test('missing or truncated latest purchase details never borrow products or quantities from an older order', () => {
+  const drafts = load('src/services/broadcast-drafts.js');
+  const invalid = [null, 'invalid json', [], [null], [1], [{ title: 'Jumbo' }], [{ quantity: 2 }],
+    ...[0, -2, Infinity, true, [], 'not a number'].map(quantity => [{ title: 'Jumbo', quantity }]),
+    [{ title: 'X'.repeat(181), quantity: 2 }], [{ title: 'Jumbo\nMe encantaron', quantity: 2 }],
+    Array.from({ length: 13 }, () => ({ title: 'Jumbo', quantity: 1 })),
+    Array.from({ length: 12 }, () => ({ title: 'Producto '.repeat(20), quantity: 1 })),
+  ];
+  for (const items of invalid) {
+    const compras = purchases.purchaseSummary([
+      { date: '2026-10-27', status: 'paid', items },
+      { date: '2026-10-23', status: 'paid', items: [{ title: 'Caja de 100', quantity: 1 }] },
+    ], today);
+    const result = drafts.frequencyDraft({ phone: '56911111111', name: 'Cliente', context: { compras } });
+    assert.equal(result.decision, 'skip');
+    assert.equal(result.reasonCode, 'purchase_details');
+    assert.equal(result.message, undefined);
+  }
+});
+
+test('frequency only changes the neutral question; multi-product and decimal units remain exact', () => {
+  const drafts = load('src/services/broadcast-drafts.js');
+  const compras = purchases.purchaseSummary([{ date: '2026-10-27', status: 'paid', items: JSON.stringify([
+    { title: 'Queso 900 g', quantity: '1.5' }, { name: 'Caja de 100', quantity: '2' },
+  ]) }], today);
+  const cases = [
+    ['regular', 'due', 10, 'repetir tu pedido en los próximos días'],
+    ['regular', 'overdue', 10, 'volver a pedir'],
+    ['variable', 'overdue', 10, 'hacer un nuevo pedido'],
+    ['insufficient', 'due', 10, 'hacer un nuevo pedido'],
+    ['regular', 'due', 1, 'más adelante'],
+    ['regular', 'upcoming', 10, 'más adelante'],
+  ];
+  for (const [regularidad, estadoFrecuencia, diasDesdeCompra, expected] of cases) {
+    const result = drafts.frequencyDraft({ phone: '56911111111', name: 'Cliente', context: { compras: { ...compras, regularidad, estadoFrecuencia, diasDesdeCompra } } });
+    assert.match(result.message, /• 1,5 × Queso 900 g\n• 2 × Caja de 100/);
+    assert.ok(result.message.includes(expected));
+    assert.doesNotMatch(result.message, /gustaron|gustó|favorit|consum|acab|recibi|entreg|cada \d|habitual/i);
+  }
+  const empty = drafts.frequencyDraft({ phone: '56911111111', name: 'Cliente', context: { compras: purchases.purchaseSummary([], today) } });
+  assert.equal(empty.decision, 'draft');
+  assert.doesNotMatch(empty.message, /última compra|pediste|×/);
+});
+
 test('list and draft share recent twelve business days, latest products and exclusions', () => {
   const order = (date, extra = {}) => ({ date, phone: '56911111111', status: 'paid', items: [{ title: 'XL', quantity: 2 }], ...extra });
   const orders = [
@@ -58,44 +120,37 @@ test('automatic drafts read tenant purchases per selected customer, recheck excl
         (2,'56911111111','Otra empresa','2026-11-05T12:00:00Z','paid','[{"title":"SECRETO AJENO","quantity":99}]'),
         (2,'56999999999','Solo otra empresa','2026-11-05T12:00:00Z','paid','[]');
     `);
-    const prompts = [];
+    let aiCalls = 0;
+    let decline = false;
     const drafts = load('src/services/broadcast-drafts.js', {
-      '../db/database': { ...db, getProducts: async () => [], getMessagesByCustomerPhone: async () => [] },
+      '../db/database': { ...db, getProducts: async () => { throw new Error('Automatic follow-up must not use catalog alternatives'); },
+        getMessagesByCustomerPhone: async () => [{ direction: 'inbound', created_at: '2020-01-01T12:00:00Z',
+          content: decline ? 'No me escriban más' : 'Quería una caja de 100 y aceitunas. Me encantaron.' }] },
       './customer-identity': require('../src/services/customer-identity'),
       './purchase-frequency': frequency,
       './ai-provider': { modelFor: () => 'test' },
       './business-date': { ...businessDate, todayISOChile: date => date ? businessDate.todayISOChile(date) : today },
     });
-    const ai = { messages: { create: async request => {
-      const data = JSON.parse(request.messages[0].content);
-      prompts.push(data);
-      assert.match(request.system, /compras.estadoFrecuencia/);
-      assert.match(request.system, /no afirmes un ritmo habitual/);
-      assert.match(request.system, /La fecha de compra no prueba la entrega/);
-      const product = data.cliente.compras.pedidos[0].productos[0].producto;
-      return { content: [{ type: 'tool_use', name: 'customer_draft', input: {
-        decision: 'draft', reason: 'Compra verificada', message: `Hola ${data.cliente.nombre}, ¿te gustaría volver a pedir ${product}?`,
-      } }] };
-    } } };
+    const ai = { messages: { create: async () => { aiCalls++; throw new Error('Automatic follow-up must not invent purchase facts through AI'); } } };
     const body = { instruction: 'Consulta si desea repetir su última compra según su frecuencia.', contextSource: 'purchase_frequency',
       phones: ['56911111111', '56922222222', '56999999999'], organization_id: 2,
       compras: { intervaloMedianoDias: 999, pedidos: [{ productos: [{ producto: 'FALSO' }] }] } };
     const result = await drafts.generateDrafts(1, body, ai);
     assert.equal(result.requiresApproval, true);
     assert.equal(result.drafts.length, 3);
-    assert.equal(prompts.length, 2);
+    assert.equal(aiCalls, 0);
     assert.equal(result.drafts[2].reasonCode, 'unavailable');
-    assert.match(result.drafts[0].message, /Ana.*XL/);
-    assert.match(result.drafts[1].message, /Bruno.*Aceitunas/);
-    assert.equal(prompts[0].cliente.compras.intervaloMedianoDias, 7);
-    assert.equal(prompts[0].cliente.compras.estadoFrecuencia, 'due');
-    assert.equal(prompts[0].cliente.compras.regularidad, 'regular');
-    assert.equal(prompts[1].cliente.compras.ultimaCompra, '2026-11-01');
-    assert.equal(prompts[1].cliente.compras.intervaloMedianoDias, null);
-    assert.equal(prompts[1].cliente.compras.estadoFrecuencia, 'insufficient');
-    assert.doesNotMatch(JSON.stringify(prompts), /SECRETO AJENO|FALSO/);
-    assert.doesNotMatch(JSON.stringify(prompts[0]), /Bruno|Aceitunas/);
-    assert.doesNotMatch(JSON.stringify(prompts[1]), /Ana|XL/);
+    assert.match(result.drafts[0].message, /Ana[\s\S]*2 × XL/);
+    assert.match(result.drafts[1].message, /Bruno[\s\S]*1 × Aceitunas/);
+    assert.equal(result.drafts[0].evidence.intervaloMedianoDias, 7);
+    assert.equal(result.drafts[0].evidence.estadoFrecuencia, 'due');
+    assert.equal(result.drafts[0].evidence.regularidad, 'regular');
+    assert.equal(result.drafts[1].evidence.ultimaCompra, '2026-11-01');
+    assert.equal(result.drafts[1].evidence.intervaloMedianoDias, null);
+    assert.equal(result.drafts[1].evidence.estadoFrecuencia, 'insufficient');
+    assert.doesNotMatch(JSON.stringify(result), /SECRETO AJENO|FALSO|caja de 100|encantaron/);
+    assert.doesNotMatch(JSON.stringify(result.drafts[0]), /Bruno|Aceitunas/);
+    assert.doesNotMatch(JSON.stringify(result.drafts[1]), /Ana|XL/);
     const selected = await frequency.getPurchaseFrequency(db.getPool(), 1, today, ['922222222']);
     assert.equal(selected.customers.length, 1);
     assert.equal(selected.customers[0].phone, '56922222222');
@@ -105,8 +160,10 @@ test('automatic drafts read tenant purchases per selected customer, recheck excl
     const blocked = await drafts.generateDrafts(1, { ...body, phones: ['56922222222', '56999999999'] }, ai);
     assert.equal(blocked.drafts[0].reasonCode, 'opt_out');
     assert.equal(blocked.drafts[1].reasonCode, 'unavailable');
-    assert.equal(prompts.length, 2);
-    await assert.rejects(drafts.generateDrafts(1, { ...body, phones: ['56911111111'] }, { messages: { create: async () => { throw new Error('Mock AI unavailable'); } } }), /Mock AI unavailable/);
+    assert.equal(aiCalls, 0);
+    decline = true;
+    const declined = await drafts.generateDrafts(1, { ...body, phones: ['56911111111'] }, ai);
+    assert.equal(declined.drafts[0].reasonCode, 'opt_out', 'conversation policy still applies even though it cannot rewrite purchase facts');
     for (const contextSource of ['unknown', {}, null]) {
       assert.throws(() => drafts.validateRequest({ ...body, contextSource }), /Origen/);
     }

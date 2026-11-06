@@ -42,7 +42,7 @@ export const api = {
         const first = phone === '56911111111';
         return scenario === 'skip' && !first ? {phone,name:'Bruno Ejemplo',decision:'skip',reasonCode:'opt_out',reason:'Contacto dado de baja.'} : {
           phone,name:first ? 'Ana Ejemplo':'Bruno Ejemplo',decision:'draft',reason:'Productos y frecuencia verificados en su historial.',offers:[],
-          message:first ? 'Hola Ana, en tu última compra elegiste huevos XL. ¿Te gustaría volver a pedir esta semana?':'Hola Bruno, ¿te gustaría conocer las opciones para volver a pedir aceitunas?',
+          message:first ? 'Hola Ana, en tu última compra pediste 2 × Huevos XL. ¿Te gustaría volver a pedir?':'Hola Bruno, en tu última compra pediste 1 × Aceitunas. ¿Te gustaría hacer un nuevo pedido?',
           evidence:{ultimaCompra:first?'2026-10-30':'2026-11-01',intervaloMedianoDias:first?7:null,regularidad:first?'regular':'insufficient',proximaCompraEstimada:first?'2026-11-06':null,pedidos:[{productos:[{producto:first?'Huevos XL':'Aceitunas',cantidad:first?2:1}]}]},
         };
       });
@@ -60,7 +60,7 @@ export const conversationsAPI = { getByPhone:async()=>[] };
 const entry = `import React from 'react'; import {createRoot} from 'react-dom/client'; import PurchaseFrequencyPanel from '/src/components/PurchaseFrequencyPanel.jsx';
 createRoot(document.getElementById('root')).render(React.createElement(PurchaseFrequencyPanel, {canSendFollowup:true}));`;
 const server = await createServer({ root, configFile: false, cacheDir: 'node_modules/.vite-frequency-preview',
-  optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-runtime', 'lucide-react'] },
+  optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'lucide-react'] },
   esbuild: { jsx: 'automatic' }, plugins: [{ name: 'frequency-fixture', enforce: 'pre',
   resolveId(id) { if (/(?:^|\/)utils\/api(?:\.js)?$/.test(id)) return '\0fixture-api'; if (id === '/fixture.jsx') return '\0fixture.jsx'; },
   load(id) { if (id === '\0fixture-api') return mock; if (id === '\0fixture.jsx') return entry; },

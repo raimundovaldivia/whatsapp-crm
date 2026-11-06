@@ -167,7 +167,7 @@ export function applyOfferToAll(plan, fields) {
 // Códigos estables agrupan exclusiones aunque el detalle incluya días o nombres.
 export function summarizeDraftAudience(prepared, excluded = []) {
   const labels = {
-    unavailable: 'Contacto no disponible', opt_out: 'Baja o contacto excluido',
+    unavailable: 'Contacto no disponible', opt_out: 'Baja o contacto excluido', purchase_details: 'Revisar productos y cantidades de la última compra',
     audience: 'Fuera del público elegido', recent_decline: 'Rechazo en las últimas 48 horas',
     recent_issue: 'Reclamo o gestión sensible reciente', recent_campaign: 'Campaña reciente sin respuesta',
     instruction: 'Exclusión según la instrucción', manual: 'Excluido durante la revisión',
