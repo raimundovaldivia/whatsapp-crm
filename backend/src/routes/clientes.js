@@ -13,6 +13,7 @@ const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const shopifyApi  = require('../services/shopify-api');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { getPurchaseFrequency } = require('../services/purchase-frequency');
 
 router.use(requireAuth);
 
@@ -128,6 +129,12 @@ router.get('/repeat-deliveries', async (req, res) => {
 
 router.get('/all', async (req, res) => {
   try {
+    if (req.query.view !== undefined) {
+      if (req.query.view !== 'frequency') return res.status(400).json({ success: false, error: 'Vista de clientes inválida.' });
+      if (!['owner', 'admin', 'supervisor'].includes(req.role)) return res.status(403).json({ success: false, error: 'Sin permisos suficientes' });
+      res.set('Cache-Control', 'no-store');
+      return res.json(await getPurchaseFrequency(getPool(), req.orgId));
+    }
     const q = (req.query.query || '').toLowerCase();
     const params = [req.orgId];
 
@@ -206,7 +213,7 @@ router.get('/all', async (req, res) => {
 
   } catch (err) {
     console.error('[Clientes/all]', err.message);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: req.query.view === 'frequency' ? 'No se pudo cargar la frecuencia de compra.' : err.message });
   }
 });
 
