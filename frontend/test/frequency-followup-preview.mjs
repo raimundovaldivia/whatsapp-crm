@@ -42,7 +42,7 @@ export const api = {
         const first = phone === '56911111111';
         return scenario === 'skip' && !first ? {phone,name:'Bruno Ejemplo',decision:'skip',reasonCode:'opt_out',reason:'Contacto dado de baja.'} : {
           phone,name:first ? 'Ana Ejemplo':'Bruno Ejemplo',decision:'draft',reason:'Productos y frecuencia verificados en su historial.',offers:[],
-          message:first ? 'Hola Ana, en tu última compra pediste 2 × Huevos XL. ¿Te gustaría volver a pedir?':'Hola Bruno, en tu última compra pediste 1 × Aceitunas. ¿Te gustaría hacer un nuevo pedido?',
+          message:first ? 'Hola Ana, ¿qué tal? La última vez pediste 2 de Huevos XL. ¿Te ayudo con un nuevo pedido?':'¡Hola Bruno! Te escribo por tu último pedido de 1 de Aceitunas. ¿Quieres repetir el pedido o cambiar algo?',
           evidence:{ultimaCompra:first?'2026-10-30':'2026-11-01',intervaloMedianoDias:first?7:null,regularidad:first?'regular':'insufficient',proximaCompraEstimada:first?'2026-11-06':null,pedidos:[{productos:[{producto:first?'Huevos XL':'Aceitunas',cantidad:first?2:1}]}]},
         };
       });

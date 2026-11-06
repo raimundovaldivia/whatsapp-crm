@@ -172,26 +172,70 @@ function validateDraft(raw, customer, { catalog = [], now = new Date() } = {}) {
 
 // In automatic frequency follow-ups, purchase facts are rendered from the ledger,
 // never rewritten by a model. Conversations still determine contact eligibility.
+function conversationalProduct(item) {
+  const quantity = item.cantidad.toLocaleString('es-CL', { useGrouping: false, maximumFractionDigits: 20 });
+  // Only rearrange an explicit, unambiguous pack label. Never infer pack sizes
+  // from a product name or multiply the number of packs by their contents.
+  const pack = /^(.+?) · (Bandeja|Caja) de ([1-9]\d*)$/i.exec(item.producto);
+  if (pack) {
+    const unit = pack[2].toLocaleLowerCase('es-CL') + (item.cantidad === 1 ? '' : 's');
+    const contents = /^Huevos\b/i.test(pack[1]) ? pack[1].replace(/^Huevos/i, 'huevos') : `de ${pack[1]}`;
+    return `${quantity} ${unit} de ${pack[3]} ${contents}`;
+  }
+  return `${quantity} de ${item.producto}`;
+}
+
 function frequencyDraft(customer) {
   const evidence = customer.context.compras;
   const latest = evidence.pedidos[0];
   const firstName = text(customer.name, 100).split(/\s+/)[0];
-  const greeting = firstName && !/[{}]/.test(firstName) ? `Hola ${firstName}, ¿cómo estás?` : 'Hola, ¿cómo estás?';
+  const salutation = firstName && !/[{}]/.test(firstName) ? `Hola ${firstName}` : 'Hola';
   const incomplete = () => ({ phone: customer.phone, name: customer.name, decision: 'skip', reasonCode: 'purchase_details',
     reason: 'Revisa los productos y cantidades de la última compra: no se puede preparar un mensaje completo sin alterar sus datos.' });
   if (latest && (!latest.detalleCompleto || !latest.productos.length
     || latest.productos.some(item => !item.producto || !Number.isFinite(item.cantidad) || item.cantidad <= 0))) return incomplete();
 
-  const lines = latest ? latest.productos.map(item => `• ${item.cantidad.toLocaleString('es-CL', { useGrouping: false, maximumFractionDigits: 20 })} × ${item.producto}`) : [];
-  let question = '¿Te gustaría hacer un nuevo pedido o necesitas ayuda con algo distinto?';
+  // Stable per customer and purchase: batch order and retries must not change a
+  // reviewed draft. Variation affects phrasing only, never the purchase evidence.
+  const style = createHash('sha256').update(JSON.stringify([String(customer.phone).replace(/\D/g, ''), latest?.fecha, latest?.productos])).digest();
+  const pick = (options, index) => options[style[index] % options.length];
+  const greeting = pick([`${salutation}, ¿cómo estás?`, `${salutation}, ¿qué tal?`, `${salutation}, ¿cómo va todo?`, `¡${salutation}!`], 0);
+  const products = latest ? new Intl.ListFormat('es-CL', { style: 'long', type: 'conjunction' }).format(latest.productos.map(conversationalProduct)) : '';
+  const purchase = latest ? pick([
+    `La última vez pediste ${products}.`,
+    `Tu último pedido fue de ${products}.`,
+    `Te escribo por tu último pedido de ${products}.`,
+  ], 1) : null;
+  let questions = [
+    '¿Te gustaría pedir de nuevo o prefieres algo distinto esta vez?',
+    '¿Quieres repetir el pedido o cambiar algo?',
+    '¿Vas a querer otro pedido? Si quieres cambiar algo, me dices.',
+    '¿Te ayudo con un nuevo pedido? Me dices qué necesitas.',
+  ];
   if (evidence.estadoFrecuencia === 'upcoming' || (evidence.diasDesdeCompra != null && evidence.diasDesdeCompra <= 3)) {
-    question = '¿Necesitas ayuda con tu compra o prefieres que veamos un próximo pedido más adelante?';
+    questions = [
+      'Si necesitas ayuda con ese pedido, me dices.',
+      '¿Hay algo en lo que te pueda ayudar con ese pedido?',
+      'Cuando quieras ver otro pedido más adelante, me dices.',
+      'Si quieres consultar algo de tu pedido, aquí estoy.',
+    ];
   } else if (evidence.regularidad === 'regular' && evidence.estadoFrecuencia === 'due') {
-    question = '¿Te gustaría repetir tu pedido en los próximos días o prefieres algo distinto?';
+    questions = [
+      '¿Te ayudo a ver otro pedido para estos días?',
+      '¿Te gustaría repetir en estos días o prefieres cambiar algo?',
+      '¿Vemos un nuevo pedido para estos días?',
+      '¿Vas a querer pedir en estos días? Me dices qué necesitas.',
+    ];
   } else if (evidence.regularidad === 'regular' && evidence.estadoFrecuencia === 'overdue') {
-    question = '¿Te gustaría volver a pedir o prefieres algo distinto esta vez?';
+    questions = [
+      '¿Te gustaría volver a pedir o prefieres algo distinto esta vez?',
+      '¿Quieres que veamos otro pedido?',
+      '¿Te ayudo con un nuevo pedido?',
+      'Si quieres volver a pedir, me dices qué necesitas.',
+    ];
   }
-  const message = [greeting, latest ? `En tu última compra pediste:\n${lines.join('\n')}` : null, question].filter(Boolean).join('\n\n');
+  if (!latest) questions = ['¿Te ayudo con algún pedido?', '¿Hay algo que quieras pedir o consultar?', 'Si necesitas ayuda para hacer un pedido, me dices.'];
+  const message = [greeting, purchase, pick(questions, 2)].filter(Boolean).join(' ');
   // Do not truncate a product, drop an order line or replace unknown quantities.
   if (message.length > 1200) return incomplete();
   const reason = latest
