@@ -189,7 +189,8 @@ router.post('/test-bot', require('../middleware/commercial-access').requireSolut
     // ── Agente de órdenes (recopilando datos) ─────────────────────
     if (pipelineState === 'collecting_order') {
       newOrderDraft = await ordersAgent.extractOrderData(convHistory, orderDraft);
-      const priced = pricing.priceItems(newOrderDraft.items || [], products);
+      const quantityPricing = require('../services/quantity-pricing');
+      const priced = quantityPricing.withShipping(pricing.priceItems(newOrderDraft.items || [], products), await quantityPricing.loadShipping(db, req.orgId));
       const issue = checkout.catalogIssue(priced, products);
       const salesEnabled = (await db.getSetting(req.orgId, 'bot_sales_enabled')) !== 'false';
       const ready = ordersAgent.hasRequiredData(newOrderDraft);

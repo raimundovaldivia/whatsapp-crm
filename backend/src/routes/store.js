@@ -13,6 +13,7 @@ const db            = require('../db/database');
 const whatsapp      = require('../services/whatsapp-provider');
 const { getPool }   = require('../db/database');
 const xlPricing = require('../services/xl-welcome-pricing');
+const quantityPricing = require('../services/quantity-pricing');
 const { setProductFavorite } = require('../services/product-favorites');
 
 // ── Helper: obtener org por slug ────────────────────────────────────
@@ -73,6 +74,7 @@ router.get('/:slug/info', async (req, res) => {
       heroTags,
       whatsappPhone: whatsappPhone || null,
       freeShipping:  freeShippingRaw ? parseInt(freeShippingRaw) : null,
+      shippingRule: await quantityPricing.loadShipping(db, org.id),
       howToBuy:     howToBuy  || null,
       aboutUs:      aboutUs   || null,
     });
@@ -87,7 +89,7 @@ router.get('/:slug/products', async (req, res) => {
     const org = await getOrgBySlug(req.params.slug);
     if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
 
-    const allProducts = await db.getProducts(org.id);
+    const allProducts = quantityPricing.decorate(await db.getProducts(org.id), await quantityPricing.loadConfig(db, org.id));
     const products = allProducts.filter(p => p.active === true && p.is_business !== true).map(p => ({...p,replaces_ids:allProducts.filter(old=>old.deprecated_at && old.replacement_product_id===p.id).map(old=>old.id)})); // nunca exponer catálogo mayorista
     res.json({ products });
   } catch (err) {
@@ -123,7 +125,7 @@ router.post('/:slug/quote', async (req, res) => {
       !Array.isArray(items) || !items.length || items.length > 100 || items.some(i => !Number.isSafeInteger(i.productId) || !Number.isSafeInteger(i.quantity) || i.quantity < 1 || i.quantity > 1000)) {
       return res.status(400).json({ error: 'Ingresa un WhatsApp chileno válido y los productos.' });
     }
-    const products = await db.getProducts(org.id, true);
+    const products = quantityPricing.decorate(await db.getProducts(org.id, true), await quantityPricing.loadConfig(db, org.id));
     const merged = new Map();
     for (const i of items) merged.set(i.productId, (merged.get(i.productId) || 0) + i.quantity);
     const lines = [...merged].map(([id, quantity]) => {
@@ -132,8 +134,8 @@ router.post('/:slug/quote', async (req, res) => {
       return { id, title: p.title, quantity, price: Number(p.price) };
     });
     const ctx = await xlPricing.context(getPool(), org.id, phone);
-    const priced = xlPricing.apply(lines, xlPricing.forStore(ctx));
-    res.json({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) });
+    const priced = quantityPricing.apply(xlPricing.apply(lines, xlPricing.forStore(ctx)), products);
+    res.json(quantityPricing.withShipping({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) }, await quantityPricing.loadShipping(db, org.id)));
   } catch (err) { res.status(err.status || 503).json({ error: 'No pudimos confirmar los precios. Intenta nuevamente.' }); }
 });
 
@@ -170,7 +172,7 @@ router.post('/:slug/orders', async (req, res) => {
     const conversation = await db.upsertConversation(org.id, phoneClean, name, evolutionChannel?.id || null);
 
     // Crear el pedido y descontar stock dentro de una misma transacción.
-    const { order, resolvedItems, total } = await db.createStoreOrder({
+    const { order, resolvedItems, total, deliveryFee, productsTotal } = await db.createStoreOrder({
       conversationId:  conversation.id,
       organizationId:  org.id,
       customerName:    name,
@@ -195,6 +197,7 @@ router.post('/:slug/orders', async (req, res) => {
       itemsText,
       ``,
       `📍 *Entrega:* ${address}, ${city}`,
+      ...(deliveryFee != null ? [`🚚 *Despacho:* ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
       `💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}`,
       `💳 *Pago:* Contra entrega`,
       ``,
@@ -229,6 +232,7 @@ router.post('/:slug/orders', async (req, res) => {
       success: true,
       orderId: order.id,
       total:   parseInt(total),
+      deliveryFee, productsTotal,
       confirmationSent,
       whatsappProvider: confirmationSent ? 'evolution' : null,
       message: confirmationSent

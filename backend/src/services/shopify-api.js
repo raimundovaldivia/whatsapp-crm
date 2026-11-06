@@ -660,6 +660,7 @@ function formatProductsForAI(products, shop = null, tiendaUrl = null) {
       p.productType ? `  Categoría: ${p.productType}` : '',
       p.description ? `  ${p.description.slice(0, 250)}` : '',
       bulkLine,
+      require('./quantity-pricing').aiText(p),
       variantes,
       productLink,
     ].filter(Boolean).join('\n');

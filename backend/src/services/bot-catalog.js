@@ -13,12 +13,15 @@ async function loadBotCatalog(db, orgId, { business = false } = {}) {
         tags: p.tags, productType: p.product_type, handle: p.handle };
     });
   }
-  const own = await db.getProducts(orgId, true);
+  const quantityPricing = require('./quantity-pricing');
+  const config = await quantityPricing.loadConfig(db, orgId);
+  const own = quantityPricing.decorate(await db.getProducts(orgId, true), config);
   return visible(own || []).map(p => ({
     id: String(p.id), title: p.title, description: p.description, sku: p.sku,
     priceMin: Number(p.price) || 0, priceMax: Number(p.price) || 0,
     compare_price: p.compare_price ?? null, bulk_price: p.bulk_price ?? null,
     bulk_min_qty: p.bulk_min_qty ?? null, inventoryQuantity: p.stock ?? null,
+    quantity_prices: p.quantity_prices, box_size: p.box_size, units_per_tray: p.units_per_tray,
     imageUrl: p.image_url || null, handle: p.handle || p.title?.toLowerCase().replace(/\s+/g, '-'),
     productType: p.category || '', active: p.active,
   }));

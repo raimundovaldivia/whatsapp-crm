@@ -110,6 +110,7 @@ function flattenCatalog(products = []) {
         price:        Number(p.priceMin) || Number(p.price) || 0,
         bulk_price:   p.bulk_price != null ? Number(p.bulk_price) : (p.bulkPrice != null ? Number(p.bulkPrice) : null),
         bulk_min_qty: p.bulk_min_qty != null ? Number(p.bulk_min_qty) : (p.bulkMinQty != null ? Number(p.bulkMinQty) : null),
+        quantity_prices: p.quantity_prices, box_size: p.box_size, units_per_tray: p.units_per_tray,
         available:    p.available !== false,
       });
     }
@@ -135,6 +136,16 @@ function matchProduct(name, catalog) {
   if (!q || !catalog?.length) return null;
 
   const requestedPackage = explicitPackageType(q);
+  if (requestedPackage === 'caja') {
+    const boxCandidates = catalog.filter(c => c.box_size && c.quantity_prices?.length);
+    const requestedUnits = q.match(/\b(\d{2,3})\b/);
+    const requestedSuper = /\bsuper\b/.test(q);
+    const requestedExtra = /\bextra\b/.test(q);
+    const matches = boxCandidates.filter(c =>
+      (requestedUnits ? Number(requestedUnits[1]) === c.box_size * c.units_per_tray : requestedExtra) &&
+      (!requestedExtra || /\bsuper\b/.test(norm(c.title)) === requestedSuper));
+    if (matches.length === 1) return { candidate: matches[0], score: 1, quantityMultiplier: matches[0].box_size };
+  }
   let candidates = requestedPackage
     ? catalog.filter(candidate => candidatePackageType(candidate) === requestedPackage)
     : catalog;
@@ -240,7 +251,7 @@ function priceItems(items = [], products = [], opts = {}) {
   for (const raw of items) {
     if (!raw) continue;
     const name = raw.product_name || raw.name || raw.title || '';
-    const qty  = Math.max(1, parseInt(raw.quantity, 10) || 1);
+    let qty  = Math.max(1, parseInt(raw.quantity, 10) || 1);
     if (!name.trim()) continue;
 
     // Las promociones con presentaciones que no existen como SKU (por ejemplo
@@ -266,6 +277,7 @@ function priceItems(items = [], products = [], opts = {}) {
       priced.push({ product_name: name, name, title: name, quantity: qty, price: Number(raw.price) || 0, unit_source: 'desconocido', matched: false });
       continue;
     }
+    qty *= m.quantityMultiplier || 1;
     const { price, source } = unitPriceFor(m.candidate, qty, specialPrices);
     if (m.ambiguous) {
       // No valorizar un producto que no está claro: el agente pregunta cuál es
@@ -295,6 +307,10 @@ function priceItems(items = [], products = [], opts = {}) {
     merged.push({ ...it, _k: k });
   }
   merged.forEach(x => delete x._k);
+  // Reprice AFTER merging: "one tray + another tray" uses the two-tray tier.
+  const quantityPricing = require('./quantity-pricing');
+  const scaled = quantityPricing.apply(merged, products);
+  merged.splice(0, merged.length, ...scaled);
 
   const subtotal = merged.reduce((s, it) => s + it.price * it.quantity, 0);
   const categoryDiscounts = Array.isArray(opts.categoryDiscounts) ? opts.categoryDiscounts : [];
@@ -367,6 +383,7 @@ function pricingContext(pricing) {
     : (pricing.discountPct
       ? `Descuento acordado: ${pricing.discountPct}% (−${fmt(pricing.discountAmount)})`
       : `Descuento promocional por producto: −${fmt(pricing.discountAmount)}`));
+  if (pricing.deliveryFee != null) out.push(`Despacho: ${pricing.deliveryFee ? fmt(pricing.deliveryFee) : 'Gratis'}`);
   out.push(`TOTAL: ${fmt(pricing.total)}`);
   return `${lines.join('\n')}\n${out.join('\n')}`;
 }
@@ -379,6 +396,7 @@ function summaryBlock(pricing) {
     : (pricing.discountPct
       ? `🏷️ Descuento ${pricing.discountPct}%: −${fmt(pricing.discountAmount)}`
       : `🏷️ Descuento promocional: −${fmt(pricing.discountAmount)}`));
+  if (pricing.deliveryFee != null) lines.push(`🚚 Despacho: ${pricing.deliveryFee ? fmt(pricing.deliveryFee) : 'Gratis'}`);
   lines.push(`💰 Total: ${fmt(pricing.total)}`);
   return lines.join('\n');
 }
