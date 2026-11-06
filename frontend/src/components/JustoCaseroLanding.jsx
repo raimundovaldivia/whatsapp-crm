@@ -16,17 +16,17 @@ const productTests = [
 const eggBoxes = [
   {
     size: 'Extra',
-    units: 180,
-    sku: 'JC-EXTRA-180',
-    title: 'Huevos Extra de color · Caja de 180',
-    text: '180 huevos de color, calibre Extra de 61–68 g. Venta por caja.',
+    units: 30,
+    sku: 'JC-EXTRA-30',
+    title: 'Huevos Extra de color · Bandeja de 30',
+    text: '30 huevos de color por bandeja, calibre Extra de 61–68 g.',
   },
   {
     size: 'Súper Extra',
-    units: 100,
-    sku: 'JC-SUPER-EXTRA-100',
-    title: 'Huevos Súper Extra de color · Caja de 100',
-    text: '100 huevos de color, calibre Súper Extra / Especial de 69–76 g. Venta por caja.',
+    units: 20,
+    sku: 'JC-SUPER-EXTRA-20',
+    title: 'Huevos Súper Extra de color · Bandeja de 20',
+    text: '20 huevos de color por bandeja, calibre Súper Extra / Especial de 69–76 g.',
   },
 ];
 
@@ -50,6 +50,7 @@ function savedPriceVotes() {
 export default function JustoCaseroLanding() {
   const [whatsapp, setWhatsapp] = useState(FALLBACK_WHATSAPP);
   const [catalog, setCatalog] = useState(null);
+  const [quantities, setQuantities] = useState({});
   const [purchaseInstructions, setPurchaseInstructions] = useState('');
   const [selection, setSelection] = useState('');
   const [otherIdea, setOtherIdea] = useState('');
@@ -79,7 +80,7 @@ export default function JustoCaseroLanding() {
     const description = document.querySelector('meta[name="description"]');
     const previousDescription = description?.getAttribute('content') || '';
     document.title = 'Justo Casero | Productos locales y precios justos';
-    description?.setAttribute('content', 'Justo Casero: huevos Extra en cajas de 180 y Súper Extra en cajas de 100. Reparto en La Serena urbana y pedidos por WhatsApp.');
+    description?.setAttribute('content', 'Huevos Extra y Súper Extra desde una bandeja. Descuento automático por cantidad. La Serena y Coquimbo.');
 
     return () => {
       controller.abort();
@@ -102,7 +103,7 @@ export default function JustoCaseroLanding() {
   };
   const priceVoteLink = (size, answer) => whatsappHref(
     whatsapp,
-    `Hola, mi opinión sobre el precio cotizado de la caja de huevos café ${size} es: ${answer === 'fair' ? 'sí, me parece justo 👍' : 'creo que podría ser más bajo 👎'}.`,
+    `Hola, mi opinión sobre el precio cotizado de los huevos café ${size} es: ${answer === 'fair' ? 'sí, me parece justo 👍' : 'creo que podría ser más bajo 👎'}.`,
   );
 
   return (
@@ -118,7 +119,7 @@ export default function JustoCaseroLanding() {
             <a href="#precio-justo">Precio justo</a>
             <a href="#proximo-producto">Tu voto</a>
           </nav>
-          <a className="jc-button jc-button-small" href={orderLink('Hola, quiero consultar por las cajas Extra de 180 y Súper Extra de 100 de Justo Casero.')} target="_blank" rel="noreferrer">
+          <a className="jc-button jc-button-small" href={orderLink('Hola, quiero comprar bandejas de huevos Extra o Súper Extra en Justo Casero.')} target="_blank" rel="noreferrer">
             Pedir por WhatsApp
           </a>
         </div>
@@ -130,26 +131,26 @@ export default function JustoCaseroLanding() {
             <div className="jc-hero-copy">
               <div className="jc-eyebrow"><span /> Para la casera y el casero</div>
               <h1>Local cuando se puede. <em>Buen precio siempre.</em></h1>
-              <p className="jc-hero-lead">Huevos de color en dos formatos: Extra de 180 y Súper Extra de 100. Después iremos sumando productos locales o alternativas que realmente convengan.</p>
+              <p className="jc-hero-lead">Compra desde una bandeja de huevos de color. Elige Extra de 30 o Súper Extra de 20: al llevar más del mismo calibre, pagas menos por bandeja.</p>
               <div className="jc-hero-actions">
-                <a className="jc-button jc-button-primary" href={orderLink('Hola, quiero conocer el precio y disponibilidad de Extra de 180 y Súper Extra de 100 huevos.')} target="_blank" rel="noreferrer">
-                  Consultar precio por caja <span aria-hidden="true">→</span>
+                <a className="jc-button jc-button-primary" href="#productos" target="_blank" rel="noreferrer">
+                  Elegir mis bandejas <span aria-hidden="true">→</span>
                 </a>
                 <a className="jc-button jc-button-ghost" href="#productos">Ver tamaños</a>
               </div>
-              <p className="jc-coverage"><span className="jc-icon" aria-hidden="true">⌖</span> Reparto incluido en La Serena urbana</p>
+              <p className="jc-coverage"><span className="jc-icon" aria-hidden="true">⌖</span> Reparto en La Serena y Coquimbo</p>
             </div>
-            <div className="jc-hero-visual" aria-label="Cajas Extra de 180 y Súper Extra de 100 huevos">
+            <div className="jc-hero-visual" aria-label="Bandejas de huevos Extra y Súper Extra">
               <div className="jc-price-note">Huevos de color<br /><strong>Extra + Súper Extra</strong></div>
-              <img src="/store-assets/justo-casero/hero-huevos.png" alt="Huevos de color vendidos por caja" />
-              <div className="jc-hero-stamp">Venta<br />por caja</div>
+              <img src="/store-assets/justo-casero/hero-huevos.png" alt="Huevos de color en bandejas" />
+              <div className="jc-hero-stamp">Desde<br />1 bandeja</div>
             </div>
           </div>
         </section>
 
         <section className="jc-benefits" aria-label="Características de la oferta">
           <div className="jc-container jc-benefit-grid">
-            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Extra de 180 y Súper Extra de 100 huevos de color.</p></div></article>
+            <article><span className="jc-icon" aria-hidden="true">●</span><div><h2>Partimos con huevos</h2><p>Extra: 30 huevos por bandeja. Súper Extra: 20.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">▦</span><div><h2>Selección con criterio</h2><p>Cada producto debe ser local o tener un precio que realmente convenga.</p></div></article>
             <article><span className="jc-icon" aria-hidden="true">→</span><div><h2>Ustedes deciden</h2><p>La casera y el casero nos ayudan a elegir qué incorporar después.</p></div></article>
           </div>
@@ -159,22 +160,47 @@ export default function JustoCaseroLanding() {
           <div className="jc-container">
             <div className="jc-section-heading">
               <div><span className="jc-kicker">Nuestra primera categoría</span><h2>Huevos café.<br />Dos tamaños.</h2></div>
-              <p>Elige el calibre y la cantidad que necesitas: Extra en cajas de 180 o Súper Extra en cajas de 100. Precios por caja, con reparto incluido en La Serena urbana.</p>
+              <p>Elige tus bandejas y el descuento se aplica automáticamente. Revisa el total y cuánto pagas por bandeja antes de pedir.</p>
             </div>
             <div className="jc-egg-grid">
               {eggBoxes.map((product, index) => {
                 const activeProduct = catalog?.find(item => item?.sku === product.sku);
-                const price = Number(activeProduct?.price);
-                const available = activeProduct && (Number(activeProduct.stock) === -1 || Number(activeProduct.stock) > 0);
+                const tiers = activeProduct?.quantity_prices;
+                const quantity = quantities[product.sku] || 1;
+                const total = Array.isArray(tiers) ? tiers[quantity - 1] : null;
+                const available = activeProduct && (Number(activeProduct.stock) === -1 || Number(activeProduct.stock) >= quantity);
+                const ready = available && Number.isFinite(total) && total > 0;
+                const money = value => '$' + Math.round(value).toLocaleString('es-CL');
+                const shipping = quantity >= activeProduct?.box_size
+                  ? 'Caja completa: reparto incluido en la cobertura acordada. Confirma tu sector por WhatsApp.'
+                  : 'Despacho se cotiza según tu sector y se confirma antes de cerrar el pedido.';
                 return (
                 <article className={`jc-egg-card jc-egg-card-${index + 1}`} key={product.size}>
                   <span className="jc-card-number">0{index + 1}</span>
                   <span className="jc-size-label" aria-hidden="true">{product.units}</span>
                   <h3>{product.title}</h3>
                   <p>{product.text}</p>
-                  {activeProduct && Number.isFinite(price) && price > 0 && <strong className="jc-box-price">${price.toLocaleString('es-CL')} por caja</strong>}
-                  <p>{catalog === null ? 'Consulta precio y disponibilidad por WhatsApp.' : available ? 'Disponible. Reparto incluido en La Serena urbana.' : 'Temporalmente no disponible. Consulta por el próximo ingreso.'}</p>
-                  <a href={orderLink(`Hola, quiero consultar precio y disponibilidad de la ${product.title}.`)} target="_blank" rel="noreferrer">Consultar por {product.size} <span>→</span></a>
+                  {tiers?.length > 0 && <>
+                    <label className="jc-quantity-label">Cantidad de bandejas
+                      <select aria-label={`Bandejas de ${product.size}`} value={quantity} onChange={event => setQuantities(previous => ({ ...previous, [product.sku]: Number(event.target.value) }))}>
+                        {tiers.map((_, i) => <option key={i} value={i + 1}>{i + 1} {i === 0 ? 'bandeja' : 'bandejas'} · {(i + 1) * product.units} huevos</option>)}
+                      </select>
+                    </label>
+                    <div className="jc-tray-total" aria-live="polite">
+                      <strong>{money(total)}</strong><span>Total de productos · {quantity * product.units} huevos</span>
+                      <b>{quantity > 1 ? '≈ ' : ''}{money(total / quantity)} por bandeja</b>
+                      {quantity > 1 && <small>Ahorras {money(tiers[0] * quantity - total)} frente a comprarlas individualmente.</small>}
+                    </div>
+                    <details className="jc-tier-details"><summary>Ver todos los precios por cantidad</summary>
+                      <table><thead><tr><th>Bandejas</th><th>Total</th><th>Por bandeja</th></tr></thead><tbody>
+                        {tiers.map((amount, i) => <tr key={i}><td>{i + 1}</td><td>{money(amount)}</td><td>{money(amount / (i + 1))}</td></tr>)}
+                      </tbody></table>
+                    </details>
+                  </>}
+                  <p className="jc-shipping-note">{shipping}</p>
+                  <p>{catalog === null ? 'Cargando precios y disponibilidad…' : available ? '' : 'Temporalmente no disponible. Consulta por el próximo ingreso.'}</p>
+                  {ready ? <a href={orderLink(`Hola, quiero ${quantity} ${quantity === 1 ? 'bandeja' : 'bandejas'} de huevos ${product.size} de color de ${product.units} huevos cada una (${quantity * product.units} huevos en total). Precio de productos: ${money(total)}. Quiero confirmar el despacho y completar el pedido.`)} target="_blank" rel="noreferrer">Pedir {quantity} {quantity === 1 ? 'bandeja' : 'bandejas'} · {money(total)} <span>→</span></a>
+                    : <a href={orderLink(`Hola, quiero consultar la disponibilidad de huevos ${product.size} por bandeja.`)} target="_blank" rel="noreferrer">Consultar disponibilidad <span>→</span></a>}
                 </article>
                 );
               })}
@@ -194,9 +220,9 @@ export default function JustoCaseroLanding() {
                 const answer = priceVotes[product.size];
                 return (
                   <article className="jc-price-vote-card" key={product.size}>
-                    <div><span>Caja de huevos café</span><strong>{product.size}</strong></div>
+                    <div><span>Huevos café por bandeja</span><strong>{product.size}</strong></div>
                     <p>¿El precio cotizado está bien?</p>
-                    <div className="jc-price-vote-buttons" role="group" aria-label={`Evaluar precio de caja ${product.size}`}>
+                    <div className="jc-price-vote-buttons" role="group" aria-label={`Evaluar precio de ${product.size}`}>
                       <button type="button" className={answer === 'fair' ? 'is-selected is-fair' : ''} aria-pressed={answer === 'fair'} onClick={() => choosePriceVote(product.size, 'fair')}><span aria-hidden="true">👍</span> Sí, está justo</button>
                       <button type="button" className={answer === 'high' ? 'is-selected is-high' : ''} aria-pressed={answer === 'high'} onClick={() => choosePriceVote(product.size, 'high')}><span aria-hidden="true">👎</span> Está un poco alto</button>
                     </div>
@@ -218,8 +244,8 @@ export default function JustoCaseroLanding() {
           <div className="jc-container">
             <div className="jc-centered-heading"><span className="jc-kicker">Comprar será así de fácil</span><h2>Tres pasos y listo.</h2></div>
             <ol className="jc-steps">
-              <li><span>1</span><h3>Consulta</h3><p>Pide el precio vigente de las cajas de huevos café.</p></li>
-              <li><span>2</span><h3>Elige</h3><p>Indica Extra de 180 o Súper Extra de 100, la cantidad de cajas y tu dirección.</p></li>
+              <li><span>1</span><h3>Consulta</h3><p>Elige Extra de 30 o Súper Extra de 20 huevos por bandeja.</p></li>
+              <li><span>2</span><h3>Elige</h3><p>Selecciona desde una bandeja. Verás automáticamente el descuento y el total según tu cantidad.</p></li>
               <li><span>3</span><h3>Confirma</h3><p>Revisa el resumen y confírmalo por WhatsApp. Recibirás el número de tu pedido. Pagas en efectivo o transferencia al recibir.</p></li>
             </ol>
             {purchaseInstructions && (
@@ -233,8 +259,8 @@ export default function JustoCaseroLanding() {
 
         <section className="jc-contact" id="contacto">
           <div className="jc-container jc-contact-card">
-            <div><span className="jc-kicker">EXTRA O SÚPER EXTRA</span><h2>Tu caja de huevos de color.</h2><p>Repartimos de lunes a sábado, de 15:00 a 21:00. Pedidos hasta las 15:00 inclusive; después, para el siguiente día de reparto disponible. Fuera de La Serena urbana, consulta cobertura y costo antes de comprar.</p></div>
-            <a className="jc-button jc-button-dark" href={orderLink('Hola, quiero pedir una caja de huevos de color. ¿Qué disponibilidad tienen en Extra de 180 y Súper Extra de 100?')} target="_blank" rel="noreferrer">Abrir WhatsApp <span>→</span></a>
+            <div><span className="jc-kicker">EXTRA O SÚPER EXTRA</span><h2>Tus bandejas de huevos de color.</h2><p>Repartimos de lunes a sábado, de 15:00 a 21:00. Pedidos hasta las 15:00 inclusive; después, para el siguiente día de reparto disponible. Consulta el costo del despacho para tu cantidad y sector antes de confirmar. Las cajas completas conservan el reparto incluido en la cobertura acordada.</p></div>
+            <a className="jc-button jc-button-dark" href={orderLink('Hola, quiero pedir huevos de color por bandeja. ¿Qué disponibilidad tienen en Extra y Súper Extra?')} target="_blank" rel="noreferrer">Abrir WhatsApp <span>→</span></a>
           </div>
         </section>
 
@@ -263,7 +289,7 @@ export default function JustoCaseroLanding() {
         </section>
       </main>
 
-      <footer className="jc-footer"><div className="jc-container jc-footer-inner"><img src="/store-assets/justo-casero/logo.png" alt="Justo Casero" /><p>Para la casera y el casero: productos locales o de buen precio.</p><a href={orderLink('Hola, quiero comprar huevos café en caja.')} target="_blank" rel="noreferrer">Comprar por WhatsApp</a></div></footer>
+      <footer className="jc-footer"><div className="jc-container jc-footer-inner"><img src="/store-assets/justo-casero/logo.png" alt="Justo Casero" /><p>Para la casera y el casero: productos locales o de buen precio.</p><a href={orderLink('Hola, quiero comprar huevos café por bandeja.')} target="_blank" rel="noreferrer">Comprar por WhatsApp</a></div></footer>
     </div>
   );
 }

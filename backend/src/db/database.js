@@ -2130,7 +2130,7 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
     const xlContext = await xlPricing.context(client, organizationId, customerPhone);
     const ids = [...requested.keys()];
     const { rows: products } = await client.query(
-      `SELECT id, title, price, stock, active, is_business
+      `SELECT id, title, price, stock, active, is_business, sku
          FROM products
         WHERE organization_id = $1 AND id = ANY($2::int[])
         FOR UPDATE`,
@@ -2158,7 +2158,10 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
       total += price * quantity;
     }
 
-    const adjusted = xlPricing.apply(resolvedItems, xlPricing.forStore(xlContext));
+    const quantityPricing = require('../services/quantity-pricing');
+    const { rows: quantitySettings } = await client.query('SELECT value FROM settings WHERE organization_id = $1 AND key = $2', [organizationId, quantityPricing.SETTING]);
+    const quantityProducts = quantityPricing.decorate(products, quantityPricing.parseConfig(quantitySettings[0]?.value));
+    const adjusted = quantityPricing.apply(xlPricing.apply(resolvedItems, xlPricing.forStore(xlContext)), quantityProducts);
     resolvedItems.splice(0, resolvedItems.length, ...adjusted);
     total = Math.round(resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0));
     if (expectedTotal != null && Number(expectedTotal) !== total) {
