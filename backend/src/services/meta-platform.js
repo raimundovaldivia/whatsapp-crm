@@ -33,23 +33,24 @@ function decryptToken(value) {
   return Buffer.concat([decipher.update(Buffer.from(payload, 'base64url')), decipher.final()]).toString('utf8');
 }
 
-function appSecretProof(token) {
-  return crypto.createHmac('sha256', requiredEnv('META_APP_SECRET')).update(token).digest('hex');
+function appSecretProof(token, appSecret = requiredEnv('META_APP_SECRET')) {
+  if (!appSecret) throw new Error('Falta el secreto de la app Meta');
+  return crypto.createHmac('sha256', appSecret).update(token).digest('hex');
 }
 
-async function graphGet(path, token, params = {}) {
+async function graphGet(path, token, params = {}, options = {}) {
   const response = await axios.get(`${GRAPH_URL}/${String(path).replace(/^\//, '')}`, {
-    params: { ...params, access_token: token, appsecret_proof: appSecretProof(token) },
+    params: { ...params, access_token: token, appsecret_proof: appSecretProof(token, options.appSecret) },
     timeout: 20000,
   });
   return response.data;
 }
 
-async function graphPost(path, token, data = {}) {
+async function graphPost(path, token, data = {}, options = {}) {
   const response = await axios.post(`${GRAPH_URL}/${String(path).replace(/^\//, '')}`, {
     ...data,
     access_token: token,
-    appsecret_proof: appSecretProof(token),
+    appsecret_proof: appSecretProof(token, options.appSecret),
   }, { timeout: 30000 });
   return response.data;
 }

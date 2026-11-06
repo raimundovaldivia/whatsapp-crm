@@ -357,6 +357,9 @@ router.get('/assets', async (req, res) => {
 
 router.post('/whatsapp/activate', async (req, res) => {
   try {
+    if (process.env.META_WHATSAPP_APP_ID || process.env.META_WHATSAPP_APP_SECRET) {
+      return res.status(409).json({ error: 'WhatsApp usa una aplicación propia. Completa su conexión en Ajustes → WhatsApp con el token de usuario del sistema' });
+    }
     const wabaId = String(req.body.businessAccountId || '').trim();
     const phoneId = String(req.body.phoneNumberId || '').trim();
     if (!wabaId || !phoneId) return res.status(400).json({ error: 'Selecciona una cuenta de WhatsApp Business y un número' });
