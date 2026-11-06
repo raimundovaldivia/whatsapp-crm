@@ -1,7 +1,37 @@
 // One purchase ledger for audience selection and AI evidence. Profile edits are
 // never purchases; linked Shopify/CRM representations count only once.
 const { normalizePhone, buildCustomerIdentityMap } = require('./customer-identity');
-const { todayISOChile } = require('./business-date');
+const { todayISOChile, isValidISODate, addDays } = require('./business-date');
+
+function purchaseDate(order) {
+  return typeof order.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(order.date)
+    ? (isValidISODate(order.date) ? order.date : null) : todayISOChile(new Date(order.date));
+}
+
+// Shared by the customer list and the evidence used to write follow-ups.
+function summarizeDates(dates, today) {
+  const distinct = [...new Set(dates)].filter(date => isValidISODate(date) && date <= today).sort();
+  const recent = distinct.slice(-12);
+  const daysBetween = (a, b) => (Date.parse(a) - Date.parse(b)) / 86400000;
+  const gaps = recent.slice(1).map((date, index) => daysBetween(date, recent[index]));
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const median = gaps.length ? (sorted[Math.floor(sorted.length / 2)] + sorted[Math.floor((sorted.length - 1) / 2)]) / 2 : null;
+  const intervalDays = median == null ? null : Math.round(median * 10) / 10;
+  const lastPurchase = distinct.at(-1) || null;
+  const nextPurchase = intervalDays == null ? null : addDays(lastPurchase, Math.round(intervalDays));
+  const daysUntilNext = nextPurchase ? daysBetween(nextPurchase, today) : null;
+  const mean = gaps.length ? gaps.reduce((sum, value) => sum + value, 0) / gaps.length : 0;
+  const variation = mean ? Math.sqrt(gaps.reduce((sum, value) => sum + (value - mean) ** 2, 0) / gaps.length) / mean : 0;
+  return {
+    purchaseDays: distinct.length, sampleDays: recent.length, lastPurchase,
+    daysSincePurchase: lastPurchase ? daysBetween(today, lastPurchase) : null,
+    intervalDays, nextPurchase, daysUntilNext,
+    regularity: gaps.length < 2 ? 'insufficient' : variation > 0.5 ? 'variable' : 'regular',
+    cadence: intervalDays == null ? 'unknown' : intervalDays <= 10 ? 'weekly' : intervalDays <= 20 ? 'fortnightly' : intervalDays <= 40 ? 'monthly' : 'occasional',
+    status: daysUntilNext == null ? 'insufficient' : daysUntilNext < 0 ? 'overdue' : daysUntilNext <= 3 ? 'due' : 'upcoming',
+    recentDates: recent.slice().reverse(),
+  };
+}
 
 function isPurchase(order) {
   return ['PAID', 'PARTIALLY_PAID', 'ENTREGADO', 'DELIVERED', 'FULFILLED', 'COMPLETED']
@@ -52,10 +82,9 @@ async function loadPurchases(pool, orgId, phones = null) {
 }
 
 function purchaseSummary(orders, today) {
-  const valid = orders.filter(isPurchase);
-  const dates = [...new Set(valid.map(order => todayISOChile(new Date(order.date))))].sort().reverse();
-  const intervals = dates.slice(1).map((date, i) => (Date.parse(dates[i]) - Date.parse(date)) / 86400000).sort((a, b) => a - b);
-  const middle = Math.floor(intervals.length / 2);
+  const valid = orders.filter(order => isPurchase(order) && purchaseDate(order) && purchaseDate(order) <= today)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  const frequency = summarizeDates(valid.map(purchaseDate), today);
   const itemsOf = raw => {
     let items = raw;
     if (typeof items === 'string') { try { items = JSON.parse(items); } catch { return []; } }
@@ -64,13 +93,18 @@ function purchaseSummary(orders, today) {
     })) : [];
   };
   return {
-    ultimaCompra: dates[0] || null,
-    diasDesdeCompra: dates.length ? (Date.parse(today) - Date.parse(dates[0])) / 86400000 : null,
+    ultimaCompra: frequency.lastPurchase,
+    diasDesdeCompra: frequency.daysSincePurchase,
     cantidadPedidos: valid.length,
-    intervaloMedianoDias: intervals.length ? (intervals[middle] + intervals[Math.floor((intervals.length - 1) / 2)]) / 2 : null,
-    fechasDistintas: dates.length,
+    intervaloMedianoDias: frequency.intervalDays,
+    fechasDistintas: frequency.purchaseDays,
+    regularidad: frequency.regularity,
+    proximaCompraEstimada: frequency.nextPurchase,
+    diasHastaProximaCompra: frequency.daysUntilNext,
+    estadoFrecuencia: frequency.status,
+    fechasUsadas: frequency.recentDates,
     limite: 'Pedidos pagados o entregados; una sola fecha no permite inferir frecuencia. Cantidad es unidades del producto, no huevos individuales.',
-    pedidos: valid.slice(0, 12).map(order => ({ fecha: todayISOChile(new Date(order.date)), productos: itemsOf(order.items), estado: String(order.status || '').slice(0, 40) })),
+    pedidos: valid.slice(0, 12).map(order => ({ fecha: purchaseDate(order), productos: itemsOf(order.items), estado: String(order.status || '').slice(0, 40) })),
   };
 }
 
@@ -90,4 +124,4 @@ function withPurchaseStats(contacts, rawContacts, orders) {
   });
 }
 
-module.exports = { loadPurchases, loadOrderLedger, purchaseSummary, withPurchaseStats, isPurchase };
+module.exports = { loadPurchases, loadOrderLedger, purchaseSummary, withPurchaseStats, isPurchase, purchaseDate, summarizeDates };

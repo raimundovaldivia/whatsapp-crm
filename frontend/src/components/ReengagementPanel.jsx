@@ -11,9 +11,9 @@ import {
 import { api, reengagementAPI } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
-import { summarizeDraftAudience, reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries } from '../utils/broadcast-drafts.mjs';
+import { summarizeDraftAudience, reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries, validateDraftBatch } from '../utils/broadcast-drafts.mjs';
 import { crmOrderLabel } from '../utils/order-reference.js';
-import { frequencyBroadcastContacts, initialEvolutionMethod } from '../utils/purchase-frequency.mjs';
+import { frequencyBroadcastContacts, initialEvolutionMethod, frequencyDraftRequest, FREQUENCY_FOLLOWUP_INSTRUCTION } from '../utils/purchase-frequency.mjs';
 import { fromChileInput, formatChile } from '../utils/social-schedule.mjs';
 
 function DraftAudienceSummary({ prepared, excluded = [] }) {
@@ -1337,7 +1337,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
     catch { return 'Fecha u hora inválida'; }
   })();
   const [directText, setDirectText] = useState(frequencyAudience ? 'Hola {{nombre}}, ¿cómo estás? ¿Necesitas reponer tu pedido? Si quieres, te ayudo a coordinar una nueva compra.' : '');
-  const [directMode, setDirectMode] = useState(frequencyAudience ? 'manual' : 'instruction');
+  const [directMode, setDirectMode] = useState(frequencyAudience ? 'frequency' : 'instruction');
   const [directInstruction, setDirectInstruction] = useState(frequencyAudience ? 'Redacta un seguimiento breve y cercano para consultar si necesita reponer su pedido. Usa su historial sin afirmar que ya se le acabó el producto ni inventar precios, descuentos, disponibilidad o fechas de entrega.' : '');
   const [drafting, setDrafting] = useState(false);
   const [draftProgress, setDraftProgress] = useState({ done: 0, total: 0 });
@@ -1345,8 +1345,9 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
   const draftRunRef = useRef(0);
   const directEditorRef = useRef(null);
   const isDirect = sendingMethodKey.startsWith('evolution:');
-  const isInstruction = isDirect && directMode === 'instruction';
-  const messageReady = isDirect ? (isInstruction ? directInstruction.trim().length >= 10 : !!directText.trim()) : !!selTpl;
+  const isFrequency = isDirect && directMode === 'frequency';
+  const isInstruction = isDirect && (directMode === 'instruction' || isFrequency);
+  const messageReady = isDirect ? (isFrequency || (isInstruction ? directInstruction.trim().length >= 10 : !!directText.trim())) : !!selTpl;
   const [waitSeconds, setWaitSeconds] = useState(0);
   const selectedMethod = sendingMethods.find(m => (m.channelId ? `evolution:${m.channelId}` : 'kapso') === sendingMethodKey);
   const loadSendingMethods = useCallback(async (background = false) => {
@@ -2216,6 +2217,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
     if (selectedCount > 5000) { showToast('Acota la selección a un máximo de 5.000 clientes para revisar sus borradores.', 'error'); return; }
     const run = ++draftRunRef.current;
     const chosen = testMode ? audience.slice(0, 1) : [...audience];
+    const instruction = isFrequency ? FREQUENCY_FOLLOWUP_INSTRUCTION : directInstruction.trim();
     setDrafting(true);
     setDraftProgress({ done: 0, total: chosen.length });
     setDraftReport(null);
@@ -2223,12 +2225,12 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
     const drafts = [];
     try {
       for (let i = 0; i < chosen.length; i += 6) {
-        const { data } = await api.post('/reengagement/generate', {
-          instruction: directInstruction.trim(), phones: chosen.slice(i, i + 6).map(contact => contact.phone), audienceType,
+        const phones = chosen.slice(i, i + 6).map(contact => contact.phone);
+        const { data } = await api.post('/reengagement/generate', isFrequency ? frequencyDraftRequest(phones) : {
+          instruction, phones, audienceType,
         }, { timeout: 180000 });
         if (run !== draftRunRef.current) return;
-        if (!Array.isArray(data.drafts)) throw new Error('No se recibieron los borradores. No se ha enviado nada.');
-        drafts.push(...data.drafts);
+        drafts.push(...validateDraftBatch(data.drafts, phones));
         setDraftProgress({ done: Math.min(i + 6, chosen.length), total: chosen.length });
       }
       const excluded = drafts.filter(draft => draft.decision !== 'draft');
@@ -2242,12 +2244,12 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
             contactName: contact.name, message: draft.message, previewText: draft.message, offers: offerList } };
       });
       setDraftReport({ excluded, total: chosen.length, prepared: entries.length });
-      if (!entries.length) { showToast('Ningún cliente cumple las condiciones. Revisa los motivos y ajusta la instrucción.', 'error'); return; }
+      if (!entries.length) { showToast('No hay mensajes listos. Revisa los motivos de exclusión antes de continuar.', 'error'); return; }
       setReviewIdx(0);
       setGuidedReview(true);
       setReviewedItems(new Set());
-      setReviewPlan({ templateName: 'Redacción individual · Evolution', entries,
-        generationMode: 'instruction', instruction: directInstruction.trim(), excluded,
+      setReviewPlan({ templateName: isFrequency ? 'Seguimiento por frecuencia · Evolution' : 'Redacción individual · Evolution', entries,
+        generationMode: 'instruction', instruction, excluded,
         sendingProvider: selectedMethod.provider, sendingChannelId: selectedMethod.channelId,
         sendingLabel: selectedMethod.label, audienceLabel: frequencyAudience ? 'Clientes seleccionados por frecuencia de compra' : purchaseAgeLabel(purchaseDays),
         ...directPacing, testMode, testPhone: TEST_PHONE, createdAt: Date.now() });
@@ -3027,7 +3029,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
           opacity: sending ? 0.7 : 1,
         }}>
           <Send size={14} />
-          {drafting ? `Redactando ${draftProgress.done}/${draftProgress.total}…` : sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : isInstruction ? `Preparar ${testMode ? 1 : selectedCount} borradores` : (testMode ? 'Revisar 1 mensaje de prueba' : `Revisar envío a ${selectedCount}`)}
+          {drafting ? `Redactando ${draftProgress.done}/${draftProgress.total}…` : sending ? (sendProgress.total ? `Enviando ${sendProgress.done}/${sendProgress.total}…` : 'Enviando…') : isFrequency ? `Generar ${testMode ? 1 : selectedCount} mensajes personalizados` : isInstruction ? `Preparar ${testMode ? 1 : selectedCount} borradores` : (testMode ? 'Revisar 1 mensaje de prueba' : `Revisar envío a ${selectedCount}`)}
         </button>
       </div>
 
@@ -3270,22 +3272,25 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
         <label style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 800 }}>Redacción para Evolution
           <select aria-label="Cómo redactar los mensajes" value={directMode} disabled={sending || drafting || !!reviewPlan}
             onChange={event => setDirectMode(event.target.value)} style={{ marginLeft: 12, padding: 6, background: colors.bgCard, color: colors.textPrimary }}>
+            {frequencyAudience && <option value="frequency">Automático según última compra y frecuencia</option>}
             <option value="instruction">Dar una instrucción a la IA</option>
             <option value="manual">Escribir un texto común manualmente</option>
           </select>
         </label>
         {isInstruction ? <>
+          {isFrequency ? <p style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6 }}>Se generará un mensaje individual con los productos de su última compra, el tiempo transcurrido y su frecuencia estimada. Si compró hace poco, tiene un patrón variable o poco historial, la pregunta se adaptará sin asumir que necesita reponer. No necesitas escribir una instrucción.</p> : <>
           <p style={{ fontSize: 12, color: colors.textSecondary }}>Explica qué quieres lograr, las ofertas y a quiénes excluir. La IA revisará las compras y conversaciones para redactar un borrador por cliente. Tú revisas y autorizas los mensajes antes de enviarlos.</p>
           <textarea id="evolution-instruction" aria-label="Instrucción para redactar mensajes" value={directInstruction} maxLength={6000}
             disabled={sending || drafting || !!reviewPlan} onChange={event => setDirectInstruction(event.target.value)} rows={5}
             placeholder="Ofrece reposición para mañana a particulares según cuándo y cuánto compran. Incluye aceitunas y trata de otra forma a quienes compraron una sola vez. Indica aquí los precios, cantidades disponibles y exclusiones."
             style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 12, borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5 }} />
+          </>}
           <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>Preparar borradores no envía mensajes. Se evalúa solamente el público seleccionado. Los precios y compromisos deben revisarse antes de autorizar.</div>
-          <details style={{ marginTop: 12, color: colors.textSecondary, fontSize: 12 }}>
+          {!isFrequency && <details style={{ marginTop: 12, color: colors.textSecondary, fontSize: 12 }}>
             <summary>Recuperar borradores de promoción guardados</summary>
             <p>Carga los textos guardados de los contactos seleccionados. Conserva su orden, pero exige completar las ofertas y revisar todo de nuevo. No recupera autorizaciones ni envía mensajes.</p>
             <input type="file" accept=".json,application/json" aria-label="Archivo de borradores de promoción" disabled={sending || drafting || !!reviewPlan || testMode} onChange={restorePromotionDrafts} />
-          </details>
+          </details>}
           {drafting && <button onClick={() => { draftRunRef.current++; setDrafting(false); }} style={{ marginTop: 8 }}>Cancelar preparación</button>}
           {draftReport && <div style={{ marginTop: 10, color: colors.textSecondary, fontSize: 12 }}>
             <DraftAudienceSummary prepared={draftReport.prepared} excluded={draftReport.excluded} />
@@ -3635,6 +3640,8 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
                   <div style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
                     {entry.reason}
                     {entry.evidence && <div style={{ marginTop: 5 }}>Última compra: {entry.evidence.ultimaCompra || 'sin registro'} · Intervalo entre compras: {entry.evidence.intervaloMedianoDias ? `${entry.evidence.intervaloMedianoDias} días (estimado)` : 'sin frecuencia suficiente'}</div>}
+                    {entry.evidence?.pedidos?.[0]?.productos?.length > 0 && <div style={{ marginTop: 5 }}>Productos de la última compra: {entry.evidence.pedidos[0].productos.map(product => product.producto).filter(Boolean).join(' · ')}</div>}
+                    {entry.evidence?.regularidad && <div style={{ marginTop: 5 }}>Historial: {({ regular: 'regular', variable: 'variable', insufficient: 'limitado' })[entry.evidence.regularidad]}{entry.evidence.proximaCompraEstimada ? ` · Próxima compra estimada: ${entry.evidence.proximaCompraEstimada}` : ''}</div>}
                   </div>
                   <textarea aria-label={`Mensaje para ${entry.contact?.name || entry.contact?.phone}`} value={entry.previewText} rows={6} maxLength={1200} disabled={sending}
                     onChange={event => {

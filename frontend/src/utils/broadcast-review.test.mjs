@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { validateDraftBatch } from './broadcast-drafts.mjs';
 import { summarizeDraftAudience, offerCatalog, offerExpiryInput, restoreDraftEntries, canApproveDrafts, setEntryOffers, setEntryOfferChecks, offersSnapshot } from './broadcast-drafts.mjs';
+
+test('draft batches account for each selected customer exactly once, including explicit exclusions', () => {
+  const phones = ['56911111111', '56922222222'];
+  const rows = [{ phone: phones[0], decision: 'draft' }, { phone: phones[1], decision: 'skip', reason: 'Baja' }];
+  assert.equal(validateDraftBatch(rows, phones), rows);
+  assert.equal(validateDraftBatch([...rows].reverse(), phones).length, 2);
+  for (const invalid of [null, [], [rows[0]], [rows[0], rows[0]], [...rows, rows[0]],
+    [rows[0], { phone: '56933333333', decision: 'draft' }], [rows[0], { ...rows[1], decision: 'unknown' }], [rows[0], null]]) {
+    assert.throws(() => validateDraftBatch(invalid, phones));
+  }
+});
 
 test('catalog accepts the actual products envelope and excludes inactive or retired products', () => {
   const rows = [{ id: 1, active: true }, { id: 2, active: false }, { id: 3, active: true, deprecated_at: '2026-10-01' }];

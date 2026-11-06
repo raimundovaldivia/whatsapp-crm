@@ -1,6 +1,6 @@
 // Local browser fixture. Every CRM request is replaced; CSP blocks external calls.
 // Run: node test/frequency-followup-preview.mjs, then http://127.0.0.1:5194
-// ?scenario=disconnected|changed|error|pages exercises negative/selection cases.
+// ?scenario=disconnected|changed|error|pages|generation-error|missing|skip exercises negative cases.
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +15,7 @@ const customers = [
   ...(scenario === 'pages' ? Array.from({length:51}, (_,i) => ({...base,name:'Cliente '+i,phone:String(56940000000+i)})) : []),
 ];
 let reads = 0;
+let generations = 0;
 const posts = [];
 const campaigns = [];
 const log = () => { document.getElementById('requests').textContent = JSON.stringify({simulatedPosts: posts},null,2); };
@@ -34,6 +35,19 @@ export const api = {
   },
   post: async (url,body) => {
     posts.push({url,body}); log();
+    if (url === '/reengagement/generate') {
+      generations++;
+      if (scenario === 'generation-error' && generations === 1) throw new Error('Fallo simulado de generación; puedes reintentar.');
+      const drafts = body.phones.map(phone => {
+        const first = phone === '56911111111';
+        return scenario === 'skip' && !first ? {phone,name:'Bruno Ejemplo',decision:'skip',reasonCode:'opt_out',reason:'Contacto dado de baja.'} : {
+          phone,name:first ? 'Ana Ejemplo':'Bruno Ejemplo',decision:'draft',reason:'Productos y frecuencia verificados en su historial.',offers:[],
+          message:first ? 'Hola Ana, en tu última compra elegiste huevos XL. ¿Te gustaría volver a pedir esta semana?':'Hola Bruno, ¿te gustaría conocer las opciones para volver a pedir aceitunas?',
+          evidence:{ultimaCompra:first?'2026-10-30':'2026-11-01',intervaloMedianoDias:first?7:null,regularidad:first?'regular':'insufficient',proximaCompraEstimada:first?'2026-11-06':null,pedidos:[{productos:[{producto:first?'Huevos XL':'Aceitunas',cantidad:first?2:1}]}]},
+        };
+      });
+      return {data:{drafts:scenario === 'missing' ? drafts.slice(0,-1):drafts,requiresApproval:true,businessDate:'2026-11-06'}};
+    }
     if (url === '/reengagement/campaigns') { const campaign={...body,id:1,template_name:body.templateName,created_at:new Date().toISOString(),total_count:body.total,status:'processing',sending_provider:body.sendingProvider,server_managed:true,queue_pending_count:body.total}; campaigns.push(campaign);return {data:{campaign}}; }
     if (url === '/reengagement/campaigns/1/start') return {data:{success:true}};
     throw new Error('Unexpected write '+url);

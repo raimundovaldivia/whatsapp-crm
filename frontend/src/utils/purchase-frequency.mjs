@@ -2,6 +2,12 @@ export const cadenceLabels = { unknown: 'Sin frecuencia', weekly: 'Hasta 10 día
 export const statusLabels = { followup: 'Para seguimiento', overdue: 'Pasó su fecha estimada', due: 'Próximos 3 días', upcoming: 'Más adelante', insufficient: 'Historial insuficiente' };
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
+export const FREQUENCY_FOLLOWUP_INSTRUCTION = 'Genera un WhatsApp breve y cercano para cada cliente según los productos de su última compra, los días transcurridos y su frecuencia de compra. Adapta la pregunta a si se acerca su próxima compra estimada, ya pasó o compró recientemente. Si el historial es insuficiente o variable, no atribuyas hábitos. No afirmes que se quedó sin producto ni inventes precios, promociones, stock o entregas. Termina con una pregunta sencilla para saber si necesita ayuda con una nueva compra.';
+
+export function frequencyDraftRequest(phones) {
+  return { phones: [...phones], instruction: FREQUENCY_FOLLOWUP_INSTRUCTION, audienceType: 'all', contextSource: 'purchase_frequency' };
+}
+
 export function selectableFrequencyCustomers(customers) {
   const blocked = new Set(customers.filter(customer => customer.optedOut).map(customer => customer.phone));
   const seen = new Set();

@@ -27,6 +27,21 @@ export const OFFER_FIELD_LABELS = {
 
 export const MAX_OFFERS_PER_RECIPIENT = 5;
 
+export function validateDraftBatch(drafts, phones) {
+  const normalizePhone = value => String(value || '').replace(/\D/g, '');
+  const expected = new Set(phones.map(normalizePhone));
+  const seen = new Set();
+  if (!Array.isArray(drafts) || drafts.length !== expected.size) throw new Error('Falta la respuesta de algún cliente. Vuelve a preparar los mensajes; no se ha enviado nada.');
+  for (const draft of drafts) {
+    const phone = normalizePhone(draft?.phone);
+    if (!expected.has(phone) || seen.has(phone) || !['draft', 'skip'].includes(draft.decision)) {
+      throw new Error('La respuesta no coincide con la selección. No se ha enviado nada.');
+    }
+    seen.add(phone);
+  }
+  return drafts;
+}
+
 export function offerCatalog(data) {
   const products = Array.isArray(data) ? data : data?.products;
   if (!Array.isArray(products)) throw new Error('No se recibió el catálogo de productos.');

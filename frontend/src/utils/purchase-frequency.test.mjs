@@ -2,6 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { filterFrequencyCustomers, latestConversationId, selectableFrequencyCustomers, toggleFrequencySelection, frequencyBroadcastContacts, initialEvolutionMethod } from './purchase-frequency.mjs';
 import { renderDirectMessage } from './direct-message.mjs';
+import { frequencyDraftRequest, FREQUENCY_FOLLOWUP_INSTRUCTION } from './purchase-frequency.mjs';
+
+test('automatic drafting sends explicit phones and a frequency source, leaving history to the server', () => {
+  const phones = ['56911111111', '56922222222'];
+  const request = frequencyDraftRequest(phones);
+  assert.deepEqual(request, { phones, instruction: FREQUENCY_FOLLOWUP_INSTRUCTION, audienceType: 'all', contextSource: 'purchase_frequency' });
+  phones.push('56933333333');
+  assert.equal(request.phones.length, 2);
+  assert.match(request.instruction, /última compra/);
+  assert.match(request.instruction, /historial es insuficiente o variable/);
+});
 
 const customers = [
   { name: 'Ángela', phone: '56912345678', status: 'overdue', cadence: 'weekly', daysUntilNext: -4, lastPurchase: '2026-10-26' },
