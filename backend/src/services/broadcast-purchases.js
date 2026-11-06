@@ -87,10 +87,17 @@ function purchaseSummary(orders, today) {
   const frequency = summarizeDates(valid.map(purchaseDate), today);
   const itemsOf = raw => {
     let items = raw;
-    if (typeof items === 'string') { try { items = JSON.parse(items); } catch { return []; } }
-    return Array.isArray(items) ? items.slice(0, 12).map(item => ({
-      producto: String(item.title || item.name || '').slice(0, 180), cantidad: Number(item.quantity) || null,
-    })) : [];
+    if (typeof items === 'string') { try { items = JSON.parse(items); } catch { items = null; } }
+    if (!Array.isArray(items)) return { productos: [], detalleCompleto: false };
+    let detalleCompleto = items.length > 0 && items.length <= 12;
+    const productos = items.slice(0, 12).map(item => {
+      const title = typeof item?.title === 'string' ? item.title.trim() : typeof item?.name === 'string' ? item.name.trim() : '';
+      const quantity = ['string', 'number'].includes(typeof item?.quantity) ? Number(item.quantity) : NaN;
+      const cantidad = Number.isFinite(quantity) && quantity > 0 ? quantity : null;
+      if (!title || title.length > 180 || /[\r\n{}]/.test(title) || cantidad == null) detalleCompleto = false;
+      return { producto: title.slice(0, 180), cantidad };
+    });
+    return { productos, detalleCompleto };
   };
   return {
     ultimaCompra: frequency.lastPurchase,
@@ -104,7 +111,7 @@ function purchaseSummary(orders, today) {
     estadoFrecuencia: frequency.status,
     fechasUsadas: frequency.recentDates,
     limite: 'Pedidos pagados o entregados; una sola fecha no permite inferir frecuencia. Cantidad es unidades del producto, no huevos individuales.',
-    pedidos: valid.slice(0, 12).map(order => ({ fecha: purchaseDate(order), productos: itemsOf(order.items), estado: String(order.status || '').slice(0, 40) })),
+    pedidos: valid.slice(0, 12).map(order => ({ fecha: purchaseDate(order), ...itemsOf(order.items), estado: String(order.status || '').slice(0, 40) })),
   };
 }
 

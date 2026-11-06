@@ -13,7 +13,7 @@ import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
 import { summarizeDraftAudience, reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries, validateDraftBatch } from '../utils/broadcast-drafts.mjs';
 import { crmOrderLabel } from '../utils/order-reference.js';
-import { frequencyBroadcastContacts, initialEvolutionMethod, frequencyDraftRequest, FREQUENCY_FOLLOWUP_INSTRUCTION } from '../utils/purchase-frequency.mjs';
+import { frequencyBroadcastContacts, initialEvolutionMethod, frequencyDraftRequest, FREQUENCY_FOLLOWUP_INSTRUCTION, purchaseProductLabel } from '../utils/purchase-frequency.mjs';
 import { fromChileInput, formatChile } from '../utils/social-schedule.mjs';
 
 function DraftAudienceSummary({ prepared, excluded = [] }) {
@@ -3278,7 +3278,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
           </select>
         </label>
         {isInstruction ? <>
-          {isFrequency ? <p style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6 }}>Se generará un mensaje individual con los productos de su última compra, el tiempo transcurrido y su frecuencia estimada. Si compró hace poco, tiene un patrón variable o poco historial, la pregunta se adaptará sin asumir que necesita reponer. No necesitas escribir una instrucción.</p> : <>
+          {isFrequency ? <p style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6 }}>El mensaje copia los productos, presentaciones y cantidades de la última compra registrada. La frecuencia solo adapta la pregunta, sin suponer gustos, consumo ni necesidad de reponer. Si faltan datos de esa compra, se excluye el borrador para revisión. No necesitas escribir una instrucción.</p> : <>
           <p style={{ fontSize: 12, color: colors.textSecondary }}>Explica qué quieres lograr, las ofertas y a quiénes excluir. La IA revisará las compras y conversaciones para redactar un borrador por cliente. Tú revisas y autorizas los mensajes antes de enviarlos.</p>
           <textarea id="evolution-instruction" aria-label="Instrucción para redactar mensajes" value={directInstruction} maxLength={6000}
             disabled={sending || drafting || !!reviewPlan} onChange={event => setDirectInstruction(event.target.value)} rows={5}
@@ -3640,7 +3640,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
                   <div style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
                     {entry.reason}
                     {entry.evidence && <div style={{ marginTop: 5 }}>Última compra: {entry.evidence.ultimaCompra || 'sin registro'} · Intervalo entre compras: {entry.evidence.intervaloMedianoDias ? `${entry.evidence.intervaloMedianoDias} días (estimado)` : 'sin frecuencia suficiente'}</div>}
-                    {entry.evidence?.pedidos?.[0]?.productos?.length > 0 && <div style={{ marginTop: 5 }}>Productos de la última compra: {entry.evidence.pedidos[0].productos.map(product => product.producto).filter(Boolean).join(' · ')}</div>}
+                    {entry.evidence?.pedidos?.[0]?.productos?.length > 0 && <div style={{ marginTop: 5 }}>Productos y cantidades de la última compra: {entry.evidence.pedidos[0].productos.map(purchaseProductLabel).join(' · ')}</div>}
                     {entry.evidence?.regularidad && <div style={{ marginTop: 5 }}>Historial: {({ regular: 'regular', variable: 'variable', insufficient: 'limitado' })[entry.evidence.regularidad]}{entry.evidence.proximaCompraEstimada ? ` · Próxima compra estimada: ${entry.evidence.proximaCompraEstimada}` : ''}</div>}
                   </div>
                   <textarea aria-label={`Mensaje para ${entry.contact?.name || entry.contact?.phone}`} value={entry.previewText} rows={6} maxLength={1200} disabled={sending}
