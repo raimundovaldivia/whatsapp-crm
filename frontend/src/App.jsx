@@ -616,6 +616,7 @@ export default function App() {
         <ClientesPanel
           key={org?.id}
           showEggRepurchase={org?.slug === 'diez-rios-mrs96z69' && ['owner', 'admin', 'supervisor'].includes(user?.role)}
+          canSendFollowup={allowedViews.has('mensajeria') && Boolean(modules) && modules.mensajeria !== false}
           onOpenConversation={(id) => { handleSelectConversation(id); setView('chats'); }}
         />
       )}

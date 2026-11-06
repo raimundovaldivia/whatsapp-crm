@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Search, MessageSquare } from 'lucide-react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw, Search, MessageSquare, Send } from 'lucide-react';
 import api, { conversationsAPI } from '../utils/api';
 import { useTheme } from '../theme.js';
-import { cadenceLabels, statusLabels, filterFrequencyCustomers, latestConversationId } from '../utils/purchase-frequency.mjs';
+import { cadenceLabels, statusLabels, filterFrequencyCustomers, latestConversationId, selectableFrequencyCustomers, toggleFrequencySelection } from '../utils/purchase-frequency.mjs';
+
+const BroadcastPanel = lazy(() => import('./ReengagementPanel.jsx').then(module => ({ default: module.BroadcastPanel })));
 
 const PAGE_SIZE = 50;
 
-export default function PurchaseFrequencyPanel({ onOpenConversation }) {
+export default function PurchaseFrequencyPanel({ onOpenConversation, canSendFollowup = false }) {
   const { colors } = useTheme();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -19,6 +21,8 @@ export default function PurchaseFrequencyPanel({ onOpenConversation }) {
   const [page, setPage] = useState(1);
   const [openingChat, setOpeningChat] = useState(false);
   const [chatNotice, setChatNotice] = useState('');
+  const [selected, setSelected] = useState(new Set());
+  const [followupPhones, setFollowupPhones] = useState(null);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -45,6 +49,8 @@ export default function PurchaseFrequencyPanel({ onOpenConversation }) {
         if (controller.signal.aborted) return;
         if (!response.data.success) throw new Error('No se pudo cargar la frecuencia de compra.');
         setData(response.data);
+        const eligible = new Set(selectableFrequencyCustomers(response.data.customers || []).map(customer => customer.phone));
+        setSelected(current => new Set([...current].filter(phone => eligible.has(phone))));
         setPage(1);
       })
       .catch(() => {
@@ -57,14 +63,23 @@ export default function PurchaseFrequencyPanel({ onOpenConversation }) {
     return () => controller.abort();
   }, [refresh]);
   useEffect(() => { setPage(1); }, [search, status, cadence, sort]);
+  useEffect(() => { setSelected(new Set()); }, [search, status, cadence]);
 
   const customers = data?.customers || [];
   const filtered = useMemo(() => filterFrequencyCustomers(data?.customers || [], { search, status, cadence, sort }), [data, search, status, cadence, sort]);
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pages);
+  const pageCustomers = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const eligible = selectableFrequencyCustomers(filtered);
+  const eligiblePage = selectableFrequencyCustomers(pageCustomers);
+  const chosen = eligible.filter(customer => selected.has(customer.phone));
   const control = { padding: '9px 12px', borderRadius: 8, border: `1px solid ${colors.border}`, background: colors.bgPanel, color: colors.textPrimary, fontSize: 13 };
   const cell = { padding: '14px 16px', borderBottom: `1px solid ${colors.border}`, textAlign: 'left', verticalAlign: 'top' };
   const muted = { color: colors.textSecondary, fontSize: 12, marginTop: 5 };
+
+  if (followupPhones && canSendFollowup) return <Suspense fallback={<p role="status" style={{ padding: 24 }}>Preparando seguimiento…</p>}>
+    <BroadcastPanel colors={colors} frequencyAudience={followupPhones} onBack={() => { setFollowupPhones(null); setRefresh(value => value + 1); }} />
+  </Suspense>;
 
   return <section aria-label="Frecuencia de compra" style={{ flex: 1, overflow: 'auto', padding: '20px 24px', color: colors.textPrimary }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: 12 }}>
@@ -105,11 +120,22 @@ export default function PurchaseFrequencyPanel({ onOpenConversation }) {
       </div>
       <p style={{ ...muted, lineHeight: 1.6 }}>Para seguimiento incluye fechas estimadas vencidas o dentro de los próximos 3 días y excluye contactos dados de baja. Frecuencia = intervalo mediano entre los últimos 12 días distintos de compra, usando pedidos pagados o entregados del historial del CRM. Excluye borradores, cancelaciones y reembolsos totales. La fecha es orientativa; una sola fecha de compra no permite estimarla.</p>
       {chatNotice && <p role="status">{chatNotice}</p>}
+      {canSendFollowup && <div aria-label="Selección para seguimiento" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '12px 0' }}>
+        <strong aria-live="polite">{chosen.length} seleccionados</strong>
+        <button style={control} disabled={!eligible.length || eligible.length > 5000} onClick={() => setSelected(new Set(eligible.map(customer => customer.phone)))}>Seleccionar los {eligible.length} del filtro</button>
+        <button style={control} disabled={!selected.size} onClick={() => setSelected(new Set())}>Limpiar selección</button>
+        <button style={{ ...control, display: 'flex', alignItems: 'center', gap: 7, background: chosen.length ? colors.green : colors.bgPanel, color: chosen.length ? '#fff' : colors.textSecondary }} disabled={!chosen.length || chosen.length > 5000} onClick={() => setFollowupPhones(chosen.map(customer => customer.phone))}>
+          <Send size={15} /> Preparar WhatsApp por Evolution
+        </button>
+        <span style={muted}>Marca clientes y revisa el mensaje antes de enviar. Al cambiar los filtros se limpia la selección.</span>
+        {chosen.length > 5000 && <span role="alert">Selecciona hasta 5.000 clientes por envío.</span>}
+      </div>}
       {!filtered.length ? <p style={{ padding: '35px 0' }}>{customers.length ? status === 'followup' && !search && cadence === 'all' ? 'No hay clientes pendientes de seguimiento según su frecuencia. Puedes consultar Todos los estados para revisar el historial.' : 'No hay clientes que coincidan con estos filtros.' : 'Todavía no hay clientes con teléfono ni compras registradas para mostrar.'}</p> : <>
         <div style={{ overflowX: 'auto', border: `1px solid ${colors.border}`, borderRadius: 10 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 800 }}>
-            <thead><tr style={{ background: colors.bgPanel }}>{['Cliente', 'Compras', 'Última compra', 'Cada cuánto compra', 'Próxima compra estimada', 'Estado', ''].map(label => <th key={label} scope="col" style={{ ...cell, whiteSpace: 'nowrap' }}>{label}</th>)}</tr></thead>
-            <tbody>{filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(customer => <tr key={customer.phone}>
+            <thead><tr style={{ background: colors.bgPanel }}>{canSendFollowup && <th scope="col" style={cell}><input type="checkbox" aria-label="Seleccionar esta página" disabled={!eligiblePage.length} checked={eligiblePage.length > 0 && eligiblePage.every(customer => selected.has(customer.phone))} onChange={() => setSelected(current => toggleFrequencySelection(current, pageCustomers))} /></th>}{['Cliente', 'Compras', 'Última compra', 'Cada cuánto compra', 'Próxima compra estimada', 'Estado', ''].map(label => <th key={label} scope="col" style={{ ...cell, whiteSpace: 'nowrap' }}>{label}</th>)}</tr></thead>
+            <tbody>{pageCustomers.map(customer => <tr key={customer.phone}>
+              {canSendFollowup && <td style={cell}><input type="checkbox" aria-label={`Seleccionar a ${customer.name}`} disabled={!eligiblePage.some(item => item.phone === customer.phone)} checked={selected.has(customer.phone)} onChange={() => setSelected(current => toggleFrequencySelection(current, [customer]))} /></td>}
               <td style={cell}><strong>{customer.name}</strong><div style={muted}>{customer.phone}</div>{customer.optedOut && <div style={muted}>Dado de baja · No contactar</div>}</td>
               <td style={cell}>{customer.purchaseCount}<div style={muted}>{customer.purchaseDays} días distintos</div></td>
               <td style={cell}>{customer.lastPurchase || 'Sin compras'}{customer.daysSincePurchase != null && <div style={muted}>Hace {customer.daysSincePurchase} días</div>}</td>

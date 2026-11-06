@@ -13,6 +13,8 @@ import { useTheme } from '../theme.js';
 import { matchesPurchaseAge, selectedAudience, purchaseAgeLabel, limitToMostRecent } from '../utils/broadcast-audience.mjs';
 import { summarizeDraftAudience, reviewFingerprint, editReviewedEntry, canApproveDrafts, offerReady, offerKey, offersList, offersSnapshot, setEntryOffers, setEntryOfferChecks, applyOfferToAll, duplicateOfferProducts, MAX_OFFERS_PER_RECIPIENT, OFFER_FIELD_LABELS, offerCatalog, offerExpiryInput, restoreDraftEntries } from '../utils/broadcast-drafts.mjs';
 import { crmOrderLabel } from '../utils/order-reference.js';
+import { frequencyBroadcastContacts, initialEvolutionMethod } from '../utils/purchase-frequency.mjs';
+import { fromChileInput, formatChile } from '../utils/social-schedule.mjs';
 
 function DraftAudienceSummary({ prepared, excluded = [] }) {
   const summary = summarizeDraftAudience(prepared, excluded);
@@ -1292,10 +1294,12 @@ function FixedTextPreviewEditor({ number, value, onChange, colors }) {
   );
 }
 
-function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
+export function BroadcastPanel({ colors, testPhone, parentTemplates = [], frequencyAudience = null, onBack = null }) {
   const [contacts,       setContacts]       = useState([]);
   const [sources,        setSources]        = useState(null);
   const [loading,        setLoading]        = useState(true);
+  const [audienceError, setAudienceError] = useState('');
+  const [audienceRefresh, setAudienceRefresh] = useState(0);
   const [search,         setSearch]         = useState('');
   const [detailJourneyId, setDetailJourneyId] = useState(null);
   const [purchaseAge, setPurchaseAge] = useState('all');
@@ -1325,12 +1329,16 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
   const [methodsLoading, setMethodsLoading] = useState(true);
   const [methodsError, setMethodsError] = useState('');
   const methodsRequestRef = useRef(false);
-  const [sendingMethodKey, setSendingMethodKey] = useState('kapso');
+  const [sendingMethodKey, setSendingMethodKey] = useState(frequencyAudience ? 'evolution:pending' : 'kapso');
   const [directPacing, setDirectPacing] = useState({ intervalSeconds: 60, batchSize: 10, batchPauseSeconds: 300 });
   const [scheduledFor, setScheduledFor] = useState('');
-  const [directText, setDirectText] = useState('');
-  const [directMode, setDirectMode] = useState('instruction');
-  const [directInstruction, setDirectInstruction] = useState('');
+  const scheduleLabel = (() => {
+    try { return scheduledFor ? formatChile(fromChileInput(scheduledFor)) : ''; }
+    catch { return 'Fecha u hora inválida'; }
+  })();
+  const [directText, setDirectText] = useState(frequencyAudience ? 'Hola {{nombre}}, ¿cómo estás? ¿Necesitas reponer tu pedido? Si quieres, te ayudo a coordinar una nueva compra.' : '');
+  const [directMode, setDirectMode] = useState(frequencyAudience ? 'manual' : 'instruction');
+  const [directInstruction, setDirectInstruction] = useState(frequencyAudience ? 'Redacta un seguimiento breve y cercano para consultar si necesita reponer su pedido. Usa su historial sin afirmar que ya se le acabó el producto ni inventar precios, descuentos, disponibilidad o fechas de entrega.' : '');
   const [drafting, setDrafting] = useState(false);
   const [draftProgress, setDraftProgress] = useState({ done: 0, total: 0 });
   const [draftReport, setDraftReport] = useState(null);
@@ -1349,6 +1357,9 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     try {
       const { data } = await api.get('/reengagement/sending-methods');
       setSendingMethods(data.methods || []);
+      // Auto-select only an unambiguous Evolution connection, never fall back
+      // to the official provider or silently switch an already chosen channel.
+      if (frequencyAudience) setSendingMethodKey(current => current === 'evolution:pending' ? initialEvolutionMethod(data.methods || []) : current);
     } catch (error) {
       setMethodsError(error.response?.data?.error || 'No se pudieron cargar las conexiones.');
       setSendingMethods(current => current.map(method => ({ ...method, available: false })));
@@ -1356,7 +1367,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       methodsRequestRef.current = false;
       setMethodsLoading(false);
     }
-  }, []);
+  }, [frequencyAudience]);
   useEffect(() => {
     loadSendingMethods();
     const timer = setInterval(() => loadSendingMethods(true), 15000);
@@ -1943,6 +1954,24 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   // Cargar contactos y templates en paralelo
   useEffect(() => {
+    if (frequencyAudience) {
+      const controller = new AbortController();
+      setLoading(true);
+      setAudienceError('');
+      setContacts([]);
+      setSelected(new Set());
+      api.get('/clientes/all', { params: { view: 'frequency' }, signal: controller.signal, timeout: 60000 })
+        .then(({ data }) => {
+          if (controller.signal.aborted) return;
+          if (!data.success || !Array.isArray(data.customers)) throw new Error('Respuesta inválida');
+          const list = frequencyBroadcastContacts(data.customers, frequencyAudience);
+          setContacts(list);
+          setSelected(new Set(list.map(contact => contact.phone)));
+        })
+        .catch(() => { if (!controller.signal.aborted) setAudienceError('No se pudo verificar la selección. Reintenta antes de preparar el envío.'); })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+      return () => controller.abort();
+    }
     // Dedup + backfill + normalizar nombres, luego cargar la lista
     api.post('/contacts/dedup-phones').catch(() => {});
     api.post('/contacts/backfill-shopify').catch(() => {});
@@ -1986,7 +2015,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       }).finally(() => setTplLoading(false));
     }
     // si ya vienen del padre, tplLoading ya es false
-  }, []);
+  }, [frequencyAudience, audienceRefresh]);
 
   // Producto favorito por cliente (para rellenar variables de template)
   useEffect(() => {
@@ -2069,7 +2098,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   const purchaseDays = purchaseAge === 'custom' ? customPurchaseDays : purchaseAge;
   // Lista de números pegada a mano: solo esos números, y los que no están en contactos entran como leads.
-  const listPhones = phoneListText.trim()
+  const listPhones = !frequencyAudience && phoneListText.trim()
     ? new Set(phoneListText.split(/[\s,;]+/).map(normPhone).filter(p => /^569\d{8}$/.test(p)))
     : null;
   const knownPhones = new Set(contacts.map(c => normPhone(c.phone)));
@@ -2220,7 +2249,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       setReviewPlan({ templateName: 'Redacción individual · Evolution', entries,
         generationMode: 'instruction', instruction: directInstruction.trim(), excluded,
         sendingProvider: selectedMethod.provider, sendingChannelId: selectedMethod.channelId,
-        sendingLabel: selectedMethod.label, audienceLabel: purchaseAgeLabel(purchaseDays),
+        sendingLabel: selectedMethod.label, audienceLabel: frequencyAudience ? 'Clientes seleccionados por frecuencia de compra' : purchaseAgeLabel(purchaseDays),
         ...directPacing, testMode, testPhone: TEST_PHONE, createdAt: Date.now() });
     } catch (error) {
       if (run === draftRunRef.current) showToast(error.response?.data?.error || error.message || 'No se pudieron preparar los borradores. No se envió nada.', 'error');
@@ -2247,7 +2276,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       setReviewPlan({ templateName: 'Redacción individual · Evolution', entries,
         generationMode: 'instruction', instruction: directInstruction.trim() || 'Revisar los textos guardados y completar sus ofertas antes de autorizar.', excluded: [],
         sendingProvider: selectedMethod.provider, sendingChannelId: selectedMethod.channelId,
-        sendingLabel: selectedMethod.label, audienceLabel: purchaseAgeLabel(purchaseDays),
+        sendingLabel: selectedMethod.label, audienceLabel: frequencyAudience ? 'Clientes seleccionados por frecuencia de compra' : purchaseAgeLabel(purchaseDays),
         ...directPacing, testMode: false, testPhone: '', createdAt: Date.now() });
       showToast('Borradores recuperados. Completa las ofertas y revisa cada mensaje; no se ha enviado nada.');
     } catch (error) {
@@ -2260,6 +2289,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   function prepareReview() {
     if (drafting) return;
+    if (loading || audienceError) { showToast('Espera a que se verifique la selección.', 'error'); return; }
+    if (selectedCount > 5000) { showToast('Selecciona hasta 5.000 clientes por envío.', 'error'); return; }
+    if (frequencyAudience && selectedMethod?.provider !== 'evolution') { showToast('Selecciona una conexión Evolution.', 'error'); return; }
+    try { if (scheduledFor) fromChileInput(scheduledFor); }
+    catch (error) { showToast(error.message, 'error'); return; }
     if (isDirect && !Object.entries(directPacing).every(([key, value]) => Number.isInteger(Number(value)) && Number(value) >= (key === 'batchPauseSeconds' ? 0 : 1) && Number(value) <= (key === 'batchSize' ? 5000 : 86400))) { showToast('Revisa los tiempos y el tamaño del lote', 'error'); return; }
     if (!selectedMethod?.available) { showToast('Selecciona un método de envío conectado', 'error'); return; }
     if (!messageReady) { showToast(isDirect ? 'Escribe el mensaje primero' : 'Selecciona un template primero', 'error'); return; }
@@ -2327,7 +2361,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       sendingProvider: selectedMethod.provider,
       sendingChannelId: selectedMethod.channelId,
       sendingLabel: selectedMethod.label,
-      audienceLabel: purchaseAgeLabel(purchaseDays),
+      audienceLabel: frequencyAudience ? 'Clientes seleccionados por frecuencia de compra' : purchaseAgeLabel(purchaseDays),
       ...directPacing,
       testMode,
       testPhone: TEST_PHONE,
@@ -2361,6 +2395,11 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   async function confirmSend() {
     if (!reviewPlan?.entries?.length || sendingRef.current) return;
+    if (frequencyAudience && (reviewPlan.sendingProvider !== 'evolution' || reviewPlan.entries.some(entry =>
+      !frequencyAudience.includes(entry.item.originalPhone || entry.item.phone)
+      || (!reviewPlan.testMode && entry.item.phone !== (entry.item.originalPhone || entry.item.phone))))) {
+      showToast('El envío debe corresponder a los clientes seleccionados en frecuencia de compra.', 'error'); return;
+    }
     if (reviewPlan.generationMode === 'instruction' && !canApproveDrafts(reviewPlan, reviewedItems)) {
       showToast('Revisa cada mensaje antes de autorizar el envío.', 'error'); return;
     }
@@ -2377,6 +2416,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
     try {
       const approval = reviewPlan.generationMode === 'instruction'
         ? { confirmed: true, fingerprint: await reviewFingerprint(reviewPlan.entries) } : undefined;
+      const scheduledAt = scheduledFor ? fromChileInput(scheduledFor) : null;
       const created = await api.post('/reengagement/campaigns', {
         templateName: reviewPlan.templateName,
         total: items.length,
@@ -2385,7 +2425,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         sendingProvider: reviewPlan.sendingProvider,
         sendingChannelId: reviewPlan.sendingChannelId,
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
-        ...(scheduledFor ? { scheduledFor: new Date(scheduledFor).toISOString() } : {}),
+        ...(scheduledAt ? { scheduledFor: scheduledAt } : {}),
         ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction } : {}),
       });
       campaignId = created.data.campaign.id;
@@ -2395,7 +2435,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         setReviewPlan(null);
         setHistoryOpen(true);
         showToast(scheduledFor
-          ? `Campaña programada para ${new Date(scheduledFor).toLocaleString('es-CL')}. Puedes cerrar el navegador.`
+          ? `Campaña programada para ${formatChile(scheduledAt)}. Puedes cerrar el navegador.`
           : 'Campaña iniciada en el servidor. Puedes cerrar el navegador; continuará enviando.');
         return;
       }
@@ -2545,6 +2585,14 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {frequencyAudience && <section aria-label="Seguimiento por frecuencia de compra" style={{ padding: '12px 20px', background: colors.bgPanel, color: colors.textPrimary, borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
+        <button onClick={onBack} disabled={sending || drafting} style={{ background: 'transparent', border: 0, color: colors.green, cursor: 'pointer', padding: '0 0 8px' }}>← Volver a frecuencia de compra</button>
+        <h2 style={{ margin: '0 0 6px', fontSize: 18 }}>Seguimiento por WhatsApp · Evolution</h2>
+        <div style={{ fontSize: 12 }}>{loading ? 'Verificando los clientes seleccionados…' : `${contacts.length} de ${frequencyAudience.length} clientes disponibles para seguimiento.`} Revisa el texto y confirma para iniciar el envío automático.</div>
+        {!loading && !audienceError && contacts.length < frequencyAudience.length && <p role="status" style={{ fontSize: 12 }}>Se excluyeron {frequencyAudience.length - contacts.length} clientes dados de baja o que ya no aparecen en la lista de esta tienda.</p>}
+        {audienceError && <div role="alert">{audienceError} <button onClick={() => setAudienceRefresh(value => value + 1)}>Reintentar selección</button></div>}
+      </section>}
 
       {/* Toast */}
       {toast && (
@@ -2730,7 +2778,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           ] : [
             { provider: 'kapso', label: 'Kapso · API oficial', available: false },
             { provider: 'evolution', label: 'Directo · Evolution', available: false },
-          ]).map(method => {
+          ]).filter(method => !frequencyAudience || method.provider === 'evolution').map(method => {
             const methodKey = method.provider === 'evolution' ? `evolution:${method.channelId}` : 'kapso';
             const isSelected = sendingMethodKey === methodKey && method.available;
             return <button key={methodKey} type="button" aria-pressed={isSelected}
@@ -2754,6 +2802,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           {methodsLoading ? 'Cargando…' : 'Actualizar conexiones'}
         </button>}
         {methodsError && <div role="alert" style={{ width: '100%', color: colors.red, fontSize: 12 }}>{methodsError}</div>}
+        {frequencyAudience && !methodsLoading && !selectedMethod && <div role="status" style={{ width: '100%', fontSize: 12 }}>Elige una conexión Evolution disponible. Si no hay ninguna, conéctala en Ajustes.</div>}
         {reviewPlan && <div style={{ width: '100%', fontSize: 12 }}>Cierra la revisión para cambiar el método de envío.</div>}
         {selectedMethod && <div style={{ fontSize: 12, marginTop: 6 }}>
           {selectedMethod.provider === 'evolution' && <>
@@ -2785,6 +2834,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 20px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgPanel, flexWrap: 'wrap' }}>
 
         {/* Límite de cantidad: las N personas con compra más reciente */}
+        {!frequencyAudience && <>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, fontSize: 13 }}>
           Elegir solo
           <input type="number" min="1" step="1" value={limitCount} placeholder="todos"
@@ -2902,6 +2952,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           }}>
           {deliveryBusy ? 'Revisando ruta…' : `${deliveryPhones ? '✓ ' : ''}No entregados ayer${deliveryPhones ? ` (${deliveryPhones.size})` : ''}`}
         </button>
+        </>}
 
         {/* Template selector */}
         {!isDirect && (tplLoading ? (
@@ -2941,7 +2992,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           )}
         </button>
 
-        <button
+        {!frequencyAudience && <button
           onClick={openJourneyBuilder}
           disabled={contacts.length === 0 || templates.length === 0}
           style={{
@@ -2954,7 +3005,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
           title="Crear una secuencia automática con el público seleccionado"
         >
           <Zap size={14} /> Secuencia
-        </button>
+        </button>}
 
         {/* Test mode */}
         <button onClick={() => setTestMode(t => !t)} style={{
@@ -2967,7 +3018,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
         </button>
 
         {/* Enviar */}
-        <button onClick={prepareReview} disabled={sending || drafting || selectedCount === 0 || !messageReady} style={{
+        <button onClick={prepareReview} disabled={sending || drafting || loading || !!audienceError || !selectedMethod?.available || selectedCount === 0 || !messageReady} style={{
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '7px 16px', borderRadius: colors.radiusMd, border: 'none',
           backgroundColor: (selectedCount > 0 && messageReady) ? colors.green : colors.bgHover,
@@ -3111,7 +3162,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                         {repliedRecipients.map(recipient => recipient.contact_name || recipient.original_phone || recipient.destination_phone).join(' · ')}
                       </div>
                     )}
-                    {(campaign.reasons || []).some(reason => String(reason.error_code || '') === '131042') && (
+                    {!frequencyAudience && (campaign.reasons || []).some(reason => String(reason.error_code || '') === '131042') && (
                       <div style={{ border: `1px solid ${colors.red}66`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: `${colors.red}0d` }}>
                         <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>Envíos bloqueados por facturación de Meta</div>
                         <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3, lineHeight: 1.4 }}>
@@ -3123,7 +3174,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                         </button>
                       </div>
                     )}
-                    {campaign.sending_provider !== 'evolution' && !campaign.test_mode && read > 0 && (
+                    {!frequencyAudience && campaign.sending_provider !== 'evolution' && !campaign.test_mode && read > 0 && (
                       <div style={{ border: `1px solid ${colors.border}`, borderRadius: 8, padding: 9, marginBottom: 9, backgroundColor: colors.bgApp }}>
                         <div style={{ color: colors.textPrimary, fontSize: 11, fontWeight: 800 }}>Seguimiento inteligente para mañana</div>
                         <div style={{ color: colors.textMuted, fontSize: 10, marginTop: 3 }}>
@@ -3537,6 +3588,7 @@ function BroadcastPanel({ colors, testPhone, parentTemplates = [] }) {
                   <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 5 }}>
                     {reviewPlan.sendingLabel}
                     {reviewPlan.audienceLabel && <div style={{ marginTop: 4 }}>Destinatarios: {reviewPlan.audienceLabel}</div>}
+                    {scheduledFor && <div style={{ marginTop: 4 }}>Inicio programado: {scheduleLabel} · Hora de Chile</div>}
                     {reviewPlan.sendingProvider === 'evolution' && <>
                       {' · '}Lotes de {reviewPlan.batchSize}, pausa de {reviewPlan.batchPauseSeconds / 60} minutos.
                       {' '}Tiempo mínimo aproximado: {Math.ceil((Math.max(0, reviewPlan.entries.length - 1) * reviewPlan.intervalSeconds + Math.floor(Math.max(0, reviewPlan.entries.length - 1) / reviewPlan.batchSize) * Math.max(0, reviewPlan.batchPauseSeconds - reviewPlan.intervalSeconds)) / 60)} minutos.

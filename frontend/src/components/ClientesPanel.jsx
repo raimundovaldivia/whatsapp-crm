@@ -119,7 +119,7 @@ function formatDate(dateStr) {
 const PAGE_SIZE = 50;
 const LEADS_PAGE_SIZE = 100;
 
-export default function ClientesPanel({ onOpenConversation, showEggRepurchase = false }) {
+export default function ClientesPanel({ onOpenConversation, showEggRepurchase = false, canSendFollowup = false }) {
   const { colors, isDark } = useTheme();
 
   // Tabs: 'clientes' = Shopify customers | 'leads' = WhatsApp leads from contacts DB
@@ -600,7 +600,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
         </div>}
       </div>
 
-      {tab === 'frequency' && <PurchaseFrequencyPanel onOpenConversation={onOpenConversation} />}
+      {tab === 'frequency' && <PurchaseFrequencyPanel onOpenConversation={onOpenConversation} canSendFollowup={canSendFollowup} />}
 
       {tab === 'eggs' && showEggRepurchase && <EggRepurchaseList report={repurchase} search={search} colors={colors} />}
 
