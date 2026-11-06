@@ -18,7 +18,9 @@ test('automatic follow-up preserves latest products, units and pack sizes instea
   ], today);
   const result = drafts.frequencyDraft({ phone: '56911111111', name: 'Cliente Ejemplo', context: { compras: evidence,
     conversacionReciente: [{ texto: 'Quiero una caja de 100. Le gustaron las aceitunas.' }] } });
-  assert.equal(result.message, 'Hola Cliente, ¿cómo estás?\n\nEn tu última compra pediste:\n• 2 × Huevos Jumbo mixtos · Bandeja de 20\n\n¿Te gustaría hacer un nuevo pedido o necesitas ayuda con algo distinto?');
+  assert.match(result.message, /Hola Cliente/);
+  assert.match(result.message, /2 bandejas de 20 huevos Jumbo mixtos/);
+  assert.doesNotMatch(result.message, /[\n•×]|última compra pediste:/);
   assert.doesNotMatch(result.message, /100|40|aceitunas|gustaron|gustó|sirvi|consum|recibi|acab/i);
   assert.equal(result.offers.length, 0);
   assert.equal(result.evidence, evidence);
@@ -51,22 +53,48 @@ test('frequency only changes the neutral question; multi-product and decimal uni
     { title: 'Queso 900 g', quantity: '1.5' }, { name: 'Caja de 100', quantity: '2' },
   ]) }], today);
   const cases = [
-    ['regular', 'due', 10, 'repetir tu pedido en los próximos días'],
-    ['regular', 'overdue', 10, 'volver a pedir'],
-    ['variable', 'overdue', 10, 'hacer un nuevo pedido'],
-    ['insufficient', 'due', 10, 'hacer un nuevo pedido'],
-    ['regular', 'due', 1, 'más adelante'],
-    ['regular', 'upcoming', 10, 'más adelante'],
+    ['regular', 'due', 10, /estos días/],
+    ['regular', 'overdue', 10, /volver a pedir|otro pedido|nuevo pedido/],
+    ['variable', 'overdue', 10, /pedir de nuevo|repetir el pedido|otro pedido|nuevo pedido/],
+    ['insufficient', 'due', 10, /pedir de nuevo|repetir el pedido|otro pedido|nuevo pedido/],
+    ['regular', 'due', 1, /ayuda|ayudar|más adelante|consultar/],
+    ['regular', 'upcoming', 10, /ayuda|ayudar|más adelante|consultar/],
   ];
   for (const [regularidad, estadoFrecuencia, diasDesdeCompra, expected] of cases) {
     const result = drafts.frequencyDraft({ phone: '56911111111', name: 'Cliente', context: { compras: { ...compras, regularidad, estadoFrecuencia, diasDesdeCompra } } });
-    assert.match(result.message, /• 1,5 × Queso 900 g\n• 2 × Caja de 100/);
-    assert.ok(result.message.includes(expected));
+    assert.match(result.message, /1,5 de Queso 900 g y 2 de Caja de 100/);
+    assert.match(result.message, expected);
     assert.doesNotMatch(result.message, /gustaron|gustó|favorit|consum|acab|recibi|entreg|cada \d|habitual/i);
   }
   const empty = drafts.frequencyDraft({ phone: '56911111111', name: 'Cliente', context: { compras: purchases.purchaseSummary([], today) } });
   assert.equal(empty.decision, 'draft');
   assert.doesNotMatch(empty.message, /última compra|pediste|×/);
+  assert.doesNotMatch(empty.message, /último pedido|repetir|otro pedido|de nuevo/);
+});
+
+test('conversational drafts vary between customers without changing facts and remain stable across retries', () => {
+  const drafts = load('src/services/broadcast-drafts.js');
+  const compras = purchases.purchaseSummary([{ date: '2026-10-27', status: 'paid', items: [
+    { title: 'Huevos Jumbo mixtos · Bandeja de 20', quantity: 2 },
+    { title: 'Huevos XL · Caja de 100', quantity: 1 },
+    { title: 'Queso 900 g', quantity: 1.5 },
+  ] }], today);
+  const customers = Array.from({ length: 12 }, (_, index) => ({ phone: `569111111${String(index).padStart(2, '0')}`, name: 'Cliente', context: { compras } }));
+  const messages = new Map(customers.map(customer => [customer.phone, drafts.frequencyDraft(customer).message]));
+  assert.ok(new Set(messages.values()).size >= 3, 'customers should not all receive the same wording');
+  for (const customer of customers.reverse()) {
+    const message = drafts.frequencyDraft(customer).message;
+    assert.equal(message, messages.get(customer.phone));
+    assert.equal(drafts.frequencyDraft({ ...customer, phone: `+${customer.phone}` }).message, message);
+    assert.match(message, /2 bandejas de 20 huevos Jumbo mixtos, 1 caja de 100 huevos XL y 1,5 de Queso 900 g/);
+    assert.doesNotMatch(message, /[\n•×]|gustaron|gustó|favorit|consum|acab|recibi|entreg|cada \d|habitual|me acordé/i);
+  }
+  const uncommon = purchases.purchaseSummary([{ date: '2026-10-27', status: 'paid', items: [
+    { title: 'Pack especial 2 por 1', quantity: 2 },
+    { title: 'Huevos XL · Bandeja de 20 o 30', quantity: 1 },
+  ] }], today);
+  const result = drafts.frequencyDraft({ ...customers[0], context: { compras: uncommon } });
+  assert.match(result.message, /2 de Pack especial 2 por 1 y 1 de Huevos XL · Bandeja de 20 o 30/);
 });
 
 test('list and draft share recent twelve business days, latest products and exclusions', () => {
@@ -140,8 +168,8 @@ test('automatic drafts read tenant purchases per selected customer, recheck excl
     assert.equal(result.drafts.length, 3);
     assert.equal(aiCalls, 0);
     assert.equal(result.drafts[2].reasonCode, 'unavailable');
-    assert.match(result.drafts[0].message, /Ana[\s\S]*2 × XL/);
-    assert.match(result.drafts[1].message, /Bruno[\s\S]*1 × Aceitunas/);
+    assert.match(result.drafts[0].message, /Ana[\s\S]*2 de XL/);
+    assert.match(result.drafts[1].message, /Bruno[\s\S]*1 de Aceitunas/);
     assert.equal(result.drafts[0].evidence.intervaloMedianoDias, 7);
     assert.equal(result.drafts[0].evidence.estadoFrecuencia, 'due');
     assert.equal(result.drafts[0].evidence.regularidad, 'regular');

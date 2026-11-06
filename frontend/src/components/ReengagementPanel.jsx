@@ -3278,7 +3278,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
           </select>
         </label>
         {isInstruction ? <>
-          {isFrequency ? <p style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6 }}>El mensaje copia los productos, presentaciones y cantidades de la última compra registrada. La frecuencia solo adapta la pregunta, sin suponer gustos, consumo ni necesidad de reponer. Si faltan datos de esa compra, se excluye el borrador para revisión. No necesitas escribir una instrucción.</p> : <>
+          {isFrequency ? <p style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6 }}>Prepara mensajes breves y conversacionales, con saludos y cierres variados para cada cliente. Conserva los productos, presentaciones y cantidades de la última compra. La frecuencia solo adapta la pregunta, sin suponer gustos, consumo ni necesidad de reponer. Si faltan datos, se excluye el borrador para revisión. No necesitas escribir una instrucción.</p> : <>
           <p style={{ fontSize: 12, color: colors.textSecondary }}>Explica qué quieres lograr, las ofertas y a quiénes excluir. La IA revisará las compras y conversaciones para redactar un borrador por cliente. Tú revisas y autorizas los mensajes antes de enviarlos.</p>
           <textarea id="evolution-instruction" aria-label="Instrucción para redactar mensajes" value={directInstruction} maxLength={6000}
             disabled={sending || drafting || !!reviewPlan} onChange={event => setDirectInstruction(event.target.value)} rows={5}

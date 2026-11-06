@@ -2,7 +2,7 @@ export const cadenceLabels = { unknown: 'Sin frecuencia', weekly: 'Hasta 10 día
 export const statusLabels = { followup: 'Para seguimiento', overdue: 'Pasó su fecha estimada', due: 'Próximos 3 días', upcoming: 'Más adelante', insufficient: 'Historial insuficiente' };
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-export const FREQUENCY_FOLLOWUP_INSTRUCTION = 'Prepara un seguimiento con los productos, presentaciones y cantidades exactas de la última compra registrada. Usa la frecuencia solo para adaptar la pregunta. Si el historial es insuficiente o variable, no atribuyas hábitos. No cambies bandejas por cajas, no conviertas unidades ni agregues productos de compras anteriores. No supongas gustos, consumo, entrega ni necesidad de reposición. Sin ofertas ni compromisos de disponibilidad. Si el detalle está incompleto, excluye el borrador para revisión.';
+export const FREQUENCY_FOLLOWUP_INSTRUCTION = 'Escribe un WhatsApp breve, cercano y conversacional, con saludos y cierres variados, sin encabezados, listas ni tono de plantilla. Mantén los productos, presentaciones y cantidades exactas de la última compra registrada. Usa la frecuencia solo para adaptar la pregunta. Si el historial es insuficiente o variable, no atribuyas hábitos. No cambies bandejas por cajas, no conviertas unidades ni agregues productos de compras anteriores. No supongas gustos, consumo, entrega, confianza previa ni necesidad de reposición. Sin ofertas ni compromisos de disponibilidad. Si el detalle está incompleto, excluye el borrador para revisión.';
 
 export function purchaseProductLabel(item) {
   const quantity = Number.isFinite(item?.cantidad) && item.cantidad > 0
