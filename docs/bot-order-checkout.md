@@ -39,7 +39,7 @@ junto al «sí» siguen procesándose y requieren revisar el nuevo resumen. Tamb
 se reconoce «Sí, todo correcto. Confirmo el pedido de prueba» como una afirmación
 completa; añadir cambios o condiciones impide el cierre directo.
 
-También se reconocen «Todo bien», «Está correcto», «Sí correcto» y «Sí, necesito
+También se reconocen «Todo bien», «Está correcto», «Sí correcto», «Sí es correcto» y «Sí, necesito
 me lo envíen», incluso con un agradecimiento en una segunda línea. La frase
 completa debe ser afirmativa: preguntas, condiciones, cambios de fecha o producto
 y la aprobación únicamente de una dirección no autorizan crear el pedido.

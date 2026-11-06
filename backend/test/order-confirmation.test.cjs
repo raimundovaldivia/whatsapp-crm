@@ -58,6 +58,7 @@ test('una indicación nueva junto a la confirmación se revisa antes de crear el
 });
 
 for (const message of ['Todo bien', 'Esta correcto', 'Sí correcto', 'Si correcto\nGracias',
+  'Si es correcto', 'Sí, es correcto.', 'Sí es correcto\nGracias',
   'Sí, necesito me lo envíen\nPor favor', 'Está todo correcto', 'Dale perfecto']) {
   test(`confirmación habitual cierra el resumen enviado sin reinterpretarlo: ${message}`, async () => {
     const history = [];
@@ -78,7 +79,10 @@ for (const message of ['Todo bien', 'Esta correcto', 'Sí correcto', 'Si correct
 test('las nuevas afirmaciones no aceptan condiciones, preguntas ni cambios', () => {
   for (const message of ['Todo bien pero cambia a dos', 'Está correcto?', 'Si correcto pero no lo envíes',
     'Sí necesito que lo envíen mañana', 'Si esta dirección', 'Si necesito que llegue hoy',
-    'Todo bien si llega mañana', 'Gracias', 'Por favor']) {
+    'Todo bien si llega mañana', 'Gracias', 'Por favor',
+    '¿Sí es correcto?', 'Sí es correcto pero cambia la dirección',
+    'Sí es correcto si llega mañana', 'Sí es correcto, agrega otra bandeja',
+    'No, no es correcto', 'Sí es correcto el teléfono']) {
     assert.equal(agent.isOrderConfirmed('ORDEN_CONFIRMADA', message, draft()), false, message);
   }
 });

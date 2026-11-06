@@ -51,7 +51,7 @@ function isBareAffirmative(value = '') {
   // abiertos ("si cambio...", "ok pero..."). No contiene productos nuevos.
   if (/[¿?]/u.test(String(value))) return false;
   const text = normalize(value).replace(/[,.!;:¡\p{Emoji_Modifier}]+/gu, ' ').replace(/\s+/g, ' ').trim();
-  const approval = '(?:si+|yes|claro|dale|ok(?:ay|ey|a)?|bueno|perfecto|correcto|confirmo(?: (?:el|mi|este) (?:pedido|resumen)(?: de prueba)?)?|adelante|procede|listo|vamos?|por supuesto|de acuerdo|(?:esta )?todo (?:correcto|bien)|esta (?:correcto|bien)|necesito (?:que )?me lo envien|👍)';
+  const approval = '(?:si+|yes|claro|dale|ok(?:ay|ey|a)?|bueno|perfecto|(?:es )?correcto|confirmo(?: (?:el|mi|este) (?:pedido|resumen)(?: de prueba)?)?|adelante|procede|listo|vamos?|por supuesto|de acuerdo|(?:esta )?todo (?:correcto|bien)|esta (?:correcto|bien)|necesito (?:que )?me lo envien|👍)';
   const courtesy = '(?:(?:lo|la|los|las) espero|(?:aca|aqui) estoy|estoy en casa|(?:muchas )?gracias|por favor|porfa|😊)';
   return new RegExp(`^${approval}(?: (?:${approval}|${courtesy}))*$`, 'u').test(text);
 }
