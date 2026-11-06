@@ -197,7 +197,8 @@ router.post('/:slug/orders', async (req, res) => {
       itemsText,
       ``,
       `📍 *Entrega:* ${address}, ${city}`,
-      ...(deliveryFee != null ? [`🚚 *Despacho:* ${deliveryFee ? '
+      ...(deliveryFee != null ? [`🚚 *Despacho:* ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
+      `💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}`,
       `💳 *Pago:* Contra entrega`,
       ``,
       `Pronto te confirmaremos la fecha de despacho 🚀`,
@@ -232,55 +233,6 @@ router.post('/:slug/orders', async (req, res) => {
       orderId: order.id,
       total:   parseInt(total),
       deliveryFee, productsTotal,
-      confirmationSent,
-      whatsappProvider: confirmationSent ? 'evolution' : null,
-      message: confirmationSent
-        ? `¡Pedido recibido! Enviamos la confirmación al ${phoneClean} por WhatsApp.`
-        : '¡Pedido recibido! Lo guardamos correctamente y te contactaremos para confirmarlo.',
-    });
-
-  } catch (err) {
-    console.error('[Store] Error creando pedido:', err.message);
-    res.status(err.status || 500).json({ error: err.message, code: err.code || undefined });
-  }
-});
-
-module.exports = router;
- + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
-      `💵 *Total:* ${parseInt(total).toLocaleString('es-CL')}`,
-      `💳 *Pago:* Contra entrega`,
-      ``,
-      `Pronto te confirmaremos la fecha de despacho 🚀`,
-    ].join('\n');
-
-    let confirmationSent = false;
-    if (evolutionChannel) {
-      try {
-        await whatsapp.sendTextMessage(phoneClean, msg, evolutionChannel);
-        confirmationSent = true;
-      } catch (sendError) {
-        console.error('[Store] Pedido guardado, pero Evolution no confirmó el mensaje al cliente:', sendError.message);
-      }
-    } else {
-      console.warn('[Store] Pedido guardado sin confirmación: no hay canal Evolution conectado');
-    }
-
-    // Notificar al admin por la misma conexión directa.
-    const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
-    if (adminPhone && evolutionChannel) {
-      const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
-      const adminMsg = `🛒 *Nuevo pedido desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
-      try {
-        await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
-      } catch (sendError) {
-        console.error('[Store] Pedido guardado, pero Evolution no notificó al administrador:', sendError.message);
-      }
-    }
-
-    res.status(201).json({
-      success: true,
-      orderId: order.id,
-      total:   parseInt(total),
       confirmationSent,
       whatsappProvider: confirmationSent ? 'evolution' : null,
       message: confirmationSent
