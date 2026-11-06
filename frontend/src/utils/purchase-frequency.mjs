@@ -2,6 +2,44 @@ export const cadenceLabels = { unknown: 'Sin frecuencia', weekly: 'Hasta 10 día
 export const statusLabels = { followup: 'Para seguimiento', overdue: 'Pasó su fecha estimada', due: 'Próximos 3 días', upcoming: 'Más adelante', insufficient: 'Historial insuficiente' };
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
+export function selectableFrequencyCustomers(customers) {
+  const blocked = new Set(customers.filter(customer => customer.optedOut).map(customer => customer.phone));
+  const seen = new Set();
+  return customers.filter(customer => {
+    if (!/^\d{8,15}$/.test(customer.phone) || blocked.has(customer.phone) || seen.has(customer.phone)) return false;
+    seen.add(customer.phone);
+    return true;
+  });
+}
+
+export function toggleFrequencySelection(selected, customers) {
+  const eligible = selectableFrequencyCustomers(customers);
+  const remove = eligible.every(customer => selected.has(customer.phone));
+  const next = new Set(selected);
+  for (const customer of eligible) {
+    if (remove) next.delete(customer.phone);
+    else next.add(customer.phone);
+  }
+  return next;
+}
+
+// Resolve only explicitly chosen phones against freshly loaded tenant data.
+// An empty/missing selection must never become the entire customer list.
+export function frequencyBroadcastContacts(customers, phones = []) {
+  const chosen = new Set(phones);
+  return selectableFrequencyCustomers(customers).filter(customer => chosen.has(customer.phone)).map(customer => ({
+    phone: customer.phone, name: customer.name, contact_type: 'customer',
+    total_orders: customer.purchaseCount, opt_out: false, source: 'frecuencia',
+    // Noon UTC preserves a date-only Chilean business date in existing formatters.
+    last_order_at: customer.lastPurchase ? `${customer.lastPurchase}T12:00:00Z` : null,
+  }));
+}
+
+export function initialEvolutionMethod(methods) {
+  const available = methods.filter(method => method.provider === 'evolution' && method.available && method.channelId);
+  return available.length === 1 ? `evolution:${available[0].channelId}` : 'evolution:pending';
+}
+
 export function latestConversationId(conversations) {
   const existing = conversations.filter(conversation => Number.isInteger(conversation.id) && conversation.id > 0 && Number(conversation.message_count) > 0);
   existing.sort((a, b) => (Date.parse(b.last_message_at) || 0) - (Date.parse(a.last_message_at) || 0));
