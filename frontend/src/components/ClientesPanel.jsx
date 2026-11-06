@@ -1,5 +1,6 @@
 import { EggPurchaseDetail, EggRepurchaseList, useEggRepurchase } from './EggRepurchase.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import PurchaseFrequencyPanel from './PurchaseFrequencyPanel.jsx';
 import {
   Users, Search, RefreshCw, MessageSquare, ShoppingBag,
   TrendingUp, WifiOff, MapPin, ChevronRight, ChevronLeft, Zap, Upload, X, CheckCircle, AlertCircle, ChevronDown, Check,
@@ -122,7 +123,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
   const { colors, isDark } = useTheme();
 
   // Tabs: 'clientes' = Shopify customers | 'leads' = WhatsApp leads from contacts DB
-  const [tab, setTab] = useState('clientes');
+  const [tab, setTab] = useState('frequency');
   const repurchase = useEggRepurchase(showEggRepurchase);
 
   // ── Clientes (Shopify) state ──
@@ -464,7 +465,8 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
     }
   }, [importRows, importCols, leadsSearch, loadLeads]);
 
-  useEffect(() => { loadAll(); return () => { abortRef.current = true; }; }, []);
+  useEffect(() => { if (tab === 'clientes') loadAll(); }, [tab, loadAll]);
+  useEffect(() => () => { abortRef.current = true; }, []);
 
   // Load leads when switching to leads tab or searching
   useEffect(() => {
@@ -517,12 +519,13 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
 
       {/* Header */}
       <div style={{ padding: '14px 24px', backgroundColor: colors.bgPanel, borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <Users size={20} color={colors.green} />
           <h1 style={{ color: colors.textPrimary, fontSize: '17px', fontWeight: 600 }}>Clientes</h1>
 
           {/* Tab pills */}
           {[
+            { key: 'frequency', label: 'Frecuencia de compra', icon: <TrendingUp size={12} /> },
             { key: 'clientes', label: 'Clientes Shopify', icon: <ShoppingBag size={12} /> },
             { key: 'leads',    label: 'Leads WhatsApp',   icon: <Zap size={12} /> },
             ...(showEggRepurchase ? [{ key: 'eggs', label: 'Recompra de huevos', icon: null }] : []),
@@ -553,7 +556,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        {tab !== 'frequency' && <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <div style={{ backgroundColor: colors.bgHover, borderRadius: '8px', display: 'flex', alignItems: 'center', padding: '7px 12px', gap: '7px' }}>
             <Search size={14} color={colors.textSecondary} />
             <input
@@ -594,8 +597,10 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
             style={{ padding: '8px', borderRadius: '8px', backgroundColor: colors.bgHover, border: 'none', cursor: 'pointer', display: 'flex' }}>
             <RefreshCw size={14} color={colors.textSecondary} />
           </button>}
-        </div>
+        </div>}
       </div>
+
+      {tab === 'frequency' && <PurchaseFrequencyPanel onOpenConversation={onOpenConversation} />}
 
       {tab === 'eggs' && showEggRepurchase && <EggRepurchaseList report={repurchase} search={search} colors={colors} />}
 

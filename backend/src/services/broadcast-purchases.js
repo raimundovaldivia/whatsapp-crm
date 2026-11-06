@@ -14,7 +14,7 @@ async function loadOrderLedger(pool, orgId, phones = null, includeDetails = fals
     THEN '56' || regexp_replace(${column}, '[^0-9]', '', 'g')
     ELSE regexp_replace(COALESCE(${column}, ''), '[^0-9]', '', 'g') END`;
   const [shopify, local] = await Promise.all([
-    pool.query(`SELECT shopify_order_id AS id, customer_phone AS phone, shopify_created_at AS date, items,
+    pool.query(`SELECT shopify_order_id AS id, customer_phone AS phone, shopify_created_at AT TIME ZONE 'UTC' AS date, items,
         ${includeDetails ? `customer_name AS name, total_price AS total, crm_status AS dispatch,
           delivery_date::text AS delivery_day, delivered_at, financial_status AS payment,
           fulfillment_status AS fulfillment,` : ''}
@@ -25,7 +25,7 @@ async function loadOrderLedger(pool, orgId, phones = null, includeDetails = fals
       FROM shopify_orders WHERE organization_id = $1 AND shopify_created_at IS NOT NULL
         AND ($2::text[] IS NULL OR ${phoneSql('customer_phone')} = ANY($2::text[]))`, [orgId, normalized]),
     pool.query(`SELECT o.id, o.shopify_order_id, COALESCE(NULLIF(o.customer_phone, ''), c.phone_number) AS phone,
-        o.created_at AS date, o.items, o.status
+        o.created_at AT TIME ZONE 'UTC' AS date, o.items, o.status
         ${includeDetails ? `, o.customer_name AS name, o.total_price AS total, o.status AS dispatch,
           o.delivery_date::text AS delivery_day, o.delivered_at, o.payment_marked_at` : ''}
       FROM orders o LEFT JOIN conversations c ON c.id = o.conversation_id AND c.organization_id = o.organization_id
