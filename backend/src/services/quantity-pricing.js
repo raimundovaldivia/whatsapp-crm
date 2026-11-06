@@ -45,4 +45,16 @@ function aiText(product) {
   const scale = product.quantity_prices.map((p, i) => `${i + 1} bandeja(s): $${p.toLocaleString('es-CL')} total`).join('; ');
   return `  Escala automática por cantidad del MISMO producto: ${scale}. Desde ${product.quantity_prices.length} bandejas se mantiene el precio por bandeja de caja completa. Cada bandeja contiene ${product.units_per_tray} huevos. Una caja completa equivale a ${product.box_size} bandejas: registra el producto de bandeja con quantity=${product.box_size}, no como una bandeja. Los totales son de productos; confirma el despacho según las condiciones de la tienda. No sumes calibres distintos para calcular el descuento.`;
 }
-module.exports = { SETTING, parseConfig, loadConfig, decorate, totalFor, apply, aiText };
+function parseShipping(raw) {
+  let rule; try { rule = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
+  return rule && Number.isSafeInteger(rule.fee) && rule.fee >= 0 && Number.isSafeInteger(rule.freeFrom) && rule.freeFrom > 0
+    ? { fee: rule.fee, freeFrom: rule.freeFrom } : null;
+}
+async function loadShipping(db, orgId) { return parseShipping(await db.getSetting(orgId, 'store_shipping_rule')); }
+function withShipping(quote, rule) {
+  if (!rule) return quote;
+  const productsTotal = Math.round(quote.productsTotal ?? quote.total);
+  const deliveryFee = productsTotal > 0 && productsTotal < rule.freeFrom ? rule.fee : 0;
+  return { ...quote, productsTotal, deliveryFee, total: productsTotal + deliveryFee };
+}
+module.exports = { SETTING, parseConfig, loadConfig, decorate, totalFor, apply, aiText, parseShipping, loadShipping, withShipping };

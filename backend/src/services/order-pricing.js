@@ -383,6 +383,7 @@ function pricingContext(pricing) {
     : (pricing.discountPct
       ? `Descuento acordado: ${pricing.discountPct}% (−${fmt(pricing.discountAmount)})`
       : `Descuento promocional por producto: −${fmt(pricing.discountAmount)}`));
+  if (pricing.deliveryFee != null) out.push(`Despacho: ${pricing.deliveryFee ? fmt(pricing.deliveryFee) : 'Gratis'}`);
   out.push(`TOTAL: ${fmt(pricing.total)}`);
   return `${lines.join('\n')}\n${out.join('\n')}`;
 }
@@ -395,6 +396,7 @@ function summaryBlock(pricing) {
     : (pricing.discountPct
       ? `🏷️ Descuento ${pricing.discountPct}%: −${fmt(pricing.discountAmount)}`
       : `🏷️ Descuento promocional: −${fmt(pricing.discountAmount)}`));
+  if (pricing.deliveryFee != null) lines.push(`🚚 Despacho: ${pricing.deliveryFee ? fmt(pricing.deliveryFee) : 'Gratis'}`);
   lines.push(`💰 Total: ${fmt(pricing.total)}`);
   return lines.join('\n');
 }

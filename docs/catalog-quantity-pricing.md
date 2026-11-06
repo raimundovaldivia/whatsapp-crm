@@ -6,7 +6,9 @@ La escala solo se utiliza si el precio de una unidad coincide con el precio base
 
 El catálogo público y `loadBotCatalog` cargan la misma configuración. El bot calcula después de agrupar líneas repetidas. La cotización pública y `createStoreOrder` vuelven a calcular en servidor; el checkout rechaza un total esperado obsoleto y conserva la transacción de stock. Los calibres distintos no se suman para determinar el tramo. Los acuerdos especiales existentes conservan su prioridad.
 
-La landing de Justo Casero permite seleccionar desde una bandeja hasta una caja y envía por WhatsApp el calibre, bandejas, huevos y subtotal. Los importes provienen del catálogo publicado, no de constantes en la web. El despacho de cantidades menores a caja completa se confirma por sector hasta que el dueño defina su tarifa.
+La landing de Justo Casero permite seleccionar desde una bandeja hasta una caja y envía por WhatsApp el calibre, bandejas, huevos, subtotal, despacho y total. Los importes provienen del catálogo publicado, no de constantes en la web.
+
+`store_shipping_rule` configura `{ "fee": 1500, "freeFrom": 15000 }` exclusivamente para Justo Casero. El umbral se calcula sobre productos después del descuento y antes del despacho: dos bandejas Súper Extra cuestan $13.900 + $1.500 = $15.400, mientras dos Extra cuestan $17.900 con despacho gratis. Desde $15.000 inclusive es gratuito. La cobertura autorizada es La Serena y Coquimbo. La cotización, el simulador, el bot y el checkout aplican la misma función; los pedidos conservan el desglose en `shipping_address.delivery_fee` y `products_total`.
 
 ## Configuración aprobada el 6 de noviembre de 2026
 

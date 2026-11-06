@@ -538,6 +538,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   const orderCtx = {
     products, specialPrices, baseSpecialPrices, isLead, promotionContext,
     xlContext: personalOffer ? { ...xlContext, enabled: false, eligible: false } : xlContext,
+    shippingRule: await require('./quantity-pricing').loadShipping(db, orgId),
     personalOffer, now: nowCl,
   };
 
@@ -2850,6 +2851,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     delete updatedDraft.awaiting_free_gift;
   }
   priced = require('./xl-welcome-pricing').applyQuote(priced, orderCtx.xlContext);
+  priced = require('./quantity-pricing').withShipping(priced, orderCtx.shippingRule);
   // Validar el catálogo vigente antes de pedir o aceptar una confirmación.
   const productIssue = checkout.catalogIssue(priced, products);
   if (productIssue) {
@@ -2871,6 +2873,8 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     delete updatedDraft.personal_offer_discount_amount;
   }
   updatedDraft.total    = priced.total;
+  updatedDraft.delivery_fee = priced.deliveryFee;
+  updatedDraft.products_total = priced.productsTotal;
   if (priced.unmatched.length) console.log(`[Pipeline] 🛒 Ítems sin match en catálogo: ${priced.unmatched.join(' | ')}`);
   await db.updatePipelineState(conversationId, 'collecting_order', updatedDraft);
 
@@ -2953,7 +2957,8 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       ...(it.locked_quote ? { locked_quote: true } : {}),
       ...(it.free_gift ? { free_gift: true, promotion_offer: true } : {}),
     }));
-    const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city };
+    const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city,
+      ...(priced.deliveryFee != null ? { delivery_fee: priced.deliveryFee, products_total: priced.productsTotal } : {}) };
     const summary = pricing.summaryBlock(priced);
     const deliveryLine = updatedDraft.delivery_date ? `\n📅 Entrega: ${formatDateEs(updatedDraft.delivery_date)}` : '';
     const customerPhone = updatedDraft.customer_phone || conversation.phone_number;

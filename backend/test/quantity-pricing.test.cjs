@@ -38,6 +38,13 @@ test('all eleven approved totals are identical in bot and web; repeated lines me
   assert.deepEqual(tiers.parseConfig('{bad'),{});
   assert.deepEqual(tiers.parseConfig({wrong:{totals:[10,30]}}),{});
   assert.equal(tiers.decorate([{...products[0],price:10000}],config)[0].quantity_prices,undefined);
+  const shipping={fee:1500,freeFrom:15000};
+  for(const [subtotal,fee,total] of [[7900,1500,9400],[9900,1500,11400],[13900,1500,15400],[14999,1500,16499],[15000,0,15000],[17900,0,17900],[17800,0,17800]]){
+    const quoted=tiers.withShipping({total:subtotal},shipping);
+    assert.equal(quoted.deliveryFee,fee);assert.equal(quoted.total,total);
+    assert.deepEqual(tiers.withShipping(quoted,shipping),quoted);
+  }
+  assert.equal(tiers.withShipping({total:9900},null).total,9900);
 });
 
 test('checkout persists exact tier totals, rejects stale prices and foreign products, rolls back stock on failure', async () => {
@@ -69,5 +76,12 @@ test('checkout persists exact tier totals, rejects stale prices and foreign prod
     assert.equal((await engine.query('SELECT stock FROM products WHERE id=62')).rows[0].stock,120);
     assert.equal((await engine.query('SELECT stock FROM products WHERE id=60')).rows[0].stock,99);
     assert.equal((await engine.query('SELECT stock FROM products WHERE id=61')).rows[0].stock,85);
+    await engine.query('INSERT INTO settings(organization_id,key,value) VALUES($1,$2,$3)',[2,'store_shipping_rule',JSON.stringify({fee:1500,freeFrom:15000})]);
+    const delivered=await db.createStoreOrder({...base,items:[{productId:61,quantity:2}],expectedTotal:15400});
+    assert.equal(delivered.total,15400);assert.equal(delivered.deliveryFee,1500);assert.equal(delivered.productsTotal,13900);
+    const address=typeof delivered.order.shipping_address==='string'?JSON.parse(delivered.order.shipping_address):delivered.order.shipping_address;
+    assert.equal(address.delivery_fee,1500);
+    const free=await db.createStoreOrder({...base,items:[{productId:60,quantity:2}],expectedTotal:17900});
+    assert.equal(free.total,17900);assert.equal(free.deliveryFee,0);
   } finally { await engine.close(); }
 });

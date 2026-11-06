@@ -52,6 +52,7 @@ export default function JustoCaseroLanding() {
   const [catalog, setCatalog] = useState(null);
   const [quantities, setQuantities] = useState({});
   const [purchaseInstructions, setPurchaseInstructions] = useState('');
+  const [shippingRule, setShippingRule] = useState(null);
   const [selection, setSelection] = useState('');
   const [otherIdea, setOtherIdea] = useState('');
   const [priceVotes, setPriceVotes] = useState(savedPriceVotes);
@@ -63,6 +64,7 @@ export default function JustoCaseroLanding() {
       .then(data => {
         const configured = onlyDigits(data.whatsappPhone);
         if (configured) setWhatsapp(configured);
+        setShippingRule(data.shippingRule || null);
         setPurchaseInstructions(typeof data.howToBuy === 'string' ? data.howToBuy.trim() : '');
       })
       .catch(error => {
@@ -169,11 +171,13 @@ export default function JustoCaseroLanding() {
                 const quantity = quantities[product.sku] || 1;
                 const total = Array.isArray(tiers) ? tiers[quantity - 1] : null;
                 const available = activeProduct && (Number(activeProduct.stock) === -1 || Number(activeProduct.stock) >= quantity);
-                const ready = available && Number.isFinite(total) && total > 0;
+                const ready = available && Number.isFinite(total) && total > 0 && shippingRule;
+                const deliveryFee = shippingRule && total < shippingRule.freeFrom ? shippingRule.fee : 0;
+                const finalTotal = total + deliveryFee;
                 const money = value => '$' + Math.round(value).toLocaleString('es-CL');
-                const shipping = quantity >= activeProduct?.box_size
-                  ? 'Caja completa: reparto incluido en la cobertura acordada. Confirma tu sector por WhatsApp.'
-                  : 'Despacho se cotiza según tu sector y se confirma antes de cerrar el pedido.';
+                const shipping = shippingRule
+                  ? `Despacho ${money(shippingRule.fee)} en compras de productos menores a ${money(shippingRule.freeFrom)}. Desde ${money(shippingRule.freeFrom)}, gratis. La Serena y Coquimbo; confirma cobertura de tu dirección.`
+                  : 'Consultando las condiciones de despacho…';
                 return (
                 <article className={`jc-egg-card jc-egg-card-${index + 1}`} key={product.size}>
                   <span className="jc-card-number">0{index + 1}</span>
@@ -188,6 +192,7 @@ export default function JustoCaseroLanding() {
                     </label>
                     <div className="jc-tray-total" aria-live="polite">
                       <strong>{money(total)}</strong><span>Total de productos · {quantity * product.units} huevos</span>
+                      {shippingRule && <><span>Despacho: {deliveryFee ? money(deliveryFee) : 'Gratis'}</span><b>Total a pagar: {money(finalTotal)}</b></>}
                       <b>{quantity > 1 ? '≈ ' : ''}{money(total / quantity)} por bandeja</b>
                       {quantity > 1 && <small>Ahorras {money(tiers[0] * quantity - total)} frente a comprarlas individualmente.</small>}
                     </div>
@@ -199,7 +204,7 @@ export default function JustoCaseroLanding() {
                   </>}
                   <p className="jc-shipping-note">{shipping}</p>
                   <p>{catalog === null ? 'Cargando precios y disponibilidad…' : available ? '' : 'Temporalmente no disponible. Consulta por el próximo ingreso.'}</p>
-                  {ready ? <a href={orderLink(`Hola, quiero ${quantity} ${quantity === 1 ? 'bandeja' : 'bandejas'} de huevos ${product.size} de color de ${product.units} huevos cada una (${quantity * product.units} huevos en total). Precio de productos: ${money(total)}. Quiero confirmar el despacho y completar el pedido.`)} target="_blank" rel="noreferrer">Pedir {quantity} {quantity === 1 ? 'bandeja' : 'bandejas'} · {money(total)} <span>→</span></a>
+                  {ready ? <a href={orderLink(`Hola, quiero ${quantity} ${quantity === 1 ? 'bandeja' : 'bandejas'} de huevos ${product.size} de color de ${product.units} huevos cada una (${quantity * product.units} huevos en total). Precio de productos: ${money(total)}. Despacho: ${deliveryFee ? money(deliveryFee) : 'gratis'}. Total a pagar: ${money(finalTotal)}. Quiero completar el pedido.`)} target="_blank" rel="noreferrer">Pedir {quantity} {quantity === 1 ? 'bandeja' : 'bandejas'} · {money(finalTotal)} <span>→</span></a>
                     : <a href={orderLink(`Hola, quiero consultar la disponibilidad de huevos ${product.size} por bandeja.`)} target="_blank" rel="noreferrer">Consultar disponibilidad <span>→</span></a>}
                 </article>
                 );
@@ -259,7 +264,7 @@ export default function JustoCaseroLanding() {
 
         <section className="jc-contact" id="contacto">
           <div className="jc-container jc-contact-card">
-            <div><span className="jc-kicker">EXTRA O SÚPER EXTRA</span><h2>Tus bandejas de huevos de color.</h2><p>Repartimos de lunes a sábado, de 15:00 a 21:00. Pedidos hasta las 15:00 inclusive; después, para el siguiente día de reparto disponible. Consulta el costo del despacho para tu cantidad y sector antes de confirmar. Las cajas completas conservan el reparto incluido en la cobertura acordada.</p></div>
+            <div><span className="jc-kicker">EXTRA O SÚPER EXTRA</span><h2>Tus bandejas de huevos de color.</h2><p>Repartimos de lunes a sábado, de 15:00 a 21:00. Pedidos hasta las 15:00 inclusive; después, para el siguiente día de reparto disponible. Despacho de $1.500 para compras de productos menores a $15.000; desde $15.000, gratis en La Serena y Coquimbo, según cobertura de tu dirección.</p></div>
             <a className="jc-button jc-button-dark" href={orderLink('Hola, quiero pedir huevos de color por bandeja. ¿Qué disponibilidad tienen en Extra y Súper Extra?')} target="_blank" rel="noreferrer">Abrir WhatsApp <span>→</span></a>
           </div>
         </section>

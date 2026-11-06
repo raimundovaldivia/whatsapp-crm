@@ -74,6 +74,7 @@ router.get('/:slug/info', async (req, res) => {
       heroTags,
       whatsappPhone: whatsappPhone || null,
       freeShipping:  freeShippingRaw ? parseInt(freeShippingRaw) : null,
+      shippingRule: await quantityPricing.loadShipping(db, org.id),
       howToBuy:     howToBuy  || null,
       aboutUs:      aboutUs   || null,
     });
@@ -134,7 +135,7 @@ router.post('/:slug/quote', async (req, res) => {
     });
     const ctx = await xlPricing.context(getPool(), org.id, phone);
     const priced = quantityPricing.apply(xlPricing.apply(lines, xlPricing.forStore(ctx)), products);
-    res.json({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) });
+    res.json(quantityPricing.withShipping({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) }, await quantityPricing.loadShipping(db, org.id)));
   } catch (err) { res.status(err.status || 503).json({ error: 'No pudimos confirmar los precios. Intenta nuevamente.' }); }
 });
 
@@ -171,7 +172,7 @@ router.post('/:slug/orders', async (req, res) => {
     const conversation = await db.upsertConversation(org.id, phoneClean, name, evolutionChannel?.id || null);
 
     // Crear el pedido y descontar stock dentro de una misma transacción.
-    const { order, resolvedItems, total } = await db.createStoreOrder({
+    const { order, resolvedItems, total, deliveryFee, productsTotal } = await db.createStoreOrder({
       conversationId:  conversation.id,
       organizationId:  org.id,
       customerName:    name,
@@ -196,7 +197,57 @@ router.post('/:slug/orders', async (req, res) => {
       itemsText,
       ``,
       `📍 *Entrega:* ${address}, ${city}`,
-      `💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}`,
+      ...(deliveryFee != null ? [`🚚 *Despacho:* ${deliveryFee ? '
+      `💳 *Pago:* Contra entrega`,
+      ``,
+      `Pronto te confirmaremos la fecha de despacho 🚀`,
+    ].join('\n');
+
+    let confirmationSent = false;
+    if (evolutionChannel) {
+      try {
+        await whatsapp.sendTextMessage(phoneClean, msg, evolutionChannel);
+        confirmationSent = true;
+      } catch (sendError) {
+        console.error('[Store] Pedido guardado, pero Evolution no confirmó el mensaje al cliente:', sendError.message);
+      }
+    } else {
+      console.warn('[Store] Pedido guardado sin confirmación: no hay canal Evolution conectado');
+    }
+
+    // Notificar al admin por la misma conexión directa.
+    const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
+    if (adminPhone && evolutionChannel) {
+      const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
+      const adminMsg = `🛒 *Nuevo pedido desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
+      try {
+        await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
+      } catch (sendError) {
+        console.error('[Store] Pedido guardado, pero Evolution no notificó al administrador:', sendError.message);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      orderId: order.id,
+      total:   parseInt(total),
+      deliveryFee, productsTotal,
+      confirmationSent,
+      whatsappProvider: confirmationSent ? 'evolution' : null,
+      message: confirmationSent
+        ? `¡Pedido recibido! Enviamos la confirmación al ${phoneClean} por WhatsApp.`
+        : '¡Pedido recibido! Lo guardamos correctamente y te contactaremos para confirmarlo.',
+    });
+
+  } catch (err) {
+    console.error('[Store] Error creando pedido:', err.message);
+    res.status(err.status || 500).json({ error: err.message, code: err.code || undefined });
+  }
+});
+
+module.exports = router;
+ + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
+      `💵 *Total:* ${parseInt(total).toLocaleString('es-CL')}`,
       `💳 *Pago:* Contra entrega`,
       ``,
       `Pronto te confirmaremos la fecha de despacho 🚀`,

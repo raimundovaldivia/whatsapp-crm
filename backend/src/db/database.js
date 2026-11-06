@@ -2164,6 +2164,10 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
     const adjusted = quantityPricing.apply(xlPricing.apply(resolvedItems, xlPricing.forStore(xlContext)), quantityProducts);
     resolvedItems.splice(0, resolvedItems.length, ...adjusted);
     total = Math.round(resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0));
+    const { rows: shippingSettings } = await client.query('SELECT value FROM settings WHERE organization_id = $1 AND key = $2', [organizationId, 'store_shipping_rule']);
+    const shipping = quantityPricing.withShipping({total}, quantityPricing.parseShipping(shippingSettings[0]?.value));
+    total = shipping.total;
+    if (shipping.deliveryFee != null) shippingAddress = {...shippingAddress, delivery_fee: shipping.deliveryFee, products_total: shipping.productsTotal};
     if (expectedTotal != null && Number(expectedTotal) !== total) {
       throw Object.assign(new Error('El precio cambió. Revisa el total actualizado antes de confirmar.'), { status: 409, code: 'PRICE_CHANGED' });
     }
@@ -2199,7 +2203,7 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
       [organizationId, today]
     ).catch(() => {});
 
-    return { order, resolvedItems, total };
+    return { order, resolvedItems, total, deliveryFee: shipping.deliveryFee, productsTotal: shipping.productsTotal };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     throw error;
