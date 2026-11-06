@@ -3,6 +3,17 @@ const assert = require('node:assert/strict');
 const policy = require('../src/services/order-input-policy');
 
 const reviewedNotes = notes => ({ notes, _reviewed_order: JSON.stringify({ notes }) });
+test('reconoce sí es correcto como confirmación completa, sin preguntas ni condiciones', () => {
+  for (const message of ['Si es correcto', 'Sí, es correcto.', 'Sí es correcto\nGracias']) {
+    assert.equal(policy.isBareAffirmative(message), true, message);
+  }
+  for (const message of ['¿Sí es correcto?', 'Sí es correcto si llega mañana',
+    'Sí es correcto pero cambia la dirección', 'Sí es correcto, agrega otra bandeja',
+    'No es correcto', 'Sí es correcto el teléfono']) {
+    assert.equal(policy.isBareAffirmative(message), false, message);
+  }
+});
+
 test('confirmación con indicaciones repetidas exige cláusulas completas ya revisadas', () => {
   const draft = reviewedNotes('PRUEBA INTERNA, NO PREPARAR, NO COBRAR NI DESPACHAR. Pago en efectivo al recibir. No tocar el timbre.');
   for (const message of [
