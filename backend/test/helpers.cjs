@@ -43,6 +43,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './purchase-feedback') return require(path.join(root, 'src/services/purchase-feedback.js'));
       if (name === './personal-offers') return require(path.join(root, 'src/services/personal-offers.js'));
       if (name === './promotion-context') return require(path.join(root, 'src/services/promotion-context.js'));
+      if (name === './diez-rios-box-ad') return require(path.join(root, 'src/services/diez-rios-box-ad.js'));
       if (name === './ai-provider' || name === '../ai-provider' || name === '../services/ai-provider') {
         const providerDeps = Object.hasOwn(deps, '@anthropic-ai/sdk')
           ? deps

@@ -158,7 +158,9 @@ function fixture(options = {}) {
   const calls = { orders: [], states: [], claims: 0, extractions: 0 };
   let current = options.draft || draft();
   const db = {
-    getConversationById: async () => ({ id: 91, organization_id: 7, phone_number: options.channel ? null : '56911111111', source_channel: options.channel || 'whatsapp', pipeline_state: options.state || 'collecting_order', agent_mode: 'ai' }),
+    getConversationById: async () => ({ id: 91, organization_id: 7, whatsapp_channel_id: options.boxAd ? 4 : null, phone_number: options.channel ? null : '56911111111', source_channel: options.channel || 'whatsapp', pipeline_state: options.state || 'collecting_order', agent_mode: 'ai' }),
+    getLatestWhatsappAttribution: async () => options.boxAd,
+    getWhatsappChannel: async () => ({ phone_number: '56942876413' }),
     getLastMessages: async () => options.history || [{ direction: 'outbound', content: '📦 1x Huevos XL cafés · Bandeja de 30 — $12.990\n💰 Total: $12.990\n¿Todo correcto?' }],
     getSetting: async (_org, key) => options.settings?.[key] ?? (key === 'catalog_source' ? 'local' : null),
     getContact: async () => null,
@@ -203,6 +205,32 @@ function fixture(options = {}) {
   });
   return { pipeline, calls };
 }
+
+test('WhatsApp del anuncio: la bienvenida, el resumen y la orden guardada respetan precio y cantidad', async () => {
+  const id = require('../src/services/diez-rios-box-ad').AD_ID;
+  for (const [sku,title,price,promo,quantity] of [
+    ['DR-EGG-BOX-XL-180','Huevos XL · Caja de 180',55000,45000,2],
+    ['DR-EGG-BOX-JUMBO-100','Huevos Jumbo · Caja de 100',37000,27000,1],
+  ]) {
+    const history = [{id:1,direction:'inbound',content:'Hola'}];
+    const options = {history,webPricing:true,state:'exploring',draft:{},
+      boxAd:{ad_id:id,message_id:1,provider:'evolution'},
+      products:[{id:42,sku,title,price,stock:20,active:true}],
+      extract:previous=>({...previous,...draft(),items:[{product_name:title,quantity,price,locked_quote:true}]})};
+    const f=fixture(options);
+    const greeting=await f.pipeline.processMessage(7,91,'Hola');
+    assert.ok(greeting.response.includes(promo.toLocaleString('es-CL')));
+    history.push({direction:'outbound',content:greeting.response},{id:2,direction:'inbound',content:'Quiero pedir'});
+    options.state='collecting_order';
+    const review=await f.pipeline.processMessage(7,91,'Quiero pedir');
+    assert.ok(review.response.includes((promo*quantity).toLocaleString('es-CL')),review.response);
+    history.push({direction:'outbound',content:review.response},{id:3,direction:'inbound',content:'Sí, todo correcto'});
+    await f.pipeline.processMessage(7,91,'Sí, todo correcto');
+    assert.equal(f.calls.orders.length,1);
+    assert.equal(f.calls.orders[0].items[0].price,promo);
+    assert.equal(f.calls.orders[0].items[0].quantity,quantity);
+  }
+});
 
 for (const channel of ['facebook', 'instagram', 'whatsapp']) {
   test(`${channel}: el nombre actual gana al historial desde la primera compra y confirma una sola vez`, async () => {

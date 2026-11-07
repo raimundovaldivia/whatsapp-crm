@@ -456,7 +456,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   // ── Estrategia de cierre para leads (clientes nuevos sin compra previa) ──
   const xlPricing = require('./xl-welcome-pricing');
   const previousXlContext = await xlPricing.context(getPool(), orgId, conversation.phone_number);
-  const xlContext = isEmpresa ? previousXlContext : xlPricing.forStore(previousXlContext);
+  let xlContext = isEmpresa ? previousXlContext : xlPricing.forStore(previousXlContext);
   const personalOfferPaymentMode = (await db.getSetting(orgId, 'payment_mode')) || 'cod';
   let personalOffer = personalOfferPaymentMode === 'cod' && db.getActivePersonalOffer
     ? await db.getActivePersonalOffer(orgId, conversationId).catch(() => null)
@@ -472,12 +472,26 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   // se extraen del mensaje efectivamente enviado, no se dejan a interpretación
   // del modelo. La promoción activa prevalece sobre el precio de catálogo.
   const promotionsEnabled = (await db.getSetting(orgId, 'promotions_enabled')) !== 'false';
+  const boxCampaign = require('./diez-rios-box-ad');
+  let boxOffer = null;
+  let needsBoxCheck = Boolean(orderDraft?.box_ad_message_id);
   let promotionHistory = history;
   if (promotionsEnabled && db.getLatestWhatsappAttribution) {
     try {
       const ad = await db.getLatestWhatsappAttribution(orgId, conversationId);
+      if (ad?.ad_id === boxCampaign.AD_ID) {
+        needsBoxCheck = true;
+        const channel = conversation.whatsapp_channel_id
+          ? await db.getWhatsappChannel(orgId, conversation.whatsapp_channel_id) : null;
+        boxOffer = await boxCampaign.resolve({
+          pool: getPool(), orgId, isDiezRios: previousXlContext.enabled,
+          destination: channel?.phone_number,
+          phone: conversation.phone_number, ad, draft: orderDraft, products,
+          inbound: history.filter(message => message.direction === 'inbound').at(-1),
+        });
+      }
       const adCopy = [ad?.headline, ad?.body].filter(Boolean).join('\n').trim();
-      if (adCopy) {
+      if (adCopy && ad.ad_id !== boxCampaign.AD_ID) {
         promotionHistory = [...history, {
           direction: 'outbound',
           content: `[Template: promocion_anuncio_whatsapp]\n${adCopy}`,
@@ -486,6 +500,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
       }
     } catch (error) {
       console.warn('[Pipeline] No se pudo leer la oferta del anuncio:', error.message);
+      if (needsBoxCheck) return { response: 'Necesito verificar la oferta de tu pedido antes de cotizarte. Por favor, vuelve a consultarme en un momento.', agentType: 'sales', newState: currentState };
     }
   }
   let promotionContext = promotionsEnabled
@@ -510,6 +525,20 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   if (!promotionsEnabled && orderDraft?.promotion) {
     orderDraft = { ...orderDraft };
     delete orderDraft.promotion;
+  }
+  if (boxOffer) {
+    personalOffer = null;
+    promotionContext = null;
+    xlContext = { ...xlContext, enabled: false, eligible: false, web: false, overrides: [] };
+    products = boxOffer.products;
+    productosTexto = shopifyApi.formatProductsForAI(products);
+    specialPricesSection = boxOffer.reply;
+    Object.assign(specialPrices, boxOffer.specialPrices);
+    orderDraft = { ...orderDraft, box_ad_message_id: boxOffer.messageId, discount_pct: 0 };
+    delete orderDraft.promotion;
+  } else if (orderDraft?.box_ad_message_id) {
+    orderDraft = { ...orderDraft };
+    delete orderDraft.box_ad_message_id;
   }
   const baseSpecialPrices = { ...specialPrices };
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
@@ -536,10 +565,10 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
   const orderCtx = {
-    products, specialPrices, baseSpecialPrices, isLead, promotionContext,
+    products, specialPrices, baseSpecialPrices, isLead: isLead && !boxOffer, promotionContext,
     xlContext: personalOffer ? { ...xlContext, enabled: false, eligible: false } : xlContext,
     shippingRule: await require('./quantity-pricing').loadShipping(db, orgId),
-    personalOffer, now: nowCl,
+    personalOffer, boxOffer, now: nowCl,
   };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
@@ -1224,6 +1253,11 @@ REGLAS ABSOLUTAS:
       agentType: 'orchestrator',
       newState: 'opted_out',
     };
+  }
+
+  if (boxOffer && (boxOffer.fresh || promotions.isCurrentPriceQuestion(userMessage))) {
+    await db.updatePipelineState(conversationId, 'interested', orderDraft);
+    return { response: boxOffer.reply, agentType: 'sales', newState: 'interested' };
   }
 
   // Un contacto particular que pide precios por mayor no debe recibir el
@@ -2681,6 +2715,16 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     preservesReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
   ));
+  delete updatedDraft.box_ad_message_id;
+  if (orderCtx.boxOffer) {
+    updatedDraft.box_ad_message_id = orderCtx.boxOffer.messageId;
+    // Each box is priced by its catalog ID; a prior quote or an extracted
+    // amount must never override the campaign's unit price.
+    updatedDraft.items = (updatedDraft.items || []).map(item => ({
+      product_name: item.product_name || item.name || item.title,
+      product_id: item.product_id, quantity: item.quantity,
+    }));
+  }
   updatedDraft.customer_name = orderInputPolicy.resolveCustomerName(
     userMessage, orderDraft.customer_name, updatedDraft.customer_name
   );
