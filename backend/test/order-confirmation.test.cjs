@@ -158,7 +158,7 @@ function fixture(options = {}) {
   const calls = { orders: [], states: [], claims: 0, extractions: 0 };
   let current = options.draft || draft();
   const db = {
-    getConversationById: async () => ({ id: 91, organization_id: 7, whatsapp_channel_id: options.boxAd ? 4 : null, phone_number: options.channel ? null : '56911111111', source_channel: options.channel || 'whatsapp', pipeline_state: options.state || 'collecting_order', agent_mode: 'ai' }),
+    getConversationById: async () => ({ id: 91, organization_id: 7, whatsapp_channel_id: options.whatsappChannelId ?? (options.boxAd ? 4 : null), phone_number: options.channel ? null : '56911111111', source_channel: options.channel || 'whatsapp', pipeline_state: options.state || 'collecting_order', agent_mode: 'ai' }),
     getLatestWhatsappAttribution: async () => options.boxAd,
     getWhatsappChannel: async () => ({ phone_number: '56942876413' }),
     getLastMessages: async () => options.history || [{ direction: 'outbound', content: '📦 1x Huevos XL cafés · Bandeja de 30 — $12.990\n💰 Total: $12.990\n¿Todo correcto?' }],
@@ -171,7 +171,7 @@ function fixture(options = {}) {
     getActiveOrderForBot: async () => typeof options.activeOrder === 'function' ? options.activeOrder() : (options.activeOrder || null),
     updatePipelineState: async (...args) => { calls.states.push(args); if (args[2] !== undefined) current = args[2]; },
     setAgentMode: async () => {},
-    getPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+    getPool: () => options.pool || ({ query: async () => ({ rows: [], rowCount: 0 }) }),
     claimOrderCreation: async (_id, claimOptions) => { calls.claimOptions = claimOptions; calls.claims++; return !options.duplicate; },
     createOrder: async value => {
       if (options.failSave) throw new Error('Simulated database failure');
@@ -231,6 +231,56 @@ test('WhatsApp del anuncio: la bienvenida, el resumen y la orden guardada respet
     assert.equal(f.calls.orders[0].items[0].quantity,quantity);
   }
 });
+
+for (const scenario of ['orgánico nuevo', 'anuncio', 'recompra orgánica']) {
+  test(`dos cajas en el mismo WhatsApp: ${scenario}`, async () => {
+    const viaAd = scenario === 'anuncio';
+    const products = [
+      {id:41, sku:'DR-EGG-BOX-XL-180', title:'Huevos XL · Caja de 180', price:55000, stock:10},
+      {id:42, sku:'DR-EGG-BOX-JUMBO-100', title:'Huevos Jumbo · Caja de 100', price:37000, stock:10},
+    ];
+    const message = 'Vi la promo. Quiero una caja XL de 180 y una Jumbo de 100.';
+    const contextInfo = viaAd ? {externalAdReply:{sourceId:'120251917404930010'}} : {};
+    const referral = require('../src/services/whatsapp-attribution').fromEvolution({
+      extendedTextMessage: {text:message, contextInfo},
+    });
+    const history = [{id:1, direction:'inbound', content:message}];
+    const itemSelection = products.map(p => ({product_name:p.title, quantity:1}));
+    const pool = {query: async sql => ({
+      rows: scenario === 'recompra orgánica' && sql.includes('FROM box_ad_customers') ? [{entry_message_id:'19'}] : [],
+    })};
+    const options = {history, products, pool, webPricing:true, whatsappChannelId:4, state:'exploring', draft:{},
+      boxAd:referral && {ad_id:referral.adId, message_id:1, provider:'evolution'},
+      extract:previous => ({...previous, ...draft(), items:itemSelection})};
+    const f = fixture(options);
+    const expected = scenario === 'orgánico nuevo' ? [55000,37000] : [45000,27000];
+    const total = expected[0] + expected[1];
+    const first = await f.pipeline.processMessage(7,91,message);
+    if (viaAd) {
+      for (const price of expected) assert.ok(first.response.includes(price.toLocaleString('es-CL')),first.response);
+    } else if (scenario === 'orgánico nuevo') {
+      assert.doesNotMatch(first.response, /45\.000|27\.000|primera compra:/);
+    }
+    history.push({direction:'outbound',content:first.response});
+    options.state='collecting_order';
+    let review = first;
+    if (!first.response.includes(total.toLocaleString('es-CL'))) {
+      history.push({id:2,direction:'inbound',content:'Una de cada una, por favor.'});
+      review = await f.pipeline.processMessage(7,91,history.at(-1).content);
+      history.push({direction:'outbound',content:review.response});
+    }
+    const responses = [first.response, review.response].join('\n');
+    for (const amount of [...expected,total]) assert.ok(responses.includes(amount.toLocaleString('es-CL')),responses);
+    history.push({id:3,direction:'inbound',content:'Sí, todo correcto'});
+    const confirmation = await f.pipeline.processMessage(7,91,history.at(-1).content);
+    assert.equal(f.calls.orders.length,1,confirmation.response);
+    for (const [index,p] of products.entries()) {
+      const item = f.calls.orders[0].items.find(i => String(i.product_id) === String(p.id));
+      assert.equal(item.price,expected[index]);
+      assert.equal(item.quantity,1);
+    }
+  });
+}
 
 for (const channel of ['facebook', 'instagram', 'whatsapp']) {
   test(`${channel}: el nombre actual gana al historial desde la primera compra y confirma una sola vez`, async () => {

@@ -238,6 +238,17 @@ async function setupDatabase() {
         ON whatsapp_attributions(conversation_id, first_seen_at DESC);
       CREATE INDEX IF NOT EXISTS idx_wa_attr_campaign
         ON whatsapp_attributions(organization_id, campaign_id, source_id);
+      CREATE INDEX IF NOT EXISTS idx_wa_attr_org_ad_entry
+        ON whatsapp_attributions(organization_id, ad_id, first_seen_at)
+        WHERE provider='evolution' AND message_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS box_ad_customers (
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        phone TEXT NOT NULL,
+        ad_id TEXT NOT NULL,
+        entry_message_id TEXT NOT NULL,
+        PRIMARY KEY (organization_id, phone, ad_id)
+      );
 
       -- Enlaces cortos por conversación. El token público no contiene teléfono ni PII;
       -- la relación con el cliente permanece protegida dentro de la base de datos.
