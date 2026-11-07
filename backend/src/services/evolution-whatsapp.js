@@ -205,13 +205,13 @@ async function downloadMediaReference(orgId, ref) {
 function parseStatusUpdate(body) {
   if (eventName(body) !== 'messages.update') return null;
   const data = unwrapData(body);
-  const raw = data?.status || data?.update?.status;
+  const raw = data?.status ?? data?.update?.status;
   const statusMap = {
     ERROR: 'failed', PENDING: 'pending', SERVER_ACK: 'sent',
     DELIVERY_ACK: 'delivered', READ: 'read', PLAYED: 'read',
     0: 'failed', 1: 'pending', 2: 'sent', 3: 'delivered', 4: 'read', 5: 'read',
   };
-  const messageId = data?.key?.id || data?.id;
+  const messageId = data?.key?.id || data?.keyId || data?.id;
   if (!messageId || raw === undefined || raw === null) return null;
   return { messageId, status: statusMap[raw] || String(raw).toLowerCase(), error: data?.error || null };
 }

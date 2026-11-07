@@ -85,6 +85,13 @@ test('normaliza estados de entrega de Evolution', () => {
     event: 'MESSAGES_UPDATE',
     data: { key: { id: 'MSG1' }, status: 'DELIVERY_ACK' },
   }), { messageId: 'MSG1', status: 'delivered', error: null });
+  assert.deepEqual(evolution.parseStatusUpdate({
+    event: 'messages.update',
+    data: {keyId:'MSG2',messageId:'provider-row-id',fromMe:true,status:'READ'},
+  }), {messageId:'MSG2',status:'read',error:null});
+  assert.deepEqual(evolution.parseStatusUpdate({
+    event:'messages.update',data:{keyId:'MSG3',status:0},
+  }), {messageId:'MSG3',status:'failed',error:null});
 });
 
 test('normaliza la conexión de Evolution y recupera el número vinculado', () => {
