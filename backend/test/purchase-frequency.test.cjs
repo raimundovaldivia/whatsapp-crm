@@ -117,7 +117,13 @@ test('consulta SQL real aísla empresa y transforma fechas a Chile en verano e i
       VALUES (1,'+56 9 1234 5678','nuevo','2026-11-06'),(2,'912345678','nuevo','2026-11-06')`);
     const current = async () => (await frequency.getPurchaseFrequency(pool, 1, today, ['912345678'])).customers[0];
     assert.equal((await current()).status, 'pending_dispatch');
-    await pool.exec("UPDATE orders SET status='cancelled' WHERE organization_id=1 AND status='nuevo'");
+    // Pedidos displays legacy CRM drafts as Nuevo. They block outreach
+    // while open, without adding a purchase to the customer's history.
+    await pool.exec("UPDATE orders SET status='draft' WHERE organization_id=1 AND status='nuevo'");
+    const legacyNew = await current();
+    assert.equal(legacyNew.status, 'pending_dispatch');
+    assert.equal(legacyNew.purchaseCount, result.customers[0].purchaseCount);
+    await pool.exec("UPDATE orders SET status='cancelled' WHERE organization_id=1 AND status='draft'");
     assert.equal((await current()).status, 'upcoming');
     await pool.exec("UPDATE shopify_orders SET crm_status='en_camino' WHERE organization_id=1 AND shopify_order_id='1'");
     assert.equal((await current()).status, 'pending_dispatch');
