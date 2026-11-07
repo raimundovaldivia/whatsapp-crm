@@ -473,22 +473,32 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   // del modelo. La promoción activa prevalece sobre el precio de catálogo.
   const promotionsEnabled = (await db.getSetting(orgId, 'promotions_enabled')) !== 'false';
   const boxCampaign = require('./diez-rios-box-ad');
+  let customerPrices = null;
   let boxOffer = null;
-  let needsBoxCheck = Boolean(orderDraft?.box_ad_message_id);
+  const boxCustomer = previousXlContext.enabled && (conversation.source_channel || 'whatsapp') === 'whatsapp';
   let promotionHistory = history;
-  if (promotionsEnabled && db.getLatestWhatsappAttribution) {
+  if ((promotionsEnabled || boxCustomer) && db.getLatestWhatsappAttribution) {
     try {
       const ad = await db.getLatestWhatsappAttribution(orgId, conversationId);
-      if (ad?.ad_id === boxCampaign.AD_ID) {
-        needsBoxCheck = true;
-        const channel = conversation.whatsapp_channel_id
+      if (boxCustomer) {
+        const channel = ad?.ad_id === boxCampaign.AD_ID && conversation.whatsapp_channel_id
           ? await db.getWhatsappChannel(orgId, conversation.whatsapp_channel_id) : null;
-        boxOffer = await boxCampaign.resolve({
+        customerPrices = await boxCampaign.resolve({
           pool: getPool(), orgId, isDiezRios: previousXlContext.enabled,
           destination: channel?.phone_number,
           phone: conversation.phone_number, ad, draft: orderDraft, products,
+          allowEnrollment: promotionsEnabled,
           inbound: history.filter(message => message.direction === 'inbound').at(-1),
         });
+        if (customerPrices) {
+          products = customerPrices.products;
+          productosTexto = shopifyApi.formatProductsForAI(products);
+          Object.assign(specialPrices, customerPrices.specialPrices);
+          specialPricesSection = [specialPricesSection, customerPrices.reply].filter(Boolean).join('\n');
+          if (customerPrices.fresh || boxCampaign.concernsBoxes(userMessage, orderDraft, customerPrices)) {
+            boxOffer = customerPrices;
+          }
+        }
       }
       const adCopy = [ad?.headline, ad?.body].filter(Boolean).join('\n').trim();
       if (adCopy && ad.ad_id !== boxCampaign.AD_ID) {
@@ -500,7 +510,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
       }
     } catch (error) {
       console.warn('[Pipeline] No se pudo leer la oferta del anuncio:', error.message);
-      if (needsBoxCheck) return { response: 'Necesito verificar la oferta de tu pedido antes de cotizarte. Por favor, vuelve a consultarme en un momento.', agentType: 'sales', newState: currentState };
+      if (boxCustomer) return { response: 'Necesito verificar tus precios antes de cotizarte. Por favor, vuelve a consultarme en un momento.', agentType: 'sales', newState: currentState };
     }
   }
   let promotionContext = promotionsEnabled
@@ -530,10 +540,6 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     personalOffer = null;
     promotionContext = null;
     xlContext = { ...xlContext, enabled: false, eligible: false, web: false, overrides: [] };
-    products = boxOffer.products;
-    productosTexto = shopifyApi.formatProductsForAI(products);
-    specialPricesSection = boxOffer.reply;
-    Object.assign(specialPrices, boxOffer.specialPrices);
     orderDraft = { ...orderDraft, box_ad_message_id: boxOffer.messageId, discount_pct: 0 };
     delete orderDraft.promotion;
   } else if (orderDraft?.box_ad_message_id) {
@@ -568,7 +574,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
     products, specialPrices, baseSpecialPrices, isLead: isLead && !boxOffer, promotionContext,
     xlContext: personalOffer ? { ...xlContext, enabled: false, eligible: false } : xlContext,
     shippingRule: await require('./quantity-pricing').loadShipping(db, orgId),
-    personalOffer, boxOffer, now: nowCl,
+    personalOffer, boxOffer, customerPrices, now: nowCl,
   };
 
   // Contexto de la tienda + info de entrega estructurada + instrucciones adicionales
@@ -2619,7 +2625,7 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
  * @param {object} orderCtx — { products, specialPrices, isLead }
  */
 async function handleOrderCollection(orgId, conversationId, conversation, userMessage, history, orderDraft, productosTexto, orderCtx = {}) {
-  const { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null, personalOffer = null } = orderCtx;
+  let { products = [], specialPrices = {}, baseSpecialPrices = specialPrices, isLead = false, promotionContext = null, personalOffer = null } = orderCtx;
   const requestedOrderNow = orderCtx.now ? new Date(orderCtx.now) : null;
   const orderNow = requestedOrderNow && !Number.isNaN(requestedOrderNow.getTime()) ? requestedOrderNow : new Date();
   orderDraft = pricing.normalizeDraft(orderDraft || {});
@@ -2716,8 +2722,14 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     userMessage
   ));
   delete updatedDraft.box_ad_message_id;
-  if (orderCtx.boxOffer) {
-    updatedDraft.box_ad_message_id = orderCtx.boxOffer.messageId;
+  const permanentPrices = orderCtx.customerPrices;
+  if (permanentPrices && (orderCtx.boxOffer || require('./diez-rios-box-ad').concernsBoxes('', {items: updatedDraft.items}, permanentPrices))) {
+    updatedDraft.box_ad_message_id = permanentPrices.messageId;
+    specialPrices = baseSpecialPrices;
+    personalOffer = null;
+    promotionContext = null;
+    isLead = false;
+    delete updatedDraft.promotion;
     // Each box is priced by its catalog ID; a prior quote or an extracted
     // amount must never override the campaign's unit price.
     updatedDraft.items = (updatedDraft.items || []).map(item => ({
