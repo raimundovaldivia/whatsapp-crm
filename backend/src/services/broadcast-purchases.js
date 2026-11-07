@@ -67,7 +67,7 @@ async function loadOrderLedger(pool, orgId, phones = null, includeDetails = fals
         ${includeDetails ? `, o.customer_name AS name, o.total_price AS total, o.status AS dispatch,
           o.delivery_date::text AS delivery_day, o.delivered_at, o.payment_marked_at,
           (o.delivered_at IS NULL AND (
-            o.status IN ('nuevo','sent','payment_received','por_despachar','asignado_ruta','en_camino','no_entregado')
+            o.status IN ('draft','nuevo','sent','payment_received','por_despachar','asignado_ruta','en_camino','no_entregado')
             OR (o.status = 'paid' AND o.delivery_date IS NOT NULL)
           )) AS pending_dispatch` : ''}
       FROM orders o LEFT JOIN conversations c ON c.id = o.conversation_id AND c.organization_id = o.organization_id
