@@ -89,7 +89,7 @@ test('la tarifa queda por teléfono y tienda; distingue compras anteriores y pos
     await pool.query("INSERT INTO box_ad_customers VALUES(1,'56944444444',$1,'15')",[PREVIOUS_AD_ID]);
     assert.ok(await resolve({...organic, phone:'56944444444', allowEnrollment:false}));
     await pool.exec("INSERT INTO conversations VALUES(5,1,'56955555555',7)");
-    await pool.query("INSERT INTO whatsapp_attributions VALUES(2,20,5,1,$1,'evolution','ad','2026-10-12')",[AD_ID]);
+    await pool.query("INSERT INTO whatsapp_attributions VALUES(2,20,5,1,$1,'evolution','ad','2026-10-12')",['120251480763710010']);
     assert.equal(await resolve({...organic,phone:'56955555555'}),null);
   } finally {await pool.close();}
 });

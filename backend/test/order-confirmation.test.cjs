@@ -275,7 +275,7 @@ for (const scenario of ['orgánico nuevo', 'anuncio', 'recompra orgánica']) {
       {id:42, sku:'DR-EGG-BOX-JUMBO-100', title:'Huevos Jumbo · Caja de 100', price:37000, stock:10},
     ];
     const message = 'Vi la promo. Quiero una caja XL de 180 y una Jumbo de 100.';
-    const contextInfo = viaAd ? {externalAdReply:{sourceId:'120251480763710010'}} : {};
+    const contextInfo = viaAd ? {externalAdReply:{sourceId:'120251921295630010'}} : {};
     const referral = require('../src/services/whatsapp-attribution').fromEvolution({
       extendedTextMessage: {text:message, contextInfo},
     });
