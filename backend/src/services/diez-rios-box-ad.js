@@ -1,8 +1,9 @@
 const { normalizePhone, phoneVariants } = require('./customer-identity');
 const { loadPurchases } = require('./broadcast-purchases');
 
-const AD_ID = '120251480763710010';
+const AD_ID = '120251921295630010';
 const PREVIOUS_AD_ID = '120251917404930010';
+const PREVIOUS_REEL_ID = '120251480763710010';
 const PROMO_SWITCH_AT = '2026-11-07T19:42:15Z';
 const PRICES = new Map([
   ['DR-EGG-BOX-XL-180', 45000],
@@ -27,7 +28,7 @@ async function resolve({ pool, orgId, isDiezRios, phone, destination, ad, inboun
   if (!isDiezRios || !/^569\d{8}$/.test(normalized || '')) return null;
   const {rows: [member]} = await pool.query(
     'SELECT entry_message_id FROM box_ad_customers WHERE organization_id=$1 AND phone=$2 AND ad_id=ANY($3::text[]) ORDER BY ad_id LIMIT 1',
-    [orgId, normalized, [AD_ID, PREVIOUS_AD_ID]]);
+    [orgId, normalized, [AD_ID, PREVIOUS_AD_ID, PREVIOUS_REEL_ID]]);
   const matchingAd = ad?.ad_id === AD_ID && new Date(ad.first_seen_at) >= new Date(PROMO_SWITCH_AT) &&
     ad.source_type !== 'manual_recovery' && ad.message_id != null &&
     ad.provider === 'evolution' && normalizePhone(destination) === '56942876413';
