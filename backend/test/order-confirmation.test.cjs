@@ -216,7 +216,7 @@ test('el anuncio ofrece despacho hoy hasta las 15:00 inclusive y después indica
     ['2026-11-09T17:01:00Z','14:00',/próximo reparto habitual.*martes.*10 de noviembre/],
   ]) {
     const f=fixture({state:'exploring',draft:{},webPricing:true,history:[{id:1,direction:'inbound',content:'Hola'}],
-      boxAd:{ad_id:AD_ID,message_id:1,provider:'evolution'},
+      boxAd:{ad_id:AD_ID,message_id:1,provider:'evolution',first_seen_at:'2026-11-07T20:00:00Z'},
       settings:{delivery_info:JSON.stringify({zone:'La Serena y Coquimbo',schedule,cutoffTime})},
       products:[{id:42,sku:'DR-EGG-BOX-XL-180',title:'Huevos XL · Caja de 180',price:55000,stock:20,active:true}]});
     const result=await f.pipeline.processMessage(7,91,'Hola',null,{now});
@@ -233,7 +233,7 @@ test('WhatsApp del anuncio: la bienvenida, el resumen y la orden guardada respet
   ]) {
     const history = [{id:1,direction:'inbound',content:'Hola'}];
     const options = {history,webPricing:true,state:'exploring',draft:{},
-      boxAd:{ad_id:id,message_id:1,provider:'evolution'},
+      boxAd:{ad_id:id,message_id:1,provider:'evolution',first_seen_at:'2026-11-07T20:00:00Z'},
       products:[{id:42,sku,title,price,stock:20,active:true}],
       extract:previous=>({...previous,...draft(),items:[{product_name:title,quantity,price,locked_quote:true}]})};
     const f=fixture(options);
@@ -275,7 +275,7 @@ for (const scenario of ['orgánico nuevo', 'anuncio', 'recompra orgánica']) {
       {id:42, sku:'DR-EGG-BOX-JUMBO-100', title:'Huevos Jumbo · Caja de 100', price:37000, stock:10},
     ];
     const message = 'Vi la promo. Quiero una caja XL de 180 y una Jumbo de 100.';
-    const contextInfo = viaAd ? {externalAdReply:{sourceId:'120251917404930010'}} : {};
+    const contextInfo = viaAd ? {externalAdReply:{sourceId:'120251480763710010'}} : {};
     const referral = require('../src/services/whatsapp-attribution').fromEvolution({
       extendedTextMessage: {text:message, contextInfo},
     });
@@ -285,7 +285,7 @@ for (const scenario of ['orgánico nuevo', 'anuncio', 'recompra orgánica']) {
       rows: scenario === 'recompra orgánica' && sql.includes('FROM box_ad_customers') ? [{entry_message_id:'19'}] : [],
     })};
     const options = {history, products, pool, webPricing:true, whatsappChannelId:4, state:'exploring', draft:{},
-      boxAd:referral && {ad_id:referral.adId, message_id:1, provider:'evolution'},
+      boxAd:referral && {ad_id:referral.adId, message_id:1, provider:'evolution', first_seen_at:'2026-11-07T20:00:00Z'},
       extract:previous => ({...previous, ...draft(), items:itemSelection})};
     const f = fixture(options);
     const expected = scenario === 'orgánico nuevo' ? [55000,37000] : [45000,27000];

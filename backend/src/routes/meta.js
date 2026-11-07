@@ -292,17 +292,17 @@ router.put('/purchase-sync', async (req, res) => {
   }
   const connection = await getConnection(req.orgId);
   if (!connection || connection.status !== 'connected') return res.status(400).json({ error: 'Conecta Meta antes de activar compradores reales' });
-  if (enabled && (!datasetId || !audienceId)) {
-    return res.status(400).json({ error: 'Configura el dataset de conversiones y la audiencia de compradores' });
+  if (enabled && !audienceId) {
+    return res.status(400).json({ error: 'Configura la audiencia de compradores' });
   }
-  if (enabled && !(connection.scopes || []).includes('whatsapp_business_manage_events')) {
+  if (enabled && datasetId && !(connection.scopes || []).includes('whatsapp_business_manage_events')) {
     return res.status(409).json({ error: 'Reconecta Meta para autorizar el permiso de eventos de WhatsApp' });
   }
   const { rows: [whatsapp] } = await getPool().query(
     'SELECT business_account_id FROM whatsapp_configs WHERE organization_id=$1',
     [req.orgId]
   );
-  if (enabled && !whatsapp?.business_account_id) {
+  if (enabled && datasetId && !whatsapp?.business_account_id) {
     return res.status(400).json({ error: 'Activa una cuenta de WhatsApp Business antes de sincronizar compras' });
   }
   if (audienceId && !connection.customer_audience_terms_accepted_at && !acceptedTerms) {

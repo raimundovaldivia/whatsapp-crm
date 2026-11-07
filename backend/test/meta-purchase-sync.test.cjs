@@ -120,6 +120,11 @@ test('descubre por organización, envía Purchase reciente y agrega compradores 
     assert.deepEqual(removalResult, { sent: 1, failed: 0, skipped: 0 });
     assert.equal(removals.length, 1);
     assert.equal(removals[0].path, 'audience-1/users');
+    await engine.exec("UPDATE meta_connections SET conversion_dataset_id=NULL WHERE organization_id=2; DELETE FROM whatsapp_configs WHERE organization_id=2");
+    assert.equal(await purchaseSync.discoverPurchaseDeliveries({pool, organizationId:2}),1);
+    assert.equal(await purchaseSync.discoverPurchaseDeliveries({pool, organizationId:2}),0);
+    const audienceOnly = await engine.query('SELECT destination FROM meta_purchase_deliveries WHERE organization_id=2');
+    assert.deepEqual(audienceOnly.rows,[{destination:'audience'}]);
   } finally {
     await engine.close();
   }

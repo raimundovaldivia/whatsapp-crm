@@ -75,7 +75,7 @@ async function enabledConfigurations(pool, organizationId = null) {
   return rows;
 }
 
-async function paidOrders(pool, organizationId, since) {
+async function paidOrders(pool, organizationId, since, audienceOnly) {
   const { rows: localOrders } = await pool.query(
     `SELECT 'bot' AS source, order_row.id::text AS order_key,
             order_row.conversation_id, order_row.customer_phone,
@@ -85,9 +85,12 @@ async function paidOrders(pool, organizationId, since) {
       WHERE order_row.organization_id = $1
         AND order_row.status = 'paid'
         AND COALESCE(order_row.payment_marked_at, order_row.created_at) >= $2::timestamptz
+        AND (NOT $3::boolean OR NOT EXISTS (
+          SELECT 1 FROM meta_purchase_deliveries d WHERE d.organization_id=$1
+            AND d.source='bot' AND d.order_key=order_row.id::text AND d.destination='audience'))
       ORDER BY COALESCE(order_row.payment_marked_at, order_row.created_at) ASC
-      LIMIT 1000`,
-    [organizationId, since]
+      LIMIT CASE WHEN $3 THEN NULL ELSE 1000 END`,
+    [organizationId, since, audienceOnly]
   );
   const { rows: shopifyOrders } = await pool.query(
     `SELECT 'shopify' AS source, shopify.shopify_order_id AS order_key,
@@ -98,14 +101,17 @@ async function paidOrders(pool, organizationId, since) {
       WHERE shopify.organization_id = $1
         AND LOWER(COALESCE(shopify.financial_status, '')) = 'paid'
         AND COALESCE(shopify.payment_marked_at, shopify.shopify_created_at, shopify.synced_at) >= $2::timestamptz
+        AND (NOT $3::boolean OR NOT EXISTS (
+          SELECT 1 FROM meta_purchase_deliveries d WHERE d.organization_id=$1
+            AND d.source='shopify' AND d.order_key=shopify.shopify_order_id AND d.destination='audience'))
         AND NOT EXISTS (
           SELECT 1 FROM orders order_row
            WHERE order_row.organization_id = shopify.organization_id
              AND order_row.shopify_order_id = shopify.shopify_order_id
         )
       ORDER BY COALESCE(shopify.payment_marked_at, shopify.shopify_created_at, shopify.synced_at) ASC
-      LIMIT 1000`,
-    [organizationId, since]
+      LIMIT CASE WHEN $3 THEN NULL ELSE 1000 END`,
+    [organizationId, since, audienceOnly]
   );
   return [...localOrders, ...shopifyOrders];
 }
@@ -204,12 +210,13 @@ async function discoverPurchaseDeliveries({ pool = getPool(), organizationId = n
   const configurations = await enabledConfigurations(pool, organizationId);
   let discovered = 0;
   for (const configuration of configurations) {
-    const orders = await paidOrders(pool, configuration.organization_id, configuration.purchase_sync_since);
+    const audienceOnly = !configuration.conversion_dataset_id;
+    const orders = await paidOrders(pool, configuration.organization_id, configuration.purchase_sync_since, audienceOnly);
     for (const order of orders) {
       const amount = Number(order.value_amount);
       if (!Number.isFinite(amount) || amount < 0) continue;
       const hashedPhone = phoneHash(order.customer_phone);
-      const clickId = await purchaseAttribution(pool, configuration.organization_id, order);
+      const clickId = audienceOnly ? null : await purchaseAttribution(pool, configuration.organization_id, order);
       const contact = await purchaseContact(pool, configuration.organization_id, order.customer_phone);
       if (configuration.purchase_audience_id && hashedPhone && !contact.optedOut) {
         discovered += Number(Boolean(await insertDelivery(pool, configuration.organization_id, order, 'audience', {

@@ -523,7 +523,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
         }
       }
       const adCopy = [ad?.headline, ad?.body].filter(Boolean).join('\n').trim();
-      if (adCopy && ad.ad_id !== boxCampaign.AD_ID) {
+      if (adCopy && ad.ad_id !== boxCampaign.AD_ID && ad.ad_id !== boxCampaign.PREVIOUS_AD_ID) {
         promotionHistory = [...history, {
           direction: 'outbound',
           content: `[Template: promocion_anuncio_whatsapp]\n${adCopy}`,

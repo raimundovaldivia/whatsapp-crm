@@ -203,10 +203,10 @@ function PurchaseSyncCard({ colors, setError }) {
   return <Card colors={colors}>
     <strong style={{ color: colors.textPrimary, fontSize: 13 }}>Compradores reales para Meta Ads</strong>
     <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>Los pagos confirmados con atribución envían Purchase. Todos los compradores con teléfono válido se agregan cifrados a la audiencia para exclusiones y públicos similares.</div>
-    {state?.config?.needsReconnect && <div style={{ marginTop: 10, color: '#f59e0b', fontSize: 12 }}>Autoriza los eventos de WhatsApp antes de activar esta función. <button onClick={connectWhatsapp} style={secondary(colors)}>Autorizar WhatsApp</button></div>}
-    {!state?.config?.wabaConnected && <div style={{ marginTop: 10, color: '#f59e0b', fontSize: 12 }}>Primero activa la cuenta de WhatsApp Business en esta conexión.</div>}
+    {datasetId && state?.config?.needsReconnect && <div style={{ marginTop: 10, color: '#f59e0b', fontSize: 12 }}>Autoriza WhatsApp para enviar eventos de compra. <button onClick={connectWhatsapp} style={secondary(colors)}>Autorizar WhatsApp</button></div>}
+    {datasetId && !state?.config?.wabaConnected && <div style={{ marginTop: 10, color: '#f59e0b', fontSize: 12 }}>Activa la cuenta de WhatsApp Business para enviar eventos de compra.</div>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 10, marginTop: 14 }}>
-      <label style={label(colors)}>Dataset de conversiones<input value={datasetId} onChange={event => setDatasetId(event.target.value.replace(/\D/g, ''))} placeholder="ID numérico" style={{ ...input(colors), marginTop: 5 }} /></label>
+      <label style={label(colors)}>Dataset de conversiones (opcional)<input value={datasetId} onChange={event => setDatasetId(event.target.value.replace(/\D/g, ''))} placeholder="ID numérico" style={{ ...input(colors), marginTop: 5 }} /></label>
       <label style={label(colors)}>Audiencia de compradores<input value={audienceId} onChange={event => setAudienceId(event.target.value.replace(/\D/g, ''))} placeholder="ID numérico" style={{ ...input(colors), marginTop: 5 }} /></label>
       <label style={label(colors)}>Histórico inicial<select value={lookbackDays} onChange={event => setLookbackDays(Number(event.target.value))} style={{ ...input(colors), marginTop: 5 }}><option value={30}>30 días</option><option value={90}>90 días</option><option value={180}>180 días</option><option value={365}>365 días</option></select></label>
     </div>

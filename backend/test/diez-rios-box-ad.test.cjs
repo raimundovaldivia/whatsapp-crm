@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { AD_ID, resolve } = require('../src/services/diez-rios-box-ad');
+const { AD_ID, PREVIOUS_AD_ID, resolve } = require('../src/services/diez-rios-box-ad');
 const { priceItems } = require('../src/services/order-pricing');
 const { PGlite } = require('@electric-sql/pglite');
 const xlPricing = require('../src/services/xl-welcome-pricing');
@@ -9,7 +9,7 @@ const products = [
   { id: '1', sku: 'DR-EGG-BOX-XL-180', title: 'Huevos XL · Caja de 180', priceMin: 55000 },
   { id: '2', sku: 'DR-EGG-BOX-JUMBO-100', title: 'Huevos Jumbo · Caja de 100', priceMin: 37000 },
 ];
-const ad = { ad_id: AD_ID, message_id: 19, provider: 'evolution' };
+const ad = { ad_id: AD_ID, message_id: 19, provider: 'evolution', first_seen_at: '2026-11-07T20:00:00Z' };
 const incoming = { pool: { query: async () => ({ rows: [] }) }, orgId: 1, isDiezRios: true,
   phone: '56911111111', destination:'56942876413', ad, inbound: {id:19}, draft:{}, products };
 
@@ -71,9 +71,9 @@ test('la tarifa queda por teléfono y tienda; distingue compras anteriores y pos
       INSERT INTO whatsapp_channels VALUES(7,1,'56942876413');
       INSERT INTO conversations VALUES(3,1,'56911111111',7),(4,1,'56922222222',7);
       INSERT INTO orders(id,organization_id,customer_phone,created_at,status) VALUES
-        (1,1,'56922222222','2026-11-01','paid'), (2,1,'56911111111','2026-11-05','paid');
+        (1,1,'56922222222','2026-11-01','paid'), (2,1,'56911111111','2026-11-08','paid');
     `);
-    for (const id of [3,4]) await pool.query(`INSERT INTO whatsapp_attributions VALUES(1,19,$1,1,$2,'evolution','ad','2026-11-02')`, [id, AD_ID]);
+    for (const id of [3,4]) await pool.query(`INSERT INTO whatsapp_attributions VALUES(1,19,$1,1,$2,'evolution','ad',$3)`, [id, AD_ID, ad.first_seen_at]);
     const organic = {...incoming,pool,ad:null,draft:{},inbound:{id:35},destination:null};
     assert.equal(await resolve({...organic,phone:'56922222222'}),null);
     assert.equal(await resolve({...organic,orgId:2}),null);
@@ -86,13 +86,19 @@ test('la tarifa queda por teléfono y tienda; distingue compras anteriores y pos
     assert.equal(again.products[2].priceMin,7900);
     assert.equal(await resolve({...organic,phone:'56933333333'}),null);
     assert.equal((await pool.query('SELECT * FROM box_ad_customers')).rows.length,1);
+    await pool.query("INSERT INTO box_ad_customers VALUES(1,'56944444444',$1,'15')",[PREVIOUS_AD_ID]);
+    assert.ok(await resolve({...organic, phone:'56944444444', allowEnrollment:false}));
+    await pool.exec("INSERT INTO conversations VALUES(5,1,'56955555555',7)");
+    await pool.query("INSERT INTO whatsapp_attributions VALUES(2,20,5,1,$1,'evolution','ad','2026-10-12')",[AD_ID]);
+    assert.equal(await resolve({...organic,phone:'56955555555'}),null);
   } finally {await pool.close();}
 });
 
 test('cierra acceso ante compra anterior, mensaje directo, otra marca, otro anuncio o atribución histórica', async () => {
   const purchased = {query:async()=>({rows:[{id:1,status:'PAID',date:'2026-11-01',phone:incoming.phone}]})};
   for (const patch of [{pool:purchased},{ad:null},{ad:{...ad,ad_id:'999'}},{isDiezRios:false},
-    {inbound:{id:20},draft:{}},{ad:{...ad,provider:'kapso'}},{phone:''},{destination:'56900000000'}]) {
+    {inbound:{id:20},draft:{}},{ad:{...ad,provider:'kapso'}},{ad:{...ad,first_seen_at:'2026-10-12'}},
+    {ad:{...ad,ad_id:PREVIOUS_AD_ID}},{phone:''},{destination:'56900000000'}]) {
     assert.equal(await resolve({...incoming,...patch}),null);
   }
 });
