@@ -2,7 +2,23 @@ const { normalizePhone, phoneVariants } = require('./customer-identity');
 const { loadPurchases } = require('./broadcast-purchases');
 
 const AD_ID = '120251917404930010';
-const PRICES = new Map([['DR-EGG-BOX-XL-180', 45000], ['DR-EGG-BOX-JUMBO-100', 27000]]);
+const PRICES = new Map([
+  ['DR-EGG-BOX-XL-180', 45000],
+  ['DR-EGG-BOX-JUMBO-100', 27000],
+  ['DR-EGG-V2-XL-30-MIXTO', { boxSku: 'DR-EGG-BOX-XL-180', totals: [9900, 17900, 24900, 31900, 38900, 45000] }],
+  ['DR-EGG-V2-JUMBO-20-MIXTO', { boxSku: 'DR-EGG-BOX-JUMBO-100', totals: [7900, 13900, 18900, 23400, 27000] }],
+]);
+const money = amount => '$' + amount.toLocaleString('es-CL');
+
+function offerLine(product) {
+  const price = PRICES.get(product.sku);
+  if (!price.totals) return product.title + ' por ' + money(price);
+  const totals = price.totals;
+  const choices = totals.map((total, i) => (i + 1) + ' por ' + money(total));
+  const extra = totals.at(-1) / totals.length;
+  return product.title + ' (totales por cantidad)\n' + choices.join(' · ') +
+    '\nDesde ' + totals.length + ' bandejas, ' + money(extra) + ' por bandeja. Si llevas la caja completa del mismo calibre, cada bandeja mixta adicional cuesta ' + money(extra) + '.';
+}
 
 async function resolve({ pool, orgId, isDiezRios, phone, destination, ad, inbound, draft, products, allowEnrollment = true }) {
   const normalized = normalizePhone(phone);
@@ -37,21 +53,29 @@ async function resolve({ pool, orgId, isDiezRios, phone, destination, ad, inboun
   }
   const offers = products.filter(p => PRICES.has(p.sku) && p.active !== false &&
     (p.inventoryQuantity == null || p.inventoryQuantity > 0));
-  const specialPrices = Object.fromEntries(offers.map(p => [p.id, PRICES.get(p.sku)]));
+  const specialPrices = Object.fromEntries(offers.map(product => {
+    const rule = PRICES.get(product.sku);
+    if (!rule.totals) return [product.id, rule];
+    const box = offers.find(p => p.sku === rule.boxSku);
+    return [product.id, { totals: rule.totals, boxProductId: box?.id }];
+  }));
   return {
     messageId: entryMessageId, fresh, offers, specialPrices,
-    products: products.map(p => PRICES.has(p.sku) ? ({
-      ...p, price: PRICES.get(p.sku), priceMin: PRICES.get(p.sku), priceMax: PRICES.get(p.sku), description: '',
-      compare_price: null, bulk_price: null, quantity_prices: [],
-    }) : p),
-    reply: offers.length ? 'Estos son tus precios de cliente para las cajas de huevos de gallinas libres:\n' +
-      offers.map(p => p.title + ' por $' + PRICES.get(p.sku).toLocaleString('es-CL')).join('\n') +
-      '\n¿Qué caja quieres y cuántas necesitas?' : 'En este momento no hay cajas disponibles para esta promoción.',
+    products: products.map(product => {
+      const rule = PRICES.get(product.sku);
+      if (!rule) return product;
+      const price = rule.totals?.[0] ?? rule;
+      return { ...product, price, priceMin: price, priceMax: price, description: '',
+        compare_price: null, bulk_price: null, quantity_prices: [] };
+    }),
+    reply: offers.length ? 'Estos son tus precios de cliente para huevos de gallinas libres:\n\n' +
+      offers.map(offerLine).join('\n\n') +
+      '\n\n¿Qué formato y cantidad necesitas?' : 'En este momento no hay formatos disponibles para esta promoción.',
   };
 }
 
 function concernsBoxes(message, draft, offer) {
-  if (draft?.box_ad_message_id || /\b(?:cajas?|180|100|promo(?:ci[oó]n)?)\b/iu.test(message)) return true;
+  if (draft?.box_ad_message_id || /\b(?:cajas?|mixt[oa]s?|180|100|promo(?:ci[oó]n)?)\b/iu.test(message)) return true;
   return (draft?.items || []).some(item => offer.specialPrices[item.product_id] != null ||
     offer.offers.some(product => product.title === (item.product_name || item.name)));
 }

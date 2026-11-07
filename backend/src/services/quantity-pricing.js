@@ -32,8 +32,18 @@ function totalFor(totals, quantity) {
   // Beyond one full box, retain the full-box unit rate, rounded only at total.
   return Math.round(totals[totals.length - 1] * quantity / totals.length);
 }
-function apply(items, products) {
+function apply(items, products, specialPrices = {}) {
+  const purchasedIds = new Set(items.filter(item => item.matched && !item.free_gift).map(item => String(item.product_id)));
   return items.map(item => {
+    const rule = specialPrices[item.product_id];
+    if (rule?.totals && !item.free_gift && !item.locked_quote) {
+      const total = totalFor(rule.totals, item.quantity);
+      if (total !== null) {
+        const includesBox = rule.boxProductId != null && purchasedIds.has(String(rule.boxProductId));
+        const price = includesBox ? rule.totals.at(-1) / rule.totals.length : total / item.quantity;
+        return { ...item, price, unit_source: 'promocion_cantidad' };
+      }
+    }
     const product = products.find(p => String(p.id) === String(item.product_id ?? item.id));
     const total = totalFor(product?.quantity_prices, item.quantity);
     if (total === null || item.locked_quote || item.free_gift || ['especial', 'promocion', 'promocion_cantidad'].includes(item.unit_source)) return item;

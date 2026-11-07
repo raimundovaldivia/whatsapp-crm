@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { AD_ID, resolve } = require('../src/services/diez-rios-box-ad');
 const { priceItems } = require('../src/services/order-pricing');
 const { PGlite } = require('@electric-sql/pglite');
+const xlPricing = require('../src/services/xl-welcome-pricing');
 
 const products = [
   { id: '1', sku: 'DR-EGG-BOX-XL-180', title: 'Huevos XL · Caja de 180', priceMin: 55000 },
@@ -11,6 +12,38 @@ const products = [
 const ad = { ad_id: AD_ID, message_id: 19, provider: 'evolution' };
 const incoming = { pool: { query: async () => ({ rows: [] }) }, orgId: 1, isDiezRios: true,
   phone: '56911111111', destination:'56942876413', ad, inbound: {id:19}, draft:{}, products };
+
+test('solo las dos bandejas mixtas acordadas usan la escala permanente por SKU', async () => {
+  const catalog = [
+    ['XL','mixtos',30,'MIXTO',11990], ['Jumbo','mixtos',20,'MIXTO',9990],
+    ['XL','blancos',30,'BLANCO',10990], ['Jumbo','cafés',20,'CAFE',10990],
+    ['XL','mixtos',20,'MIXTO',8990], ['Jumbo','mixtos',30,'MIXTO',14990],
+  ].map(([size,color,units,code,price], index) => ({
+    id:String(index+10), title:`Huevos ${size} ${color} · Bandeja de ${units}`,
+    sku:`DR-EGG-V2-${size.toUpperCase()}-${units}-${code}`, priceMin:price,
+  }));
+  const promo = await resolve({...incoming, products:[...catalog, ...products]});
+  const ctx = {...xlPricing.forStore({enabled:true}), adCustomerPrices:promo.specialPrices};
+  const line = (product,quantity) => ({product_name:product.title, quantity});
+  const quote = lines => xlPricing.applyQuote(priceItems(lines,promo.products,{specialPrices:promo.specialPrices}),ctx);
+  const tiers = [[9900,17900,24900,31900,38900,45000,52500,60000],[7900,13900,18900,23400,27000,32400,37800,43200]];
+  for (const [i, totals] of tiers.entries()) {
+    for (const [j,total] of totals.entries()) assert.equal(quote([line(catalog[i],j+1)]).total,total,catalog[i].title);
+    assert.ok(promo.reply.includes(catalog[i].title));
+  }
+  assert.equal(quote([line(catalog[0],1),line(catalog[0],1)]).total,17900);
+  assert.equal(quote([line(catalog[0],1),line(catalog[1],1)]).total,17800);
+  assert.equal(quote([line(products[0],1),line(catalog[0],1)]).total,52500);
+  assert.equal(quote([line(products[1],1),line(catalog[1],1)]).total,32400);
+  assert.equal(quote([line(products[1],1),line(catalog[0],1)]).total,36900);
+  for (const other of catalog.slice(2)) {
+    assert.equal(promo.specialPrices[other.id],undefined);
+    assert.ok(!promo.reply.includes(other.title));
+    const publicTotal=xlPricing.applyQuote(priceItems([line(other,2)],catalog),xlPricing.forStore({enabled:true})).total;
+    assert.equal(quote([line(catalog[0],1),line(other,2)]).total,9900+publicTotal);
+  }
+  assert.match(xlPricing.trayCountPriceReply('¿Cuánto cuestan 3 bandejas Jumbo mixtas de 20?',[],promo.products,ctx),/18\.900/);
+});
 
 test('primera compra por anuncio mantiene los precios por unidad en el mensaje y el carrito', async () => {
   for (const input of [incoming, {...incoming, inbound:{id:20},draft:{box_ad_message_id:'19'}}]) {
