@@ -25,7 +25,7 @@ function offerLine(product) {
 
 async function resolve({ pool, orgId, isDiezRios, phone, destination, ad, inbound, draft, products, allowEnrollment = true }) {
   const normalized = normalizePhone(phone);
-  if (!isDiezRios || !/^569\d{8}$/.test(normalized || '')) return null;
+  if (!isDiezRios || !/^[+\d ().-]+$/.test(phone || '') || !/^[1-9]\d{7,14}$/.test(normalized || '')) return null;
   const {rows: [member]} = await pool.query(
     'SELECT entry_message_id FROM box_ad_customers WHERE organization_id=$1 AND phone=$2 AND ad_id=ANY($3::text[]) ORDER BY ad_id LIMIT 1',
     [orgId, normalized, [AD_ID, PREVIOUS_AD_ID, PREVIOUS_REEL_ID]]);
