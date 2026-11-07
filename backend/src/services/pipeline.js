@@ -26,7 +26,7 @@ const outboundPolicy = require('./outbound-text-policy');
 const orderInputPolicy = require('./order-input-policy');
 const { requestsAdditionalOrder } = require('./order-creation-policy');
 const deliveryCoverage = require('./delivery-coverage');
-const { resolveExplicitDeliveryDate, todayISOChile, toISODate } = require('./business-date');
+const { resolveExplicitDeliveryDate, todayISOChile, toISODate, addDays, formatDateEs: formatDeliveryDate } = require('./business-date');
 const salesClosing = require('./sales-closing');
 const purchaseFeedback = require('./purchase-feedback');
 const personalOffers = require('./personal-offers');
@@ -149,6 +149,27 @@ function deliveryWindowEnded(schedule, now = new Date()) {
   const end = times[times.length - 1];
   const endMinutes = Number(end[1]) * 60 + Number(end[2]);
   return chileClock(now).totalMinutes > endMinutes;
+}
+
+function boxAdDeliveryGreeting(schedule, zone, cutoff, now, policy) {
+  const confirmation = 'Te confirmamos el día de despacho según tu dirección y el cupo de la ruta.';
+  if (!schedule || !zone || !cutoff) return confirmation;
+  const day = salesClosing.chileParts(now);
+  const window = schedule.match(/\bde\s+(\d{1,2}:\d{2})\s+a\s+(?:las\s+)?(\d{1,2}:\d{2})\b/i);
+  const hours = window ? `, entre las ${window[1]} y las ${window[2]}` : '';
+  if (policy.canContinueSameDay && scheduleCoversWeekday(schedule, DELIVERY_DAYS[day.weekday]) === true &&
+      !deliveryWindowEnded(schedule, now)) {
+    return `🚚 Tenemos despacho hoy en ${zone}${hours}. Confirma tu pedido hasta las ${cutoff}. Sujeto a cobertura y cupo de reparto.`;
+  }
+  if (policy.needsHumanReview) return '🚚 Estamos revisando con el equipo si tu pedido aún alcanza el despacho de hoy.';
+  for (let offset = 1; offset <= 7; offset++) {
+    const weekday = (day.weekday + offset) % 7;
+    if (weekday !== 0 && scheduleCoversWeekday(schedule, DELIVERY_DAYS[weekday]) === true) {
+      const next = formatDeliveryDate(addDays(day.isoDate, offset));
+      return `🚚 El próximo reparto habitual en ${zone} es el ${next}${hours}. Te confirmamos cobertura y cupo al tomar tu pedido.`;
+    }
+  }
+  return confirmation;
 }
 
 function asksForPaymentInstructions(message) {
@@ -596,13 +617,18 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
   const freeShippingRaw = deliveryEnabled && xlContext.web ? await db.getSetting(orgId, 'store_free_shipping') : null;
   let deliverySection = '';
   let cutoffTime = null;
+  let deliveryZone = '';
   let deliverySchedule = '';   // el horario tal cual, para responder "¿a qué hora llega?" con dato real
   if (deliveryRaw) {
     try {
       const d = JSON.parse(deliveryRaw);
-      cutoffTime = d.cutoffTime || null;
-      orderCtx.cutoffTime = cutoffTime;
       deliverySchedule = (d.schedule || '').trim();
+      deliveryZone = (d.zone || '').trim();
+      // Older DIEZ RÍOS settings keep the regular cutoff in the schedule,
+      // alongside an earlier, dated exception. Use the regular clause only.
+      const regularCutoff = customerPrices && deliverySchedule.match(/horario habitual:\s*pedidos hasta las ((?:[01]\d|2[0-3]):[0-5]\d) inclusive/i);
+      cutoffTime = d.cutoffTime || regularCutoff?.[1] || null;
+      orderCtx.cutoffTime = cutoffTime;
       const lines = [];
       if (d.schedule)       lines.push(`📅 Horarios de entrega: ${d.schedule}`);
       if (d.zone)           lines.push(`📍 Zona de reparto: ${d.zone}`);
@@ -1264,7 +1290,8 @@ REGLAS ABSOLUTAS:
   if (boxOffer && (boxOffer.fresh || (promotions.isCurrentPriceQuestion(userMessage) &&
       !/\b(?:bandejas?|blanc[oa]s?|caf[eé]s?)\b/iu.test(userMessage)))) {
     await db.updatePipelineState(conversationId, 'interested', orderDraft);
-    return { response: boxOffer.reply, agentType: 'sales', newState: 'interested' };
+    const delivery = boxAdDeliveryGreeting(deliverySchedule, deliveryZone, cutoffTime, nowCl, closingPolicy);
+    return { response: delivery + '\n\n' + boxOffer.reply, agentType: 'sales', newState: 'interested' };
   }
 
   // Un contacto particular que pide precios por mayor no debe recibir el

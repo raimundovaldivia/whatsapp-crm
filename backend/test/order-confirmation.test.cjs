@@ -206,6 +206,25 @@ function fixture(options = {}) {
   return { pipeline, calls };
 }
 
+test('el anuncio ofrece despacho hoy hasta las 15:00 inclusive y después indica el próximo reparto en Chile', async () => {
+  const {AD_ID} = require('../src/services/diez-rios-box-ad');
+  const schedule='El 16-10-2026 el corte fue a las 15:30. Horario habitual: pedidos hasta las 15:00 inclusive; después se programan para el siguiente día de reparto. Repartos de lunes a sábado, de 15:00 a 21:00.';
+  for (const [now, cutoffTime, expected] of [
+    ['2026-11-07T18:00:59Z',undefined,/Tenemos despacho hoy.*La Serena y Coquimbo.*entre las 15:00 y las 21:00.*hasta las 15:00/],
+    ['2026-11-07T18:01:00Z',undefined,/próximo reparto habitual.*lunes.*9 de noviembre/],
+    ['2026-11-08T13:00:00Z',undefined,/próximo reparto habitual.*lunes.*9 de noviembre/],
+    ['2026-11-09T17:01:00Z','14:00',/próximo reparto habitual.*martes.*10 de noviembre/],
+  ]) {
+    const f=fixture({state:'exploring',draft:{},webPricing:true,history:[{id:1,direction:'inbound',content:'Hola'}],
+      boxAd:{ad_id:AD_ID,message_id:1,provider:'evolution'},
+      settings:{delivery_info:JSON.stringify({zone:'La Serena y Coquimbo',schedule,cutoffTime})},
+      products:[{id:42,sku:'DR-EGG-BOX-XL-180',title:'Huevos XL · Caja de 180',price:55000,stock:20,active:true}]});
+    const result=await f.pipeline.processMessage(7,91,'Hola',null,{now});
+    assert.match(result.response.split('\n')[0],expected);
+    assert.match(result.response,/45\.000/);
+  }
+});
+
 test('WhatsApp del anuncio: la bienvenida, el resumen y la orden guardada respetan precio y cantidad', async () => {
   const id = require('../src/services/diez-rios-box-ad').AD_ID;
   for (const [sku,title,price,promo,quantity] of [
