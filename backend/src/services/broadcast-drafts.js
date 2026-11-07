@@ -94,6 +94,7 @@ async function customerContext(orgId, phone, audienceType, today, outreachDays, 
   if (!contact) return { phone, decision: 'skip', reasonCode: 'unavailable', reason: 'Cliente no disponible en esta empresa.' };
   const name = text(contact.name || 'Cliente', 100);
   if (contact.opt_out || contact.identity_blocked || frequencyCustomer?.optedOut) return { phone, name, decision: 'skip', reasonCode: 'opt_out', reason: 'Contacto excluido o dado de baja.' };
+  if (frequencyCustomer?.status === 'pending_dispatch') return { phone, name, decision: 'skip', reasonCode: 'pending_dispatch', reason: 'Ya tiene un pedido pendiente de entrega.' };
   if ((audienceType === 'natural' && contact.client_type === 'empresa') || (audienceType === 'empresa' && contact.client_type !== 'empresa')) {
     return { phone, name, decision: 'skip', reasonCode: 'audience', reason: 'No pertenece al público elegido.' };
   }

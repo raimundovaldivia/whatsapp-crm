@@ -3,6 +3,8 @@
 const { normalizePhone, buildCustomerIdentityMap } = require('./customer-identity');
 const { todayISOChile, isValidISODate, addDays } = require('./business-date');
 
+const { importedShopifyClosed } = require('./shopify-dispatch-state');
+
 function purchaseDate(order) {
   return typeof order.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(order.date)
     ? (isValidISODate(order.date) ? order.date : null) : todayISOChile(new Date(order.date));
@@ -47,7 +49,13 @@ async function loadOrderLedger(pool, orgId, phones = null, includeDetails = fals
     pool.query(`SELECT shopify_order_id AS id, customer_phone AS phone, shopify_created_at AT TIME ZONE 'UTC' AS date, items,
         ${includeDetails ? `customer_name AS name, total_price AS total, crm_status AS dispatch,
           delivery_date::text AS delivery_day, delivered_at, financial_status AS payment,
-          fulfillment_status AS fulfillment,` : ''}
+          fulfillment_status AS fulfillment,
+          (delivered_at IS NULL AND NOT ${importedShopifyClosed}
+            AND COALESCE(crm_status, 'nuevo') NOT IN ('entregado','cancelled','draft','failed')
+            AND UPPER(COALESCE(financial_status, '')) NOT IN ('REFUNDED','VOIDED')
+            AND UPPER(COALESCE(fulfillment_status, '')) <> 'RESTOCKED'
+            AND COALESCE(NULLIF(raw_json->>'cancelledAt', ''), NULLIF(raw_json->>'cancelled_at', '')) IS NULL
+          ) AS pending_dispatch,` : ''}
         CASE WHEN LOWER(COALESCE(crm_status, '')) = 'cancelled' THEN 'CANCELLED'
           WHEN LOWER(COALESCE(financial_status, '')) IN ('refunded','voided') THEN financial_status
           WHEN delivered_at IS NOT NULL OR LOWER(COALESCE(fulfillment_status, '')) = 'fulfilled'
@@ -57,7 +65,11 @@ async function loadOrderLedger(pool, orgId, phones = null, includeDetails = fals
     pool.query(`SELECT o.id, o.shopify_order_id, COALESCE(NULLIF(o.customer_phone, ''), c.phone_number) AS phone,
         o.created_at AT TIME ZONE 'UTC' AS date, o.items, o.status
         ${includeDetails ? `, o.customer_name AS name, o.total_price AS total, o.status AS dispatch,
-          o.delivery_date::text AS delivery_day, o.delivered_at, o.payment_marked_at` : ''}
+          o.delivery_date::text AS delivery_day, o.delivered_at, o.payment_marked_at,
+          (o.delivered_at IS NULL AND (
+            o.status IN ('nuevo','sent','payment_received','por_despachar','asignado_ruta','en_camino','no_entregado')
+            OR (o.status = 'paid' AND o.delivery_date IS NOT NULL)
+          )) AS pending_dispatch` : ''}
       FROM orders o LEFT JOIN conversations c ON c.id = o.conversation_id AND c.organization_id = o.organization_id
       WHERE o.organization_id = $1 AND o.created_at IS NOT NULL
         AND ($2::text[] IS NULL OR ${phoneSql("COALESCE(NULLIF(o.customer_phone, ''), c.phone_number)")} = ANY($2::text[]))`, [orgId, normalized]),

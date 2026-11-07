@@ -189,6 +189,11 @@ test('automatic drafts read tenant purchases per selected customer, recheck excl
     assert.equal(blocked.drafts[0].reasonCode, 'opt_out');
     assert.equal(blocked.drafts[1].reasonCode, 'unavailable');
     assert.equal(aiCalls, 0);
+    await engine.exec("INSERT INTO orders(organization_id,customer_phone,status,items,total_price) VALUES(1,'911111111','nuevo','[]',100)");
+    const pending = await drafts.generateDrafts(1, { ...body, phones: ['56911111111'] }, ai);
+    assert.equal(pending.drafts[0].reasonCode, 'pending_dispatch');
+    assert.equal(pending.drafts[0].message, undefined);
+    await engine.exec("UPDATE orders SET status='cancelled' WHERE organization_id=1 AND status='nuevo'");
     decline = true;
     const declined = await drafts.generateDrafts(1, { ...body, phones: ['56911111111'] }, ai);
     assert.equal(declined.drafts[0].reasonCode, 'opt_out', 'conversation policy still applies even though it cannot rewrite purchase facts');

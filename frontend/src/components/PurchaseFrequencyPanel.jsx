@@ -118,7 +118,7 @@ export default function PurchaseFrequencyPanel({ onOpenConversation, canSendFoll
           <option value="next">Próxima compra estimada</option><option value="last">Compra más reciente</option><option value="name">Nombre</option>
         </select>
       </div>
-      <p style={{ ...muted, lineHeight: 1.6 }}>Para seguimiento incluye fechas estimadas vencidas o dentro de los próximos 3 días y excluye contactos dados de baja. Frecuencia = intervalo mediano entre los últimos 12 días distintos de compra, usando pedidos pagados o entregados del historial del CRM. Excluye borradores, cancelaciones y reembolsos totales. La fecha es orientativa; una sola fecha de compra no permite estimarla.</p>
+      <p style={{ ...muted, lineHeight: 1.6 }}>Para seguimiento incluye fechas estimadas vencidas o dentro de los próximos 3 días y excluye a quienes tienen un pedido pendiente de entrega o se dieron de baja. Frecuencia = intervalo mediano entre los últimos 12 días distintos de compra, usando pedidos pagados o entregados del historial del CRM. Excluye borradores, cancelaciones y reembolsos totales. La fecha es orientativa; una sola fecha de compra no permite estimarla.</p>
       {chatNotice && <p role="status">{chatNotice}</p>}
       {canSendFollowup && <div aria-label="Selección para seguimiento" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '12px 0' }}>
         <strong aria-live="polite">{chosen.length} seleccionados</strong>

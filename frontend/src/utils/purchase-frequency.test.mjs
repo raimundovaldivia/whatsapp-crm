@@ -46,6 +46,15 @@ test('seguimiento incluye vencidos y próximos, excluye bajas y falta de histori
   assert.equal(filterFrequencyCustomers(input, { status: 'all' }).length, 4);
 });
 
+test('pedido pendiente conserva el historial y lo excluye del seguimiento y de selecciones anteriores', () => {
+  const pending = { ...customers[0], status: 'pending_dispatch' };
+  const rows = [pending, customers[1]];
+  assert.deepEqual(filterFrequencyCustomers(rows, { status: 'followup' }), [customers[1]]);
+  assert.deepEqual(filterFrequencyCustomers(rows, { status: 'pending_dispatch' }), [pending]);
+  assert.deepEqual(selectableFrequencyCustomers(rows), [customers[1]]);
+  assert.deepEqual(frequencyBroadcastContacts(rows, [pending.phone]), []);
+});
+
 test('abre por ID el chat más reciente con mensajes, sin confundir teléfono ni reservas vacías', () => {
   assert.equal(latestConversationId([
     { id: 30, message_count: 0, last_message_at: null },

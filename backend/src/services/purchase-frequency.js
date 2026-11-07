@@ -5,6 +5,7 @@ const { loadOrderLedger, isPurchase, purchaseDate, summarizeDates } = require('.
 function buildFrequencyCustomers(contacts, orders, today = todayISOChile()) {
   const customers = new Map();
   const profiles = new Map();
+  const pendingDispatch = new Set();
   for (const contact of contacts) {
     const phone = normalizePhone(contact.phone);
     if (!phone) continue;
@@ -23,17 +24,22 @@ function buildFrequencyCustomers(contacts, orders, today = todayISOChile()) {
   // The shared ledger has already reconciled Shopify and CRM representations.
   // Keep its purchase criteria consistent with the existing CRM evidence.
   for (const order of orders) {
+    const phone = normalizePhone(order.phone);
+    if (!phone) continue;
+    if (order.pending_dispatch) pendingDispatch.add(phone);
     if (!isPurchase(order)) continue;
     // Date-only values are business dates; stored timestamps use Chile's zone.
     const date = purchaseDate(order);
     if (!date || date > today) continue;
-    const phone = normalizePhone(order.phone);
-    if (!phone) continue;
     const customer = ensure(phone, order.name);
     customer.purchaseCount++;
     customer.dates.push(date);
   }
-  return [...customers.values()].map(({ dates, ...customer }) => ({ ...customer, ...summarizeDates(dates, today) }))
+  return [...customers.values()].map(({ dates, ...customer }) => {
+    const frequency = summarizeDates(dates, today);
+    if (pendingDispatch.has(customer.phone)) frequency.status = 'pending_dispatch';
+    return { ...customer, ...frequency };
+  })
     .sort((a, b) => (a.daysUntilNext ?? Infinity) - (b.daysUntilNext ?? Infinity) || a.name.localeCompare(b.name, 'es'));
 }
 

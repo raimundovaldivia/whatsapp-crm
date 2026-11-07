@@ -89,7 +89,7 @@ test('consulta SQL real aísla empresa y transforma fechas a Chile en verano e i
       CREATE TABLE contacts (id serial, organization_id integer, phone text, name text, contact_type text, shopify_id text, opt_out boolean, updated_at timestamp);
       CREATE TABLE conversations (id serial, organization_id integer, phone_number text);
       CREATE TABLE orders (id serial, conversation_id integer, organization_id integer, shopify_order_id text, customer_phone text, customer_name text, status text, created_at timestamp, items text, total_price text, delivery_date date, delivered_at timestamp, payment_marked_at timestamp);
-      CREATE TABLE shopify_orders (id serial, organization_id integer, shopify_order_id text, customer_phone text, customer_name text, crm_status text, financial_status text, fulfillment_status text, raw_json jsonb, shopify_created_at timestamp, items jsonb, total_price numeric, delivery_date date, delivered_at timestamp);
+      CREATE TABLE shopify_orders (id serial, organization_id integer, shopify_order_id text, customer_phone text, customer_name text, crm_status text, financial_status text, fulfillment_status text, raw_json jsonb, shopify_created_at timestamp, items jsonb, total_price numeric, delivery_date date, delivered_at timestamp, dispatch_count integer, last_attempt_at timestamp, last_attempt_status text, delivery_note text);
       INSERT INTO contacts (organization_id, phone, name, contact_type) VALUES (1, '912345678', 'Propio', 'customer'), (2, '987654321', 'Ajeno', 'customer');
       INSERT INTO orders (organization_id, customer_phone, status, created_at) VALUES
         (1, '912345678', 'paid', '2026-07-02 03:30:00'),
@@ -103,12 +103,26 @@ test('consulta SQL real aísla empresa y transforma fechas a Chile en verano e i
       INSERT INTO shopify_orders (organization_id, shopify_order_id, customer_phone, financial_status, shopify_created_at) VALUES
         (1, '3', '912345678', 'REFUNDED', '2026-11-04 12:00:00');
     `);
+    await pool.exec("UPDATE shopify_orders SET crm_status='por_despachar' WHERE organization_id=1 AND shopify_order_id='1'");
     const result = await frequency.getPurchaseFrequency(pool, 1, today);
     assert.equal(result.customers.length, 1);
     assert.equal(result.customers[0].name, 'Propio');
     assert.equal(result.customers[0].purchaseCount, 2);
     assert.deepEqual(result.customers[0].recentDates, ['2026-11-01', '2026-07-01']);
     assert.equal(result.customers[0].intervalDays, 123);
+    assert.equal(result.customers[0].status, 'pending_dispatch');
+    await pool.exec(`UPDATE orders SET delivered_at=NOW() WHERE organization_id=1;
+      UPDATE shopify_orders SET fulfillment_status='FULFILLED', crm_status='nuevo' WHERE organization_id=1;
+      INSERT INTO orders (organization_id,customer_phone,status,created_at)
+      VALUES (1,'+56 9 1234 5678','nuevo','2026-11-06'),(2,'912345678','nuevo','2026-11-06')`);
+    const current = async () => (await frequency.getPurchaseFrequency(pool, 1, today, ['912345678'])).customers[0];
+    assert.equal((await current()).status, 'pending_dispatch');
+    await pool.exec("UPDATE orders SET status='cancelled' WHERE organization_id=1 AND status='nuevo'");
+    assert.equal((await current()).status, 'upcoming');
+    await pool.exec("UPDATE shopify_orders SET crm_status='en_camino' WHERE organization_id=1 AND shopify_order_id='1'");
+    assert.equal((await current()).status, 'pending_dispatch');
+    await pool.exec("UPDATE shopify_orders SET delivered_at=NOW() WHERE organization_id=1");
+    assert.equal((await current()).status, 'upcoming');
     assert.equal(todayISOChile(new Date('2026-11-07T02:59:00Z')), today);
   } finally { await pool.close(); }
 });

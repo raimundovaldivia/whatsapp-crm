@@ -1,5 +1,5 @@
 export const cadenceLabels = { unknown: 'Sin frecuencia', weekly: 'Hasta 10 días', fortnightly: '11 a 20 días', monthly: '21 a 40 días', occasional: 'Más de 40 días' };
-export const statusLabels = { followup: 'Para seguimiento', overdue: 'Pasó su fecha estimada', due: 'Próximos 3 días', upcoming: 'Más adelante', insufficient: 'Historial insuficiente' };
+export const statusLabels = { followup: 'Para seguimiento', pending_dispatch: 'Pedido pendiente de entrega', overdue: 'Pasó su fecha estimada', due: 'Próximos 3 días', upcoming: 'Más adelante', insufficient: 'Historial insuficiente' };
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
 export const FREQUENCY_FOLLOWUP_INSTRUCTION = 'Escribe un WhatsApp breve, cercano y conversacional, con saludos y cierres variados, sin encabezados, listas ni tono de plantilla. Mantén los productos, presentaciones y cantidades exactas de la última compra registrada. Usa la frecuencia solo para adaptar la pregunta. Si el historial es insuficiente o variable, no atribuyas hábitos. No cambies bandejas por cajas, no conviertas unidades ni agregues productos de compras anteriores. No supongas gustos, consumo, entrega, confianza previa ni necesidad de reposición. Sin ofertas ni compromisos de disponibilidad. Si el detalle está incompleto, excluye el borrador para revisión.';
@@ -15,7 +15,7 @@ export function frequencyDraftRequest(phones) {
 }
 
 export function selectableFrequencyCustomers(customers) {
-  const blocked = new Set(customers.filter(customer => customer.optedOut).map(customer => customer.phone));
+  const blocked = new Set(customers.filter(customer => customer.optedOut || customer.status === 'pending_dispatch').map(customer => customer.phone));
   const seen = new Set();
   return customers.filter(customer => {
     if (!/^\d{8,15}$/.test(customer.phone) || blocked.has(customer.phone) || seen.has(customer.phone)) return false;
