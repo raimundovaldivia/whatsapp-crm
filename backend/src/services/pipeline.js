@@ -31,6 +31,7 @@ const salesClosing = require('./sales-closing');
 const purchaseFeedback = require('./purchase-feedback');
 const personalOffers = require('./personal-offers');
 const paymentPromises = require('./payment-promises');
+const { isPaymentProofClarification } = require('./payment-proof-reply');
 const { isLikelyAutomaticReply, isGiftedStockReply } = inboundPolicy;
 const isBareLinkMessage = inboundPolicy.isBareLinkMessage || (() => false);
 const { recordRouteOutcome } = require('./delivery-attempts');
@@ -360,6 +361,14 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     };
   }
   const history = await db.getLastMessages(conversationId, 16);
+  if (isPaymentProofClarification(userMessage, history)) {
+    L.step('payment_proof_clarification', 'Aclaración posterior al comprobante');
+    return {
+      response: 'Gracias por aclararlo 😊 Ya recibimos tu comprobante.',
+      agentType: 'orchestrator',
+      newState: conversation.pipeline_state || 'exploring',
+    };
+  }
   if (typeof customerFeedback.handleInboundFeedback === 'function') {
     const feedback = await customerFeedback.handleInboundFeedback(orgId, conversationId, userMessage).catch(error => {
       console.warn('[Pipeline] No se pudo registrar feedback:', error.message);
