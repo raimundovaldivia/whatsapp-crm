@@ -69,6 +69,16 @@ function apply(items, ctx) {
   const result = items.map(i => ({ ...i }));
   if (!ctx?.enabled) return result;
   for (const item of result) {
+    const memberPrice = ctx.adCustomerPrices?.[item.product_id ?? item.id];
+    if (memberPrice && !item.free_gift && !item.locked_quote) {
+      if (item.unit_source === 'promocion_cantidad') continue;
+      const total = require('./quantity-pricing').totalFor(memberPrice.totals, Number(item.quantity));
+      if (total !== null || typeof memberPrice === 'number') {
+        item.price = total === null ? memberPrice : total / item.quantity;
+        item.unit_source = total === null ? 'especial' : 'promocion_cantidad';
+        continue;
+      }
+    }
     const override = ctx.overrides?.find(o => String(o.product_id) === String(item.product_id ?? item.id)
       || (o.product_title && o.product_title === (item.title || item.name || item.product_name)));
     if (override && Number(override.custom_price) > 0) {

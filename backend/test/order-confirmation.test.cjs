@@ -232,6 +232,22 @@ test('WhatsApp del anuncio: la bienvenida, el resumen y la orden guardada respet
   }
 });
 
+test('recompra por WhatsApp guarda el total por bandeja mixta aunque el cliente vuelva directamente', async () => {
+  const title = 'Huevos Jumbo mixtos · Bandeja de 20';
+  const history = [{id:2, direction:'inbound', content:'Quiero seis bandejas Jumbo mixtas de 20 huevos'}];
+  const pool = {query: async sql => ({rows: sql.includes('FROM box_ad_customers') ? [{entry_message_id:'19'}] : []})};
+  const f = fixture({history, pool, webPricing:true, whatsappChannelId:4, state:'collecting_order', draft:{},
+    products:[{id:42,sku:'DR-EGG-V2-JUMBO-20-MIXTO',title,price:9990,stock:100,active:true}],
+    extract:previous=>({...previous,...draft(),items:[{product_name:title,quantity:6,price:9990,locked_quote:true}]})});
+  const review = await f.pipeline.processMessage(7,91,history[0].content);
+  assert.match(review.response,/32\.400/);
+  history.push({direction:'outbound',content:review.response},{id:3,direction:'inbound',content:'Sí, todo correcto'});
+  await f.pipeline.processMessage(7,91,history.at(-1).content);
+  assert.equal(f.calls.orders.length,1);
+  assert.equal(f.calls.orders[0].items[0].price,5400);
+  assert.equal(f.calls.orders[0].items[0].quantity,6);
+});
+
 for (const scenario of ['orgánico nuevo', 'anuncio', 'recompra orgánica']) {
   test(`dos cajas en el mismo WhatsApp: ${scenario}`, async () => {
     const viaAd = scenario === 'anuncio';

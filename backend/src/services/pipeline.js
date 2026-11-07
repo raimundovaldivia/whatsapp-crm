@@ -491,6 +491,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
           inbound: history.filter(message => message.direction === 'inbound').at(-1),
         });
         if (customerPrices) {
+          xlContext = { ...xlContext, adCustomerPrices: customerPrices.specialPrices };
           products = customerPrices.products;
           productosTexto = shopifyApi.formatProductsForAI(products);
           Object.assign(specialPrices, customerPrices.specialPrices);
@@ -539,7 +540,6 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   if (boxOffer) {
     personalOffer = null;
     promotionContext = null;
-    xlContext = { ...xlContext, enabled: false, eligible: false, web: false, overrides: [] };
     orderDraft = { ...orderDraft, box_ad_message_id: boxOffer.messageId, discount_pct: 0 };
     delete orderDraft.promotion;
   } else if (orderDraft?.box_ad_message_id) {
@@ -1261,7 +1261,8 @@ REGLAS ABSOLUTAS:
     };
   }
 
-  if (boxOffer && (boxOffer.fresh || promotions.isCurrentPriceQuestion(userMessage))) {
+  if (boxOffer && (boxOffer.fresh || (promotions.isCurrentPriceQuestion(userMessage) &&
+      !/\b(?:bandejas?|blanc[oa]s?|caf[eé]s?)\b/iu.test(userMessage)))) {
     await db.updatePipelineState(conversationId, 'interested', orderDraft);
     return { response: boxOffer.reply, agentType: 'sales', newState: 'interested' };
   }

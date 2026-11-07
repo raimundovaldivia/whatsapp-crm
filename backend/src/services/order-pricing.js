@@ -309,7 +309,7 @@ function priceItems(items = [], products = [], opts = {}) {
   merged.forEach(x => delete x._k);
   // Reprice AFTER merging: "one tray + another tray" uses the two-tray tier.
   const quantityPricing = require('./quantity-pricing');
-  const scaled = quantityPricing.apply(merged, products);
+  const scaled = quantityPricing.apply(merged, products, specialPrices);
   merged.splice(0, merged.length, ...scaled);
 
   const subtotal = merged.reduce((s, it) => s + it.price * it.quantity, 0);
