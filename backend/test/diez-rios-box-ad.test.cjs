@@ -96,9 +96,13 @@ test('la tarifa queda por teléfono y tienda; distingue compras anteriores y pos
 
 test('cierra acceso ante compra anterior, mensaje directo, otra marca, otro anuncio o atribución histórica', async () => {
   const purchased = {query:async()=>({rows:[{id:1,status:'PAID',date:'2026-11-01',phone:incoming.phone}]})};
+  const international = {...incoming, phone:'+51 900 000 001'};
+  assert.deepEqual((await resolve(international)).specialPrices,{'1':45000,'2':27000});
+  assert.equal(await resolve({...international,ad:null}),null);
+  assert.equal(await resolve({...international,pool:purchased}),null);
   for (const patch of [{pool:purchased},{ad:null},{ad:{...ad,ad_id:'999'}},{isDiezRios:false},
     {inbound:{id:20},draft:{}},{ad:{...ad,provider:'kapso'}},{ad:{...ad,first_seen_at:'2026-10-12'}},
-    {ad:{...ad,ad_id:PREVIOUS_AD_ID}},{phone:''},{destination:'56900000000'}]) {
+    {ad:{...ad,ad_id:PREVIOUS_AD_ID}},{phone:''},{phone:'123456789012345@lid'},{phone:'00000001'},{destination:'56900000000'}]) {
     assert.equal(await resolve({...incoming,...patch}),null);
   }
 });
