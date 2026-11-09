@@ -58,7 +58,7 @@ test('una indicación nueva junto a la confirmación se revisa antes de crear el
 });
 
 for (const message of ['Todo bien', 'Esta correcto', 'Sí correcto', 'Si correcto\nGracias',
-  'Si es correcto', 'Sí, es correcto.', 'Sí es correcto\nGracias',
+  'Si es correcto', 'Sí, es correcto.', 'Sí es correcto\nGracias', 'Bu\nBueno', 'Bu\r\nBueno, gracias',
   'Sí, necesito me lo envíen\nPor favor', 'Está todo correcto', 'Dale perfecto']) {
   test(`confirmación habitual cierra el resumen enviado sin reinterpretarlo: ${message}`, async () => {
     const history = [];
@@ -82,7 +82,9 @@ test('las nuevas afirmaciones no aceptan condiciones, preguntas ni cambios', () 
     'Todo bien si llega mañana', 'Gracias', 'Por favor',
     '¿Sí es correcto?', 'Sí es correcto pero cambia la dirección',
     'Sí es correcto si llega mañana', 'Sí es correcto, agrega otra bandeja',
-    'No, no es correcto', 'Sí es correcto el teléfono']) {
+    'No, no es correcto', 'Sí es correcto el teléfono', 'Bu', 'Bu Bueno',
+    'No\nBu\nBueno', 'Bu?\nBueno', 'Bu\n¿Bueno?', 'Bu\nBueno si llega mañana',
+    'Bu\nBueno\ncambia la cantidad', 'Bu\nDale', 'Bueno\nBu']) {
     assert.equal(agent.isOrderConfirmed('ORDEN_CONFIRMADA', message, draft()), false, message);
   }
 });
@@ -115,13 +117,33 @@ test('pregunta de pago se responde sin repetir y permite una sola confirmación 
   assert.match(result.response, /DR-812/);
 });
 
+test('un fragmento solo pide aclaración y su corrección posterior cierra el mismo pedido', async () => {
+  const history = [];
+  const f = fixture({ history, extract: (previous, count) => {
+    assert.equal(count, 1, 'el fragmento y la aprobación conservan los datos revisados');
+    return previous;
+  } });
+  const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
+  history.push({ direction: 'outbound', content: review.response });
+  const reminder = await f.pipeline.processMessage(7, 91, 'Bu');
+  assert.match(reminder.response, /¿Confirmas el pedido/);
+  assert.equal(reminder.switchToHuman, undefined);
+  assert.equal(f.calls.claims, 0);
+  history.push({ direction: 'outbound', content: reminder.response });
+  const confirmation = await f.pipeline.processMessage(7, 91, 'Bueno');
+  assert.equal(confirmation.newState, 'confirmed');
+  assert.equal(f.calls.orders.length, 1);
+});
+
 test('una respuesta ambigua no repite el resumen ni crea una orden; insistir deriva', async () => {
   const history = [];
   const f = fixture({ history });
   const review = await f.pipeline.processMessage(7, 91, 'Estos son mis datos');
   history.push({ direction: 'outbound', content: review.response });
-  const reminder = await f.pipeline.processMessage(7, 91, 'Gracias');
+  const reminder = await f.pipeline.processMessage(7, 91, 'Mmm no sé');
   assert.equal(f.calls.orders.length, 0);
+  assert.equal(reminder.switchToHuman, undefined);
+  assert.match(reminder.response, /¿Confirmas el pedido/);
   assert.doesNotMatch(reminder.response, /Revisa el resumen|📦/);
   history.push({ direction: 'outbound', content: reminder.response });
   const result = await f.pipeline.processMessage(7, 91, 'No entiendo');
@@ -435,7 +457,8 @@ test('sin instrucciones de transferencia no inventa medios de pago ni repite el 
   const f = fixture();
   const result = await f.pipeline.processMessage(7, 91, 'Puedo transferir?');
   assert.equal(f.calls.orders.length, 0);
-  assert.equal(result.switchToHuman, true);
+  assert.equal(result.switchToHuman, undefined);
+  assert.match(result.response, /Todavía no puedo confirmarte.*¿Confirmas el pedido/);
   assert.doesNotMatch(result.response, /Revisa el resumen|puedes pagar por transferencia/i);
 });
 
@@ -468,7 +491,7 @@ test('pago con una corrección sigue extrayendo y exige revisar el cambio', asyn
 test('otra aprobación después del cierre no duplica el pedido', async () => {
   const options = {};
   const f = fixture(options);
-  await f.pipeline.processMessage(7, 91, 'Todo bien');
+  await f.pipeline.processMessage(7, 91, 'Bu\nBueno');
   options.activeOrder = active();
   await f.pipeline.processMessage(7, 91, 'Sí correcto');
   assert.equal(f.calls.orders.length, 1);
