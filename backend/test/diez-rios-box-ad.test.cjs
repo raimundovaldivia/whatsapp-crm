@@ -13,6 +13,23 @@ const ad = { ad_id: AD_ID, message_id: 19, provider: 'evolution', first_seen_at:
 const incoming = { pool: { query: async () => ({ rows: [] }) }, orgId: 1, isDiezRios: true,
   phone: '56911111111', destination:'56942876413', ad, inbound: {id:19}, draft:{}, products };
 
+test('cotiza la consulta corta del anuncio en Kapso y respeta el precio de prueba solo el lunes', async () => {
+  const {directPriceReply, KAPSO_EGG_AD} = require('../src/services/diez-rios-box-ad');
+  const catalog = [...products, {id:'3', sku:'DR-EGG-V2-XL-30-MIXTO', title:'Huevos XL mixtos · Bandeja de 30', priceMin:11990}];
+  const input = {...incoming, products:catalog, ad:{...ad,provider:'kapso',ad_id:KAPSO_EGG_AD},destination:null,
+    pool:{query:async sql=>({rows:sql.includes('FROM broadcast_campaign_recipients') ? [{whatsapp_message_id:'sent'}] : []})}};
+  const trial = await resolve({...input,businessDate:'2026-11-09'});
+  assert.match(directPriceReply('Qué valor tiene la bandeja?',trial),/30 huevos XL mixtos: \$9\.000\. Dos bandejas \(60 huevos\): \$15\.000/);
+  assert.equal(priceItems([{product_name:catalog[2].title,quantity:2}],trial.products,{specialPrices:trial.specialPrices}).total,15000);
+  const regular = await resolve({...input,businessDate:'2026-11-10'});
+  assert.match(directPriceReply('precio bandeja XL',regular),/9\.900.*17\.900/);
+  assert.equal(directPriceReply('cuánto sale la caja XL',regular),'Caja de 180 huevos XL: $45.000.');
+  assert.match(directPriceReply('Precios',regular),/100 huevos Jumbo: \$27\.000/);
+  for (const message of ['Precio del queso','valor del despacho','quiero confirmar mi pedido','precio de tres bandejas XL']) {
+    assert.equal(directPriceReply(message,regular),null);
+  }
+});
+
 test('solo las dos bandejas mixtas acordadas usan la escala permanente por SKU', async () => {
   const catalog = [
     ['XL','mixtos',30,'MIXTO',11990], ['Jumbo','mixtos',20,'MIXTO',9990],

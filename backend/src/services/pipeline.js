@@ -517,6 +517,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
           pool: getPool(), orgId, isDiezRios: previousXlContext.enabled,
           destination: channel?.phone_number,
           phone: conversation.phone_number, ad, draft: orderDraft, products,
+          businessDate: salesClosing.chileParts(nowCl).isoDate,
           allowEnrollment: promotionsEnabled,
           inbound: history.filter(message => message.direction === 'inbound').at(-1),
         });
@@ -532,7 +533,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
         }
       }
       const adCopy = [ad?.headline, ad?.body].filter(Boolean).join('\n').trim();
-      if (adCopy && ad.ad_id !== boxCampaign.AD_ID && ad.ad_id !== boxCampaign.PREVIOUS_AD_ID) {
+      if (adCopy && ![boxCampaign.AD_ID, boxCampaign.PREVIOUS_AD_ID, boxCampaign.KAPSO_EGG_AD].includes(ad.ad_id)) {
         promotionHistory = [...history, {
           direction: 'outbound',
           content: `[Template: promocion_anuncio_whatsapp]\n${adCopy}`,
@@ -1296,11 +1297,12 @@ REGLAS ABSOLUTAS:
     };
   }
 
-  if (boxOffer && (boxOffer.fresh || (promotions.isCurrentPriceQuestion(userMessage) &&
-      !/\b(?:bandejas?|blanc[oa]s?|caf[eé]s?)\b/iu.test(userMessage)))) {
+  const adPriceReply = boxCampaign.directPriceReply(userMessage, customerPrices);
+  if (adPriceReply || (boxOffer?.fresh && !/\b(?:ques\w*|aceitunas?|leche|despacho|env[ií]o|mayor|precio\w*|valor\w*|cu[aá]nt\w*)\b/iu.test(userMessage))) {
     await db.updatePipelineState(conversationId, 'interested', orderDraft);
     const delivery = boxAdDeliveryGreeting(deliverySchedule, deliveryZone, cutoffTime, nowCl, closingPolicy);
-    return { response: delivery + '\n\n' + boxOffer.reply, agentType: 'sales', newState: 'interested' };
+    const response = adPriceReply || (delivery + '\n\n' + (boxCampaign.directPriceReply('Precios', boxOffer) || boxOffer.reply));
+    return { response, agentType: 'sales', newState: 'interested' };
   }
 
   // Un contacto particular que pide precios por mayor no debe recibir el
