@@ -2224,14 +2224,15 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
     setReviewPlan(null);
     const drafts = [];
     try {
-      for (let i = 0; i < chosen.length; i += 6) {
-        const phones = chosen.slice(i, i + 6).map(contact => contact.phone);
+      const batchSize = 12;
+      for (let i = 0; i < chosen.length; i += batchSize) {
+        const phones = chosen.slice(i, i + batchSize).map(contact => contact.phone);
         const { data } = await api.post('/reengagement/generate', isFrequency ? frequencyDraftRequest(phones) : {
           instruction, phones, audienceType,
         }, { timeout: 180000 });
         if (run !== draftRunRef.current) return;
         drafts.push(...validateDraftBatch(data.drafts, phones));
-        setDraftProgress({ done: Math.min(i + 6, chosen.length), total: chosen.length });
+        setDraftProgress({ done: drafts.length, total: chosen.length });
       }
       const excluded = drafts.filter(draft => draft.decision !== 'draft');
       const entries = drafts.filter(draft => draft.decision === 'draft').map(draft => {

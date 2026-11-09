@@ -293,28 +293,28 @@ async function generateDrafts(orgId, body, aiClient) {
   const request = validateRequest(body);
   const today = todayISOChile();
   const frequencyMode = request.contextSource === 'purchase_frequency';
-  const frequencyCustomers = frequencyMode ? new Map((await require('./purchase-frequency')
-    .getPurchaseFrequency(db.getPool(), orgId, today, request.phones)).customers.map(customer => [customer.phone, customer])) : null;
-  const [store, organization, outreachSetting] = await Promise.all([
+  const [store, organization, outreachSetting, products, frequencyReport] = await Promise.all([
     frequencyMode ? null : db.getSetting(orgId, 'store_context'),
     frequencyMode ? null : db.getOrgById(orgId),
     db.getSetting(orgId, 'campaign_recent_outreach_days'),
+    frequencyMode ? [] : db.getProducts(orgId, true),
+    frequencyMode ? require('./purchase-frequency').getPurchaseFrequency(db.getPool(), orgId, today, request.phones) : null,
   ]);
+  const frequencyCustomers = frequencyMode ? new Map(frequencyReport.customers.map(customer => [customer.phone, customer])) : null;
   const outreachDays = recentOutreachDays(outreachSetting);
-  const catalog = (frequencyMode ? [] : await db.getProducts(orgId, true)).map(p => ({
+  const catalog = products.map(p => ({
     product_id: String(p.id), title: text(p.title, 120), available: !p.deprecated_at,
     unit_cost: p.unit_cost ?? null, min_margin_pct: p.min_margin_pct ?? null,
   }));
-  const drafts = [];
+  const availableProducts = catalog.filter(product => product.available).map(({ product_id, title }) => ({ product_id, title }));
   // One generation per customer; neighbouring customers' conversations are never shared.
-  for (const phone of request.phones) {
+  async function prepareCustomer(phone) {
     if (frequencyMode && !frequencyCustomers.has(phone)) {
-      drafts.push({ phone, decision: 'skip', reasonCode: 'unavailable', reason: 'El cliente ya no aparece en la frecuencia de compra de esta empresa.' });
-      continue;
+      return { phone, decision: 'skip', reasonCode: 'unavailable', reason: 'El cliente ya no aparece en la frecuencia de compra de esta empresa.' };
     }
     const customer = await customerContext(orgId, phone, request.audienceType, today, outreachDays, frequencyCustomers?.get(phone));
-    if (customer.decision === 'skip') { drafts.push(customer); continue; }
-    if (frequencyMode) { drafts.push(frequencyDraft(customer)); continue; }
+    if (customer.decision === 'skip') return customer;
+    if (frequencyMode) return frequencyDraft(customer);
     const response = await aiClient.messages.create({
       model: modelFor('smart'), max_tokens: 900,
       system: `Redactas borradores de WhatsApp para revisión humana. Nunca envías ni autorizas mensajes.
@@ -331,7 +331,7 @@ Ofertas: si la instrucción define ofertas concretas, llena "offers" con una ent
 La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa fecha. No reveles cálculos de frecuencia, notas internas ni datos de terceros al cliente.`,
       messages: [{ role: 'user', content: JSON.stringify({
         instruccion: request.instruction, negocio: text(organization?.name, 100),
-        catalogoDisponible: text(store, 10000), catalogoProductos: catalog.filter(p => p.available).map(({ product_id, title }) => ({ product_id, title })), cliente: customer.context,
+        catalogoDisponible: text(store, 10000), catalogoProductos: availableProducts, cliente: customer.context,
       }) }],
       tools: [{ name: 'customer_draft', description: 'Propuesta para revisión; no efectúa envíos.', input_schema: {
         type: 'object', additionalProperties: false, required: ['decision', 'reason', 'message'],
@@ -346,8 +346,26 @@ La fecha de hoy es ${today}, zona America/Santiago. Resuelve mañana desde esa f
       tool_choice: { type: 'tool', name: 'customer_draft' },
     });
     const raw = response.content?.find(part => part.type === 'tool_use' && part.name === 'customer_draft')?.input;
-    drafts.push(reviewDraftAgainstInstruction(validateDraft(raw, customer, { catalog, now: new Date() }), request.instruction));
+    return reviewDraftAgainstInstruction(validateDraft(raw, customer, { catalog, now: new Date() }), request.instruction);
   }
+  const drafts = new Array(request.phones.length);
+  let nextIndex = 0;
+  let failed = false;
+  async function prepareRemaining() {
+    while (!failed && nextIndex < request.phones.length) {
+      const index = nextIndex++;
+      try {
+        drafts[index] = await prepareCustomer(request.phones[index]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }
+  const workers = Array.from({ length: Math.min(6, request.phones.length) }, prepareRemaining);
+  const results = await Promise.allSettled(workers);
+  const failure = results.find(result => result.status === 'rejected');
+  if (failure) throw failure.reason;
   return { drafts, generatedAt: new Date().toISOString(), businessDate: today, requiresApproval: true };
 }
 
