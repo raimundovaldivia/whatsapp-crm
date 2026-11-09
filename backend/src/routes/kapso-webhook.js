@@ -418,7 +418,7 @@ async function handleOfficialWebhook(req, res, provider = 'kapso', service = kap
         // Enviar respuesta por WhatsApp via Kapso
         const queued = await require('../services/outbound-message-queue').deferOutsideHours({
           orgId: org.id, conversationId: capturedConvId, text: result.response, sentBy: 'ai', sendingProvider: activeProvider,
-          agentType: result.agentType, aiProvider: result.aiProvider, aiModel: result.aiModel, promptVersion: result.promptVersion, io,
+          agentType: result.agentType, aiProvider: result.aiProvider, aiModel: result.aiModel, promptVersion: result.promptVersion, productMedia: result.productMedia, io,
         });
         let sentResult = null;
         let windowExpired = false;

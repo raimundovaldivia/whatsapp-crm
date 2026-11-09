@@ -137,7 +137,7 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
   if (!beforeSend || beforeSend.agent_mode === 'human') return;
   const queued = await require('./outbound-message-queue').deferOutsideHours({
     orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', sendingProvider: whatsappConfig.provider || 'meta',
-    agentType: result.agentType, aiProvider: result.aiProvider, aiModel: result.aiModel, promptVersion: result.promptVersion, io,
+    agentType: result.agentType, aiProvider: result.aiProvider, aiModel: result.aiModel, promptVersion: result.promptVersion, productMedia: result.productMedia, io,
   });
   const sentResult = queued ? null : await provider.sendTextMessage(parsed.from, result.response, whatsappConfig);
   const outMsg = queued || await db.saveMessage({

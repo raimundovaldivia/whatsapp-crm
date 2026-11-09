@@ -35,11 +35,14 @@ async function deferOutsideHours(input, pool = db.getPool()) {
     }
     const context = { state: 'queued', phone: conv.phone_number, channelId: conv.whatsapp_channel_id || null,
       sendingProvider: input.sendingProvider || null, createdBy, queuedAt: now.toISOString() };
+    const photo = sentBy === 'ai' ? input.productMedia : null;
+    if (photo) context.productMedia = photo;
     const { rows: [existing] } = await client.query(`SELECT m.* FROM messages m JOIN conversations c ON c.id=m.conversation_id
       WHERE c.organization_id=$1 AND c.id=$2 AND m.content=$3 AND m.sent_by=$4
       AND m.outbound_queue->>'state' IN ('queued','processing')
-      AND COALESCE(m.outbound_queue->>'createdBy','')=COALESCE($5::text,'') ORDER BY m.id DESC LIMIT 1`,
-    [orgId, conversationId, text.trim(), sentBy, createdBy]);
+      AND COALESCE(m.outbound_queue->>'createdBy','')=COALESCE($5::text,'')
+      AND (m.outbound_queue->'productMedia') IS NOT DISTINCT FROM $6::jsonb ORDER BY m.id DESC LIMIT 1`,
+    [orgId, conversationId, text.trim(), sentBy, createdBy, photo ? JSON.stringify(photo) : null]);
     if (existing) { await client.query('COMMIT'); return existing; }
     // Only the latest automatic response remains eligible. Human drafts remain separate.
     replaced = (await client.query(`UPDATE messages m SET status='failed', outbound_queue=outbound_queue || '{"state":"cancelled","reason":"Reemplazado por una respuesta más reciente"}'::jsonb
@@ -62,7 +65,7 @@ async function deferOutsideHours(input, pool = db.getPool()) {
   return message;
 }
 
-function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, configForConversation = provider.configForConversation, checkFreshness = guardrail.checkResponseFreshness, io, clock = () => new Date() } = {}) {
+function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, sendMedia = provider.sendMediaMessage, configForConversation = provider.configForConversation, checkFreshness = guardrail.checkResponseFreshness, io, clock = () => new Date() } = {}) {
   async function settle(orgId, message, state, reason, status = 'failed') {
     const { rows: [updated] } = await pool.query(`UPDATE messages m SET status=$4,
       outbound_queue=m.outbound_queue || jsonb_build_object('state',$3::text,'reason',$5::text)
@@ -128,14 +131,17 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, co
       if (!policy.isChatMessagingHour(clock())) {
         return settle(orgId, message, 'queued', 'Esperando horario de atención', 'pending');
       }
-      const result = await send(conv.phone_number, message.content, config);
+      const photo = context.productMedia;
+      const result = photo ? await sendMedia(conv.phone_number, photo, config) : await send(conv.phone_number, message.content, config);
       const id = provider.messageId(result);
       if (!id) return settle(orgId, message, 'uncertain', 'WhatsApp no devolvió un identificador; revisar antes de reenviar', 'pending');
       const { rows: [updated] } = await pool.query(`UPDATE messages m SET whatsapp_message_id=$3,status='sent',created_at=$4::timestamptz AT TIME ZONE 'UTC',
+        type=CASE WHEN $5::text IS NULL THEN m.type ELSE 'image' END,
+        media_id=COALESCE($5::text,m.media_id),content=COALESCE($6::text,m.content),
         outbound_queue=m.outbound_queue || jsonb_build_object('state','sent','sentAt',$4::text)
         FROM conversations c WHERE m.id=$2 AND m.conversation_id=c.id AND c.organization_id=$1
-        AND m.outbound_queue->>'state'='processing' RETURNING m.*`, [orgId, message.id, id, clock().toISOString()]);
-      await db.updateConversationLastMessage(conv.id, message.content);
+        AND m.outbound_queue->>'state'='processing' RETURNING m.*`, [orgId, message.id, id, clock().toISOString(), photo?.mediaUrl || null, photo?.caption || null]);
+      await db.updateConversationLastMessage(conv.id, updated.content);
       await publish(io, orgId, updated);
     } catch (error) {
       await settle(orgId, message, error.is24hWindow ? 'review' : 'uncertain', error.is24hWindow

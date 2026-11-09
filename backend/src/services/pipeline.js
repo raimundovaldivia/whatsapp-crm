@@ -312,16 +312,6 @@ async function processMessage(orgId, conversationId, userMessage, log = null, op
       reason: 'OUTBOUND_POLICY_BLOCK',
     };
   }
-  if (result?.response && !result.skipped && !result.duplicate && !result.switchToHuman) {
-    try {
-      const productMedia = await require('./product-media').suggest({
-        orgId, conversationId, userMessage, response: result.response,
-      });
-      if (productMedia) return { ...result, productMedia };
-    } catch (error) {
-      console.warn('[Pipeline] No se pudo preparar la foto del producto:', error.message);
-    }
-  }
   return result;
 }
 
@@ -361,6 +351,16 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     };
   }
   const history = await db.getLastMessages(conversationId, 16);
+  if ((conversation?.source_channel || 'whatsapp') === 'whatsapp') {
+    try {
+      const photo = await require('./product-media').photoTurn({
+        orgId, userMessage, history, phone: conversation?.phone_number,
+      });
+      if (photo) return { ...photo, agentType: 'sales', newState: conversation?.pipeline_state || 'exploring' };
+    } catch (error) {
+      console.warn('[Pipeline] No se pudo preparar la foto del producto:', error.message);
+    }
+  }
   if (isPaymentProofClarification(userMessage, history)) {
     L.step('payment_proof_clarification', 'Aclaración posterior al comprobante');
     return {

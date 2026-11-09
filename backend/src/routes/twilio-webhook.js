@@ -83,7 +83,8 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
 
     // 6. Enviar respuesta por Twilio
     const queued = await require('../services/outbound-message-queue').deferOutsideHours({
-      orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', agentType: result.agentType, sendingProvider: 'twilio', io,
+      orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', agentType: result.agentType,
+      promptVersion: result.promptVersion, productMedia: result.productMedia, sendingProvider: 'twilio', io,
     });
     const sentResult = queued ? null : await twilioService.sendTextMessage(
       parsed.from,
@@ -99,6 +100,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
       content:           result.response,
       sentBy:            'ai',
       agentType:         result.agentType,
+      promptVersion:     result.promptVersion,
     });
 
     if (!queued) await db.updateConversationLastMessage(conversation.id, result.response);
@@ -109,6 +111,11 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
 
     const finalConv = await db.getConversationById(conversation.id);
     io?.to(`org_${org.id}`).emit(`new_message_${org.id}`, { message: outMsg, conversation: finalConv });
+    if (!queued && result.productMedia) {
+      await require('../services/product-media-delivery').sendSuggested({
+        suggestion: result.productMedia, orgId: org.id, conversation: finalConv, config: { ...whatsappConfig, provider: 'twilio' }, io,
+      });
+    }
 
     if (result.orderCreated) {
       io?.to(`org_${org.id}`).emit(`order_created_${org.id}`, { conversationId: conversation.id, order: result.orderCreated });
