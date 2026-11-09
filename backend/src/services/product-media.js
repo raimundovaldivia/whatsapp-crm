@@ -24,7 +24,7 @@ function mimeType(url) {
 }
 
 const PRICE_QUERY = /\b(precios?|valor(?:es)?|cuant[oa]s?|cuestan?|costos?|valen?|salen?|cotiz\w*|ofertas?|promocion(?:es)?|tarifas?)\b/;
-const REQUEST_PREFIX = /^(?:(?:me|nos) )?(?:(?:puedes?|podrias?|puedo|quisiera|quiero|me gustaria) )?/;
+const REQUEST_PREFIX = /^(?:me gustaria |(?:(?:me|nos) )?(?:(?:puedes?|podrias?|puedo|quisiera|quiero) )?)/;
 const SEND_VERB = /^(?:(?:(?:manda|envia|pasa)[rs]?|compartir|compartes?)(?:me|nos)?|tienes?|hay)\s+/;
 const SHOW_VERB = /^(?:ver|(?:mostrar|muestra)(?:me|nos)?)\s+/;
 const PHOTO_NOUN = /^(?:(?:un[ao]s?|l[ao]s?|alguna) )?(?:fotos?|fotitos?|fotografias?|imagen(?:es)?)\b\s*/;
@@ -49,7 +49,7 @@ const VARIANTS = new Map(Object.entries({
 }));
 
 function productWords(value) {
-  return norm(value).split(' ').filter(word => word && !FILLER.has(word))
+  return norm(value).replace(/(\d)(kg|gr|g)\b/g, '$1 $2').split(' ').filter(word => word && !FILLER.has(word))
     .map(word => VARIANTS.get(word) || word);
 }
 

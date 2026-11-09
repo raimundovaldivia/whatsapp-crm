@@ -45,6 +45,7 @@ test('la foto corresponde a la variante pedida aunque el historial o la respuest
     ['Muéstrame la bandeja Jumbo de 20', jumbo],
     ['Quisiera ver los huevos Jumbo', jumbo],
     ['¿Tienes una imagen del queso de cabra?', goat],
+    ['Me gustaría ver una foto del queso de cabra de 900g', goat],
   ]) {
     const photo = await select(text);
     assert.equal(photo?.caption, '📷 ' + product.title, text);
