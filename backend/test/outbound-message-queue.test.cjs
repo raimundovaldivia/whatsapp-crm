@@ -15,7 +15,7 @@ async function fixture(t) {
     CREATE TABLE users(id INT PRIMARY KEY,organization_id INT,role TEXT,merged_into_user_id INT);
     CREATE TABLE orders(id INT PRIMARY KEY,organization_id INT,conversation_id INT,status TEXT,created_at TIMESTAMP,updated_at TIMESTAMP);
     CREATE TABLE messages(id SERIAL PRIMARY KEY,conversation_id INT,direction TEXT,content TEXT,type TEXT,status TEXT,sent_by TEXT,agent_type TEXT,
-      ai_provider TEXT,ai_model TEXT,prompt_version TEXT,whatsapp_message_id TEXT UNIQUE,created_at TIMESTAMP DEFAULT NOW());
+      ai_provider TEXT,ai_model TEXT,prompt_version TEXT,media_id TEXT,whatsapp_message_id TEXT UNIQUE,created_at TIMESTAMP DEFAULT NOW());
     INSERT INTO conversations(id,organization_id,phone_number) VALUES(11,1,'56911111111'),(22,2,'56922222222');
     INSERT INTO users VALUES(1,1,'owner',NULL),(2,2,'owner',NULL),(3,1,'repartidor',NULL);`);
   const migration = fs.readFileSync(path.join(__dirname,'../src/db/outbound-message-queue.sql'),'utf8');
@@ -88,6 +88,22 @@ test('worker sends once, persists provider receipt on same message, preserves te
   assert.equal(f.sends.length,1); assert.equal(f.sends[0][0],'56911111111');
   const rows=await f.messages(); assert.equal(rows.length,1);assert.equal(rows[0].id,m.id);
   assert.equal(rows[0].outbound_queue.state,'sent');assert.equal(rows[0].whatsapp_message_id,'wa-1');
+});
+
+test('a photo selected overnight is sent and recorded as an image at opening',async t=>{
+  const f = await fixture(t);
+  const photo = { type: 'image', mediaUrl: 'https://tienda.example/cabra.jpg', caption: '📷 Queso de cabra' };
+  await f.enqueue({ sentBy: 'ai', createdBy: null, productMedia: photo, text: 'Elegiste queso de cabra.' });
+  const media = [];
+  const worker = f.worker({ sendMedia: async (phone, payload) => { media.push([phone, payload]); return { messageId: 'photo-1' }; } });
+  await worker.tick(1);
+  await worker.tick(1);
+  assert.deepEqual(media, [['56911111111', photo]]);
+  assert.equal(f.sends.length, 0);
+  const [saved] = await f.messages();
+  assert.equal(saved.media_id, photo.mediaUrl);
+  assert.equal(saved.content, photo.caption);
+  assert.equal(saved.type, 'image');
 });
 
 test('only latest AI draft remains eligible, unsent text is excluded from pipeline history',async t=>{
