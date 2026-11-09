@@ -23,6 +23,53 @@ test('transactional messages, failures and old temporary declines preserve custo
   assert.equal(drafts.messageSafety([], today, [{ result_status: 'unknown', created_at: recent }]).unansweredRecentOutreach, true);
 });
 
+test('draft preparation refills six slots without waiting for slow customers and preserves recipient order', async () => {
+  const { drafts, database } = setup();
+  const phones = Array.from({ length: 12 }, (_, index) => String(56910000100 + index));
+  database.getContact = async (_org, phone) => ({ name: 'Persona ' + phones.indexOf(phone) });
+  let active = 0;
+  let peak = 0;
+  let lastStarted;
+  const lastCustomerStarted = new Promise(resolve => { lastStarted = resolve; });
+  const ai = { messages: { create: async request => {
+    const { nombre } = JSON.parse(request.messages[0].content).cliente;
+    active++;
+    peak = Math.max(peak, active);
+    if (nombre === 'Persona 11') lastStarted();
+    if (nombre === 'Persona 0') await lastCustomerStarted;
+    else await new Promise(resolve => setImmediate(resolve));
+    active--;
+    return { content: [{ type: 'tool_use', name: 'customer_draft', input: {
+      decision: 'draft', message: 'Hola ' + nombre, reason: 'Consulta personalizada.',
+    } }] };
+  } } };
+  const result = await drafts.generateDrafts(7, { phones, instruction: 'Consultar por la próxima compra.' }, ai);
+  assert.equal(peak, 6);
+  assert.deepEqual(Array.from(result.drafts, draft => draft.phone), phones);
+  assert.deepEqual(Array.from(result.drafts, draft => draft.message), phones.map((_, index) => 'Hola Persona ' + index));
+});
+
+test('a draft error stops scheduling and waits for in-flight drafts before rejecting', async () => {
+  const { drafts, database } = setup();
+  const phones = Array.from({ length: 12 }, (_, index) => String(56910000100 + index));
+  database.getContact = async (_org, phone) => ({ name: phone });
+  let started = 0;
+  let finished = 0;
+  const ai = { messages: { create: async request => {
+    const phone = JSON.parse(request.messages[0].content).cliente.nombre;
+    started++;
+    if (phone === phones[0]) throw new Error('Generation failed');
+    await new Promise(resolve => setImmediate(resolve));
+    finished++;
+    return { content: [{ type: 'tool_use', name: 'customer_draft', input: {
+      decision: 'draft', message: 'Hola', reason: 'Consulta.',
+    } }] };
+  } } };
+  await assert.rejects(drafts.generateDrafts(7, { phones, instruction: 'Consultar por la próxima compra.' }, ai), /Generation failed/);
+  assert.equal(started, 6);
+  assert.equal(finished, 5);
+});
+
 test('100 selected customers keep 80 valid drafts and report 20 real exclusions', async () => {
   const { drafts, database } = setup();
   const day = require('../src/services/business-date').todayISOChile();
