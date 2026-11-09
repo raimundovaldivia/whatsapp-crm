@@ -2753,7 +2753,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   // new order data for the model to reinterpret. Mixed corrections still extract.
   const preservesReviewedDraft = Boolean(orderDraft._reviewed_order)
     && ordersAgent.hasRequiredData(orderDraft) && (orderInputPolicy.isReviewedAffirmative(userMessage, orderDraft)
-      || orderInputPolicy.isCheckoutPaymentQuestion(userMessage));
+      || orderInputPolicy.isApprovalFragment(userMessage) || orderInputPolicy.isCheckoutPaymentQuestion(userMessage));
   const updatedDraft = checkout.normalizeDraft(preserveFreshnessPreference(
     preservesReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),
     userMessage
@@ -3012,14 +3012,10 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   if (ready && !(acceptedReview && ordersAgent.isOrderConfirmed('', userMessage, updatedDraft))) {
     if (acceptedReview) {
       const lastOutbound = [...history].reverse().find(m => m.direction === 'outbound');
-      if (orderInputPolicy.isCheckoutPaymentQuestion(userMessage) && orderCtx.hasTransferInstructions
-          && lastOutbound?.content !== checkout.PAYMENT_REVIEW_REPLY) {
-        return { response: checkout.PAYMENT_REVIEW_REPLY, agentType: 'orders', newState: 'collecting_order' };
-      }
-      // Un agradecimiento o aprobación parcial recibe una indicación breve.
-      // Una consulta sin resolver o un segundo intento sale del bucle al equipo.
-      if (!checkout.isReviewFollowup(lastOutbound?.content)
-          && /^(?:gracias|muchas gracias|por favor|porfa|si esta direccion)[\s.!]*$/iu.test(userMessage.trim())) {
+      if (orderInputPolicy.isCheckoutPaymentQuestion(userMessage)) {
+        const response = orderCtx.hasTransferInstructions ? checkout.PAYMENT_REVIEW_REPLY : checkout.TRANSFER_UNAVAILABLE_REPLY;
+        if (lastOutbound?.content !== response) return { response, agentType: 'orders', newState: 'collecting_order' };
+      } else if (!checkout.isReviewFollowup(lastOutbound?.content)) {
         return { response: checkout.REVIEW_REMINDER, agentType: 'orders', newState: 'collecting_order' };
       }
       return handoffCheckout();

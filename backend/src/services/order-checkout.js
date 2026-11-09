@@ -3,9 +3,11 @@ const { parseConfirmedSummary } = require('./order-quote');
 
 const key = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-const REVIEW_REMINDER = 'El resumen sigue igual y el pedido aún no está creado. Para aprobarlo, responde «confirmo el pedido»; si necesitas cambiar algo, dime qué dato.';
+const PREVIOUS_REMINDER = 'El resumen sigue igual y el pedido aún no está creado. Para aprobarlo, responde «confirmo el pedido»; si necesitas cambiar algo, dime qué dato.';
+const REVIEW_REMINDER = 'Tu pedido sigue pendiente. ¿Confirmas el pedido tal como aparece en el resumen? Si necesitas cambiar algo, dime qué cambiamos.';
+const TRANSFER_UNAVAILABLE_REPLY = 'Todavía no puedo confirmarte si la tienda acepta transferencias. Si prefieres consultar el pago con el equipo, dímelo. ¿Confirmas el pedido del resumen anterior?';
 const PAYMENT_REVIEW_REPLY = 'Sí, la tienda tiene habilitada la transferencia. Primero confirmemos el pedido; después puedes solicitar los datos de pago por este chat. ¿Confirmas el pedido del resumen anterior?';
-const isReviewFollowup = text => [REVIEW_REMINDER, PAYMENT_REVIEW_REPLY].includes(String(text || ''));
+const isReviewFollowup = text => [PREVIOUS_REMINDER, REVIEW_REMINDER, PAYMENT_REVIEW_REPLY, TRANSFER_UNAVAILABLE_REPLY].includes(String(text || ''));
 
 function streetAddress(address, city) {
   if (typeof address !== 'string' || !key(city)) return address;
@@ -95,4 +97,4 @@ function reviewReply(draft, priced) {
 }
 
 module.exports = { catalogIssue, signature, matchesReview, reviewReply, normalizeDraft, formatAddress,
-  REVIEW_REMINDER, PAYMENT_REVIEW_REPLY, isReviewFollowup };
+  REVIEW_REMINDER, PAYMENT_REVIEW_REPLY, TRANSFER_UNAVAILABLE_REPLY, isReviewFollowup };

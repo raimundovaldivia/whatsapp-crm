@@ -46,11 +46,26 @@ function resolveCustomerName(message, previousName, extractedName) {
   return previousName;
 }
 
+const approvalWords = ['bueno', 'claro', 'dale', 'perfecto', 'correcto', 'confirmo', 'listo'];
+
+function isApprovalFragment(value) {
+  const part = normalize(value);
+  return part.length >= 2 && approvalWords.some(word => word !== part && word.startsWith(part));
+}
+
 function isBareAffirmative(value = '') {
   // Reconocer la frase completa, sin un límite de 20 caracteres ni prefijos
   // abiertos ("si cambio...", "ok pero..."). No contiene productos nuevos.
   if (/[¿?]/u.test(String(value))) return false;
-  const text = normalize(value).replace(/[,.!;:¡\p{Emoji_Modifier}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  // WhatsApp agrupa mensajes con saltos de línea. Solo omitir el fragmento
+  // si el siguiente mensaje lo completa con una palabra de aprobación.
+  const lines = String(value).split(/\r?\n/);
+  const completed = lines.filter((line, index) => {
+    if (!isApprovalFragment(line)) return true;
+    const nextWord = normalize(lines[index + 1]).match(/^[a-z]+\b/u)?.[0];
+    return !approvalWords.includes(nextWord) || !nextWord.startsWith(normalize(line));
+  });
+  const text = normalize(completed.join(' ')).replace(/[,.!;:¡\p{Emoji_Modifier}]+/gu, ' ').replace(/\s+/g, ' ').trim();
   const approval = '(?:si+|yes|claro|dale|ok(?:ay|ey|a)?|bueno|perfecto|(?:es )?correcto|confirmo(?: (?:el|mi|este) (?:pedido|resumen)(?: de prueba)?)?|adelante|procede|listo|vamos?|por supuesto|de acuerdo|(?:esta )?todo (?:correcto|bien)|esta (?:correcto|bien)|necesito (?:que )?me lo envien|👍)';
   const courtesy = '(?:(?:lo|la|los|las) espero|(?:aca|aqui) estoy|estoy en casa|(?:muchas )?gracias|por favor|porfa|😊)';
   return new RegExp(`^${approval}(?: (?:${approval}|${courtesy}))*$`, 'u').test(text);
@@ -154,6 +169,7 @@ module.exports = {
   ambiguousQuantityToken,
   isBareAffirmative,
   isReviewedAffirmative,
+  isApprovalFragment,
   isCheckoutPaymentQuestion,
   isRepeatedSummaryComplaint,
   unexpectedItemsFromBareAffirmative,
