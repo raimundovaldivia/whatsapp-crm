@@ -437,9 +437,9 @@ function validGeoPoint(point) {
     && !(lat === 0 && lng === 0);
 }
 
-async function geocodeMany(orgId, addresses) {
+async function geocodeMany(orgId, addresses, retryNegative = false) {
   return deliveryGeocoding.geocodeMany({
-    pool: getPool(), axios, apiKey: process.env.GOOGLE_MAPS_API_KEY, orgId, addresses,
+    pool: getPool(), axios, apiKey: process.env.GOOGLE_MAPS_API_KEY, orgId, addresses, retryNegative,
     log: code => console.warn('[Geocode]', code),
   });
 }
@@ -607,9 +607,10 @@ function normalizeBotOrder(row) {
 function normalizeReturnTask(row) {
   const customer = row.customer && typeof row.customer === 'object' ? row.customer : {};
   const rawAddress = customer.address;
-  const fullAddress = typeof rawAddress === 'string'
-    ? rawAddress
-    : Object.values(rawAddress || {}).filter(value => typeof value === 'string' && value.trim()).join(', ');
+  const { city = '', address, address1, ...details } = typeof rawAddress === 'object' && rawAddress ? rawAddress : {};
+  const street = typeof rawAddress === 'string' ? rawAddress
+    : [address || address1, ...Object.values(details)].filter(value => typeof value === 'string' && value.trim()).join(', ');
+  const fullAddress = [street, city].filter(Boolean).join(', ');
   const affected = jsonList(row.items).map(item => ({
     ...item,
     name: `Retirar: ${item.name || item.title || 'Producto'}`,
@@ -637,7 +638,7 @@ function normalizeReturnTask(row) {
     id: String(row.id), source: 'return', isReturn: true,
     orderName: `↩ ${kindLabel} #${row.id} · Pedido ${row.order_source === 'bot' ? crmOrderLabel(row.order_id) : row.order_id}`,
     customerName: `↩ ${kindLabel} · ${customer.name || 'Cliente'}`,
-    phone: customer.phone || '', address: fullAddress, city: '', fullAddress,
+    phone: customer.phone || '', address: street, city, fullAddress,
     items: routeItems, totalPrice: 0, status: row.status,
     deliveryDate: dateOnly(row.scheduled_date), deliveryNote: row.reason || null,
     returnTask: {
@@ -2737,7 +2738,7 @@ async function updateStoredOrderAddress(client, { source, orderId, orgId, addres
 
 async function correctedStop(orgId, stop, addressData) {
   const next = { ...stop, ...addressData };
-  const geo = await geocodeMany(orgId, [addressData.fullAddress]);
+  const geo = await geocodeMany(orgId, [addressData.fullAddress], true);
   const point = geo[addressKey(addressData.fullAddress)];
   next.lat = point?.lat ?? null;
   next.lng = point?.lng ?? null;
@@ -2757,9 +2758,19 @@ router.patch('/orders/address', requireRole('owner', 'admin', 'supervisor', 'coo
     const stop = await correctedStop(req.orgId, { source, id: orderId }, addressData);
     client = await getPool().connect();
     await client.query('BEGIN');
-    await updateStoredOrderAddress(client, {
-      source, orderId, orgId: req.orgId, ...addressData, updateContact: req.body?.updateContact === true,
-    });
+    if (source === 'return') {
+      const { rowCount } = await client.query(
+        `UPDATE order_returns
+            SET customer = jsonb_set(customer, '{address}', $3::jsonb), updated_at = NOW()
+          WHERE organization_id = $1 AND id = $2 AND route_id IS NULL AND status IN ('approved', 'scheduled')`,
+        [req.orgId, orderId, JSON.stringify({ address: addressData.address, city: addressData.city })]
+      );
+      if (!rowCount) throw Object.assign(new Error('El cambio o devolución ya no está disponible para reparto'), { status: 409 });
+    } else {
+      await updateStoredOrderAddress(client, {
+        source, orderId, orgId: req.orgId, ...addressData, updateContact: req.body?.updateContact === true,
+      });
+    }
     await client.query('COMMIT');
     res.json({ success: true, stop });
   } catch (err) {

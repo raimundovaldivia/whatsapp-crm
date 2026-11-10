@@ -221,6 +221,34 @@ test('driver can persist a manual route order without adding or losing stops',as
     assert.equal(completed.code,409);
   } finally {await f.engine.close();}
 });
+test('dispatch formats and edits the pending return address independently of its original order', async () => {
+  const f = await fixture();
+  try {
+    await f.query(`INSERT INTO order_returns(id,organization_id,source,order_id,kind,status,items,customer,reason,created_by,request_key)
+      VALUES(1,1,'bot','1','exchange','approved','[]',$1,'Cambio',10,'address-test')`,
+      [JSON.stringify({name:'Cliente',address:{city:'La Serena',address:'Ejemplo 123',address2:'Depto A 201'}})]);
+    const router = load('src/routes/delivery.js', {'../db/database':f.db,'../middleware/auth':{requireAuth:noop,requireRole:()=>noop}});
+    const orders = async () => {
+      const res = response();
+      await handler(router,'get','/orders')({orgId:1,query:{}},res);
+      assert.equal(res.code,200,JSON.stringify(res.body));
+      return res.body.orders.find(o => o.source === 'return');
+    };
+    assert.equal((await orders()).fullAddress,'Ejemplo 123, Depto A 201, La Serena');
+    const edit = async orgId => {
+      const res = response();
+      await handler(router,'patch','/orders/address')({orgId,body:{source:'return',id:'1',address:'Otra 456',city:'La Serena',updateContact:true}},res);
+      return res;
+    };
+    assert.equal((await edit(2)).code,409);
+    assert.equal((await edit(1)).code,200);
+    assert.equal((await orders()).fullAddress,'Otra 456, La Serena');
+    assert.equal((await f.query('SELECT shipping_address FROM orders WHERE id=1')).rows[0].shipping_address,null);
+    await f.query('UPDATE order_returns SET route_id=1 WHERE id=1');
+    assert.equal((await edit(1)).code,409);
+  } finally { await f.engine.close(); }
+});
+
 test('assigned driver can correct an address without crossing route or organization boundaries',async()=>{
   const f=await fixture();
   try {

@@ -15,11 +15,18 @@ function geocodeQuery(address) {
   const cleaned = [];
   for (let part of parts) {
     if (reference.test(part)) continue;
-    if (cleaned.length && /^(?:casa|depto\.?|dpto\.?|departamento|sitio|torre|piso|edificio|condominio)\s*(?:n[°º.]?\s*)?[a-z-]*\d/i.test(part)) continue;
+    if (cleaned.length && /^(?:casa|depto\.?|dpto\.?|departamento|sitio|torre|piso|edificio|condominio)\s*(?:n[°º.]?\s*)?[a-z-]*\s*\d/i.test(part)) continue;
+    // A nearby house number describes a landmark, not the delivery entrance.
+    part = part.replace(/\s+(?:al lado (?:del?|de la)|frente (?:al?|a la)|cerca (?:del?|de la))\s+.*$/i, '').trim();
     if (!/\b(?:parcela|lote|fundo|ruta|km)\b/i.test(part)) {
       part = part.replace(/(\d[a-z]?\s+)\b(?:casa|depto\.?|dpto\.?|departamento|sitio|torre|piso|edificio)\s*.*$/i, '$1').trim();
     }
     if (part && !cleaned.some(p => fold(p) === fold(part))) cleaned.push(part);
+  }
+  // Some historical free-text addresses start with the commune.
+  const domestic = cleaned.at(-1) === 'chile' ? cleaned.slice(0, -1) : cleaned;
+  if (domestic.length === 2 && !/\d/.test(domestic[0]) && /\p{L}.*\s\d+[a-z]?$/u.test(domestic[1])) {
+    [cleaned[0], cleaned[1]] = [cleaned[1], cleaned[0]];
   }
   return cleaned.join(', ');
 }
@@ -55,7 +62,12 @@ function selectResult(data, query) {
       const street = components.find(c => c.types?.includes('route'));
       // Neighborhoods after the house number must not count as the street name.
       const requested = words(head.slice(0, head.lastIndexOf(number))), returned = words(street?.long_name);
-      if (requested.length && requested.filter(w => returned.includes(w)).length / requested.length < 0.6) return false;
+      if (requested.length && requested.filter(w => returned.includes(w)).length / requested.length < 0.6) {
+        // Accept a final plural only for a complete, precise numbered match in the requested locality.
+        const pluralMatch = requested.length === returned.length && requested.every((word, index) =>
+          word === returned[index] || (word.length >= 4 && (returned[index] === word + 's' || word === returned[index] + 's')));
+        if (!pluralMatch || !query.includes(',') || result.partial_match || result.geometry.location_type !== 'ROOFTOP') return false;
+      }
     }
     const parts = query.split(',').map(fold);
     const city = parts.at(-1) === 'chile' ? parts.at(-2) : parts.at(-1);

@@ -476,6 +476,7 @@ function NuevoReparto({ colors }) {
   const selectedOrders = orders.filter(o => selected.has(`${o.source}_${o.id}`));
   const outsideOrders = orders.filter(o => o.coverage?.status === 'outside');
   const reviewOrders = orders.filter(o => ['outside', 'unlocated'].includes(o.coverage?.status));
+  const selectedForReview = reviewOrders.filter(o => selected.has(`${o.source}_${o.id}`)).length;
 
   async function handleOptimize() {
     if (selectedOrders.length === 0) return;
@@ -710,7 +711,7 @@ function NuevoReparto({ colors }) {
         {reviewOrders.length > 0 && (
           <div style={{ margin: '10px 12px 0', padding: '9px 11px', backgroundColor: '#3a180d', border: '1px solid #ef444466', borderRadius: '9px', color: '#fecaca', fontSize: '11px', lineHeight: 1.45 }}>
             <strong>📍 {reviewOrders.length} dirección{reviewOrders.length === 1 ? '' : 'es'} por revisar.</strong>{' '}
-            {outsideOrders.length ? `${outsideOrders.length} fuera del rango configurado. ` : ''}Quedaron sin seleccionar para evitar agregarlas por error; puedes corregirlas o seleccionarlas manualmente después de verificar.
+            {outsideOrders.length ? `${outsideOrders.length} fuera del rango configurado. ` : ''}{selectedForReview} de {reviewOrders.length} seleccionadas para despacho. Verifica la ubicación antes de despachar.
           </div>
         )}
 
@@ -764,13 +765,13 @@ function NuevoReparto({ colors }) {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
                       <MapPin size={11} color={o.fullAddress ? colors.textMuted : colors.red} />
-                      {!o.isReturn && !o.fullAddress && editingAddr !== `${o.source}_${o.id}` ? (
+                      {!o.fullAddress && editingAddr !== `${o.source}_${o.id}` ? (
                         <button
                           onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(''); setCityDraft(o.city || ''); }}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.red, fontSize: '12px', padding: 0, textDecoration: 'underline' }}>
                           + Agregar dirección
                         </button>
-                      ) : !o.isReturn && editingAddr === `${o.source}_${o.id}` ? (
+                      ) : editingAddr === `${o.source}_${o.id}` ? (
                         <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: '4px', flex: 1, flexWrap: 'wrap' }}>
                           <input
                             autoFocus
@@ -790,8 +791,8 @@ function NuevoReparto({ colors }) {
                           <span style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                             {o.fullAddress || '—'}
                           </span>
-                          {!o.isReturn && <button title="Corregir dirección" onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(o.address || ''); setCityDraft(o.city || ''); }}
-                            style={{ background: 'none', border: 'none', color: colors.blue, cursor: 'pointer', padding: 0, fontSize: '11px' }}>editar</button>}
+                          <button title="Corregir dirección" onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(o.address || ''); setCityDraft(o.city || ''); }}
+                            style={{ background: 'none', border: 'none', color: colors.blue, cursor: 'pointer', padding: 0, fontSize: '11px' }}>editar</button>
                         </>
                       )}
                     </div>
@@ -801,7 +802,7 @@ function NuevoReparto({ colors }) {
                       </div>
                     )}
                     {o.coverage?.status === 'unlocated' && (
-                      <div style={{ marginTop: 5, color: '#fbbf24', fontSize: '11px', fontWeight: 700 }}>⚠ Dirección no reconocida · revisar antes de despachar</div>
+                      <div style={{ marginTop: 5, color: '#fbbf24', fontSize: '11px', fontWeight: 700 }}>⚠ Ubicación sin confirmar en el mapa · revisar antes de despachar</div>
                     )}
                     <span style={{ color: colors.textMuted, fontSize: '11px' }}>{o.orderName}</span>
                     {o.isReturn && (
