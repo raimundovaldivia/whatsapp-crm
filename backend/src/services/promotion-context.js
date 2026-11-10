@@ -547,11 +547,38 @@ function parseDirectOffer(message, products = [], now = new Date()) {
   };
 }
 
+function quotedTrayPromotion(quote, products, now) {
+  // Only accept an unqualified, dated store offer. Additional terms, bundles
+  // and quotes authored by the customer must not become price overrides.
+  if (quote?.direction !== 'outbound') return null;
+  const match = /^\s*Hoy estamos despachando[.!]?\s+bandejas?\s+(XL|L|M|Jumbo)\s+(?:de\s+)?(\d{1,2})\s+(?:unidades|huevos)\s+(?:a\s+)?\$\s*(\d{1,3}(?:\.\d{3})+|\d{3,6})[.!]?\s*$/iu.exec(quote.content);
+  if (!match) return null;
+  const [, size, units, amount] = match;
+  const price = money(amount);
+  const specialPrices = {};
+  for (const product of pricing.flattenCatalog(products)) {
+    const title = norm(product.title);
+    const pack = title.match(/\bbandeja\s+(?:de\s+)?(\d+)\b/) || title.match(/\b(\d+)\s+(?:huevos|unidades)\b/);
+    if (product.available && /\bhuevos?\b/.test(title) && /\bbandeja\b/.test(title)
+        && !/\b(?:pack|caja|combo|\d+\s+bandejas?)\b/.test(title)
+        && title.split(' ').includes(norm(size)) && Number(pack?.[1]) === Number(units)) {
+      specialPrices[title] = price;
+    }
+  }
+  if (!price || !Object.keys(specialPrices).length) return null;
+  const sentDay = chileDay(quote.created_at);
+  const quotedTray = { label: `bandejas ${size.toUpperCase()} de ${units}`, price };
+  return { templateName: 'bandeja_citada_instagram', offers: [], quotedTray, specialPrices,
+    sentDay, validUntil: sentDay, validOnlyToday: true, active: sentDay === chileDay(now) };
+}
+
 function fromHistory(history = [], products = [], now = new Date()) {
-  const outbound = (Array.isArray(history) ? history : [])
-    .filter(message => message?.direction === 'outbound')
-    .reverse();
-  for (const message of outbound) {
+  for (const entry of (Array.isArray(history) ? history.slice().reverse() : [])) {
+    if (!entry) continue;
+    const message = entry.instagramQuote || entry;
+    if (message.direction !== 'outbound') continue;
+    const quoted = entry.instagramQuote && quotedTrayPromotion(message, products, now);
+    if (quoted) return { ...quoted, replyKey: entry.whatsapp_message_id };
     const promotion = /\[Template:/i.test(message?.content || '') || isOneHourTieredGift(message?.content)
       ? parseTemplate(message, products, now)
       : parseDirectOffer(message, products, now);
@@ -563,7 +590,7 @@ function fromHistory(history = [], products = [], now = new Date()) {
 function snapshot(promotion) {
   if (!promotion) return null;
   const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift } = promotion;
-  return { templateName, offerId: promotion.offerId ?? null, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift };
+  return { templateName, offerId: promotion.offerId ?? null, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift, ...(promotion.quotedTray && { quotedTray: promotion.quotedTray }) };
 }
 
 function restore(saved, now = new Date()) {
@@ -582,6 +609,12 @@ function restore(saved, now = new Date()) {
 
 function promptSection(promotion) {
   if (!promotion) return '';
+  if (promotion.quotedTray) {
+    const { label, price } = promotion.quotedTray;
+    return promotion.active
+      ? `Oferta citada de la tienda: ${label} a $${price.toLocaleString('es-CL')} cada una. Retoma la compra con la cantidad y los datos que falten.`
+      : `La oferta de ${label} corresponde al ${promotion.sentDay}. Confirma el precio vigente antes de continuar el pedido.`;
+  }
   const options = promotion.offers.map(offer => `- ${offer.label}: $${offer.price.toLocaleString('es-CL')}`).join('\n');
   if (!promotion.active) {
     const reason = promotion.orderCutoffOnlyToday

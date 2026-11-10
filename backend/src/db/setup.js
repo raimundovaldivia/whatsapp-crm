@@ -1852,6 +1852,7 @@ async function setupDatabase() {
         raw_payload JSONB,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE meta_messages ADD COLUMN IF NOT EXISTS instagram_reply_context JSONB;
       CREATE INDEX IF NOT EXISTS idx_meta_messages_thread ON meta_messages(thread_id,created_at);
 
       CREATE TABLE IF NOT EXISTS meta_comments (

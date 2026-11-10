@@ -28,6 +28,32 @@ for (const channel of ['instagram', 'facebook', 'whatsapp']) {
   });
 }
 
+test('Instagram retoma la bandeja citada, pide cantidad y conserva el precio al confirmar', async () => {
+  const title = 'Huevos XL cafés · Bandeja de 30';
+  const quote = { created_at: '2026-11-10T15:38:00Z', direction: 'outbound', content: 'Hoy estamos despachando.\nBandejas XL 30 UNIDADES $7.000' };
+  const history = [{ direction: 'inbound', whatsapp_message_id: 'social:instagram:reply', content: 'Te dejo ubicación?' }];
+  const pool = { query: async sql => ({ rows: sql.includes('AS reply_id') ? [{ ...quote, reply_id: 'reply', parent_id: 'promo', thread_id: 12 }] : [] }) };
+  const options = { channel: 'instagram', state: 'exploring', draft: {}, history, pool, webPricing: true,
+    extract: previous => ({ ...previous, ...draft(), customer_phone: '56911111111', items: [{ product_name: title, quantity: 2 }] }) };
+  const f = fixture(options);
+  const turn = text => f.pipeline.processMessage(7, 91, text, null, { now: '2026-11-10T20:20:00Z' });
+  const ask = await turn(history[0].content);
+  assert.match(ask.response, /Cuántas bandejas XL de 30.+7\.000/);
+  assert.equal(f.calls.extractions, 0);
+  const answer = 'Dos bandejas. Mi dirección es Calle de prueba 123, La Serena.';
+  history.push({ direction: 'outbound', content: ask.response }, { direction: 'inbound', content: answer });
+  options.state = 'interested';
+  const review = await turn(answer);
+  assert.match(review.response, /14\.000/);
+  assert.equal(f.calls.orders.length, 0);
+  history.push({ direction: 'outbound', content: review.response }, { direction: 'inbound', content: 'Sí, todo correcto' });
+  options.state = 'collecting_order';
+  await turn(history.at(-1).content);
+  assert.equal(f.calls.orders.length, 1);
+  assert.equal(f.calls.orders[0].items[0].price, 7000);
+  assert.equal(f.calls.orders[0].items[0].quantity, 2);
+});
+
 test('reiterar indicaciones conserva revisión enviada, precio, stock y bloqueo de duplicados', async () => {
   for (const scenario of ['reviewNotSent', 'priceChanged', 'outOfStock', 'duplicate', 'failSave']) {
     const history = [];
