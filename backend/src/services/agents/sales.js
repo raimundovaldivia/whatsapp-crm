@@ -1,4 +1,5 @@
 const { client, modelFor, responseText } = require('../ai-provider');
+const { formatQuotedReply } = require('../social-events');
 
 const SALES_SYSTEM = `Eres un vendedor experto de una tienda online. Llevas años vendiendo por WhatsApp y conoces bien a los clientes. Tu personalidad: directo, cálido, como un amigo que conoce bien los productos — no un robot de ventas.
 
@@ -192,10 +193,10 @@ function isReadyToOrder(agentResponse) {
 function buildMessages(history, userMessage, limit = 12) {
   const msgs = history.slice(-limit).map(m => ({
     role: m.direction === 'inbound' ? 'user' : 'assistant',
-    content: m.content,
+    content: formatQuotedReply(m),
   }));
-  const last = msgs[msgs.length - 1];
-  if (!last || last.role !== 'user' || last.content !== userMessage) {
+  const last = history.at(-1);
+  if (last?.direction !== 'inbound' || last.content !== userMessage) {
     msgs.push({ role: 'user', content: userMessage });
   }
   return msgs;
