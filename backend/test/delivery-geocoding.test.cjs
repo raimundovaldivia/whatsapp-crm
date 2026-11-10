@@ -27,6 +27,32 @@ test('valid point is stored under original organization/address and query uses c
  assert.equal(f.requests[0].params.address,'avenida ejemplo 346, la serena');assert.equal(f.requests[0].params.components,'country:CL');
  assert.deepEqual(f.writes[0].args,[f.orgId,geo.addressKey(address),-29.95,-71.22]);
 });
+test('commune first and lettered apartments do not hide the street number', () => {
+ const query = geo.geocodeQuery('La Serena, Avenida Ejemplo 346, Depto A 508');
+ assert.equal(query, 'avenida ejemplo 346, la serena');
+ assert.ok(geo.selectResult({status:'OK', results:[result()]}, query));
+});
+test('a landmark is never used as the house number', () => {
+ const query = geo.geocodeQuery('Avenida Ejemplo al lado del 346, La Serena');
+ assert.equal(query, 'avenida ejemplo, la serena');
+ assert.equal(geo.selectResult({status:'OK', results:[result()]}, query), null);
+ assert.equal(geo.geocodeQuery('Avenida Ejemplo 346 frente al 350, La Serena'), 'avenida ejemplo 346, la serena');
+});
+test('a plural street name requires a unique complete rooftop match in the named commune', () => {
+ const query = 'aromo 346, la serena';
+ const match = result();
+ match.address_components[1].long_name = 'Los Aromos';
+ const select = (q, ...results) => geo.selectResult({status:'OK', results}, q);
+ assert.equal(select(query, match), match);
+ assert.equal(select('aromo 347, la serena', match), null);
+ assert.equal(select('aromo 346, coquimbo', match), null);
+ assert.equal(select('aromo 346', match), null);
+ assert.equal(select(query, match, match), null);
+ assert.equal(select(query, {...match, partial_match:true}), null);
+ assert.equal(select(query, {...match, geometry:{...match.geometry, location_type:'RANGE_INTERPOLATED'}}), null);
+ match.address_components[1].long_name = 'Aromos del Sur';
+ assert.equal(select(query, match), null);
+});
 for(const status of ['REQUEST_DENIED','OVER_QUERY_LIMIT','OVER_DAILY_LIMIT','UNKNOWN_ERROR','INVALID_REQUEST']){
  test(`${status} does not poison cache and recovers after bounded backoff`,async()=>{
   const response={status,error_message:'secret URL must not be logged'};const f=fixture(response);await f.run();assert.equal(f.writes.length,0);
