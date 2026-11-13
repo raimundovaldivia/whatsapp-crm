@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge, RotateCcw, AlertCircle } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
-export default function Sidebar({ conversations, selectedId, onSelect, loading, onRefresh, isMobile }) {
+export default function Sidebar({ conversations, drafts, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
+  const draftOrder = useSyncExternalStore(drafts.subscribeOrder, drafts.getOrder);
   const [search, setSearch]           = useState('');
   const [msgResults, setMsgResults]   = useState([]); // resultados de búsqueda en mensajes
   const [msgLoading, setMsgLoading]   = useState(false);
@@ -132,6 +133,8 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
       c.last_message?.toLowerCase().includes(q)
     );
   }).sort((a, b) => {
+    const draftPriority = (draftOrder.get(String(b.id)) || 0) - (draftOrder.get(String(a.id)) || 0);
+    if (draftPriority) return draftPriority;
     const pinOrder = Number(!!b.is_pinned) - Number(!!a.is_pinned);
     if (pinOrder) return pinOrder;
     if (a.is_pinned && b.is_pinned) {
@@ -582,7 +585,7 @@ export default function Sidebar({ conversations, selectedId, onSelect, loading, 
         ) : (
           <>
             {filtered.map(conv => (
-              <ConversationItem key={conv.id} conversation={conv} now={clockNow} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />
+              <ConversationItem key={conv.id} conversation={conv} drafts={drafts} now={clockNow} selected={conv.id === selectedId} onClick={() => onSelect(conv.id)} />
             ))}
 
             {/* Resultados de búsqueda en mensajes */}
