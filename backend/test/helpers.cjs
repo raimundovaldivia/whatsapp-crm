@@ -82,6 +82,7 @@ function load(file, deps = {}, extra = {}) {
         latestForConversation: async () => null, activeForConversation: async () => [], createDraft: async () => null, markSent: async () => null,
         redeem: async () => null, releaseOnCancel: async () => null, expireDue: async () => 0,
       };
+      if (name.endsWith('/instagram-keyword-offers')) return require(path.join(root, 'src/services/instagram-keyword-offers.js'));
       if (name === 'express' || name === 'jsonwebtoken' || name === 'ipaddr.js' || name === 'crypto' || name.startsWith('node:')) return require(name);
       return {};
     }, ...extra,

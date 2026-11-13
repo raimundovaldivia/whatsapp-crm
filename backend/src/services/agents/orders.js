@@ -138,7 +138,7 @@ async function generateOrderResponse(conversationHistory, userMessage, orderDraf
  * Extrae datos del pedido del historial de conversación
  * Usa haiku (barato/rápido) para parsear info estructurada
  */
-async function extractOrderData(conversationHistory, currentDraft) {
+async function extractOrderData(conversationHistory, currentDraft, catalogReference = '') {
   const EXTRACT_SYSTEM = `Extrae los datos del pedido de esta conversación comercial.
 Devuelve SOLO un JSON con los campos que encuentres. Si no encuentras un campo, omítelo.
 
@@ -178,7 +178,7 @@ Solo el JSON, nada más.`;
       model: modelFor('fast'),
       max_tokens: 400,
       system: EXTRACT_SYSTEM,
-      messages: [{ role: 'user', content: recent }],
+      messages: [{ role: 'user', content: [catalogReference, recent].filter(Boolean).join('\n\n') }],
     });
 
     const text = responseText(response, '{}');
