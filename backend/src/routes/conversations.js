@@ -534,6 +534,8 @@ const campaignOffers = require('../services/campaign-offers');
 const campaignOffersStore = require('../services/campaign-offers-store');
 
 router.post('/:id/orders', async (req, res) => {
+  let order;
+  let messageId;
   try {
     const convId = parseInt(req.params.id);
     const conv   = await db.getConversationById(convId, req.orgId);
@@ -578,7 +580,7 @@ router.post('/:id/orders', async (req, res) => {
       finalAddress = { address: contact.address, city: contact.city || '' };
     }
 
-    const order = await db.createOrder({
+    order = await db.createOrder({
       conversationId: convId,
       organizationId: req.orgId,
       items,
@@ -603,41 +605,42 @@ router.post('/:id/orders', async (req, res) => {
         ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
       const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
 
+      const wc = await outboundConfig(req.orgId, conv);
+      if (!wc) return res.json({ success: true, order, summaryWarning: 'Falta configurar WhatsApp para enviar el resumen.' });
       const queued = await require('../services/outbound-message-queue').deferOutsideHours({
-        orgId: req.orgId, conversationId: convId, text: summary, sentBy: 'human', createdBy: req.userId, io,
+        orgId: req.orgId, conversationId: convId, text: summary, sentBy: 'human', createdBy: req.userId,
+        sendingProvider: wc.provider || 'meta', io,
       });
       if (queued) return res.json({ success: true, order, queued: true });
 
-      const wc = await db.getWhatsappConfig(req.orgId);
-      if (wc) {
-        try {
-          const provider = wc.provider || 'kapso';
-          if (provider === 'kapso') {
-            await require('../services/kapso-whatsapp').sendTextMessage(conv.phone_number, summary, wc);
-          } else if (provider === 'twilio') {
-            await require('../services/twilio-whatsapp').sendTextMessage(conv.phone_number, summary, wc);
-          } else {
-            await require('../services/whatsapp').sendTextMessage(conv.phone_number, summary, wc);
-          }
-        } catch (_) { /* no bloquear si el WA falla */ }
-      }
+      const sent = await whatsappProvider.sendTextMessage(conv.phone_number, summary, wc);
+      messageId = whatsappProvider.messageId(sent);
+      if (!messageId) throw new Error('WhatsApp no devolvió un identificador del resumen');
       const savedMsg = await db.saveMessage({
         conversationId:    convId,
-        whatsappMessageId: `order_${order.id}_${Date.now()}`,
+        whatsappMessageId: messageId,
         content:           summary,
         direction:         'outbound',
         type:              'text',
         sentBy:            'human',
       });
       await db.updateConversationLastMessage(convId, summary);
-      const updatedConv = await db.getConversationById(convId);
-      const io = req.app.get('io');
-      io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
+      if (savedMsg) {
+        const updatedConv = await db.getConversationById(convId, req.orgId);
+        io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: savedMsg, conversation: updatedConv });
+      }
     }
 
     res.json({ success: true, order });
   } catch (err) {
     console.error('[Conversations/createOrder]', err.message);
+    if (order) {
+      if (messageId) return res.json({ success: true, order, summaryWarning: 'WhatsApp aceptó el resumen. No se pudo actualizar el chat.' });
+      const summaryWarning = err.is24hWindow
+        ? 'La ventana de WhatsApp venció. Usa una plantilla aprobada para contactar al cliente.'
+        : 'No se pudo confirmar el envío del resumen. Revisa el chat antes de reenviarlo.';
+      return res.json({ success: true, order, summaryWarning });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
