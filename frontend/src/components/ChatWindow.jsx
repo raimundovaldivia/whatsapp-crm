@@ -1050,12 +1050,13 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     setCreatingOrder(true); setOrderError('');
     try {
       const shippingAddress = orderAddress.trim() ? { address: orderAddress.trim(), city: orderCity.trim() } : {};
-      await api.post(`/conversations/${conversation.id}/orders`, {
+      const { data } = await api.post(`/conversations/${conversation.id}/orders`, {
         items, sendSummary, shippingAddress,
         discount: discountNum,
         discountType: orderDiscountType,
         note: orderNote.trim(),
       });
+      setError(data.summaryWarning ? `Pedido #DR-${data.order.id} creado. ${data.summaryWarning}` : null);
       setShowOrderModal(false);
       setOrderItems({});
       setOrderAddress('');
