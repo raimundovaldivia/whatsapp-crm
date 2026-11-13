@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
 import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote, Megaphone, Link2 } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
@@ -10,6 +10,7 @@ import { buildBodyTemplateComponent, getBodyComponent, getTemplateVariables, ren
 import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
 import { crmOrderLabel } from '../utils/order-reference.js';
 import { channelConversationSignature, mergeCustomerChannelConversations } from '../utils/chat-channels.js';
+import { useConversationDraft } from '../hooks/useConversationDraft.js';
 
 const DEV_EMAIL = 'raivaldiviabou@gmail.com';
 
@@ -35,10 +36,11 @@ const normalizeProductSearch = (value) => String(value || '')
   .toLowerCase()
   .trim();
 
-export default function ChatWindow({ conversation, messages, availableConversations = [], onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted, onSelectConversation }) {
+export default function ChatWindow({ conversation, drafts, messages, availableConversations = [], onSendMessage, onToggleAgentMode, onRefresh, onEscalationFeedback, onDeleteMessages, currentUserEmail, onBack, isMobile, botTyping, onConversationUpdated, onAlternateConversationStarted, onSelectConversation }) {
   const { colors, isDark } = useTheme();
-  const [inputText, setInputText] = useState('');
-  const [sending, setSending] = useState(false);
+  const inputText = useConversationDraft(drafts, conversation.id);
+  const setInputText = value => drafts.update(conversation.id, value);
+  const sending = useConversationDraft(drafts, conversation.id, drafts.isSending);
   const [creatingTrackingLink, setCreatingTrackingLink] = useState(false);
   const [attachment, setAttachment] = useState(null);
   const [dragActive, setDragActive] = useState(false);
@@ -47,7 +49,6 @@ export default function ChatWindow({ conversation, messages, availableConversati
   const [deleting, setDeleting] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [alternateSend, setAlternateSend] = useState(null);
-  const [alternateSending, setAlternateSending] = useState(false);
   const [alternateError, setAlternateError] = useState('');
   const [channelConversations, setChannelConversations] = useState([conversation]);
   const [loadingChannels, setLoadingChannels] = useState(false);
@@ -427,6 +428,13 @@ export default function ChatWindow({ conversation, messages, availableConversati
   const [paymentError, setPaymentError] = useState('');
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  useLayoutEffect(() => {
+    const field = inputRef.current;
+    if (field) {
+      field.style.height = 'auto';
+      field.style.height = Math.min(field.scrollHeight, 120) + 'px';
+    }
+  }, [inputText]);
   const fileInputRef = useRef(null);
   const dragDepthRef = useRef(0);
 
@@ -730,19 +738,22 @@ export default function ChatWindow({ conversation, messages, availableConversati
     }
   };
 
-  const openExpiredWindowAlternative = async (draftText = '') => {
-    const preservedText = draftText || inputText;
-
+  const openExpiredWindowAlternative = async () => {
     try {
       const peers = await conversationsAPI.getByPhone(conversation.phone_number);
+      if (!inputRef.current) return;
       const evolutionConversation = peers.find(item =>
         item.whatsapp_provider === 'evolution'
         && Number(item.id) !== Number(conversation.id)
       );
-      if (evolutionConversation) {
+      if (evolutionConversation && !drafts.read(evolutionConversation.id).trim()) {
         setAlternateSend(null);
         setAlternateError('');
-        setInputText(preservedText);
+        const preserved = drafts.read(conversation.id);
+        if (preserved) {
+          drafts.update(evolutionConversation.id, preserved);
+          setInputText('');
+        }
         setError(null);
         await selectChannelConversation(evolutionConversation.id);
         return;
@@ -753,6 +764,7 @@ export default function ChatWindow({ conversation, messages, availableConversati
 
     try {
       const response = await api.get('/settings/whatsapp/channels');
+      if (!inputRef.current) return;
       const channels = (response.data?.data || []).filter(channel =>
         channel.provider === 'evolution'
         && channel.status === 'connected'
@@ -764,20 +776,19 @@ export default function ChatWindow({ conversation, messages, availableConversati
         setAlternateSend({
           channels,
           channelId: String(preferred.id),
-          text: preservedText,
         });
         return;
       }
     } catch (_) {
       // Si no se pueden recuperar los otros canales, todavía queda el template.
     }
-    if (!conversation.whatsapp_channel_id) await openTemplateModal();
+    if (inputRef.current && !conversation.whatsapp_channel_id) await openTemplateModal();
   };
 
   const sendThroughAlternateChannel = async () => {
-    const text = alternateSend?.text?.trim();
-    if (!text || alternateSending) return;
-    setAlternateSending(true);
+    const text = inputText.trim();
+    if (!text || drafts.isSending(conversation.id)) return;
+    drafts.setSending(conversation.id, true);
     setAlternateError('');
     try {
       const result = await conversationsAPI.startConversation({
@@ -787,23 +798,21 @@ export default function ChatWindow({ conversation, messages, availableConversati
         channelId: alternateSend.channelId,
       });
       setAlternateSend(null);
-      setInputText('');
+      setInputText(current => current === inputText ? '' : current);
       setError(null);
-      await onAlternateConversationStarted?.(result.data);
+      if (inputRef.current) await onAlternateConversationStarted?.(result.data);
     } catch (err) {
       setAlternateError(err.response?.data?.error || err.message || 'No se pudo enviar por el canal alternativo.');
     } finally {
-      setAlternateSending(false);
+      drafts.setSending(conversation.id, false);
     }
   };
 
   const handleSend = async () => {
     const text = inputText.trim();
-    if ((!text && !attachment) || sending) return;
+    if ((!text && !attachment) || drafts.isSending(conversation.id)) return;
     const pendingAttachment = attachment;
-    setInputText('');
-    setAttachment(null);
-    setSending(true);
+    drafts.setSending(conversation.id, true);
     setError(null);
     try {
       if (pendingAttachment) {
@@ -816,11 +825,15 @@ export default function ChatWindow({ conversation, messages, availableConversati
       } else {
         await onSendMessage(conversation.id, text);
       }
+      setInputText(current => current === inputText ? '' : current);
+      setAttachment(current => current === pendingAttachment ? null : current);
     } catch (err) {
       const is24h = err.response?.data?.error === 'WINDOW_EXPIRED';
       if (is24h) {
         setError('⏰ Ventana de 24h expirada — usa otro WhatsApp conectado o un template aprobado.');
-        if (!pendingAttachment) await openExpiredWindowAlternative(text);
+        if (!pendingAttachment && inputRef.current && drafts.read(conversation.id) === inputText) {
+          await openExpiredWindowAlternative();
+        }
       } else {
         const serverMessage = err.response?.data?.message;
         const serverError = err.response?.data?.error;
@@ -832,10 +845,8 @@ export default function ChatWindow({ conversation, messages, availableConversati
                 : 'Error enviando el mensaje. Intenta de nuevo.')
         );
       }
-      setInputText(text);
-      setAttachment(pendingAttachment);
     } finally {
-      setSending(false);
+      drafts.setSending(conversation.id, false);
       inputRef.current?.focus();
     }
   };
@@ -1624,7 +1635,7 @@ export default function ChatWindow({ conversation, messages, availableConversati
             El canal oficial no permite texto libre. Usa tu otro WhatsApp conectado o un template aprobado.
           </span>
           <button
-            onClick={() => openExpiredWindowAlternative(inputText)}
+            onClick={openExpiredWindowAlternative}
             style={{
               marginLeft: 'auto', border: '1px solid #d97706', borderRadius: '7px',
               background: '#78350f', color: '#fde68a', padding: '5px 9px',
@@ -2632,7 +2643,7 @@ export default function ChatWindow({ conversation, messages, availableConversati
         <div style={{
           position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.66)',
           zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
-        }} onClick={() => !alternateSending && setAlternateSend(null)}>
+        }} onClick={() => !sending && setAlternateSend(null)}>
           <div style={{
             width: '100%', maxWidth: '480px', backgroundColor: colors.bgPanel,
             border: `1px solid ${colors.border}`, borderRadius: '14px', overflow: 'hidden',
@@ -2643,7 +2654,7 @@ export default function ChatWindow({ conversation, messages, availableConversati
                 <div style={{ color: colors.textPrimary, fontWeight: 700, fontSize: '15px' }}>Enviar por otro WhatsApp</div>
                 <div style={{ color: colors.textSecondary, fontSize: '11px', marginTop: '3px' }}>La ventana del canal oficial venció; tu mensaje sigue listo.</div>
               </div>
-              <button onClick={() => setAlternateSend(null)} disabled={alternateSending}
+              <button onClick={() => setAlternateSend(null)} disabled={sending}
                 style={{ border: 0, background: 'none', color: colors.textSecondary, cursor: 'pointer', padding: '4px' }}>
                 <X size={18} />
               </button>
@@ -2666,21 +2677,21 @@ export default function ChatWindow({ conversation, messages, availableConversati
               )}
               <label style={{ color: colors.textSecondary, fontSize: '11px' }}>
                 Mensaje
-                <textarea value={alternateSend.text}
-                  onChange={event => setAlternateSend(current => ({ ...current, text: event.target.value }))}
+                <textarea value={inputText}
+                  onChange={event => setInputText(event.target.value)}
                   rows={4} autoFocus
                   style={{ width: '100%', boxSizing: 'border-box', marginTop: '6px', padding: '10px 11px', resize: 'vertical', borderRadius: '8px', backgroundColor: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, fontFamily: 'inherit' }} />
               </label>
               {alternateError && <div style={{ color: colors.red, fontSize: '12px' }}>{alternateError}</div>}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                <button onClick={() => setAlternateSend(null)} disabled={alternateSending}
+                <button onClick={() => setAlternateSend(null)} disabled={sending}
                   style={{ border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, borderRadius: '8px', padding: '9px 13px', cursor: 'pointer' }}>
                   Cancelar
                 </button>
-                <button onClick={sendThroughAlternateChannel} disabled={alternateSending || !alternateSend.text.trim()}
-                  style={{ border: 0, backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', padding: '9px 15px', fontWeight: 700, cursor: alternateSending ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '7px' }}>
-                  {alternateSending ? <Loader size={14} className="spin" /> : <Send size={14} />}
-                  {alternateSending ? 'Enviando...' : 'Enviar por Evolution'}
+                <button onClick={sendThroughAlternateChannel} disabled={sending || !inputText.trim()}
+                  style={{ border: 0, backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', padding: '9px 15px', fontWeight: 700, cursor: sending ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                  {sending ? <Loader size={14} className="spin" /> : <Send size={14} />}
+                  {sending ? 'Enviando...' : 'Enviar por Evolution'}
                 </button>
               </div>
             </div>
@@ -2751,10 +2762,6 @@ export default function ChatWindow({ conversation, messages, availableConversati
             lineHeight: '1.5',
             fontFamily: 'inherit',
             outline: 'none',
-          }}
-          onInput={e => {
-            e.target.style.height = 'auto';
-            e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
           />
         <style>{`
