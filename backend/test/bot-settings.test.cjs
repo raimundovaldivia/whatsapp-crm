@@ -9,6 +9,7 @@ const draft = { customer_name: 'Prueba', address: 'Calle 123', city: 'La Serena'
 function fixture({ products = [product], settings = {}, permitted = ['sales_ai'], salesReply = 'Consulta de producto' } = {}) {
   const writes = [], extractions = [], salesCalls = [];
   const db = {
+    getOrgById: async () => ({ slug: 'otra-tienda' }),
     getSetting: async (_org, key) => settings[key] ?? (key === 'catalog_source' ? 'local' : null),
     setSetting: async (...args) => writes.push(args),
     getPrimaryDataSource: async () => null,
@@ -39,6 +40,25 @@ function fixture({ products = [product], settings = {}, permitted = ['sales_ai']
   };
   return { invoke, writes, extractions, salesCalls, db };
 }
+
+test('palabras por tienda: valida catálogo, precios y duplicados antes de guardar y detecta ediciones simultáneas', async () => {
+  const f = fixture();
+  const path = '/instagram-keywords';
+  const get = await f.invoke('get', path);
+  assert.equal(get.code, 200);
+  assert.equal(get.body.rules.length, 0);
+  assert.equal(get.body.products[0].key, '7');
+  const rule = { keyword: 'PROMO', enabled: true, items: [{ key: '7', price: 8000 }] };
+  const put = (rules, version = null) => f.invoke('put', path, { rules, version });
+  for (const rules of [[rule, { ...rule, keyword: '¡Prómo!' }], [{ ...rule, items: [{ key: '8', price: 2 }] }],
+    [{ ...rule, items: [{ key: '7', price: -1 }] }]]) assert.equal((await put(rules)).code, 400);
+  const calls = [];
+  f.db.getPool = () => ({ query: async (sql, args) => { calls.push({ sql, args }); return { rowCount: calls.length === 1 ? 1 : 0 }; } });
+  const saved = await put([rule]);
+  assert.equal(saved.code, 200);
+  assert.equal(calls[0].args[0], 2);
+  assert.equal((await put([], saved.body.version)).code, 409);
+});
 
 test('cada consulta recibe el estado vigente aunque el historial diga lo contrario', async () => {
   const settings = { bot_sales_enabled: 'false' };

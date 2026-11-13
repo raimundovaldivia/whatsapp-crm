@@ -221,7 +221,7 @@ function matchProduct(name, catalog) {
  * Prioridad: precio especial del contacto > precio por volumen > lista.
  */
 function unitPriceFor(candidate, qty, specialPrices = {}) {
-  const sp = specialPrices[candidate.product_id] ?? specialPrices[norm(candidate.product_title)] ?? specialPrices[norm(candidate.title)];
+  const sp = specialPrices[candidate.key] ?? specialPrices[candidate.product_id] ?? specialPrices[norm(candidate.product_title)] ?? specialPrices[norm(candidate.title)];
   if (sp && typeof sp === 'object') {
     const total = Number(sp.quantities?.[String(qty)]);
     if (total > 0) return { price: total / qty, source: 'promocion_cantidad' };

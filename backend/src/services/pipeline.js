@@ -19,6 +19,7 @@ const { client: conversationalAI, modelFor: conversationalModelFor, responseText
 const pricing      = require('./order-pricing');
 const promotions   = require('./promotion-context');
 const campaignOffers = require('./campaign-offers');
+const keywordOffers = require('./instagram-keyword-offers');
 const campaignOffersStore = require('./campaign-offers-store');
 const { isFutureOrderIntent, isSoftFutureIntent, extractScheduledOrderData, formatDateEs } = require('./scheduled-orders');
 const inboundPolicy = require('./inbound-message-policy');
@@ -545,8 +546,10 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
       if (boxCustomer) return { response: 'Necesito verificar tus precios antes de cotizarte. Por favor, vuelve a consultarme en un momento.', agentType: 'sales', newState: currentState };
     }
   }
+  const savedPromotion = orderDraft?.promotion?.templateName === keywordOffers.TEMPLATE
+    ? null : orderDraft?.promotion;
   let promotionContext = promotionsEnabled
-    ? promotions.fromHistory(promotionHistory, products) || promotions.restore(orderDraft?.promotion)
+    ? promotions.fromHistory(promotionHistory, products) || promotions.restore(savedPromotion)
     : null;
   // El último mensaje personal con escala de bandejas es una decisión comercial explícita y
   // más reciente. Mientras siga dentro de su hora reemplaza (sin acumular) una
@@ -577,6 +580,21 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     orderDraft = { ...orderDraft };
     delete orderDraft.box_ad_message_id;
   }
+  let triggeredKeyword = null;
+  if (promotionsEnabled && conversation.source_channel === 'instagram') {
+    const rules = keywordOffers.configuredRules(await db.getSetting(orgId, keywordOffers.SETTING), previousXlContext.enabled, products);
+    const word = keywordOffers.normalize(userMessage);
+    const rule = rules.find(entry => entry.enabled && keywordOffers.normalize(entry.keyword) === word);
+    const savedKeyword = !['done','confirmed','awaiting_payment'].includes(currentState) && orderDraft?.promotion?.templateName === keywordOffers.TEMPLATE
+      ? promotions.restore(orderDraft.promotion, nowCl) : null;
+    if (rule) triggeredKeyword = keywordOffers.context(rule, keywordOffers.catalogOptions(products));
+    if (triggeredKeyword || savedKeyword) {
+      personalOffer = null;
+      promotionContext = triggeredKeyword || savedKeyword;
+      xlContext = { ...xlContext, overrides: xlContext.overrides?.filter(override =>
+        !promotionContext.offers.some(offer => String(offer.productId) === String(override.product_id) || offer.title === override.product_title)) };
+    }
+  }
   const baseSpecialPrices = { ...specialPrices };
   if (promotionContext?.active) Object.assign(specialPrices, promotionContext.specialPrices);
   productosTexto = promotions.alignPromotedAvailability(productosTexto, promotionContext);
@@ -602,7 +620,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
   const orderCtx = {
-    products, specialPrices, baseSpecialPrices, isLead: isLead && !boxOffer, promotionContext,
+    products, specialPrices, baseSpecialPrices, isLead: isLead && !boxOffer && promotionContext?.templateName !== keywordOffers.TEMPLATE, promotionContext,
     xlContext: personalOffer ? { ...xlContext, enabled: false, eligible: false } : xlContext,
     shippingRule: await require('./quantity-pricing').loadShipping(db, orgId),
     personalOffer, boxOffer, customerPrices, now: nowCl,
@@ -1298,6 +1316,17 @@ REGLAS ABSOLUTAS:
   }
 
   const adPriceReply = boxCampaign.directPriceReply(userMessage, customerPrices);
+  if (triggeredKeyword) {
+    const salesOpen = (await db.getSetting(orgId, 'bot_sales_enabled')) !== 'false';
+    const nextState = ['collecting_order', 'opted_out'].includes(currentState) || activeOrder ? currentState : 'interested';
+    if (triggeredKeyword.offers.length) {
+      const nextDraft = { ...orderDraft, promotion: promotions.snapshot(triggeredKeyword) };
+      delete nextDraft.keyword_quantity;
+      delete nextDraft._reviewed_order;
+      await db.updatePipelineState(conversationId, nextState, nextDraft);
+    }
+    return { response: keywordOffers.reply(triggeredKeyword, salesOpen), agentType: 'sales', newState: nextState };
+  }
   if (adPriceReply || (boxOffer?.fresh && !/\b(?:ques\w*|aceitunas?|leche|despacho|env[ií]o|mayor|precio\w*|valor\w*|cu[aá]nt\w*)\b/iu.test(userMessage))) {
     await db.updatePipelineState(conversationId, 'interested', orderDraft);
     const delivery = boxAdDeliveryGreeting(deliverySchedule, deliveryZone, cutoffTime, nowCl, closingPolicy);
@@ -1429,10 +1458,32 @@ REGLAS ABSOLUTAS:
     };
   }
 
-  // Tras mostrar "¿Todo correcto?", respuestas breves como "2 bandejas"
-  // corrigen la cantidad del único producto; no son una ambigüedad ni un caso
-  // para derivar al equipo. El flujo de pedidos recalcula aquí precio, promo y
-  // descuento y vuelve a presentar el resumen actualizado.
+  if (promotionContext?.templateName === keywordOffers.TEMPLATE && !orderDraft?.items?.length && !activeOrder) {
+    const selected = keywordOffers.choiceForTurn(userMessage, promotionContext, orderDraft?.keyword_quantity);
+    if (!selected && /^(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)$/.test(keywordOffers.normalize(userMessage)) && promotionContext.offers.length > 1) {
+      await db.updatePipelineState(conversationId, 'interested', { ...orderDraft, keyword_quantity: {
+        quantity: keywordOffers.normalize(userMessage), keys: promotionContext.offers.map(o => o.key),
+      } });
+      return { response: '¿De cuál producto de la oferta quieres esa cantidad?', agentType: 'sales', newState: 'interested' };
+    }
+    if (selected?.choices.length > 1) {
+      await db.updatePipelineState(conversationId, 'interested', { ...orderDraft, keyword_quantity: {
+        quantity: selected.quantity, keys: selected.choices.map(o => o.key),
+      } });
+      const choices = selected.choices.map(o => o.label + ' a ' + pricing.fmt(o.price)).join('\n');
+      return { response: `Para ${selected.quantity}, ¿qué variedad prefieres?\n${choices}`, agentType: 'sales', newState: 'interested' };
+    }
+    if (selected) {
+      const offer = selected.choices[0];
+      if (!keywordOffers.catalogOptions(products).some(p => p.key === offer.key)) {
+        return { response: 'Esta presentación ya no está disponible. ¿Quieres revisar otra opción?', agentType: 'sales', newState: currentState };
+      }
+      const items = [{ product_name: offer.title, quantity: selected.quantity }];
+      return handleOrderCollection(orgId, conversationId, conversation, userMessage, history,
+        { ...orderDraft, items }, productosTexto, { ...orderCtx, keywordSelection: items });
+    }
+  }
+  // Tras mostrar el resumen, una cantidad corrige el único producto.
   const correctedQuantity = currentState === 'collecting_order'
     ? orderQuantityCorrection(userMessage, orderDraft)
     : null;
@@ -2750,6 +2801,12 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       ...history,
     ];
   }
+  const keywordQuote = promotionContext?.templateName === keywordOffers.TEMPLATE;
+  const catalogReference = keywordQuote
+    ? 'Productos de la oferta: ' + promotionContext.offers.map(o => o.title).join(' | ') +
+      '. Incluye únicamente los productos que pidió el cliente. Conserva sus elecciones salvo que las cambie: ' +
+      JSON.stringify((orderDraft.items || []).map(item => [item.product_name || item.name, item.quantity]))
+    : '';
   const checkout = require('./order-checkout');
   // Approval may reiterate instructions already reviewed without supplying
   // new order data for the model to reinterpret. Mixed corrections still extract.
@@ -2757,9 +2814,25 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     && ordersAgent.hasRequiredData(orderDraft) && (orderInputPolicy.isReviewedAffirmative(userMessage, orderDraft)
       || orderInputPolicy.isApprovalFragment(userMessage) || orderInputPolicy.isCheckoutPaymentQuestion(userMessage));
   const updatedDraft = checkout.normalizeDraft(preserveFreshnessPreference(
-    preservesReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft),
+    preservesReviewedDraft ? JSON.parse(JSON.stringify(orderDraft)) : await ordersAgent.extractOrderData(extractHistory, orderDraft, catalogReference),
     userMessage
   ));
+  if (keywordQuote) {
+    updatedDraft.promotion = promotions.snapshot(promotionContext);
+    delete updatedDraft.keyword_quantity;
+    if (orderCtx.keywordSelection) updatedDraft.items = orderCtx.keywordSelection;
+    updatedDraft.items = (updatedDraft.items || []).map(item => {
+      if (!item.locked_quote || item.free_gift) return item;
+      const offer = promotionContext.offers.find(o => (item.product_id != null &&
+        String(item.product_id) === String(o.productId) && String(item.variant_id || '') === String(o.variantId || '')) ||
+        keywordOffers.normalize(item.product_name || item.name) === keywordOffers.normalize(o.title));
+      return offer ? { product_name: offer.title, quantity: item.quantity } : item;
+    });
+    const catalog = keywordOffers.catalogOptions(products);
+    const retired = promotionContext.offers.find(offer => !catalog.some(p => p.key === offer.key) &&
+      updatedDraft.items?.some(item => keywordOffers.normalize(item.product_name || item.name) === keywordOffers.normalize(offer.title)));
+    if (retired) return { response: `La presentación «${retired.title}» ya no está disponible. ¿Quieres cambiarla o quitarla del pedido?`, agentType: 'orders', newState: conversation.pipeline_state };
+  } else if (updatedDraft.promotion?.templateName === keywordOffers.TEMPLATE) delete updatedDraft.promotion;
   delete updatedDraft.box_ad_message_id;
   const permanentPrices = orderCtx.customerPrices;
   if (permanentPrices && (orderCtx.boxOffer || require('./diez-rios-box-ad').concernsBoxes('', {items: updatedDraft.items}, permanentPrices))) {
@@ -2861,7 +2934,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       ? { product_name: item.product_name || item.name, quantity: item.quantity || 1 }
       : item);
   }
-  if (promotionApplies) {
+  if (promotionApplies && promotionContext.templateName !== keywordOffers.TEMPLATE) {
     const inboundChoices = [
       userMessage,
       ...history.slice().reverse().filter(m => m.direction === 'inbound').map(m => m.content),
@@ -3157,7 +3230,8 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
           personalOfferTrays: updatedDraft.personal_offer_id ? personalOffers.eggTrayQuantity(priced.items) : null,
           creationGuard: { additionalOrderId: currentActiveOrder?.id || null },
         });
-        const pendingCampaigns = await campaignOffersStore.activeForConversation(getPool(), orgId, conversationId).catch(() => []);
+        const pendingCampaigns = promotionContext?.templateName === keywordOffers.TEMPLATE ? []
+          : await campaignOffersStore.activeForConversation(getPool(), orgId, conversationId).catch(() => []);
         for (const pending of pendingCampaigns) {
           if (pending.status !== 'sent' || campaignOffers.isExpiredOffer(pending)) continue;
           if (!priced.items.some(it => String(it.product_id) === String(pending.product_id))) continue;
@@ -3329,9 +3403,13 @@ async function createShopifyOrder(orgId, conversationId, draft) {
 
   const lineItems = [];
   for (const it of items) {
-    let variantId = it.variant_id || null;
+    // A catalog variant in this draft API would charge its current list price.
+    // Use the existing custom-priced line path for items from a keyword quote.
+    const keywordQuote = draft.promotion?.templateName === keywordOffers.TEMPLATE &&
+      draft.promotion.offers.some(o => String(o.productId) === String(it.product_id) && String(o.variantId || '') === String(it.variant_id || ''));
+    let variantId = keywordQuote ? null : it.variant_id || null;
     let price = it.price || null;
-    if (!variantId && !it.locked_quote) {
+    if (!variantId && !it.locked_quote && !keywordQuote) {
       const resolved = await resolveVariantId(ds, it.name || it.product_name);
       variantId = resolved.variantId;
       price = price || resolved.price;

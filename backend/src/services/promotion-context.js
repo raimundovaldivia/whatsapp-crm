@@ -3,6 +3,7 @@
  * comerciales estructuradas. Así el precio no queda a interpretación del LLM.
  */
 const pricing = require('./order-pricing');
+const keywordOffers = require('./instagram-keyword-offers');
 
 const TZ = 'America/Santiago';
 const ONE_HOUR_TRAY_GIFT_UNIT_COST = 150;
@@ -563,7 +564,7 @@ function fromHistory(history = [], products = [], now = new Date()) {
 function snapshot(promotion) {
   if (!promotion) return null;
   const { templateName, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift } = promotion;
-  return { templateName, offerId: promotion.offerId ?? null, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift };
+  return { templateName, ...(promotion.keyword ? { keyword: promotion.keyword } : {}), offerId: promotion.offerId ?? null, offers, discountPct, categoryDiscounts, secondUnitDiscounts, freeGift, specialPrices, sentDay, validUntil, validOnlyToday, deliveryWeekOnly, freeShippingMin, orderCutoffOnlyToday, usesDefaultValidity, validityMinutes, expiresAt, cutoff, sameDayConditional, stockConditional, oneHourTieredGift };
 }
 
 function restore(saved, now = new Date()) {
@@ -582,6 +583,11 @@ function restore(saved, now = new Date()) {
 
 function promptSection(promotion) {
   if (!promotion) return '';
+  if (promotion.templateName === keywordOffers.TEMPLATE) {
+    const lines = promotion.offers.map(o => o.label + ': ' + pricing.fmt(o.price));
+    return 'Oferta solicitada por Instagram. Estos son los precios por unidad para este pedido:\n' +
+      lines.join('\n') + '\nMantén estos precios al cambiar cantidades. Si hay varias presentaciones posibles, pregunta cuál prefiere.';
+  }
   const options = promotion.offers.map(offer => `- ${offer.label}: $${offer.price.toLocaleString('es-CL')}`).join('\n');
   if (!promotion.active) {
     const reason = promotion.orderCutoffOnlyToday
@@ -659,6 +665,8 @@ function optionText(promotion) {
  */
 function selectedOffer(message, promotion) {
   if (!promotion?.active || !Array.isArray(promotion.offers)) return null;
+  // Keyword offers are unit prices. A number is never a bundle or a line total.
+  if (promotion.templateName === keywordOffers.TEMPLATE) return null;
   const text = norm(message);
   if (!text) return null;
   const numberedChoice = text.match(/^(?:la\s+)?(?:opcion\s+)?(\d{1,2})$/iu);
@@ -782,6 +790,7 @@ function tieredGiftSizeReply(size) {
 }
 
 function choiceReply(promotion) {
+  if (promotion?.templateName === keywordOffers.TEMPLATE) return keywordOffers.reply(promotion);
   if (promotion?.oneHourTieredGift) return priceReply(promotion);
   const choices = (promotion?.offers || []).map((offer, index) =>
     `${index + 1}) ${offer.label} — $${Number(offer.price).toLocaleString('es-CL')}`
@@ -796,6 +805,7 @@ function isCurrentPriceQuestion(message) {
 }
 
 function priceReply(promotion) {
+  if (promotion?.templateName === keywordOffers.TEMPLATE) return keywordOffers.reply(promotion);
   if (promotion?.oneHourTieredGift) {
     return 'Claro 😊 Tu regalo personal sirve tanto para bandejas XL como Jumbo:\n\n1 bandeja → $1.000 de descuento\n2 bandejas → $4.000 de descuento\n3 o más bandejas → $7.000 de descuento\n\nEs válido durante una hora desde el mensaje que te envié y no se acumula con otras promociones. ¿Cuántas bandejas quieres y prefieres XL o Jumbo?';
   }

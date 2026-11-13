@@ -176,6 +176,78 @@ test('las confirmaciones largas tampoco permiten inventar productos nuevos', () 
   assert.equal(policy.unexpectedItemsFromBareAffirmative('Siiii , por supuesto los espero', previous, next).length, 1);
 });
 
+test('Instagram: OFERTA recorre palabra, cantidad, variedad, resumen y confirmación a precio de campaña', async () => {
+  const products = [
+    { id: 46, sku: 'DR-EGG-V2-XL-30-BLANCO', title: 'Huevos XL blancos · Bandeja de 30', price: 13000, stock: 20 },
+    { id: 47, sku: 'DR-EGG-V2-XL-30-MIXTO', title: 'Huevos XL mixtos · Bandeja de 30', price: 12000, stock: 20 },
+    { id: 80, sku: 'DR-QUESO-FRESCO-700', title: 'Queso fresco · pieza de 700 g', price: 10000, stock: 20 },
+  ];
+  const history = [];
+  const options = { channel: 'instagram', products, history, webPricing: true, state: 'exploring', draft: {},
+    extract: previous => ({ ...previous, customer_name: 'Cliente de prueba', address: 'Calle 123', city: 'La Serena',
+      customer_phone: '56911111111', delivery_date: '2099-01-01' }) };
+  const f = fixture(options);
+  async function turn(content) {
+    history.push({ direction: 'inbound', content });
+    const result = await f.pipeline.processMessage(7, 91, content);
+    history.push({ direction: 'outbound', content: result.response });
+    options.state = result.newState;
+    return result.response;
+  }
+  const welcome = await turn(' ¡óFeRtA! 🥚 ');
+  assert.match(welcome, /8\.000/);
+  assert.match(welcome, /700 g a \$10\.000/);
+  assert.equal(f.calls.extractions, 0);
+  assert.match(await turn('dos bandejas'), /Para 2.*variedad/);
+  assert.equal(f.calls.extractions, 0);
+  assert.match(await turn('mixtos'), /16\.000/);
+  assert.equal(f.calls.orders.length, 0);
+  await turn('sí, todo correcto');
+  assert.equal(f.calls.orders.length, 1);
+  assert.equal(f.calls.orders[0].items[0].price, 8000);
+  assert.equal(f.calls.orders[0].items[0].quantity, 2);
+  assert.equal(String(f.calls.orders[0].items[0].product_id), '47');
+});
+
+test('dos ofertas editables: el último disparador gana y no elimina productos del pedido mixto', async () => {
+  const products = [{ id: 1, title: 'Bandeja XL de 30', stock: 5, price: 13000 },
+    { id: 2, title: 'Queso fresco 700 g', stock: 5, price: 12000 }];
+  const rules = [{ keyword: 'OFERTA', enabled: true, items: [{ key: '1', price: 8000 }, { key: '2', price: 10000 }] },
+    { keyword: 'FINDE', enabled: true, items: [{ key: '1', price: 7000 }, { key: '2', price: 9000 }] }];
+  const options = { channel: 'instagram', products, history: [], state: 'exploring', draft: {},
+    settings: { instagram_keyword_offers: JSON.stringify(rules) },
+    extract: previous => ({ ...previous, ...draft(), customer_phone: '56911111111',
+      items: products.map(p => ({ product_name: p.title, quantity: p.id === 1 ? 2 : 1 })) }) };
+  const f = fixture(options);
+  async function turn(content) {
+    options.history.push({ direction: 'inbound', content });
+    const result = await f.pipeline.processMessage(7, 91, content);
+    options.history.push({ direction: 'outbound', content: result.response });
+    options.state = result.newState;
+    return result.response;
+  }
+  assert.match(await turn('OFERTA'), /8\.000/);
+  assert.match(await turn('Finde'), /7\.000/);
+  assert.match(await turn('Quiero dos bandejas y un queso'), /23\.000/);
+  await turn('sí, todo correcto');
+  assert.equal(f.calls.orders[0].items.length, 2);
+  assert.equal(f.calls.orders[0].totalPrice, 23000);
+});
+
+test('OFERTA no se activa por negación, otro canal, pausas o por pertenecer a otra tienda', async () => {
+  const products = [{ id: 47, sku: 'DR-EGG-V2-XL-30-MIXTO', title: 'Huevos XL mixtos · Bandeja de 30', stock: 4, price: 13000 }];
+  for (const [channel, webPricing, message, settings] of [
+    ['instagram', true, 'No quiero la oferta', {}], ['facebook', true, 'OFERTA', {}],
+    ['instagram', false, 'OFERTA', {}], ['instagram', true, 'OFERTA', { instagram_keyword_offers: '[]' }],
+    ['instagram', true, 'OFERTA', { promotions_enabled: 'false' }],
+  ]) {
+    const f = fixture({ channel, webPricing, history: [{ direction: 'inbound', content: message }], state: 'exploring', draft: {}, products, settings });
+    const r = await f.pipeline.processMessage(7, 91, message);
+    assert.doesNotMatch(r.response || '', /8\.000/);
+    assert.ok(!f.calls.states.some(([, , d]) => d?.promotion?.templateName === 'oferta_por_palabra_instagram'));
+  }
+});
+
 function fixture(options = {}) {
   const calls = { orders: [], states: [], claims: 0, extractions: 0 };
   let current = options.draft || draft();
