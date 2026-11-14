@@ -364,6 +364,8 @@ router.patch('/shopify/:id/address', async (req, res) => {
       `UPDATE shopify_orders
          SET shipping_city       = COALESCE($3, shipping_city),
              shipping_address1   = $2,
+             manual_delivery_point = CASE WHEN shipping_address1 IS NOT DISTINCT FROM $2
+               AND shipping_city IS NOT DISTINCT FROM COALESCE($3, shipping_city) THEN manual_delivery_point END,
              synced_at           = NOW()
        WHERE id = $1 AND organization_id = $4
        RETURNING *`,
@@ -491,7 +493,9 @@ router.patch('/:id/address', async (req, res) => {
     );
     if (!before) return res.status(404).json({ error: 'Pedido no encontrado' });
     const { rows: [order] } = await pool.query(
-      `UPDATE orders SET shipping_address = $1 WHERE id = $2 AND organization_id = $3 RETURNING *`,
+      `UPDATE orders SET shipping_address = $1,
+         manual_delivery_point = CASE WHEN shipping_address IS NOT DISTINCT FROM $1 THEN manual_delivery_point END
+       WHERE id = $2 AND organization_id = $3 RETURNING *`,
       [addrJson, orderId, req.orgId]
     );
     if (updateContact && order.customer_phone) {
@@ -1110,6 +1114,8 @@ router.patch('/history-edit', async (req, res) => {
                 total_price = $2,
                 shipping_address1 = $3,
                 shipping_city = $4,
+                manual_delivery_point = CASE WHEN shipping_address1 IS NOT DISTINCT FROM $3
+                  AND shipping_city IS NOT DISTINCT FROM $4 THEN manual_delivery_point END,
                 delivery_note = $5,
                 delivery_modified = TRUE,
                 synced_at = NOW()
@@ -1124,6 +1130,7 @@ router.patch('/history-edit', async (req, res) => {
             SET items = $1,
                 total_price = $2,
                 shipping_address = $3,
+                manual_delivery_point = CASE WHEN shipping_address IS NOT DISTINCT FROM $3 THEN manual_delivery_point END,
                 delivery_note = $4,
                 delivery_modified = TRUE,
                 updated_at = NOW()

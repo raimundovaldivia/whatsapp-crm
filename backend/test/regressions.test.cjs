@@ -249,6 +249,57 @@ test('dispatch formats and edits the pending return address independently of its
   } finally { await f.engine.close(); }
 });
 
+test('dispatch keeps pasted coordinates per order, including stops without a street, and can return to automatic lookup', async () => {
+  const f = await fixture();
+  try {
+    const street = 'Camino al fundo';
+    const original = JSON.stringify({ address: street, city: 'Ovalle', address2: 'Portón sur' });
+    await f.query('UPDATE orders SET shipping_address=$1 WHERE id=1', [original]);
+    await f.query("UPDATE shopify_orders SET crm_status='por_despachar'");
+    await f.query(`INSERT INTO order_returns(organization_id,source,order_id,kind,status,items,customer,reason,created_by,request_key)
+      VALUES (1,'bot','1','exchange','approved','[]','{}','Cambio',10,'pin')`);
+    await f.query(`INSERT INTO geocode_cache(organization_id,address_key,lat,lng) VALUES (1,'camino al fundo, ovalle',-30.5,-71.2)`);
+    const router = load('src/routes/delivery.js', { '../db/database': f.db, '../middleware/auth': { requireAuth: noop, requireRole: () => noop } });
+    async function request(method, path, body, orgId = 1) {
+      const res = response();
+      await handler(router, method, path)({ orgId, userId: 10, role: 'repartidor', params: { id: '1' }, query: {}, body }, res);
+      return res;
+    }
+    const edit = (source, id, coordinates, orgId) => request('patch', '/orders/address', { source, id, coordinates }, orgId);
+    for (const coordinates of ['', '-29.8', '-91, -71', '-29, 181', '0,0', 'no sé']) {
+      assert.equal((await edit('bot', 1, coordinates)).code, 400);
+    }
+    assert.equal((await edit('bot', 1, '-29.9, -71.25', 2)).code, 404);
+    const shopId = 'gid://shopify/Order/42';
+    for (const [source, id, pair] of [['bot', 1, '-29.9, -71.25'], ['shopify', shopId, '-29,9; -71,25'], ['return', 1, '-29.9 -71.25']]) {
+      const saved = await edit(source, id, pair);
+      assert.equal(saved.code, 200, JSON.stringify(saved.body));
+    }
+    let list = (await request('get', '/orders')).body.orders;
+    for (const order of list.filter(o => o.source !== 'bot' || o.id === '1')) {
+      assert.deepEqual([order.manualLocation, order.lat, order.lng], [true, -29.9, -71.25]);
+    }
+    assert.equal(list.find(o => o.source === 'shopify').address, '');
+    assert.equal(list.find(o => o.source === 'return').lat, -29.9);
+    assert.equal((await f.query('SELECT shipping_address FROM orders WHERE id=1')).rows[0].shipping_address, original);
+
+    const pinned = await request('patch', '/routes/1/stops/address', { stopKey: 'bot_1', coordinates: '-30.48, -71.19' });
+    assert.equal(pinned.code, 200, JSON.stringify(pinned.body));
+    const route = (await f.query('SELECT orders, stop_address_updates FROM delivery_routes WHERE id=1')).rows[0];
+    assert.equal(route.orders[0].lng, -71.19);
+    assert.equal(route.stop_address_updates.bot_1.manualLocation, true);
+    const reset = await request('patch', '/routes/1/stops/address', { stopKey: 'bot_1', address: street, city: 'Ovalle' });
+    assert.equal(reset.code, 200, JSON.stringify(reset.body));
+    list = (await request('get', '/orders')).body.orders;
+    const auto = list.find(o => o.source === 'bot' && o.id === '1');
+    assert.deepEqual([!!auto.manualLocation, auto.lat, auto.lng], [false, -30.5, -71.2]);
+    assert.equal(list.find(o => o.source === 'shopify').lat, -29.9);
+    const staleDraft = await request('post', '/optimize', { orders: [pinned.body.stop] });
+    assert.equal(staleDraft.code, 200, JSON.stringify(staleDraft.body));
+    assert.equal(staleDraft.body.routes[0].stops[0].lng, -71.2);
+  } finally { await f.engine.close(); }
+});
+
 test('assigned driver can correct an address without crossing route or organization boundaries',async()=>{
   const f=await fixture();
   try {

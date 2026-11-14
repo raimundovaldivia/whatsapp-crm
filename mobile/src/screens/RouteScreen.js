@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import * as ImagePicker from 'expo-image-picker';
 import { getRoute, createExpense, getSavedSession, updateLoadChecklist, startRoute, reorderRouteStops } from '../services/api';
-import { routeStops as stopsOf } from '../utils/routeMap';
+import { navigationDestination, routeStops as stopsOf } from '../utils/routeMap';
 import { stopLabel, loadStopLabelMode, saveStopLabelMode } from '../utils/stopLabel';
 import { enqueueExpense, flushExpenses, pendingCount, onQueueChange, legacyExpenses, recoverLegacyExpenses } from '../utils/expenseQueue';
 import { C, R, shadowSoft } from '../theme';
@@ -480,7 +480,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                     <Text style={[s.stopName, isDone && s.textDone]} numberOfLines={1}>
                       {stop.customerName}
                     </Text>
-                    <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || 'Sin dirección'}</Text>
+                    <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || navigationDestination(stop) || 'Sin dirección'}</Text>
                     {stop?.coverage?.status === 'outside' ? <Text style={s.coverageChip}>⚠ Fuera de cobertura · {stop.coverage.distanceKm} km</Text> : null}
                     {stop?.coverage?.status === 'unlocated' ? <Text style={s.coverageChip}>⚠ Dirección sin ubicar</Text> : null}
                     {stop.isReturn ? <Text style={s.stopHistory}>↩️ Cambio/devolución · abre para confirmar retiro y reemplazo</Text> : null}

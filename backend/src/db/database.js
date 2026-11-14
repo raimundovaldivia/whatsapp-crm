@@ -2222,7 +2222,12 @@ async function updateOrder(id, updates, orgId = null) {
   }
   const keys = Object.keys(updates);
   const values = Object.values(updates);
-  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  const assignments = keys.map((k, i) => `${k} = $${i + 1}`);
+  if (keys.includes('shipping_address')) {
+    const addressParam = keys.indexOf('shipping_address') + 1;
+    assignments.push(`manual_delivery_point = CASE WHEN shipping_address IS NOT DISTINCT FROM $${addressParam} THEN manual_delivery_point END`);
+  }
+  const setClause = assignments.join(', ');
   values.push(id);
   let where = `id = $${values.length}`;
   if (orgId !== null && orgId !== undefined) {

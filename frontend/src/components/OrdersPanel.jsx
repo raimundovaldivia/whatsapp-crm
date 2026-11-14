@@ -499,7 +499,9 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
       const dataRows = dispatchOrders.map(order => {
         const row = new Array(26).fill('');
         row[0] = `${order.orderName || `#${order.id}`}${order.customerName || 'Cliente'}`;
-        row[1] = order.fullAddress || '';
+        row[1] = order.fullAddress || (order.lat != null && order.lng != null ? `${order.lat}, ${order.lng}` : '');
+        row[7] = order.lat ?? '';
+        row[8] = order.lng ?? '';
 
         const itemsText = (order.items || []).map(i => {
           const name = i.name || i.title || i.product_name || '?';

@@ -48,10 +48,13 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const [addressInfo, setAddressInfo] = useState({
     address: stop?.address || '', city: stop?.city || '', fullAddress: stop?.fullAddress || '',
     lat: stop?.lat ?? null, lng: stop?.lng ?? null, coverage: stop?.coverage || null,
+    manualLocation: !!stop?.manualLocation,
   });
   const [editingAddress, setEditingAddress] = useState(false);
   const [addressDraft, setAddressDraft] = useState(stop?.address || '');
   const [cityDraft, setCityDraft] = useState(stop?.city || '');
+  const [useCoordinates, setUseCoordinates] = useState(false);
+  const [coordinatesDraft, setCoordinatesDraft] = useState('');
   const [savingAddress, setSavingAddress] = useState(false);
 
   // Venta extra en ruta ("bandejas extras") — solo si la tienda lo activó.
@@ -261,23 +264,27 @@ export default function StopScreen({ route: navRoute, navigation }) {
       ? `maps://maps.apple.com/?daddr=${addr}&dirflg=d`
       : `google.navigation:q=${addr}&mode=d`;
     Linking.openURL(url).catch(() =>
-      Linking.openURL(navigationUrl(stop)).catch(() => Alert.alert('No se pudo abrir el mapa', 'Revisa la conexión e intenta nuevamente.'))
+      Linking.openURL(navigationUrl({ ...stop, ...addressInfo })).catch(() => Alert.alert('No se pudo abrir el mapa', 'Revisa la conexión e intenta nuevamente.'))
     );
   }
 
   async function saveAddress() {
-    if (!addressDraft.trim()) return Alert.alert('Falta la dirección', 'Escribe la calle y número correctos.');
+    if (useCoordinates && !coordinatesDraft.trim()) return Alert.alert('Faltan las coordenadas', 'Pega la latitud y la longitud.');
+    if (!useCoordinates && !addressDraft.trim()) return Alert.alert('Falta la dirección', 'Escribe la calle y número correctos.');
     setSavingAddress(true);
     try {
-      const updated = await updateStopAddress(routeId, stopKey, addressDraft.trim(), cityDraft.trim(), true);
+      const location = useCoordinates ? { coordinates: coordinatesDraft.trim() }
+        : { address: addressDraft.trim(), city: cityDraft.trim(), updateContact: true };
+      const updated = await updateStopAddress(routeId, stopKey, location);
       if (updated) setAddressInfo({
         address: updated.address || '', city: updated.city || '', fullAddress: updated.fullAddress || '',
         lat: updated.lat ?? null, lng: updated.lng ?? null, coverage: updated.coverage || null,
+        manualLocation: !!updated.manualLocation,
       });
       setEditingAddress(false);
       Alert.alert('Dirección actualizada', updated?.coverage?.status === 'outside'
         ? 'Se guardó, pero sigue fuera del rango configurado. Confírmala con el cliente o el equipo.'
-        : 'La parada y los datos del cliente quedaron actualizados.');
+        : 'Se guardó la ubicación de esta parada.');
     } catch (err) {
       Alert.alert('No se pudo guardar', err.response?.data?.error || 'Revisa la conexión e intenta nuevamente.');
     } finally {
@@ -452,21 +459,37 @@ export default function StopScreen({ route: navRoute, navigation }) {
         <Text style={s.infoLabel}>📍 Dirección</Text>
         {editingAddress ? (
           <>
-            <TextInput style={s.addressInput} value={addressDraft} onChangeText={setAddressDraft}
-              placeholder="Calle y número" placeholderTextColor={C.muted} autoFocus />
-            <TextInput style={s.addressInput} value={cityDraft} onChangeText={setCityDraft}
-              placeholder="Ciudad" placeholderTextColor={C.muted} />
+            <TouchableOpacity style={s.editAddressBtn} disabled={savingAddress} onPress={() => setUseCoordinates(!useCoordinates)}>
+              <Text style={s.editAddressText}>{useCoordinates ? 'Buscar por dirección' : 'Usar coordenadas'}</Text>
+            </TouchableOpacity>
+            {useCoordinates ? <>
+              <Text style={s.infoLabel}>Latitud, longitud</Text>
+              <TextInput style={s.addressInput} value={coordinatesDraft} onChangeText={setCoordinatesDraft}
+                accessibilityLabel="Latitud, longitud" placeholder="-29.905, -71.251" placeholderTextColor={C.muted} autoFocus />
+            </> : <>
+              <TextInput style={s.addressInput} value={addressDraft} onChangeText={setAddressDraft}
+                placeholder="Calle y número" placeholderTextColor={C.muted} autoFocus />
+              <TextInput style={s.addressInput} value={cityDraft} onChangeText={setCityDraft}
+                placeholder="Ciudad" placeholderTextColor={C.muted} />
+            </>}
             <View style={s.addressActions}>
               <TouchableOpacity style={s.addressCancel} onPress={() => setEditingAddress(false)} disabled={savingAddress}><Text style={s.addressCancelText}>Cancelar</Text></TouchableOpacity>
-              <TouchableOpacity style={s.addressSave} onPress={saveAddress} disabled={savingAddress}><Text style={s.addressSaveText}>{savingAddress ? 'Guardando…' : 'Guardar dirección'}</Text></TouchableOpacity>
+              <TouchableOpacity style={s.addressSave} onPress={saveAddress} disabled={savingAddress}><Text style={s.addressSaveText}>{savingAddress ? 'Guardando…' : 'Guardar ubicación'}</Text></TouchableOpacity>
             </View>
           </>
         ) : (
           <>
-            <Text style={s.infoValue}>{addressInfo.address || '—'}</Text>
+            <Text style={s.infoValue}>{addressInfo.address || addressInfo.fullAddress || 'Sin dirección escrita'}</Text>
             {addressInfo.city ? <Text style={s.infoCity}>{addressInfo.city}</Text> : null}
-            {!stop?.isReturn && <TouchableOpacity onPress={() => { setAddressDraft(addressInfo.address || ''); setCityDraft(addressInfo.city || ''); setEditingAddress(true); }} style={s.editAddressBtn}>
-              <Text style={s.editAddressText}>✏️ Corregir dirección</Text>
+            {addressInfo.manualLocation && <Text style={s.infoCity}>📍 {addressInfo.lat}, {addressInfo.lng}</Text>}
+            {['bot', 'shopify', 'return'].includes(stop?.source) && <TouchableOpacity onPress={() => {
+              setAddressDraft(addressInfo.address || addressInfo.fullAddress || '');
+              setCityDraft(addressInfo.city || '');
+              setUseCoordinates(addressInfo.manualLocation || !addressInfo.fullAddress);
+              setCoordinatesDraft(addressInfo.manualLocation ? `${addressInfo.lat}, ${addressInfo.lng}` : '');
+              setEditingAddress(true);
+            }} style={s.editAddressBtn}>
+              <Text style={s.editAddressText}>✏️ Editar ubicación</Text>
             </TouchableOpacity>}
           </>
         )}
