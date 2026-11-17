@@ -1,6 +1,6 @@
 // Local browser fixture. Every CRM request is replaced; CSP blocks external calls.
 // Run: node test/frequency-followup-preview.mjs, then http://127.0.0.1:5194
-// ?scenario=disconnected|changed|error|pages|generation-error|missing|skip exercises negative cases.
+// ?scenario=loyalty shows commercial segments; other scenarios exercise follow-up.
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 
@@ -8,12 +8,26 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const mock = `
 const scenario = new URLSearchParams(location.search).get('scenario');
 const base = { purchaseCount: 4, purchaseDays: 4, sampleDays: 4, lastPurchase: '2026-10-01', daysSincePurchase: 36, intervalDays: 10, nextPurchase: '2026-10-11', daysUntilNext: -26, cadence: 'weekly', status: 'overdue', regularity: 'regular', recentDates: ['2026-10-01','2026-09-21','2026-09-11','2026-09-01'] };
-const customers = [
+const customers = scenario === 'loyalty' ? [
+  {...base, name:'Clara Constante', phone:'56911111111', intervalDays:7, daysSincePurchase:7, daysUntilNext:0, status:'due'},
+  {...base, name:'Renato Recurrente', phone:'56922222222', intervalDays:7, daysSincePurchase:20, daysUntilNext:-13},
+  {...base, name:'Inés Inactiva', phone:'56933333333', daysSincePurchase:80, daysUntilNext:-70},
+  {...base, name:'Olivia Ocasional', phone:'56944444444', regularity:'variable', intervalDays:7, daysSincePurchase:8, daysUntilNext:-1, status:'overdue'},
+  {...base, name:'Nicolás Nuevo', phone:'56955555555', purchaseCount:1, purchaseDays:1, sampleDays:1, intervalDays:null, regularity:'insufficient', daysSincePurchase:3, daysUntilNext:null, status:'insufficient', recentDates:['2026-11-03']},
+  {...base, name:'Baja Recurrente', phone:'56966666666', intervalDays:7, daysSincePurchase:7, daysUntilNext:0, status:'due', optedOut:true},
+  {...base, name:'Pedido Pendiente', phone:'56977777777', intervalDays:7, daysSincePurchase:7, daysUntilNext:0, status:'pending_dispatch'},
+] : [
   {...base, name:'Ana Ejemplo', phone:'56911111111'},
   {...base, name:'Bruno Ejemplo', phone:'56922222222'},
   {...base, name:'Baja Ejemplo', phone:'56933333333', optedOut:true},
   ...(scenario === 'pages' ? Array.from({length:51}, (_,i) => ({...base,name:'Cliente '+i,phone:String(56940000000+i)})) : []),
 ];
+if (scenario === 'loyalty') for (const customer of customers) {
+  const before = days => new Date(Date.parse('2026-11-06T12:00:00Z') - days * 86400000).toISOString().slice(0, 10);
+  customer.lastPurchase = before(customer.daysSincePurchase);
+  customer.nextPurchase = customer.intervalDays == null ? null : before(customer.daysSincePurchase - customer.intervalDays);
+  customer.recentDates = Array.from({length:customer.purchaseDays}, (_, index) => before(customer.daysSincePurchase + (customer.regularity === 'variable' ? [0,2,17,24][index] : index * (customer.intervalDays || 0))));
+}
 let reads = 0;
 let generations = 0;
 const posts = [];
