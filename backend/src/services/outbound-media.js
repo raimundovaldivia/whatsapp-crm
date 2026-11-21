@@ -6,7 +6,7 @@ const whatsappProvider = require('./whatsapp-provider');
 
 const MAX_MEDIA_BYTES = 6 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/webp',
+  'image/jpeg', 'image/png', 'image/webp', 'video/mp4',
   'application/pdf', 'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-excel',
@@ -15,7 +15,7 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 
 function safeFileName(value, mimeType) {
-  const fallback = mimeType.startsWith('image/') ? 'foto.jpg' : 'archivo';
+  const fallback = mimeType === 'video/mp4' ? 'video.mp4' : mimeType.startsWith('image/') ? 'foto.jpg' : 'archivo';
   const clean = path.basename(String(value || fallback))
     .normalize('NFKC')
     .replace(/[\x00-\x1f<>:"/\\|?*]+/g, '_')
@@ -28,7 +28,7 @@ function safeFileName(value, mimeType) {
 function decodePayload({ data, mimeType, fileName, caption }) {
   const mime = String(mimeType || '').toLowerCase().split(';')[0].trim();
   if (!ALLOWED_MIME_TYPES.has(mime)) {
-    const error = new Error('Formato no permitido. Usa JPG, PNG, WEBP, PDF, Word, Excel, CSV o TXT.');
+    const error = new Error('Formato no permitido. Usa JPG, PNG, WEBP, MP4, PDF, Word, Excel, CSV o TXT.');
     error.status = 400;
     error.code = 'UNSUPPORTED_MEDIA';
     throw error;
@@ -42,7 +42,7 @@ function decodePayload({ data, mimeType, fileName, caption }) {
   if (buffer.length > MAX_MEDIA_BYTES) {
     const error = new Error('El archivo supera el máximo de 6 MB'); error.status = 413; error.code = 'FILE_TOO_LARGE'; throw error;
   }
-  const type = mime.startsWith('image/') ? 'image' : 'document';
+  const type = mime === 'video/mp4' ? 'video' : mime.startsWith('image/') ? 'image' : 'document';
   return {
     buffer,
     mimeType: mime,
@@ -76,7 +76,9 @@ async function send({ orgId, conversation, payload, config, sentBy = 'human', ag
   if (!mediaUrl) mediaCache.set(`${orgId}:${mediaReference}`, media.buffer, media.mimeType);
   const content = media.type === 'image'
     ? (media.caption || '📷 Foto')
-    : `📎 ${media.fileName}${media.caption ? `\n${media.caption}` : ''}`;
+    : media.type === 'video'
+      ? (media.caption || '🎥 [Video]')
+      : `📎 ${media.fileName}${media.caption ? `\n${media.caption}` : ''}`;
   const message = await db.saveMessage({
     conversationId: conversation.id,
     whatsappMessageId: whatsappProvider.messageId(result),

@@ -39,7 +39,7 @@ async function sendTextMessage(toPhone, text, whatsappConfig) {
 
 async function sendMediaMessage(toPhone, media, whatsappConfig) {
   const { phone_number_id } = whatsappConfig;
-  const type = media.type === 'image' ? 'image' : 'document';
+  const type = ['image', 'video'].includes(media.type) ? media.type : 'document';
   let uploadedMediaId = null;
   if (!media.mediaUrl) {
     const form = new FormData();

@@ -285,7 +285,7 @@ router.delete('/:id/messages/:messageId/queue', requireRole('owner', 'admin', 's
   } catch { res.status(500).json({ error: 'No se pudo cancelar el mensaje' }); }
 });
 
-/** POST /api/conversations/:id/media — foto o documento desde el CRM. */
+/** POST /api/conversations/:id/media — foto, video o documento desde el CRM. */
 router.post('/:id/media', async (req, res) => {
   try {
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);

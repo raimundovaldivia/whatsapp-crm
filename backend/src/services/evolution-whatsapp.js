@@ -61,7 +61,7 @@ async function sendMediaMessage(to, media, config) {
   const { instance } = credentials(config);
   const response = await trackedSend(config, () => client(config).post(`/message/sendMedia/${encodeURIComponent(instance)}`, {
     number: String(to).replace(/\D/g, ''),
-    mediatype: media.type === 'image' ? 'image' : 'document',
+    mediatype: ['image', 'video'].includes(media.type) ? media.type : 'document',
     mimetype: media.mimeType,
     caption: media.caption || '',
     media: media.mediaUrl || media.buffer?.toString('base64'),
