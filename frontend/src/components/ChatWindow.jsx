@@ -875,22 +875,24 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     }
     const extension = String(file.name || '').toLowerCase().split('.').pop();
     const mimeByExtension = {
-      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp',
+      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp', mp4:'video/mp4',
       pdf:'application/pdf', doc:'application/msword',
       docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       xls:'application/vnd.ms-excel',
       xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       csv:'text/csv', txt:'text/plain',
     };
-    const mimeType = file.type || mimeByExtension[extension] || '';
+    const mimeType = file.type && file.type !== 'application/octet-stream'
+      ? file.type
+      : mimeByExtension[extension] || '';
     const allowed = [
-      'image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'application/msword',
+      'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'application/pdf', 'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'text/csv', 'text/plain',
     ];
     if (!allowed.includes(mimeType)) {
-      setError('Formato no permitido. Usa imágenes, PDF, Word, Excel, CSV o TXT.');
+      setError('Formato no permitido. Usa imágenes, videos MP4, PDF, Word, Excel, CSV o TXT.');
       return;
     }
     const reader = new FileReader();
@@ -2722,15 +2724,15 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
+            accept="image/jpeg,image/png,image/webp,video/mp4,.mp4,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
             onChange={handleFileSelected}
             style={{ display:'none' }}
           />
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={sending}
-            aria-label="Adjuntar foto o archivo"
-            title="Adjuntar foto o archivo (máx. 6 MB)"
+            aria-label="Adjuntar archivo"
+            title="Adjuntar foto, video MP4 o documento (máx. 6 MB)"
             style={{ width:'42px', height:'42px', borderRadius:'50%', border:`1px solid ${colors.border}`, backgroundColor:colors.bgInput, color:colors.textSecondary, cursor:sending?'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
             <Paperclip size={18} />
           </button>

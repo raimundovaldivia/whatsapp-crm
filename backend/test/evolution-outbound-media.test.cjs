@@ -159,3 +159,26 @@ test('el PDF enviado se abre desde la copia persistente sin caché ni descarga e
   assert.equal(headers['Content-Type'], 'application/pdf');
   assert.equal(headers['Content-Disposition'], 'inline; filename="guia.pdf"');
 });
+
+test('Evolution envía un MP4 como video y guarda una copia para reproducirlo', async () => {
+  const h = fixture({ reply: { key: { id: 'VIDEO1' } } });
+  const video = Buffer.from('contenido simulado de video');
+  const result = await h.send({
+    data: video.toString('base64'),
+    mimeType: 'video/mp4',
+    fileName: 'producto.mp4',
+    caption: 'Nuevo producto',
+  });
+  assert.deepEqual({ ...h.requests[0].body }, {
+    number: '56911112222',
+    mediatype: 'video',
+    mimetype: 'video/mp4',
+    fileName: 'producto.mp4',
+    caption: 'Nuevo producto',
+    media: video.toString('base64'),
+  });
+  assert.equal(result.message.type, 'video');
+  assert.equal(result.message.content, h.requests[0].body.caption);
+  assert.equal(result.message.mediaId, h.evolution.mediaReference(9, 'VIDEO1'));
+  assert.deepEqual(h.blobs[0], [3, 8, video, 'video/mp4']);
+});
