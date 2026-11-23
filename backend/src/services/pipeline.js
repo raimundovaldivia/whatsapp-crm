@@ -316,6 +316,19 @@ async function processMessage(orgId, conversationId, userMessage, log = null, op
   return result;
 }
 
+async function resolveSalesFunnel(orgId, conversation) {
+  const { normalizePhone } = require('./customer-identity');
+  const phone = normalizePhone(conversation?.phone_number);
+  if (!phone || !/^\d{7,15}$/.test(phone) || ['facebook', 'instagram'].includes(conversation?.source_channel)) return 'unknown';
+  try {
+    const purchases = await require('./broadcast-purchases').loadPurchases(getPool(), orgId, [phone]);
+    return purchases.length ? 'customer' : 'lead';
+  } catch (error) {
+    console.warn('[Pipeline] No se pudo consultar el historial de compras:', error.message);
+    return 'unknown';
+  }
+}
+
 async function processMessageInternal(orgId, conversationId, userMessage, log = null, options = {}) {
   try { await require('./commercial').consumeBotTurn(orgId); }
   catch(error) {
@@ -326,6 +339,8 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const noop = { step:()=>{}, context:()=>{}, intent:()=>{}, escalation:()=>{}, agent:()=>{}, error:()=>{} };
   const L = log || noop;
   const conversation = await db.getConversationById(conversationId, orgId);
+  const salesFunnel = await resolveSalesFunnel(orgId, conversation);
+  L.step('sales_funnel', salesFunnel);
   const requestedNow = options.now ? new Date(options.now) : null;
   const nowCl = requestedNow && !Number.isNaN(requestedNow.getTime()) ? requestedNow : new Date();
 
@@ -427,7 +442,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     ? await db.getContact(orgId, conversation.phone_number).catch(() => null)
     : null;
   const isEmpresa = contact?.client_type === 'empresa';
-  const isLead    = contact?.contact_type === 'lead' || !contact?.contact_type;
+  const eligibleForLeadPricing = salesFunnel === 'lead' && (!contact?.contact_type || contact.contact_type === 'lead');
   const customerNoteSection = customerNoteContext(contact?.notes);
 
   // ── Catálogo: siempre desde nuestra DB, nunca llamar Shopify en vivo ──
@@ -601,9 +616,12 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const promotionSection = promotions.promptSection(promotionContext);
   const leadSection = personalOffer
     ? personalOffers.promptSection(personalOffer)
-    : (xlContext.enabled && !promotionContext?.active ? xlPricing.prompt(xlContext, products) : isLead ? `## Cliente Nuevo — Estrategia de Cierre
-
-Este cliente es un lead nuevo, posiblemente llegó por publicidad. Defiende el valor y facilita el cierre, pero no inventes ni negocies descuentos. Los únicos beneficios válidos son los que el sistema muestre explícitamente como vigentes.` : '');
+    : (xlContext.enabled && !promotionContext?.active ? xlPricing.prompt(xlContext, products) : '');
+  const relationshipSection = {
+    lead: 'Primera compra: contesta con formato y precio vigente del producto consultado o anunciado. Si ya eligió, avanza al pedido.',
+    customer: 'Cliente con compras verificadas: responde lo que consulta hoy. Si pide repetir, usa únicamente artículos comprobados del historial y cotiza al precio vigente. Confirma antes de registrar.',
+    unknown: 'Historial sin verificar: responde la consulta sin asumir compras anteriores ni ofrecer beneficios de primera compra.',
+  }[salesFunnel];
   let campaignThreadSection = '';
   try {
     const thread = conversation.phone_number
@@ -620,7 +638,7 @@ Trata este mensaje como continuación directa del hilo que aparece en el histori
 
   // Contexto que necesita el agente de pedidos para valorizar el carrito
   const orderCtx = {
-    products, specialPrices, baseSpecialPrices, isLead: isLead && !boxOffer && promotionContext?.templateName !== keywordOffers.TEMPLATE, promotionContext,
+    products, specialPrices, baseSpecialPrices, isLead: eligibleForLeadPricing && !boxOffer && promotionContext?.templateName !== keywordOffers.TEMPLATE, promotionContext,
     xlContext: personalOffer ? { ...xlContext, enabled: false, eligible: false } : xlContext,
     shippingRule: await require('./quantity-pricing').loadShipping(db, orgId),
     personalOffer, boxOffer, customerPrices, now: nowCl,
@@ -1090,7 +1108,7 @@ Reglas estrictas:
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
-  const storeCustomPrompt = [dateSection, closingSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts, currentSalesState].filter(Boolean).join('\n\n---\n\n');
+  const storeCustomPrompt = [dateSection, closingSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, relationshipSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts, currentSalesState].filter(Boolean).join('\n\n---\n\n');
   orderCtx.storeContext = storeCustomPrompt;
 
   if (isSoftFutureIntent(userMessage) && !['scheduled', 'collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
@@ -2455,7 +2473,7 @@ REGLAS ABSOLUTAS:
 
   // FAST PATH: Saludo simple → respuesta inmediata sin LLM adicional
   if (intent === 'greeting' && !isTemplateReply && history.filter(m => m.direction === 'outbound').length === 0) {
-    const greeting = salesAgent.generateGreeting(customerName);
+    const greeting = salesAgent.generateGreeting(customerName, salesFunnel);
     await db.updatePipelineState(conversationId, 'exploring');
     L.agent('sales', 0);
     return { response: greeting, agentType: 'sales', newState: 'exploring' };

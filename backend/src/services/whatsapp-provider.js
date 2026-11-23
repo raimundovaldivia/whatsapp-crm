@@ -11,8 +11,8 @@ function serviceFor(config = {}) {
   return meta;
 }
 
-async function sendTextMessage(to, text, config) {
-  return serviceFor(config).sendTextMessage(to, text, config);
+async function sendTextMessage(to, text, config, options) {
+  return serviceFor(config).sendTextMessage(to, text, config, options);
 }
 
 async function sendMediaMessage(to, media, config) {
