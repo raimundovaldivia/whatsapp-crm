@@ -14,7 +14,7 @@ function minutesSince(value, now = Date.now()) {
  */
 async function shouldResumeDivaOnInbound(conversation, database, now = Date.now()) {
   const mode = conversation?.agent_mode || 'ai';
-  if (mode === 'ai') return false;
+  if (mode === 'ai' || conversation?.campaign_manual_hold) return false;
 
   const ages = [
     minutesSince(conversation.agent_mode_changed_at, now),
@@ -35,7 +35,7 @@ async function shouldResumeDivaOnInbound(conversation, database, now = Date.now(
 
 async function resumeDivaOnInbound(conversation, database, now = Date.now()) {
   if (!await shouldResumeDivaOnInbound(conversation, database, now)) return false;
-  await database.setAgentMode(conversation.id, 'ai');
+  if (await database.setAgentMode(conversation.id, 'ai') === false) return false;
   if (typeof database.clearLastEscalation === 'function') {
     await database.clearLastEscalation(conversation.id).catch(() => {});
   }

@@ -1947,6 +1947,7 @@ router.post('/campaigns', async (req, res) => {
     const { templateName, total, testMode = false, testPhone = null, sendingProvider = 'kapso', sendingChannelId = null } = req.body || {};
     if (req.body?.sendingProvider) await require('../services/broadcast-sender').resolveSender(req.orgId, sendingProvider, sendingChannelId);
     const pacing = sendingProvider === 'evolution' ? require('../services/broadcast-sender').pacingSettings(req.body.pacingSettings) : null;
+    if (sendingProvider === 'evolution' && req.body.manualReplies === true) pacing.manualReplies = true;
     if (req.body.generationMode !== undefined) {
       if (req.body.generationMode !== 'instruction' || sendingProvider !== 'evolution'
         || typeof req.body.instruction !== 'string' || req.body.instruction.trim().length < 10 || req.body.instruction.length > 6000) {
@@ -2799,6 +2800,11 @@ async function sendBulk(req, res) {
       if (direct) {
         const permit = await require('../services/broadcast-sender').claimDirectSlot(req.orgId, sendingChannelId, pacing, campaignId);
         if (!permit.allowed) return res.status(429).json({ rateLimited: true, retryAfterSeconds: permit.retryAfterSeconds, outsideSendWindow: Boolean(permit.outsideSendWindow), error: permit.outsideSendWindow ? 'Fuera del horario de envío: 08:00 a 22:30, hora de Chile' : 'Pausa entre mensajes directos' });
+        if (pacing.manualReplies === true && campaignId) {
+          const recipient = await db.upsertConversation(req.orgId, item.phone, item.contactName || 'Cliente', sendingChannelId);
+          const paused = await db.setAgentMode(recipient.id, 'human', { holdForCampaign: true });
+          if (!paused) throw new Error('No se pudo reservar el chat para atención personal');
+        }
         savedContent = String(item.templateName ? item.previewText : item.message).trim();
         sentResult = await require('../services/evolution-whatsapp').sendTextMessage(item.phone, savedContent, wc);
         if (!sentResult?.messageId && !sentResult?.key?.id) {

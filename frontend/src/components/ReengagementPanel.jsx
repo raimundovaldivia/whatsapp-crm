@@ -1338,6 +1338,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
   })();
   const [directText, setDirectText] = useState(frequencyAudience ? 'Hola {{nombre}}, ¿cómo estás? ¿Necesitas reponer tu pedido? Si quieres, te ayudo a coordinar una nueva compra.' : '');
   const [directMode, setDirectMode] = useState(frequencyAudience ? 'frequency' : 'instruction');
+  const [manualReplies, setManualReplies] = useState(false);
   const [directInstruction, setDirectInstruction] = useState(frequencyAudience ? 'Redacta un seguimiento breve y cercano para consultar si necesita reponer su pedido. Usa su historial sin afirmar que ya se le acabó el producto ni inventar precios, descuentos, disponibilidad o fechas de entrega.' : '');
   const [drafting, setDrafting] = useState(false);
   const [draftProgress, setDraftProgress] = useState({ done: 0, total: 0 });
@@ -2429,7 +2430,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
         sendingChannelId: reviewPlan.sendingChannelId,
         pacingSettings: { intervalSeconds: Number(reviewPlan.intervalSeconds), batchSize: Number(reviewPlan.batchSize), batchPauseSeconds: Number(reviewPlan.batchPauseSeconds) },
         ...(scheduledAt ? { scheduledFor: scheduledAt } : {}),
-        ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction } : {}),
+        ...(approval ? { generationMode: 'instruction', instruction: reviewPlan.instruction, manualReplies } : {}),
       });
       campaignId = created.data.campaign.id;
       if (serverManaged) {
@@ -3286,6 +3287,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
             placeholder="Ofrece reposición para mañana a particulares según cuándo y cuánto compran. Incluye aceitunas y trata de otra forma a quienes compraron una sola vez. Indica aquí los precios, cantidades disponibles y exclusiones."
             style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 12, borderRadius: 8, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, font: 'inherit', fontSize: 13, lineHeight: 1.5 }} />
           </>}
+          <label style={{ display: 'block', marginTop: 10 }}><input type="checkbox" checked={manualReplies} disabled={sending || drafting || !!reviewPlan} onChange={event => setManualReplies(event.target.checked)} /> Contestar personalmente hasta reactivar la IA en cada chat</label>
           <div style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>Preparar borradores no envía mensajes. Se evalúa solamente el público seleccionado. Los precios y compromisos deben revisarse antes de autorizar.</div>
           {!isFrequency && <details style={{ marginTop: 12, color: colors.textSecondary, fontSize: 12 }}>
             <summary>Recuperar borradores de promoción guardados</summary>

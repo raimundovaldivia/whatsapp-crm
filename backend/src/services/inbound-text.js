@@ -56,6 +56,11 @@ async function processInboundText({ org, whatsappConfig, parsed, io, markAsRead,
   // El mensaje entrante siempre llega al CRM, incluso con el bot apagado.
   if (await db.getSetting(org.id, 'ai_enabled_global') === 'false') return;
 
+  if (updatedConv.campaign_manual_hold) {
+    await notifyAdminHumanPendingReply(org.id, updatedConv, parsed.text);
+    return;
+  }
+
   if (updatedConv.agent_mode !== 'ai') {
     const recentHistory = await db.getLastMessages(conversation.id, 20).catch(() => []);
     if (isTerminalConversationReply(parsed.text, recentHistory)) {

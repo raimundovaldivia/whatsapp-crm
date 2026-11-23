@@ -1076,16 +1076,18 @@ async function markConversationAsRead(id) {
   await pool.query('UPDATE conversations SET unread_count = 0 WHERE id = $1', [id]);
 }
 
-async function setAgentMode(id, mode) {
-  await pool.query(
+async function setAgentMode(id, mode, { holdForCampaign = false, releaseHold = false } = {}) {
+  const result = await pool.query(
     `UPDATE conversations
         SET agent_mode = $1,
+            campaign_manual_hold = CASE WHEN $3 THEN TRUE WHEN $4 THEN FALSE ELSE campaign_manual_hold END,
             agent_mode_changed_at = CURRENT_TIMESTAMP,
             human_pending_notified_at = CASE WHEN $1 IN ('ai','human') THEN NULL ELSE human_pending_notified_at END,
             updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2`,
-    [mode, id]
+      WHERE id = $2 AND (NOT campaign_manual_hold OR $1 = 'human' OR $4)`,
+    [mode, id, holdForCampaign, releaseHold]
   );
+  return result.rowCount > 0;
 }
 
 async function claimHumanPendingNotification(conversationId, cooldownMinutes = 5) {

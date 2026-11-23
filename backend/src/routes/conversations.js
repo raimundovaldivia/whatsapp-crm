@@ -327,7 +327,7 @@ router.patch('/:id/agent-mode', async (req, res) => {
     const conv = await db.getConversationById(parseInt(req.params.id), req.orgId);
     if (!conv) return res.status(404).json({ success: false, error: 'No encontrada' });
 
-    await db.setAgentMode(conv.id, mode);
+    await db.setAgentMode(conv.id, mode, { releaseHold: mode !== 'human' });
     io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode });
 
     // Notificar al admin si se cambia a modo humano manualmente desde el CRM

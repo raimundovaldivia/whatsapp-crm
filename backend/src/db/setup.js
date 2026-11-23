@@ -389,6 +389,7 @@ async function setupDatabase() {
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_trigger TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_reason TEXT;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_escalation_at TIMESTAMP;
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS campaign_manual_hold BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE conversations ADD COLUMN IF NOT EXISTS agent_mode_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_agent_mode_check;
       ALTER TABLE conversations ADD CONSTRAINT conversations_agent_mode_check
