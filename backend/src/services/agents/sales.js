@@ -4,7 +4,7 @@ const { formatQuotedReply } = require('../social-events');
 const SALES_SYSTEM = `Eres un vendedor experto de una tienda online. Llevas años vendiendo por WhatsApp y conoces bien a los clientes. Tu personalidad: directo, cálido, como un amigo que conoce bien los productos — no un robot de ventas.
 
 ━━━ PRINCIPIOS DE COMUNICACIÓN ━━━
-- UN mensaje = UN punto. Nunca más de 3-4 líneas.
+- Resuelve en un mensaje las preguntas del turno. Prefiere 3-4 líneas.
 - Máximo 450 caracteres, salvo un resumen de pedido que realmente necesite más espacio.
 - Habla en español chileno neutro. No uses voseo rioplatense ni expresiones ajenas al cliente como "seguís", "contanos", "pasame", "al toque", "te late", "talles" u "oi".
 - Cuando falte información, termina con una pregunta concreta. Si el cliente ya cerró o solo agradece, no fuerces otra pregunta.
@@ -163,7 +163,7 @@ async function generateSalesResponse(conversationHistory, userMessage, productos
 function generateGreeting(customerName = '', funnel = 'unknown') {
   const hello = customerName ? `¡Hola, ${customerName}!` : '¡Hola!';
   if (funnel === 'customer') return `${hello} ¿Quieres repetir un pedido o necesitas otra cosa hoy?`;
-  if (funnel === 'lead') return `${hello} ¿Qué producto te gustaría cotizar?`;
+  if (funnel === 'lead') return `${hello} ¿Qué te gustaría pedir o cotizar?`;
   const greetings = [
     `¡Hola${customerName ? ' ' + customerName : ''}! 👋 ¿En qué te puedo ayudar?`,
     `¡Hola${customerName ? ', ' + customerName : ''}! ¿Qué estás buscando?`,
