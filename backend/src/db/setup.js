@@ -603,6 +603,7 @@ async function setupDatabase() {
       -- Modificado por el propio cliente desde WhatsApp (modify_order del bot)
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_modified BOOLEAN DEFAULT FALSE;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS notes TEXT;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_origin TEXT;
       -- ─── CONCILIACIÓN BANCARIA: cartolas y abonos ────────────────────
       CREATE TABLE IF NOT EXISTS bank_statements (
         id               SERIAL PRIMARY KEY,

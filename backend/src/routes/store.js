@@ -14,6 +14,7 @@ const whatsapp      = require('../services/whatsapp-provider');
 const { getPool }   = require('../db/database');
 const xlPricing = require('../services/xl-welcome-pricing');
 const quantityPricing = require('../services/quantity-pricing');
+const { crmOrderLabel } = require('../utils/order-reference');
 const { setProductFavorite } = require('../services/product-favorites');
 
 // ── Helper: obtener org por slug ────────────────────────────────────
@@ -185,13 +186,14 @@ router.post('/:slug/orders', async (req, res) => {
     // Guardar contacto
     db.upsertContact(org.id, { phone: phoneClean, name, address, city }).catch(() => {});
 
+    const orderLabel = crmOrderLabel(order.id);
     const itemsText = resolvedItems
       .map(i => `  • ${i.title} x${i.quantity} — $${(i.price * i.quantity).toLocaleString('es-CL')}`)
       .join('\n');
     const msg = [
       `¡Hola ${name}! 👋`,
       ``,
-      `Tu pedido fue recibido ✅`,
+      `Recibimos tu pedido ${orderLabel} ✅`,
       ``,
       `📦 *Productos:*`,
       itemsText,
@@ -217,12 +219,14 @@ router.post('/:slug/orders', async (req, res) => {
     }
 
     // Notificar al admin por la misma conexión directa.
-    const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
-    if (adminPhone && evolutionChannel) {
-      const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
-      const adminMsg = `🛒 *Nuevo pedido desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
+    if (evolutionChannel) {
       try {
-        await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
+        const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
+        if (adminPhone) {
+          const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
+          const adminMsg = `🛒 *Pedido ${orderLabel} desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
+          await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
+        }
       } catch (sendError) {
         console.error('[Store] Pedido guardado, pero Evolution no notificó al administrador:', sendError.message);
       }
