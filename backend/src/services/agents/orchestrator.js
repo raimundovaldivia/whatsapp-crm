@@ -135,21 +135,6 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     return { escalate: false, reason: 'Mensaje simple', urgency: 'low' };
   }
 
-  // Una pregunta comercial normal que el catálogo puede resolver nunca debe
-  // heredarse como "caso complejo" por reclamos o coordinaciones antiguas del
-  // mismo cliente. Esto incluye mensajes combinados como
-  // "Buen día, precio de la bandeja L?".
-  const productInfoPatterns = [
-    /\b(precio|valor)\s+(de|del|para|por)?\s*(la|el|los|las|una|un)?\b/iu,
-    /\bcu[aá]nto\s+(cuesta|sale|vale|salen|valen)\b/iu,
-    /\bqu[eé]\s+precio\s+(tiene|tienen|sale)\b/iu,
-    /\b(tienen|hay|venden)\b.{0,45}\b(huevos?|bandejas?|cajas?|queso|aceitunas?|productos?)\b/iu,
-  ];
-  const complaintAboutPrice = /\b(me\s+cobraron|cobro|cobrado|pagu[eé]|factura|boleta|no\s+coincide|incorrecto|equivocado|distinto|reclamo|devoluci[oó]n)\b/iu.test(userMessage);
-  if (!complaintAboutPrice && productInfoPatterns.some(pattern => pattern.test(userMessage))) {
-    return { escalate: false, reason: 'Consulta comercial resoluble con catálogo', urgency: 'low' };
-  }
-
   // ── 2. Solicitud explícita de humano (alta prioridad) ──────────
   const hardEscalationPatterns = [
     /habla[r]? con (una |un )?(persona|humano|asesor|agente|vendedor)/i,
@@ -165,9 +150,10 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
 
   // ── 3. Frustración fuerte ─────────────────────────────────────
   const frustrationPatterns = [
-    /no (me |te )?(entiendes?|sirves?|funciona[s]?|ayuda[s]?|entiendes?)/i,
+    /\bno (?:me |te )?(?:entiendes|sirves|funcionas|ayudas)\b/i,
+    /\b(?:el bot|la app|la p[aá]gina|el enlace|el sistema) no (?:me )?(?:sirve|funciona|ayuda)\b/i,
     /\b(mentira|estafa|fraude|engaño|pésimo|horrible|terrible|nefasto)\b/i,
-    /\b(enojado|molesto|furioso|harto|indignado|decepcionado)\b/i,
+    /\b(enojado|molesto|furioso|indignado|decepcionado)\b|\b(?:estoy|me tienen|me tiene)\s+hart[oa]\b/iu,
     /esto (es|está) (un )?desastre/i,
     /nunca (me|te|les) (llega?|contesta[n]?|responde[n]?)/i,
     /llevo (esperando|días?|semanas?) (y|sin)/i,
@@ -201,9 +187,30 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     return { escalate: true, reason: 'Situación de posventa compleja detectada', urgency: 'medium' };
   }
 
+  // Una pregunta comercial normal que el catálogo puede resolver nunca debe
+  // heredarse como "caso complejo" por reclamos o coordinaciones antiguas del
+  // mismo cliente. Esto incluye mensajes combinados como
+  // "Buen día, precio de la bandeja L?".
+  const productInfoPatterns = [
+    /\b(precio|valor)\s+(de|del|para|por)?\s*(la|el|los|las|una|un)?\b/iu,
+    /\bcu[aá]nto\s+(cuesta|sale|vale|salen|valen)\b/iu,
+    /\bqu[eé]\s+precio\s+(tiene|tienen|sale)\b/iu,
+    /\b(tienen|hay|venden)\b.{0,45}\b(huevos?|bandejas?|cajas?|queso|aceitunas?|productos?)\b/iu,
+  ];
+  const complaintAboutPrice = /\b(me\s+cobraron|cobro|cobrado|pagu[eé]|factura|boleta|no\s+coincide|incorrecto|equivocado|distinto|reclamo|devoluci[oó]n)\b/iu.test(userMessage);
+  if (!complaintAboutPrice && productInfoPatterns.some(pattern => pattern.test(userMessage))) {
+    return { escalate: false, reason: 'Consulta comercial resoluble con catálogo', urgency: 'low' };
+  }
+
   // Una continuación comercial concreta no hereda problemas antiguos del
   // historial. Los reclamos, la frustración y las solicitudes de humano ya se
   // resolvieron arriba y por eso conservan prioridad.
+  const day = '(?:hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)';
+  const unavailableDay = new RegExp('^(?:el )?' + day + ' no me (?:sirve|acomoda)|^no me (?:sirve|acomoda) (?:el )?' + day, 'iu');
+  if (unavailableDay.test(userMessage.trim()) && userMessage.trim().split(/\s+/).length <= 6) {
+    return { escalate: false, reason: 'Preferencia de fecha de entrega', urgency: 'low' };
+  }
+
   const standardPurchasePatterns = [
     /\b(quiero|necesito|dame|m[aá]ndame|env[ií]ame|agr[eé]game|an[oó]tame|gu[aá]rdame|llevar[ií]a)\b.{0,70}\b(\d+|un[ao]?|dos|tres|cuatro|xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
     /^\s*\d+\s*(?:x\s*)?(?:xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
