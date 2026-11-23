@@ -1,9 +1,11 @@
 import { timeAgo } from '../utils/dates.js';
 import { Bot, User, MessagesSquare, Pin, StickyNote } from 'lucide-react';
 import { useTheme } from '../theme.js';
+import { useConversationDraft } from '../hooks/useConversationDraft.js';
 
-export default function ConversationItem({ conversation, selected, onClick, now = Date.now() }) {
+export default function ConversationItem({ conversation, drafts, selected, onClick, now = Date.now() }) {
   const { colors } = useTheme();
+  const draft = useConversationDraft(drafts, conversation.id).trim();
   const { contact_name, phone_number, last_message, last_message_at, unread_count, agent_mode } = conversation;
 
   const timeAgoStr = timeAgo(last_message_at);
@@ -121,10 +123,10 @@ export default function ConversationItem({ conversation, selected, onClick, now 
             flex: 1,
             display: 'flex', alignItems: 'center', gap: '4px',
           }}>
-            {agent_mode === 'ai' && last_message && (
+            {draft ? <strong style={{ color: colors.red, flexShrink: 0 }}>Borrador:</strong> : agent_mode === 'ai' && last_message && (
               <Bot size={10} color={colors.green} style={{ flexShrink: 0, opacity: 0.8 }} />
             )}
-            {last_message || 'Sin mensajes'}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{draft || last_message || 'Sin mensajes'}</span>
           </span>
           {unread_count > 0 && (
             <span style={{

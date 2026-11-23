@@ -121,7 +121,7 @@ router.post('/:orgId/:channelId/:token', authenticate, durableWebhook('evolution
           return media;
         },
         markAsRead,
-        sendTextMessage: evolution.sendTextMessage,
+        sendTextMessage: (to, text, config) => evolution.sendTextMessage(to, text, config, { botReply: true }),
       };
       const image = parsed.type === 'image' || (parsed.type === 'document' && /^image\/(jpeg|png|gif|webp)(;|$)/i.test(parsed.mimeType || ''));
       if (image) {

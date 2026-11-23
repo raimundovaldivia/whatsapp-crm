@@ -112,7 +112,7 @@ async function sendMediaMessage(to, media, config) {
   const { phone_number_id } = config;
   const apiKey = config.kapso_api_key || process.env.KAPSO_API_KEY;
   if (!apiKey) throw new Error('No hay Kapso API Key disponible');
-  const type = media.type === 'image' ? 'image' : 'document';
+  const type = ['image', 'video'].includes(media.type) ? media.type : 'document';
   let uploadedMediaId = null;
   if (!media.mediaUrl) {
     const form = new FormData();

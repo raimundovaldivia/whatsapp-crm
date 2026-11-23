@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { setupAPI, api, storeSettingsAPI, settingsAPI, metaAPI } from '../utils/api.js';
 import TemplateManager from './TemplateManager.jsx';
+import InstagramKeywordOffers from './InstagramKeywordOffers.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 
@@ -1501,6 +1502,7 @@ function IATab({ onSwitchTab }) {
         </div>
         <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
+          <InstagramKeywordOffers colors={colors} />
           {/* Toggle IA global */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.bgApp, borderRadius: '10px', padding: '14px 16px' }}>
             <div>

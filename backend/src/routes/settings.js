@@ -23,12 +23,42 @@ const evolutionConnection = require('../services/evolution-connection');
 const crypto          = require('node:crypto');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const dispatchCoverage = require('../services/dispatch-coverage');
+const keywordOffers = require('../services/instagram-keyword-offers');
+const { loadBotCatalog } = require('../services/bot-catalog');
 
 router.use(requireAuth);
 router.use((req, res, next) => {
   if (req.method === 'GET' && req.path === '/modules') return next();
   const roles = req.path === '/warehouse' ? ['owner', 'admin', 'supervisor', 'coordinador'] : ['owner', 'admin'];
   return requireRole(...roles)(req, res, next);
+});
+
+router.get('/instagram-keywords', async (req, res) => {
+  try {
+    const [raw, org, products] = await Promise.all([
+      db.getSetting(req.orgId, keywordOffers.SETTING), db.getOrgById(req.orgId), loadBotCatalog(db, req.orgId),
+    ]);
+    res.json({ rules: keywordOffers.configuredRules(raw, org.slug === keywordOffers.DIEZ_RIOS, products),
+      products: keywordOffers.catalogOptions(products), version: raw });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/instagram-keywords', async (req, res) => {
+  try {
+    const { rules, version } = req.body;
+    if (version !== null && typeof version !== 'string') return res.status(400).json({ error: 'Falta la versión de las ofertas.' });
+    const products = await loadBotCatalog(db, req.orgId);
+    let validated;
+    try { validated = keywordOffers.validateRules(rules, keywordOffers.catalogOptions(products)); }
+    catch (err) { return res.status(400).json({ error: err.message }); }
+    const next = JSON.stringify(validated);
+    const args = [req.orgId, keywordOffers.SETTING, next];
+    const result = version === null
+      ? await db.getPool().query('INSERT INTO settings (organization_id, key, value) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', args)
+      : await db.getPool().query('UPDATE settings SET value=$3 WHERE organization_id=$1 AND key=$2 AND value=$4', [...args, version]);
+    if (!result.rowCount) return res.status(409).json({ error: 'Otra persona cambió estas ofertas. Recarga para ver la versión actual.' });
+    res.json({ rules: validated, version: next });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /**

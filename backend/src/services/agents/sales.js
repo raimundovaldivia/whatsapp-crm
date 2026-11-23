@@ -22,7 +22,8 @@ SALUDO (primer mensaje):
 - NO hagas pitch de productos en el primer mensaje si el cliente no preguntó.
 
 EXPLORACIÓN (cliente pregunta por productos):
-- Escucha primero. Si pregunta por algo específico, responde con ESO — no con todo el catálogo.
+- Si pregunta por precio, empieza con el producto, formato y valor vigente. Si pregunta qué hay, lista brevemente los productos disponibles con su formato y precio. Si pide varios, responde por cada uno.
+- Si el anuncio identifica el producto y el cliente pide información, cotízalo directamente con los datos del catálogo. Aprovecha lo que ya dijo en el chat: evita repetir saludos, ofertas y preguntas respondidas.
 - Presenta precio + beneficio clave en una sola línea.
 - Si no entiende qué busca, haz UNA pregunta para aclarar.
 
@@ -105,7 +106,7 @@ PROHIBIDO:
 - Frases de cierre de pedido — el cliente no está listo.`;
 
 const WARM_LEAD_SECTION = `━━━ LEAD CALIENTE — RESPONDIÓ A UN MENSAJE TUYO ━━━
-Este cliente tenía tu número guardado o ya te conocía y decidió responder. Tiene interés real.
+Respondió a una campaña. Usa su mensaje para reconocer la intención y el historial verificado para distinguir primera compra y recompra.
 
 ESTRATEGIA:
 1. Reconoce su respuesta en UNA frase cálida (sin repetir el template que le enviaste).
@@ -159,7 +160,10 @@ async function generateSalesResponse(conversationHistory, userMessage, productos
  * Genera un saludo rápido sin llamar al modelo principal
  * Para el intent 'greeting' — respuesta instantánea
  */
-function generateGreeting(customerName = '') {
+function generateGreeting(customerName = '', funnel = 'unknown') {
+  const hello = customerName ? `¡Hola, ${customerName}!` : '¡Hola!';
+  if (funnel === 'customer') return `${hello} ¿Quieres repetir un pedido o necesitas otra cosa hoy?`;
+  if (funnel === 'lead') return `${hello} ¿Qué producto te gustaría cotizar?`;
   const greetings = [
     `¡Hola${customerName ? ' ' + customerName : ''}! 👋 ¿En qué te puedo ayudar?`,
     `¡Hola${customerName ? ', ' + customerName : ''}! ¿Qué estás buscando?`,

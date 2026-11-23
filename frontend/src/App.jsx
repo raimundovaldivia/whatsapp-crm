@@ -28,11 +28,13 @@ import { conversationsAPI, authAPI, ordersAPI, paymentProofsAPI, api } from './u
 import { DARK, LIGHT, ThemeCtx } from './theme.js';
 import { deriveAttentionState } from './utils/conversation-attention.js';
 import { inboxConversations } from './utils/inbox-conversations.mjs';
+import { useConversationDraftStore } from './hooks/useConversationDraft.js';
 
 export default function App() {
   const [appState, setAppState] = useState('loading');
   const [user, setUser]         = useState(null);
   const [org, setOrg]           = useState(null);
+  const drafts = useConversationDraftStore(org?.id, user?.id);
   const [view, setView]         = useState('chats');
   const [switchingStore, setSwitchingStore] = useState(false);
 
@@ -537,6 +539,7 @@ export default function App() {
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', height: isMobile ? '100%' : '100vh' }}>
           {showSidebar && (
             <Sidebar
+              drafts={drafts}
               conversations={visibleConversations}
               selectedId={selectedId}
               onSelect={handleSelectConversation}
@@ -548,6 +551,8 @@ export default function App() {
           {showChat && (
             selectedConv ? (
               <ChatWindow
+                key={selectedConv.id}
+                drafts={drafts}
                 conversation={selectedConv}
                 messages={selectedMsgs}
                 availableConversations={conversations}

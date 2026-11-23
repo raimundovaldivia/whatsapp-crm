@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import ReturnsPanel from './ReturnsPanel.jsx';
 import CajaRepartos from './CajaRepartos.jsx';
 import RouteDispatchControls from './RouteDispatchControls.jsx';
+import DeliveryLocationEditor from './DeliveryLocationEditor.jsx';
 import { api, API_BASE } from '../utils/api.js';
 import { authSession } from '../utils/browser-session.js';
 import { useTheme } from '../theme.js';
@@ -389,9 +390,6 @@ function NuevoReparto({ colors }) {
   const [sending,        setSending]        = useState(false);
   const [sentRoute,      setSentRoute]      = useState(null);
   const [error,          setError]          = useState(null);
-  const [editingAddr,    setEditingAddr]    = useState(null); // key de orden en edición
-  const [addrDraft,      setAddrDraft]      = useState('');
-  const [cityDraft,      setCityDraft]      = useState('');
 
   // Multi-vehículo
   const [vehicles,      setVehicles]      = useState(1);        // cuántos vehículos
@@ -552,27 +550,15 @@ function NuevoReparto({ colors }) {
     }
   }
 
-  async function saveAddress(order) {
-    if (!addrDraft.trim()) return;
-    try {
-      const { data } = await api.patch('/delivery/orders/address', {
-        source: order.source, id: order.id, address: addrDraft.trim(), city: cityDraft.trim(), updateContact: true,
-      });
-      const updated = data.stop;
-      setOrders(prev => prev.map(o =>
-        o.source === order.source && String(o.id) === String(order.id)
-          ? { ...o, ...updated }
-          : o
-      ));
-      if (updated?.coverage?.status === 'inside') {
-        setSelected(prev => new Set([...prev, `${order.source}_${order.id}`]));
-      }
-      setEditingAddr(null);
-      setAddrDraft('');
-      setCityDraft('');
-    } catch (e) {
-      setError(e.response?.data?.error || 'Error guardando dirección');
-    }
+  function applyLocation(updated) {
+    const key = `${updated.source}_${updated.id}`;
+    setOrders(prev => prev.map(order => `${order.source}_${order.id}` === key ? { ...order, ...updated } : order));
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (['outside', 'unlocated'].includes(updated.coverage?.status)) next.delete(key);
+      else if (updated.coverage?.status === 'inside') next.add(key);
+      return next;
+    });
   }
 
   async function handleExportXlsx() {
@@ -595,7 +581,9 @@ function NuevoReparto({ colors }) {
       // Col A: #IDNombre
       row[0] = `${o.orderName}${o.customerName}`;
       // Col B: Dirección
-      row[1] = o.fullAddress || '';
+      row[1] = o.fullAddress || mapCoordinates(o)?.join(', ') || '';
+      row[7] = o.lat ?? '';
+      row[8] = o.lng ?? '';
       // Col G: Notas (items)
       row[6] = (o.items || []).map(i => {
         const name  = i.name || i.title || i.product_name || '?';
@@ -764,37 +752,8 @@ function NuevoReparto({ colors }) {
                       </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
-                      <MapPin size={11} color={o.fullAddress ? colors.textMuted : colors.red} />
-                      {!o.fullAddress && editingAddr !== `${o.source}_${o.id}` ? (
-                        <button
-                          onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(''); setCityDraft(o.city || ''); }}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.red, fontSize: '12px', padding: 0, textDecoration: 'underline' }}>
-                          + Agregar dirección
-                        </button>
-                      ) : editingAddr === `${o.source}_${o.id}` ? (
-                        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: '4px', flex: 1, flexWrap: 'wrap' }}>
-                          <input
-                            autoFocus
-                            value={addrDraft}
-                            onChange={e => setAddrDraft(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter') saveAddress(o); if (e.key === 'Escape') { setEditingAddr(null); setAddrDraft(''); } }}
-                            placeholder="Ej: Av. Ejemplo 123, La Serena"
-                            style={{ flex: '1 1 170px', fontSize: '11px', padding: '2px 6px', borderRadius: '5px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, outline: 'none' }}
-                          />
-                          <input value={cityDraft} onChange={e => setCityDraft(e.target.value)} placeholder="Ciudad"
-                            style={{ width: '82px', fontSize: '11px', padding: '2px 6px', borderRadius: '5px', border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, outline: 'none' }} />
-                          <button onClick={() => saveAddress(o)} style={{ background: colors.green, border: 'none', borderRadius: '4px', color: '#fff', fontSize: '11px', padding: '2px 7px', cursor: 'pointer', fontWeight: 600 }}>✓</button>
-                          <button onClick={() => { setEditingAddr(null); setAddrDraft(''); }} style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', fontSize: '12px' }}>✕</button>
-                        </div>
-                      ) : (
-                        <>
-                          <span style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                            {o.fullAddress || '—'}
-                          </span>
-                          <button title="Corregir dirección" onClick={e => { e.stopPropagation(); setEditingAddr(`${o.source}_${o.id}`); setAddrDraft(o.address || ''); setCityDraft(o.city || ''); }}
-                            style={{ background: 'none', border: 'none', color: colors.blue, cursor: 'pointer', padding: 0, fontSize: '11px' }}>editar</button>
-                        </>
-                      )}
+                      <MapPin size={11} color={o.fullAddress || o.manualLocation ? colors.textMuted : colors.red} />
+                      <DeliveryLocationEditor order={o} colors={colors} onSaved={applyLocation} />
                     </div>
                     {o.coverage?.status === 'outside' && (
                       <div style={{ marginTop: 5, color: '#fca5a5', fontSize: '11px', fontWeight: 800 }}>
@@ -1054,7 +1013,7 @@ function NuevoReparto({ colors }) {
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stop.customerName}</div>
-                          <div style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stop.fullAddress || 'Sin dirección'}</div>
+                          <div style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stop.fullAddress || mapCoordinates(stop)?.join(', ') || 'Sin dirección'}</div>
                         </div>
                         {stop.durationText && (
                           <span style={{ color: colors.textMuted, fontSize: '11px', flexShrink: 0 }}>{stop.durationText}</span>
@@ -1824,7 +1783,11 @@ function DespachosRepartos({ colors }) {
                           <td style={{ padding: '8px 12px', color: colors.textSecondary, whiteSpace: 'nowrap' }}>{r.driver_name || '—'}<div style={{ fontSize: '10px', opacity: 0.7 }}>{r.route_name}</div></td>
                           <td style={{ padding: '8px 12px' }}>
                             <div style={{ color: colors.textPrimary, fontWeight: 600 }}>{r.customer_name || '—'} <span style={{ color: colors.textMuted, fontWeight: 400 }}>{r.order_label}</span></div>
-                            <div style={{ color: colors.textMuted, fontSize: '11px' }}>{r.address || ''}</div>
+                            {r.status === 'pending' && ['sent', 'in_progress'].includes(r.route_status) && ['bot', 'shopify', 'return'].includes(r.source)
+                              ? <DeliveryLocationEditor routeId={r.route_id} colors={colors} onSaved={load}
+                                  order={{ source: r.source, id: r.order_id, address: r.street, city: r.city, fullAddress: r.address,
+                                    lat: r.lat, lng: r.lng, manualLocation: r.manualLocation }} />
+                              : <div style={{ color: colors.textMuted, fontSize: '11px' }}>{r.address || ''}</div>}
                             {r.note && <div style={{ color: '#fbbf24', fontSize: '11px' }}>📝 {r.note}</div>}
                           </td>
                           <td style={{ padding: '8px 12px', color: colors.textSecondary }}>
@@ -2507,7 +2470,7 @@ function HistorialRepartos({ colors }) {
                                     }} />
                                     <span style={{ flex: 1, minWidth: 0, fontSize: '12px', color: colors.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                       {o.customerName || o.orderName}
-                                      <span style={{ color: colors.textMuted }}> · {o.fullAddress || 'sin dirección'}</span>
+                                      <span style={{ color: colors.textMuted }}> · {o.fullAddress || mapCoordinates(o)?.join(', ') || 'sin dirección'}</span>
                                       {o.dispatchCount > 0 && <span style={{ color: '#fb923c', fontWeight: 700 }}> · 🔁 {o.dispatchCount + 1}º</span>}
                                     </span>
                                     <span style={{ fontSize: '12px', fontWeight: 700, color: colors.green }}>${Number(o.totalPrice || 0).toLocaleString('es-CL')}</span>

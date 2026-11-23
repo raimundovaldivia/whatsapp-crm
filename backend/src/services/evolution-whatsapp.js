@@ -47,11 +47,17 @@ function client(config) {
   });
 }
 
-async function sendTextMessage(to, text, config) {
+function botTypingDelay(text) {
+  const base = Math.min(5400, 1500 + text.trim().length * 23);
+  return Math.round(base + Math.random() * 1000);
+}
+
+async function sendTextMessage(to, text, config, { botReply = false } = {}) {
   const { instance } = credentials(config);
   const response = await trackedSend(config, () => client(config).post(`/message/sendText/${encodeURIComponent(instance)}`, {
     number: String(to).replace(/\D/g, ''),
     text,
+    ...(botReply ? { delay: botTypingDelay(text) } : {}),
   }));
   const messageId = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id || null;
   return { ...response.data, messageId };
@@ -61,7 +67,7 @@ async function sendMediaMessage(to, media, config) {
   const { instance } = credentials(config);
   const response = await trackedSend(config, () => client(config).post(`/message/sendMedia/${encodeURIComponent(instance)}`, {
     number: String(to).replace(/\D/g, ''),
-    mediatype: media.type === 'image' ? 'image' : 'document',
+    mediatype: ['image', 'video'].includes(media.type) ? media.type : 'document',
     mimetype: media.mimeType,
     caption: media.caption || '',
     media: media.mediaUrl || media.buffer?.toString('base64'),

@@ -525,7 +525,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
 
           {/* Tab pills */}
           {[
-            { key: 'frequency', label: 'Frecuencia de compra', icon: <TrendingUp size={12} /> },
+            { key: 'frequency', label: 'Cautivos y frecuencia', icon: <TrendingUp size={12} /> },
             { key: 'clientes', label: 'Clientes Shopify', icon: <ShoppingBag size={12} /> },
             { key: 'leads',    label: 'Leads WhatsApp',   icon: <Zap size={12} /> },
             ...(showEggRepurchase ? [{ key: 'eggs', label: 'Recompra de huevos', icon: null }] : []),

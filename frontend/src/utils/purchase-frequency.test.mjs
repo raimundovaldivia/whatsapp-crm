@@ -1,8 +1,53 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterFrequencyCustomers, latestConversationId, selectableFrequencyCustomers, toggleFrequencySelection, frequencyBroadcastContacts, initialEvolutionMethod } from './purchase-frequency.mjs';
+import { customerLoyalty, filterFrequencyCustomers, latestConversationId, selectableFrequencyCustomers, toggleFrequencySelection, frequencyBroadcastContacts, initialEvolutionMethod } from './purchase-frequency.mjs';
 import { renderDirectMessage } from './direct-message.mjs';
 import { frequencyDraftRequest, FREQUENCY_FOLLOWUP_INSTRUCTION, purchaseProductLabel } from './purchase-frequency.mjs';
+
+const weeklyBuyer = { name: 'Cliente semanal', phone: '56911111111', purchaseCount: 8, purchaseDays: 4, regularity: 'regular', intervalDays: 7, daysSincePurchase: 7, status: 'due', cadence: 'weekly' };
+
+test('cautivos requires distinct purchase dates, regularity and recent continuity', () => {
+  assert.equal(customerLoyalty(weeklyBuyer).key, 'captive');
+  assert.equal(customerLoyalty({ ...weeklyBuyer, purchaseDays: 1, purchaseCount: 30 }).key, 'developing');
+  assert.equal(customerLoyalty({ ...weeklyBuyer, purchaseDays: 2 }).key, 'developing');
+  assert.equal(customerLoyalty({ ...weeklyBuyer, purchaseDays: 3, regularity: 'variable' }).key, 'occasional');
+  assert.equal(customerLoyalty({ ...weeklyBuyer, purchaseDays: 0, purchaseCount: 0 }).key, 'no_purchases');
+  for (const value of [null, undefined, NaN, Infinity, -1]) {
+    assert.notEqual(customerLoyalty({ ...weeklyBuyer, daysSincePurchase: value }).key, 'captive');
+    assert.notEqual(customerLoyalty({ ...weeklyBuyer, intervalDays: value }).key, 'captive');
+    assert.notEqual(customerLoyalty({ ...weeklyBuyer, purchaseDays: value }).key, 'captive');
+  }
+});
+
+test('risk and inactivity use each customer cadence with explicit tolerance boundaries', () => {
+  assert.equal(customerLoyalty({ ...weeklyBuyer, daysSincePurchase: 14 }).key, 'captive');
+  assert.equal(customerLoyalty({ ...weeklyBuyer, daysSincePurchase: 15 }).key, 'at_risk');
+  assert.equal(customerLoyalty({ ...weeklyBuyer, daysSincePurchase: 60 }).key, 'at_risk');
+  assert.equal(customerLoyalty({ ...weeklyBuyer, daysSincePurchase: 61 }).key, 'inactive');
+  const monthly = { ...weeklyBuyer, intervalDays: 30 };
+  assert.equal(customerLoyalty({ ...monthly, daysSincePurchase: 45 }).key, 'captive');
+  assert.equal(customerLoyalty({ ...monthly, daysSincePurchase: 46 }).key, 'at_risk');
+  assert.equal(customerLoyalty({ ...monthly, daysSincePurchase: 90 }).key, 'at_risk');
+  assert.equal(customerLoyalty({ ...monthly, daysSincePurchase: 91 }).key, 'inactive');
+  assert.equal(customerLoyalty({ ...monthly, regularity: 'variable', daysSincePurchase: 61 }).key, 'inactive');
+  assert.equal(customerLoyalty({ ...monthly, purchaseDays: 1, daysSincePurchase: 61 }).key, 'inactive');
+});
+
+test('loyalty composes with filters and cannot override opt-out or pending delivery', () => {
+  const blocked = { ...weeklyBuyer, name: 'Baja', phone: '56922222222', optedOut: true };
+  const pending = { ...weeklyBuyer, name: 'Pendiente', phone: '56933333333', status: 'pending_dispatch' };
+  const risk = { ...weeklyBuyer, name: 'En riesgo', phone: '56944444444', daysSincePurchase: 20, status: 'overdue' };
+  const list = [weeklyBuyer, blocked, pending, risk];
+  const captives = filterFrequencyCustomers(list, { loyalty: 'captive' });
+  assert.equal(captives.length, 3);
+  assert.deepEqual(selectableFrequencyCustomers(captives), [weeklyBuyer]);
+  assert.deepEqual(filterFrequencyCustomers(list, { loyalty: 'captive', status: 'followup' }), [weeklyBuyer]);
+  assert.deepEqual(filterFrequencyCustomers(list, { loyalty: 'at_risk', cadence: 'weekly', search: 'riesgo' }), [risk]);
+  assert.deepEqual(filterFrequencyCustomers(list, { loyalty: 'captive', cadence: 'monthly' }), []);
+  assert.deepEqual(frequencyBroadcastContacts(captives, [blocked.phone, pending.phone]), []);
+  assert.equal(list.length, 4);
+  assert.equal(list[0], weeklyBuyer);
+});
 
 test('automatic drafting sends explicit phones and a frequency source, leaving history to the server', () => {
   const phones = ['56911111111', '56922222222'];

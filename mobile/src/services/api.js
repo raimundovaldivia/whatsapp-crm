@@ -249,10 +249,10 @@ export async function updateStopStatus(routeId, stopKey, status, paymentMethod, 
 }
 
 /** Corrige la dirección del pedido y de la parada asignada al repartidor. */
-export async function updateStopAddress(routeId, stopKey, address, city, updateContact = true) {
+export async function updateStopAddress(routeId, stopKey, location) {
   const client = await getClient();
   const res = await client.patch(`/api/delivery/routes/${routeId}/stops/address`, {
-    stopKey, address, city, updateContact,
+    stopKey, ...location,
   });
   return res.data?.stop || null;
 }
