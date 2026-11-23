@@ -31,8 +31,6 @@ const MANUAL_REASON_LABELS = {
 };
 
 const INFERRED_REASONS = {
-  initial: ['no_reply_initial', 'No respondió la conversación inicial', 0.52],
-  product_interest: ['no_reply_after_offer', 'No respondió después de producto o precio', 0.58],
   order_details: ['incomplete_order', 'No completó los datos del pedido', 0.64],
   link_sent: ['link_not_opened', 'No abrió el enlace enviado', 0.82],
   link_clicked: ['friction_after_click', 'Abrió el enlace, pero no terminó el pedido', 0.86],
@@ -118,6 +116,7 @@ function classifyReason(row, stage, feedback = null, reply) {
   const observed = explicitReason(row.recent_inbound_text);
   if (observed) return observed;
   if (['store','review','closed'].includes(reply)) return { code: reply, label: REPLY_LABELS[reply], source: 'inferred', confidence: null };
+  if (['initial','product_interest'].includes(stage)) return { code: reply, label: REPLY_LABELS[reply], source: 'observed', confidence: 1 };
   const inferred = INFERRED_REASONS[stage];
   if (inferred) return { code: inferred[0], label: inferred[1], source: 'inferred', confidence: inferred[2] };
   return { code: 'unknown', label: 'Motivo desconocido', source: 'unknown', confidence: null };
