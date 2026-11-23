@@ -1739,7 +1739,7 @@ async function getLeadJourneyRows(orgId, { from = null, to = null, provider = nu
        SELECT DISTINCT ON (wa.conversation_id)
               wa.conversation_id, wa.provider, wa.source_url, wa.headline,
               wa.campaign_id, wa.campaign_name, wa.adset_name, wa.ad_id, wa.ad_name,
-              wa.first_seen_at
+              wa.first_seen_at, wa.message_id
          FROM whatsapp_attributions wa
         WHERE ${where.join(' AND ')}
         ORDER BY wa.conversation_id, wa.first_seen_at ASC, wa.id ASC
@@ -1748,6 +1748,7 @@ async function getLeadJourneyRows(orgId, { from = null, to = null, provider = nu
             c.order_draft, c.limbo_reason_code, c.limbo_reason_note,
             a.provider, a.source_url, a.headline, a.campaign_id,
             a.campaign_name, a.adset_name, a.ad_id, a.ad_name, a.first_seen_at,
+            message_stats.journey_messages,
             first_inbound.created_at AS first_inbound_at,
             first_response.created_at AS first_response_at,
             next_inbound.created_at AS first_customer_reply_at,
@@ -1769,31 +1770,35 @@ async function getLeadJourneyRows(orgId, { from = null, to = null, provider = nu
             last_message.created_at AS last_message_at
        FROM attributed a
        JOIN conversations c ON c.id = a.conversation_id AND c.organization_id = $1
+       LEFT JOIN messages origin ON origin.id = a.message_id AND origin.conversation_id = c.id AND origin.direction = 'inbound'
        LEFT JOIN LATERAL (
-         SELECT m.created_at FROM messages m
+         SELECT m.id, m.created_at FROM messages m
           WHERE m.conversation_id = c.id AND m.direction = 'inbound'
-            AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+            AND (m.created_at, m.id) >= (COALESCE(origin.created_at, a.first_seen_at AT TIME ZONE 'UTC'), COALESCE(origin.id, 0))
           ORDER BY m.created_at ASC, m.id ASC LIMIT 1
        ) first_inbound ON TRUE
        LEFT JOIN LATERAL (
-         SELECT m.created_at FROM messages m
+         SELECT m.id, m.created_at FROM messages m
           WHERE m.conversation_id = c.id AND m.direction = 'outbound'
-            AND first_inbound.created_at IS NOT NULL AND m.created_at >= first_inbound.created_at
+            AND first_inbound.created_at IS NOT NULL AND (m.created_at, m.id) > (first_inbound.created_at, first_inbound.id)
+            AND COALESCE(m.status, '') NOT IN ('pending','queued','deferred','failed','cancelled','scheduled')
           ORDER BY m.created_at ASC, m.id ASC LIMIT 1
        ) first_response ON TRUE
        LEFT JOIN LATERAL (
-         SELECT m.created_at FROM messages m
+         SELECT m.id, m.created_at FROM messages m
           WHERE m.conversation_id = c.id AND m.direction = 'inbound'
-            AND first_response.created_at IS NOT NULL AND m.created_at > first_response.created_at
+            AND first_response.created_at IS NOT NULL AND (m.created_at, m.id) > (first_response.created_at, first_response.id)
           ORDER BY m.created_at ASC, m.id ASC LIMIT 1
        ) next_inbound ON TRUE
        LEFT JOIN LATERAL (
-         SELECT COUNT(*)::int AS messages_count,
+         SELECT json_agg(json_build_array(m.direction, m.content, m.type) ORDER BY m.created_at, m.id) AS journey_messages,
+                COUNT(*)::int AS messages_count,
                 COUNT(*) FILTER (WHERE m.direction = 'inbound')::int AS inbound_count,
                 COUNT(*) FILTER (WHERE m.direction = 'outbound')::int AS outbound_count,
                 BOOL_OR(m.direction = 'outbound' AND m.content ~* 'https?://') AS has_outbound_url
            FROM messages m WHERE m.conversation_id = c.id
-            AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+            AND (m.direction = 'inbound' OR (m.direction = 'outbound' AND COALESCE(m.status, '') NOT IN ('pending','queued','deferred','failed','cancelled','scheduled')))
+            AND (m.created_at, m.id) >= (COALESCE(origin.created_at, a.first_seen_at AT TIME ZONE 'UTC'), COALESCE(origin.id, 0))
        ) message_stats ON TRUE
        LEFT JOIN LATERAL (
          SELECT COUNT(*)::int AS orders_count, MIN(o.created_at) AS first_order_at
@@ -1815,14 +1820,15 @@ async function getLeadJourneyRows(orgId, { from = null, to = null, provider = nu
            FROM (
              SELECT m.content, m.created_at FROM messages m
               WHERE m.conversation_id = c.id AND m.direction = 'inbound'
-                AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+                AND (m.created_at, m.id) >= (COALESCE(origin.created_at, a.first_seen_at AT TIME ZONE 'UTC'), COALESCE(origin.id, 0))
               ORDER BY m.created_at DESC, m.id DESC LIMIT 8
            ) recent
        ) recent_inbound ON TRUE
        LEFT JOIN LATERAL (
          SELECT m.direction, m.created_at FROM messages m
           WHERE m.conversation_id = c.id
-            AND (m.created_at AT TIME ZONE 'UTC') >= a.first_seen_at
+            AND (m.direction = 'inbound' OR (m.direction = 'outbound' AND COALESCE(m.status, '') NOT IN ('pending','queued','deferred','failed','cancelled','scheduled')))
+            AND (m.created_at, m.id) >= (COALESCE(origin.created_at, a.first_seen_at AT TIME ZONE 'UTC'), COALESCE(origin.id, 0))
           ORDER BY m.created_at DESC, m.id DESC LIMIT 1
        ) last_message ON TRUE
       ORDER BY a.first_seen_at DESC`,

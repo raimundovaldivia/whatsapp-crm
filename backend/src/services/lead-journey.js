@@ -1,5 +1,7 @@
 'use strict';
 
+const { isNoResponseNeeded, normalizeInboundText } = require('./inbound-message-policy');
+
 const EXPLICIT_REASONS = [
   { code: 'competitor', label: 'Compró en otro lugar', confidence: 0.99, pattern: /\b(ya )?(compr[eé]|compramos|lo compr[eé]).{0,55}\b(otro medio|otro lado|otra parte|otra tienda|otro proveedor)\b/i },
   { code: 'no_need', label: 'No lo necesita ahora', confidence: 0.97, pattern: /\b(ya no necesito|no necesito|no requiero|no lo tomar[eé]|por (ahora|el momento) no lo (tomar[eé]|quiero))\b/i },
@@ -29,8 +31,6 @@ const MANUAL_REASON_LABELS = {
 };
 
 const INFERRED_REASONS = {
-  initial: ['no_reply_initial', 'No respondió la conversación inicial', 0.52],
-  product_interest: ['no_reply_after_offer', 'No respondió después de producto o precio', 0.58],
   order_details: ['incomplete_order', 'No completó los datos del pedido', 0.64],
   link_sent: ['link_not_opened', 'No abrió el enlace enviado', 0.82],
   link_clicked: ['friction_after_click', 'Abrió el enlace, pero no terminó el pedido', 0.86],
@@ -67,7 +67,43 @@ function feedbackFromRow(row = {}) {
   } catch { return null; }
 }
 
-function classifyReason(row, stage, feedback = null) {
+const REPLY_LABELS = {
+  store: 'Diez Ríos debe responder',
+  review: 'Revisar si resolvimos la consulta',
+  first_silence: 'Sin respuesta del lead desde nuestra primera contestación',
+  later_silence: 'El lead conversó y luego dejó de responder',
+  closed: 'Conversación cerrada',
+  converted: 'Pedido creado',
+};
+
+function classifyReply(row, stage, feedback) {
+  if (stage === 'converted') return 'converted';
+  if (feedback?.status === 'completed') return 'closed';
+  const turns = [];
+  for (const [direction, content, type] of row.journey_messages || []) {
+    if (turns.at(-1)?.direction !== direction) turns.push({ direction, texts: [], media: false });
+    const turn = turns.at(-1);
+    turn.texts.push(String(content || '').trim());
+    if (type && type !== 'text') turn.media = true;
+  }
+  const last = turns.at(-1);
+  if (!last || !row.first_inbound_at) return 'review';
+  if (last.direction === 'inbound') {
+    if (last.texts.every(text => text && isNoResponseNeeded(text))) return 'closed';
+    return 'store';
+  }
+  const question = normalizeInboundText(turns.at(-2)?.texts.join(' '));
+  const answer = normalizeInboundText(last.texts.join(' '));
+  const finalText = normalizeInboundText(last.texts.at(-1));
+  if (/\b(?:te|le) (?:voy a (?:confirmar|averiguar)|confirmo en un rato|aviso (?:en un rato|apenas)|confirmare|averiguo y)/.test(finalText)) return 'store';
+  if (!answer || last.media) return 'review';
+  if (/\b(?:preci[oa]s?|valor(?:es)?|cuanto (?:sale|cuesta|vale|estan?))\b/.test(question)
+      && !/(?:\$\s*\d|\b\d[\d.,]*\s*(?:pesos|mil|clp)\b|\b\d{4,}\b|\b\d{1,3}[.,]\d{3}\b)/.test(answer)) return 'review';
+  if (turns.at(-2)?.texts.every(text => text && isNoResponseNeeded(text))) return 'closed';
+  return row.first_customer_reply_at ? 'later_silence' : 'first_silence';
+}
+
+function classifyReason(row, stage, feedback = null, reply) {
   if (stage === 'converted') {
     return { code: 'converted', label: 'Convirtió en pedido', source: 'observed', confidence: 1 };
   }
@@ -79,6 +115,8 @@ function classifyReason(row, stage, feedback = null) {
   }
   const observed = explicitReason(row.recent_inbound_text);
   if (observed) return observed;
+  if (['store','review','closed'].includes(reply)) return { code: reply, label: REPLY_LABELS[reply], source: 'inferred', confidence: null };
+  if (['initial','product_interest'].includes(stage)) return { code: reply, label: REPLY_LABELS[reply], source: 'observed', confidence: 1 };
   const inferred = INFERRED_REASONS[stage];
   if (inferred) return { code: inferred[0], label: inferred[1], source: 'inferred', confidence: inferred[2] };
   return { code: 'unknown', label: 'Motivo desconocido', source: 'unknown', confidence: null };
@@ -87,13 +125,18 @@ function classifyReason(row, stage, feedback = null) {
 function classifyJourney(row) {
   const stage = classifyStage(row);
   const feedback = feedbackFromRow(row);
-  const reason = classifyReason(row, stage, feedback);
+  const reply = classifyReply(row, stage, feedback);
+  const reason = classifyReason(row, stage, feedback, reply);
+  const { journey_messages, ...publicRow } = row;
   const silentHours = numberOrNull(row.silent_hours);
   const feedbackCompleted = feedback?.status === 'completed';
   const active = stage !== 'converted' && !feedbackCompleted && silentHours !== null && silentHours < 2;
   const outcome = stage === 'converted' ? 'converted' : active ? 'active' : 'limbo';
   return {
-    ...row,
+    ...publicRow,
+    reply_status: reply,
+    reply_label: REPLY_LABELS[reply],
+    never_replied: Boolean(row.first_response_at && !row.first_customer_reply_at),
     stage,
     stage_label: STAGE_LABELS[stage],
     outcome,
@@ -128,7 +171,9 @@ function summarizeJourneys(rows) {
   const records = rows.map(classifyJourney);
   const stages = new Map();
   const reasons = new Map();
+  const replies = new Map();
   for (const record of records) {
+    increment(replies, record.reply_status, record.reply_label);
     increment(stages, record.stage, record.stage_label);
     if (record.outcome === 'limbo') increment(reasons, record.reason_code, record.reason_label);
   }
@@ -153,6 +198,8 @@ function summarizeJourneys(rows) {
       active: records.length - converted - limbo,
       conversion_rate: records.length ? Math.round(converted * 1000 / records.length) / 10 : 0,
     },
+    replies: [...replies.values()],
+    never_replied: records.filter(record => record.never_replied).length,
     funnel: {
       contacts: records.length,
       answered: records.filter(record => record.first_response_at).length,
