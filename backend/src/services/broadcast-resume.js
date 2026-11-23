@@ -20,6 +20,27 @@ async function resumeCampaign({ pool, orgId, campaignId, excludeOrdersThisWeek =
       await client.query('COMMIT');
       return { campaign, alreadyRunning: true };
     }
+    // Only retry the known pre-provider failure. Accepted or uncertain attempts
+    // for the same phone must remain untouched.
+    if (campaign.sending_provider === 'evolution' && campaign.pacing_settings?.manualReplies === true) {
+      const missingColumn = 'column "campaign_manual_hold" does not exist';
+      await client.query(`WITH retry AS (
+        UPDATE broadcast_jobs j SET state = 'pending', claimed_at = NULL, result = NULL
+        WHERE j.campaign_id = $1 AND j.organization_id = $2 AND j.state = 'done'
+          AND j.result->>'success' = 'false' AND j.result->>'error' = $3
+          AND EXISTS (SELECT 1 FROM broadcast_campaign_recipients r WHERE r.campaign_id = j.campaign_id
+            AND r.organization_id = j.organization_id AND r.destination_phone = j.item->>'phone'
+            AND r.result_status = 'failed' AND r.error_message = $3)
+          AND NOT EXISTS (SELECT 1 FROM broadcast_campaign_recipients r WHERE r.campaign_id = j.campaign_id
+            AND r.organization_id = j.organization_id AND r.destination_phone = j.item->>'phone'
+            AND (r.whatsapp_message_id IS NOT NULL OR r.result_status IS DISTINCT FROM 'failed'
+              OR r.error_message IS DISTINCT FROM $3))
+        RETURNING j.item->>'phone' AS phone)
+        DELETE FROM broadcast_campaign_recipients r USING retry WHERE r.campaign_id = $1
+          AND r.organization_id = $2 AND r.destination_phone = retry.phone
+          AND r.result_status = 'failed' AND r.error_message = $3 AND r.whatsapp_message_id IS NULL`,
+      [campaignId, orgId, missingColumn]);
+    }
     const counts = (await client.query(`SELECT
       COUNT(*) FILTER (WHERE state = 'pending')::int AS pending,
       COUNT(*) FILTER (WHERE state = 'processing')::int AS processing,
