@@ -86,6 +86,7 @@ function filterByDate(orders, dateFilter, customDate) {
 
 function filterBySource(orders, sourceFilter) {
   if (sourceFilter === 'all') return orders;
+  if (sourceFilter === 'web') return orders.filter(o => o.raw?.order_origin === 'web');
   return orders.filter(o => o.source === sourceFilter);
 }
 
@@ -1130,6 +1131,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
           {[
             { key: 'all',     label: 'Todos',   icon: null },
             { key: 'bot',     label: 'DR',       icon: null },
+            { key: 'web',     label: 'Tienda web', icon: null },
             { key: 'shopify', label: '🛍️ Shopify', icon: null },
           ].map(({ key, label }) => (
             <button key={key} onClick={() => setSourceFilterR(key)}
@@ -1439,6 +1441,9 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', backgroundColor: '#0d1f0d', border: '1px solid #1a3d1a', fontSize: '11px', fontWeight: 600, color: colors.green, flexShrink: 0 }}>
           <Package size={10} /> {crmOrderLabel(order.id)}
         </div>
+        {order.order_origin === 'web' && (
+          <span style={{ color: colors.textSecondary, fontSize: '11px', flexShrink: 0 }}>Tienda web</span>
+        )}
 
         {/* Badge estado */}
         <div style={{ backgroundColor: status.bg, color: status.color, borderRadius: '20px', padding: '3px 10px', fontSize: '11px', fontWeight: 500, border: `1px solid ${status.color}33`, flexShrink: 0 }}>

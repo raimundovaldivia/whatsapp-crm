@@ -2184,8 +2184,8 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
     }
 
     const { rows: [order] } = await client.query(
-      `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft') RETURNING *`,
+      `INSERT INTO orders (conversation_id, organization_id, items, customer_name, customer_phone, shipping_address, total_price, status, order_origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft', 'web') RETURNING *`,
       [conversationId, organizationId, JSON.stringify(resolvedItems), customerName, customerPhone,
         JSON.stringify(shippingAddress), total.toFixed(0)]
     );

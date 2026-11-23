@@ -14,7 +14,20 @@ const whatsapp      = require('../services/whatsapp-provider');
 const { getPool }   = require('../db/database');
 const xlPricing = require('../services/xl-welcome-pricing');
 const quantityPricing = require('../services/quantity-pricing');
+const { crmOrderLabel } = require('../utils/order-reference');
 const { setProductFavorite } = require('../services/product-favorites');
+
+async function getTransferInstructions(orgId) {
+  const paymentInfo = await db.getSetting(orgId, 'payment_info').catch(() => null);
+  if (typeof paymentInfo === 'string' && paymentInfo.trim()) return paymentInfo.trim();
+
+  try {
+    const settings = JSON.parse(await db.getSetting(orgId, 'charge_settings'));
+    return typeof settings?.bankDetails === 'string' ? settings.bankDetails.trim() : '';
+  } catch {
+    return '';
+  }
+}
 
 // ── Helper: obtener org por slug ────────────────────────────────────
 async function getOrgBySlug(slug) {
@@ -185,13 +198,15 @@ router.post('/:slug/orders', async (req, res) => {
     // Guardar contacto
     db.upsertContact(org.id, { phone: phoneClean, name, address, city }).catch(() => {});
 
+    const orderLabel = crmOrderLabel(order.id);
     const itemsText = resolvedItems
       .map(i => `  • ${i.title} x${i.quantity} — $${(i.price * i.quantity).toLocaleString('es-CL')}`)
       .join('\n');
+    const transferInstructions = evolutionChannel ? await getTransferInstructions(org.id) : '';
     const msg = [
       `¡Hola ${name}! 👋`,
       ``,
-      `Tu pedido fue recibido ✅`,
+      `Recibimos tu pedido ${orderLabel} ✅`,
       ``,
       `📦 *Productos:*`,
       itemsText,
@@ -199,7 +214,13 @@ router.post('/:slug/orders', async (req, res) => {
       `📍 *Entrega:* ${address}, ${city}`,
       ...(deliveryFee != null ? [`🚚 *Despacho:* ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
       `💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}`,
-      `💳 *Pago:* Contra entrega`,
+      `💳 *Pago:* Puedes pagar al recibir tu pedido.`,
+      ...(transferInstructions ? [
+        '',
+        'Si prefieres pagar por transferencia, estos son los datos:',
+        transferInstructions,
+        `Envíanos el comprobante por este WhatsApp e indica el folio ${orderLabel}.`,
+      ] : []),
       ``,
       `Pronto te confirmaremos la fecha de despacho 🚀`,
     ].join('\n');
@@ -217,12 +238,14 @@ router.post('/:slug/orders', async (req, res) => {
     }
 
     // Notificar al admin por la misma conexión directa.
-    const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
-    if (adminPhone && evolutionChannel) {
-      const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
-      const adminMsg = `🛒 *Nuevo pedido desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
+    if (evolutionChannel) {
       try {
-        await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
+        const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
+        if (adminPhone) {
+          const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
+          const adminMsg = `🛒 *Pedido ${orderLabel} desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
+          await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
+        }
       } catch (sendError) {
         console.error('[Store] Pedido guardado, pero Evolution no notificó al administrador:', sendError.message);
       }
