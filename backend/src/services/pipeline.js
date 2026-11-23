@@ -621,7 +621,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
     ? personalOffers.promptSection(personalOffer)
     : (xlContext.enabled && !promotionContext?.active ? xlPricing.prompt(xlContext, products) : '');
   const relationshipSection = {
-    lead: 'Primera compra: contesta con formato y precio vigente del producto consultado o anunciado. Si ya eligió, avanza al pedido.',
+    lead: 'Primera compra, desde cualquier canal. Empieza por resolver lo que preguntó: producto, formato, cantidad por envase y precio vigente. Si pregunta qué hay, muestra las opciones pertinentes del catálogo. Si también consulta despacho, incluye cobertura y costo conocidos en el mismo mensaje. Usa la comuna si ya la dio. Haz como máximo una pregunta por el próximo dato que falta. Si acepta una cotización, conserva el producto y la cantidad elegidos para el pedido. Si había varias opciones, aclara cuál quiere. Un anuncio aporta contexto; el mensaje actual tiene prioridad.',
     customer: 'Cliente con compras verificadas: responde lo que consulta hoy. Si pide repetir, usa únicamente artículos comprobados del historial y cotiza al precio vigente. Confirma antes de registrar.',
     unknown: 'Historial sin verificar: responde la consulta sin asumir compras anteriores ni ofrecer beneficios de primera compra.',
   }[salesFunnel];
@@ -1119,7 +1119,7 @@ Reglas estrictas:
 
   if (isSoftFutureIntent(userMessage) && !['scheduled', 'collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
     if (currentState !== 'scheduled') await db.updatePipelineState(conversationId, 'future_interest');
-    return { response: 'Claro, avísame cuando lo tengas decidido 😊', agentType: 'orchestrator', newState: currentState === 'scheduled' ? 'scheduled' : 'future_interest' };
+    return { response: salesFunnel === 'lead' ? 'Está bien, gracias a ti 😊' : 'Claro, avísame cuando lo tengas decidido 😊', agentType: 'orchestrator', newState: currentState === 'scheduled' ? 'scheduled' : 'future_interest' };
   }
 
   // ── Agendado vigente? ──────────────────────────────────────────────────────
@@ -1346,6 +1346,23 @@ REGLAS ABSOLUTAS:
       escalationReason: priorityHandoff.reason };
   }
 
+  // Las respuestas rápidas de precio o reparto cubren una sola parte de una consulta mixta.
+  const mixedFirstPurchase = salesFunnel === 'lead'
+    && /\b(?:huevos?|bandejas?|cajas?|xl|jumbo|quesos?|manjar|aceitunas?|productos?)\b/iu.test(userMessage)
+    && /\b(?:despach\w*|repart\w*|env[ií]os?|env[ií]an|entreg\w*|delivery)\b/iu.test(userMessage);
+  async function completeQuote(answer, topic) {
+    if (!mixedFirstPurchase) return answer;
+    if (topic === 'producto' && deliveryEnabled) {
+      const shipping = xlPricing.deliveryPriceReply(userMessage, xlContext, freeShippingRaw);
+      if (shipping) return answer + '\n' + shipping;
+    }
+    const missing = topic === 'producto' ? 'el despacho según la zona, costo y horario consultados' : 'el producto consultado con su formato y precio vigente';
+    const supplement = await salesAgent.generateSalesResponse(history, userMessage, productosTexto,
+      [storeCustomPrompt, 'Ya se incluirá esta respuesta verificada: ' + answer, 'Redacta únicamente la parte que falta sobre ' + missing + '. Si falta información, pide solo el dato necesario.'].join('\n'),
+      { customerName: contact?.name?.split(' ')[0] });
+    return supplement && !supplement.includes('[NO_RESPONSE]') ? answer + '\n' + supplement : answer;
+  }
+
   const adPriceReply = boxCampaign.directPriceReply(userMessage, customerPrices);
   if (triggeredKeyword) {
     const salesOpen = (await db.getSetting(orgId, 'bot_sales_enabled')) !== 'false';
@@ -1362,7 +1379,7 @@ REGLAS ABSOLUTAS:
     await db.updatePipelineState(conversationId, 'interested', orderDraft);
     const delivery = boxAdDeliveryGreeting(deliverySchedule, deliveryZone, cutoffTime, nowCl, closingPolicy);
     const response = adPriceReply || (delivery + '\n\n' + (boxCampaign.directPriceReply('Precios', boxOffer) || boxOffer.reply));
-    return { response, agentType: 'sales', newState: 'interested' };
+    return { response: await completeQuote(response, 'producto'), agentType: 'sales', newState: 'interested' };
   }
 
   // Un contacto particular que pide precios por mayor no debe recibir el
@@ -1370,19 +1387,20 @@ REGLAS ABSOLUTAS:
   // el contexto comercial, pero nunca se cambia su tipo de cliente solo por
   // una frase ni se exponen precios reservados antes de validarlo.
   if (!isEmpresa && orderInputPolicy.isWholesaleInquiry(userMessage)) {
-    const reason = `Consulta mayorista pendiente de validación: ${String(userMessage).slice(0, 300)}`;
+    const context = history.filter(m => m.direction === 'inbound' && m.content && m.content !== userMessage).slice(-2).map(m => m.content).concat(userMessage).join(' · ').slice(-600);
+    const reason = `Consulta mayorista pendiente de validación${salesFunnel === 'lead' ? ' para primera compra' : ''}: ${context}`;
     await db.setAgentMode(conversationId, 'coordinating');
     if (typeof db.setLastEscalation === 'function') await db.setLastEscalation(conversationId, userMessage, reason);
     await db.updatePipelineState(conversationId, 'interested', orderDraft || {});
     L.agent('orchestrator', 0);
     L.step('wholesale_validation', 'contacto no clasificado como empresa');
     return {
-      response: 'Sí atendemos compras por mayor. Para cotizarte correctamente, indícame el nombre del negocio, la comuna, el producto y la cantidad aproximada. Dejé tu solicitud al equipo comercial para que valide el formato y los precios de empresa.',
+      response: salesFunnel === 'lead' ? 'Le paso tu cotización mayorista al equipo con los datos que me diste. Te responden por aquí.' : 'Sí atendemos compras por mayor. Para cotizarte correctamente, indícame el nombre del negocio, la comuna, el producto y la cantidad aproximada. Dejé tu solicitud al equipo comercial para que valide el formato y los precios de empresa.',
       agentType: 'orchestrator',
       newState: 'interested',
       switchToHuman: true,
       escalationReason: reason,
-      adminNotice: `🏢 *Consulta mayorista* — ${conversation.contact_name || conversation.phone_number || 'Contacto social'}: "${String(userMessage).slice(0, 300)}"`,
+      adminNotice: `🏢 *Consulta mayorista* — ${conversation.contact_name || conversation.phone_number || 'Contacto social'}: "${context}"`,
     };
   }
 
@@ -1406,7 +1424,7 @@ REGLAS ABSOLUTAS:
     L.agent('sales', 0);
     L.step('promotion_price_question', `${promotionContext.templateName} (${promotionContext.offers.length} opciones)`);
     return {
-      response: promotions.priceReply(promotionContext),
+      response: await completeQuote(promotions.priceReply(promotionContext), 'producto'),
       agentType: 'sales',
       newState: 'interested',
     };
@@ -2132,7 +2150,7 @@ REGLAS ABSOLUTAS:
     L.agent('sales', 0);
     L.step('delivery_price', 'regla exacta de costo y cobertura');
     return {
-      response: deliveryPriceReply,
+      response: await completeQuote(deliveryPriceReply, 'despacho'),
       agentType: 'sales',
       newState: currentState,
     };
@@ -2168,14 +2186,14 @@ REGLAS ABSOLUTAS:
       await db.updatePipelineState(conversationId, 'interested', undefined);
       L.agent('sales', 0);
       L.step('tray_count_price_quote', 'total exacto por cantidad desde catálogo activo');
-      return { response: trayCountPriceReply, agentType: 'sales', newState: 'interested' };
+      return { response: await completeQuote(trayCountPriceReply, 'producto'), agentType: 'sales', newState: 'interested' };
     }
     const quantityPriceReply = xlPricing.quantityPriceReply(userMessage, history, products, xlContext);
     if (quantityPriceReply) {
       await db.updatePipelineState(conversationId, 'interested', undefined);
       L.agent('sales', 0);
       L.step('quantity_price_quote', 'cotización exacta desde catálogo activo');
-      return { response: quantityPriceReply, agentType: 'sales', newState: 'interested' };
+      return { response: await completeQuote(quantityPriceReply, 'producto'), agentType: 'sales', newState: 'interested' };
     }
   }
 
@@ -2494,7 +2512,7 @@ REGLAS ABSOLUTAS:
   // ── Mapeo de intent → acción ─────────────────────────────────────
 
   // FAST PATH: Saludo simple → respuesta inmediata sin LLM adicional
-  if (intent === 'greeting' && !isTemplateReply && !quoteGuidance && history.filter(m => m.direction === 'outbound').length === 0) {
+  if (intent === 'greeting' && (salesFunnel !== 'lead' || orchestrator.isSimpleMessage(userMessage)) && !isTemplateReply && !quoteGuidance && history.filter(m => m.direction === 'outbound').length === 0) {
     const greeting = salesAgent.generateGreeting(customerName, salesFunnel);
     await db.updatePipelineState(conversationId, 'exploring');
     L.agent('sales', 0);

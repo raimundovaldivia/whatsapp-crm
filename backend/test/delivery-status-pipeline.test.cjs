@@ -115,9 +115,11 @@ function buildPipeline(deliveryDate, status = 'draft', options = {}) {
       formatDateEs: value => `fecha ${String(value).slice(0, 10)}`,
     },
     './agents/orchestrator': {
+      isSimpleMessage: message => /^hola$/i.test(message),
       checkEscalation: async () => options.escalation || ({ escalate: false, urgency: 'low', reason: '' }),
       classifyIntent: async () => ({ intent: options.intent || 'post_sale', confidence: 1, reason: 'consulta de reparto' }),
     },
+    ...(options.salesAgent ? { './agents/sales': options.salesAgent } : {}),
     './agents/orders': options.ordersAgent || ordersAgent,
   });
 }
@@ -619,3 +621,32 @@ for (const message of ['Porfi no venga tarde', 'Porfavor no llegan tan tarde', '
     assert.ok(!queries.some(q => /INSERT INTO orders/.test(q.sql)));
   });
 }
+
+test('primera compra orgánica recibe el precio y el despacho en el mismo turno', async () => {
+  const calls = [];
+  const pipeline = buildPipeline(null, 'draft', {
+    activeOrder: false, deliveryEnabled: true, freeShipping: '10000',
+    deliveryZone: 'La Serena y Coquimbo', storeSlug: 'diez-rios-mrs96z69',
+    intent: 'delivery_inquiry',
+    salesAgent: { generateSalesResponse: async (...args) => { calls.push(args); return 'La bandeja XL de prueba vale $7.000.'; } },
+  });
+  const result = await pipeline.processMessage(1, 71, '¿Cuánto vale la bandeja XL y el despacho es gratis?');
+  assert.match(result.response, /bandeja XL de prueba/);
+  assert.match(result.response, /\$10\.000/);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][3], /Primera compra, desde cualquier canal/);
+  assert.ok(!result.switchToHuman);
+});
+
+test('un saludo con precio no pierde la consulta aunque el clasificador indique saludo', async () => {
+  const salesAgent = {
+    generateGreeting: () => 'Solo saludo',
+    generateSalesResponse: async () => 'La bandeja XL de prueba vale $7.000.',
+    isReadyToOrder: () => false,
+  };
+  const options = { activeOrder: false, intent: 'greeting', salesAgent };
+  const hello = await buildPipeline(null, 'draft', options).processMessage(1, 71, 'Hola');
+  assert.equal(hello.response, 'Solo saludo');
+  const quote = await buildPipeline(null, 'draft', options).processMessage(1, 71, 'Hola, ¿cuánto vale la bandeja XL?');
+  assert.match(quote.response, /bandeja XL/);
+});

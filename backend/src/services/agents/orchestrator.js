@@ -59,7 +59,7 @@ async function classifyIntent(userMessage, conversationHistory, pipelineState, o
   const SYSTEM = `Eres un clasificador de intenciones para un chat de ventas de WhatsApp.
 Tu ÚNICA tarea es clasificar el mensaje del cliente en UNA de estas categorías:
 
-- greeting: Primer mensaje o saludo simple sin contexto de compra ("hola", "buenas", "hay alguien?")
+- greeting: Saludo simple sin una consulta ("hola", "buenas", "hay alguien?")
 - exploring: El cliente está viendo productos, compara opciones o solo pregunta precio, disponibilidad o características ("¿cuánto cuesta?", "cuánto vale")
 - interested: El cliente muestra una preferencia concreta por un producto, pero todavía no expresa que comprará ("me gusta el XL", "estoy buscando bandejas grandes")
 - wants_to_order: El cliente está listo para comprar ahora ("quiero pedir", "cómo compro", "me lo mandas", "lo quiero pedir")
@@ -70,7 +70,8 @@ Tu ÚNICA tarea es clasificar el mensaje del cliente en UNA de estas categorías
 - human_request: El cliente quiere hablar con una persona real explícitamente${orderIntents}
 
 REGLAS:
-- Si el mensaje es MUY corto (1-3 palabras) y es el inicio, probablemente es "greeting"
+- "Precio", "¿bandejas XL?" y "hola, ¿reparten?" ya expresan consultas, aunque sean el primer mensaje.
+- "Ya, quiero dos" después de cotizar un producto expresa compra. Usa wants_to_order cuando sea un pedido nuevo. Ante varias opciones el agente de pedidos deberá aclarar cuál eligió.
 - Un enlace o URL enviado sin texto adicional NO es una solicitud de humano; clasifícalo como "exploring"
 - Si ya hay historial de conversación largo, no es "greeting"
 - "delivery_inquiry" es distinto de "support": delivery_inquiry es ANTES de comprar, support es DESPUÉS${orderRules}

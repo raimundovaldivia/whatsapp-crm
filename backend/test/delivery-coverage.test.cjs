@@ -47,3 +47,24 @@ test('the prompt forbids inferring non-coverage from an unknown neighborhood', (
   assert.match(prompt, /Sindempart/i);
   assert.match(prompt, /Las Compañías/i);
 });
+
+test('respuestas breves de sector y precio ya cotizado', () => {
+  for (const [message, commune] of [['punta mira sur','Coquimbo'], ['compañía baja','La Serena'], ['Alfalfares','La Serena']]) {
+    const result = coverage.guardResponse({ message, zone, response: 'La bandeja vale $7.000. No tenemos cobertura en ese sector.' });
+    assert.ok(result.includes('La bandeja vale $7.000.'));
+    assert.ok(result.includes('Sí, despachamos en ' + commune));
+  }
+});
+
+test('ubicación ambigua y comuna explícita', () => {
+  assert.equal(coverage.resolveCoveredPlace('Centro', zone), null);
+  assert.equal(coverage.resolveCoveredPlace('Centro, Coquimbo', zone), 'coquimbo');
+  assert.equal(coverage.resolveCoveredPlace('La Serenata', zone), null);
+  assert.equal(coverage.resolveCoveredPlace('Punta Mira', 'La Serena'), null);
+  assert.match(coverage.guardResponse({ message: 'Villa Nueva', zone, response: 'No hay reparto en ese sector.' }), /corresponde a alguna/);
+});
+
+test('cobertura territorial respeta los horarios del reparto', () => {
+  const response = 'Hoy no despachamos por falta de cupos.';
+  assert.equal(coverage.guardResponse({ message: 'Punta Mira', response, zone }), response);
+});
