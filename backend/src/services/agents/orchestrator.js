@@ -111,40 +111,18 @@ Nada más. Solo el JSON.`;
  *
  * @returns {{ escalate: boolean, reason: string, urgency: 'low'|'medium'|'high', loopDetected?: boolean }}
  */
-async function checkEscalation(userMessage, conversationHistory, pipelineState, orgId = null) {
-  if (isBareLinkMessage(userMessage)) {
-    return { escalate: false, reason: 'Enlace compartido sin solicitud explícita', urgency: 'low' };
-  }
-
-  // ── 0. Romper bucle de escalación ────────────────────────────────
-  const ESCALATION_PHRASES = [
-    'voy a conectarte', 'te voy a conectar', 'ya te atienden',
-    'pasarte con', 'asesor para que te ayude', 'conectarte ahora mismo',
-    'un asesor te', 'uno de nuestros asesores',
-  ];
-  const recentBotMsgs = (conversationHistory || []).filter(m => m.direction === 'outbound').slice(-4);
-  const escalationLoopCount = recentBotMsgs.filter(m =>
-    ESCALATION_PHRASES.some(phrase => m.content?.toLowerCase().includes(phrase))
-  ).length;
-  if (escalationLoopCount >= 2) {
-    return { escalate: false, loopDetected: true, reason: 'Rompiendo bucle — bot ya escaló múltiples veces', urgency: 'low' };
-  }
-
-  // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────
-  if (isSimpleMessage(userMessage)) {
-    return { escalate: false, reason: 'Mensaje simple', urgency: 'low' };
-  }
-
+function priorityHandoff(userMessage) {
   // ── 2. Solicitud explícita de humano (alta prioridad) ──────────
   const hardEscalationPatterns = [
     /habla[r]? con (una |un )?(persona|humano|asesor|agente|vendedor)/i,
     /quiero (hablar|habla) con alguien/i,
+    /\b(?:der[ií]vame|comun[ií]came|p[aá]same)\s+(?:con\s+|a\s+)?(?:un[a]?\s+)?(?:ejecutiv[oa]|asesor[a]?|vendedor[a]?|persona|humano)\b/iu,
     /pásame? (con|a) (un |una )?(persona|humano|asesor|agente)/i,
     /\b(asesor|ejecutivo|persona real|humano)\b.*por favor/i,
     /necesito (hablar|ayuda) (de|con) (una persona|alguien)/i,
     /comunicarme? con (alguien|una persona)/i,
   ];
-  if (hardEscalationPatterns.some(p => p.test(userMessage))) {
+  if (!/\bno (?:quiero|necesito) hablar con\b/i.test(userMessage) && hardEscalationPatterns.some(p => p.test(userMessage))) {
     return { escalate: true, reason: 'Cliente solicita hablar con una persona explícitamente', urgency: 'high' };
   }
 
@@ -176,6 +154,38 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     return { escalate: true, reason: 'Posible problema de inocuidad o producto en mal estado', urgency: 'high' };
   }
 
+  if (/\b(?:me (?:cobraron|cobraron de)|cobro|cargo)\s+(?:el\s+)?(?:doble|duplicado|dos veces|de m[aá]s)\b/iu.test(userMessage)) {
+    return { escalate: true, reason: 'Cliente reclama un cobro incorrecto', urgency: 'high' };
+  }
+  return null;
+}
+
+async function checkEscalation(userMessage, conversationHistory, pipelineState, orgId = null) {
+  const priority = priorityHandoff(userMessage);
+  if (priority) return priority;
+  if (isBareLinkMessage(userMessage)) {
+    return { escalate: false, reason: 'Enlace compartido sin solicitud explícita', urgency: 'low' };
+  }
+
+  // ── 0. Romper bucle de escalación ────────────────────────────────
+  const ESCALATION_PHRASES = [
+    'voy a conectarte', 'te voy a conectar', 'ya te atienden',
+    'pasarte con', 'asesor para que te ayude', 'conectarte ahora mismo',
+    'un asesor te', 'uno de nuestros asesores',
+  ];
+  const recentBotMsgs = (conversationHistory || []).filter(m => m.direction === 'outbound').slice(-4);
+  const escalationLoopCount = recentBotMsgs.filter(m =>
+    ESCALATION_PHRASES.some(phrase => m.content?.toLowerCase().includes(phrase))
+  ).length;
+  if (escalationLoopCount >= 2) {
+    return { escalate: false, loopDetected: true, reason: 'Rompiendo bucle — bot ya escaló múltiples veces', urgency: 'low' };
+  }
+
+  // ── 1. Mensajes simples: NUNCA escalar ──────────────────────────
+  if (isSimpleMessage(userMessage)) {
+    return { escalate: false, reason: 'Mensaje simple', urgency: 'low' };
+  }
+
   // ── 4. Post-venta complejo ─────────────────────────────────────
   const postSaleComplexPatterns = [
     /mi pedido (no|nunca) (llegó|llego|ha llegado)/i,
@@ -195,7 +205,7 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     /\b(precio|valor)\s+(de|del|para|por)?\s*(la|el|los|las|una|un)?\b/iu,
     /\bcu[aá]nto\s+(cuesta|sale|vale|salen|valen)\b/iu,
     /\bqu[eé]\s+precio\s+(tiene|tienen|sale)\b/iu,
-    /\b(tienen|hay|venden)\b.{0,45}\b(huevos?|bandejas?|cajas?|queso|aceitunas?|productos?)\b/iu,
+    /\b(tienen|hay|venden)\b.{0,45}\b(huevos?|bandejas?|cajas?|quesos?|manjar|aceitunas?|productos?)\b/iu,
   ];
   const complaintAboutPrice = /\b(me\s+cobraron|cobro|cobrado|pagu[eé]|factura|boleta|no\s+coincide|incorrecto|equivocado|distinto|reclamo|devoluci[oó]n)\b/iu.test(userMessage);
   if (!complaintAboutPrice && productInfoPatterns.some(pattern => pattern.test(userMessage))) {
@@ -212,6 +222,8 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
   }
 
   const standardPurchasePatterns = [
+    /^\s*(?:[¿¡]?\s*)?(?:y\s+)?(?:por|para)\s+(?:dos|tres|\d+)(?:\s+bandejas?)?\s*[?!.]*\s*$/iu,
+    /\b(?:solo|s[oó]lo)\s+si\s+(?:llega[n]?|entregan|despachan)\s+hoy\b|\bsi no es para hoy[,\s]+no gracias\b/iu,
     /\b(quiero|necesito|dame|m[aá]ndame|env[ií]ame|agr[eé]game|an[oó]tame|gu[aá]rdame|llevar[ií]a)\b.{0,70}\b(\d+|un[ao]?|dos|tres|cuatro|xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
     /^\s*\d+\s*(?:x\s*)?(?:xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
     /\b(agr[eé]game|s[uú]mame|ponme)\s+\d+\s+m[aá]s\b/iu,
@@ -302,4 +314,4 @@ Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgenc
   }
 }
 
-module.exports = { classifyIntent, checkEscalation, isSimpleMessage };
+module.exports = { priorityHandoff, classifyIntent, checkEscalation, isSimpleMessage };
