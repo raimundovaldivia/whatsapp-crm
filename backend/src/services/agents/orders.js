@@ -1,5 +1,6 @@
 const { client, modelFor, responseText } = require('../ai-provider');
 const { normalizeDraft } = require('../order-pricing');
+const { formatQuotedReply } = require('../social-events');
 const { isReviewedAffirmative } = require('../order-input-policy');
 
 // Campos requeridos para crear la orden (además de al menos un ítem)
@@ -117,10 +118,10 @@ async function generateOrderResponse(conversationHistory, userMessage, orderDraf
   // Más historial para el agente de pedidos — necesita recordar el contexto completo
   const messages = conversationHistory.slice(-20).map(m => ({
     role: m.direction === 'inbound' ? 'user' : 'assistant',
-    content: m.content,
+    content: formatQuotedReply(m),
   }));
-  const last = messages[messages.length - 1];
-  if (!last || last.role !== 'user' || last.content !== userMessage) {
+  const last = conversationHistory.at(-1);
+  if (last?.direction !== 'inbound' || last.content !== userMessage) {
     messages.push({ role: 'user', content: userMessage });
   }
 
@@ -146,7 +147,7 @@ Campos posibles:
 - customer_name: nombre completo del cliente (ej: "Juan Pérez")
 - items: lista COMPLETA y ACTUAL de productos que el cliente quiere, cada uno {"product_name": "...", "quantity": N}.
     · product_name: nombre del producto + variante tal como aparece en el catálogo o lo más parecido (ej: "Huevos XL Bandeja 30")
-    · quantity: entero. "uno" → 1, "un par" → 2, "media docena" → 6. Si no especifica → 1.
+    · quantity: entero. "uno" → 1, "un par" → 2, "media docena" → 6. Si responde a una oferta citada en Instagram, usa el producto citado pero agrega el ítem solo cuando el cliente indique cuántos envases quiere. Las unidades por envase, la dirección y las preguntas sobre despacho no confirman cantidad. Para los demás pedidos, si no especifica → 1.
     · Si el cliente pidió varios productos, incluye TODOS. Si cambió de opinión ("mejor solo una", "quita la de color"), refleja el estado FINAL, no el histórico.
 - address: dirección de envío incluyendo calle, número y sector si los menciona
 - city: ciudad de envío
@@ -168,7 +169,7 @@ Solo el JSON, nada más.`;
 
   // Usar más historial para capturar el producto aunque se haya mencionado antes
   const recent = conversationHistory.slice(-20).map(m =>
-    `${m.direction === 'inbound' ? 'Cliente' : 'Agente'}: ${m.content}`
+    `${m.direction === 'inbound' ? 'Cliente' : 'Agente'}: ${formatQuotedReply(m)}`
   ).join('\n');
 
   const base = normalizeDraft(currentDraft);

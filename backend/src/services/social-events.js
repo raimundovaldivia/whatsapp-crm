@@ -1,8 +1,19 @@
 function textFromMessage(message = {}) {
+  if (!message) return '';
   if (typeof message.text === 'string' && message.text.trim()) return message.text.trim();
   const attachment = message.attachments?.[0];
   if (attachment?.payload?.url) return `[Adjunto] ${attachment.payload.url}`;
   return attachment ? `[${attachment.type || 'Adjunto'}]` : '';
+}
+
+// Render quotes only for the language model. Address, date, confirmation and
+// quantity checks must still operate on the customer's original words.
+function formatQuotedReply(message) {
+  const quote = message.instagramQuote;
+  if (!quote) return message.content;
+  const author = quote.direction === 'outbound' ? 'la tienda' : 'el cliente';
+  const date = new Date(quote.created_at).toLocaleDateString('es-CL', { timeZone: 'America/Santiago' });
+  return `[Mensaje de ${author} citado en Instagram, del ${date}: ${JSON.stringify(quote.content.slice(0, 2000))}]\nRespuesta del cliente: ${message.content}`;
 }
 
 function timestampMs(value) {
@@ -87,6 +98,7 @@ function commentReplyEndpoint(comment) {
 }
 
 module.exports = {
+  formatQuotedReply,
   extractSocialEvents,
   isOwnActor,
   messageEndpoint,

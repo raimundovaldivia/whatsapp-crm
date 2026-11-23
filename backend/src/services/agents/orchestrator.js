@@ -1,5 +1,6 @@
 const { client, modelFor, responseText } = require('../ai-provider');
 const { isBareLinkMessage } = require('../inbound-message-policy');
+const { formatQuotedReply } = require('../social-events');
 
 const SIMPLE_MESSAGE_PARTS = [
   'buenos dias', 'buenas tardes', 'buenas noches', 'buen dia',
@@ -81,7 +82,7 @@ Nada más. Solo el JSON.`;
   // Más contexto histórico para clasificar mejor
   const history = conversationHistory.slice(-8).map(m => ({
     role: m.direction === 'inbound' ? 'user' : 'assistant',
-    content: m.content,
+    content: formatQuotedReply(m),
   }));
 
   try {

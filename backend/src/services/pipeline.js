@@ -366,7 +366,10 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
       switchToHuman: false,
     };
   }
-  const history = await db.getLastMessages(conversationId, 16);
+  let history = await db.getLastMessages(conversationId, 16);
+  if (conversation?.source_channel === 'instagram') {
+    history = await require('./instagram-quotes').loadInstagramQuotes(getPool(), orgId, conversationId, history);
+  }
   if ((conversation?.source_channel || 'whatsapp') === 'whatsapp') {
     try {
       const photo = await require('./product-media').photoTurn({
@@ -564,7 +567,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const savedPromotion = orderDraft?.promotion?.templateName === keywordOffers.TEMPLATE
     ? null : orderDraft?.promotion;
   let promotionContext = promotionsEnabled
-    ? promotions.fromHistory(promotionHistory, products) || promotions.restore(savedPromotion)
+    ? promotions.fromHistory(promotionHistory, products, nowCl) || promotions.restore(savedPromotion, nowCl)
     : null;
   // El último mensaje personal con escala de bandejas es una decisión comercial explícita y
   // más reciente. Mientras siga dentro de su hora reemplaza (sin acumular) una
@@ -1108,7 +1111,10 @@ Reglas estrictas:
   const manana     = new Date(nowCl.getTime() + 86400000).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', weekday: 'long' });
   const dateSection = `## Fecha y hora actual\nHoy es ${fechaLarga}, ${horaCl} (hora de Chile). Mañana es ${manana}. Usa esto para interpretar "hoy", "mañana", "el viernes", etc., y para saber si un día cae dentro del horario de reparto.${deliveryHoursEnded ? '\n⚠️ El horario de reparto de hoy YA TERMINÓ. No prometas entregas para hoy ni uses expresiones como "esta tarde" salvo que el pedido figure realmente en una ruta activa.' : ''}`;
 
-  const storeCustomPrompt = [dateSection, closingSection, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, relationshipSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts, currentSalesState].filter(Boolean).join('\n\n---\n\n');
+  const quoteGuidance = history.some(m => m.instagramQuote)
+    ? 'La cita de Instagram identifica a qué responde el cliente. Si responde a una oferta de la tienda, retoma ese producto y presentación. Si ofrece su ubicación, acepta la dirección y pregunta cuántos envases quiere si aún falta la cantidad. Distingue las unidades por envase de la cantidad solicitada. Si ya envió la dirección, úsala. Respeta los precios y la vigencia verificados al cotizar.'
+    : '';
+  const storeCustomPrompt = [dateSection, closingSection, quoteGuidance, campaignThreadSection, chargeSection, pendingOrderSection, contactAddressSection, customerNoteSection, promotionSection, relationshipSection, leadSection, clientTypeSection, specialPricesSection, purchaseHistorySection, paymentSection, deliverySection, tiendaSection, storeContext, extraPrompt, botRulesSection, catalogFacts, currentSalesState].filter(Boolean).join('\n\n---\n\n');
   orderCtx.storeContext = storeCustomPrompt;
 
   if (isSoftFutureIntent(userMessage) && !['scheduled', 'collecting_order', 'confirmed', 'awaiting_payment'].includes(currentState)) {
@@ -1373,6 +1379,15 @@ REGLAS ABSOLUTAS:
     };
   }
 
+  if (promotionContext?.active && promotionContext.quotedTray && !activeOrder && !orderDraft?.items?.length
+      && promotionContext.replyKey && promotionContext.replyKey === history.at(-1)?.whatsapp_message_id
+      && /^\s*¿?(?:te |les? )?(?:dejo|mando|env[ií]o|paso) (?:mi |la )?(?:ubicaci[oó]n|direcci[oó]n)\s*\??\s*$/iu.test(userMessage)
+      && await db.getSetting(orgId, 'bot_sales_enabled') !== 'false') {
+    const { label, price } = promotionContext.quotedTray;
+    await db.updatePipelineState(conversationId, 'interested', { ...orderDraft, promotion: promotions.snapshot(promotionContext) });
+    return { response: `Sí, mándame tu dirección con comuna 😊 ¿Cuántas ${label} quieres a $${price.toLocaleString('es-CL')} cada una?`,
+      agentType: 'sales', newState: 'interested' };
+  }
   // Una consulta de precio no debe saltarse una oferta vigente y mostrar
   // primero importes normales. La promoción recibida por template o por el
   // anuncio es la fuente comercial prioritaria.
@@ -2472,7 +2487,7 @@ REGLAS ABSOLUTAS:
   // ── Mapeo de intent → acción ─────────────────────────────────────
 
   // FAST PATH: Saludo simple → respuesta inmediata sin LLM adicional
-  if (intent === 'greeting' && !isTemplateReply && history.filter(m => m.direction === 'outbound').length === 0) {
+  if (intent === 'greeting' && !isTemplateReply && !quoteGuidance && history.filter(m => m.direction === 'outbound').length === 0) {
     const greeting = salesAgent.generateGreeting(customerName, salesFunnel);
     await db.updatePipelineState(conversationId, 'exploring');
     L.agent('sales', 0);

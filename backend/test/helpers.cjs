@@ -15,6 +15,9 @@ function load(file, deps = {}, extra = {}) {
         return database;
       }
       if (Object.hasOwn(deps, name)) return deps[name];
+      if (name === '../social-events') return require(path.join(root, 'src/services/social-events.js'));
+      if (name === './customer-identity') return require(path.join(root, 'src/services/customer-identity.js'));
+      if (name === './instagram-quotes') return require(path.join(root, 'src/services/instagram-quotes.js'));
       if (name === './quantity-pricing' || name === '../services/quantity-pricing') return require(path.join(root, 'src/services/quantity-pricing.js'));
       if (name === './kapso-webhook') return load('src/routes/kapso-webhook.js', deps, extra);
       if (['./bot-catalog', '../services/bot-catalog', './bot-operating-context', '../services/bot-operating-context', './order-checkout', '../services/order-checkout', '../services/order-pricing'].includes(name)) return require(path.join(root, 'src/services', name.split('/').at(-1)));

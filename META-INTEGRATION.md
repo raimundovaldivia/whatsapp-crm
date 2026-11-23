@@ -95,6 +95,8 @@ Regresión local sin red: `node --test test/meta-comment-connection.test.cjs tes
 
 Los mensajes privados usan el mismo pipeline de catálogo, precios, datos de despacho, confirmación, prevención de duplicados y creación de pedidos que WhatsApp. Cada identidad de Instagram o Facebook se guarda separada por organización y canal, sin convertir el identificador de Meta en un teléfono. Los comentarios permanecen públicos y nunca recopilan nombre, dirección, teléfono ni otros datos del pedido.
 
+En Instagram, el bot usa el identificador `message.reply_to.mid` para leer el texto citado en el mismo chat. Si la tienda envió el mensaje desde Instagram y el CRM todavía no lo tiene, el bot consulta Meta, comprueba el remitente y el destinatario y guarda la cita junto a la respuesta. Esto permite retomar una oferta cuando después llega la dirección o la cantidad. Si Meta ya no permite leer el mensaje, el bot continúa con la información disponible.
+
 Antes de modificar el carrito, el pipeline pide aclaración ante cantidades alfanuméricas ambiguas y no permite que un “sí” aislado agregue un producto nuevo visto solo en una tarjeta o mensaje saliente. Las consultas por mayor de contactos aún no validados como empresa se derivan al equipo comercial sin exponer precios B2B ni cambiar automáticamente la clasificación del cliente.
 
 ## Embudo de conversaciones y enlaces rastreables
