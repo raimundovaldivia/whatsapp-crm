@@ -16,7 +16,7 @@ test('distinguishes observed price objection from inferred silence', () => {
   assert.equal(observed.reason_code, 'price');
   assert.equal(observed.reason_source, 'observed');
 
-  const inferred = classifyJourney({ pipeline_state: 'interested', recent_inbound_text: 'Quiero XL', silent_hours: 5 });
+  const inferred = classifyJourney({ pipeline_state: 'interested', recent_inbound_text: 'Quiero XL', first_inbound_at: '2026-10-13', first_response_at: '2026-10-13', journey_messages: [['inbound','Quiero XL'],['outbound','La bandeja vale $7.000']], silent_hours: 5 });
   assert.equal(inferred.reason_code, 'no_reply_after_offer');
   assert.equal(inferred.reason_source, 'inferred');
 });
@@ -105,10 +105,10 @@ test('journey query and tracking links preserve organization isolation', async (
   try {
     await engine.exec(`
       CREATE TABLE conversations (id SERIAL PRIMARY KEY, organization_id INT, contact_name TEXT, phone_number TEXT, pipeline_state TEXT, order_draft TEXT, limbo_reason_code TEXT, limbo_reason_note TEXT, limbo_reason_updated_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
-      CREATE TABLE messages (id SERIAL PRIMARY KEY, conversation_id INT, direction TEXT, content TEXT, created_at TIMESTAMP);
+      CREATE TABLE messages (id SERIAL PRIMARY KEY, conversation_id INT, direction TEXT, content TEXT, type TEXT, status TEXT, created_at TIMESTAMP);
       CREATE TABLE orders (id SERIAL PRIMARY KEY, organization_id INT, conversation_id INT, status TEXT, created_at TIMESTAMP);
       CREATE TABLE whatsapp_attributions (
-        id SERIAL PRIMARY KEY, organization_id INT, conversation_id INT, provider TEXT,
+        id SERIAL PRIMARY KEY, organization_id INT, conversation_id INT, provider TEXT, message_id INT,
         source_url TEXT, headline TEXT, campaign_id TEXT, campaign_name TEXT, adset_name TEXT,
         ad_id TEXT, ad_name TEXT, first_seen_at TIMESTAMPTZ
       );
@@ -146,4 +146,20 @@ test('journey query and tracking links preserve organization isolation', async (
   } finally {
     await engine.close();
   }
+});
+
+test('separa el silencio del lead de una consulta pendiente', () => {
+  const classify = (messages, replied = false) => classifyJourney({
+    first_inbound_at: '2026-11-01', first_response_at: messages.some(([dir]) => dir === 'outbound') ? '2026-11-01' : null,
+    first_customer_reply_at: replied ? '2026-11-02' : null, journey_messages: messages, silent_hours: 5,
+  });
+  const ask = ['inbound', '¿Qué precio tiene la bandeja?'];
+  const quote = ['outbound', 'Vale $7.000'];
+  assert.equal(classify([ask]).reply_status, 'store');
+  assert.equal(classify([ask,['outbound','Hola']]).reply_status, 'review');
+  assert.equal(classify([ask,['outbound','Te confirmo en un rato']]).reply_status, 'store');
+  assert.equal(classify([ask,quote]).reply_status, 'first_silence');
+  assert.equal(classify([ask,quote,['inbound','¿Y la caja?'],quote], true).reply_status, 'later_silence');
+  assert.equal(classify([ask,quote,['inbound','Muchas gracias']], true).reply_status, 'closed');
+  assert.equal(classify([ask,quote,['inbound','¿Y la caja?'],['inbound','Gracias']], true).reply_status, 'store');
 });
