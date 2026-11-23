@@ -47,11 +47,12 @@ function client(config) {
   });
 }
 
-async function sendTextMessage(to, text, config) {
+async function sendTextMessage(to, text, config, { botReply = false } = {}) {
   const { instance } = credentials(config);
   const response = await trackedSend(config, () => client(config).post(`/message/sendText/${encodeURIComponent(instance)}`, {
     number: String(to).replace(/\D/g, ''),
     text,
+    ...(botReply ? { delay: Math.min(5000, Math.max(2000, text.length * 25)) } : {}),
   }));
   const messageId = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id || null;
   return { ...response.data, messageId };
