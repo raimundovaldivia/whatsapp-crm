@@ -548,3 +548,38 @@ test('el aviso general no duplica el caso que ya está en coordinación humana',
   assert.equal(lookups, 0);
   assert.equal(sends, 0);
 });
+
+test('derivación de ventas distingue preferencias, cantidades y pedidos explícitos de atención', async () => {
+  const agent = load('src/services/agents/orchestrator.js', {
+    '../inbound-message-policy': { isBareLinkMessage: () => false },
+  });
+  const history = Array.from({ length: 10 }, (_, i) => ({
+    direction: i % 2 ? 'outbound' : 'inbound',
+    content: i % 2 ? 'Voy a conectarte con el equipo' : 'Gracias',
+  }));
+  for (const text of ['¿Cuánto sale la XL? Quiero hablar con un asesor', 'Quiero precio, el queso llegó en mal estado', '¿Cuál era el precio? Me cobraron dos veces']) {
+    assert.equal((await agent.checkEscalation(text, history, 'interested')).escalate, true, text);
+  }
+  for (const text of ['El domingo no me sirve', 'Compro harto queso', '¿Y por dos?', 'Necesito 30 huevos Jumbo y 2 quesos', 'Si no es para hoy, no gracias']) {
+    assert.equal((await agent.checkEscalation(text, [], 'exploring')).escalate, false, text);
+  }
+});
+
+test('el recordatorio de una derivación pendiente llega únicamente al equipo', async () => {
+  let notified = 0;
+  const updates = [];
+  const c = { id: 7, organization_id: 1, last_escalation_at: '2026-11-22T14:00:00Z' };
+  const watcher = load('src/services/escalation-watch.js', {
+    '../db/database': { getPool: () => ({ query: async (sql,args) => {
+      if (sql.includes('SELECT c.id')) return { rows: [c] };
+      updates.push(args);
+      return { rowCount: 1 };
+    } }) },
+    './outbound-policy': { isCustomerMessagingHour: () => true },
+    './notifications': { getAdminConversationBrief: async () => ({}), formatConversationBrief: () => 'Caso pendiente' },
+    './admin-notify': { isWindowOpen: async () => true, notifyAdmin: async () => { notified++; return { queued: true }; } },
+  });
+  await watcher.sweepEscalations(new Date('2026-11-22T17:00:00Z'));
+  assert.equal(notified, 1);
+  assert.deepEqual(Array.from(updates[0]), [1,7,c.last_escalation_at]);
+});

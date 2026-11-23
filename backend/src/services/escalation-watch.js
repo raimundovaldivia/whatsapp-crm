@@ -4,8 +4,7 @@
  * Cuando el bot escala una conversación a humano, el cliente ya recibió un
  * acuse ("le paso tu caso al equipo"). Si pasan N minutos sin que ningún
  * humano responda, este job:
- *   1. Le manda al cliente UN recordatorio de que sigue pendiente.
- *   2. Vuelve a avisar al admin por WhatsApp.
+ *   avisa internamente al admin con el contexto del caso.
  * Solo una vez por escalación (escalation_reminder_at). La vuelta automática
  * al bot a las 24 h la hace el webhook al siguiente mensaje del cliente.
  *
@@ -13,8 +12,6 @@
  */
 
 const { getPool } = require('../db/database');
-const db          = require('../db/database');
-const whatsappProvider = require('./whatsapp-provider');
 const { notifyAdmin, isWindowOpen } = require('./admin-notify');
 const { getAdminConversationBrief, formatConversationBrief } = require('./notifications');
 const { isCustomerMessagingHour } = require('./outbound-policy');
@@ -38,7 +35,7 @@ async function sweepEscalations(now = new Date()) {
     // aún dentro de la ventana de 24 h (si no, el texto libre no llega).
     const { rows } = await pool.query(`
       SELECT c.id, c.organization_id, c.phone_number, c.contact_name, c.whatsapp_channel_id,
-             c.last_escalation_at, c.last_escalation_reason,
+             c.last_escalation_at::text AS last_escalation_at, c.last_escalation_reason,
              COALESCE(NULLIF(s.value, ''), '${DEFAULT_REMINDER_MINUTES}')::int AS reminder_minutes
         FROM conversations c
         LEFT JOIN settings s
@@ -58,29 +55,7 @@ async function sweepEscalations(now = new Date()) {
 
     for (const c of rows) {
       try {
-        const wc = c.whatsapp_channel_id
-          ? await db.getWhatsappChannel(c.organization_id, c.whatsapp_channel_id)
-          : await db.getWhatsappConfig(c.organization_id);
-        if (!wc) continue;
-
-        const waited = Math.round((Date.now() - new Date(c.last_escalation_at).getTime()) / 60000);
-        const text = 'Sigo con tu consulta pendiente con el equipo 🙏 Te escribimos por aquí apenas la revisen. ¡Gracias por la paciencia!';
-
-        let sent = null;
-        try { sent = await whatsappProvider.sendTextMessage(c.phone_number, text, wc); }
-        catch (e) { if (!e.is24hWindow) throw e; }
-
-        await db.saveMessage({
-          conversationId:    c.id,
-          whatsappMessageId: whatsappProvider.messageId(sent),
-          direction:         'outbound',
-          content:           text,
-          sentBy:            'ai',
-          agentType:         'system',
-          status:            sent ? 'sent' : 'failed',
-        });
-        await pool.query('UPDATE conversations SET escalation_reminder_at = NOW() WHERE id = $1', [c.id]);
-
+        const waited = Math.round((now.getTime() - new Date(c.last_escalation_at).getTime()) / 60000);
         const who = c.contact_name || c.phone_number;
         const adminWindowOpen = await isWindowOpen(c.organization_id);
         const brief = await getAdminConversationBrief(
@@ -88,7 +63,7 @@ async function sweepEscalations(now = new Date()) {
           c.last_escalation_reason || 'Diva pidió apoyo del equipo',
           { allowAi: adminWindowOpen }
         );
-        await notifyAdmin(c.organization_id, {
+        const notification = await notifyAdmin(c.organization_id, {
           body: [
             `⏰ *${who} sigue esperando hace ${waited} min*`,
             '',
@@ -99,7 +74,9 @@ async function sweepEscalations(now = new Date()) {
           ].filter(Boolean).join('\n'),
           kind: 'help',
           conversationId: c.id,
-        }).catch(() => {});
+        });
+        if (!notification?.sent && !notification?.queued) continue;
+        await pool.query('UPDATE conversations SET escalation_reminder_at = NOW() WHERE organization_id = $1 AND id = $2 AND last_escalation_at = $3', [c.organization_id, c.id, c.last_escalation_at]);
 
         console.log(`[EscalationWatch] ⏰ Recordatorio enviado a conv ${c.id} (${waited} min esperando)`);
       } catch (err) {

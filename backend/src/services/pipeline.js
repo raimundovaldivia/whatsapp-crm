@@ -1339,6 +1339,13 @@ REGLAS ABSOLUTAS:
     };
   }
 
+  const priorityHandoff = orchestrator.priorityHandoff?.(userMessage);
+  if (priorityHandoff) {
+    return { response: 'Le paso tu mensaje al equipo para que te atiendan por aquí.',
+      agentType: 'orchestrator', newState: currentState, switchToHuman: true,
+      escalationReason: priorityHandoff.reason };
+  }
+
   const adPriceReply = boxCampaign.directPriceReply(userMessage, customerPrices);
   if (triggeredKeyword) {
     const salesOpen = (await db.getSetting(orgId, 'bot_sales_enabled')) !== 'false';

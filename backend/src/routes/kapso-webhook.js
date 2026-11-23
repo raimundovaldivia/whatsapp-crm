@@ -289,7 +289,7 @@ async function handleOfficialWebhook(req, res, provider = 'kapso', service = kap
     //    inicia una atención activa con Diva y no se pierde.
     if (updatedConv.agent_mode !== 'ai') {
       const recentHistory = await db.getLastMessages(conversation.id, 20).catch(() => []);
-      if (isTerminalConversationReply(parsed.text, recentHistory)) {
+      if (!(updatedConv.agent_mode === 'coordinating' && updatedConv.last_escalation_at) && isTerminalConversationReply(parsed.text, recentHistory)) {
         await db.setAgentMode(conversation.id, 'ai');
         if (typeof db.clearLastEscalation === 'function') await db.clearLastEscalation(conversation.id).catch(() => {});
         io?.to(`org_${org.id}`).emit(`agent_mode_changed_${org.id}`, { conversationId: conversation.id, mode: 'ai' });

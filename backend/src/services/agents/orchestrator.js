@@ -111,7 +111,58 @@ Nada más. Solo el JSON.`;
  *
  * @returns {{ escalate: boolean, reason: string, urgency: 'low'|'medium'|'high', loopDetected?: boolean }}
  */
+function priorityHandoff(userMessage) {
+  // ── 2. Solicitud explícita de humano (alta prioridad) ──────────
+  const hardEscalationPatterns = [
+    /habla[r]? con (una |un )?(persona|humano|asesor|agente|vendedor)/i,
+    /quiero (hablar|habla) con alguien/i,
+    /\b(?:der[ií]vame|comun[ií]came|p[aá]same)\s+(?:con\s+|a\s+)?(?:un[a]?\s+)?(?:ejecutiv[oa]|asesor[a]?|vendedor[a]?|persona|humano)\b/iu,
+    /pásame? (con|a) (un |una )?(persona|humano|asesor|agente)/i,
+    /\b(asesor|ejecutivo|persona real|humano)\b.*por favor/i,
+    /necesito (hablar|ayuda) (de|con) (una persona|alguien)/i,
+    /comunicarme? con (alguien|una persona)/i,
+  ];
+  if (!/\bno (?:quiero|necesito) hablar con\b/i.test(userMessage) && hardEscalationPatterns.some(p => p.test(userMessage))) {
+    return { escalate: true, reason: 'Cliente solicita hablar con una persona explícitamente', urgency: 'high' };
+  }
+
+  // ── 3. Frustración fuerte ─────────────────────────────────────
+  const frustrationPatterns = [
+    /\bno (?:me |te )?(?:entiendes|sirves|funcionas|ayudas)\b/i,
+    /\b(?:el bot|la app|la p[aá]gina|el enlace|el sistema) no (?:me )?(?:sirve|funciona|ayuda)\b/i,
+    /\b(mentira|estafa|fraude|engaño|pésimo|horrible|terrible|nefasto)\b/i,
+    /\b(enojado|molesto|furioso|indignado|decepcionado)\b|\b(?:estoy|me tienen|me tiene)\s+hart[oa]\b/iu,
+    /esto (es|está) (un )?desastre/i,
+    /nunca (me|te|les) (llega?|contesta[n]?|responde[n]?)/i,
+    /llevo (esperando|días?|semanas?) (y|sin)/i,
+    /qu[eé] mal (servicio|atención)/i,
+    /no (sirve|funciona) (nada|esto|el bot)/i,
+    /(reclamaci[oó]n|devoluci[oó]n|reembolso) (urgente|inmediata?)/i,
+  ];
+  if (frustrationPatterns.some(p => p.test(userMessage))) {
+    return { escalate: true, reason: 'Cliente muestra frustración fuerte', urgency: 'high' };
+  }
+
+  // Un alimento posiblemente descompuesto no se resuelve con una respuesta
+  // automática: requiere revisión humana y trazabilidad del lote/pedido.
+  const foodSafetyPatterns = [
+    /\b(podrid[oa]|descompuest[oa]|en\s+mal\s+estado|vencid[oa]|hongos?|moho|mal\s+olor|olor\s+raro|agrio|cortad[oa]|echad[oa]\s+a\s+perder)\b/iu,
+    /\b(queso|producto|alimento)\b.{0,30}\b(malo|mala|dañad[oa])\b/iu,
+    /\b(me\s+enferm[oó]|intoxicaci[oó]n|reacci[oó]n)\b/iu,
+  ];
+  if (foodSafetyPatterns.some(p => p.test(userMessage))) {
+    return { escalate: true, reason: 'Posible problema de inocuidad o producto en mal estado', urgency: 'high' };
+  }
+
+  if (/\b(?:me (?:cobraron|cobraron de)|cobro|cargo)\s+(?:el\s+)?(?:doble|duplicado|dos veces|de m[aá]s)\b/iu.test(userMessage)) {
+    return { escalate: true, reason: 'Cliente reclama un cobro incorrecto', urgency: 'high' };
+  }
+  return null;
+}
+
 async function checkEscalation(userMessage, conversationHistory, pipelineState, orgId = null) {
+  const priority = priorityHandoff(userMessage);
+  if (priority) return priority;
   if (isBareLinkMessage(userMessage)) {
     return { escalate: false, reason: 'Enlace compartido sin solicitud explícita', urgency: 'low' };
   }
@@ -135,61 +186,6 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     return { escalate: false, reason: 'Mensaje simple', urgency: 'low' };
   }
 
-  // Una pregunta comercial normal que el catálogo puede resolver nunca debe
-  // heredarse como "caso complejo" por reclamos o coordinaciones antiguas del
-  // mismo cliente. Esto incluye mensajes combinados como
-  // "Buen día, precio de la bandeja L?".
-  const productInfoPatterns = [
-    /\b(precio|valor)\s+(de|del|para|por)?\s*(la|el|los|las|una|un)?\b/iu,
-    /\bcu[aá]nto\s+(cuesta|sale|vale|salen|valen)\b/iu,
-    /\bqu[eé]\s+precio\s+(tiene|tienen|sale)\b/iu,
-    /\b(tienen|hay|venden)\b.{0,45}\b(huevos?|bandejas?|cajas?|queso|aceitunas?|productos?)\b/iu,
-  ];
-  const complaintAboutPrice = /\b(me\s+cobraron|cobro|cobrado|pagu[eé]|factura|boleta|no\s+coincide|incorrecto|equivocado|distinto|reclamo|devoluci[oó]n)\b/iu.test(userMessage);
-  if (!complaintAboutPrice && productInfoPatterns.some(pattern => pattern.test(userMessage))) {
-    return { escalate: false, reason: 'Consulta comercial resoluble con catálogo', urgency: 'low' };
-  }
-
-  // ── 2. Solicitud explícita de humano (alta prioridad) ──────────
-  const hardEscalationPatterns = [
-    /habla[r]? con (una |un )?(persona|humano|asesor|agente|vendedor)/i,
-    /quiero (hablar|habla) con alguien/i,
-    /pásame? (con|a) (un |una )?(persona|humano|asesor|agente)/i,
-    /\b(asesor|ejecutivo|persona real|humano)\b.*por favor/i,
-    /necesito (hablar|ayuda) (de|con) (una persona|alguien)/i,
-    /comunicarme? con (alguien|una persona)/i,
-  ];
-  if (hardEscalationPatterns.some(p => p.test(userMessage))) {
-    return { escalate: true, reason: 'Cliente solicita hablar con una persona explícitamente', urgency: 'high' };
-  }
-
-  // ── 3. Frustración fuerte ─────────────────────────────────────
-  const frustrationPatterns = [
-    /no (me |te )?(entiendes?|sirves?|funciona[s]?|ayuda[s]?|entiendes?)/i,
-    /\b(mentira|estafa|fraude|engaño|pésimo|horrible|terrible|nefasto)\b/i,
-    /\b(enojado|molesto|furioso|harto|indignado|decepcionado)\b/i,
-    /esto (es|está) (un )?desastre/i,
-    /nunca (me|te|les) (llega?|contesta[n]?|responde[n]?)/i,
-    /llevo (esperando|días?|semanas?) (y|sin)/i,
-    /qu[eé] mal (servicio|atención)/i,
-    /no (sirve|funciona) (nada|esto|el bot)/i,
-    /(reclamaci[oó]n|devoluci[oó]n|reembolso) (urgente|inmediata?)/i,
-  ];
-  if (frustrationPatterns.some(p => p.test(userMessage))) {
-    return { escalate: true, reason: 'Cliente muestra frustración fuerte', urgency: 'high' };
-  }
-
-  // Un alimento posiblemente descompuesto no se resuelve con una respuesta
-  // automática: requiere revisión humana y trazabilidad del lote/pedido.
-  const foodSafetyPatterns = [
-    /\b(podrid[oa]|descompuest[oa]|en\s+mal\s+estado|vencid[oa]|hongos?|moho|mal\s+olor|olor\s+raro|agrio|cortad[oa]|echad[oa]\s+a\s+perder)\b/iu,
-    /\b(queso|producto|alimento)\b.{0,30}\b(malo|mala|dañad[oa])\b/iu,
-    /\b(me\s+enferm[oó]|intoxicaci[oó]n|reacci[oó]n)\b/iu,
-  ];
-  if (foodSafetyPatterns.some(p => p.test(userMessage))) {
-    return { escalate: true, reason: 'Posible problema de inocuidad o producto en mal estado', urgency: 'high' };
-  }
-
   // ── 4. Post-venta complejo ─────────────────────────────────────
   const postSaleComplexPatterns = [
     /mi pedido (no|nunca) (llegó|llego|ha llegado)/i,
@@ -201,10 +197,33 @@ async function checkEscalation(userMessage, conversationHistory, pipelineState, 
     return { escalate: true, reason: 'Situación de posventa compleja detectada', urgency: 'medium' };
   }
 
+  // Una pregunta comercial normal que el catálogo puede resolver nunca debe
+  // heredarse como "caso complejo" por reclamos o coordinaciones antiguas del
+  // mismo cliente. Esto incluye mensajes combinados como
+  // "Buen día, precio de la bandeja L?".
+  const productInfoPatterns = [
+    /\b(precio|valor)\s+(de|del|para|por)?\s*(la|el|los|las|una|un)?\b/iu,
+    /\bcu[aá]nto\s+(cuesta|sale|vale|salen|valen)\b/iu,
+    /\bqu[eé]\s+precio\s+(tiene|tienen|sale)\b/iu,
+    /\b(tienen|hay|venden)\b.{0,45}\b(huevos?|bandejas?|cajas?|quesos?|manjar|aceitunas?|productos?)\b/iu,
+  ];
+  const complaintAboutPrice = /\b(me\s+cobraron|cobro|cobrado|pagu[eé]|factura|boleta|no\s+coincide|incorrecto|equivocado|distinto|reclamo|devoluci[oó]n)\b/iu.test(userMessage);
+  if (!complaintAboutPrice && productInfoPatterns.some(pattern => pattern.test(userMessage))) {
+    return { escalate: false, reason: 'Consulta comercial resoluble con catálogo', urgency: 'low' };
+  }
+
   // Una continuación comercial concreta no hereda problemas antiguos del
   // historial. Los reclamos, la frustración y las solicitudes de humano ya se
   // resolvieron arriba y por eso conservan prioridad.
+  const day = '(?:hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)';
+  const unavailableDay = new RegExp('^(?:el )?' + day + ' no me (?:sirve|acomoda)|^no me (?:sirve|acomoda) (?:el )?' + day, 'iu');
+  if (unavailableDay.test(userMessage.trim()) && userMessage.trim().split(/\s+/).length <= 6) {
+    return { escalate: false, reason: 'Preferencia de fecha de entrega', urgency: 'low' };
+  }
+
   const standardPurchasePatterns = [
+    /^\s*(?:[¿¡]?\s*)?(?:y\s+)?(?:por|para)\s+(?:dos|tres|\d+)(?:\s+bandejas?)?\s*[?!.]*\s*$/iu,
+    /\b(?:solo|s[oó]lo)\s+si\s+(?:llega[n]?|entregan|despachan)\s+hoy\b|\bsi no es para hoy[,\s]+no gracias\b/iu,
     /\b(quiero|necesito|dame|m[aá]ndame|env[ií]ame|agr[eé]game|an[oó]tame|gu[aá]rdame|llevar[ií]a)\b.{0,70}\b(\d+|un[ao]?|dos|tres|cuatro|xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
     /^\s*\d+\s*(?:x\s*)?(?:xl|jumbo|extra|grandes?|medianos?|bandejas?|cajas?|huevos?)\b/iu,
     /\b(agr[eé]game|s[uú]mame|ponme)\s+\d+\s+m[aá]s\b/iu,
@@ -295,4 +314,4 @@ Responde SOLO con JSON: {"escalate": true/false, "reason": "una línea", "urgenc
   }
 }
 
-module.exports = { classifyIntent, checkEscalation, isSimpleMessage };
+module.exports = { priorityHandoff, classifyIntent, checkEscalation, isSimpleMessage };
