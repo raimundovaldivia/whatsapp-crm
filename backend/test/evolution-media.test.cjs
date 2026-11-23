@@ -26,7 +26,7 @@ test('media downloads use the configured Evolution endpoint, never untrusted med
       requests.push({ opts, url, payload, limits }); return { data: { base64: body, mimetype: mime } };
     } }) },
     '../db/database': { getWhatsappChannel: async (org, id) => org === 1 && id === 9 ? config : null },
-  });
+  }, { process: { env: { EVOLUTION_ALLOWED_ORIGINS: 'https://evolution.example' } } });
   const parsed = evolution.parseWebhookMessage(event({ audioMessage: { url: 'http://127.0.0.1/private', mimetype: 'audio/ogg' } }));
   const media = await service.downloadMessageMedia(parsed, config);
   assert.equal(media.data.toString(), 'audio bytes');
