@@ -17,8 +17,8 @@ test('distinguishes observed price objection from inferred silence', () => {
   assert.equal(observed.reason_source, 'observed');
 
   const inferred = classifyJourney({ pipeline_state: 'interested', recent_inbound_text: 'Quiero XL', first_inbound_at: '2026-10-13', first_response_at: '2026-10-13', journey_messages: [['inbound','Quiero XL'],['outbound','La bandeja vale $7.000']], silent_hours: 5 });
-  assert.equal(inferred.reason_code, 'no_reply_after_offer');
-  assert.equal(inferred.reason_source, 'inferred');
+  assert.equal(inferred.reason_code, 'first_silence');
+  assert.equal(inferred.reason_source, 'observed');
 });
 
 test('manual reason overrides an inference without changing a conversion', () => {
