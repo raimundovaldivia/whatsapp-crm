@@ -47,12 +47,17 @@ function client(config) {
   });
 }
 
+function botTypingDelay(text) {
+  const base = Math.min(5400, 1500 + text.trim().length * 23);
+  return Math.round(base + Math.random() * 1000);
+}
+
 async function sendTextMessage(to, text, config, { botReply = false } = {}) {
   const { instance } = credentials(config);
   const response = await trackedSend(config, () => client(config).post(`/message/sendText/${encodeURIComponent(instance)}`, {
     number: String(to).replace(/\D/g, ''),
     text,
-    ...(botReply ? { delay: Math.min(5000, Math.max(2000, text.length * 25)) } : {}),
+    ...(botReply ? { delay: botTypingDelay(text) } : {}),
   }));
   const messageId = response.data?.key?.id || response.data?.message?.key?.id || response.data?.id || null;
   return { ...response.data, messageId };
