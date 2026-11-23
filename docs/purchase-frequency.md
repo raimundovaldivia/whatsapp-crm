@@ -1,5 +1,15 @@
 # Frecuencia de compra para seguimiento
 
+## Clientes cautivos
+
+La pestaña **Cautivos y frecuencia** conserva el seguimiento existente y agrega contadores de toda la base: **Cautivos activos**, **Recurrentes en riesgo**, **Inactivos** y **Todos los clientes**. Cada contador abre su listado completo y restablece los demás filtros. La columna **Relación** muestra la clasificación y el motivo; el selector permite combinarla con búsqueda, frecuencia y estado. Cambiar la relación limpia la selección de destinatarios y vuelve a la primera página.
+
+El criterio inicial es explícito y orientativo: al menos tres fechas distintas de compra, patrón regular y atraso no superior a `max(7, ceil(intervalo / 2))` días respecto de la próxima fecha estimada. Si supera ese margen, el recurrente está en riesgo. Se considera inactivo tras más de `max(60, ceil(3 * intervalo))` días sin compra cuando hay patrón regular; sin patrón fiable se usan 60 días. Menos de tres fechas recientes: **En formación**; tres o más con patrón variable: **Ocasional**; cero fechas: **Sin compras registradas**. Los intervalos y la regularidad son los ya calculados por el servidor; no se usa el número bruto de pedidos para inferir recurrencia.
+
+Es una clasificación visual sobre el mismo historial pagado o entregado, sin nuevas lecturas, cambios de datos ni permisos. Un cliente cautivo puede estar dado de baja o tener un pedido pendiente: sigue siendo visible como recurrente, pero conserva las exclusiones del seguimiento. No implica exclusividad ni garantiza una próxima compra.
+
+Verificar con `npm test` y `npm run build` en frontend. Las pruebas cubren fechas distintas, ritmo irregular, datos incompletos, límites de atraso e inactividad, combinación de filtros y exclusiones. Ejecutar `node test/frequency-followup-preview.mjs` y abrir `http://127.0.0.1:5194/?scenario=loyalty` para revisar contadores, motivos y selección con clientes ficticios, sin enviar mensajes.
+
 Clientes abre Frecuencia de compra con el filtro Para seguimiento: fecha estimada vencida o dentro de tres días, excluyendo bajas explícitas. Ofrece búsqueda, filtros, orden, paginación, fechas de respaldo y apertura del chat existente más reciente con mensajes. Consultar la lista o abrir un chat no crea conversaciones ni envía mensajes. La vista especializada Recompra de huevos y su cálculo permanecen disponibles.
 
 ## Seguimiento por Evolution
