@@ -1548,7 +1548,7 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
 
   try {
     const { rows } = await pool.query(`
-      SELECT c.id, c.phone_number, c.whatsapp_channel_id, m.id AS latest_message_id, m.content AS last_inbound, m.created_at AT TIME ZONE 'UTC' AS inbound_at
+      SELECT c.id, c.contact_name, c.phone_number, c.whatsapp_channel_id, m.id AS latest_message_id, m.content AS last_inbound, m.created_at AT TIME ZONE 'UTC' AS inbound_at
       FROM conversations c
       JOIN LATERAL (
         SELECT id, content, direction, created_at
@@ -1597,34 +1597,79 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
           LIMIT 1
         `, [conv.id, req.orgId]);
         const latest = await readLatest();
-        if (!latest.rows[0]
-          || latest.rows[0].agent_mode !== 'ai'
-          || (!dated && latest.rows[0].direction !== 'inbound')
-          || String(latest.rows[0].id) !== String(conv.latest_message_id)) {
-          results.push({ phone: conv.phone_number, success: false, reason: 'already_answered' });
+        const current = latest.rows[0];
+        const mark = (reason, needsReview = false) => results.push({
+          conversationId: conv.id, name: conv.contact_name, phone: conv.phone_number,
+          success: false, reason, needsReview,
+        });
+        if (!current || String(current.id) !== String(conv.latest_message_id)) {
+          mark('conversation_changed', true);
           continue;
         }
-        const recent = dated ? await db.getLastMessages(conv.id, 3) : [];
-        const inbound = dated ? recent.findLast(message => message.direction === 'inbound') : {
+        const { rows: recent } = dated ? await lockClient.query(`
+          WITH inbound AS (
+            SELECT id, content, direction, created_at, status
+            FROM messages
+            WHERE conversation_id = $1 AND direction = 'inbound'
+              AND created_at >= ($2::date::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')
+              AND created_at < (($3::date + 1)::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')
+            ORDER BY created_at DESC, id DESC LIMIT 1
+          )
+          SELECT * FROM inbound
+          UNION ALL
+          SELECT subsequent.* FROM inbound
+          CROSS JOIN LATERAL (
+            SELECT id, content, direction, created_at,
+              CASE WHEN COALESCE(to_jsonb(m)->'outbound_queue'->>'state', 'sent') <> 'sent'
+                THEN 'pending' ELSE status END AS status
+            FROM messages m
+            WHERE conversation_id = $1 AND (created_at, id) > (inbound.created_at, inbound.id)
+              AND COALESCE(status, 'sent') <> 'failed'
+              AND COALESCE(to_jsonb(m)->'outbound_queue'->>'state', 'sent') NOT IN ('cancelled', 'superseded')
+            ORDER BY (direction = 'inbound') DESC, created_at DESC, id DESC LIMIT 2
+          ) subsequent
+          ORDER BY created_at, id
+        `, [conv.id, from, to]) : { rows: [] };
+        const inbound = dated ? recent[0] : {
           content: conv.last_inbound, created_at: conv.inbound_at,
         };
         const userMessage = inbound?.content;
-        if (!userMessage || inboundPolicy.isNoResponseNeeded(userMessage)
-          || Date.now() - new Date(inbound.created_at).getTime() < 120000) {
-          results.push({ phone: conv.phone_number, success: false, reason: 'no_response_needed' });
+        if (!userMessage || inboundPolicy.isNoResponseNeeded(userMessage)) {
+          mark('no_response_needed');
+          continue;
+        }
+        if (current.pipeline_state === 'opted_out') {
+          mark('opted_out');
+          continue;
+        }
+        const afterInbound = recent.slice(1);
+        if (afterInbound.some(message => message.direction === 'inbound')) {
+          mark('newer_inbound', true);
+          continue;
+        }
+        if (afterInbound.some(message => message.status === 'pending')) {
+          mark('delivery_pending', true);
+          continue;
+        }
+        const hasReply = dated ? afterInbound.length > 0 : current.direction === 'outbound';
+        if (current.agent_mode !== 'ai') {
+          mark(hasReply ? 'human_has_reply' : 'human_unanswered', !hasReply);
+          continue;
+        }
+        if (Date.now() - new Date(inbound.created_at).getTime() < 120000) {
+          mark('recent_inbound', true);
           continue;
         }
         const sendConfig = await outboundConfig(req.orgId, conv);
         if (!sendConfig) throw new Error('WhatsApp no configurado para la conversación');
         if ((sendConfig.provider || 'meta') !== 'evolution'
           && Date.now() - new Date(inbound.created_at).getTime() >= 24 * 60 * 60 * 1000) {
-          results.push({ phone: conv.phone_number, success: false, reason: 'window_expired' });
+          mark(hasReply ? 'window_expired_with_reply' : 'window_expired', !hasReply);
           continue;
         }
         let result;
-        if (latest.rows[0].direction === 'outbound') {
-          if (latest.rows[0].pipeline_state !== 'opted_out'
-            && await db.getSetting(req.orgId, 'ai_enabled_global') !== 'false'
+        if (hasReply) {
+          if (await db.getSetting(req.orgId, 'ai_enabled_global') !== 'false'
             && await db.getSetting(req.orgId, 'bot_sales_enabled') !== 'false') {
             const decision = await aiClient.messages.create({
               model: modelFor('fast'),
@@ -1642,14 +1687,16 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
           }
           result ??= { skipped: true, reason: 'no_confirmed_gap' };
         } else {
-          result = await pipeline.processMessage(req.orgId, conv.id, userMessage, null, { historyLimit: 3 });
+          result = await pipeline.processMessage(req.orgId, conv.id, userMessage, null, {
+            historyLimit: 3, ...(dated && current.direction === 'outbound' ? { recoveryHistory: recent } : {}),
+          });
         }
         if (result.duplicate) {
-          results.push({ phone: conv.phone_number, success: false, reason: 'duplicate' });
+          mark('duplicate', !hasReply);
           continue;
         }
         if (result.skipped || !result.response) {
-          results.push({ phone: conv.phone_number, success: false, reason: result.reason || 'no_response' });
+          mark(result.reason || 'no_response', !hasReply || result.reason !== 'no_confirmed_gap');
           continue;
         }
 

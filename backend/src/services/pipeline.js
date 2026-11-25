@@ -369,7 +369,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
       switchToHuman: false,
     };
   }
-  let history = await db.getLastMessages(conversationId, options.historyLimit ?? 16);
+  let history = options.recoveryHistory ?? await db.getLastMessages(conversationId, options.historyLimit ?? 16);
   if (conversation?.source_channel === 'instagram') {
     history = await require('./instagram-quotes').loadInstagramQuotes(getPool(), orgId, conversationId, history);
   }
