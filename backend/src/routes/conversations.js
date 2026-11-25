@@ -87,6 +87,69 @@ router.get('/inbound-range', async (req, res) => {
   }
 });
 
+router.get('/export-day', async (req, res) => {
+  const { date } = req.query;
+  if (!validDate(date)) {
+    return res.status(400).json({ success: false, error: 'Selecciona una fecha válida.' });
+  }
+
+  try {
+    const { rows } = await getPool().query(`
+      WITH bounds AS (
+        SELECT $2::date::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC' AS start_at,
+               ($2::date + 1)::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC' AS end_at
+      ), day_chats AS (
+        SELECT m.conversation_id,
+               json_agg(json_build_object(
+                 'id', m.id,
+                 'created_at', m.created_at AT TIME ZONE 'UTC',
+                 'direction', m.direction,
+                 'sender', m.sent_by,
+                 'type', m.type,
+                 'status', m.status,
+                 'text', m.content
+               ) ORDER BY m.created_at, m.id) AS messages
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        CROSS JOIN bounds b
+        WHERE c.organization_id = $1
+          AND c.source_channel = 'whatsapp'
+          AND m.created_at >= b.start_at AND m.created_at < b.end_at
+        GROUP BY m.conversation_id
+        HAVING bool_or(m.direction = 'inbound')
+      )
+      SELECT c.id AS conversation_id, c.contact_name, c.phone_number,
+             c.whatsapp_channel_id, c.pipeline_state, d.messages,
+             COALESCE(linked.orders, '[]'::json) AS orders
+      FROM day_chats d
+      JOIN conversations c ON c.id = d.conversation_id
+      CROSS JOIN bounds b
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object(
+          'id', o.id,
+          'status', o.status,
+          'items', o.items,
+          'total', o.total_price,
+          'created_at', o.created_at AT TIME ZONE 'UTC',
+          'delivery_date', o.delivery_date,
+          'delivered_at', o.delivered_at AT TIME ZONE 'UTC'
+        ) ORDER BY o.created_at, o.id) AS orders
+        FROM orders o
+        WHERE o.organization_id = $1 AND o.conversation_id = c.id
+          AND o.created_at >= b.start_at
+      ) linked ON true
+      ORDER BY c.id
+    `, [req.orgId, date]);
+
+    res.set('Cache-Control', 'private, no-store');
+    res.attachment(`resel-chats-${date}.json`);
+    res.json({ date, timezone: 'America/Santiago', total_chats: rows.length, chats: rows });
+  } catch (err) {
+    console.error('[Conversations/exportDay]', err.message);
+    res.status(500).json({ success: false, error: 'No se pudieron exportar los chats.' });
+  }
+});
+
 /**
  * GET /api/conversations/:id/messages
  */

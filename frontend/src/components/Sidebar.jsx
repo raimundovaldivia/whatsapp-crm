@@ -25,6 +25,8 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
   const [dateFields, setDateFields] = useState(inboundRange || { from: '', to: '' });
   const [rangeResult, setRangeResult] = useState(null);
   const [copyStatus, setCopyStatus] = useState('');
+  const [exportStatus, setExportStatus] = useState('');
+  const [exporting, setExporting] = useState(false);
   const rangeLoading = Boolean(inboundRange && rangeResult?.range !== inboundRange);
   const inboundIds = !rangeLoading && inboundRange ? rangeResult.ids : null;
 
@@ -240,8 +242,33 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
     }
   }
 
+  async function exportDay() {
+    const date = dateFields.from;
+    if (!date || exporting) return;
+    setExporting(true);
+    setExportStatus('');
+    try {
+      const { data } = await api.get('/conversations/export-day', {
+        params: { date },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `resel-chats-${date}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setExportStatus(`Descarga iniciada para ${date}.`);
+    } catch {
+      setExportStatus('No se pudieron exportar los chats. Intenta nuevamente.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function applyInboundRange(range) {
     setCopyStatus('');
+    setExportStatus('');
     setMsgResults([]);
     setInboundRange(range);
   }
@@ -632,6 +659,12 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
             }}>Quitar filtro</button>}
             {inboundRange && !loading && !msgLoading && phones.size > 0 && <button type="button" onClick={copyPhones}>Copiar {phones.size} números</button>}
           </div>
+          <div>
+            <button type="button" onClick={exportDay} disabled={!dateFields.from || exporting}>
+              {exporting ? 'Exportando…' : 'Exportar día (Desde)'}
+            </button>
+          </div>
+          {exportStatus && <div role="status">{exportStatus}</div>}
           {inboundRange && <div role="status">{rangeLoading ? 'Consultando mensajes entrantes…'
             : rangeResult.error ? 'No se pudo consultar el período. Pulsa Aplicar para reintentar.'
             : copyStatus || `${inboundIds.size} chats en el período · hora de Chile`}</div>}
