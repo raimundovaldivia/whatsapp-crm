@@ -103,7 +103,7 @@ const products=[
 a.equal(p.quantityPriceReply('¿Cuánto sale la caja de 100 XL?',[],products,p.forStore({enabled:true})),null);
 });
 
-require('node:test')('quotes two trays deterministically with exact totals and savings',()=>{
+require('node:test')('quotes the single price, pair unit price and exact pair total in order',()=>{
 const a=require('node:assert/strict'),p=require('../src/services/xl-welcome-pricing');
 const products=[
   {id:1,title:'Huevos XL blancos · Bandeja de 30',price:10990,stock:10,active:true},
@@ -111,9 +111,9 @@ const products=[
   {id:3,title:'Huevos XL cafés · Bandeja de 30',price:12990,stock:10,active:true},
 ];
 const reply=p.trayCountPriceReply('Quiero 2 bandejas XL de 30',[],products,p.forStore({enabled:true}));
-a.match(reply,/Blancos, bandeja de 30: \$20\.100 \(ahorras \$1\.880\)/);
-a.match(reply,/Mixtos, bandeja de 30: \$22\.000 \(ahorras \$1\.980\)/);
-a.match(reply,/Cafés, bandeja de 30: \$23\.800 \(ahorras \$2\.180\)/);
+a.match(reply,/Blancos, bandeja de 30. Una sale \$10\.990.*\$10\.050 cada una \(\$20\.100 en total\)/);
+a.match(reply,/Mixtos, bandeja de 30. Una sale \$11\.990.*\$11\.000 cada una \(\$22\.000 en total\)/);
+a.match(reply,/Cafés, bandeja de 30. Una sale \$12\.990.*\$11\.900 cada una \(\$23\.800 en total\)/);
 a.match(reply,/no se mezclan colores ni formatos/);
 });
 
@@ -190,10 +190,10 @@ const lastPurchase = {detalleCompleto:true, productos:[{producto:mediumTray.titl
 test('new egg-price inquiries get a concrete comparison, repeat customers get their verified presentation', () => {
   const msg = 'Hola, ¿qué precio tienen los huevos?';
   const lead = rule.introductoryTrayReply(msg,[],trays,retail,'lead');
-  assert.match(lead,/20 huevos XL blancos.*Una sale \$8\.490\. Dos iguales quedan en \$14\.938 en total y ahorras \$2\.042/);
+  assert.match(lead,/20 huevos XL blancos.*Una sale \$8\.490\. Si llevas dos iguales, quedan a \$7\.469 cada una \(\$14\.938 en total\)/);
   assert.match(lead,/20 o 30 huevos/);
   const repeat = rule.introductoryTrayReply(msg,[],trays,retail,'customer',lastPurchase);
-  assert.match(repeat,/última vez.*M mixtos.*\$16\.255.*\$1\.725/);
+  assert.match(repeat,/última vez.*M mixtos.*\$8\.127,50 cada una en promedio \(\$16\.255 en total\)/);
   assert.doesNotMatch(rule.introductoryTrayReply(msg,[],trays,retail,'unknown',lastPurchase),/última vez/);
   assert.match(rule.prompt(retail,trays,'customer',lastPurchase),/Última compra verificada: 2 × Huevos M mixtos/);
 });
@@ -201,15 +201,31 @@ test('comparisons respect the applicable single-tray price, stock and conversati
   const ctx={...retail,overrides:[{product_id:'39',custom_price:7000}]};
   const msg='¿Cuánto valen los huevos?';
   const intro=rule.introductoryTrayReply(msg,[],trays,ctx,'customer',lastPurchase);
-  assert.match(intro,/Una sale \$7\.000\. Dos iguales quedan en \$14\.000/);
+  assert.match(intro,/Una sale \$7\.000\. Si llevas dos iguales, quedan a \$7\.000 cada una \(\$14\.000 en total\)/);
   assert.doesNotMatch(intro,/ahorras/);
   assert.doesNotMatch(rule.trayCountPriceReply('2 bandejas M de 30',[],trays,ctx),/ahorras|no tienen descuento/);
-  assert.match(rule.introductoryTrayReply(msg,[],[{...mediumTray,inventoryQuantity:-1}],retail,'lead'),/Dos iguales/);
+  assert.match(rule.introductoryTrayReply(msg,[],[{...mediumTray,inventoryQuantity:-1}],retail,'lead'),/Si llevas dos iguales/);
   const scarce=[{...mediumTray,inventoryQuantity:1}];
-  assert.doesNotMatch(rule.introductoryTrayReply(msg,[],scarce,retail,'lead'),/Dos iguales/);
+  assert.doesNotMatch(rule.introductoryTrayReply(msg,[],scarce,retail,'lead'),/Si llevas dos iguales/);
   assert.equal(rule.trayCountPriceReply('2 bandejas M de 30',[],scarce,retail),null);
   assert.equal(rule.introductoryTrayReply(msg,[],[{...mediumTray,inventoryQuantity:0}],retail,'lead'),null);
   for (const other of ['Hola','¿Cuánto valen los huevos y el despacho?','Quiero dos bandejas','Precio del manjar'])
     assert.equal(rule.introductoryTrayReply(other,[],trays,retail,'lead'),null);
   assert.equal(rule.introductoryTrayReply(msg,[{direction:'outbound',content:'¿Qué color prefieres?'}],trays,retail,'lead'),null);
+});
+
+test('distinguishes the cheapest tray from the best price per egg at the current customer tariff', () => {
+  const ask = (message, ctx = retail, available = trays) =>
+    rule.introductoryTrayReply(message, [], available, ctx, 'customer', lastPurchase);
+  assert.match(ask('¿Cuál es la bandeja más barata?'), /20 huevos XL blancos/);
+  assert.match(ask('Quiero huevos que me rindan'), /precio por huevo.*30 huevos M mixtos/);
+  assert.match(ask('¿A cuánto los huevos?'), /última vez.*30 huevos M mixtos/);
+  assert.match(ask('¿Qué huevos rinden más?', {...retail,overrides:[{product_id:'43',custom_price:5000}]}), /20 huevos XL blancos/);
+  assert.match(ask('¿Qué huevos rinden más?', retail, [smallTray,{...mediumTray,inventoryQuantity:0}]), /20 huevos XL blancos/);
+  assert.equal(ask('¿Qué bandeja Jumbo rinde más?'), null);
+  const prompt = rule.prompt(retail,trays,'lead');
+  assert.match(prompt, /menor precio por huevo comprando una es: Huevos M mixtos/);
+  assert.match(prompt, /calibre, color y formato manda/);
+  assert.match(rule.trayCountPriceReply('¿Cuánto ahorro con 2 bandejas M de 30?',[],trays,retail), /8\.127,50.*16\.255.*Ahorras \$1\.725/);
+  assert.match(rule.quantityPriceReply('¿Qué precio tienen 60 huevos M?',[],trays,retail), /8\.990.*8\.127,50.*16\.255/);
 });

@@ -203,7 +203,7 @@ function trayCountPriceReply(userMessage, history = [], products = [], ctx = {})
     const total = Math.round(Number(priced.price) * count);
     const [single] = apply([{ ...product, title, price, quantity: 1 }], ctx);
     const regular = Math.round(single.price * count);
-    const option = { color, units, total, saving: Math.max(0, regular - total) };
+    const option = { color, units, total, one: Math.round(single.price), saving: Math.max(0, regular - total) };
     const key = `${color}:${units}`;
     const previous = choices.get(key);
     if (!previous || option.total < previous.total) choices.set(key, option);
@@ -213,6 +213,10 @@ function trayCountPriceReply(userMessage, history = [], products = [], ctx = {})
 
   const format = option => {
     const label = `${option.color[0].toUpperCase()}${option.color.slice(1)}, bandeja de ${option.units}`;
+    if (count === 2) {
+      const savings = /ahorr|descuento/i.test(current) && option.saving > 0 ? ` Ahorras ${money(option.saving)}.` : '';
+      return `${label}. ${pairQuote(option.one, option.total)}${savings}`;
+    }
     return `${label}: ${money(option.total)}${option.saving ? ` (ahorras ${money(option.saving)})` : ''}`;
   };
   const condition = size === 'M' && !products.some(p => p.quantity_prices?.length) && !options.some(option => option.saving > 0) && count > 1
@@ -299,7 +303,7 @@ function quantityPriceReply(userMessage, history = [], products = [], ctx = {}) 
       const total = Math.round(Number(priced?.price) * quantity);
       if (!Number.isFinite(total) || total <= 0) continue;
       const [single] = apply([{ ...product, title, quantity: 1, price: Number(product.price ?? product.priceMin) }], ctx);
-      const option = { color, quantity, units, total, saving: Math.max(0, Math.round(quantity * single.price - total)) };
+      const option = { color, quantity, units, total, one: Math.round(single.price), saving: Math.max(0, Math.round(quantity * single.price - total)) };
       const previous = bestByColor.get(color);
       if (!previous || total < previous.total || (total === previous.total && quantity < previous.quantity)) {
         bestByColor.set(color, option);
@@ -308,7 +312,9 @@ function quantityPriceReply(userMessage, history = [], products = [], ctx = {}) 
     const options = ['blancos', 'mixtos', 'cafés'].map(color => bestByColor.get(color)).filter(Boolean);
     if (!options.length) continue;
     const heading = `${target} huevos ${size} exactos`;
-    const lines = options.map(option => `${option.color[0].toUpperCase()}${option.color.slice(1)}: ${option.quantity} bandejas de ${option.units} — ${money(option.total)}${option.saving ? ` (ahorras ${money(option.saving)})` : ''}`);
+    const lines = options.map(option => option.quantity === 2
+      ? `${option.color[0].toUpperCase()}${option.color.slice(1)}, bandeja de ${option.units}. ${pairQuote(option.one, option.total)}`
+      : `${option.color[0].toUpperCase()}${option.color.slice(1)}: ${option.quantity} bandejas de ${option.units} — ${money(option.total)}${option.saving ? ` (ahorras ${money(option.saving)})` : ''}`);
     sections.push({ target, heading, lines, hasSavings: options.some(option => option.saving) });
   }
   if (!sections.length) return null;
@@ -332,6 +338,20 @@ function quantityAvailable(product, quantity) {
     (stock == null || Number(stock) === -1 || Number(stock) >= quantity);
 }
 
+function pairQuote(one, two) {
+  const average = two / 2;
+  const each = Number.isInteger(average) ? money(average)
+    : '$' + average.toLocaleString('es-CL', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const qualifier = Number.isInteger(average) ? '' : ' en promedio';
+  return `Una sale ${money(one)}. Si llevas dos iguales, quedan a ${each} cada una${qualifier} (${money(two)} en total).`;
+}
+
+function lowestPricePerEgg(options, quantity = 1) {
+  const candidates = options.filter(p => p.units > 0 && (quantity === 1 || p.two != null));
+  const rate = p => (quantity === 1 ? p.one : p.two) / (quantity * p.units);
+  return candidates.reduce((best, option) => !best || rate(option) < rate(best) ? option : best, null);
+}
+
 function trayComparisons(ctx, products) {
   const trays = products.filter(product => product.quantity_prices?.length &&
     quantityAvailable(product, 1) && !product.is_business);
@@ -342,16 +362,14 @@ function trayComparisons(ctx, products) {
       return Math.round(line.price * quantity);
     };
     const one = totalFor(1);
-    const two = totalFor(2);
+    const two = quantityAvailable(product, 2) ? totalFor(2) : null;
     const title = product.title || product.name;
-    const saving = 2 * one - two;
     const units = presentationUnits(product);
     const size = eggSize(title);
     const color = eggColor(product);
     const label = units && size && color ? `bandeja de ${units} huevos ${size} ${color}` : title;
-    const prices = `Una sale ${money(one)}.` + (quantityAvailable(product, 2)
-      ? ` Dos iguales quedan en ${money(two)} en total${saving > 0 ? ` y ahorras ${money(saving)}` : ''}.` : '');
-    return {title, one, label, prices, units, text: `${title}. ${prices}`};
+    const prices = two == null ? `Una sale ${money(one)}.` : pairQuote(one, two);
+    return {title, one, two, label, prices, units, text: `${title}. ${prices}`};
   }).sort((a, b) => a.one - b.one);
 }
 
@@ -360,6 +378,8 @@ function customerTrayGuidance(ctx, products, funnel, lastPurchase) {
   if (!comparisons.length) return '';
   const evidence = lastPurchase?.detalleCompleto ? lastPurchase.productos : [];
   const cheapest = comparisons[0];
+  const bestSingle = lowestPricePerEgg(comparisons);
+  const bestPair = lowestPricePerEgg(comparisons, 2);
   const priorItems = evidence.map(item => `${item.cantidad} × ${item.producto}`).join(', ');
   const audience = funnel === 'customer'
     ? `Cliente con compra verificada. ${priorItems ? 'Última compra verificada: ' + priorItems + '.' : 'El detalle de su última compra no está verificado.'} Si pregunta por precios en general y hay una sola bandeja previa identificable, usa esa presentación de ejemplo. Si pide repetir, parte por la cantidad y presentación exactas de su último pedido y el total vigente para él. Si faltan datos o el formato ya no figura, pregunta. Si hoy pide otra variedad, esa tiene prioridad.`
@@ -367,26 +387,35 @@ function customerTrayGuidance(ctx, products, funnel, lastPurchase) {
       ? 'Primera compra. Si pregunta en general por precios de huevos, abre con un ejemplo concreto y pregunta qué formato o calibre prefiere.'
       : 'Historial sin verificar. Ante una pregunta general de precios de huevos, da un ejemplo concreto y pregunta qué formato o calibre busca.';
   return [audience,
-    'Para una consulta general, una opción de entrada disponible es: ' + cheapest.text,
-    'Para consultas específicas usa la fila del producto solicitado. Da primero el total por la cantidad que pide. Si está comparando una bandeja con dos, indica ambos totales y el ahorro en pesos respecto de comprar dos por separado a SU precio vigente. Menciona una alternativa como máximo, salvo que pida todas las opciones o la escala completa. Si ya eligió cantidad o rechazó llevar más, continúa con el pedido. Si tiene tarifa especial, usa el total que le corresponde; habla de ahorro solo si aparece. Omite esta explicación en saludos, pagos, reclamos o seguimiento de pedidos.',
+    'Para un lead que pregunta precios en general, o si pide gastar lo mínimo en una bandeja, usa la disponible de menor precio total: ' + cheapest.text,
+    bestSingle && 'Si busca que le rinda, más huevos por su plata o menor precio por huevo, la bandeja con menor precio por huevo comprando una es: ' + bestSingle.text,
+    bestPair && 'Si compara específicamente dos bandejas por rendimiento, el menor precio por huevo para dos bandejas iguales es: ' + bestPair.text,
+    'La preferencia explícita de calibre, color y formato manda: compara solo entre bandejas que la cumplan y calcula con la tarifa del contacto. Para cotizar una y dos iguales, usa este orden: precio de una, precio de cada una llevando dos, total por las dos. Si el total es impar, muestra el promedio exacto por bandeja. Añade el ahorro en pesos si lo pregunta o si está comparando descuentos. Para otras cantidades, da el total solicitado. Menciona una alternativa como máximo, salvo que pida todas las opciones o la escala completa. Si ya eligió cantidad o rechazó llevar más, continúa con el pedido. Si tiene tarifa especial, usa el total que le corresponde; habla de ahorro solo si aparece. Omite esta explicación en saludos, pagos, reclamos o seguimiento de pedidos.',
     ...comparisons.map(option => option.text)
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function introductoryTrayReply(message, history, products, ctx, funnel, lastPurchase) {
   // Only standalone egg-price questions. Follow-ups and mixed requests need the full conversation.
   const question = normalize(message).replace(/^(?:hola|buenos dias|buenas tardes|buenas noches|buenas)\s+/, '');
-  if (!/^(?:(?:que |cuales son los )?(?:precios?|valores?) (?:tienen |tienen los |de los |de |los |tienen de )?huevos|(?:cuanto (?:cuestan|valen|salen|estan)|a cuanto (?:estan|tienen)) (?:los )?huevos)(?: por favor)?$/.test(question)) return null;
+  const asksPrice = /^(?:(?:que |cuales son los )?(?:precios?|valores?) (?:tienen |tienen los |de los |de |los |tienen de )?huevos|(?:cuanto (?:cuestan|valen|salen|estan)|a cuanto(?: estan| tienen)?) (?:los )?huevos)(?: por favor)?$/.test(question);
+  const asksCheapest = /^(?:(?:cual es |cuanto (?:vale|sale|cuesta) )?la bandeja(?: de huevos)? mas (?:barata|economica)|(?:cuales son |a cuanto estan )?los huevos mas baratos)(?: por favor)?$/.test(question);
+  const asksValue = /^(?:(?:que|cuales) (?:huevos|bandejas) (?:rinden mas|salen mas (?:baratos|baratas) por huevo)|(?:busco|quiero) huevos que (?:me )?rindan(?: mas)?|(?:que|cual) bandeja(?: de huevos)? (?:rinde mas|sale mas barata por huevo))(?: por favor)?$/.test(question);
+  if (!asksPrice && !asksCheapest && !asksValue) return null;
   if (history.some(m => m.direction === 'outbound')) return null;
   if (history.some(m => m.direction === 'inbound' && normalize(m.content) !== normalize(message) &&
       !/^(hola|buenos dias|buenas tardes|buenas noches|buenas)$/.test(normalize(m.content)))) return null;
   const options = trayComparisons(ctx, products);
   if (!options.length) return null;
-  const previous = funnel === 'customer' && lastPurchase?.detalleCompleto
+  const previous = asksPrice && funnel === 'customer' && lastPurchase?.detalleCompleto
     ? options.filter(option => lastPurchase.productos.some(item => normalize(item.producto) === normalize(option.title)))
     : [];
-  const selected = previous.length === 1 ? previous[0] : options[0];
-  const intro = previous.length === 1 ? 'La última vez llevaste la ' + selected.label + '.' : 'Tenemos ' + selected.label + '.';
+  const selected = asksValue ? lowestPricePerEgg(options) : previous.length === 1 ? previous[0] : options[0];
+  if (!selected) return null;
+  let intro = 'Tenemos ' + selected.label + '.';
+  if (asksValue) intro = 'El menor precio por huevo lo tiene la ' + selected.label + '.';
+  else if (asksCheapest) intro = 'La más económica es la ' + selected.label + '.';
+  else if (previous.length === 1) intro = 'La última vez llevaste la ' + selected.label + '.';
   if (previous.length === 1) return intro + ' ' + selected.prices + ' ¿Quieres repetir esa bandeja?';
   const formats = [...new Set(options.map(p => p.units).filter(Boolean))].sort((a, b) => a - b);
   const close = formats.length > 1 ? '¿Buscas bandejas de ' + formats.join(' o ') + ' huevos?' : '¿Qué calibre buscas?';
@@ -410,7 +439,7 @@ function prompt(ctx, products = [], funnel = 'unknown', lastPurchase) {
 ${table}
 ${customerTrayGuidance(ctx, products, funnel, lastPurchase)}
 Origen confirmado por Diez Ríos: todos nuestros huevos son 100% de campo, incluidos blancos, cafés y mixtos. Destaca este atributo de forma natural al presentar los huevos o responder por su origen; no lo repitas en cada mensaje. No deduzcas del término "de campo" certificación orgánica, crianza libre, alimentación específica ni otras condiciones no verificadas.
-Nueva metodología comercial vigente desde el 9 de octubre de 2026: en la primera consulta de precios o inicio de pedido, explica brevemente que el descuento se calcula al repetir exactamente la misma bandeja: misma talla, mismo color y misma cantidad de huevos por bandeja. No se calcula por el total general de huevos ni se mezclan colores o formatos. Nunca respondas solamente "hay descuento automático": muestra el total final y el ahorro exactos para la opción consultada. Usa la tabla vigente para todos los calibres, incluida la M. Revisa el historial y no repitas esta introducción si ya se explicó en la conversación. No interrumpas una consulta de pago, reclamo o despacho con publicidad. No digas "desde hoy" en fechas posteriores ni sugieras que cambió un pedido anterior ya confirmado.
+Nueva metodología comercial vigente desde el 9 de octubre de 2026: en la primera consulta de precios o inicio de pedido, explica brevemente que el descuento se calcula al repetir exactamente la misma bandeja: misma talla, mismo color y misma cantidad de huevos por bandeja. No se calcula por el total general de huevos ni se mezclan colores o formatos. Nunca respondas solamente "hay descuento automático": muestra los precios en pesos para la opción consultada y el total exacto a pagar. Usa la tabla vigente para todos los calibres, incluida la M. Revisa el historial y no repitas esta introducción si ya se explicó en la conversación. No interrumpas una consulta de pago, reclamo o despacho con publicidad. No digas "desde hoy" en fechas posteriores ni sugieras que cambió un pedido anterior ya confirmado.
 Si pregunta por precios, puedes comparar una bandeja con dos iguales. Si ya eligió cuántas comprar, sigue con esa cantidad. Solo ofrece productos con stock. Nunca agregues cantidades sin aceptación. Ofrece un descuento solo cuando el total de la tabla muestre un ahorro. Si falta color o cantidad por bandeja, pregunta antes de escoger un producto.
 Si pide una cantidad total de huevos cuya caja ya no existe, intenta formar esa cantidad exacta con bandejas activas antes de decir que no se puede. Ejemplo obligatorio: 100 huevos XL pueden formarse con 5 bandejas XL de 20; conserva el nombre "bandejas", calcula el total de esa misma variedad y pregunta el color si falta. Para 120 huevos compara las combinaciones exactas activas y ofrece la de menor total para cada color. No revivas cajas legacy ni presentes una suma de bandejas como caja.
 Referencia NCh1376.Of78 divulgada por Chilehuevos: Muy chico hasta 40 g; Chico más de 40 y hasta 47 g; Mediano (M) más de 47 y hasta 54 g; Grande (L) más de 54 y hasta 61 g; Extra grande (XL) más de 61 y hasta 68 g; Especial más de 68 g. Estos son los rangos de la referencia chilena, no los rangos comerciales que anunciamos para L y XL. En Diez Ríos elevamos 2 g los extremos de referencia para nuestra selección comercial: L de 56 a 63 g y XL (Extra grande) de 63 a 70 g. Al ofrecer nuestros productos usa estos rangos comerciales y explica la diferencia si preguntan. No digas que la norma chilena fija L en 56–63 ni XL en 63–70. Los rangos comerciales comparten el límite 63 g: no reasignes un producto por ese peso; conserva su variante registrada. No extiendas el ajuste de 2 g a M, Especial o Jumbo. Es peso individual del huevo con cáscara. En la tabla normativa los límites superiores están incluidos: 54 g es M, 61 g es L y 68 g es XL. Jumbo no es una categoría independiente de esta norma: es el nombre comercial de nuestra selección sobre 74 g, que pertenece a Especial. Habla de categoría de peso, no de apariencia. No afirmes certificación, cumplimiento de un lote ni obligatoriedad legal sin verificación. El color no determina el peso. Explica esto si preguntan por tamaños o diferencias.
