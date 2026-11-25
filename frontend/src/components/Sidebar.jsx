@@ -19,9 +19,28 @@ const recoveryReasons = {
   duplicate: 'El bot detectó un turno repetido',
 };
 
-export default function Sidebar({ conversations, drafts, selectedId, onSelect, loading, onRefresh, isMobile }) {
+export default function Sidebar({ conversations, drafts, selectedId, onSelect, loading, onRefresh, isMobile, inboundRange, setInboundRange }) {
   const { colors } = useTheme();
   const draftOrder = useSyncExternalStore(drafts.subscribeOrder, drafts.getOrder);
+  const [dateFields, setDateFields] = useState(inboundRange || { from: '', to: '' });
+  const [rangeResult, setRangeResult] = useState(null);
+  const [copyStatus, setCopyStatus] = useState('');
+  const rangeLoading = Boolean(inboundRange && rangeResult?.range !== inboundRange);
+  const inboundIds = !rangeLoading && inboundRange ? rangeResult.ids : null;
+
+  useEffect(() => {
+    if (!inboundRange) return;
+    const controller = new AbortController();
+    api.get('/conversations/inbound-range', { params: inboundRange, signal: controller.signal })
+      .then(({ data }) => {
+        if (!controller.signal.aborted) setRangeResult({ range: inboundRange, ids: new Set(data.data.map(String)) });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setRangeResult({ range: inboundRange, ids: new Set(), error: true });
+      });
+    return () => controller.abort();
+  }, [inboundRange]);
+
   const [search, setSearch]           = useState('');
   const [msgResults, setMsgResults]   = useState([]); // resultados de búsqueda en mensajes
   const [msgLoading, setMsgLoading]   = useState(false);
@@ -108,16 +127,24 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
   useEffect(() => {
     clearTimeout(msgTimerRef.current);
     if (search.trim().length < 2) { setMsgResults([]); setMsgLoading(false); return; }
+    setMsgResults([]);
     setMsgLoading(true);
+    const controller = new AbortController();
     msgTimerRef.current = setTimeout(async () => {
       try {
-        const res = await api.get(`/conversations/search-messages?q=${encodeURIComponent(search.trim())}`);
-        setMsgResults(res.data.data || []);
-      } catch { setMsgResults([]); }
-      finally { setMsgLoading(false); }
+        const res = await api.get('/conversations/search-messages', {
+          params: { q: search.trim(), ...inboundRange },
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) setMsgResults(res.data.data || []);
+      } catch {
+        if (!controller.signal.aborted) setMsgResults([]);
+      } finally {
+        if (!controller.signal.aborted) setMsgLoading(false);
+      }
     }, 450);
-    return () => clearTimeout(msgTimerRef.current);
-  }, [search]);
+    return () => { clearTimeout(msgTimerRef.current); controller.abort(); };
+  }, [search, inboundRange]);
 
   const HOT_TEMPERATURES = ['hot', 'very_hot'];
   const HOT_STATES = ['interested', 'collecting_order'];
@@ -153,8 +180,8 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
   const metaCount = conversations.filter(isMeta).length;
   const evolutionCount = conversations.filter(isEvolution).length;
 
-  const filtered = conversations.filter(c => {
-    if (!matchesProvider(c)) return false;
+  const matchesFilters = c => {
+    if (!matchesProvider(c) || (inboundRange && !inboundIds?.has(String(c.id)))) return false;
     if (activeTab === 'ai'     && c.agent_mode !== 'ai')    return false;
     if (activeTab === 'coordinating' && (c.agent_mode !== 'coordinating' || c.attention_state !== 'requires_human')) return false;
     if (activeTab === 'human'  && c.agent_mode !== 'human') return false;
@@ -162,11 +189,16 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
     if (activeTab === 'attention' && !['requires_human', 'bot_unanswered'].includes(c.attention_state)) return false;
     if (activeTab === 'hot'     && (!HOT_TEMPERATURES.includes(c.lead_temperature) || c.hot_lead_excluded || c.attention_state === 'no_response_needed')) return false;
     if (activeTab === 'stalled' && !isStalled(c))                          return false;
-    const q = search.toLowerCase();
+    return true;
+  };
+  const filtered = conversations.filter(c => {
+    if (!matchesFilters(c)) return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
     return (
       c.contact_name?.toLowerCase().includes(q) ||
       c.phone_number?.includes(q) ||
-      c.last_message?.toLowerCase().includes(q)
+      (!inboundRange && c.last_message?.toLowerCase().includes(q))
     );
   }).sort((a, b) => {
     const draftPriority = (draftOrder.get(String(b.id)) || 0) - (draftOrder.get(String(a.id)) || 0);
@@ -186,6 +218,33 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
     }
     return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
   });
+  const matchingConversations = inboundRange ? conversations.filter(matchesFilters) : [];
+  const matchingById = new Map(matchingConversations.map(c => [String(c.id), c]));
+  const visibleMessageResults = inboundRange
+    ? msgResults.filter(r => matchingById.has(String(r.id)))
+    : msgResults;
+  const visibleRangeConversations = inboundRange
+    ? [...filtered, ...visibleMessageResults.map(r => matchingById.get(String(r.id)))]
+    : [];
+  const phones = new Set(visibleRangeConversations
+    .map(c => String(c.phone_number || '').trim())
+    .filter(phone => /^\+?\d[\d ()-]*$/.test(phone))
+    .map(phone => phone.replace(/\D/g, '').replace(/^9\d{8}$/, number => '56' + number)));
+
+  async function copyPhones() {
+    try {
+      await navigator.clipboard.writeText([...phones].sort().join('\n'));
+      setCopyStatus('Números copiados');
+    } catch {
+      setCopyStatus('No se pudieron copiar los números.');
+    }
+  }
+
+  function applyInboundRange(range) {
+    setCopyStatus('');
+    setMsgResults([]);
+    setInboundRange(range);
+  }
 
   const [triggering, setTriggering] = useState(false);
 
@@ -532,7 +591,10 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
             style={{ background: 'none', color: colors.textSecondary, padding: '6px', border: 'none', cursor: 'pointer', display: 'flex' }}>
             <RotateCcw size={16} />
           </button>
-          <button onClick={onRefresh}
+          <button onClick={() => {
+            onRefresh();
+            if (inboundRange) applyInboundRange({ ...inboundRange });
+          }}
             style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: 'pointer' }}
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = colors.textSecondary; }}
@@ -549,6 +611,32 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
           {search && <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: '0', display: 'flex' }}><X size={14} /></button>}
         </div>
       </div>
+
+      <details open={inboundRange ? true : undefined} style={{ padding: '4px 12px', color: colors.textSecondary, fontSize: '12px' }}>
+        <summary style={{ cursor: 'pointer' }}>Mensajes entrantes por fecha</summary>
+        <form style={{ display: 'grid', gap: '6px', paddingTop: '6px' }} onSubmit={event => {
+          event.preventDefault();
+          applyInboundRange({ ...dateFields });
+        }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <label>Desde<br /><input type="date" required max={dateFields.to || undefined} value={dateFields.from}
+              onChange={event => setDateFields({ ...dateFields, from: event.target.value })} /></label>
+            <label>Hasta<br /><input type="date" required min={dateFields.from || undefined} value={dateFields.to}
+              onChange={event => setDateFields({ ...dateFields, to: event.target.value })} /></label>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <button type="submit" disabled={!dateFields.from || !dateFields.to || dateFields.from > dateFields.to}>Aplicar</button>
+            {inboundRange && <button type="button" onClick={() => {
+              setDateFields({ from: '', to: '' });
+              applyInboundRange(null);
+            }}>Quitar filtro</button>}
+            {inboundRange && !loading && !msgLoading && phones.size > 0 && <button type="button" onClick={copyPhones}>Copiar {phones.size} números</button>}
+          </div>
+          {inboundRange && <div role="status">{rangeLoading ? 'Consultando mensajes entrantes…'
+            : rangeResult.error ? 'No se pudo consultar el período. Pulsa Aplicar para reintentar.'
+            : copyStatus || `${inboundIds.size} chats en el período · hora de Chile`}</div>}
+        </form>
+      </details>
 
       {/* Filtro por proveedor de WhatsApp — se combina con los filtros de estado */}
       <div style={{
@@ -650,12 +738,12 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
 
       {/* Lista */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {loading ? (
+        {loading || rangeLoading ? (
           <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary, fontSize: '14px' }}>Cargando...</div>
-        ) : filtered.length === 0 && msgResults.length === 0 ? (
+        ) : filtered.length === 0 && visibleMessageResults.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '40px', color: colors.textSecondary }}>
             <MessageSquare size={40} color={colors.textMuted} style={{ marginBottom: '12px' }} />
-            <div style={{ fontSize: '14px' }}>{search ? 'Sin resultados' : 'Sin conversaciones aún'}</div>
+            <div style={{ fontSize: '14px' }}>{rangeResult?.error && inboundRange ? 'Consulta no disponible' : search || inboundRange ? 'Sin resultados' : 'Sin conversaciones aún'}</div>
           </div>
         ) : (
           <>
@@ -667,7 +755,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
             {search.trim().length >= 2 && (
               <>
                 {/* Separador solo si hay resultados de conversaciones arriba */}
-                {filtered.length > 0 && msgResults.filter(r => {
+                {filtered.length > 0 && visibleMessageResults.filter(r => {
                   const conversation = conversations.find(c => c.id === r.id) || r;
                   return matchesProvider(conversation) && !filtered.find(f => f.id === r.id);
                 }).length > 0 && (
@@ -678,7 +766,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
                   </div>
                 )}
                 {/* Mostrar resultados de mensajes que no aparecen ya en la lista normal */}
-                {msgResults
+                {visibleMessageResults
                   .filter(r => {
                     const conversation = conversations.find(c => c.id === r.id) || r;
                     return matchesProvider(conversation) && !filtered.find(f => f.id === r.id);
@@ -727,7 +815,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
                       </div>
                     );
                   })}
-                {msgResults.filter(r => !filtered.find(f => f.id === r.id)).length === 0 && filtered.length === 0 && !msgLoading && (
+                {visibleMessageResults.filter(r => !filtered.find(f => f.id === r.id)).length === 0 && filtered.length === 0 && !msgLoading && (
                   <div style={{ textAlign: 'center', padding: '30px', color: colors.textSecondary }}>
                     <MessageSquare size={32} color={colors.textMuted} style={{ marginBottom: '8px' }} />
                     <div style={{ fontSize: '13px' }}>Sin resultados</div>
