@@ -53,7 +53,8 @@ function apply(items, products, specialPrices = {}) {
 function aiText(product) {
   if (!product.quantity_prices?.length) return '';
   const scale = product.quantity_prices.map((p, i) => `${i + 1} bandeja(s): $${p.toLocaleString('es-CL')} total`).join('; ');
-  return `  Escala automática por cantidad del MISMO producto: ${scale}. Desde ${product.quantity_prices.length} bandejas se mantiene el precio por bandeja de caja completa. Cada bandeja contiene ${product.units_per_tray} huevos. Una caja completa equivale a ${product.box_size} bandejas: registra el producto de bandeja con quantity=${product.box_size}, no como una bandeja. Los totales son de productos; confirma el despacho según las condiciones de la tienda. No sumes calibres distintos para calcular el descuento.`;
+  const boxNote = product.box_size ? ` Una caja completa equivale a ${product.box_size} bandejas: registra el producto de bandeja con quantity=${product.box_size}, no como una bandeja.` : '';
+  return `  Escala automática por cantidad del MISMO producto: ${scale}. Desde ${product.quantity_prices.length} bandejas se mantiene el precio por bandeja del último tramo. Cada bandeja contiene ${product.units_per_tray} huevos.${boxNote} Los totales son de productos; confirma el despacho según las condiciones de la tienda. No sumes calibres distintos para calcular el descuento.`;
 }
 function parseShipping(raw) {
   let rule; try { rule = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
