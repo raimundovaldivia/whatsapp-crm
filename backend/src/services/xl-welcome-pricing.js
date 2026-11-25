@@ -387,6 +387,7 @@ function introductoryTrayReply(message, history, products, ctx, funnel, lastPurc
     : [];
   const selected = previous.length === 1 ? previous[0] : options[0];
   const intro = previous.length === 1 ? 'La última vez llevaste la ' + selected.label + '.' : 'Tenemos ' + selected.label + '.';
+  if (previous.length === 1) return intro + ' ' + selected.prices + ' ¿Quieres repetir esa bandeja?';
   const formats = [...new Set(options.map(p => p.units).filter(Boolean))].sort((a, b) => a - b);
   const close = formats.length > 1 ? '¿Buscas bandejas de ' + formats.join(' o ') + ' huevos?' : '¿Qué calibre buscas?';
   return intro + ' ' + selected.prices + ' ' + close;
