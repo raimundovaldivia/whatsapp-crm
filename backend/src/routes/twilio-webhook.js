@@ -85,6 +85,7 @@ router.post('/', require('../middleware/webhook-auth').verifyWebhook('twilio'), 
     const queued = await require('../services/outbound-message-queue').deferOutsideHours({
       orgId: org.id, conversationId: conversation.id, text: result.response, sentBy: 'ai', agentType: result.agentType,
       promptVersion: result.promptVersion, productMedia: result.productMedia, sendingProvider: 'twilio', io,
+      inboundMessageId: savedMsg.id, handoff: result.switchToHuman === true,
     });
     const sentResult = queued ? null : await twilioService.sendTextMessage(
       parsed.from,

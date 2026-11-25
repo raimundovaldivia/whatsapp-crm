@@ -13,7 +13,7 @@ async function fixture(t) {
   await pg.exec(`SET TIME ZONE 'UTC';
     CREATE TABLE organizations(id INT PRIMARY KEY,slug TEXT);
     INSERT INTO organizations VALUES(1,'diez-rios-mrs96z69'),(2,'otra-tienda');
-    CREATE TABLE conversations(id INT PRIMARY KEY,organization_id INT,phone_number TEXT,whatsapp_channel_id INT,agent_mode TEXT DEFAULT 'ai');
+    CREATE TABLE conversations(id INT PRIMARY KEY,organization_id INT,phone_number TEXT,whatsapp_channel_id INT,agent_mode TEXT DEFAULT 'ai',campaign_manual_hold BOOLEAN DEFAULT FALSE);
     CREATE TABLE users(id INT PRIMARY KEY,organization_id INT,role TEXT,merged_into_user_id INT);
     CREATE TABLE orders(id INT PRIMARY KEY,organization_id INT,conversation_id INT,status TEXT,created_at TIMESTAMP,updated_at TIMESTAMP);
     CREATE TABLE messages(id SERIAL PRIMARY KEY,conversation_id INT,direction TEXT,content TEXT,type TEXT,status TEXT,sent_by TEXT,agent_type TEXT,
@@ -292,4 +292,108 @@ test('Evolution history verifies the direct number, content, author and latest t
   assert.equal((await evolution.latestDirectMessage(number,config)).direction,'inbound');
   records.push(entry('e',jid,true,0));
   assert.equal((await evolution.latestDirectMessage(number,config)).direction,'outbound');
+});
+
+async function customerMessage(f, conversationId = 11, at = NIGHT) {
+  const {rows:[message]} = await f.pool.query(`INSERT INTO messages
+    (conversation_id,direction,content,status,sent_by,whatsapp_message_id,created_at)
+    VALUES($1,'inbound','¿Cuánto sale?','sent','client','in-'||nextval('messages_id_seq'),$2::timestamptz AT TIME ZONE 'UTC')
+    RETURNING id`, [conversationId, at.toISOString()]);
+  return message.id;
+}
+
+function botResponse(f, inboundMessageId, options = {}) {
+  return f.enqueue({sentBy:'ai',createdBy:null,inboundMessageId,text:'La bandeja cuesta $8.990.',...options});
+}
+
+test('Diva responds to a real inbound after closing once, including webhook retries and morning drain', async t => {
+  const f = await fixture(t);
+  const id = await customerMessage(f);
+  const replies = await Promise.all([
+    botResponse(f,id,{inboundTimestamp:NIGHT.getTime()/1000}), botResponse(f,id,{text:'Respuesta alternativa'}),
+  ]);
+  assert.equal(replies[0].id, replies[1].id);
+  assert.equal((await f.messages()).at(-1).outbound_queue.state, 'sent');
+  assert.equal(f.sends[0][3].botReply, true);
+  assert.equal((await botResponse(f,id)).id, replies[0].id);
+  await f.worker().tick(1);
+  assert.equal(f.sends.length, 1);
+});
+
+test('a historic replay, superseded inbound or ID from another conversation cannot open the night window', async t => {
+  const f = await fixture(t);
+  const old = await customerMessage(f);
+  const latest = await customerMessage(f);
+  const foreign = await customerMessage(f,22);
+  assert.equal((await botResponse(f,old)).outbound_queue.state, 'review');
+  assert.equal((await botResponse(f,foreign)).outbound_queue.state, 'review');
+  assert.equal((await botResponse(f,latest,{inboundTimestamp:new Date(NIGHT.getTime()-86400000).toISOString()})).outbound_queue.state, 'review');
+  await f.worker().tick(1);
+  assert.equal(f.sends.length, 0);
+});
+
+test('a manual hold, a human takeover and disabled global AI keep Diva silent overnight', async t => {
+  const f = await fixture(t);
+  await f.pool.query('UPDATE conversations SET campaign_manual_hold=true WHERE id=11');
+  assert.equal((await botResponse(f,await customerMessage(f))).outbound_queue.state, 'review');
+  await f.pool.query("UPDATE conversations SET campaign_manual_hold=false,agent_mode='human' WHERE id=11");
+  assert.equal((await botResponse(f,await customerMessage(f))).outbound_queue.state, 'review');
+  await f.pool.query("UPDATE conversations SET agent_mode='ai' WHERE id=11");
+  f.db.getSetting = async () => 'false';
+  assert.equal((await botResponse(f,await customerMessage(f))).outbound_queue.state, 'review');
+  assert.equal(f.sends.length, 0);
+});
+
+test('only a handoff acknowledgment may answer a turn in coordinating mode', async t => {
+  const f = await fixture(t);
+  await f.pool.query("UPDATE conversations SET agent_mode='coordinating' WHERE id=11");
+  assert.equal((await botResponse(f,await customerMessage(f))).outbound_queue.state, 'review');
+  assert.equal((await botResponse(f,await customerMessage(f),{handoff:true})).outbound_queue.state, 'sent');
+  assert.equal(f.sends.length, 1);
+});
+
+test('night worker recovers a busy inbound reply while leaving proactive and other-tenant drafts for opening', async t => {
+  const f = await fixture(t);
+  const queued = await f.enqueue();
+  await f.pool.query(`UPDATE messages SET outbound_queue=outbound_queue||'{"state":"processing"}'::jsonb WHERE id=$1`, [queued.id]);
+  const inbound = await customerMessage(f);
+  const draft = await botResponse(f,inbound);
+  assert.equal(draft.outbound_queue.state,'queued');
+  await f.pool.query(`UPDATE messages SET outbound_queue=outbound_queue||'{"state":"queued"}'::jsonb WHERE id=$1`, [queued.id]);
+  const foreign = await botResponse(f,await customerMessage(f,22),{orgId:2,conversationId:22});
+  assert.equal(foreign.outbound_queue.replyToInboundId,undefined);
+  const worker=f.worker({clock:()=>NIGHT});
+  await worker.tick(2);
+  await worker.tick(1);
+  await worker.tick(1);
+  assert.equal(f.sends.length,1);
+  assert.equal((await f.messages()).find(m=>m.id===queued.id).outbound_queue.state,'queued');
+});
+
+test('Shared inbound pipeline passes the originating customer message to the night queue and sends a single answer', async t => {
+  const f = await fixture(t);
+  const config = {provider:'kapso'};
+  const readConversation = () => f.db.getConversationById(11,1);
+  const inbound = load('src/services/inbound-text.js', {
+    '../db/database': {
+      ...f.db, upsertConversation: readConversation, getConversationById: readConversation,
+      saveMessage: async message => {
+        assert.equal(message.direction, 'inbound');
+        const {rows:[saved]} = await f.pool.query(`INSERT INTO messages(conversation_id,direction,content,status,sent_by,whatsapp_message_id,created_at)
+          VALUES($1,'inbound',$2,'sent','client',$3,$4::timestamptz AT TIME ZONE 'UTC') RETURNING *`,
+        [message.conversationId,message.content,message.whatsappMessageId,NIGHT.toISOString()]);
+        return saved;
+      },
+    },
+    './pipeline':{processMessage:async () => ({response:'La caja cuesta $37.000.',agentType:'sales'})},
+    './pipeline-outbound':{evaluatePipelineResult:async () => ({escalate:false})},
+    './outbound-message-queue':{deferOutsideHours:input => f.service.deferOutsideHours({...input,now:NIGHT},f.pool)},
+    './whatsapp-provider':{sendTextMessage:() => assert.fail('El webhook no debe duplicar el envío de la cola')},
+  });
+  await inbound.processInboundText({org:{id:1},whatsappConfig:config,
+    parsed:{from:'56911111111',text:'¿Cuánto cuesta la caja?',messageId:'wa-in-1',timestamp:NIGHT.getTime()/1000}});
+  const [question,answer] = await f.messages();
+  assert.equal(answer.outbound_queue.replyToInboundId,question.id);
+  assert.equal(answer.outbound_queue.state,'sent');
+  assert.equal(f.sends.length,1);
 });
