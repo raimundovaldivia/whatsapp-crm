@@ -4,6 +4,21 @@ import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
 
+const recoveryReasons = {
+  conversation_changed: 'El chat cambió durante la revisión',
+  newer_inbound: 'Hay un mensaje posterior al período',
+  delivery_pending: 'Envío pendiente de confirmación',
+  human_unanswered: 'Consulta sin respuesta en atención humana',
+  human_has_reply: 'Chat en atención humana con respuesta registrada',
+  window_expired: 'Consulta sin respuesta con ventana de WhatsApp vencida',
+  window_expired_with_reply: 'Ventana vencida con respuesta registrada',
+  recent_inbound: 'Mensaje recién recibido',
+  no_response_needed: 'Mensaje que no requiere respuesta',
+  no_confirmed_gap: 'Sin una pregunta pendiente identificada',
+  opted_out: 'Contacto dado de baja',
+  duplicate: 'El bot detectó un turno repetido',
+};
+
 export default function Sidebar({ conversations, drafts, selectedId, onSelect, loading, onRefresh, isMobile }) {
   const { colors } = useTheme();
   const draftOrder = useSyncExternalStore(drafts.subscribeOrder, drafts.getOrder);
@@ -34,7 +49,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
     event.preventDefault();
     if (retrying) return;
     setRetrying(true);
-    const totals = { sent: 0, reviewed: 0, failed: 0 };
+    const totals = { sent: 0, reviewed: 0, failed: 0, reasons: {}, manual: [] };
     setRetryResult(totals);
     try {
       let afterId = 0;
@@ -44,9 +59,15 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
         }, { timeout: 120000 });
         totals.reviewed += data.retried || 0;
         totals.sent += data.sent || 0;
-        totals.failed += data.results.filter(item => item.failed).length;
+        for (const item of data.results) {
+          if (item.success) continue;
+          if (item.failed) totals.failed += 1;
+          const label = item.failed ? 'Error al procesar' : recoveryReasons[item.reason] || 'El bot no generó respuesta';
+          totals.reasons[label] = (totals.reasons[label] || 0) + 1;
+          if (item.needsReview) totals.manual.push({ ...item, label });
+        }
         afterId = data.nextAfterId;
-        setRetryResult({ ...totals });
+        setRetryResult({ ...totals, reasons: { ...totals.reasons }, manual: [...totals.manual] });
       } while (afterId != null);
     } catch (err) {
       setRetryResult({ ...totals, error: err.response?.data?.error || 'La recuperación se interrumpió. Revisa las respuestas registradas antes de volver a ejecutar.' });
@@ -256,7 +277,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
     {showRecovery && (
       <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', zIndex: 2000 }}>
         <form onSubmit={handleRetryUnanswered} role="dialog" aria-modal="true" aria-labelledby="recover-bot-title"
-          style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 24, width: 'min(420px, 90vw)', display: 'grid', gap: 14 }}>
+          style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 24, width: 'min(460px, 90vw)', maxHeight: '90vh', overflowY: 'auto', display: 'grid', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <strong id="recover-bot-title">Recuperar respuestas del bot</strong>
             <button type="button" aria-label="Cerrar" disabled={retrying} onClick={() => setShowRecovery(false)}><X size={16} /></button>
@@ -279,6 +300,26 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
           {retryResult && (
             <div role="status" style={{ fontSize: 13 }}>
               <div>{retryResult.reviewed} revisados · {retryResult.sent} enviados · {retryResult.reviewed - retryResult.sent - retryResult.failed} omitidos · {retryResult.failed} con error</div>
+              {Object.keys(retryResult.reasons).length > 0 && (
+                <details>
+                  <summary>Motivos de omisión o error</summary>
+                  <ul>{Object.entries(retryResult.reasons).map(([reason, count]) => <li key={reason}>{count} · {reason}</li>)}</ul>
+                </details>
+              )}
+              {retryResult.manual.length > 0 && (
+                <details open>
+                  <summary>{retryResult.manual.length} chats requieren revisión</summary>
+                  <ul>{retryResult.manual.map(item => (
+                    <li key={item.conversationId}>
+                      <button type="button" disabled={retrying} onClick={() => {
+                        const conversation = conversations.find(candidate => Number(candidate.id) === Number(item.conversationId));
+                        if (conversation) { onSelect(conversation.id); setShowRecovery(false); }
+                      }}>{item.name || item.phone}</button>
+                      {' · '}{item.label}
+                    </li>
+                  ))}</ul>
+                </details>
+              )}
               {retryResult.error && <div style={{ color: colors.dangerSoft }}>{retryResult.error}</div>}
             </div>
           )}
