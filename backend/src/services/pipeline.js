@@ -316,16 +316,19 @@ async function processMessage(orgId, conversationId, userMessage, log = null, op
   return result;
 }
 
-async function resolveSalesFunnel(orgId, conversation) {
+async function resolveSalesProfile(orgId, conversation) {
   const { normalizePhone } = require('./customer-identity');
   const phone = normalizePhone(conversation?.phone_number);
-  if (!phone || !/^\d{7,15}$/.test(phone) || ['facebook', 'instagram'].includes(conversation?.source_channel)) return 'unknown';
+  if (!phone || !/^\d{7,15}$/.test(phone) || ['facebook', 'instagram'].includes(conversation?.source_channel)) return { funnel: 'unknown' };
   try {
-    const purchases = await require('./broadcast-purchases').loadPurchases(getPool(), orgId, [phone]);
-    return purchases.length ? 'customer' : 'lead';
+    const { loadPurchases, purchaseSummary } = require('./broadcast-purchases');
+    const [latest] = await loadPurchases(getPool(), orgId, [phone]);
+    if (!latest) return { funnel: 'lead' };
+    const lastPurchase = purchaseSummary([latest], todayISOChile()).pedidos[0];
+    return { funnel: 'customer', lastPurchase };
   } catch (error) {
     console.warn('[Pipeline] No se pudo consultar el historial de compras:', error.message);
-    return 'unknown';
+    return { funnel: 'unknown' };
   }
 }
 
@@ -339,7 +342,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const noop = { step:()=>{}, context:()=>{}, intent:()=>{}, escalation:()=>{}, agent:()=>{}, error:()=>{} };
   const L = log || noop;
   const conversation = await db.getConversationById(conversationId, orgId);
-  const salesFunnel = await resolveSalesFunnel(orgId, conversation);
+  const { funnel: salesFunnel, lastPurchase } = await resolveSalesProfile(orgId, conversation);
   L.step('sales_funnel', salesFunnel);
   const requestedNow = options.now ? new Date(options.now) : null;
   const nowCl = requestedNow && !Number.isNaN(requestedNow.getTime()) ? requestedNow : new Date();
@@ -619,7 +622,7 @@ async function processMessageInternal(orgId, conversationId, userMessage, log = 
   const promotionSection = promotions.promptSection(promotionContext);
   const leadSection = personalOffer
     ? personalOffers.promptSection(personalOffer)
-    : (xlContext.enabled && !promotionContext?.active ? xlPricing.prompt(xlContext, products) : '');
+    : (xlContext.enabled && !promotionContext?.active ? xlPricing.prompt(xlContext, products, salesFunnel, lastPurchase) : '');
   const relationshipSection = {
     lead: 'Primera compra, desde cualquier canal. Empieza por resolver lo que preguntó: producto, formato, cantidad por envase y precio vigente. Si pregunta qué hay, muestra las opciones pertinentes del catálogo. Si también consulta despacho, incluye cobertura y costo conocidos en el mismo mensaje. Usa la comuna si ya la dio. Haz como máximo una pregunta por el próximo dato que falta. Si acepta una cotización, conserva el producto y la cantidad elegidos para el pedido. Si había varias opciones, aclara cuál quiere. Un anuncio aporta contexto; el mensaje actual tiene prioridad.',
     customer: 'Cliente con compras verificadas: responde lo que consulta hoy. Si pide repetir, usa únicamente artículos comprobados del historial y cotiza al precio vigente. Confirma antes de registrar.',
@@ -2180,7 +2183,12 @@ REGLAS ABSOLUTAS:
   // Consultas como "¿qué valor tendrían los 100?" se cotizan en código con
   // el catálogo activo. Así Diva no confunde una caja legacy con 5 bandejas
   // de 20 ni se limita a decir que existe un descuento sin mostrar el total.
-  if (!promotionContext?.active && !activeOrder && xlContext?.web) {
+  if (!promotionContext?.active && !personalOffer && !boxOffer && !activeOrder && xlContext?.enabled && xlContext.web && !hasOrderIntent) {
+    const introductoryReply = xlPricing.introductoryTrayReply(userMessage, history, products, xlContext, salesFunnel, lastPurchase);
+    if (introductoryReply) {
+      await db.updatePipelineState(conversationId, 'interested', undefined);
+      return { response: introductoryReply, agentType: 'sales', newState: 'interested' };
+    }
     const trayCountPriceReply = xlPricing.trayCountPriceReply(userMessage, history, products, xlContext);
     if (trayCountPriceReply) {
       await db.updatePipelineState(conversationId, 'interested', undefined);

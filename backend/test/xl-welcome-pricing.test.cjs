@@ -180,3 +180,36 @@ test('the configured M scale is identical in a tray quote, an egg-count quote an
   assert.equal(priced.unit_source,'escala_catalogo');
   assert.deepEqual(rule.apply([priced],retail),[priced]);
 });
+
+const retail = rule.forStore({ enabled: true });
+const smallTray = {id:'43',title:'Huevos XL blancos · Bandeja de 20',priceMin:8490,inventoryQuantity:100,quantity_prices:[8490,14938]};
+const mediumTray = {id:'39',title:'Huevos M mixtos · Bandeja de 30',priceMin:8990,inventoryQuantity:100,quantity_prices:[8990,16255]};
+const trays = [smallTray,mediumTray];
+const lastPurchase = {detalleCompleto:true, productos:[{producto:mediumTray.title,cantidad:2}]};
+
+test('new egg-price inquiries get a concrete comparison, repeat customers get their verified presentation', () => {
+  const msg = 'Hola, ¿qué precio tienen los huevos?';
+  const lead = rule.introductoryTrayReply(msg,[],trays,retail,'lead');
+  assert.match(lead,/20 huevos XL blancos.*Una sale \$8\.490\. Dos iguales quedan en \$14\.938 en total y ahorras \$2\.042/);
+  assert.match(lead,/20 o 30 huevos/);
+  const repeat = rule.introductoryTrayReply(msg,[],trays,retail,'customer',lastPurchase);
+  assert.match(repeat,/última vez.*M mixtos.*\$16\.255.*\$1\.725/);
+  assert.doesNotMatch(rule.introductoryTrayReply(msg,[],trays,retail,'unknown',lastPurchase),/última vez/);
+  assert.match(rule.prompt(retail,trays,'customer',lastPurchase),/Última compra verificada: 2 × Huevos M mixtos/);
+});
+test('comparisons respect the applicable single-tray price, stock and conversation context', () => {
+  const ctx={...retail,overrides:[{product_id:'39',custom_price:7000}]};
+  const msg='¿Cuánto valen los huevos?';
+  const intro=rule.introductoryTrayReply(msg,[],trays,ctx,'customer',lastPurchase);
+  assert.match(intro,/Una sale \$7\.000\. Dos iguales quedan en \$14\.000/);
+  assert.doesNotMatch(intro,/ahorras/);
+  assert.doesNotMatch(rule.trayCountPriceReply('2 bandejas M de 30',[],trays,ctx),/ahorras|no tienen descuento/);
+  assert.match(rule.introductoryTrayReply(msg,[],[{...mediumTray,inventoryQuantity:-1}],retail,'lead'),/Dos iguales/);
+  const scarce=[{...mediumTray,inventoryQuantity:1}];
+  assert.doesNotMatch(rule.introductoryTrayReply(msg,[],scarce,retail,'lead'),/Dos iguales/);
+  assert.equal(rule.trayCountPriceReply('2 bandejas M de 30',[],scarce,retail),null);
+  assert.equal(rule.introductoryTrayReply(msg,[],[{...mediumTray,inventoryQuantity:0}],retail,'lead'),null);
+  for (const other of ['Hola','¿Cuánto valen los huevos y el despacho?','Quiero dos bandejas','Precio del manjar'])
+    assert.equal(rule.introductoryTrayReply(other,[],trays,retail,'lead'),null);
+  assert.equal(rule.introductoryTrayReply(msg,[{direction:'outbound',content:'¿Qué color prefieres?'}],trays,retail,'lead'),null);
+});
