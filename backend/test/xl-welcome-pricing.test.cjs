@@ -190,8 +190,7 @@ const lastPurchase = {detalleCompleto:true, productos:[{producto:mediumTray.titl
 test('new egg-price inquiries get a concrete comparison, repeat customers get their verified presentation', () => {
   const msg = 'Hola, ¿qué precio tienen los huevos?';
   const lead = rule.introductoryTrayReply(msg,[],trays,retail,'lead');
-  assert.match(lead,/20 huevos XL blancos.*Una sale \$8\.490\. Si llevas dos iguales, quedan a \$7\.469 cada una \(\$14\.938 en total\)/);
-  assert.match(lead,/20 o 30 huevos/);
+  assert.match(lead,/30 huevos M mixtos.*Una sale \$8\.990\. Si llevas dos iguales, quedan a \$8\.127,50 cada una en promedio \(\$16\.255 en total\)/);
   const repeat = rule.introductoryTrayReply(msg,[],trays,retail,'customer',lastPurchase);
   assert.match(repeat,/última vez.*M mixtos.*\$8\.127,50 cada una en promedio \(\$16\.255 en total\)/);
   assert.doesNotMatch(rule.introductoryTrayReply(msg,[],trays,retail,'unknown',lastPurchase),/última vez/);
@@ -228,4 +227,18 @@ test('distinguishes the cheapest tray from the best price per egg at the current
   assert.match(prompt, /calibre, color y formato manda/);
   assert.match(rule.trayCountPriceReply('¿Cuánto ahorro con 2 bandejas M de 30?',[],trays,retail), /8\.127,50.*16\.255.*Ahorras \$1\.725/);
   assert.match(rule.quantityPriceReply('¿Qué precio tienen 60 huevos M?',[],trays,retail), /8\.990.*8\.127,50.*16\.255/);
+});
+
+test('opens with an available 30-egg tray and honours requested sizes and stock', () => {
+  const previous20 = {detalleCompleto:true,productos:[{producto:smallTray.title,cantidad:1}]};
+  const general = available => rule.introductoryTrayReply('¿A cuánto los huevos?',[],available,retail,'customer',previous20);
+  assert.match(general(trays),/Tenemos bandeja de 30 huevos/);
+  assert.match(general([smallTray,{...mediumTray,inventoryQuantity:0}]),/última vez.*20 huevos/);
+  assert.match(rule.prompt(retail,trays,'lead'),/primera opción es: Huevos M mixtos · Bandeja de 30/);
+  const sameCaliber = [smallTray,{...mediumTray,title:'Huevos XL blancos · Bandeja de 30'}];
+  const both = rule.trayCountPriceReply('¿Cuánto cuestan 2 bandejas XL?',[],sameCaliber,retail);
+  assert.ok(both.includes('bandeja de 20') && both.indexOf('bandeja de 30') < both.indexOf('bandeja de 20'));
+  const only20=rule.trayCountPriceReply('¿Cuánto cuestan 2 bandejas XL de 20?',[],sameCaliber,retail);
+  assert.match(only20,/bandeja de 20/);
+  assert.doesNotMatch(only20,/bandeja de 30/);
 });
