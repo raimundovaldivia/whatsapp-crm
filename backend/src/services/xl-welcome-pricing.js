@@ -87,11 +87,17 @@ function apply(items, ctx) {
   }
   if (!ctx.eligible) return result;
   if(ctx.web)for(const i of result){
-    if(i.locked_quote||i.free_gift||['especial','promocion','promocion_cantidad'].includes(i.unit_source))continue;
+    if(i.locked_quote||i.free_gift||['especial','promocion','promocion_cantidad','escala_catalogo'].includes(i.unit_source))continue;
+    const catalogTotal = require('./quantity-pricing').totalFor(i.quantity_prices, Number(i.quantity));
+    if (catalogTotal !== null) {
+      i.price = catalogTotal / Number(i.quantity);
+      i.unit_source = 'escala_catalogo';
+      continue;
+    }
     const total=trayTotal(i);if(total<Number(i.price)*Number(i.quantity)){i.price=total/Number(i.quantity);i.unit_source='escala_bandejas';}
   }
   const selected = result.filter(i => packSize(i) && !i.locked_quote && !i.free_gift
-    && !['especial','promocion','promocion_cantidad'].includes(i.unit_source));
+    && !['especial','promocion','promocion_cantidad','escala_catalogo'].includes(i.unit_source));
   const units = selected.reduce((s, i) => s + packSize(i) * Number(i.quantity), 0);
   const current = selected.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
   const target = scaleTotal(units, ctx.tiers || TIERS);
@@ -208,9 +214,9 @@ function trayCountPriceReply(userMessage, history = [], products = [], ctx = {})
     const label = `${option.color[0].toUpperCase()}${option.color.slice(1)}, bandeja de ${option.units}`;
     return `${label}: ${money(option.total)}${option.saving ? ` (ahorras ${money(option.saving)})` : ''}`;
   };
-  const condition = size === 'M'
+  const condition = size === 'M' && !options.some(option => option.saving > 0) && count > 1
     ? 'Las bandejas M mantienen su precio normal y no tienen descuento por cantidad.'
-    : 'El total ya aplica el descuento por repetir exactamente la misma bandeja; no se mezclan colores ni formatos.';
+    : 'El total corresponde a esa cantidad de bandejas iguales; no se mezclan colores ni formatos.';
   const close = requestedColor ? '¿Confirmamos esa opción?' : '¿Qué color prefieres?';
   return `Para ${count} bandejas ${size}${requestedUnits ? ` de ${requestedUnits} huevos cada una` : ''}:\n${options.map(format).join('\n')}\n\n${condition} ${close}`;
 }
@@ -291,7 +297,7 @@ function quantityPriceReply(userMessage, history = [], products = [], ctx = {}) 
       const [priced] = apply([{ ...product, title, quantity, price: Number(product.price ?? product.priceMin) }], ctx);
       const total = Math.round(Number(priced?.price) * quantity);
       if (!Number.isFinite(total) || total <= 0) continue;
-      const option = { color, quantity, units, total };
+      const option = { color, quantity, units, total, saving: total < quantity * Number(product.price ?? product.priceMin) };
       const previous = bestByColor.get(color);
       if (!previous || total < previous.total || (total === previous.total && quantity < previous.quantity)) {
         bestByColor.set(color, option);
@@ -301,7 +307,7 @@ function quantityPriceReply(userMessage, history = [], products = [], ctx = {}) 
     if (!options.length) continue;
     const heading = `${target} huevos ${size} exactos`;
     const lines = options.map(option => `${option.color[0].toUpperCase()}${option.color.slice(1)}: ${option.quantity} bandejas de ${option.units} — ${money(option.total)}`);
-    sections.push({ target, heading, lines });
+    sections.push({ target, heading, lines, hasSavings: options.some(option => option.saving) });
   }
   if (!sections.length) return null;
 
@@ -311,7 +317,7 @@ function quantityPriceReply(userMessage, history = [], products = [], ctx = {}) 
     : `Para completar ${first.heading} con bandejas de la misma variedad:`;
   const extra = sections.slice(1).map(section => `Para ${section.heading}:\n${section.lines.join('\n')}`);
   const detail = [first.lines.join('\n'), ...extra].join('\n\n');
-  const condition = size === 'M'
+  const condition = size === 'M' && !sections.some(section => section.hasSavings)
     ? 'En las bandejas M no hay descuento por cantidad.'
     : 'Estos totales ya incluyen el descuento por repetir exactamente la misma bandeja; no se mezclan colores ni formatos y no se agrega otro porcentaje.';
   const close = requestedColor ? '¿Te preparo esa opción?' : '¿Qué color prefieres?';
@@ -334,12 +340,12 @@ function prompt(ctx, products = []) {
     return `## Precios de huevos para particulares: misma tabla del ecommerce
 ${table}
 Origen confirmado por Diez Ríos: todos nuestros huevos son 100% de campo, incluidos blancos, cafés y mixtos. Destaca este atributo de forma natural al presentar los huevos o responder por su origen; no lo repitas en cada mensaje. No deduzcas del término "de campo" certificación orgánica, crianza libre, alimentación específica ni otras condiciones no verificadas.
-Nueva metodología comercial vigente desde el 9 de octubre de 2026: en la primera consulta de precios o inicio de pedido, explica brevemente que el descuento se calcula al repetir exactamente la misma bandeja: misma talla, mismo color y misma cantidad de huevos por bandeja. No se calcula por el total general de huevos ni se mezclan colores o formatos. Nunca respondas solamente "hay descuento automático": muestra el total final y el ahorro exactos para la opción consultada, y aclara que las M no participan. Revisa el historial y no repitas esta introducción si ya se explicó en la conversación. No interrumpas una consulta de pago, reclamo o despacho con publicidad. No digas "desde hoy" en fechas posteriores ni sugieras que cambió un pedido anterior ya confirmado.
-Ofrece activamente la promoción: si pide 1 bandeja, indica cuánto cuesta sumar la segunda y el total; si pide 2, ofrece la tercera con su total. Solo ofrece productos con stock. Nunca agregues cantidades sin aceptación. Si el cliente rechaza, continúa sin insistir. No ofrezcas descuento para M. Si falta color o cantidad por bandeja, pregunta antes de escoger un producto.
+Nueva metodología comercial vigente desde el 9 de octubre de 2026: en la primera consulta de precios o inicio de pedido, explica brevemente que el descuento se calcula al repetir exactamente la misma bandeja: misma talla, mismo color y misma cantidad de huevos por bandeja. No se calcula por el total general de huevos ni se mezclan colores o formatos. Nunca respondas solamente "hay descuento automático": muestra el total final y el ahorro exactos para la opción consultada. Usa la tabla vigente para todos los calibres, incluida la M. Revisa el historial y no repitas esta introducción si ya se explicó en la conversación. No interrumpas una consulta de pago, reclamo o despacho con publicidad. No digas "desde hoy" en fechas posteriores ni sugieras que cambió un pedido anterior ya confirmado.
+Ofrece activamente la promoción: si pide 1 bandeja, indica cuánto cuesta sumar la segunda y el total; si pide 2, ofrece la tercera con su total. Solo ofrece productos con stock. Nunca agregues cantidades sin aceptación. Si el cliente rechaza, continúa sin insistir. Ofrece un descuento solo cuando el total de la tabla muestre un ahorro. Si falta color o cantidad por bandeja, pregunta antes de escoger un producto.
 Si pide una cantidad total de huevos cuya caja ya no existe, intenta formar esa cantidad exacta con bandejas activas antes de decir que no se puede. Ejemplo obligatorio: 100 huevos XL pueden formarse con 5 bandejas XL de 20; conserva el nombre "bandejas", calcula el total de esa misma variedad y pregunta el color si falta. Para 120 huevos compara las combinaciones exactas activas y ofrece la de menor total para cada color. No revivas cajas legacy ni presentes una suma de bandejas como caja.
 Referencia NCh1376.Of78 divulgada por Chilehuevos: Muy chico hasta 40 g; Chico más de 40 y hasta 47 g; Mediano (M) más de 47 y hasta 54 g; Grande (L) más de 54 y hasta 61 g; Extra grande (XL) más de 61 y hasta 68 g; Especial más de 68 g. Estos son los rangos de la referencia chilena, no los rangos comerciales que anunciamos para L y XL. En Diez Ríos elevamos 2 g los extremos de referencia para nuestra selección comercial: L de 56 a 63 g y XL (Extra grande) de 63 a 70 g. Al ofrecer nuestros productos usa estos rangos comerciales y explica la diferencia si preguntan. No digas que la norma chilena fija L en 56–63 ni XL en 63–70. Los rangos comerciales comparten el límite 63 g: no reasignes un producto por ese peso; conserva su variante registrada. No extiendas el ajuste de 2 g a M, Especial o Jumbo. Es peso individual del huevo con cáscara. En la tabla normativa los límites superiores están incluidos: 54 g es M, 61 g es L y 68 g es XL. Jumbo no es una categoría independiente de esta norma: es el nombre comercial de nuestra selección sobre 74 g, que pertenece a Especial. Habla de categoría de peso, no de apariencia. No afirmes certificación, cumplimiento de un lote ni obligatoriedad legal sin verificación. El color no determina el peso. Explica esto si preguntan por tamaños o diferencias.
 DEFINICIÓN COMERCIAL OBLIGATORIA: una bandeja es la presentación individual de 20 o 30 huevos indicada en el nombre. Una caja es un formato diferente y de mayor cantidad; sólo existe si el catálogo activo dice "Caja" o muestra una presentación cerrada de 100 o 180 huevos. Una caja NO es sinónimo de una bandeja y varias bandejas con descuento NO pasan a llamarse caja. Los precios de la tabla anterior corresponden a la presentación exacta escrita en cada línea. Si todas las líneas activas dicen bandeja y preguntan "¿esos precios son por caja?", responde directamente que son precios por bandeja e indica cuántos huevos trae cada una. Cada vez que el cliente diga "caja" sin indicar su contenido, la PRIMERA pregunta debe ser: "¿De cuántos huevos necesitas la caja?". Sólo después pregunta calibre o color si todavía hace falta; no deduzcas la cantidad desde el historial. Si no hay una caja activa en el catálogo, dilo y ofrece calcular el total de las bandejas disponibles; nunca inventes un precio de caja ni conviertas una caja en bandeja por tu cuenta.
-Cada unidad de venta es una bandeja o caja según el nombre: nunca confundas cantidad de huevos con cantidad de bandejas. Las promociones son para el mismo producto; las bandejas M no tienen descuento por cantidad. No acumules estos precios con otros descuentos. Respeta precios especiales y promociones ya acordadas si son mejores. No uses la antigua escala de primera compra ni inventes colores, disponibilidad o precios. Si no está definido el color, no prometas blanco, café ni mixto.
+Cada unidad de venta es una bandeja o caja según el nombre: nunca confundas cantidad de huevos con cantidad de bandejas. Las promociones son para el mismo producto, según los totales de la tabla. No acumules estos precios con otros descuentos. Respeta precios especiales y promociones ya acordadas si son mejores. No uses la antigua escala de primera compra ni inventes colores, disponibilidad o precios. Si no está definido el color, no prometas blanco, café ni mixto.
 Para entrega el mismo día sigue exactamente la sección “Cierre comercial de hoy” del contexto: no deduzcas el corte solo desde la hora escrita aquí. Confirma el pedido solamente después de guardarlo.`;
   }
   return `## Escala XL autorizada\n${ctx.eligible ? 'Cliente elegible por primera compra o compra previa en esta escala. Precios finales: 30 XL $11.000; 60 XL $22.000; 100 XL $36.500; 180 XL $54.000.' : 'Cliente sin beneficio de bienvenida: usa sus tarifas vigentes, no ofrezcas esta escala.'}

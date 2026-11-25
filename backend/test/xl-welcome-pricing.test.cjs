@@ -72,7 +72,7 @@ a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/5 b
 a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/Una caja NO es sinónimo de una bandeja/);
 a.match(p.prompt(ctx,[{title:'Huevos Jumbo · Bandeja de 20',price:10000}]),/¿De cuántos huevos necesitas la caja\?/);
 a.match(p.prompt(ctx,[]),/misma talla, mismo color y misma cantidad de huevos por bandeja/);
-a.match(p.prompt(ctx,[]),/bandejas M no tienen descuento/);
+a.match(p.prompt(ctx,[]),/tabla vigente para todos los calibres, incluida la M/);
 });
 
 require('node:test')('quotes 100 XL as five active 20-egg trays and explains the discount boundary',()=>{
@@ -165,4 +165,18 @@ for(const message of [
   'La bandeja cuesta $11.990. Quiero despacho', 'Retiro sin costo, no necesito envío',
   'Quiero comprar una bandeja y pagar en efectivo al despacho',
 ]) a.equal(p.deliveryPriceReply(message,web,'10000'),null,message);
+});
+
+test('the configured M scale is identical in a tray quote, an egg-count quote and the prompt', () => {
+  const retail = rule.forStore({enabled:true});
+  const product = {id:39,title:'Huevos M mixtos · Bandeja de 30',price:8990,stock:100,
+    quantity_prices:[8990,16255,22611,28968,35324,40773]};
+  const tray = rule.trayCountPriceReply('Quiero 2 bandejas M de 30', [], [product], retail);
+  assert.match(tray, /16\.255/);
+  assert.doesNotMatch(tray, /no tienen descuento/);
+  assert.match(rule.quantityPriceReply('¿Qué precio tienen 120 huevos M?', [], [product], retail) || '', /28\.968/);
+  assert.match(rule.prompt(retail, [product]), /2 bandejas \$16255/);
+  const [priced] = rule.apply([{...product,quantity:2}],retail);
+  assert.equal(priced.unit_source,'escala_catalogo');
+  assert.deepEqual(rule.apply([priced],retail),[priced]);
 });
