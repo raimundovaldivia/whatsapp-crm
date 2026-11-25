@@ -56,6 +56,37 @@ router.get('/', async (req, res) => {
   }
 });
 
+const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  && !value.startsWith('0000-') && Number.isFinite(Date.parse(value))
+  && new Date(value).toISOString().slice(0, 10) === value;
+
+function inboundDuringRange(message, from, to) {
+  return `${message}.direction = 'inbound'
+    AND ${message}.created_at >= (${from}::date::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')
+    AND ${message}.created_at < ((${to}::date + 1)::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')`;
+}
+
+router.get('/inbound-range', async (req, res) => {
+  const { from, to } = req.query;
+  if (!validDate(from) || !validDate(to) || from > to) {
+    return res.status(400).json({ success: false, error: 'Selecciona un rango de fechas válido.' });
+  }
+  try {
+    const { rows } = await getPool().query(`
+      SELECT DISTINCT c.id
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.organization_id = $1
+        AND c.source_channel = 'whatsapp'
+        AND ${inboundDuringRange('m', '$2', '$3')}
+    `, [req.orgId, from, to]);
+    res.json({ success: true, data: rows.map(row => row.id) });
+  } catch (err) {
+    console.error('[Conversations/inboundRange]', err.message);
+    res.status(500).json({ success: false, error: 'No se pudieron consultar los mensajes entrantes.' });
+  }
+});
+
 /**
  * GET /api/conversations/:id/messages
  */
@@ -973,6 +1004,11 @@ router.post('/merge-duplicates', requireRole('owner', 'admin', 'supervisor'), as
 router.get('/search-messages', async (req, res) => {
   const pool = getPool();
   try {
+    const { from, to } = req.query;
+    const dated = from !== undefined || to !== undefined;
+    if (dated && (!validDate(from) || !validDate(to) || from > to)) {
+      return res.status(400).json({ success: false, error: 'Selecciona un rango de fechas válido.' });
+    }
     const q = (req.query.q || '').trim();
     if (q.length < 2) return res.json({ success: true, data: [] });
 
@@ -987,9 +1023,10 @@ router.get('/search-messages', async (req, res) => {
       JOIN conversations c ON c.id = m.conversation_id
       WHERE c.organization_id = $1
         AND m.content ILIKE $2
+        ${dated ? `AND c.source_channel = 'whatsapp' AND ${inboundDuringRange('m', '$3', '$4')}` : ''}
       ORDER BY m.conversation_id, m.created_at DESC
-      LIMIT 25
-    `, [req.orgId, `%${q}%`]);
+      ${dated ? '' : 'LIMIT 25'}
+    `, dated ? [req.orgId, `%${q}%`, from, to] : [req.orgId, `%${q}%`]);
 
     res.json({ success: true, data: rows });
   } catch (err) {
@@ -1539,8 +1576,6 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
   const customerNote = recoveryContext.trim();
   const dated = from !== undefined || to !== undefined;
   const hours = Math.min(168, Math.max(1, parseInt(req.body?.hours, 10) || 48));
-  const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
-    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   if (dated && (!validDate(from) || !validDate(to) || from > to
     || !Number.isSafeInteger(afterId) || afterId < 0 || afterId > 2147483647)) {
     return res.status(400).json({ error: 'Selecciona un rango de fechas válido.' });
@@ -1565,9 +1600,7 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
             AND m.created_at > (NOW() AT TIME ZONE 'UTC') - ($2::integer * INTERVAL '1 hour'))
           OR ($3::date IS NOT NULL AND EXISTS (
             SELECT 1 FROM messages received
-            WHERE received.conversation_id = c.id AND received.direction = 'inbound'
-              AND received.created_at >= ($3::date::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')
-              AND received.created_at < (($4::date + 1)::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')
+            WHERE received.conversation_id = c.id AND ${inboundDuringRange('received', '$3', '$4')}
           ))
         )
       ORDER BY c.id

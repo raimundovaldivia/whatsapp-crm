@@ -57,6 +57,7 @@ export default function App() {
 
   // CRM state
   const [conversations, setConversations] = useState([]);
+  const [inboundRange, setInboundRange] = useState(null);
   const [selectedId, setSelectedId]       = useState(null);
   const [messages, setMessages]           = useState({});
   const [loadingConvs, setLoadingConvs]   = useState(false);
@@ -541,6 +542,8 @@ export default function App() {
             <Sidebar
               drafts={drafts}
               conversations={visibleConversations}
+              inboundRange={inboundRange}
+              setInboundRange={setInboundRange}
               selectedId={selectedId}
               onSelect={handleSelectConversation}
               loading={loadingConvs}
