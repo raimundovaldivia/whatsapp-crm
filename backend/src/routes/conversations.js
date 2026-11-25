@@ -1630,7 +1630,7 @@ router.get('/unanswered', async (req, res) => {
  */
 router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
-  const { from, to, afterId = 0, recoveryContext = '' } = req.body || {};
+  const { from, to, afterId = 0, recoveryContext = '', conversationIds } = req.body || {};
   const { checkOutboundText } = require('../services/outbound-text-policy');
   if (typeof recoveryContext !== 'string' || recoveryContext.length > 300
     || !checkOutboundText(recoveryContext).ok) {
@@ -1642,6 +1642,11 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
   if (dated && (!validDate(from) || !validDate(to) || from > to
     || !Number.isSafeInteger(afterId) || afterId < 0 || afterId > 2147483647)) {
     return res.status(400).json({ error: 'Selecciona un rango de fechas válido.' });
+  }
+
+  if (conversationIds !== undefined && (!dated || !Array.isArray(conversationIds)
+    || conversationIds.some(id => !Number.isSafeInteger(id) || id <= 0 || id > 2147483647))) {
+    return res.status(400).json({ error: 'La selección de chats no es válida.' });
   }
 
   try {
@@ -1658,6 +1663,7 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
       WHERE c.organization_id = $1
         AND COALESCE(c.source_channel, 'whatsapp') = 'whatsapp'
         AND c.id > $5::integer
+        AND ($7::integer[] IS NULL OR c.id = ANY($7::integer[]))
         AND (
           ($3::date IS NULL AND c.agent_mode = 'ai' AND m.direction = 'inbound'
             AND m.created_at > (NOW() AT TIME ZONE 'UTC') - ($2::integer * INTERVAL '1 hour'))
@@ -1668,7 +1674,7 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
         )
       ORDER BY c.id
       LIMIT $6
-    `, [req.orgId, hours, dated ? from : null, dated ? to : null, dated ? afterId : 0, dated ? 2 : null]);
+    `, [req.orgId, hours, dated ? from : null, dated ? to : null, dated ? afterId : 0, dated ? 2 : null, conversationIds ?? null]);
 
     // Cada solicitud procesa un chat. El segundo ID solo indica si hay más.
     const nextAfterId = dated && rows.length > 1 ? Number(rows[0].id) : null;
@@ -1844,7 +1850,7 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
           });
           const beforeSend = (await readLatest()).rows[0];
           if (String(beforeSend?.id) !== String(conv.latest_message_id) || beforeSend.agent_mode === 'human') {
-            results.push({ phone: conv.phone_number, success: false, reason: 'conversation_changed' });
+            mark('conversation_changed', true);
             continue;
           }
           if (outboundDecision.escalate) {
@@ -1919,7 +1925,10 @@ router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), as
         }
       } catch (err) {
         console.error(`[RetryUnanswered] ❌ ${conv.phone_number}:`, err.message);
-        results.push({ phone: conv.phone_number, success: false, reason: err.message, failed: true });
+        results.push({
+          conversationId: conv.id, name: conv.contact_name, phone: conv.phone_number,
+          success: false, reason: 'processing_error', failed: true, needsReview: true,
+        });
       } finally {
         if (lockClient) {
           await lockClient.query('SELECT pg_advisory_unlock($1, $2)', [req.orgId, conv.id]).catch(() => {});

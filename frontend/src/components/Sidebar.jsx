@@ -55,6 +55,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
   const [retrying, setRetrying]   = useState(false);
   const [retryResult, setRetryResult] = useState(null);
   const [showRecovery, setShowRecovery] = useState(false);
+  const [recoveryScope, setRecoveryScope] = useState(null);
   const [recoveryContext, setRecoveryContext] = useState('');
   const [recoveryDates, setRecoveryDates] = useState(() => {
     const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Santiago' }).format(new Date());
@@ -65,6 +66,13 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
     const timer = setInterval(() => setClockNow(Date.now()), 30 * 1000);
     return () => clearInterval(timer);
   }, []);
+
+  function openRecovery(scope = null) {
+    setRetryResult(null);
+    setRecoveryScope(scope);
+    if (scope) setRecoveryDates({ ...inboundRange });
+    setShowRecovery(true);
+  }
 
   async function handleRetryUnanswered(event) {
     event.preventDefault();
@@ -77,6 +85,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
       do {
         const { data } = await api.post('/conversations/retry-unanswered', {
           ...recoveryDates, afterId, recoveryContext,
+          ...(recoveryScope && { conversationIds: recoveryScope }),
         }, { timeout: 120000 });
         totals.reviewed += data.retried || 0;
         totals.sent += data.sent || 0;
@@ -228,6 +237,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
   const visibleRangeConversations = inboundRange
     ? [...filtered, ...visibleMessageResults.map(r => matchingById.get(String(r.id)))]
     : [];
+  const visibleRangeIds = [...new Set(visibleRangeConversations.map(c => Number(c.id)))];
   const phones = new Set(visibleRangeConversations
     .map(c => String(c.phone_number || '').trim())
     .filter(phone => /^\+?\d[\d ()-]*$/.test(phone))
@@ -365,14 +375,18 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
         <form onSubmit={handleRetryUnanswered} role="dialog" aria-modal="true" aria-labelledby="recover-bot-title"
           style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 24, width: 'min(460px, 90vw)', maxHeight: '90vh', overflowY: 'auto', display: 'grid', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <strong id="recover-bot-title">Recuperar respuestas del bot</strong>
+            <strong id="recover-bot-title">{recoveryScope ? 'Responder chats filtrados' : 'Recuperar respuestas del bot'}</strong>
             <button type="button" aria-label="Cerrar" disabled={retrying} onClick={() => setShowRecovery(false)}><X size={16} /></button>
           </div>
-          <p style={{ margin: 0, fontSize: 13 }}>Usa esta acción después de una caída. Se revisarán hasta ocho mensajes alrededor de la consulta de cada chat de WhatsApp en el período seleccionado. Como contexto anterior se usan solo mensajes de las 24 horas previas. El bot responderá solo las consultas pendientes y omitirá los chats en modo humano.</p>
+          <p style={{ margin: 0, fontSize: 13 }}>
+            {recoveryScope
+              ? `Se recorrerán ${recoveryScope.length} chats del filtro activo, uno por uno. El bot enviará respuestas a las consultas pendientes que pueda atender. Mantén esta vista abierta hasta que termine.`
+              : 'Usa esta acción después de una caída. Se revisarán hasta ocho mensajes alrededor de la consulta de cada chat de WhatsApp en el período seleccionado. Como contexto anterior se usan solo mensajes de las 24 horas previas. El bot responderá solo las consultas pendientes y omitirá los chats en modo humano.'}
+          </p>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <label>Desde <input required type="date" value={recoveryDates.from} max={recoveryDates.to} disabled={retrying}
+            <label>Desde <input required type="date" value={recoveryDates.from} max={recoveryDates.to} disabled={retrying || Boolean(recoveryScope)}
               onChange={event => setRecoveryDates(dates => ({ ...dates, from: event.target.value }))} /></label>
-            <label>Hasta <input required type="date" value={recoveryDates.to} min={recoveryDates.from} disabled={retrying}
+            <label>Hasta <input required type="date" value={recoveryDates.to} min={recoveryDates.from} disabled={retrying || Boolean(recoveryScope)}
               onChange={event => setRecoveryDates(dates => ({ ...dates, to: event.target.value }))} /></label>
           </div>
           <label style={{ display: 'grid', gap: 5 }}>
@@ -385,7 +399,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
           <button type="submit" disabled={retrying}>{retrying ? 'Recuperando respuestas…' : 'Analizar y responder'}</button>
           {retryResult && (
             <div role="status" style={{ fontSize: 13 }}>
-              <div>{retryResult.reviewed} revisados · {retryResult.sent} enviados · {retryResult.reviewed - retryResult.sent - retryResult.failed} omitidos · {retryResult.failed} con error</div>
+              <div>{retryResult.reviewed}{recoveryScope ? ` de ${recoveryScope.length}` : ''} revisados · {retryResult.sent} enviados · {retryResult.reviewed - retryResult.sent - retryResult.failed} omitidos · {retryResult.failed} con error</div>
               {Object.keys(retryResult.reasons).length > 0 && (
                 <details>
                   <summary>Motivos de omisión o error</summary>
@@ -613,7 +627,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = colors.textSecondary; }}
             title="Diagnosticar número (chats perdidos)"><Stethoscope size={16} /></button>
-          <button type="button" onClick={() => setShowRecovery(true)}
+          <button type="button" onClick={() => openRecovery()}
             aria-label="Recuperar respuestas del bot" title="Recuperar respuestas del bot"
             style={{ background: 'none', color: colors.textSecondary, padding: '6px', border: 'none', cursor: 'pointer', display: 'flex' }}>
             <RotateCcw size={16} />
@@ -657,6 +671,11 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
               setDateFields({ from: '', to: '' });
               applyInboundRange(null);
             }}>Quitar filtro</button>}
+            {inboundRange && !loading && !msgLoading && visibleRangeIds.length > 0 && (
+              <button type="button" disabled={retrying} onClick={() => openRecovery(visibleRangeIds)}>
+                Responder chats filtrados ({visibleRangeIds.length})
+              </button>
+            )}
             {inboundRange && !loading && !msgLoading && phones.size > 0 && <button type="button" onClick={copyPhones}>Copiar {phones.size} números</button>}
           </div>
           <div>
