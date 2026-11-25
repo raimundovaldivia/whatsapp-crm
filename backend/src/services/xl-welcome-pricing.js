@@ -187,7 +187,9 @@ function trayCountPriceReply(userMessage, history = [], products = [], ctx = {})
   const size = inboundContext.map(eggSize).find(Boolean);
   if (!size) return null;
   const requestedColor = inboundContext.map(text => eggColor({ title: text })).find(Boolean);
-  const requestedUnits = inboundContext.map(text => presentationUnits({ title: text })).find(units => units === 20 || units === 30) || null;
+  const requestedUnits = inboundContext.map(text => presentationUnits({ title: text })
+    || Number(normalize(text).match(/\bde (20|30)\b(?! (?:mil|pesos)\b)/)?.[1]))
+    .find(units => units === 20 || units === 30) || null;
 
   const choices = new Map();
   for (const product of products) {
@@ -208,7 +210,8 @@ function trayCountPriceReply(userMessage, history = [], products = [], ctx = {})
     const previous = choices.get(key);
     if (!previous || option.total < previous.total) choices.set(key, option);
   }
-  const options = [...choices.values()].sort((a, b) => ['blancos', 'mixtos', 'cafés'].indexOf(a.color) - ['blancos', 'mixtos', 'cafés'].indexOf(b.color));
+  const colorOrder = ['blancos', 'mixtos', 'cafés'];
+  const options = [...choices.values()].sort((a, b) => b.units - a.units || colorOrder.indexOf(a.color) - colorOrder.indexOf(b.color));
   if (!options.length) return null;
 
   const format = option => {
@@ -222,7 +225,8 @@ function trayCountPriceReply(userMessage, history = [], products = [], ctx = {})
   const condition = size === 'M' && !products.some(p => p.quantity_prices?.length) && !options.some(option => option.saving > 0) && count > 1
     ? 'Las bandejas M mantienen su precio normal y no tienen descuento por cantidad.'
     : 'El total corresponde a esa cantidad de bandejas iguales; no se mezclan colores ni formatos.';
-  const close = requestedColor ? '¿Confirmamos esa opción?' : '¿Qué color prefieres?';
+  const close = requestedColor && options.length > 1 ? '¿Prefieres la bandeja de 30 o la de 20?'
+    : requestedColor ? '¿Confirmamos esa opción?' : '¿Qué color prefieres?';
   return `Para ${count} bandejas ${size}${requestedUnits ? ` de ${requestedUnits} huevos cada una` : ''}:\n${options.map(format).join('\n')}\n\n${condition} ${close}`;
 }
 
@@ -373,6 +377,10 @@ function trayComparisons(ctx, products) {
   }).sort((a, b) => a.one - b.one);
 }
 
+function openingTray(options) {
+  return options.find(option => option.units === 30) || options[0];
+}
+
 function customerTrayGuidance(ctx, products, funnel, lastPurchase) {
   const comparisons = trayComparisons(ctx, products);
   if (!comparisons.length) return '';
@@ -382,12 +390,13 @@ function customerTrayGuidance(ctx, products, funnel, lastPurchase) {
   const bestPair = lowestPricePerEgg(comparisons, 2);
   const priorItems = evidence.map(item => `${item.cantidad} × ${item.producto}`).join(', ');
   const audience = funnel === 'customer'
-    ? `Cliente con compra verificada. ${priorItems ? 'Última compra verificada: ' + priorItems + '.' : 'El detalle de su última compra no está verificado.'} Si pregunta por precios en general y hay una sola bandeja previa identificable, usa esa presentación de ejemplo. Si pide repetir, parte por la cantidad y presentación exactas de su último pedido y el total vigente para él. Si faltan datos o el formato ya no figura, pregunta. Si hoy pide otra variedad, esa tiene prioridad.`
+    ? `Cliente con compra verificada. ${priorItems ? 'Última compra verificada: ' + priorItems + '.' : 'El detalle de su última compra no está verificado.'} Si consulta en general, empieza por una bandeja de 30 disponible. Si ya llevó una de 30 que sigue disponible, puedes empezar por esa. Si pide repetir, parte por la cantidad y presentación exactas de su último pedido y el total vigente para él. Si faltan datos o el formato ya no figura, pregunta. Si hoy pide otra variedad, esa tiene prioridad.`
     : funnel === 'lead'
       ? 'Primera compra. Si pregunta en general por precios de huevos, abre con un ejemplo concreto y pregunta qué formato o calibre prefiere.'
       : 'Historial sin verificar. Ante una pregunta general de precios de huevos, da un ejemplo concreto y pregunta qué formato o calibre busca.';
   return [audience,
-    'Para un lead que pregunta precios en general, o si pide gastar lo mínimo en una bandeja, usa la disponible de menor precio total: ' + cheapest.text,
+    'En consultas generales sobre huevos, abre con una bandeja de 30. Si indica calibre o color sin formato, prioriza las de 30 que cumplan lo pedido. Si ninguna está disponible, ofrece el formato disponible. Para una consulta abierta, la primera opción es: ' + openingTray(comparisons).text,
+    'Si pide explícitamente la bandeja más barata o gastar lo mínimo, compara todos los formatos permitidos: ' + cheapest.text,
     bestSingle && 'Si busca que le rinda, más huevos por su plata o menor precio por huevo, la bandeja con menor precio por huevo comprando una es: ' + bestSingle.text,
     bestPair && 'Si compara específicamente dos bandejas por rendimiento, el menor precio por huevo para dos bandejas iguales es: ' + bestPair.text,
     'La preferencia explícita de calibre, color y formato manda: compara solo entre bandejas que la cumplan y calcula con la tarifa del contacto. Para cotizar una y dos iguales, usa este orden: precio de una, precio de cada una llevando dos, total por las dos. Si el total es impar, muestra el promedio exacto por bandeja. Añade el ahorro en pesos si lo pregunta o si está comparando descuentos. Para otras cantidades, da el total solicitado. Menciona una alternativa como máximo, salvo que pida todas las opciones o la escala completa. Si ya eligió cantidad o rechazó llevar más, continúa con el pedido. Si tiene tarifa especial, usa el total que le corresponde; habla de ahorro solo si aparece. Omite esta explicación en saludos, pagos, reclamos o seguimiento de pedidos.',
@@ -407,19 +416,22 @@ function introductoryTrayReply(message, history, products, ctx, funnel, lastPurc
       !/^(hola|buenos dias|buenas tardes|buenas noches|buenas)$/.test(normalize(m.content)))) return null;
   const options = trayComparisons(ctx, products);
   if (!options.length) return null;
+  const opening = openingTray(options);
   const previous = asksPrice && funnel === 'customer' && lastPurchase?.detalleCompleto
-    ? options.filter(option => lastPurchase.productos.some(item => normalize(item.producto) === normalize(option.title)))
+    ? options.filter(option => option.units === opening.units &&
+        lastPurchase.productos.some(item => normalize(item.producto) === normalize(option.title)))
     : [];
-  const selected = asksValue ? lowestPricePerEgg(options) : previous.length === 1 ? previous[0] : options[0];
+  let selected = opening;
+  if (asksCheapest) selected = options[0];
+  if (asksValue) selected = lowestPricePerEgg(options);
+  if (previous.length === 1) selected = previous[0];
   if (!selected) return null;
   let intro = 'Tenemos ' + selected.label + '.';
   if (asksValue) intro = 'El menor precio por huevo lo tiene la ' + selected.label + '.';
   else if (asksCheapest) intro = 'La más económica es la ' + selected.label + '.';
   else if (previous.length === 1) intro = 'La última vez llevaste la ' + selected.label + '.';
   if (previous.length === 1) return intro + ' ' + selected.prices + ' ¿Quieres repetir esa bandeja?';
-  const formats = [...new Set(options.map(p => p.units).filter(Boolean))].sort((a, b) => a - b);
-  const close = formats.length > 1 ? '¿Buscas bandejas de ' + formats.join(' o ') + ' huevos?' : '¿Qué calibre buscas?';
-  return intro + ' ' + selected.prices + ' ' + close;
+  return intro + ' ' + selected.prices + ' ¿Te acomoda esa bandeja?';
 }
 
 function prompt(ctx, products = [], funnel = 'unknown', lastPurchase) {
