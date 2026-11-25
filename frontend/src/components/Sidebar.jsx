@@ -261,7 +261,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
             <strong id="recover-bot-title">Recuperar respuestas del bot</strong>
             <button type="button" aria-label="Cerrar" disabled={retrying} onClick={() => setShowRecovery(false)}><X size={16} /></button>
           </div>
-          <p style={{ margin: 0, fontSize: 13 }}>Usa esta acción después de una caída. El bot revisará hasta tres mensajes por chat y responderá las consultas pendientes del período seleccionado.</p>
+          <p style={{ margin: 0, fontSize: 13 }}>Usa esta acción después de una caída. Se revisarán hasta tres mensajes recientes de cada chat de WhatsApp en el período seleccionado. El bot responderá solo las consultas pendientes y omitirá los chats en modo humano.</p>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <label>Desde <input required type="date" value={recoveryDates.from} max={recoveryDates.to} disabled={retrying}
               onChange={event => setRecoveryDates(dates => ({ ...dates, from: event.target.value }))} /></label>
