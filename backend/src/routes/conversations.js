@@ -1528,37 +1528,46 @@ router.get('/unanswered', async (req, res) => {
  * POST /api/conversations/retry-unanswered
  * Re-ejecuta el pipeline para cada conversación sin respuesta (bot mode, últimas N horas).
  */
-router.post('/retry-unanswered', async (req, res) => {
+router.post('/retry-unanswered', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
   const pool = getPool();
-  const hours = parseInt(req.body?.hours) || 48;
+  const { from, to, afterId = 0 } = req.body || {};
+  const dated = from !== undefined || to !== undefined;
+  const hours = Math.min(168, Math.max(1, parseInt(req.body?.hours, 10) || 48));
+  const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+  if (dated && (!validDate(from) || !validDate(to) || from > to
+    || !Number.isSafeInteger(afterId) || afterId < 0 || afterId > 2147483647)) {
+    return res.status(400).json({ error: 'Selecciona un rango de fechas válido.' });
+  }
 
   try {
-    // 1. Buscar conversaciones sin respuesta
     const { rows } = await pool.query(`
-      SELECT
-        c.id,
-        c.phone_number,
-        c.whatsapp_channel_id,
-        m.id AS last_inbound_id,
-        m.content AS last_inbound
+      SELECT c.id, c.phone_number, c.whatsapp_channel_id, m.id AS last_inbound_id, m.content AS last_inbound, m.created_at AT TIME ZONE 'UTC' AS inbound_at
       FROM conversations c
       JOIN LATERAL (
         SELECT id, content, direction, created_at
         FROM messages
         WHERE conversation_id = c.id
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT 1
       ) m ON true
-      WHERE c.organization_id = $1
-        AND c.agent_mode = 'ai'
-        AND m.direction   = 'inbound'
-        AND m.created_at  > NOW() - ($2 || ' hours')::interval
-      ORDER BY m.created_at ASC
-    `, [req.orgId, hours]);
+      WHERE c.organization_id = $1 AND c.agent_mode = 'ai' AND m.direction = 'inbound'
+        AND COALESCE(c.source_channel, 'whatsapp') = 'whatsapp'
+        AND c.id > $5::integer
+        AND (
+          ($3::date IS NULL AND m.created_at > (NOW() AT TIME ZONE 'UTC') - ($2::integer * INTERVAL '1 hour'))
+          OR ($3::date IS NOT NULL
+            AND m.created_at >= ($3::date::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')
+            AND m.created_at < (($4::date + 1)::timestamp AT TIME ZONE 'America/Santiago' AT TIME ZONE 'UTC')
+            AND m.created_at < (NOW() AT TIME ZONE 'UTC') - INTERVAL '2 minutes')
+        )
+      ORDER BY c.id
+      LIMIT $6
+    `, [req.orgId, hours, dated ? from : null, dated ? to : null, dated ? afterId : 0, dated ? 2 : null]);
 
-    if (!rows.length) {
-      return res.json({ success: true, retried: 0, results: [] });
-    }
+    // Cada solicitud procesa un chat. El segundo ID solo indica si hay más.
+    const nextAfterId = dated && rows.length > 1 ? Number(rows[0].id) : null;
+    if (nextAfterId !== null) rows.pop();
 
     // 2. Obtener pipeline. La configuración de salida se resuelve por conversación
     // para no responder un chat de Evolution desde el número oficial de Kapso.
@@ -1570,14 +1579,17 @@ router.post('/retry-unanswered', async (req, res) => {
       try {
         lockClient = await pool.connect();
         await lockClient.query('SELECT pg_advisory_lock($1, $2)', [req.orgId, conv.id]);
-        const latest = await lockClient.query(`
-          SELECT id, direction
-          FROM messages
-          WHERE conversation_id = $1
-          ORDER BY created_at DESC, id DESC
+        const readLatest = () => lockClient.query(`
+          SELECT m.id, m.direction, c.agent_mode
+          FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.id = $1 AND c.organization_id = $2
+          ORDER BY m.created_at DESC, m.id DESC
           LIMIT 1
-        `, [conv.id]);
+        `, [conv.id, req.orgId]);
+        const latest = await readLatest();
         if (!latest.rows[0]
+          || latest.rows[0].agent_mode !== 'ai'
           || latest.rows[0].direction !== 'inbound'
           || String(latest.rows[0].id) !== String(conv.last_inbound_id)) {
           results.push({ phone: conv.phone_number, success: false, reason: 'already_answered' });
@@ -1587,7 +1599,14 @@ router.post('/retry-unanswered', async (req, res) => {
           results.push({ phone: conv.phone_number, success: false, reason: 'no_response_needed' });
           continue;
         }
-        const result = await pipeline.processMessage(req.orgId, conv.id, conv.last_inbound);
+        const sendConfig = await outboundConfig(req.orgId, conv);
+        if (!sendConfig) throw new Error('WhatsApp no configurado para la conversación');
+        if ((sendConfig.provider || 'meta') !== 'evolution'
+          && Date.now() - new Date(conv.inbound_at).getTime() >= 24 * 60 * 60 * 1000) {
+          results.push({ phone: conv.phone_number, success: false, reason: 'window_expired' });
+          continue;
+        }
+        const result = await pipeline.processMessage(req.orgId, conv.id, conv.last_inbound, null, { historyLimit: 3 });
         if (result.duplicate) {
           results.push({ phone: conv.phone_number, success: false, reason: 'duplicate' });
           continue;
@@ -1605,6 +1624,11 @@ router.post('/retry-unanswered', async (req, res) => {
             userMessage: conv.last_inbound,
             result,
           });
+          const beforeSend = (await readLatest()).rows[0];
+          if (String(beforeSend?.id) !== String(conv.last_inbound_id) || beforeSend.agent_mode === 'human') {
+            results.push({ phone: conv.phone_number, success: false, reason: 'conversation_changed' });
+            continue;
+          }
           if (outboundDecision.escalate) {
             const responseWasReplaced = outboundDecision.response !== result.response;
             await pipelineOutbound.coordinateConversation({
@@ -1626,8 +1650,6 @@ router.post('/retry-unanswered', async (req, res) => {
             }
           }
           // Enviar y guardar en DB
-          const sendConfig = await outboundConfig(req.orgId, conv);
-          if (!sendConfig) throw new Error('WhatsApp no configurado para la conversación');
           const sent = await whatsappProvider.sendTextMessage(conv.phone_number, result.response, sendConfig);
           const savedOutbound = await db.saveMessage({
             conversationId: conv.id,
@@ -1679,7 +1701,7 @@ router.post('/retry-unanswered', async (req, res) => {
         }
       } catch (err) {
         console.error(`[RetryUnanswered] ❌ ${conv.phone_number}:`, err.message);
-        results.push({ phone: conv.phone_number, success: false, reason: err.message });
+        results.push({ phone: conv.phone_number, success: false, reason: err.message, failed: true });
       } finally {
         if (lockClient) {
           await lockClient.query('SELECT pg_advisory_unlock($1, $2)', [req.orgId, conv.id]).catch(() => {});
@@ -1688,11 +1710,11 @@ router.post('/retry-unanswered', async (req, res) => {
       }
 
       // pequeña pausa entre mensajes para no saturar la API
-      await new Promise(r => setTimeout(r, 500));
+      if (!dated) await new Promise(r => setTimeout(r, 500));
     }
 
     const sent = results.filter(r => r.success).length;
-    res.json({ success: true, retried: rows.length, sent, results });
+    res.json({ success: true, retried: rows.length, sent, results, nextAfterId });
   } catch (err) {
     console.error('[RetryUnanswered] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
-import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge, RotateCcw, AlertCircle } from 'lucide-react';
+import { MessageSquare, Search, RefreshCw, Plus, X, Send, Flame, Loader, Stethoscope, GitMerge, RotateCcw } from 'lucide-react';
 import ConversationItem from './ConversationItem.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -17,26 +17,40 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone]         = useState('');
   const [retrying, setRetrying]   = useState(false);
-  const [retryResult, setRetryResult] = useState(null); // { sent, retried }
+  const [retryResult, setRetryResult] = useState(null);
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [recoveryDates, setRecoveryDates] = useState(() => {
+    const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Santiago' }).format(new Date());
+    return { from: today, to: today };
+  });
 
   useEffect(() => {
     const timer = setInterval(() => setClockNow(Date.now()), 30 * 1000);
     return () => clearInterval(timer);
   }, []);
 
-  async function handleRetryUnanswered() {
+  async function handleRetryUnanswered(event) {
+    event.preventDefault();
     if (retrying) return;
     setRetrying(true);
-    setRetryResult(null);
+    const totals = { sent: 0, reviewed: 0, failed: 0 };
+    setRetryResult(totals);
     try {
-      const res = await api.post('/conversations/retry-unanswered', { hours: 48 }, { timeout: 120000 });
-      setRetryResult({ sent: res.data.sent, retried: res.data.retried });
-      if (res.data.sent > 0) onRefresh?.();
-      setTimeout(() => setRetryResult(null), 6000);
+      let afterId = 0;
+      do {
+        const { data } = await api.post('/conversations/retry-unanswered', {
+          ...recoveryDates, afterId,
+        }, { timeout: 120000 });
+        totals.reviewed += data.retried || 0;
+        totals.sent += data.sent || 0;
+        totals.failed += data.results.filter(item => item.failed).length;
+        afterId = data.nextAfterId;
+        setRetryResult({ ...totals });
+      } while (afterId != null);
     } catch (err) {
-      setRetryResult({ error: err.message });
-      setTimeout(() => setRetryResult(null), 5000);
+      setRetryResult({ ...totals, error: err.response?.data?.error || 'La recuperación se interrumpió. Revisa las respuestas registradas antes de volver a ejecutar.' });
     } finally {
+      if (totals.sent > 0) onRefresh?.();
       setRetrying(false);
     }
   }
@@ -238,6 +252,32 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
 
   return (
     <>
+    {showRecovery && (
+      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', zIndex: 2000 }}>
+        <form onSubmit={handleRetryUnanswered} role="dialog" aria-modal="true" aria-labelledby="recover-bot-title"
+          style={{ backgroundColor: colors.bgPanel, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 24, width: 'min(420px, 90vw)', display: 'grid', gap: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong id="recover-bot-title">Recuperar respuestas del bot</strong>
+            <button type="button" aria-label="Cerrar" disabled={retrying} onClick={() => setShowRecovery(false)}><X size={16} /></button>
+          </div>
+          <p style={{ margin: 0, fontSize: 13 }}>Usa esta acción después de una caída. El bot revisará hasta tres mensajes por chat y responderá las consultas pendientes del período seleccionado.</p>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <label>Desde <input required type="date" value={recoveryDates.from} max={recoveryDates.to} disabled={retrying}
+              onChange={event => setRecoveryDates(dates => ({ ...dates, from: event.target.value }))} /></label>
+            <label>Hasta <input required type="date" value={recoveryDates.to} min={recoveryDates.from} disabled={retrying}
+              onChange={event => setRecoveryDates(dates => ({ ...dates, to: event.target.value }))} /></label>
+          </div>
+          <button type="submit" disabled={retrying}>{retrying ? 'Recuperando respuestas…' : 'Analizar y responder'}</button>
+          {retryResult && (
+            <div role="status" style={{ fontSize: 13 }}>
+              <div>{retryResult.reviewed} revisados · {retryResult.sent} enviados · {retryResult.reviewed - retryResult.sent - retryResult.failed} omitidos · {retryResult.failed} con error</div>
+              {retryResult.error && <div style={{ color: colors.dangerSoft }}>{retryResult.error}</div>}
+            </div>
+          )}
+        </form>
+      </div>
+    )}
+
     {/* Modal diagnóstico de número */}
     {showDiagModal && (
       <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}
@@ -438,25 +478,11 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = colors.textSecondary; }}
             title="Diagnosticar número (chats perdidos)"><Stethoscope size={16} /></button>
-          {/* Reintentar mensajes sin respuesta */}
-          <div style={{ position: 'relative' }}>
-            <button onClick={handleRetryUnanswered} disabled={retrying}
-              style={{ background: 'none', color: retryResult?.error ? colors.dangerSoft : retryResult ? colors.successSoft : colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: retrying ? 'wait' : 'pointer', opacity: retrying ? 0.7 : 1 }}
-              onMouseEnter={e => { if (!retrying) { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.warning; } }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = retryResult?.error ? colors.dangerSoft : retryResult ? colors.successSoft : colors.textSecondary; }}
-              title="Reintentar mensajes sin respuesta (últimas 48h)">
-              {retrying
-                ? <RotateCcw size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                : retryResult?.error
-                  ? <AlertCircle size={16} />
-                  : <RotateCcw size={16} />}
-            </button>
-            {retryResult && !retryResult.error && (
-              <span style={{ position: 'absolute', top: '-6px', right: '-4px', background: retryResult.sent > 0 ? colors.successSoft : '#6b7280', color: '#000', borderRadius: '999px', fontSize: '9px', fontWeight: 700, padding: '1px 4px', pointerEvents: 'none' }}>
-                {retryResult.sent > 0 ? `+${retryResult.sent}` : '0'}
-              </span>
-            )}
-          </div>
+          <button type="button" onClick={() => setShowRecovery(true)}
+            aria-label="Recuperar respuestas del bot" title="Recuperar respuestas del bot"
+            style={{ background: 'none', color: colors.textSecondary, padding: '6px', border: 'none', cursor: 'pointer', display: 'flex' }}>
+            <RotateCcw size={16} />
+          </button>
           <button onClick={onRefresh}
             style={{ background: 'none', color: colors.textSecondary, padding: '6px', borderRadius: '50%', display: 'flex', alignItems: 'center', border: 'none', cursor: 'pointer' }}
             onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; e.currentTarget.style.color = colors.textPrimary; }}
