@@ -1393,6 +1393,20 @@ function DespachosRepartos({ colors }) {
     (!status || r.status === status)
   );
 
+  // El informe viene ordenado por fecha descendente. Cuenta solo la
+  // aparición más reciente de cada pedido dentro de la selección.
+  const seenOrders = new Set();
+  let orderCount = 0;
+  let orderTotal = 0;
+  for (const row of filtered) {
+    if (seenOrders.has(row.stop_key)) continue;
+    seenOrders.add(row.stop_key);
+    if (!['pending', 'entregado', 'partial'].includes(row.status)) continue;
+    orderCount++;
+    orderTotal += Number(row.total) || 0;
+    if (row.status === 'partial') orderTotal += Number(row.extra_total) || 0;
+  }
+
   // Agrupar por día (más reciente primero) con totales
   const days = [];
   const byDay = {};
@@ -1592,6 +1606,7 @@ function DespachosRepartos({ colors }) {
 
       {/* Totales del período */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+        {!loading && !error && chip(`Total de pedidos: ${CLP(orderTotal)} · ${orderCount} ${orderCount === 1 ? 'pedido' : 'pedidos'}`, '#3b82f6')}
         {chip(`${totals.entregados} entregados`, '#2dd4bf')}
         {totals.parciales > 0 && chip(`${totals.parciales} entregas parciales`, '#f59e0b')}
         {totals.cancelados > 0 && chip(`${totals.cancelados} cancelados`, '#f87171')}
