@@ -19,6 +19,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
   const [retrying, setRetrying]   = useState(false);
   const [retryResult, setRetryResult] = useState(null);
   const [showRecovery, setShowRecovery] = useState(false);
+  const [recoveryContext, setRecoveryContext] = useState('');
   const [recoveryDates, setRecoveryDates] = useState(() => {
     const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Santiago' }).format(new Date());
     return { from: today, to: today };
@@ -39,7 +40,7 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
       let afterId = 0;
       do {
         const { data } = await api.post('/conversations/retry-unanswered', {
-          ...recoveryDates, afterId,
+          ...recoveryDates, afterId, recoveryContext,
         }, { timeout: 120000 });
         totals.reviewed += data.retried || 0;
         totals.sent += data.sent || 0;
@@ -267,6 +268,13 @@ export default function Sidebar({ conversations, drafts, selectedId, onSelect, l
             <label>Hasta <input required type="date" value={recoveryDates.to} min={recoveryDates.from} disabled={retrying}
               onChange={event => setRecoveryDates(dates => ({ ...dates, to: event.target.value }))} /></label>
           </div>
+          <label style={{ display: 'grid', gap: 5 }}>
+            Contexto para clientes interesados (opcional)
+            <textarea rows={3} maxLength={300} disabled={retrying} value={recoveryContext}
+              onChange={event => setRecoveryContext(event.target.value)}
+              placeholder="Por ejemplo: Hoy estamos despachando huevitos, aceitunas y manjar." />
+            <small>Escribe el mensaje como quieres que lo reciba el cliente. El bot lo añade si encaja con la consulta de compra.</small>
+          </label>
           <button type="submit" disabled={retrying}>{retrying ? 'Recuperando respuestas…' : 'Analizar y responder'}</button>
           {retryResult && (
             <div role="status" style={{ fontSize: 13 }}>
