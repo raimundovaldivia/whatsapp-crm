@@ -39,10 +39,15 @@ async function deferOutsideHours(input, pool = db.getPool()) {
     if (photo) context.productMedia = photo;
     const { rows: [existing] } = await client.query(`SELECT m.* FROM messages m JOIN conversations c ON c.id=m.conversation_id
       WHERE c.organization_id=$1 AND c.id=$2 AND m.content=$3 AND m.sent_by=$4
-      AND m.outbound_queue->>'state' IN ('queued','processing')
+      AND (m.outbound_queue->>'state' IN ('queued','processing') OR
+        ($7::boolean AND m.outbound_queue->>'manualReplyBy' IS NOT NULL
+         AND m.outbound_queue->>'state' IN ('sent','uncertain')
+         AND (m.outbound_queue->>'queuedAt')::timestamptz > $8::timestamptz - INTERVAL '24 hours'
+         AND NOT EXISTS (SELECT 1 FROM messages reply WHERE reply.conversation_id=c.id
+           AND reply.direction='inbound' AND reply.id>m.id)))
       AND COALESCE(m.outbound_queue->>'createdBy','')=COALESCE($5::text,'')
       AND (m.outbound_queue->'productMedia') IS NOT DISTINCT FROM $6::jsonb ORDER BY m.id DESC LIMIT 1`,
-    [orgId, conversationId, text.trim(), sentBy, createdBy, photo ? JSON.stringify(photo) : null]);
+    [orgId, conversationId, text.trim(), sentBy, createdBy, photo ? JSON.stringify(photo) : null, input.manualChatReply === true && sentBy === 'human', now.toISOString()]);
     if (existing) { await client.query('COMMIT'); return existing; }
     // Only the latest automatic response remains eligible. Human drafts remain separate.
     replaced = (await client.query(`UPDATE messages m SET status='failed', outbound_queue=outbound_queue || '{"state":"cancelled","reason":"Reemplazado por una respuesta más reciente"}'::jsonb
@@ -62,16 +67,39 @@ async function deferOutsideHours(input, pool = db.getPool()) {
   finally { client.release(); }
   for (const previous of replaced) await publish(io, orgId, previous);
   await publish(io, orgId, message);
+  if (input.manualChatReply === true && sentBy === 'human') {
+    const worker = createWorker({ pool, io, clock: input.now ? () => now : undefined });
+    return await worker.sendReplyNow(orgId, conversationId, message.id, createdBy) || message;
+  }
   return message;
 }
 
-function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, sendMedia = provider.sendMediaMessage, configForConversation = provider.configForConversation, checkFreshness = guardrail.checkResponseFreshness, io, clock = () => new Date() } = {}) {
+// Only a real message on this conversation can open an after-hours reply.
+async function latestChatMessage(pool, orgId, conversationId) {
+  const { rows: [last] } = await pool.query(`SELECT m.id, m.direction, m.created_at AT TIME ZONE 'UTC' AS at
+    FROM messages m JOIN conversations c ON c.id=m.conversation_id
+    WHERE c.organization_id=$1 AND c.id=$2 AND m.direction IN ('inbound','outbound')
+      AND (m.outbound_queue IS NULL OR m.outbound_queue->>'state' IN ('sent','uncertain'))
+      AND m.status IS DISTINCT FROM 'failed'
+    ORDER BY m.created_at DESC, m.id DESC LIMIT 1`, [orgId, conversationId]);
+  return last;
+}
+
+function isOpenReply(last, draft, now) {
+  if (!last || last.direction !== 'inbound') return false;
+  const at = new Date(last.at).getTime();
+  return at > now.getTime() - 24 * 60 * 60 * 1000 && at <= now.getTime()
+    && at <= Date.parse(draft.outbound_queue.queuedAt);
+}
+
+function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, sendMedia = provider.sendMediaMessage, configForConversation = provider.configForConversation, historyForPhone = require('./evolution-whatsapp').latestDirectMessage, checkFreshness = guardrail.checkResponseFreshness, io, clock = () => new Date() } = {}) {
   async function settle(orgId, message, state, reason, status = 'failed') {
     const { rows: [updated] } = await pool.query(`UPDATE messages m SET status=$4,
       outbound_queue=m.outbound_queue || jsonb_build_object('state',$3::text,'reason',$5::text)
       FROM conversations c WHERE m.id=$2 AND m.conversation_id=c.id AND c.organization_id=$1
       AND m.outbound_queue->>'state'='processing' RETURNING m.*`, [orgId, message.id, state, status, reason]);
     await publish(io, orgId, updated);
+    return updated;
   }
   async function tick(orgId) {
     if (!Number.isSafeInteger(orgId) || orgId < 1) throw invalid('Organización inválida');
@@ -88,7 +116,26 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, se
         AND (q.outbound_queue->>'dueAt')::timestamptz <= $2::timestamptz
         AND NOT EXISTS (SELECT 1 FROM messages busy WHERE busy.conversation_id=c.id AND busy.outbound_queue->>'state'='processing')
         ORDER BY q.id FOR UPDATE OF q,c SKIP LOCKED LIMIT 1) RETURNING m.*`, [orgId, clock().toISOString()]);
-    if (!message) return;
+    if (message) return deliver(orgId, message);
+  }
+
+  async function sendReplyNow(orgId, conversationId, messageId, actorId) {
+    if (![orgId, conversationId, messageId, actorId].every(n => Number.isSafeInteger(n) && n > 0)) throw invalid('Mensaje inválido');
+    // Both the scheduler and the operator acquire the same row and conversation locks.
+    const { rows: [message] } = await pool.query(`UPDATE messages m SET outbound_queue=m.outbound_queue ||
+      jsonb_build_object('state','processing','startedAt',$5::text)
+      WHERE m.id=(SELECT q.id FROM messages q JOIN conversations c ON c.id=q.conversation_id
+        JOIN organizations org ON org.id=c.organization_id AND org.slug='diez-rios-mrs96z69'
+        JOIN users u ON u.id=$4 AND u.organization_id=c.organization_id AND u.merged_into_user_id IS NULL
+        WHERE c.organization_id=$1 AND c.id=$2 AND q.id=$3 AND q.direction='outbound' AND q.sent_by='human'
+        AND q.type='text' AND q.outbound_queue->>'state'='queued' AND u.role=ANY($6::text[])
+        AND NOT EXISTS (SELECT 1 FROM messages busy WHERE busy.conversation_id=c.id AND busy.outbound_queue->>'state'='processing')
+        FOR UPDATE OF q,c SKIP LOCKED) RETURNING m.*`, [orgId, conversationId, messageId, actorId, clock().toISOString(), ROLES]);
+    if (message) return deliver(orgId, message, actorId);
+    return null;
+  }
+
+  async function deliver(orgId, message, actorId = null) {
     const context = message.outbound_queue;
     try {
       const { rows: [conv] } = await pool.query(`SELECT c.*, EXISTS(SELECT 1 FROM messages newer WHERE newer.conversation_id=c.id AND newer.id>$3
@@ -96,6 +143,22 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, se
         FROM conversations c WHERE c.id=$2 AND c.organization_id=$1`, [orgId, message.conversation_id, message.id]);
       if (!conv || conv.changed || conv.phone_number !== context.phone || (conv.whatsapp_channel_id || null) !== context.channelId) {
         return settle(orgId, message, 'review', 'La conversación o el destinatario cambió; revisar el mensaje');
+      }
+      let remoteLast;
+      let config;
+      if (actorId) {
+        const last = await latestChatMessage(pool, orgId, conv.id);
+        if (!isOpenReply(last, message, clock())) {
+          // Evolution may have received the inbound while its CRM webhook was disconnected.
+          config = await configForConversation(orgId, conv);
+          if (config?.provider === 'evolution' && (!context.sendingProvider || context.sendingProvider === 'evolution')) {
+            try { remoteLast = await historyForPhone(conv.phone_number, config); }
+            catch { /* Unavailable history leaves the draft scheduled. */ }
+          }
+          if (!isOpenReply(remoteLast, message, clock()) || (last && new Date(last.at) >= new Date(remoteLast.at))) {
+            return settle(orgId, message, 'queued', 'Se requiere un mensaje entrante pendiente de las últimas 24 horas en este chat', 'pending');
+          }
+        }
       }
       const localDay = date => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago', dateStyle: 'short' }).format(date);
       if (context.queuedAt && localDay(new Date(context.queuedAt)) !== localDay(clock()) && /\b(hoy|ayer|mañana|esta noche|esta tarde)\b/i.test(message.content)) {
@@ -122,13 +185,21 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, se
           return settle(orgId, message, 'review', 'El pedido mencionado cambió o ya no está pendiente');
         }
       }
-      const config = await configForConversation(orgId, conv);
+      config = config || await configForConversation(orgId, conv);
       if (!config) return settle(orgId, message, 'review', 'Canal no disponible');
       if (context.sendingProvider && context.sendingProvider !== (config.provider || 'meta')) {
         return settle(orgId, message, 'review', 'El proveedor del chat cambió; revisar el canal de envío');
       }
       // Check again at the transport boundary (a slow lookup may cross 21:00).
-      if (!policy.isChatMessagingHour(clock())) {
+      if (actorId) {
+        const last = await latestChatMessage(pool, orgId, conv.id);
+        const latest = remoteLast && (!last || new Date(remoteLast.at) > new Date(last.at)) ? remoteLast : last;
+        if (!isOpenReply(latest, message, clock()) || (last && last.id > message.id)) {
+          return settle(orgId, message, 'queued', 'La consulta ya no está pendiente o venció su plazo', 'pending');
+        }
+        await pool.query(`UPDATE messages SET outbound_queue=outbound_queue || jsonb_build_object('manualReplyBy',$2::int)
+          WHERE id=$1 AND outbound_queue->>'state'='processing'`, [message.id, actorId]);
+      } else if (!policy.isChatMessagingHour(clock())) {
         return settle(orgId, message, 'queued', 'Esperando horario de atención', 'pending');
       }
       const photo = context.productMedia;
@@ -143,13 +214,14 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, se
         AND m.outbound_queue->>'state'='processing' RETURNING m.*`, [orgId, message.id, id, clock().toISOString(), photo?.mediaUrl || null, photo?.caption || null]);
       await db.updateConversationLastMessage(conv.id, updated.content);
       await publish(io, orgId, updated);
+      return updated;
     } catch (error) {
-      await settle(orgId, message, error.is24hWindow ? 'review' : 'uncertain', error.is24hWindow
+      return settle(orgId, message, error.is24hWindow ? 'review' : 'uncertain', error.is24hWindow
         ? 'La ventana de WhatsApp venció; requiere revisión del equipo'
         : 'No se pudo confirmar el envío; revisar antes de reenviar', error.is24hWindow ? 'failed' : 'pending');
     }
   }
-  return { tick };
+  return { tick, sendReplyNow };
 }
 
 let timer;

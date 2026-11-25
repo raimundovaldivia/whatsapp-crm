@@ -11,6 +11,8 @@ const MORNING = new Date('2026-10-24T11:30:00Z');
 async function fixture(t) {
   const pg = new PGlite(); t.after(() => pg.close());
   await pg.exec(`SET TIME ZONE 'UTC';
+    CREATE TABLE organizations(id INT PRIMARY KEY,slug TEXT);
+    INSERT INTO organizations VALUES(1,'diez-rios-mrs96z69'),(2,'otra-tienda');
     CREATE TABLE conversations(id INT PRIMARY KEY,organization_id INT,phone_number TEXT,whatsapp_channel_id INT,agent_mode TEXT DEFAULT 'ai');
     CREATE TABLE users(id INT PRIMARY KEY,organization_id INT,role TEXT,merged_into_user_id INT);
     CREATE TABLE orders(id INT PRIMARY KEY,organization_id INT,conversation_id INT,status TEXT,created_at TIMESTAMP,updated_at TIMESTAMP);
@@ -203,4 +205,91 @@ test('explicit order must belong to this chat and remain unchanged and active',a
 test('legacy provider change cannot silently switch the sending account',async t=>{
   const f=await fixture(t);await f.enqueue({sendingProvider:'twilio'});
   await f.worker().tick(1);assert.equal(f.sends.length,0);assert.equal((await f.messages())[0].outbound_queue.state,'review');
+});
+
+async function recordTurn(f, direction, at, conversationId = 11) {
+  await f.pool.query(`INSERT INTO messages(conversation_id,direction,content,status,created_at)
+    VALUES($1,$2,'Mensaje de prueba','sent',$3::timestamptz AT TIME ZONE 'UTC')`, [conversationId, direction, at.toISOString()]);
+}
+
+test('manual composer answers an open inbound at night once, including resubmission and opening', async t => {
+  const f = await fixture(t);
+  await recordTurn(f, 'inbound', new Date(NIGHT.getTime() - 60000));
+  const sent = await f.enqueue({ manualChatReply: true });
+  assert.equal(sent.outbound_queue.state, 'sent');
+  assert.equal(sent.outbound_queue.manualReplyBy, 1);
+  assert.equal((await f.enqueue({ manualChatReply: true })).id, sent.id);
+  await f.worker().tick(1);
+  assert.equal(f.sends.length, 1);
+});
+
+test('manual release scopes recipient, actor and turn, and races safely against another release', async t => {
+  const f = await fixture(t);
+  const at = new Date(NIGHT.getTime() - 60000);
+  await recordTurn(f, 'inbound', at);
+  const draft = await f.enqueue();
+  const w = f.worker({ clock: () => NIGHT });
+  for (const [org, conv, user] of [[2,11,2],[1,22,1],[1,11,2],[1,11,3]]) {
+    assert.equal(await w.sendReplyNow(org, conv, draft.id, user), null);
+  }
+  await Promise.all([w.sendReplyNow(1,11,draft.id,1), w.sendReplyNow(1,11,draft.id,1)]);
+  await f.worker().tick(1);
+  assert.equal(f.sends.length, 1);
+});
+
+test('cold, expired, answered and automatic messages remain queued overnight', async t => {
+  const f = await fixture(t);
+  const manual = text => f.enqueue({ text, manualChatReply: true });
+  assert.equal((await manual('Sin consulta')).outbound_queue.state, 'queued');
+  await recordTurn(f, 'inbound', new Date(NIGHT.getTime() - 86400000));
+  assert.equal((await manual('Vencida')).outbound_queue.state, 'queued');
+  await recordTurn(f, 'inbound', new Date(NIGHT.getTime() - 60000));
+  const ai = await f.enqueue({text:'Automática',sentBy:'ai',createdBy:null,manualChatReply:true});
+  assert.equal(await f.worker().sendReplyNow(1,11,ai.id,1), null);
+  await recordTurn(f, 'outbound', new Date(NIGHT.getTime() - 30000));
+  assert.equal((await manual('Ya contestada')).outbound_queue.state, 'queued');
+  assert.equal(f.sends.length, 0);
+});
+
+test('verified Evolution history can recover a missing inbound but never supersede a later CRM reply', async t => {
+  const f = await fixture(t);
+  const at = NIGHT.getTime() - 60000;
+  const w = f.worker({ clock: () => NIGHT, configForConversation: async () => ({provider:'evolution'}),
+    historyForPhone: async phone => { assert.equal(phone, '56911111111'); return {direction:'inbound',at}; } });
+  const draft = await f.enqueue();
+  assert.equal((await w.sendReplyNow(1,11,draft.id,1)).outbound_queue.state, 'sent');
+  const other = await f.enqueue({text:'Otra propuesta'});
+  assert.equal((await w.sendReplyNow(1,11,other.id,1)).outbound_queue.state, 'queued');
+  assert.equal(f.sends.length, 1);
+});
+
+test('another organization retains its quiet hours even with a valid inbound and its own operator', async t => {
+  const f = await fixture(t);
+  await recordTurn(f, 'inbound', new Date(NIGHT.getTime() - 60000), 22);
+  const draft = await f.enqueue({orgId:2,conversationId:22,createdBy:2,manualChatReply:true});
+  assert.equal(draft.outbound_queue.state, 'queued');
+  assert.equal(await f.worker().sendReplyNow(2,22,draft.id,2), null);
+  assert.equal(f.sends.length, 0);
+});
+
+test('Evolution history verifies the direct number, content, author and latest turn locally', async () => {
+  const number = '56911111111', jid = number + '@s.whatsapp.net';
+  const at = Math.floor(NIGHT.getTime()/1000) - 100;
+  let records = [];
+  const evolution = load('src/services/evolution-whatsapp.js', {
+    axios:{create:() => ({post:async (url,body) => {
+      assert.equal(url,'/chat/findMessages/channel');
+      assert.equal(body.where.key.remoteJid, jid);
+      return {data:{messages:{records}}};
+    }})},
+    './whatsapp-attribution':{}, './ad-attribution':{evolutionReferral:() => null},
+  });
+  const config={evolution_api_url:'https://example.test',evolution_api_key:'test',evolution_instance:'channel'};
+  const entry=(id,remoteJid,fromMe,offset) => ({key:{id,remoteJid,fromMe},messageTimestamp:at+offset,message:{conversation:'Consulta'}});
+  records=[entry('a','123@g.us',false,9),entry('b','56922222222@s.whatsapp.net',false,5),entry('c',jid,null,1)];
+  assert.equal(await evolution.latestDirectMessage(number,config),null);
+  records.push(entry('d',jid,false,0));
+  assert.equal((await evolution.latestDirectMessage(number,config)).direction,'inbound');
+  records.push(entry('e',jid,true,0));
+  assert.equal((await evolution.latestDirectMessage(number,config)).direction,'outbound');
 });

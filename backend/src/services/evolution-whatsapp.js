@@ -47,6 +47,30 @@ function client(config) {
   });
 }
 
+async function latestDirectMessage(phone, config) {
+  const number = String(phone).replace(/\D/g, '');
+  if (!number) return null;
+  const jid = number + '@s.whatsapp.net';
+  const { instance } = credentials(config);
+  const { data } = await client(config).post(`/chat/findMessages/${encodeURIComponent(instance)}`, {
+    where: { key: { remoteJid: jid } }, page: 1, offset: 25,
+  });
+  const records = data?.messages?.records;
+  if (!Array.isArray(records)) return null;
+  let latest = null;
+  for (const row of records) {
+    const key = row?.key;
+    if (!key?.id || key.remoteJid !== jid || typeof key.fromMe !== 'boolean') continue;
+    const at = Number(row.messageTimestamp) * 1000;
+    if (!Number.isSafeInteger(at) || at <= 0) continue;
+    // Treat unrecognized traffic as a closed turn, never as proof of a customer request.
+    const parsed = parseWebhookMessage({ data: row }, { includeOwn: true });
+    const direction = !key.fromMe && parsed?.from === number ? 'inbound' : 'outbound';
+    if (!latest || at > latest.at || (at === latest.at && direction === 'outbound')) latest = { at, direction };
+  }
+  return latest;
+}
+
 function botTypingDelay(text) {
   const base = Math.min(5400, 1500 + text.trim().length * 23);
   return Math.round(base + Math.random() * 1000);
@@ -285,7 +309,7 @@ async function configureWebhook(config, webhookUrl, options = {}) {
 }
 
 module.exports = {
-  isApiMessage, mediaReference, downloadMessageMedia, downloadMediaReference,
+  latestDirectMessage, isApiMessage, mediaReference, downloadMessageMedia, downloadMediaReference,
   sendTextMessage, sendMediaMessage, markAsRead, parseWebhookMessage, parseStatusUpdate,
   parseConnectionUpdate, normalizeConnectionState,
   getConnectionState, getConnectedPhone, createInstance, getConnectQr, configureWebhook,

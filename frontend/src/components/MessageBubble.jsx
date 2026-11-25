@@ -30,15 +30,23 @@ export default function MessageBubble({ message, conversation }) {
   const { colors, isDark } = useTheme();
   const [mediaFailed, setMediaFailed] = useState(false);
   const [queueError, setQueueError] = useState('');
-  const [cancelling, setCancelling] = useState(false);
+  const [queueBusy, setQueueBusy] = useState(false);
   const queue = message.outbound_queue;
+  const canReleaseReply = queue?.state === 'queued' && message.sent_by === 'human' && message.type === 'text'
+    && JSON.parse(localStorage.getItem('crm_org') || '{}')?.slug === 'diez-rios-mrs96z69';
   const waiting = queue && queue.state !== 'sent';
   const due = queue?.dueAt ? new Date(queue.dueAt).toLocaleString('es-CL', { timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short' }) : '';
   const cancelQueued = async () => {
-    setCancelling(true); setQueueError('');
+    setQueueBusy(true); setQueueError('');
     try { await conversationsAPI.cancelQueuedMessage(conversation.id, message.id); }
     catch (error) { setQueueError(error.response?.data?.error || 'No se pudo cancelar'); }
-    finally { setCancelling(false); }
+    finally { setQueueBusy(false); }
+  };
+  const sendQueuedReply = async () => {
+    setQueueBusy(true); setQueueError('');
+    try { await conversationsAPI.sendQueuedReply(message.conversation_id || conversation.id, message.id); }
+    catch (error) { setQueueError(error.response?.data?.error || 'No se pudo verificar el envío'); }
+    finally { setQueueBusy(false); }
   };
   const isOutbound = message.direction === 'outbound';
   const isAI = message.sent_by === 'ai';
@@ -110,7 +118,8 @@ export default function MessageBubble({ message, conversation }) {
               : queue.state === 'cancelled' ? 'Envío cancelado'
               : queue.state === 'uncertain' ? 'Envío sin confirmar · revisar antes de reenviar'
               : `Pendiente de revisión · ${queue.reason || 'El chat cambió'}`}
-            {queue.state === 'queued' && <button onClick={cancelQueued} disabled={cancelling} style={{ marginLeft: '8px' }}>Cancelar envío</button>}
+            {canReleaseReply && <button onClick={sendQueuedReply} disabled={queueBusy} style={{ marginLeft: '8px' }}>Enviar ahora</button>}
+            {queue.state === 'queued' && <button onClick={cancelQueued} disabled={queueBusy} style={{ marginLeft: '8px' }}>Cancelar envío</button>}
             {queueError && <div role="alert">{queueError}</div>}
           </div>
         )}

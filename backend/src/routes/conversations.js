@@ -222,12 +222,14 @@ router.post('/:id/messages', async (req, res) => {
     if (!wc) return res.status(400).json({ success: false, error: 'WhatsApp no configurado' });
 
     const queued = await require('../services/outbound-message-queue').deferOutsideHours({
-      orgId: req.orgId, conversationId: conv.id, text, sentBy: 'human', createdBy: req.userId, sendingProvider: wc.provider || 'meta', io,
+      orgId: req.orgId, conversationId: conv.id, text, sentBy: 'human', manualChatReply: true, createdBy: req.userId, sendingProvider: wc.provider || 'meta', io,
     });
     if (queued) {
       await db.setAgentMode(conv.id, 'human');
       io?.to(`org_${req.orgId}`).emit(`agent_mode_changed_${req.orgId}`, { conversationId: conv.id, mode: 'human' });
-      return res.status(202).json({ success: true, queued: true, data: queued });
+      const pending = queued.outbound_queue.state !== 'sent';
+      if (!pending) await db.attachConversationTrackingLinksToMessage(req.orgId, conv.id, queued.id, extractTrackingTokens(text.trim()));
+      return res.status(pending ? 202 : 200).json({ success: true, queued: pending, data: queued });
     }
 
     // Enviar por el proveedor correcto según configuración
@@ -268,6 +270,18 @@ router.post('/:id/messages', async (req, res) => {
     console.error('[Conv] Error enviando:', err);
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+router.post('/:id/messages/:messageId/send-now', requireRole('owner', 'admin', 'supervisor', 'agent'), async (req, res) => {
+  try {
+    const worker = require('../services/outbound-message-queue').createWorker({ io });
+    const message = await worker.sendReplyNow(req.orgId, Number(req.params.id), Number(req.params.messageId), req.userId);
+    if (!message) return res.status(409).json({ error: 'El mensaje ya no está disponible para enviar' });
+    if (message.outbound_queue.state !== 'sent') {
+      return res.status(409).json({ error: message.outbound_queue.reason, data: message });
+    }
+    return res.json({ success: true, data: message });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.status ? err.message : 'No se pudo verificar el envío' }); }
 });
 
 router.delete('/:id/messages/:messageId/queue', requireRole('owner', 'admin', 'supervisor', 'agent'), async (req, res) => {
@@ -414,11 +428,12 @@ router.post('/start', async (req, res) => {
     const convId = existingConversation.id;
 
     const queued = await require('../services/outbound-message-queue').deferOutsideHours({
-      orgId: req.orgId, conversationId: convId, text, sentBy: 'human', createdBy: req.userId, sendingProvider: wc.provider || 'meta', io,
+      orgId: req.orgId, conversationId: convId, text, sentBy: 'human', manualChatReply: true, createdBy: req.userId, sendingProvider: wc.provider || 'meta', io,
     });
     if (queued) {
       await db.setAgentMode(convId, 'human');
-      return res.status(202).json({ success: true, queued: true, data: { conversationId: convId, message: queued, conversation: await db.getConversationById(convId, req.orgId) } });
+      const pending = queued.outbound_queue.state !== 'sent';
+      return res.status(pending ? 202 : 200).json({ success: true, queued: pending, data: { conversationId: convId, message: queued, conversation: await db.getConversationById(convId, req.orgId) } });
     }
 
     // Enviar por el proveedor correcto
