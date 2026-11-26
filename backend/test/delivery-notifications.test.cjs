@@ -9,12 +9,14 @@ function serviceWith({
   assignment = null,
   provider = 'kapso',
   whatsappChannelId = null,
+  organizationSlug = null,
 } = {}) {
   const saved = [];
   const providerConfig = { id: whatsappChannelId, provider, phone_number_id: 'phone-1', kapso_api_key: 'secret' };
   let evolutionLookups = 0;
   const db = {
     getPool: () => ({ query: async () => ({ rows: [{ id: 41, whatsapp_channel_id: whatsappChannelId, last_inbound_at: lastInboundAt }] }) }),
+    getOrgById: async () => ({ slug: organizationSlug }),
     getWhatsappConfig: async () => providerConfig,
     getWhatsappChannel: async () => providerConfig,
     getEvolutionWhatsappChannel: async () => { evolutionLookups++; return { id: 99, provider: 'evolution' }; },
@@ -24,7 +26,7 @@ function serviceWith({
     updateConversationLastMessage: async () => {},
   };
   let sends = 0;
-  let evolutionSends = 0;
+  const evolutionTexts = [];
   let templateSends = 0;
   const kapso = {
     sendTextMessage: async () => {
@@ -39,7 +41,7 @@ function serviceWith({
     './kapso-whatsapp': kapso,
     './whatsapp': { sendTextMessage: async () => {} },
     './twilio-whatsapp': { sendTextMessage: async () => {} },
-    './evolution-whatsapp': { sendTextMessage: async () => { evolutionSends++; return { messageId: 'evo.1' }; } },
+    './evolution-whatsapp': { sendTextMessage: async (_phone, text) => { evolutionTexts.push(text); return { messageId: 'evo.1' }; } },
     './whatsapp-provider': {
       configForConversation: async () => ({ provider: 'kapso', phone_number_id: 'phone-1', kapso_api_key: 'secret' }),
       messageId: result => result?.messages?.[0]?.id || null,
@@ -50,7 +52,8 @@ function serviceWith({
     service,
     saved,
     get sends() { return sends; },
-    get evolutionSends() { return evolutionSends; },
+    evolutionTexts,
+    get evolutionSends() { return evolutionTexts.length; },
     get evolutionLookups() { return evolutionLookups; },
     get templateSends() { return templateSends; },
   };
@@ -87,6 +90,49 @@ test('al consolidar la carga avisa que el pedido quedó con el repartidor y cons
   assert.equal(fixture.sends, 1);
   assert.equal(fixture.saved[0].agentType, 'delivery_consolidated');
   assert.match(fixture.saved[0].content, /Karen.*consolidado.*manos del repartidor/s);
+});
+
+test('Diez Ríos alterna el texto de consolidación en Evolution y registra la redacción enviada', async () => {
+  const fixture = serviceWith({ provider: 'evolution', organizationSlug: 'diez-rios-mrs96z69' });
+  const stop = { phone: '56911112222', customerName: 'Marcela Soto', trackingUrl: 'https://example.test/seguimiento/abc' };
+  const variants = new Set();
+  for (let id = 828; id < 832; id++) {
+    const result = await fixture.service.sendLoadConsolidatedNotification(3, { ...stop, orderName: `#BOT-${id}` });
+    assert.equal(result.text, fixture.evolutionTexts.at(-1));
+    assert.equal(result.text, fixture.saved.at(-1).content);
+    assert.ok(result.text.startsWith('¡Hola, Marcela!'));
+    assert.ok(result.text.includes(`#DR-${id}`));
+    assert.match(result.text, /repartidor/);
+    assert.ok(result.text.endsWith(stop.trackingUrl));
+    variants.add(result.text.replace(`#DR-${id}`, '#DR'));
+  }
+  assert.equal(variants.size, 4);
+  const withoutLink = await fixture.service.sendLoadConsolidatedNotification(3, {
+    ...stop, orderName: '#DR-828', trackingUrl: null,
+  });
+  assert.equal(withoutLink.text, fixture.evolutionTexts[0].split('\n')[0]);
+});
+
+test('el aviso de Diez Ríos admite paradas antiguas y omite datos ausentes', async () => {
+  const fixture = serviceWith({ provider: 'evolution', organizationSlug: 'diez-rios-mrs96z69' });
+  const older = await fixture.service.sendLoadConsolidatedNotification(3, { phone: '56911112222', source: 'bot', id: 828 });
+  assert.match(older.text, /^¡Hola! .*pedido #DR-828/);
+  const minimal = await fixture.service.sendLoadConsolidatedNotification(3, { phone: '56911112222' });
+  assert.match(minimal.text, /^¡Hola! /);
+  assert.doesNotMatch(minimal.text, /undefined|null|#DR|seguir el reparto/);
+});
+
+test('el aviso estándar se conserva para otras tiendas y para otros canales de Diez Ríos', async () => {
+  const lastInboundAt = new Date().toISOString();
+  for (const config of [
+    { provider: 'evolution', organizationSlug: 'otra-tienda' },
+    { provider: 'kapso', organizationSlug: 'diez-rios-mrs96z69' },
+  ]) {
+    const fixture = serviceWith({ ...config, lastInboundAt });
+    const stop = { phone: '56911112222', orderName: '#DR-828' };
+    const result = await fixture.service.sendLoadConsolidatedNotification(3, stop);
+    assert.equal(result.text, fixture.service.loadConsolidatedText(stop));
+  }
 });
 
 test('el aviso de salida incluye el enlace temporal de seguimiento', async () => {

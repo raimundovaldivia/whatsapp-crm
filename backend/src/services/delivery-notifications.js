@@ -6,6 +6,7 @@ const evolutionService = require('./evolution-whatsapp');
 const templateAutomation = require('./template-automation');
 const { toISODate } = require('./business-date');
 const { normalizeOrderLabel } = require('../utils/order-reference');
+const { STORE_SLUG: DIEZ_RIOS_SLUG } = require('./xl-welcome-pricing');
 
 const CUSTOMER_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -75,6 +76,25 @@ function loadConsolidatedText({ customerName, orderName, trackingUrl }) {
   const order = normalizedOrderName ? ` ${normalizedOrderName}` : '';
   const tracking = trackingUrl ? `\nSigue la ubicación del reparto aquí: ${trackingUrl}` : '';
   return `${greeting} Tu pedido${order} ya fue consolidado y quedó en manos del repartidor 🚚. Desde ahora puedes escribirnos por este chat si necesitas coordinar la entrega.${tracking}`;
+}
+
+function diezRiosLoadConsolidatedText(stop) {
+  const firstName = String(stop.customerName || stop.customer_name || '').trim().split(/\s+/)[0];
+  const greeting = firstName ? `¡Hola, ${firstName}!` : '¡Hola!';
+  const label = normalizeOrderLabel(stop.orderName) || (stop.id != null ? stopOrderLabel(stop) : '');
+  const order = label ? `pedido ${label}` : 'pedido';
+  const notices = [
+    `Tu ${order} ya está con el repartidor 🚚. Si necesitas coordinar la entrega, escríbenos por aquí.`,
+    `El repartidor ya tiene tu ${order}. Puedes responder a este mensaje si quieres dejarle una indicación para la entrega.`,
+    `Ya le pasamos tu ${order} al repartidor. Si hay algún detalle para recibirlo, cuéntanos por este chat.`,
+    `Te avisamos que el repartidor ya recibió tu ${order} 🚚. Para coordinar la entrega, puedes escribirnos por este mismo chat.`,
+  ];
+  // La referencia mantiene la misma redacción aunque se regenere el enlace.
+  const reference = label.match(/\d+$/) || String(stop.id ?? '').match(/\d+$/);
+  const sequence = BigInt(reference?.[0] || phoneDigits(stop.phone) || 0);
+  const index = Number(sequence % BigInt(notices.length));
+  const tracking = stop.trackingUrl ? `\nPuedes seguir el reparto aquí: ${stop.trackingUrl}` : '';
+  return `${greeting} ${notices[index]}${tracking}`;
 }
 
 function deliveryOutcomeText(stop, { status, note, deliveryDate } = {}) {
@@ -234,6 +254,14 @@ async function sendDeliveryNotification(orgId, stop, {
     error.status = 400;
     error.code = 'WHATSAPP_NOT_CONFIGURED';
     throw error;
+  }
+
+  if (agentType === 'delivery_consolidated' && config.provider === 'evolution') {
+    const org = await db.getOrgById(orgId).catch(error => {
+      console.warn('[Delivery notification] No se pudo identificar la tienda para el aviso:', error.message);
+      return null;
+    });
+    if (org?.slug === DIEZ_RIOS_SLUG) text = diezRiosLoadConsolidatedText(stop);
   }
 
   let sent;
