@@ -15,6 +15,7 @@ const db      = require('../db/database');
 const { getPool, normalizePhone } = require('../db/database');
 const whatsappService = require('../services/whatsapp');
 const whatsappProvider = require('../services/whatsapp-provider');
+const orderNotices = require('../services/order-notices');
 // Invalida el caché de reenganche en DB cuando llega un pedido nuevo
 function clearReengagementCache(orgId) {
   const { getPool } = require('../db/database');
@@ -119,31 +120,40 @@ async function handleOrderPaid(orgId, shopifyOrder) {
   });
 
   const conv = await db.getConversationById(localOrder.conversation_id);
-  const wc   = conv ? await whatsappProvider.configForConversation(orgId, conv) : null;
-
-  if (conv && wc) {
-    const customerName = shopifyOrder.customer?.first_name || conv.contact_name || 'cliente';
-    const orderNum     = shopifyOrder.order_number || shopifyOrder.id;
-    const total        = shopifyOrder.total_price_set?.shop_money?.amount || shopifyOrder.total_price;
-    const currency     = shopifyOrder.currency || 'MXN';
-
-    const confirmMsg =
-      `✅ ¡Pago recibido, ${customerName}!\n\n` +
-      `📦 Pedido #${orderNum} confirmado\n` +
-      `💵 Total: $${total} ${currency}\n\n` +
-      `Te avisaremos cuando tu pedido esté en camino 🚚\n` +
-      `¡Gracias por tu compra!`;
-
-    await whatsappProvider.sendTextMessage(conv.phone_number, confirmMsg, wc);
-
-    await db.saveMessage({
-      conversationId: conv.id,
-      direction:      'outbound',
-      content:        confirmMsg,
-      sentBy:         'ai',
-      agentType:      'orders',
+  if (conv && await orderNotices.enabled(orgId)) {
+    const amount = shopifyOrder.total_price_set?.shop_money?.amount || shopifyOrder.total_price;
+    const currency = shopifyOrder.total_price_set?.shop_money?.currency_code || shopifyOrder.currency || '';
+    await orderNotices.send(orgId, { phone: conv.phone_number, customerName: shopifyOrder.customer?.first_name || conv.contact_name,
+      orderName: `#${shopifyOrder.order_number || shopifyOrder.id}` }, {
+      kind: 'payment_received', fields: { TOTAL: `$${amount} ${currency}`.trim() }, io,
     });
-    await db.updateConversationLastMessage(conv.id, confirmMsg);
+  } else {
+    const wc   = conv ? await whatsappProvider.configForConversation(orgId, conv) : null;
+
+    if (conv && wc) {
+      const customerName = shopifyOrder.customer?.first_name || conv.contact_name || 'cliente';
+      const orderNum     = shopifyOrder.order_number || shopifyOrder.id;
+      const total        = shopifyOrder.total_price_set?.shop_money?.amount || shopifyOrder.total_price;
+      const currency     = shopifyOrder.currency || 'MXN';
+
+      const confirmMsg =
+        `✅ ¡Pago recibido, ${customerName}!\n\n` +
+        `📦 Pedido #${orderNum} confirmado\n` +
+        `💵 Total: $${total} ${currency}\n\n` +
+        `Te avisaremos cuando tu pedido esté en camino 🚚\n` +
+        `¡Gracias por tu compra!`;
+
+      await whatsappProvider.sendTextMessage(conv.phone_number, confirmMsg, wc);
+
+      await db.saveMessage({
+        conversationId: conv.id,
+        direction:      'outbound',
+        content:        confirmMsg,
+        sentBy:         'ai',
+        agentType:      'orders',
+      });
+      await db.updateConversationLastMessage(conv.id, confirmMsg);
+    }
   }
 
   // Invalidar caché de reenganche — el cliente ya compró, no debe aparecer
@@ -210,6 +220,11 @@ async function handleOrderCancelled(orgId, shopifyOrder) {
     io?.to(`org_${orgId}`).emit(`order_updated_${orgId}`, { orderId: localOrder.id, status: 'cancelled' });
 
     const conv = await db.getConversationById(localOrder.conversation_id);
+    if (conv && await orderNotices.enabled(orgId)) {
+      await orderNotices.send(orgId, { phone: conv.phone_number, customerName: conv.contact_name,
+        orderName: `#${shopifyOrder.order_number || shopifyOrder.id}` }, { kind: 'cancelled', io });
+      return;
+    }
     const wc   = conv ? await whatsappProvider.configForConversation(orgId, conv) : null;
     if (conv && wc) {
       const msg = `Tu pedido #${shopifyOrder.order_number} ha sido cancelado. Si tienes alguna pregunta, con gusto te ayudamos 😊`;

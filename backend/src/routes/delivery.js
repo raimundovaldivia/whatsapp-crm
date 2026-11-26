@@ -31,6 +31,7 @@ const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
 const { paymentBreakdown } = require('../utils/payment-breakdown');
 const deliveryNotifications = require('../services/delivery-notifications');
+const orderNotices = require('../services/order-notices');
 const deliveryTracking = require('../services/delivery-tracking');
 const whatsappProvider = require('../services/whatsapp-provider');
 const outboundMedia = require('../services/outbound-media');
@@ -1852,6 +1853,11 @@ router.get('/routes/:id/en-route-status', requireRole('owner', 'admin', 'supervi
     const stopKey = String(req.query.stopKey || '');
     if (!stopKey) return res.status(400).json({ success: false, error: 'Falta stopKey' });
     const stop = await getOwnedActiveStop(req, req.params.id, stopKey);
+    if (await orderNotices.enabled(req.orgId)) {
+      const available = !!stop.phone && !!await orderNotices.channel(req.orgId);
+      return res.json({ success: true, available, mode: available ? 'text' : 'unavailable', templateName: null,
+        message: available ? 'La IA redactará el aviso y lo enviará por Evolution.' : 'Falta el teléfono o la conexión a Evolution.' });
+    }
     const window = await deliveryNotifications.getCustomerServiceWindow(req.orgId, stop.phone);
     const template = window.available
       ? null
@@ -3500,24 +3506,22 @@ async function applyStopUpdate(req, res, id, stopKey) {
     pool = null;
 
     let customerFollowup = null;
-    if (['cancelled', 'postponed', 'not_delivered'].includes(status)) {
-      try {
+    try {
+      const recovery = ['cancelled', 'postponed', 'not_delivered'].includes(status);
+      if (recovery || (isDelivery && await orderNotices.enabled(req.orgId))) {
         customerFollowup = await sendDeliveryCustomerEvent(
-          req.orgId,
-          { id: Number(id), name: owned.name },
-          operationalStop,
-          `delivery_outcome:${status}`,
-          () => deliveryNotifications.sendDeliveryOutcomeRecovery(req.orgId, operationalStop, {
-            status,
-            note: cleanNote,
-            deliveryDate: deliverDate,
-          }),
+          req.orgId, { id: Number(id), name: owned.name }, operationalStop, `delivery_outcome:${status}`,
+          () => recovery
+            ? deliveryNotifications.sendDeliveryOutcomeRecovery(req.orgId, operationalStop, { status, note: cleanNote, deliveryDate: deliverDate })
+            : orderNotices.send(req.orgId, operationalStop, {
+                kind: status, fields: partial ? { FECHA: deliverDate.split('-').reverse().join('-') } : {},
+              }),
           { status, note: cleanNote, deliveryDate: deliverDate }
         );
-      } catch (followupError) {
-        console.error('[Delivery/stop] El estado se guardó, pero falló el seguimiento:', followupError.message);
-        customerFollowup = { stopKey, status: 'failed', reason: 'FOLLOWUP_PROCESS_FAILED' };
       }
+    } catch (followupError) {
+      console.error('[Delivery/stop] El estado se guardó, pero falló el aviso:', followupError.message);
+      customerFollowup = { stopKey, status: 'failed', reason: 'FOLLOWUP_PROCESS_FAILED' };
     }
 
     // ── Cobro automático por transferencia ────────────────────────────────

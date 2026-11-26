@@ -354,6 +354,24 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
     }
   }
 
+  const orderNotices = require('./order-notices');
+  if (await orderNotices.enabled(orgId)) {
+    const settings = await getChargeSettings(orgId);
+    let notice;
+    try {
+      notice = await orderNotices.send(orgId, { phone: order.customer_phone, customerName: order.customer_name,
+        orderName: orderReference(order) }, {
+        kind: mode, fields: { TOTAL: formatCLP(order.total_price) },
+        details: mode === 'charge' ? settings.bankDetails : null, agentType: mode === 'voucher' ? 'solicitud_comprobante' : 'cobranza', io,
+      });
+    } catch (error) {
+      return { ok: false, reason: error.code || 'error_envio', error: error.message };
+    }
+    for (const tracked of trackingOrders) await registerChargeSent(tracked.source, tracked.id, orgId, notice.messageId);
+    return { ok: true, status: 'pending', message: notice.text, via: 'evolution', mode,
+      orders: trackingOrders.map(item => ({ source: item.source, id: item.id, label: item.order_label })) };
+  }
+
   let conversation = null;
   let wc = null;
   if (db.getDefaultWhatsappChannel) {

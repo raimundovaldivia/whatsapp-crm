@@ -207,7 +207,14 @@ router.post('/:slug/orders', async (req, res) => {
     let confirmationSent = false;
     if (evolutionChannel) {
       try {
-        await whatsapp.sendTextMessage(phoneClean, msg, evolutionChannel);
+        if (org.slug === xlPricing.STORE_SLUG) {
+          const details = [itemsText, `Entrega: ${address}, ${city}`,
+            ...(deliveryFee != null ? [`Despacho: ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
+            `Total: $${parseInt(total).toLocaleString('es-CL')}`].join('\n');
+          await require('../services/order-notices').send(org.id, { phone: phoneClean, customerName: name, orderName: `#DR-${order.id}` }, { kind: 'web_order', details });
+        } else {
+          await whatsapp.sendTextMessage(phoneClean, msg, evolutionChannel);
+        }
         confirmationSent = true;
       } catch (sendError) {
         console.error('[Store] Pedido guardado, pero Evolution no confirmó el mensaje al cliente:', sendError.message);

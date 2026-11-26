@@ -15,6 +15,10 @@ function load(file, deps = {}, extra = {}) {
         return database;
       }
       if (Object.hasOwn(deps, name)) return deps[name];
+      if (name.endsWith('/order-notices')) {
+        const database = { getOrgById: async () => ({ slug: 'test-store' }), ...deps['../db/database'] };
+        return load('src/services/order-notices.js', { ...deps, '../db/database': database }, extra);
+      }
       if (name === '../social-events') return require(path.join(root, 'src/services/social-events.js'));
       if (name === './customer-identity') return require(path.join(root, 'src/services/customer-identity.js'));
       if (name === './instagram-quotes') return require(path.join(root, 'src/services/instagram-quotes.js'));

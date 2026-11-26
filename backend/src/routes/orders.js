@@ -1301,6 +1301,12 @@ router.post('/:id/resend-link', async (req, res) => {
     if (!order) return res.status(404).json({ success: false, error: 'Orden no encontrada' });
     if (!order.invoice_url) return res.status(400).json({ success: false, error: 'Sin link de pago disponible' });
 
+    const orderNotices = require('../services/order-notices');
+    if (await orderNotices.enabled(req.orgId)) {
+      await orderNotices.send(req.orgId, { phone: order.phone_number, customerName: order.customer_name, orderName: `#DR-${order.id}` },
+        { kind: 'payment_link', trackingUrl: order.invoice_url, io });
+      return res.json({ success: true, message: 'Link reenviado correctamente' });
+    }
     const whatsappProvider = require('../services/whatsapp-provider');
     const conv = await db.getConversationById(order.conversation_id, req.orgId);
     const wc = await whatsappProvider.configForConversation(req.orgId, conv);
