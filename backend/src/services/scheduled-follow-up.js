@@ -71,6 +71,17 @@ async function processScheduledOrder(order, io) {
 
   // 1. Obtener config de WhatsApp de la org
   const conversation = await db.getConversationById(convId, orgId);
+  const orderNotices = require('./order-notices');
+  if (await orderNotices.enabled(orgId)) {
+    const notice = await orderNotices.send(orgId, { phone, customerName: name }, {
+      kind: 'scheduled_order', fields: hasSpecificProduct ? { PRODUCTO: product } : {}, agentType: 'scheduled_follow_up', io,
+    });
+    // El proveedor ya aceptó el aviso. Un fallo posterior al activar el bot no debe generar otro envío.
+    await db.markScheduledOrderSent(id, orgId);
+    await activateDivaForAutomatedMessage(notice.conversationId, db);
+    await db.updatePipelineState(notice.conversationId, 'collecting_order', confirmationDraft);
+    return;
+  }
   const wc = await whatsappProvider.configForConversation(orgId, conversation);
 
   // Evolution no depende de la ventana de 24 horas de Meta.

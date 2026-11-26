@@ -6,7 +6,7 @@ const evolutionService = require('./evolution-whatsapp');
 const templateAutomation = require('./template-automation');
 const { toISODate } = require('./business-date');
 const { normalizeOrderLabel } = require('../utils/order-reference');
-const { STORE_SLUG: DIEZ_RIOS_SLUG } = require('./xl-welcome-pricing');
+const orderNotices = require('./order-notices');
 
 const CUSTOMER_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -78,25 +78,6 @@ function loadConsolidatedText({ customerName, orderName, trackingUrl }) {
   return `${greeting} Tu pedido${order} ya fue consolidado y quedó en manos del repartidor 🚚. Desde ahora puedes escribirnos por este chat si necesitas coordinar la entrega.${tracking}`;
 }
 
-function diezRiosLoadConsolidatedText(stop) {
-  const firstName = String(stop.customerName || stop.customer_name || '').trim().split(/\s+/)[0];
-  const greeting = firstName ? `¡Hola, ${firstName}!` : '¡Hola!';
-  const label = normalizeOrderLabel(stop.orderName) || (stop.id != null ? stopOrderLabel(stop) : '');
-  const order = label ? `pedido ${label}` : 'pedido';
-  const notices = [
-    `Tu ${order} ya está con el repartidor 🚚. Si necesitas coordinar la entrega, escríbenos por aquí.`,
-    `El repartidor ya tiene tu ${order}. Puedes responder a este mensaje si quieres dejarle una indicación para la entrega.`,
-    `Ya le pasamos tu ${order} al repartidor. Si hay algún detalle para recibirlo, cuéntanos por este chat.`,
-    `Te avisamos que el repartidor ya recibió tu ${order} 🚚. Para coordinar la entrega, puedes escribirnos por este mismo chat.`,
-  ];
-  // La referencia mantiene la misma redacción aunque se regenere el enlace.
-  const reference = label.match(/\d+$/) || String(stop.id ?? '').match(/\d+$/);
-  const sequence = BigInt(reference?.[0] || phoneDigits(stop.phone) || 0);
-  const index = Number(sequence % BigInt(notices.length));
-  const tracking = stop.trackingUrl ? `\nPuedes seguir el reparto aquí: ${stop.trackingUrl}` : '';
-  return `${greeting} ${notices[index]}${tracking}`;
-}
-
 function deliveryOutcomeText(stop, { status, note, deliveryDate } = {}) {
   const firstName = String(stop?.customerName || stop?.customer_name || '').trim().split(/\s+/)[0];
   const greeting = firstName ? `Hola ${firstName} 👋` : 'Hola 👋';
@@ -159,10 +140,8 @@ function money(value) {
   return `$${Math.round(Number(value) || 0).toLocaleString('es-CL')}`;
 }
 
-function orderEditText({ customerName, orderLabel, changes }) {
-  const firstName = String(customerName || '').trim().split(/\s+/)[0];
-  const greeting = firstName ? `Hola ${firstName} 👋` : 'Hola 👋';
-  const lines = [`${greeting}\nActualizamos tu pedido${orderLabel ? ` ${orderLabel}` : ''}:`];
+function orderEditDetails(changes) {
+  const lines = [];
   if (changes.items) {
     lines.push(`📦 Productos: ${changes.items.map(item => `${item.quantity}x ${item.name}`).join(' · ')}`);
   }
@@ -175,6 +154,14 @@ function orderEditText({ customerName, orderLabel, changes }) {
     lines.push(`📅 Fecha de entrega: ${day}-${month}-${year}`);
   }
   if (Object.hasOwn(changes, 'total')) lines.push(`💰 Nuevo total: ${money(changes.total)}`);
+  return lines;
+}
+
+function orderEditText({ customerName, orderLabel, changes }) {
+  const firstName = String(customerName || '').trim().split(/\s+/)[0];
+  const greeting = firstName ? `Hola ${firstName} 👋` : 'Hola 👋';
+  const lines = [`${greeting}\nActualizamos tu pedido${orderLabel ? ` ${orderLabel}` : ''}:`];
+  lines.push(...orderEditDetails(changes));
   lines.push('Si algo no corresponde, respóndenos por aquí y lo revisamos.');
   return lines.join('\n');
 }
@@ -236,7 +223,11 @@ async function sendDeliveryNotification(orgId, stop, {
   templateText = null,
   templateLabel = 'Pedido en camino',
   agentType = 'delivery',
+  notice = null,
 } = {}) {
+  if (notice && await orderNotices.enabled(orgId)) {
+    return orderNotices.send(orgId, stop, { ...notice, agentType });
+  }
   const window = await getCustomerServiceWindow(
     orgId,
     stop.phone,
@@ -254,14 +245,6 @@ async function sendDeliveryNotification(orgId, stop, {
     error.status = 400;
     error.code = 'WHATSAPP_NOT_CONFIGURED';
     throw error;
-  }
-
-  if (agentType === 'delivery_consolidated' && config.provider === 'evolution') {
-    const org = await db.getOrgById(orgId).catch(error => {
-      console.warn('[Delivery notification] No se pudo identificar la tienda para el aviso:', error.message);
-      return null;
-    });
-    if (org?.slug === DIEZ_RIOS_SLUG) text = diezRiosLoadConsolidatedText(stop);
   }
 
   let sent;
@@ -339,6 +322,7 @@ async function sendDeliveryNotification(orgId, stop, {
 
 async function sendEnRouteNotification(orgId, stop) {
   return sendDeliveryNotification(orgId, stop, {
+    notice: { kind: 'delivery', trackingUrl: stop.trackingUrl },
     text: enRouteText(stop),
     templateText: enRouteText({ ...stop, trackingUrl: null }),
   });
@@ -346,6 +330,7 @@ async function sendEnRouteNotification(orgId, stop) {
 
 async function sendLoadConsolidatedNotification(orgId, stop) {
   return sendDeliveryNotification(orgId, stop, {
+    notice: { kind: 'delivery_consolidated', trackingUrl: stop.trackingUrl },
     text: loadConsolidatedText(stop),
     templateText: loadConsolidatedText({ ...stop, trackingUrl: null }),
     templateLabel: 'Pedido en camino',
@@ -353,8 +338,14 @@ async function sendLoadConsolidatedNotification(orgId, stop) {
   });
 }
 
+function outcomeDate(outcome) {
+  const date = toISODate(outcome.deliveryDate);
+  return date ? { FECHA: date.split('-').reverse().join('-') } : {};
+}
+
 async function sendDeliveryOutcomeRecovery(orgId, stop, outcome) {
   return sendDeliveryNotification(orgId, stop, {
+    notice: { kind: outcome.status, fields: outcomeDate(outcome) },
     text: deliveryOutcomeText(stop, outcome),
     assignmentKey: 'delivery_resolution',
     templateComponents: deliveryResolutionTemplateComponents(stop, outcome),
@@ -368,6 +359,7 @@ async function sendCustomerFeedbackRequest(orgId, stop) {
   return sendDeliveryNotification(orgId, stop, {
     text,
     templateText: customerFeedbackTemplateText(stop),
+    notice: { kind: 'customer_feedback', fields: { ESCALA: '1 al 5' } },
     assignmentKey: 'customer_feedback',
     templateComponents: customerFeedbackTemplateComponents(stop),
     templateLabel: 'Opinión primera compra',
@@ -381,6 +373,16 @@ async function sendOrderEditNotification(orgId, { source = 'bot', id, before, af
 
   const phone = after?.customer_phone || before?.customer_phone;
   if (!phoneDigits(phone)) return { sent: false, skipped: true, reason: 'NO_PHONE' };
+  const orderLabel = source === 'shopify'
+    ? String(after?.name || after?.order_number || before?.name || before?.order_number || `#${id}`)
+    : `#DR-${id}`;
+  const customerName = after?.customer_name || before?.customer_name;
+  const text = orderEditText({ customerName, orderLabel, changes });
+  if (await orderNotices.enabled(orgId)) {
+    const details = orderEditDetails(changes).join('\n');
+    const result = await orderNotices.send(orgId, { phone, customerName, orderName: orderLabel }, { kind: 'order_edit', details });
+    return { ...result, changes };
+  }
   const window = await getCustomerServiceWindow(orgId, phone);
   let conversation = window.conversationId
     ? await db.getConversationById(window.conversationId, orgId).catch(() => null)
@@ -400,14 +402,6 @@ async function sendOrderEditNotification(orgId, { source = 'bot', id, before, af
     config = await require('./whatsapp-provider').configForConversation(orgId, conversation) || config;
   }
 
-  const orderLabel = source === 'shopify'
-    ? String(after?.name || after?.order_number || before?.name || before?.order_number || `#${id}`)
-    : `#DR-${id}`;
-  const text = orderEditText({
-    customerName: after?.customer_name || before?.customer_name,
-    orderLabel,
-    changes,
-  });
   try {
     const sent = await sendProviderText(phone, text, config);
     const message = await db.saveMessage({

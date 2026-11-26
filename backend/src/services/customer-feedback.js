@@ -128,14 +128,14 @@ async function requestEligibility(pool, request) {
   return { eligible: true };
 }
 
-async function setRequestStatus(pool, id, organizationId, status, error = null) {
+async function setRequestStatus(pool, id, organizationId, status, error = null, conversationId = null) {
   await pool.query(
     `UPDATE customer_feedback_requests
-        SET status = $1, last_error = $2,
+        SET status = $1, last_error = $2, conversation_id = COALESCE($5, conversation_id),
             sent_at = CASE WHEN $1 = 'sent' THEN NOW() ELSE sent_at END,
             updated_at = NOW()
       WHERE id = $3 AND organization_id = $4`,
-    [status, error ? String(error).slice(0, 500) : null, id, organizationId]
+    [status, error ? String(error).slice(0, 500) : null, id, organizationId, conversationId]
   );
 }
 
@@ -160,9 +160,9 @@ async function runCustomerFeedback(io = null, now = new Date()) {
         orderName: request.order_label,
         conversationId: request.conversation_id,
       });
-      await setRequestStatus(pool, request.id, request.organization_id, 'sent');
+      await setRequestStatus(pool, request.id, request.organization_id, 'sent', null, result.conversationId);
       if (io && result?.message) {
-        const conversation = await db.getConversationById(request.conversation_id, request.organization_id).catch(() => null);
+        const conversation = await db.getConversationById(result.conversationId || request.conversation_id, request.organization_id).catch(() => null);
         io.to(`org_${request.organization_id}`).emit(`new_message_${request.organization_id}`, { message: result.message, conversation });
       }
       summary.sent++;

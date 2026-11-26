@@ -712,6 +712,13 @@ router.post('/:id/orders', async (req, res) => {
         : '';
       const subtotalLine = discountAmount > 0
         ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
+      const orderNotices = require('../services/order-notices');
+      if (await orderNotices.enabled(req.orgId)) {
+        const details = `${lines.join('\n')}${subtotalLine}${discountLine}\nTotal: $${totalPrice.toLocaleString('es-CL')}`;
+        const notice = await orderNotices.send(req.orgId, { phone: order.customer_phone || conv.phone_number, customerName, orderName: `#DR-${order.id}` },
+          { kind: 'order_summary', details, respectSendingHours: true, io });
+        return res.json({ success: true, order, queued: !!notice.queued });
+      }
       const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
 
       const wc = await outboundConfig(req.orgId, conv);

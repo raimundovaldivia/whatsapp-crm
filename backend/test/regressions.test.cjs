@@ -54,6 +54,34 @@ test('delivery: member and assignment checks, missing/completed orders, rollback
   } finally {await f.engine.close();}
 });
 
+test('al confirmar una entrega se avisa una vez, después de guardar, incluso si el repartidor reintenta', async () => {
+  const f = await fixture();
+  try {
+    await f.query("UPDATE orders SET customer_phone='56911112222' WHERE id=1");
+    const notices = [];
+    const router = load('src/routes/delivery.js', {
+      '../db/database': f.db, '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+      '../services/order-notices': { enabled: async () => true, send: async (_org, stop, notice) => {
+        const { rows: [order] } = await f.query('SELECT delivered_at FROM orders WHERE id=1');
+        assert.ok(order.delivered_at);
+        notices.push([stop.orderName, notice.kind]);
+        return { sent: true, via: 'text' };
+      } },
+    });
+    const call = async () => {
+      const res = response();
+      await handler(router, 'patch', '/routes/1/stops')({
+        orgId: 1, userId: 10, role: 'repartidor', params: { id: '1' },
+        body: { stopKey: 'bot_1', status: 'entregado', paymentMethod: 'efectivo' },
+      }, res);
+      return res;
+    };
+    assert.equal((await call()).body.customerFollowup.status, 'sent');
+    await call();
+    assert.deepEqual(notices, [['#DR-1', 'entregado']]);
+  } finally { await f.engine.close(); }
+});
+
 test('partial delivery charges only delivered items and creates one dated remainder order', async () => {
   const f = await fixture();
   try {
@@ -74,6 +102,15 @@ test('partial delivery charges only delivered items and creates one dated remain
     await f.query("SELECT setval(pg_get_serial_sequence('orders','id'),(SELECT MAX(id) FROM orders))");
     const router = load('src/routes/delivery.js', {
       '../db/database': f.db,
+      '../services/order-notices': {
+        enabled: async () => true,
+        send: async (_org, stop, notice) => {
+          assert.equal(stop.orderName, '#DR-1');
+          assert.equal(notice.kind, 'partial');
+          assert.equal(notice.fields.FECHA, '03-02-2099');
+          return { sent: true, via: 'text' };
+        },
+      },
       '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
       '../services/payment-collection': { getPendingCharges: async () => [] },
     });
@@ -87,6 +124,7 @@ test('partial delivery charges only delivered items and creates one dated remain
     }, res);
 
     assert.equal(res.code, 200, JSON.stringify(res.body));
+    assert.equal(res.body.customerFollowup.status, 'sent');
     assert.equal(res.body.partialDelivery.deliveredTotal, 100);
     assert.equal(res.body.partialDelivery.pendingTotal, 200);
     const original = (await f.query('SELECT status,items,total_price,delivered_at,payment_transfer_amount FROM orders WHERE id=1')).rows[0];

@@ -10,18 +10,25 @@ function serviceWith({
   provider = 'kapso',
   whatsappChannelId = null,
   organizationSlug = null,
+  aiReply = null,
+  evolutionStatus = 'connected',
+  failEvolution = false,
+  recent = [],
 } = {}) {
   const saved = [];
   const providerConfig = { id: whatsappChannelId, provider, phone_number_id: 'phone-1', kapso_api_key: 'secret' };
   let evolutionLookups = 0;
+  const prompts = [];
+  const threads = [];
   const db = {
-    getPool: () => ({ query: async () => ({ rows: [{ id: 41, whatsapp_channel_id: whatsappChannelId, last_inbound_at: lastInboundAt }] }) }),
+    normalizePhone: phone => phone.replace(/\D/g, ''),
+    getPool: () => ({ query: async sql => ({ rows: sql.includes('SELECT content FROM messages') ? recent : [{ id: 41, whatsapp_channel_id: whatsappChannelId, last_inbound_at: lastInboundAt }] }) }),
     getOrgById: async () => ({ slug: organizationSlug }),
     getWhatsappConfig: async () => providerConfig,
     getWhatsappChannel: async () => providerConfig,
-    getEvolutionWhatsappChannel: async () => { evolutionLookups++; return { id: 99, provider: 'evolution' }; },
+    getEvolutionWhatsappChannel: async () => { evolutionLookups++; return { id: 99, provider: 'evolution', status: evolutionStatus }; },
     getConversationById: async id => ({ id, phone_number: '56911112222', whatsapp_channel_id: whatsappChannelId }),
-    upsertConversation: async (_orgId, phone) => ({ id: 41, phone_number: phone, whatsapp_channel_id: whatsappChannelId }),
+    upsertConversation: async (_orgId, phone, _name, channelId) => { threads.push(channelId); return { id: 61, phone_number: phone, whatsapp_channel_id: channelId }; },
     saveMessage: async value => { saved.push(value); return { id: 88, ...value }; },
     updateConversationLastMessage: async () => {},
   };
@@ -41,10 +48,19 @@ function serviceWith({
     './kapso-whatsapp': kapso,
     './whatsapp': { sendTextMessage: async () => {} },
     './twilio-whatsapp': { sendTextMessage: async () => {} },
-    './evolution-whatsapp': { sendTextMessage: async (_phone, text) => { evolutionTexts.push(text); return { messageId: 'evo.1' }; } },
+    './evolution-whatsapp': { sendTextMessage: async (_phone, text) => { if (failEvolution) throw new Error('Evolution fuera de servicio'); evolutionTexts.push(text); return { messageId: 'evo.1' }; } },
     './whatsapp-provider': {
       configForConversation: async () => ({ provider: 'kapso', phone_number_id: 'phone-1', kapso_api_key: 'secret' }),
       messageId: result => result?.messages?.[0]?.id || null,
+    },
+    './ai-provider': {
+      modelFor: () => 'modelo-prueba',
+      client: { messages: { create: async request => {
+        const prompt = request.messages[0].content;
+        prompts.push(prompt);
+        return aiReply ? aiReply(prompt, prompts.length) : 'Escríbenos por tu pedido.';
+      } } },
+      responseText: result => result,
     },
     './template-automation': { getAssignment: async () => assignment },
   });
@@ -52,7 +68,7 @@ function serviceWith({
     service,
     saved,
     get sends() { return sends; },
-    evolutionTexts,
+    evolutionTexts, prompts, threads,
     get evolutionSends() { return evolutionTexts.length; },
     get evolutionLookups() { return evolutionLookups; },
     get templateSends() { return templateSends; },
@@ -92,46 +108,56 @@ test('al consolidar la carga avisa que el pedido quedó con el repartidor y cons
   assert.match(fixture.saved[0].content, /Karen.*consolidado.*manos del repartidor/s);
 });
 
-test('Diez Ríos alterna el texto de consolidación en Evolution y registra la redacción enviada', async () => {
-  const fixture = serviceWith({ provider: 'evolution', organizationSlug: 'diez-rios-mrs96z69' });
-  const stop = { phone: '56911112222', customerName: 'Marcela Soto', trackingUrl: 'https://example.test/seguimiento/abc' };
-  const variants = new Set();
-  for (let id = 828; id < 832; id++) {
-    const result = await fixture.service.sendLoadConsolidatedNotification(3, { ...stop, orderName: `#BOT-${id}` });
+test('cada aviso de Diez Ríos usa la IA y el hilo comercial Evolution, incluso si el chat era de Kapso', async () => {
+  const fixture = serviceWith({ organizationSlug: 'diez-rios-mrs96z69', whatsappChannelId: 8,
+    aiReply: (_prompt, count) => count === 1 ? 'NOMBRE, el repartidor tiene tu pedido PEDIDO. Escríbenos por aquí.' : 'Hola, NOMBRE. Ya llevamos tu pedido PEDIDO.' });
+  const stop = { phone: '56911112222', customerName: 'Marcela Soto', orderName: '#BOT-828', trackingUrl: 'https://example.test/seguimiento/privado' };
+  for (const method of ['sendLoadConsolidatedNotification', 'sendEnRouteNotification']) {
+    const result = await fixture.service[method](3, stop);
+    assert.equal(result.provider, 'evolution');
+    assert.equal(result.conversationId, 61);
     assert.equal(result.text, fixture.evolutionTexts.at(-1));
     assert.equal(result.text, fixture.saved.at(-1).content);
-    assert.ok(result.text.startsWith('¡Hola, Marcela!'));
-    assert.ok(result.text.includes(`#DR-${id}`));
-    assert.match(result.text, /repartidor/);
-    assert.ok(result.text.endsWith(stop.trackingUrl));
-    variants.add(result.text.replace(`#DR-${id}`, '#DR'));
+    assert.ok(result.text.includes('Marcela') && result.text.includes('#DR-828') && result.text.endsWith(stop.trackingUrl));
   }
-  assert.equal(variants.size, 4);
-  const withoutLink = await fixture.service.sendLoadConsolidatedNotification(3, {
-    ...stop, orderName: '#DR-828', trackingUrl: null,
-  });
-  assert.equal(withoutLink.text, fixture.evolutionTexts[0].split('\n')[0]);
+  assert.equal(fixture.prompts.length, 2);
+  assert.doesNotMatch(fixture.prompts.join(' '), /Marcela|828|privado|56911112222/);
+  assert.notEqual(fixture.evolutionTexts[0], fixture.evolutionTexts[1]);
+  assert.deepEqual(fixture.threads, [99, 99]);
+  assert.equal(fixture.sends + fixture.templateSends, 0);
 });
 
-test('el aviso de Diez Ríos admite paradas antiguas y omite datos ausentes', async () => {
-  const fixture = serviceWith({ provider: 'evolution', organizationSlug: 'diez-rios-mrs96z69' });
-  const older = await fixture.service.sendLoadConsolidatedNotification(3, { phone: '56911112222', source: 'bot', id: 828 });
-  assert.match(older.text, /^¡Hola! .*pedido #DR-828/);
-  const minimal = await fixture.service.sendLoadConsolidatedNotification(3, { phone: '56911112222' });
-  assert.match(minimal.text, /^¡Hola! /);
-  assert.doesNotMatch(minimal.text, /undefined|null|#DR|seguir el reparto/);
+test('si la IA repite un aviso reciente del mismo cliente se pide otra redacción antes del envío', async () => {
+  const fixture = serviceWith({ organizationSlug: 'diez-rios-mrs96z69',
+    recent: [{ content: 'Ya tiene tu pedido #DR-4 el repartidor.' }],
+    aiReply: (_prompt, count) => count === 1 ? 'Ya tiene tu pedido PEDIDO el repartidor.' : 'El repartidor recibió tu pedido PEDIDO. Escríbenos por aquí.' });
+  const result = await fixture.service.sendLoadConsolidatedNotification(3, { phone: '56911112222', orderName: '#DR-828' });
+  assert.equal(fixture.prompts.length, 2);
+  assert.equal(fixture.evolutionSends, 1);
+  assert.match(result.text, /El repartidor recibió tu pedido #DR-828/);
 });
 
-test('el aviso estándar se conserva para otras tiendas y para otros canales de Diez Ríos', async () => {
-  const lastInboundAt = new Date().toISOString();
-  for (const config of [
-    { provider: 'evolution', organizationSlug: 'otra-tienda' },
-    { provider: 'kapso', organizationSlug: 'diez-rios-mrs96z69' },
-  ]) {
-    const fixture = serviceWith({ ...config, lastInboundAt });
-    const stop = { phone: '56911112222', orderName: '#DR-828' };
-    const result = await fixture.service.sendLoadConsolidatedNotification(3, stop);
-    assert.equal(result.text, fixture.service.loadConsolidatedText(stop));
+test('las incidencias, la encuesta y los cambios de pedido también se redactan por evento', async () => {
+  const fixture = serviceWith({ organizationSlug: 'diez-rios-mrs96z69', aiReply: prompt => {
+    const keys = prompt.match(/Marcadores disponibles: ([^\n]+)/)[1];
+    return 'Hola. ' + keys.split(', ').join(' ');
+  } });
+  const stop = { phone: '56911112222', customerName: 'Ana', orderName: '#DR-19' };
+  const postponed = await fixture.service.sendDeliveryOutcomeRecovery(3, stop, { status: 'postponed', deliveryDate: '2026-12-02' });
+  assert.ok(postponed.text.includes('02-12-2026'));
+  const survey = await fixture.service.sendCustomerFeedbackRequest(3, stop);
+  assert.ok(survey.text.includes('1 al 5'));
+  const edit = await fixture.service.sendOrderEditNotification(3, { id: 19, before: {total_price: 1000}, after: {total_price: 2000, customer_phone: stop.phone} });
+  assert.match(edit.text, /Nuevo total: \$2.000/);
+  assert.equal(fixture.evolutionSends, 3);
+});
+
+test('un fallo de IA o Evolution no produce envíos por otro canal ni un éxito falso', async () => {
+  for (const options of [{ aiReply: () => 'Un texto con un enlace inventado https://example.test' }, { evolutionStatus: 'disconnected' }, { aiReply: () => 'Tu pedido PEDIDO va en camino.', failEvolution: true }]) {
+    const fixture = serviceWith({ organizationSlug: 'diez-rios-mrs96z69', ...options });
+    await assert.rejects(fixture.service.sendEnRouteNotification(3, { phone: '56911112222', orderName: '#DR-8' }));
+    assert.equal(fixture.evolutionSends + fixture.sends + fixture.templateSends, 0);
+    assert.equal(fixture.saved.length, 0);
   }
 });
 
