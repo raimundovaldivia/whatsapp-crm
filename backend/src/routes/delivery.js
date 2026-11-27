@@ -3514,7 +3514,8 @@ async function applyStopUpdate(req, res, id, stopKey) {
           () => recovery
             ? deliveryNotifications.sendDeliveryOutcomeRecovery(req.orgId, operationalStop, { status, note: cleanNote, deliveryDate: deliverDate })
             : orderNotices.send(req.orgId, operationalStop, {
-                kind: status, fields: partial ? { FECHA: deliverDate.split('-').reverse().join('-') } : {},
+                kind: status, paymentMethod: paymentMethod || orderRow.payment_method,
+                fields: partial ? { FECHA: deliverDate.split('-').reverse().join('-') } : {},
               }),
           { status, note: cleanNote, deliveryDate: deliverDate }
         );

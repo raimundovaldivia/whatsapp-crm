@@ -57,14 +57,14 @@ test('delivery: member and assignment checks, missing/completed orders, rollback
 test('al confirmar una entrega se avisa una vez, después de guardar, incluso si el repartidor reintenta', async () => {
   const f = await fixture();
   try {
-    await f.query("UPDATE orders SET customer_phone='56911112222' WHERE id=1");
+    await f.query("UPDATE orders SET customer_phone='56911112222', payment_method='transferencia' WHERE id=1");
     const notices = [];
     const router = load('src/routes/delivery.js', {
       '../db/database': f.db, '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
       '../services/order-notices': { enabled: async () => true, send: async (_org, stop, notice) => {
         const { rows: [order] } = await f.query('SELECT delivered_at FROM orders WHERE id=1');
         assert.ok(order.delivered_at);
-        notices.push([stop.orderName, notice.kind]);
+        notices.push([stop.orderName, notice.kind, notice.paymentMethod]);
         return { sent: true, via: 'text' };
       } },
     });
@@ -72,13 +72,13 @@ test('al confirmar una entrega se avisa una vez, después de guardar, incluso si
       const res = response();
       await handler(router, 'patch', '/routes/1/stops')({
         orgId: 1, userId: 10, role: 'repartidor', params: { id: '1' },
-        body: { stopKey: 'bot_1', status: 'entregado', paymentMethod: 'efectivo' },
+        body: { stopKey: 'bot_1', status: 'entregado' },
       }, res);
       return res;
     };
     assert.equal((await call()).body.customerFollowup.status, 'sent');
     await call();
-    assert.deepEqual(notices, [['#DR-1', 'entregado']]);
+    assert.deepEqual(notices, [['#DR-1', 'entregado', 'transferencia']]);
   } finally { await f.engine.close(); }
 });
 
@@ -107,6 +107,7 @@ test('partial delivery charges only delivered items and creates one dated remain
         send: async (_org, stop, notice) => {
           assert.equal(stop.orderName, '#DR-1');
           assert.equal(notice.kind, 'partial');
+          assert.equal(notice.paymentMethod, 'transferencia');
           assert.equal(notice.fields.FECHA, '03-02-2099');
           return { sent: true, via: 'text' };
         },
