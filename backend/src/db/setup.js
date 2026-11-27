@@ -1,5 +1,20 @@
 const { Pool } = require('pg');
 
+async function ensureWebOrderNoticeWordings(client) {
+  await client.query(`
+    DO $$ BEGIN
+      IF to_regclass('web_order_notice_wordings') IS NULL THEN
+        PERFORM pg_advisory_xact_lock(hashtext('web_order_notice_wordings'));
+        CREATE TABLE IF NOT EXISTS web_order_notice_wordings (
+          organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          wording_hash TEXT NOT NULL,
+          PRIMARY KEY (organization_id, wording_hash)
+        );
+      END IF;
+    END $$;
+  `);
+}
+
 async function setupDatabase() {
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -1960,13 +1975,7 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals-rewards-v2.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'campaign-offers.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'outbound-message-queue.sql'), 'utf8'));
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS web_order_notice_wordings (
-        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-        wording_hash TEXT NOT NULL,
-        PRIMARY KEY (organization_id, wording_hash)
-      )
-    `);
+    await ensureWebOrderNoticeWordings(client);
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();
@@ -1974,4 +1983,4 @@ async function setupDatabase() {
   }
 }
 
-module.exports = { setupDatabase };
+module.exports = { setupDatabase, ensureWebOrderNoticeWordings };

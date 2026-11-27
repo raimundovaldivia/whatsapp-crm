@@ -188,12 +188,13 @@ app.use((err, _req, res, _next) => {
 const PORT = process.env.PORT || 3001;
 let eggRepurchaseTimer;
 
-const { setupDatabase } = require('./db/setup');
+const { setupDatabase, ensureWebOrderNoticeWordings } = require('./db/setup');
 
 require('./services/database-startup').prepareDatabase(setupDatabase).then(async () => {
   // Existing installations may skip the full bootstrap. This field is required
   // by both ordinary mode changes and manual-reply campaigns.
   const pool = require('./db/database').getPool();
+  await ensureWebOrderNoticeWordings(pool);
   const column = await pool.query("SELECT 1 FROM pg_attribute WHERE attrelid = 'conversations'::regclass AND attname = 'campaign_manual_hold' AND NOT attisdropped");
   if (!column.rowCount) {
     await pool.query('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS campaign_manual_hold BOOLEAN NOT NULL DEFAULT FALSE');
