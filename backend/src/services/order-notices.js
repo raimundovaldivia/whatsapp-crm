@@ -39,9 +39,9 @@ function wording(text) {
   return text.split('\n')[0].toLocaleLowerCase('es').replace(/#(?:[a-z]+-)?[\w-]+/gu, '#').replace(/[^\p{L}#]+/gu, ' ').trim();
 }
 
-async function reserveWebOrderWording(orgId, body) {
+async function reserveNoticeWording(orgId, body) {
   // Compare the prose before inserting personal data, prices or order references.
-  const prose = body.replace(/\b(?:NOMBRE|PEDIDO)\b/g, '').normalize('NFD')
+  const prose = body.replace(/\b(?:NOMBRE|PEDIDO|TOTAL|FECHA)\b/g, '').normalize('NFD')
     .replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}]+/gu, ' ').trim();
   if (!prose) return false;
   const hash = createHash('sha256').update(prose).digest('hex');
@@ -52,7 +52,7 @@ async function reserveWebOrderWording(orgId, body) {
   return result.rows.length === 1;
 }
 
-async function draft(orgId, kind, fields, recent) {
+async function draft(orgId, kind, fields, recent, uniqueWording) {
   const instruction = instructions[kind];
   if (!instruction) throw new Error('Tipo de aviso desconocido.');
   const keys = Object.keys(fields);
@@ -64,7 +64,7 @@ async function draft(orgId, kind, fields, recent) {
   const prompt = [instruction, 'Marcadores disponibles: ' + (keys.join(', ') || 'ninguno')].join('\n');
   // El modelo recibe el evento y los nombres de los marcadores, nunca datos personales ni enlaces privados.
   const rejected = [];
-  const attempts = kind === 'web_order' ? 4 : 2;
+  const attempts = uniqueWording ? 4 : 2;
   for (let attempt = 0; attempt < attempts; attempt++) {
     const retry = attempt ? '\nRedacta de otra manera y comprueba los marcadores. No añadas cifras ni enlaces.' : '';
     const avoid = rejected.length ? '\nCambia la estructura y el vocabulario de estas redacciones ya usadas:\n' + rejected.join('\n') : '';
@@ -78,13 +78,13 @@ async function draft(orgId, kind, fields, recent) {
     if (tokens.length !== keys.length || !keys.every(k => tokens.includes(k))) continue;
     const message = body.replace(/\b(?:NOMBRE|PEDIDO|FECHA|ESCALA|PRODUCTO|TOTAL)\b/g, key => fields[key]);
     if (!recent.has(wording(message)) &&
-        (kind !== 'web_order' || await reserveWebOrderWording(orgId, body))) return message;
-    if (kind === 'web_order') rejected.push(body);
+        (!uniqueWording || await reserveNoticeWording(orgId, body))) return message;
+    if (uniqueWording) rejected.push(body);
   }
   throw Object.assign(new Error('La IA no produjo un aviso válido.'), { code: 'AI_NOTICE_INVALID', status: 503 });
 }
 
-async function send(orgId, stop, { kind, fields = {}, details, trackingUrl, agentType = kind, respectSendingHours = false, io = null }) {
+async function send(orgId, stop, { kind, fields = {}, details, trackingUrl, paymentMethod, agentType = kind, respectSendingHours = false, io = null }) {
   const config = await channel(orgId);
   if (!config) throw Object.assign(new Error('El canal Evolution de la tienda no está conectado.'), { code: 'EVOLUTION_UNAVAILABLE', status: 409 });
   const rawPhone = String(stop.phone || '').trim();
@@ -101,8 +101,14 @@ async function send(orgId, stop, { kind, fields = {}, details, trackingUrl, agen
       ORDER BY id DESC LIMIT 3`, [conversation.id, agentType]
   );
   const recent = new Set(rows.filter(row => row.content).map(row => wording(row.content)));
-  const body = await draft(orgId, kind, values, recent);
-  const text = [body, details, trackingUrl].filter(Boolean).join('\n');
+  const transferDelivery = ['entregado', 'partial'].includes(kind) && ['transferencia', 'mixto'].includes(paymentMethod);
+  const uniqueWording = transferDelivery || ['web_order', 'charge', 'voucher'].includes(kind);
+  const body = await draft(orgId, kind, values, recent, uniqueWording);
+  // El medio elegido por el repartidor no acredita que el dinero haya ingresado.
+  const paymentLine = transferDelivery
+    ? 'Medio de pago registrado: ' + (paymentMethod === 'mixto' ? 'efectivo y transferencia' : 'transferencia')
+    : null;
+  const text = [body, details, paymentLine, trackingUrl].filter(Boolean).join('\n');
   if (respectSendingHours) {
     const queued = await require('./outbound-message-queue').deferOutsideHours({
       orgId, conversationId: conversation.id, text, agentType, sentBy: 'ai', sendingProvider: 'evolution', io,
