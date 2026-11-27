@@ -125,7 +125,7 @@ async function handleOrderPaid(orgId, shopifyOrder) {
     const currency = shopifyOrder.total_price_set?.shop_money?.currency_code || shopifyOrder.currency || '';
     await orderNotices.send(orgId, { phone: conv.phone_number, customerName: shopifyOrder.customer?.first_name || conv.contact_name,
       orderName: `#${shopifyOrder.order_number || shopifyOrder.id}` }, {
-      kind: 'payment_received', fields: { TOTAL: `$${amount} ${currency}`.trim() }, io,
+      kind: 'payment_received', queueRef: { key: 'shopify-paid:' + shopifyOrder.id }, fields: { TOTAL: `$${amount} ${currency}`.trim() }, io,
     });
   } else {
     const wc   = conv ? await whatsappProvider.configForConversation(orgId, conv) : null;
@@ -222,7 +222,7 @@ async function handleOrderCancelled(orgId, shopifyOrder) {
     const conv = await db.getConversationById(localOrder.conversation_id);
     if (conv && await orderNotices.enabled(orgId)) {
       await orderNotices.send(orgId, { phone: conv.phone_number, customerName: conv.contact_name,
-        orderName: `#${shopifyOrder.order_number || shopifyOrder.id}` }, { kind: 'cancelled', io });
+        orderName: `#${shopifyOrder.order_number || shopifyOrder.id}` }, { kind: 'cancelled', queueRef: { key: 'shopify-cancelled:' + shopifyOrder.id }, io });
       return;
     }
     const wc   = conv ? await whatsappProvider.configForConversation(orgId, conv) : null;

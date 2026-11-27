@@ -19,6 +19,7 @@ function serviceWith({
   const providerConfig = { id: whatsappChannelId, provider, phone_number_id: 'phone-1', kapso_api_key: 'secret' };
   let evolutionLookups = 0;
   const prompts = [];
+  const queued = [];
   const threads = [];
   const db = {
     normalizePhone: phone => phone.replace(/\D/g, ''),
@@ -62,13 +63,18 @@ function serviceWith({
       } } },
       responseText: result => result,
     },
+    './order-notice-queue': { enqueue: async input => {
+      if (failEvolution) throw new Error('Cola no disponible');
+      queued.push(input.text);
+      return { queued: true, sent: false, text: input.text, conversationId: input.conversationId, provider: 'evolution' };
+    } },
     './template-automation': { getAssignment: async () => assignment },
   });
   return {
     service,
     saved,
     get sends() { return sends; },
-    evolutionTexts, prompts, threads,
+    evolutionTexts, queued, prompts, threads,
     get evolutionSends() { return evolutionTexts.length; },
     get evolutionLookups() { return evolutionLookups; },
     get templateSends() { return templateSends; },
@@ -116,13 +122,14 @@ test('cada aviso de Diez Ríos usa la IA y el hilo comercial Evolution, incluso 
     const result = await fixture.service[method](3, stop);
     assert.equal(result.provider, 'evolution');
     assert.equal(result.conversationId, 61);
-    assert.equal(result.text, fixture.evolutionTexts.at(-1));
-    assert.equal(result.text, fixture.saved.at(-1).content);
+    assert.equal(result.text, fixture.queued.at(-1));
+    assert.ok(result.queued && !result.sent);
     assert.ok(result.text.includes('Marcela') && result.text.includes('#DR-828') && result.text.endsWith(stop.trackingUrl));
   }
   assert.equal(fixture.prompts.length, 2);
   assert.doesNotMatch(fixture.prompts.join(' '), /Marcela|828|privado|56911112222/);
-  assert.notEqual(fixture.evolutionTexts[0], fixture.evolutionTexts[1]);
+  assert.notEqual(fixture.queued[0], fixture.queued[1]);
+  assert.equal(fixture.evolutionSends, 0);
   assert.deepEqual(fixture.threads, [99, 99]);
   assert.equal(fixture.sends + fixture.templateSends, 0);
 });
@@ -133,7 +140,7 @@ test('si la IA repite un aviso reciente del mismo cliente se pide otra redacció
     aiReply: (_prompt, count) => count === 1 ? 'Ya tiene tu pedido PEDIDO el repartidor.' : 'El repartidor recibió tu pedido PEDIDO. Escríbenos por aquí.' });
   const result = await fixture.service.sendLoadConsolidatedNotification(3, { phone: '56911112222', orderName: '#DR-828' });
   assert.equal(fixture.prompts.length, 2);
-  assert.equal(fixture.evolutionSends, 1);
+  assert.equal(fixture.queued.length, 1);
   assert.match(result.text, /El repartidor recibió tu pedido #DR-828/);
 });
 
@@ -149,7 +156,7 @@ test('las incidencias, la encuesta y los cambios de pedido también se redactan 
   assert.ok(survey.text.includes('1 al 5'));
   const edit = await fixture.service.sendOrderEditNotification(3, { id: 19, before: {total_price: 1000}, after: {total_price: 2000, customer_phone: stop.phone} });
   assert.match(edit.text, /Nuevo total: \$2.000/);
-  assert.equal(fixture.evolutionSends, 3);
+  assert.equal(fixture.queued.length, 3);
 });
 
 test('un fallo de IA o Evolution no produce envíos por otro canal ni un éxito falso', async () => {

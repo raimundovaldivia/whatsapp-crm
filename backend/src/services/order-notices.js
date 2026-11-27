@@ -1,7 +1,7 @@
 const { createHash } = require('node:crypto');
 const db = require('../db/database');
 const ai = require('./ai-provider');
-const evolution = require('./evolution-whatsapp');
+const noticeQueue = require('./order-notice-queue');
 const { STORE_SLUG } = require('./xl-welcome-pricing');
 const { normalizeOrderLabel } = require('../utils/order-reference');
 
@@ -13,7 +13,7 @@ const instructions = {
   charge: 'El pago por TOTAL sigue pendiente de confirmación en nuestros registros. Pide el comprobante si transfirió o que indique si usó otro medio. No asegures que el cliente debe dinero.',
   voucher: 'Pide ayuda para verificar el pago por TOTAL. Si pagó por transferencia solicita el comprobante por este chat; si pagó de otra manera pídele que lo indique.',
   scheduled_order: 'Llegó la fecha de compra coordinada. Si hay PRODUCTO pregunta si lo confirmamos; si no hay producto, pregunta qué le gustaría pedir. No digas que hay un despacho confirmado.',
-  delivery_consolidated: 'El repartidor ya tiene el pedido. Invita a responder por este chat para coordinar la entrega.',
+  delivery_consolidated: 'Comunica que el pedido está con el repartidor y que pueden coordinar la entrega por este chat. Presenta PEDIDO como el número del pedido, sin usar «tu PEDIDO» a secas.',
   delivery: 'El repartidor va en camino para entregar el pedido. Pide estar pendiente para recibirlo.',
   entregado: 'La entrega del pedido quedó registrada. Agradece la compra. No afirmes quién lo recibió ni que fue pagado.',
   partial: 'Se entregó solo parte del pedido. El resto quedó programado para FECHA. Invita a consultar por este chat.',
@@ -30,9 +30,9 @@ async function enabled(orgId) {
   return org.slug === STORE_SLUG;
 }
 
-async function channel(orgId) {
+async function channel(orgId, includeDisconnected = false) {
   const config = await db.getEvolutionWhatsappChannel(orgId);
-  return config?.provider === 'evolution' && config.status === 'connected' && !config.assigned_user_id ? config : null;
+  return config?.provider === 'evolution' && (config.status === 'connected' || (includeDisconnected && config.status === 'disconnected')) && !config.assigned_user_id ? config : null;
 }
 
 function wording(text) {
@@ -41,7 +41,7 @@ function wording(text) {
 
 async function reserveNoticeWording(orgId, body) {
   // Compare the prose before inserting personal data, prices or order references.
-  const prose = body.replace(/\b(?:NOMBRE|PEDIDO|TOTAL|FECHA)\b/g, '').normalize('NFD')
+  const prose = body.replace(/\b(?:NOMBRE|PEDIDO|TOTAL|FECHA|ESCALA|PRODUCTO)\b/g, '').normalize('NFD')
     .replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}]+/gu, ' ').trim();
   if (!prose) return false;
   const hash = createHash('sha256').update(prose).digest('hex');
@@ -52,7 +52,7 @@ async function reserveNoticeWording(orgId, body) {
   return result.rows.length === 1;
 }
 
-async function draft(orgId, kind, fields, recent, uniqueWording) {
+async function draft(orgId, kind, fields, recent) {
   const instruction = instructions[kind];
   if (!instruction) throw new Error('Tipo de aviso desconocido.');
   const keys = Object.keys(fields);
@@ -64,8 +64,7 @@ async function draft(orgId, kind, fields, recent, uniqueWording) {
   const prompt = [instruction, 'Marcadores disponibles: ' + (keys.join(', ') || 'ninguno')].join('\n');
   // El modelo recibe el evento y los nombres de los marcadores, nunca datos personales ni enlaces privados.
   const rejected = [];
-  const attempts = uniqueWording ? 4 : 2;
-  for (let attempt = 0; attempt < attempts; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     const retry = attempt ? '\nRedacta de otra manera y comprueba los marcadores. No añadas cifras ni enlaces.' : '';
     const avoid = rejected.length ? '\nCambia la estructura y el vocabulario de estas redacciones ya usadas:\n' + rejected.join('\n') : '';
     const response = await ai.client.messages.create({
@@ -76,16 +75,19 @@ async function draft(orgId, kind, fields, recent, uniqueWording) {
     if (!body || body.length > 750 || /(?:https?:|www\.|[#\d$<>\[\]{}]|\b(?:undefined|null)\b)/i.test(body)) continue;
     const tokens = body.match(/\b(?:NOMBRE|PEDIDO|FECHA|ESCALA|PRODUCTO|TOTAL)\b/g) || [];
     if (tokens.length !== keys.length || !keys.every(k => tokens.includes(k))) continue;
+    if (kind === 'delivery_consolidated' && /\b[Tt]u\s+PEDIDO\b/.test(body)) {
+      rejected.push(body);
+      continue;
+    }
     const message = body.replace(/\b(?:NOMBRE|PEDIDO|FECHA|ESCALA|PRODUCTO|TOTAL)\b/g, key => fields[key]);
-    if (!recent.has(wording(message)) &&
-        (!uniqueWording || await reserveNoticeWording(orgId, body))) return message;
-    if (uniqueWording) rejected.push(body);
+    if (!recent.has(wording(message)) && await reserveNoticeWording(orgId, body)) return message;
+    rejected.push(body);
   }
   throw Object.assign(new Error('La IA no produjo un aviso válido.'), { code: 'AI_NOTICE_INVALID', status: 503 });
 }
 
-async function send(orgId, stop, { kind, fields = {}, details, trackingUrl, paymentMethod, agentType = kind, respectSendingHours = false, io = null }) {
-  const config = await channel(orgId);
+async function send(orgId, stop, { kind, fields = {}, details, trackingUrl, paymentMethod, agentType = kind, respectSendingHours = false, queueRef = {}, io = null }) {
+  const config = await channel(orgId, true);
   if (!config) throw Object.assign(new Error('El canal Evolution de la tienda no está conectado.'), { code: 'EVOLUTION_UNAVAILABLE', status: 409 });
   const rawPhone = String(stop.phone || '').trim();
   const phone = db.normalizePhone(rawPhone);
@@ -96,37 +98,25 @@ async function send(orgId, stop, { kind, fields = {}, details, trackingUrl, paym
   if (firstName && !/^(?:cliente|[+\d()-]+)$/i.test(firstName)) values.NOMBRE = firstName;
   if (label) values.PEDIDO = label;
   const conversation = await db.upsertConversation(orgId, phone, stop.customerName || stop.customer_name, config.id);
+  const ref = stop.queueRef || queueRef;
+  if (ref.key || ref.charges?.length) {
+    const prior = await noticeQueue.existing(db.getPool(), conversation.id, ref);
+    if (prior) return noticeQueue.resultFor(prior);
+  }
   const { rows } = await db.getPool().query(
     `SELECT content FROM messages WHERE conversation_id = $1 AND direction = 'outbound' AND agent_type = $2
       ORDER BY id DESC LIMIT 3`, [conversation.id, agentType]
   );
   const recent = new Set(rows.filter(row => row.content).map(row => wording(row.content)));
   const transferDelivery = ['entregado', 'partial'].includes(kind) && ['transferencia', 'mixto'].includes(paymentMethod);
-  const uniqueWording = transferDelivery || ['web_order', 'charge', 'voucher'].includes(kind);
-  const body = await draft(orgId, kind, values, recent, uniqueWording);
+  const body = await draft(orgId, kind, values, recent);
   // El medio elegido por el repartidor no acredita que el dinero haya ingresado.
   const paymentLine = transferDelivery
     ? 'Medio de pago registrado: ' + (paymentMethod === 'mixto' ? 'efectivo y transferencia' : 'transferencia')
     : null;
   const text = [body, details, paymentLine, trackingUrl].filter(Boolean).join('\n');
-  if (respectSendingHours) {
-    const queued = await require('./outbound-message-queue').deferOutsideHours({
-      orgId, conversationId: conversation.id, text, agentType, sentBy: 'ai', sendingProvider: 'evolution', io,
-    });
-    if (queued) return { queued: true, sent: false, conversationId: conversation.id, text, provider: 'evolution' };
-  }
-  const sent = await evolution.sendTextMessage(phone, text, config);
-  if (!sent?.messageId) throw Object.assign(new Error('Evolution no confirmó el envío.'), { code: 'EVOLUTION_UNCONFIRMED' });
-  let message = null;
-  try {
-    message = await db.saveMessage({ conversationId: conversation.id, whatsappMessageId: sent.messageId,
-      direction: 'outbound', content: text, status: 'pending', sentBy: 'ai', agentType });
-    await db.updateConversationLastMessage(conversation.id, text);
-    if (io && message) io.to(`org_${orgId}`).emit(`new_message_${orgId}`, { message, conversation });
-  } catch (error) {
-    console.error('[Order notice] Evolution aceptó el aviso, pero falló su registro:', error.message);
-  }
-  return { sent: true, text, message, conversationId: conversation.id, via: 'text', provider: 'evolution', messageId: sent.messageId, templateName: null };
+  return noticeQueue.enqueue({ orgId, conversationId: conversation.id, phone, channelId: config.id,
+    kind, text, agentType, respectSendingHours, ref, io });
 }
 
 module.exports = { enabled, channel, send };

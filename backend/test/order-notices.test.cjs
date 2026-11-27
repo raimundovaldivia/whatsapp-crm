@@ -4,7 +4,7 @@ const { load } = require('./helpers.cjs');
 
 function fixture({ compose, defer, pool } = {}) {
   const requests = [];
-  const sends = [];
+  const sends = []; // Avisos preparados para la cola; el transporte se prueba con PostgreSQL.
   const notices = load('src/services/order-notices.js', {
     '../db/database': {
       normalizePhone: value => value.replace(/\D/g, ''),
@@ -18,8 +18,11 @@ function fixture({ compose, defer, pool } = {}) {
       client: { messages: { create: async request => { requests.push(request); return compose(request); } } },
       responseText: result => result,
     },
-    './evolution-whatsapp': { sendTextMessage: async (_phone, text) => { sends.push(text); return { messageId: 'evo-1' }; } },
-    './outbound-message-queue': { deferOutsideHours: defer },
+    './order-notice-queue': { enqueue: async input => {
+      if (defer) await defer(input);
+      sends.push(input.text);
+      return { queued: true, sent: false, provider: 'evolution', text: input.text, conversationId: input.conversationId };
+    } },
   });
   return { notices, requests, sends };
 }
@@ -40,9 +43,10 @@ test('el resumen de compra generado conserva el horario de envío y el canal Evo
   assert.equal(result.queued, true);
   assert.equal(result.sent, false);
   assert.equal(queued[0].conversationId, 20);
-  assert.equal(queued[0].sendingProvider, 'evolution');
+  assert.equal(queued[0].respectSendingHours, true);
+  assert.equal(result.provider, 'evolution');
   assert.ok(queued[0].text.endsWith('2 bandejas — $14.000'));
-  assert.equal(sends.length, 0);
+  assert.equal(sends.length, 1);
 });
 
 test('ningún identificador de redes sociales se transforma en un número de cliente', async () => {
@@ -76,7 +80,7 @@ test('dos compras web simultáneas reservan redacciones distintas incluso con ot
     send('56911112222', 'Ana Soto', '#DR-10'),
     send('56933334444', 'Luis Vera', '#DR-11'),
   ]);
-  assert.ok(results.every(result => result.sent));
+  assert.ok(results.every(result => result.queued && !result.sent));
   assert.equal(sends.filter(text => /recibimos tu compra/i.test(text)).length, 1);
   assert.equal(sends.filter(text => /Gracias por tu pedido/.test(text)).length, 1);
   assert.match(requests.at(-1).messages[0].content, /redacciones ya usadas/);
@@ -109,4 +113,20 @@ test('las entregas por transferencia y sus avisos de cobro requieren redacción 
     await assert.rejects(notices.send(1, one, options), { code: 'AI_NOTICE_INVALID' });
     assert.equal(sends.length, 2);
   }
+});
+
+test('el aviso de consolidación descarta la frase reportada y reserva las nuevas redacciones entre clientes', async t => {
+  const pool = await noticeDatabase(t);
+  const original = 'Hola NOMBRE, el repartidor ya tiene tu PEDIDO. Responde por este chat para coordinar la entrega.';
+  const first = 'NOMBRE, nuestro repartidor lleva tu pedido PEDIDO. Puedes escribirnos aquí para coordinar.';
+  const next = 'Para coordinar la entrega del pedido PEDIDO, NOMBRE, puedes responder aquí. Ya lo tiene el repartidor.';
+  const candidates = [original, first, first, next];
+  const { notices, sends } = fixture({ pool, compose: () => candidates.shift() || first });
+  const options = { kind: 'delivery_consolidated', trackingUrl: 'https://example.test/seguimiento/prueba' };
+  await notices.send(1, { phone: '56911112222', customerName: 'Berta', orderName: '#DR-836' }, options);
+  await notices.send(1, { phone: '56933334444', customerName: 'Ana', orderName: '#DR-837' }, options);
+  assert.equal(sends.length, 2);
+  assert.match(sends[0], /nuestro repartidor lleva tu pedido #DR-836/);
+  assert.match(sends[1], /Para coordinar la entrega del pedido #DR-837/);
+  assert.ok(sends.every(text => text.endsWith(options.trackingUrl)));
 });

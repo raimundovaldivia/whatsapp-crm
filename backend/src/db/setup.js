@@ -15,6 +15,14 @@ async function ensureWebOrderNoticeWordings(client) {
   `);
 }
 
+async function ensureOrderNoticeLanes(client) {
+  await client.query(`CREATE TABLE IF NOT EXISTS order_notice_lanes (
+    organization_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+    available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    active_message_id INTEGER
+  )`);
+}
+
 async function setupDatabase() {
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -1976,6 +1984,7 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'campaign-offers.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'outbound-message-queue.sql'), 'utf8'));
     await ensureWebOrderNoticeWordings(client);
+    await ensureOrderNoticeLanes(client);
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();
@@ -1983,4 +1992,4 @@ async function setupDatabase() {
   }
 }
 
-module.exports = { setupDatabase, ensureWebOrderNoticeWordings };
+module.exports = { setupDatabase, ensureWebOrderNoticeWordings, ensureOrderNoticeLanes };
