@@ -1,3 +1,4 @@
+const { createHash } = require('node:crypto');
 const db = require('../db/database');
 const ai = require('./ai-provider');
 const evolution = require('./evolution-whatsapp');
@@ -5,7 +6,7 @@ const { STORE_SLUG } = require('./xl-welcome-pricing');
 const { normalizeOrderLabel } = require('../utils/order-reference');
 
 const instructions = {
-  web_order: 'Confirma que recibimos la compra. Se paga contra entrega. La fecha de despacho se confirmará después. El detalle de compra se muestra debajo.',
+  web_order: 'Confirma que recibimos la compra e indica que la fecha de despacho se confirmará después. El detalle de compra y el pago contra entrega se muestran debajo; no los repitas.',
   order_summary: 'El pedido se registró. Indica que abajo está el detalle y que coordinaremos entrega y pago por este chat.',
   payment_received: 'Confirma que se recibió el pago por TOTAL y agradece la compra.',
   payment_link: 'Envía el enlace de pago solicitado para el pedido. El enlace auténtico va en la línea siguiente.',
@@ -38,7 +39,20 @@ function wording(text) {
   return text.split('\n')[0].toLocaleLowerCase('es').replace(/#(?:[a-z]+-)?[\w-]+/gu, '#').replace(/[^\p{L}#]+/gu, ' ').trim();
 }
 
-async function draft(kind, fields, recent) {
+async function reserveWebOrderWording(orgId, body) {
+  // Compare the prose before inserting personal data, prices or order references.
+  const prose = body.replace(/\b(?:NOMBRE|PEDIDO)\b/g, '').normalize('NFD')
+    .replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}]+/gu, ' ').trim();
+  if (!prose) return false;
+  const hash = createHash('sha256').update(prose).digest('hex');
+  const result = await db.getPool().query(
+    `INSERT INTO web_order_notice_wordings (organization_id, wording_hash)
+     VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING wording_hash`, [orgId, hash]
+  );
+  return result.rows.length === 1;
+}
+
+async function draft(orgId, kind, fields, recent) {
   const instruction = instructions[kind];
   if (!instruction) throw new Error('Tipo de aviso desconocido.');
   const keys = Object.keys(fields);
@@ -49,17 +63,23 @@ async function draft(kind, fields, recent) {
     'Si no hay un marcador, omite ese dato. Devuelve solo el mensaje, sin comillas, notas ni etiquetas.';
   const prompt = [instruction, 'Marcadores disponibles: ' + (keys.join(', ') || 'ninguno')].join('\n');
   // El modelo recibe el evento y los nombres de los marcadores, nunca datos personales ni enlaces privados.
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const rejected = [];
+  const attempts = kind === 'web_order' ? 4 : 2;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const retry = attempt ? '\nRedacta de otra manera y comprueba los marcadores. No añadas cifras ni enlaces.' : '';
+    const avoid = rejected.length ? '\nCambia la estructura y el vocabulario de estas redacciones ya usadas:\n' + rejected.join('\n') : '';
     const response = await ai.client.messages.create({
       model: ai.modelFor('fast'), max_tokens: 260, system,
-      messages: [{ role: 'user', content: attempt ? prompt + '\nRedacta de otra manera y comprueba los marcadores. No añadas cifras ni enlaces.' : prompt }],
+      messages: [{ role: 'user', content: prompt + retry + avoid }],
     });
     const body = ai.responseText(response).replace(/\s+/g, ' ').trim();
     if (!body || body.length > 750 || /(?:https?:|www\.|[#\d$<>\[\]{}]|\b(?:undefined|null)\b)/i.test(body)) continue;
     const tokens = body.match(/\b(?:NOMBRE|PEDIDO|FECHA|ESCALA|PRODUCTO|TOTAL)\b/g) || [];
     if (tokens.length !== keys.length || !keys.every(k => tokens.includes(k))) continue;
     const message = body.replace(/\b(?:NOMBRE|PEDIDO|FECHA|ESCALA|PRODUCTO|TOTAL)\b/g, key => fields[key]);
-    if (!recent.has(wording(message))) return message;
+    if (!recent.has(wording(message)) &&
+        (kind !== 'web_order' || await reserveWebOrderWording(orgId, body))) return message;
+    if (kind === 'web_order') rejected.push(body);
   }
   throw Object.assign(new Error('La IA no produjo un aviso válido.'), { code: 'AI_NOTICE_INVALID', status: 503 });
 }
@@ -81,7 +101,7 @@ async function send(orgId, stop, { kind, fields = {}, details, trackingUrl, agen
       ORDER BY id DESC LIMIT 3`, [conversation.id, agentType]
   );
   const recent = new Set(rows.filter(row => row.content).map(row => wording(row.content)));
-  const body = await draft(kind, values, recent);
+  const body = await draft(orgId, kind, values, recent);
   const text = [body, details, trackingUrl].filter(Boolean).join('\n');
   if (respectSendingHours) {
     const queued = await require('./outbound-message-queue').deferOutsideHours({

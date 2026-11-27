@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { load } = require('./helpers.cjs');
 
-function fixture({ compose, defer } = {}) {
+function fixture({ compose, defer, pool } = {}) {
   const requests = [];
   const sends = [];
   const notices = load('src/services/order-notices.js', {
@@ -10,7 +10,7 @@ function fixture({ compose, defer } = {}) {
       normalizePhone: value => value.replace(/\D/g, ''),
       getEvolutionWhatsappChannel: async () => ({ id: 5, status: 'connected', provider: 'evolution' }),
       upsertConversation: async () => ({ id: 20 }),
-      getPool: () => ({ query: async () => ({ rows: [] }) }),
+      getPool: () => pool || ({ query: async () => ({ rows: [] }) }),
       saveMessage: async record => record, updateConversationLastMessage: async () => {},
     },
     './ai-provider': {
@@ -49,4 +49,33 @@ test('ningún identificador de redes sociales se transforma en un número de cli
   const { notices, sends, requests } = fixture();
   await assert.rejects(notices.send(1, { phone: 'instagram:1234567890' }, { kind: 'entregado' }), { code: 'NO_PHONE' });
   assert.equal(sends.length + requests.length, 0);
+});
+
+test('dos compras web simultáneas reservan redacciones distintas incluso con otros nombres y pedidos', async t => {
+  const { PGlite } = require('@electric-sql/pglite');
+  const engine = new PGlite();
+  t.after(() => engine.close());
+  class Pool {
+    async connect() { return { query: sql => engine.exec(sql), release() {} }; }
+    async end() {}
+  }
+  await load('src/db/setup.js', { pg: { Pool } }).setupDatabase();
+  await engine.exec("INSERT INTO organizations (id, name, slug) VALUES (1, 'Diez Ríos', 'diez-rios')");
+  const original = 'NOMBRE, recibimos tu compra PEDIDO.';
+  const revised = '¡Gracias por tu pedido PEDIDO, NOMBRE! Te confirmaremos el despacho.';
+  const candidates = [original, '¡NOMBRE! Recibimos tu compra PEDIDO ✅', revised];
+  const { notices, sends, requests } = fixture({ pool: engine, compose: () => candidates.shift() || original });
+  const send = (phone, customerName, orderName) => notices.send(1, { phone, customerName, orderName },
+    { kind: 'web_order', details: 'Total: $14.000' });
+  const results = await Promise.all([
+    send('56911112222', 'Ana Soto', '#DR-10'),
+    send('56933334444', 'Luis Vera', '#DR-11'),
+  ]);
+  assert.ok(results.every(result => result.sent));
+  assert.equal(sends.filter(text => /recibimos tu compra/i.test(text)).length, 1);
+  assert.equal(sends.filter(text => /Gracias por tu pedido/.test(text)).length, 1);
+  assert.match(requests.at(-1).messages[0].content, /redacciones ya usadas/);
+  await assert.rejects(send('56955556666', 'Luz Mora', '#DR-12'), { code: 'AI_NOTICE_INVALID' });
+  assert.equal(sends.length, 2);
+  assert.doesNotMatch(JSON.stringify(requests), /Ana|Luis|Luz|DR-1|14\.000|56911112222/);
 });
