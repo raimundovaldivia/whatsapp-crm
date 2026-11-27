@@ -716,7 +716,7 @@ router.post('/:id/orders', async (req, res) => {
       if (await orderNotices.enabled(req.orgId)) {
         const details = `${lines.join('\n')}${subtotalLine}${discountLine}\nTotal: $${totalPrice.toLocaleString('es-CL')}`;
         const notice = await orderNotices.send(req.orgId, { phone: order.customer_phone || conv.phone_number, customerName, orderName: `#DR-${order.id}` },
-          { kind: 'order_summary', details, respectSendingHours: true, queueRef: { key: 'summary:' + order.id }, io });
+          { kind: 'order_summary', details, respectSendingHours: true, queueRef: { key: 'summary:' + order.id, summaryOrderId: order.id }, io });
         return res.json({ success: true, order, queued: !!notice.queued });
       }
       const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;

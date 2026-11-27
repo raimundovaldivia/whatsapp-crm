@@ -111,7 +111,7 @@ async function claim(pool, orgId, now) {
   });
 }
 
-async function staleReason(pool, orgId, message) {
+async function staleReason(pool, orgId, message, now) {
   const { phone, channelId, ref, kind } = message.outbound_queue.orderNotice;
   if (db.normalizePhone(message.phone_number) !== phone || message.whatsapp_channel_id !== channelId) return 'Cambió el destinatario o el canal';
   const { rows: [opt] } = await pool.query(`SELECT 1 FROM contacts WHERE organization_id=$1 AND opt_out
@@ -123,6 +123,23 @@ async function staleReason(pool, orgId, message) {
     const statuses = typeof route?.stop_statuses === 'string' ? JSON.parse(route.stop_statuses) : route?.stop_statuses;
     if (route?.status !== 'in_progress' || !stops?.some(stop => stop.source + '_' + stop.id === ref.stopKey)
         || terminalStops.has(statuses?.[ref.stopKey])) return 'La parada ya no está en reparto';
+  }
+  if (ref.summaryOrderId) {
+    const queuedAt = message.outbound_queue.queuedAt;
+    const { rows: [order] } = await pool.query(`SELECT status,
+      (COALESCE(updated_at,created_at) AT TIME ZONE 'UTC') > $3::timestamptz AS changed
+      FROM orders WHERE id=$1 AND organization_id=$2`, [ref.summaryOrderId, orgId, queuedAt]);
+    if (!order || order.changed || ['cancelled','cancelado','entregado','delivered'].includes(order.status)) return 'El pedido cambió después de preparar el resumen';
+    if (!policy.isChatMessagingHour(new Date(queuedAt))) {
+      const { rows: [chat] } = await pool.query(`SELECT agent_mode, EXISTS(SELECT 1 FROM messages newer
+        WHERE newer.conversation_id=c.id AND newer.id>$3 AND (newer.outbound_queue IS NULL OR newer.outbound_queue->>'state'='sent')) AS changed
+        FROM conversations c WHERE c.id=$1 AND c.organization_id=$2`, [message.conversation_id, orgId, message.id]);
+      if (chat?.changed || chat?.agent_mode === 'human' || String(await db.getSetting(orgId, 'ai_enabled_global')) === 'false') return 'El chat cambió durante la espera';
+      const day = date => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago', dateStyle: 'short' }).format(date);
+      if (day(new Date(queuedAt)) !== day(now) && /\b(hoy|ayer|mañana|esta noche|esta tarde)\b/i.test(message.content)) return 'Cambió el día del resumen';
+      const fresh = await require('./response-guardrail').checkResponseFreshness(orgId, message.conversation_id, message.content, {});
+      if (!fresh.ok) return 'Los datos del resumen requieren revisión';
+    }
   }
   if (ref.charges) {
     const pending = await require('./payment-collection').getPendingCharges(orgId);
@@ -181,7 +198,7 @@ async function tick(orgId, { pool = db.getPool(), io, clock = () => new Date(), 
   let state = 'queued', reason = null, receipt = null, attempted = false;
   const notice = message.outbound_queue.orderNotice;
   try {
-    reason = await staleReason(pool, orgId, message);
+    reason = await staleReason(pool, orgId, message, clock());
     if (reason) state = 'cancelled';
     else {
       const config = await db.getWhatsappChannel(orgId, notice.channelId);
