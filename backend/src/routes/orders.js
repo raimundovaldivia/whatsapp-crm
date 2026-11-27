@@ -673,9 +673,11 @@ router.post('/send-charge', async (req, res) => {
       });
     }
 
-    const sent = results.filter(r => r.ok).length;
-    const sentOrders = results.filter(r => r.ok).reduce((sum, result) => sum + (result.orderCount || 0), 0);
-    res.json({ success: true, sent, sentOrders, failed: results.length - sent, mode, results });
+    const accepted = results.filter(result => result.ok && !result.queued);
+    const queued = results.filter(result => result.ok && result.queued).length;
+    const sent = accepted.length;
+    const sentOrders = accepted.reduce((sum, result) => sum + (result.orderCount || 0), 0);
+    res.json({ success: true, sent, sentOrders, queued, failed: results.length - sent - queued, mode, results });
   } catch (err) {
     console.error('[Orders/send-charge]', err.message);
     res.status(500).json({ success: false, error: err.message });
