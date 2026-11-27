@@ -1960,6 +1960,13 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals-rewards-v2.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'campaign-offers.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'outbound-message-queue.sql'), 'utf8'));
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS web_order_notice_wordings (
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        wording_hash TEXT NOT NULL,
+        PRIMARY KEY (organization_id, wording_hash)
+      )
+    `);
     console.log('✅ DB PostgreSQL multi-tenant configurada');
   } finally {
     client.release();

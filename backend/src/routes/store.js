@@ -208,9 +208,9 @@ router.post('/:slug/orders', async (req, res) => {
     if (evolutionChannel) {
       try {
         if (org.slug === xlPricing.STORE_SLUG) {
-          const details = [itemsText, `Entrega: ${address}, ${city}`,
+          const details = [itemsText, `Entrega: ${[address, city].filter(Boolean).join(', ')}`,
             ...(deliveryFee != null ? [`Despacho: ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
-            `Total: $${parseInt(total).toLocaleString('es-CL')}`].join('\n');
+            `Total: $${parseInt(total).toLocaleString('es-CL')}`, 'Pago: contra entrega'].join('\n');
           await require('../services/order-notices').send(org.id, { phone: phoneClean, customerName: name, orderName: `#DR-${order.id}` }, { kind: 'web_order', details });
         } else {
           await whatsapp.sendTextMessage(phoneClean, msg, evolutionChannel);

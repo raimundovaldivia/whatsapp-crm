@@ -1,7 +1,47 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
-const { load } = require('./helpers.cjs');
+const { load, handler, response } = require('./helpers.cjs');
+
+test('el checkout de Diez Ríos confirma por IA con los datos de la venta y conserva el pedido si falla el aviso', async () => {
+  const slug = 'diez-rios-mrs96z69';
+  let saved = 0;
+  const notices = [];
+  const router = load('src/routes/store.js', {
+    '../db/database': {
+      getPool: () => ({ query: async () => ({ rows: [{ id: 7, slug }] }) }),
+      getEvolutionWhatsappChannel: async () => ({ id: 5, status: 'connected' }),
+      upsertConversation: async () => ({ id: 9 }),
+      createStoreOrder: async () => ({
+        order: { id: ++saved }, resolvedItems: [{ title: 'Huevos L', quantity: 2, price: 7000 }],
+        deliveryFee: 2000, productsTotal: 14000, total: 16000,
+      }),
+      upsertContact: async () => {},
+    },
+    '../services/order-notices': { send: async (...args) => {
+      notices.push(args);
+      if (notices.length > 1) throw new Error('IA no disponible');
+    } },
+  });
+  const checkout = handler(router, 'post', '/' + slug + '/orders');
+  const req = { params: { slug }, body: { name: 'Ana', phone: '56911112222',
+    address: 'Calle Uno', items: [{ productId: 3, quantity: 2 }] } };
+  const ok = response();
+  await checkout(req, ok);
+  assert.equal(ok.code, 201);
+  assert.equal(ok.body.confirmationSent, true);
+  assert.equal(ok.body.whatsappProvider, 'evolution');
+  const [org, recipient, notice] = notices[0];
+  assert.equal(org, 7);
+  assert.equal(recipient.orderName, '#DR-1');
+  assert.equal(notice.kind, 'web_order');
+  assert.equal(notice.details, '  • Huevos L x2 — $14.000\nEntrega: Calle Uno\nDespacho: $2.000\nTotal: $16.000\nPago: contra entrega');
+  const pending = response();
+  await checkout(req, pending);
+  assert.equal(pending.code, 201);
+  assert.equal(saved, 2);
+  assert.equal(pending.body.confirmationSent, false);
+});
 
 test('store orders calculate server-side, aggregate quantities and update stock atomically', async () => {
   const engine = new PGlite();
