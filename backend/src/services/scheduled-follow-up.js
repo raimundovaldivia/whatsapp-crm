@@ -74,8 +74,9 @@ async function processScheduledOrder(order, io) {
   const orderNotices = require('./order-notices');
   if (await orderNotices.enabled(orgId)) {
     const notice = await orderNotices.send(orgId, { phone, customerName: name }, {
-      kind: 'scheduled_order', fields: hasSpecificProduct ? { PRODUCTO: product } : {}, agentType: 'scheduled_follow_up', io,
+      kind: 'scheduled_order', queueRef: { key: 'scheduled:' + id, scheduledId: id, confirmationDraft }, fields: hasSpecificProduct ? { PRODUCTO: product } : {}, agentType: 'scheduled_follow_up', io,
     });
+    if (notice.queued) return;
     // El proveedor ya aceptó el aviso. Un fallo posterior al activar el bot no debe generar otro envío.
     await db.markScheduledOrderSent(id, orgId);
     await activateDivaForAutomatedMessage(notice.conversationId, db);

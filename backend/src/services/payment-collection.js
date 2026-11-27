@@ -278,8 +278,7 @@ async function sendByProvider(phone, text, wc) {
 /**
  * Marca el cobro como enviado en la tabla que corresponda.
  */
-async function registerChargeSent(source, orderId, orgId, messageId) {
-  const pool = getPool();
+async function registerChargeSent(source, orderId, orgId, messageId, pool = getPool()) {
   if (source === 'shopify') {
     await pool.query(
       `UPDATE shopify_orders
@@ -362,11 +361,14 @@ async function sendChargeRequestLocked(orgId, order, opts = {}) {
       notice = await orderNotices.send(orgId, { phone: order.customer_phone, customerName: order.customer_name,
         orderName: orderReference(order) }, {
         kind: mode, fields: { TOTAL: formatCLP(order.total_price) },
+        queueRef: { charges: trackingOrders.map(item => ({ source: item.source, id: String(item.id), total: Number(item.total_price) })) },
         details: mode === 'charge' ? settings.bankDetails : null, agentType: mode === 'voucher' ? 'solicitud_comprobante' : 'cobranza', io,
       });
     } catch (error) {
       return { ok: false, reason: error.code || 'error_envio', error: error.message };
     }
+    if (notice.queued) return { ok: true, queued: true, status: 'queued', message: notice.text, via: 'evolution', mode,
+      orders: trackingOrders.map(item => ({ source: item.source, id: item.id, label: item.order_label })) };
     for (const tracked of trackingOrders) await registerChargeSent(tracked.source, tracked.id, orgId, notice.messageId);
     return { ok: true, status: 'pending', message: notice.text, via: 'evolution', mode,
       orders: trackingOrders.map(item => ({ source: item.source, id: item.id, label: item.order_label })) };
@@ -811,6 +813,7 @@ async function reconcileCharges(orgId, selection, io) {
 }
 
 module.exports = {
+  registerChargeSent,
   reconcileCharges,
   submitChargeTemplate,
   fetchTemplateStatus,

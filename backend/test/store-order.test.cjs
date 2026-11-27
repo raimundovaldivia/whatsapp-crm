@@ -21,6 +21,7 @@ test('el checkout de Diez Ríos confirma por IA con los datos de la venta y cons
     '../services/order-notices': { send: async (...args) => {
       notices.push(args);
       if (notices.length > 1) throw new Error('IA no disponible');
+      return { queued: true, sent: false };
     } },
   });
   const checkout = handler(router, 'post', '/' + slug + '/orders');
@@ -29,7 +30,8 @@ test('el checkout de Diez Ríos confirma por IA con los datos de la venta y cons
   const ok = response();
   await checkout(req, ok);
   assert.equal(ok.code, 201);
-  assert.equal(ok.body.confirmationSent, true);
+  assert.equal(ok.body.confirmationSent, false);
+  assert.equal(ok.body.confirmationQueued, true);
   assert.equal(ok.body.whatsappProvider, 'evolution');
   const [org, recipient, notice] = notices[0];
   assert.equal(org, 7);

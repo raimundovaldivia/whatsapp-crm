@@ -306,9 +306,10 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
     setChargeResults(null);
     try {
       const res = await api.post('/orders/send-charge', { orders: selection, mode });
-      const { sent = 0, sentOrders = 0, failed = 0, results = [] } = res.data || {};
+      const { sent = 0, sentOrders = 0, queued = 0, failed = 0, results = [] } = res.data || {};
       setChargeResults(results);
-      if (failed === 0) showToast(`${sent} cliente${sent === 1 ? '' : 's'} · ${sentOrders} pedido${sentOrders === 1 ? '' : 's'} aceptados; pendientes de entrega`);
+      if (queued) showToast(`En cola: ${queued}. Aceptados por WhatsApp: ${sent}. Fallidos: ${failed}.`, failed ? 'error' : 'success');
+      else if (failed === 0) showToast(`${sent} cliente${sent === 1 ? '' : 's'} · ${sentOrders} pedido${sentOrders === 1 ? '' : 's'} aceptados; pendientes de entrega`);
       else if (sent === 0) showToast(`No se pudo enviar ninguno de los ${failed}`, 'error');
       else showToast(`${sent} cliente${sent === 1 ? '' : 's'} aceptados, ${failed} sin enviar`, 'error');
       setChargeSel(new Set());

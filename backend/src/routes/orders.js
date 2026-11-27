@@ -673,9 +673,11 @@ router.post('/send-charge', async (req, res) => {
       });
     }
 
-    const sent = results.filter(r => r.ok).length;
-    const sentOrders = results.filter(r => r.ok).reduce((sum, result) => sum + (result.orderCount || 0), 0);
-    res.json({ success: true, sent, sentOrders, failed: results.length - sent, mode, results });
+    const accepted = results.filter(result => result.ok && !result.queued);
+    const queued = results.filter(result => result.ok && result.queued).length;
+    const sent = accepted.length;
+    const sentOrders = accepted.reduce((sum, result) => sum + (result.orderCount || 0), 0);
+    res.json({ success: true, sent, sentOrders, queued, failed: results.length - sent - queued, mode, results });
   } catch (err) {
     console.error('[Orders/send-charge]', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -1303,9 +1305,9 @@ router.post('/:id/resend-link', async (req, res) => {
 
     const orderNotices = require('../services/order-notices');
     if (await orderNotices.enabled(req.orgId)) {
-      await orderNotices.send(req.orgId, { phone: order.phone_number, customerName: order.customer_name, orderName: `#DR-${order.id}` },
+      const notice = await orderNotices.send(req.orgId, { phone: order.phone_number, customerName: order.customer_name, orderName: `#DR-${order.id}` },
         { kind: 'payment_link', trackingUrl: order.invoice_url, io });
-      return res.json({ success: true, message: 'Link reenviado correctamente' });
+      return res.json({ success: true, queued: !!notice.queued, message: notice.queued ? 'Enlace de pago en cola' : 'Link reenviado correctamente' });
     }
     const whatsappProvider = require('../services/whatsapp-provider');
     const conv = await db.getConversationById(order.conversation_id, req.orgId);

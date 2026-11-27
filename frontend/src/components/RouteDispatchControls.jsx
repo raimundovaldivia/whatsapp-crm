@@ -27,15 +27,15 @@ export default function RouteDispatchControls({ route, loadReady, colors, onUpda
     const { data } = await api.patch(`/delivery/routes/${route.id}/start`);
     onUpdated(data.route);
     const notices = data.customerNotifications;
-    setMessage(`Reparto iniciado. Avisos enviados: ${notices?.sent || 0}. Avisos fallidos: ${notices?.failed || 0}.`);
+    setMessage(`Reparto iniciado. En cola: ${notices?.queued || 0}. Enviados: ${notices?.sent || 0}. Fallidos: ${notices?.failed || 0}.`);
     if (notices?.failed) setError('La ruta comenzó, pero algunos avisos fallaron. Revisa el chat de esos clientes.');
   });
 
   const notify = stopKey => run(async () => {
     const { data } = await api.post(`/delivery/routes/${route.id}/notify-en-route`, { stopKey });
-    if (!data.sent) throw new Error('Aviso no enviado');
-    setNotified(previous => ({ ...previous, [stopKey]: true }));
-    setMessage('Aviso de pedido en camino enviado a WhatsApp.');
+    if (!data.sent && !data.queued) throw new Error('Aviso no enviado');
+    setNotified(previous => ({ ...previous, [stopKey]: data.queued ? 'En cola' : 'Aviso enviado' }));
+    setMessage(data.queued ? 'El aviso de pedido en camino quedó en cola.' : 'Aviso de pedido en camino enviado a WhatsApp.');
   });
 
   const deliver = event => {
@@ -69,7 +69,7 @@ export default function RouteDispatchControls({ route, loadReady, colors, onUpda
         <p style={{ color: colors.textSecondary, fontSize: 12 }}>{stop.fullAddress || stop.address}</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           <button disabled={busy || notified[key]} onClick={() => notify(key)} style={ui.btn(colors, 'secondary')}>
-            {notified[key] ? 'Aviso enviado' : 'Avisar que va en camino'}
+            {notified[key] || 'Avisar que va en camino'}
           </button>
           <button disabled={busy} onClick={() => { setSelected(key); setPayment(''); setNote(''); }} style={ui.btn(colors, 'primary')}>Registrar entrega</button>
         </div>

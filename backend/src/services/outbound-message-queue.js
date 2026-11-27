@@ -53,6 +53,7 @@ async function deferOutsideHours(input, pool = db.getPool()) {
     if (photo) context.productMedia = photo;
     const { rows: [existing] } = await client.query(`SELECT m.* FROM messages m JOIN conversations c ON c.id=m.conversation_id
       WHERE c.organization_id=$1 AND c.id=$2 AND m.content=$3 AND m.sent_by=$4
+      AND NOT (m.outbound_queue ? 'orderNotice')
       AND (m.outbound_queue->>'state' IN ('queued','processing') OR
         ($7::boolean AND m.outbound_queue->>'manualReplyBy' IS NOT NULL
          AND m.outbound_queue->>'state' IN ('sent','uncertain')
@@ -67,7 +68,7 @@ async function deferOutsideHours(input, pool = db.getPool()) {
     // Only the latest automatic response remains eligible. Human drafts remain separate.
     if (context.state === 'queued') replaced = (await client.query(`UPDATE messages m SET status='failed', outbound_queue=outbound_queue || '{"state":"cancelled","reason":"Reemplazado por una respuesta más reciente"}'::jsonb
       FROM conversations c WHERE m.conversation_id=c.id AND c.organization_id=$1 AND c.id=$2
-      AND m.sent_by='ai' AND m.outbound_queue->>'state'='queued' RETURNING m.*`, [orgId, conversationId])).rows;
+      AND m.sent_by='ai' AND m.outbound_queue->>'state'='queued' AND NOT (m.outbound_queue ? 'orderNotice') RETURNING m.*`, [orgId, conversationId])).rows;
     const { rows } = await client.query(`INSERT INTO messages (conversation_id,direction,content,type,status,sent_by,agent_type,ai_provider,ai_model,prompt_version,outbound_queue)
       SELECT c.id,'outbound',$3,'text',CASE WHEN $9::jsonb->>'state'='review' THEN 'failed' ELSE 'pending' END,$4,$5,$6,$7,$8,
         jsonb_build_object('dueAt',
@@ -138,7 +139,7 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, se
     // A process could have died after provider acceptance. Never retry that attempt.
     const expired = await pool.query(`UPDATE messages m SET outbound_queue=m.outbound_queue || '{"state":"uncertain","reason":"Envío interrumpido; revisar antes de reenviar"}'::jsonb
       FROM conversations c WHERE m.conversation_id=c.id AND c.organization_id=$1
-      AND m.outbound_queue->>'state'='processing'
+      AND m.outbound_queue->>'state'='processing' AND NOT (m.outbound_queue ? 'orderNotice')
       AND (m.outbound_queue->>'startedAt')::timestamptz < $2::timestamptz - INTERVAL '5 minutes' RETURNING m.*`, [orgId, clock().toISOString()]);
     for (const previous of expired.rows) await publish(io, orgId, previous);
     return sendDue(orgId);
@@ -148,7 +149,7 @@ function createWorker({ pool = db.getPool(), send = provider.sendTextMessage, se
     const now = clock();
     const { rows: [message] } = await pool.query(`UPDATE messages m SET outbound_queue=m.outbound_queue || jsonb_build_object('state','processing','startedAt',$2::text)
       WHERE m.id=(SELECT q.id FROM messages q JOIN conversations c ON c.id=q.conversation_id
-        WHERE c.organization_id=$1 AND q.outbound_queue->>'state'='queued'
+        WHERE c.organization_id=$1 AND q.outbound_queue->>'state'='queued' AND NOT (q.outbound_queue ? 'orderNotice')
         AND ($3::boolean OR (q.sent_by='ai' AND q.outbound_queue ? 'replyToInboundId'))
         AND ($4::int IS NULL OR q.id=$4)
         AND (q.outbound_queue->>'dueAt')::timestamptz <= $2::timestamptz
@@ -286,7 +287,7 @@ function start(io) {
     running = true;
     try {
       const { rows } = await db.getPool().query(`SELECT DISTINCT c.organization_id FROM conversations c JOIN messages m ON m.conversation_id=c.id
-        WHERE m.outbound_queue->>'state' IN ('queued','processing')`);
+        WHERE m.outbound_queue->>'state' IN ('queued','processing') AND NOT (m.outbound_queue ? 'orderNotice')`);
       for (const row of rows) await worker.tick(row.organization_id);
     } catch { console.warn('[OutboundQueue] No se pudo procesar la cola; no se reenvía automáticamente'); }
     finally { running = false; }

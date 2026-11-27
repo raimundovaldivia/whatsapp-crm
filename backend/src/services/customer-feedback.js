@@ -85,6 +85,9 @@ async function claimDueRequests(pool = db.getPool(), limit = 20) {
         FROM customer_feedback_requests
        WHERE (status = 'pending' OR (status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'))
          AND scheduled_for <= NOW() AND attempt_count < 5
+         AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=customer_feedback_requests.conversation_id
+           AND m.outbound_queue->'orderNotice'->'ref'->>'feedbackId'=customer_feedback_requests.id::text
+           AND m.outbound_queue->>'state' IN ('queued','processing','uncertain'))
        ORDER BY scheduled_for, id
        FOR UPDATE SKIP LOCKED
        LIMIT $1
@@ -159,7 +162,9 @@ async function runCustomerFeedback(io = null, now = new Date()) {
         customerName: request.customer_name,
         orderName: request.order_label,
         conversationId: request.conversation_id,
+        queueRef: { key: 'feedback:' + request.id, feedbackId: request.id },
       });
+      if (result.queued) { summary.queued = (summary.queued || 0) + 1; continue; }
       await setRequestStatus(pool, request.id, request.organization_id, 'sent', null, result.conversationId);
       if (io && result?.message) {
         const conversation = await db.getConversationById(result.conversationId || request.conversation_id, request.organization_id).catch(() => null);
@@ -227,6 +232,7 @@ module.exports = {
   discoverFirstPurchaseFeedback,
   claimDueRequests,
   requestEligibility,
+  setRequestStatus,
   runCustomerFeedback,
   handleInboundFeedback,
   startCustomerFeedbackJob,

@@ -279,7 +279,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
               const detail = notices.failed
                 ? `${notices.sent} clientes avisados. ${notices.failed} aviso${notices.failed === 1 ? '' : 's'} no pudo enviarse; revisa esas paradas en el chat.`
                 : `${notices.sent} clientes fueron avisados de que su pedido ya está con el repartidor.`;
-              Alert.alert('Reparto iniciado', detail);
+              Alert.alert('Reparto iniciado', notices.queued ? `${detail} ${notices.queued} avisos en cola.` : detail);
             }
           } catch (err) {
             Alert.alert('No se pudo iniciar', err.response?.data?.error || 'Revisa tu conexión e intenta nuevamente.');

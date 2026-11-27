@@ -36,6 +36,8 @@ export default function MessageBubble({ message, conversation }) {
     && JSON.parse(localStorage.getItem('crm_org') || '{}')?.slug === 'diez-rios-mrs96z69';
   const waiting = queue && queue.state !== 'sent';
   const due = queue?.dueAt ? new Date(queue.dueAt).toLocaleString('es-CL', { timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short' }) : '';
+  const queuedLabel = queue?.orderNotice ? 'En cola de avisos · un WhatsApp cada 2 minutos'
+    : `En cola · envío desde ${due}, hora de Chile (08:30–21:00)`;
   const cancelQueued = async () => {
     setQueueBusy(true); setQueueError('');
     try { await conversationsAPI.cancelQueuedMessage(conversation.id, message.id); }
@@ -113,7 +115,7 @@ export default function MessageBubble({ message, conversation }) {
         )}
         {isOutbound && waiting && (
           <div style={{ color: colors.textSecondary, fontSize: '12px', marginBottom: '4px', maxWidth: '420px' }}>
-            {queue.state === 'queued' ? `En cola · envío desde ${due}, hora de Chile (08:30–21:00)`
+            {queue.state === 'queued' ? queuedLabel
               : queue.state === 'processing' ? 'Procesando envío'
               : queue.state === 'cancelled' ? 'Envío cancelado'
               : queue.state === 'uncertain' ? 'Envío sin confirmar · revisar antes de reenviar'

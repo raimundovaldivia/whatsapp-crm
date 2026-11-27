@@ -188,13 +188,14 @@ app.use((err, _req, res, _next) => {
 const PORT = process.env.PORT || 3001;
 let eggRepurchaseTimer;
 
-const { setupDatabase, ensureWebOrderNoticeWordings } = require('./db/setup');
+const { setupDatabase, ensureWebOrderNoticeWordings, ensureOrderNoticeLanes } = require('./db/setup');
 
 require('./services/database-startup').prepareDatabase(setupDatabase).then(async () => {
   // Existing installations may skip the full bootstrap. This field is required
   // by both ordinary mode changes and manual-reply campaigns.
   const pool = require('./db/database').getPool();
   await ensureWebOrderNoticeWordings(pool);
+  await ensureOrderNoticeLanes(pool);
   const column = await pool.query("SELECT 1 FROM pg_attribute WHERE attrelid = 'conversations'::regclass AND attname = 'campaign_manual_hold' AND NOT attisdropped");
   if (!column.rowCount) {
     await pool.query('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS campaign_manual_hold BOOLEAN NOT NULL DEFAULT FALSE');
@@ -209,6 +210,7 @@ require('./services/database-startup').prepareDatabase(setupDatabase).then(async
     console.log(`   Panel frontend  : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
     require('./services/webhook-inbox').startWebhookWorker();
     require('./services/outbound-message-queue').start(io);
+    require('./services/order-notice-queue').start(io);
     require('./services/attribution-backfill').backfillWhatsappAttributions()
       .catch(error => console.warn('[Attribution] No se pudo recuperar el histórico:', error.message))
       .finally(() => require('./services/meta-purchase-sync').startMetaPurchaseSyncJob());
@@ -246,6 +248,7 @@ async function shutdown() {
   try {
     require('./services/referral-automation').stop();
     require('./services/outbound-message-queue').stop();
+    await require('./services/order-notice-queue').stop();
     require('./services/meta-purchase-sync').stopMetaPurchaseSyncJob();
     require('./services/social-stories').stopSocialStoriesJob();
     await require('./services/webhook-inbox').stopWebhookWorker();

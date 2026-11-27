@@ -186,7 +186,8 @@ async function sendDeliveryCustomerEvent(orgId, route, stop, eventType, sender, 
   const eventId = await claimDeliveryCustomerEvent(orgId, route.id, stopKey, eventType, payload);
   if (!eventId) return { stopKey, status: 'skipped', reason: 'ALREADY_PROCESSED' };
   try {
-    const result = await sender();
+    const result = await sender({ key: 'delivery-event:' + eventId, deliveryEventId: eventId, routeId: Number(route.id), stopKey });
+    if (result?.queued) return { stopKey, status: 'queued', via: 'evolution' };
     await finishDeliveryCustomerEvent(orgId, eventId, 'sent');
     if (result?.message) {
       const conversation = result.conversationId
@@ -214,18 +215,19 @@ async function notifyConsolidatedRouteCustomers(orgId, route) {
       route,
       stop,
       'load_consolidated',
-      async () => {
+      async queueRef => {
         const trackingUrl = await deliveryTracking.createTrackingLink(orgId, route.id, orderKey(stop)).catch(error => {
           console.warn('[Delivery tracking] No se pudo crear el enlace:', error.message);
           return null;
         });
-        return deliveryNotifications.sendLoadConsolidatedNotification(orgId, { ...stop, trackingUrl });
+        return deliveryNotifications.sendLoadConsolidatedNotification(orgId, { ...stop, trackingUrl, queueRef });
       },
       { routeName: route.name || null }
     ))));
   }
   return {
     sent: results.filter(item => item.status === 'sent').length,
+    queued: results.filter(item => item.status === 'queued').length,
     failed: results.filter(item => item.status === 'failed').length,
     skipped: results.filter(item => item.status === 'skipped').length,
     results,
@@ -1892,12 +1894,13 @@ router.post('/routes/:id/notify-en-route', requireRole('owner', 'admin', 'superv
       console.warn('[Delivery tracking] No se pudo crear el enlace:', error.message);
       return null;
     });
-    const result = await deliveryNotifications.sendEnRouteNotification(req.orgId, { ...stop, trackingUrl });
+    const result = await deliveryNotifications.sendEnRouteNotification(req.orgId, { ...stop, trackingUrl,
+      queueRef: { key: `en-route:${req.params.id}:${stopKey}`, routeId: Number(req.params.id), stopKey } });
     if (result.message) {
       const conversation = await db.getConversationById(result.conversationId, req.orgId).catch(() => null);
       io?.to(`org_${req.orgId}`).emit(`new_message_${req.orgId}`, { message: result.message, conversation });
     }
-    res.json({ success: true, sent: true, text: result.text, via: result.via, templateName: result.templateName });
+    res.json({ success: true, sent: !!result.sent, queued: !!result.queued, text: result.text, via: result.via, templateName: result.templateName });
   } catch (error) {
     res.status(error.status || 500).json({
       success: false,
@@ -3511,10 +3514,10 @@ async function applyStopUpdate(req, res, id, stopKey) {
       if (recovery || (isDelivery && await orderNotices.enabled(req.orgId))) {
         customerFollowup = await sendDeliveryCustomerEvent(
           req.orgId, { id: Number(id), name: owned.name }, operationalStop, `delivery_outcome:${status}`,
-          () => recovery
-            ? deliveryNotifications.sendDeliveryOutcomeRecovery(req.orgId, operationalStop, { status, note: cleanNote, deliveryDate: deliverDate })
+          queueRef => recovery
+            ? deliveryNotifications.sendDeliveryOutcomeRecovery(req.orgId, { ...operationalStop, queueRef }, { status, note: cleanNote, deliveryDate: deliverDate })
             : orderNotices.send(req.orgId, operationalStop, {
-                kind: status, paymentMethod: paymentMethod || orderRow.payment_method,
+                kind: status, queueRef, paymentMethod: paymentMethod || orderRow.payment_method,
                 fields: partial ? { FECHA: deliverDate.split('-').reverse().join('-') } : {},
               }),
           { status, note: cleanNote, deliveryDate: deliverDate }

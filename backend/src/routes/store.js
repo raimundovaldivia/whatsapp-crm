@@ -169,7 +169,7 @@ router.post('/:slug/orders', async (req, res) => {
     const evolutionChannel = directChannel?.status === 'connected' ? directChannel : null;
 
     // Crear/obtener conversación para este cliente y asociarla al canal directo.
-    const conversation = await db.upsertConversation(org.id, phoneClean, name, evolutionChannel?.id || null);
+    const conversation = await db.upsertConversation(org.id, phoneClean, name, (org.slug === xlPricing.STORE_SLUG ? directChannel?.id : evolutionChannel?.id) || null);
 
     // Crear el pedido y descontar stock dentro de una misma transacción.
     const { order, resolvedItems, total, deliveryFee, productsTotal } = await db.createStoreOrder({
@@ -205,17 +205,19 @@ router.post('/:slug/orders', async (req, res) => {
     ].join('\n');
 
     let confirmationSent = false;
-    if (evolutionChannel) {
+    let confirmationQueued = false;
+    if (evolutionChannel || (org.slug === xlPricing.STORE_SLUG && directChannel?.status === 'disconnected')) {
       try {
         if (org.slug === xlPricing.STORE_SLUG) {
           const details = [itemsText, `Entrega: ${[address, city].filter(Boolean).join(', ')}`,
             ...(deliveryFee != null ? [`Despacho: ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
             `Total: $${parseInt(total).toLocaleString('es-CL')}`, 'Pago: contra entrega'].join('\n');
-          await require('../services/order-notices').send(org.id, { phone: phoneClean, customerName: name, orderName: `#DR-${order.id}` }, { kind: 'web_order', details });
+          const notice = await require('../services/order-notices').send(org.id, { phone: phoneClean, customerName: name, orderName: `#DR-${order.id}` }, { kind: 'web_order', details, queueRef: { key: 'web:' + order.id } });
+          confirmationQueued = !!notice.queued;
         } else {
           await whatsapp.sendTextMessage(phoneClean, msg, evolutionChannel);
         }
-        confirmationSent = true;
+        confirmationSent = !confirmationQueued;
       } catch (sendError) {
         console.error('[Store] Pedido guardado, pero Evolution no confirmó el mensaje al cliente:', sendError.message);
       }
@@ -240,9 +242,9 @@ router.post('/:slug/orders', async (req, res) => {
       orderId: order.id,
       total:   parseInt(total),
       deliveryFee, productsTotal,
-      confirmationSent,
-      whatsappProvider: confirmationSent ? 'evolution' : null,
-      message: confirmationSent
+      confirmationSent, confirmationQueued,
+      whatsappProvider: (confirmationSent || confirmationQueued) ? 'evolution' : null,
+      message: confirmationQueued ? '¡Pedido recibido! La confirmación por WhatsApp está en cola.' : confirmationSent
         ? `¡Pedido recibido! Enviamos la confirmación al ${phoneClean} por WhatsApp.`
         : '¡Pedido recibido! Lo guardamos correctamente y te contactaremos para confirmarlo.',
     });

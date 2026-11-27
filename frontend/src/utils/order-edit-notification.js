@@ -1,5 +1,5 @@
 export function orderEditNotificationWarning(notification) {
-  if (!notification || notification.sent || notification.reason === 'NO_CHANGES') return null;
+  if (!notification || notification.sent || notification.queued || notification.reason === 'NO_CHANGES') return null;
   if (notification.reason === 'WINDOW_EXPIRED' || notification.reason === 'NO_INBOUND') {
     return 'El pedido se guardó, pero no se avisó al cliente porque la ventana de WhatsApp está cerrada.';
   }

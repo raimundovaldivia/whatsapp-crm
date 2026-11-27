@@ -321,9 +321,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
   async function notifyEnRoute() {
     setSendingEnRoute(true);
     try {
-      await sendEnRouteNotification(routeId, stopKey);
-      setEnRouteSent(true);
-      Alert.alert('Aviso enviado', 'Diva le informó al cliente que su pedido va en camino.');
+      const notice = await sendEnRouteNotification(routeId, stopKey);
+      setEnRouteSent(notice?.queued ? 'queued' : 'sent');
+      if (notice?.queued) Alert.alert('Aviso en cola', 'El aviso de pedido en camino quedó en la cola de WhatsApp.');
+      else Alert.alert('Aviso enviado', 'Diva le informó al cliente que su pedido va en camino.');
     } catch (err) {
       if (err.response?.status === 401) return;
       const expired = err.response?.data?.error === 'WINDOW_EXPIRED';
@@ -823,7 +824,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
               activeOpacity={0.85}>
               {sendingEnRoute || enRouteWindow.loading
                 ? <ActivityIndicator color="#fff" />
-                : <Text style={s.enRouteBtnText}>{enRouteSent ? '✓ Aviso enviado' : '🚚 Avisar con Diva: voy en camino'}</Text>}
+                : <Text style={s.enRouteBtnText}>{enRouteSent === 'queued' ? 'Aviso en cola' : enRouteSent ? '✓ Aviso enviado' : '🚚 Avisar con Diva: voy en camino'}</Text>}
             </TouchableOpacity>
             {!enRouteSent && (
               <Text style={[s.enRouteHint, enRouteWindow.available && { color: C.green }]}>
