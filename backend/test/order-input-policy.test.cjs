@@ -93,10 +93,10 @@ test('un sí aislado no puede introducir un producto distinto en un pedido exist
 });
 
 test('reconoce intención mayorista y evita falsos positivos pequeños', () => {
-  for (const text of ['venta por mayor', 'precio para empresa', 'quiero un paled', 'necesito 4 cajas']) {
+  for (const text of ['venta por mayor', 'precio para empresa', 'quiero un paled', 'necesito 4 cajas', 'anótame para el lunes 30 4 cajas']) {
     assert.equal(policy.isWholesaleInquiry(text), true, text);
   }
-  for (const text of ['quiero una caja', 'precio de una bandeja', 'necesito 2 cajas']) {
+  for (const text of ['quiero una caja', 'precio de una bandeja', 'necesito 2 cajas', 'Anótame para el lunes 30 caja jumbo de 100', 'para el sábado 28 caja de 100']) {
     assert.equal(policy.isWholesaleInquiry(text), false, text);
   }
 });

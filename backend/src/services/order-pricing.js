@@ -136,13 +136,19 @@ function matchProduct(name, catalog) {
   if (!q || !catalog?.length) return null;
 
   const requestedPackage = explicitPackageType(q);
+  const boxWithCaliber = q.match(/\bcaja\s+(jumbo|xl|l|m|s|super extra|extra)\s+(?:de\s+)?(\d{2,3})\b/);
+  if (boxWithCaliber) {
+    const caliber = new RegExp(`\\b${boxWithCaliber[1]}\\b`);
+    catalog = catalog.filter(candidate => caliber.test(norm(candidate.title))
+      && (boxWithCaliber[1] !== 'extra' || !/\bsuper\b/.test(norm(candidate.title))));
+  }
   if (requestedPackage === 'caja') {
     const boxCandidates = catalog.filter(c => c.box_size && c.quantity_prices?.length);
-    const requestedUnits = q.match(/\b(\d{2,3})\b/);
+    const requestedUnits = boxWithCaliber?.[2] ?? q.match(/\b(\d{2,3})\b/)?.[1];
     const requestedSuper = /\bsuper\b/.test(q);
     const requestedExtra = /\bextra\b/.test(q);
     const matches = boxCandidates.filter(c =>
-      (requestedUnits ? Number(requestedUnits[1]) === c.box_size * c.units_per_tray : requestedExtra) &&
+      (requestedUnits ? Number(requestedUnits) === c.box_size * c.units_per_tray : requestedExtra) &&
       (!requestedExtra || /\bsuper\b/.test(norm(c.title)) === requestedSuper));
     if (matches.length === 1) return { candidate: matches[0], score: 1, quantityMultiplier: matches[0].box_size };
   }
@@ -160,8 +166,8 @@ function matchProduct(name, catalog) {
     // del historial ni de un número que podría ser un precio.
     const unitMatch = q.match(/\bcaja\s*(?:de\s*)?(\d{2,3})\b/)
       || q.match(/\b(\d{2,3})\s*(?:huevos?|unidades?)\b/);
-    if (!unitMatch) return null;
-    const requestedUnits = Number(unitMatch[1]);
+    const requestedUnits = Number(boxWithCaliber?.[2] ?? unitMatch?.[1]);
+    if (!requestedUnits) return null;
     candidates = candidates.filter(candidate => {
       const title = norm(candidate.title);
       return new RegExp(`\\b${requestedUnits}\\s*(?:huevos?|unidades?)\\b`).test(title)

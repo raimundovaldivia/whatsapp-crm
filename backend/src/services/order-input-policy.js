@@ -159,7 +159,9 @@ function isWholesaleInquiry(value = '') {
   if (!text || text.length > 800) return false;
   if (/\b(?:por mayor|mayorista|mayoreo|precio(?:s)? (?:de |para )?empresa|venta(?:s)? mayorista(?:s)?)\b/.test(text)) return true;
   if (/\b(?:pallets?|palets?|paleds?)\b/.test(text)) return true;
-  const boxes = text.match(/\b(\d{1,3})\s+cajas?\b/);
+  // En «para el lunes 30 caja jumbo», 30 es el día del reparto.
+  const withoutDeliveryDay = text.replace(/\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+\d{1,2}\b/g, ' ');
+  const boxes = withoutDeliveryDay.match(/\b(\d{1,3})\s+cajas?\b/);
   return Boolean(boxes && Number(boxes[1]) >= 3);
 }
 
