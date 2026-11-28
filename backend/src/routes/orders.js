@@ -330,8 +330,8 @@ router.get('/shopify', async (req, res) => {
       ORDER BY so.shopify_created_at DESC NULLS LAST
     `, [req.orgId]);
 
-    // El contacto es la fuente autoritativa: sus datos SIEMPRE prevalecen sobre la orden.
-    // Principio: phone = clave primaria de enlace; contact = fuente de verdad para dirección.
+    // La dirección guardada con el pedido incluye el departamento de esa entrega.
+    // Los pedidos sin dirección pueden usar la ficha del contacto.
     const orders = rows.map(o => {
       const result = { ...o };
       const location = shopifyAddress(o);

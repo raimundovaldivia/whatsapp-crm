@@ -2811,7 +2811,11 @@ async function updateStoredOrderAddress(client, { source, orderId, orgId, addres
   } else if (source === 'return') {
     const result = await client.query(
       `UPDATE order_returns
-          SET customer = CASE WHEN $3::jsonb IS NULL THEN customer ELSE jsonb_set(customer, '{address}', (CASE WHEN jsonb_typeof(customer->'address') = 'object' THEN customer->'address' ELSE jsonb_build_object('address', customer->>'address') END) || $3::jsonb) END,
+          SET customer = CASE WHEN $3::jsonb IS NULL THEN customer ELSE jsonb_set(customer, '{address}', (CASE
+              WHEN jsonb_typeof(customer->'address') IS DISTINCT FROM 'object' THEN jsonb_build_object('address', customer->>'address')
+              WHEN $3::jsonb ? 'address' AND COALESCE(customer->'address'->>'address', customer->'address'->>'address1', '') <> $3::jsonb->>'address'
+                THEN (customer->'address') - 'address2' - 'addressDescription'
+              ELSE customer->'address' END) || $3::jsonb) END,
               manual_delivery_point = $4, updated_at = NOW()
         WHERE organization_id = $1 AND id = $2 AND route_id IS NOT DISTINCT FROM $5::int
           AND (status IN ('approved','scheduled') OR ($5 IS NOT NULL AND status = 'in_progress'))`,

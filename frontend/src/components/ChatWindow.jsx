@@ -2128,12 +2128,12 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
                     <div style={{ fontSize:'12px', fontWeight:800, color:colors.textPrimary, marginBottom:'9px' }}>Entrega</div>
                     <ClientAddressFields phone={conversation.phone_number} address={historyEdit.address} city={historyEdit.city}
                       details={historyEdit} onDetailsChange={data => setHistoryEdit(current => ({ ...current, ...addressDetails(data) }))}
-                                  onAddressChange={value => setHistoryEdit(current => ({ ...current, address:value }))}
+                      onAddressChange={value => setHistoryEdit(current => ({ ...current, address:value }))}
                       onCityChange={value => setHistoryEdit(current => ({ ...current, city:value }))} colors={colors} />
                     <div style={{ marginTop:'13px' }}>
                       <div style={{ fontSize:'11px', fontWeight:800, color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:'6px' }}>Nota para el despacho</div>
                       <textarea value={historyEdit.note} onChange={e => setHistoryEdit(current => ({ ...current, note:e.target.value }))}
-                        maxLength={1000} rows={3} placeholder="Horario, referencia o instrucción adicional"
+                        maxLength={1000} rows={3} placeholder="Horario u otra instrucción para este despacho"
                         style={{ width:'100%', boxSizing:'border-box', resize:'vertical', backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'8px 10px', fontSize:'13px', outline:'none' }} />
                     </div>
                     <label style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'11px', color:colors.textSecondary, fontSize:'11px', cursor:'pointer' }}>

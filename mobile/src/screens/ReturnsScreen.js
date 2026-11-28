@@ -5,7 +5,10 @@ import {getReturnTasks,updateReturnTask} from '../services/api';
 import {C} from '../theme';
 const states={scheduled:'Programado',in_progress:'En retiro/cambio',review:'Esperando resolución del equipo',resolved:'Resuelto'};
 const money=n=>'$'+Number(n||0).toLocaleString('es-CL');
-const address=value=>typeof value==='string'?value:Object.values(value||{}).filter(v=>typeof v==='string').join(', ');
+function address(value) {
+  if (typeof value === 'string') return value;
+  return [value?.address || value?.address1, value?.city, value?.province, value?.country].filter(Boolean).join(', ');
+}
 export default function ReturnsScreen(){
   const [rows,setRows]=useState([]),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[checks,setChecks]=useState({}),[history,setHistory]=useState(false);
   const load=useCallback(async()=>{setLoading(true);setError('');try{setRows((await getReturnTasks()).cases||[]);}catch(e){setError(e.response?.data?.error||'No se pudo cargar. Revisa la conexión.');}finally{setLoading(false);}},[]);
@@ -25,6 +28,8 @@ export default function ReturnsScreen(){
     {rows.filter(r=>history||r.status!=='resolved').map(row=>{const check=checks[row.id]||{};const set=(key,value)=>setChecks(c=>({...c,[row.id]:{...(c[row.id]||{}),[key]:value}}));return <View key={row.id} style={{backgroundColor:C.card,borderRadius:12,padding:16,marginBottom:16}}>
       <Text style={{...text,fontWeight:'700'}}>#{row.id} · {row.customer.name}</Text><Text style={text}>{states[row.status]} · {String(row.scheduled_date||'').slice(0,10)}</Text>
       <Text style={text}>{address(row.customer.address)}</Text>
+      {!!row.customer.address?.address2 && <Text style={text}>Casa / Depto.: {row.customer.address.address2}</Text>}
+      {!!row.customer.address?.addressDescription && <Text style={text}>Referencia: {row.customer.address.addressDescription}</Text>}
       <TouchableOpacity onPress={()=>Linking.openURL('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(address(row.customer.address)))}><Text style={{...text,color:C.green}}>Abrir dirección en mapa</Text></TouchableOpacity>
       {!!row.customer.phone&&<TouchableOpacity onPress={()=>Linking.openURL('tel:'+row.customer.phone.replace(/[^+0-9]/g,''))}><Text style={{...text,color:C.green}}>Llamar al cliente</Text></TouchableOpacity>}
       <Text style={text}>Motivo: {row.reason}</Text>
