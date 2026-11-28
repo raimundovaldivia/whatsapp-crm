@@ -85,3 +85,15 @@ test('checkout persists exact tier totals, rejects stale prices and foreign prod
     assert.equal(free.total,17900);assert.equal(free.deliveryFee,0);
   } finally { await engine.close(); }
 });
+
+test('reconoce la caja por calibre y unidades en el orden usado por WhatsApp', () => {
+  const catalog = pricing.flattenCatalog([
+    { id: 1, title: 'Huevos XL · Caja de 100', price: 35000 },
+    { id: 2, title: 'Huevos Jumbo · Caja de 100', price: 37000 },
+    { id: 3, title: 'Huevos Jumbo · Bandeja de 20', price: 7900 },
+  ]);
+  assert.equal(pricing.matchProduct('Caja Jumbo 100', catalog)?.candidate.product_id, '2');
+  assert.equal(pricing.matchProduct('caja jumbo de 100', catalog)?.candidate.product_id, '2');
+  assert.equal(pricing.matchProduct('Caja Jumbo 180', catalog), null);
+  assert.equal(pricing.matchProduct('Caja M 100', catalog), null);
+});
