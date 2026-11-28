@@ -9,6 +9,7 @@ const { addressDetails, shippingObject, shopifyAddress } = require('../utils/add
  * POST /api/orders/:id/resend-link → Reenviar link de pago por WhatsApp
  */
 
+const manualPricing = require('../services/manual-order-pricing');
 const express     = require('express');
 const router      = express.Router();
 const db          = require('../db/database');
@@ -54,25 +55,33 @@ router.post('/', async (req, res) => {
     if (typeof customerName !== 'string' || !customerName.trim()) return res.status(400).json({ error: 'El nombre del cliente es requerido' });
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Agrega al menos un producto' });
 
-    const lines = [];
-    for (const item of items) {
-      const name = item?.name || item?.title;
-      if (typeof name !== 'string' || !name.trim()) {
-        return res.status(400).json({ error: 'Completa el nombre de todos los productos' });
+    let lines, total;
+    if (req.body.manualPricing) {
+      const quote = await manualPricing.quoteOrder(db, req.orgId, phone, req.body);
+      manualPricing.verify(quote, req.body.quoteSignature);
+      lines = quote.items;
+      total = quote.total;
+    } else {
+      lines = [];
+      for (const item of items) {
+        const name = item?.name || item?.title;
+        if (typeof name !== 'string' || !name.trim()) {
+          return res.status(400).json({ error: 'Completa el nombre de todos los productos' });
+        }
+        const rawQuantity = item.quantity === undefined ? 1 : item.quantity;
+        const quantity = Number(rawQuantity);
+        if (!['number', 'string'].includes(typeof rawQuantity) || !Number.isSafeInteger(quantity) || quantity < 1) {
+          return res.status(400).json({ error: 'Ingresa una cantidad entera mayor que cero para cada producto' });
+        }
+        const price = Number(item.price);
+        if (!['string', 'number'].includes(typeof item.price) || String(item.price).trim() === '' || !Number.isFinite(price) || price < 0) {
+          return res.status(400).json({ error: 'Ingresa el precio de cada producto. Puedes escribir 0 si es gratis.' });
+        }
+        lines.push({ name: name.trim(), quantity, price });
       }
-      const rawQuantity = item.quantity === undefined ? 1 : item.quantity;
-      const quantity = Number(rawQuantity);
-      if (!['number', 'string'].includes(typeof rawQuantity) || !Number.isSafeInteger(quantity) || quantity < 1) {
-        return res.status(400).json({ error: 'Ingresa una cantidad entera mayor que cero para cada producto' });
-      }
-      const price = Number(item.price);
-      if (!['string', 'number'].includes(typeof item.price) || String(item.price).trim() === '' || !Number.isFinite(price) || price < 0) {
-        return res.status(400).json({ error: 'Ingresa el precio de cada producto. Puedes escribir 0 si es gratis.' });
-      }
-      lines.push({ name: name.trim(), quantity, price });
+      total = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
+      if (!Number.isFinite(total)) return res.status(400).json({ error: 'El total del pedido es inválido' });
     }
-    const total = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
-    if (!Number.isFinite(total)) return res.status(400).json({ error: 'El total del pedido es inválido' });
     const itemsJson = JSON.stringify(lines);
 
     const shippingJson = address ? JSON.stringify({ address1: address, city: city || '', ...addressDetails(req.body) }) : null;
@@ -89,7 +98,7 @@ router.post('/', async (req, res) => {
     res.status(201).json({ order: rows[0] });
   } catch (err) {
     console.error('[Orders] Error creando pedido manual:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

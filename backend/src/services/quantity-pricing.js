@@ -68,4 +68,8 @@ function withShipping(quote, rule) {
   const deliveryFee = productsTotal > 0 && productsTotal < rule.freeFrom ? rule.fee : 0;
   return { ...quote, productsTotal, deliveryFee, total: productsTotal + deliveryFee };
 }
-module.exports = { SETTING, parseConfig, loadConfig, decorate, totalFor, apply, aiText, parseShipping, loadShipping, withShipping };
+function storePrices(items, products, context) {
+  const xlPricing = require('./xl-welcome-pricing');
+  return apply(xlPricing.apply(items, xlPricing.forStore(context)), products);
+}
+module.exports = { storePrices, SETTING, parseConfig, loadConfig, decorate, totalFor, apply, aiText, parseShipping, loadShipping, withShipping };

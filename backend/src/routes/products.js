@@ -30,6 +30,15 @@ router.get('/order-options', requireRole('owner', 'admin', 'supervisor'), async 
   }
 });
 
+router.post('/order-quote', requireRole('owner', 'admin', 'supervisor'), async (req, res) => {
+  try {
+    const quote = await require('../services/manual-order-pricing').quoteOrder(db, req.orgId, req.body.phone, req.body);
+    res.json(quote);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
 router.use(requireRole('owner', 'admin'));
 
 // ── GET /api/products ──────────────────────────────────────────────
