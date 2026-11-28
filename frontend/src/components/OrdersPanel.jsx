@@ -1,3 +1,4 @@
+import ManualOrderPricing, { useManualOrderPricing } from './ManualOrderPricing.jsx';
 import ReturnsPanel from './ReturnsPanel.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatDateTime } from '../utils/dates.js';
@@ -1972,10 +1973,16 @@ function NewOrderModal({ colors, onClose, onSaved }) {
 
   const selectProduct = (idx, productId) => {
     const product = products.find(p => String(p.id) === productId);
-    updateItem(idx, { productId: product ? productId : '', name: product?.title || '', price: product ? String(product.price) : '' });
+    updateItem(idx, { productId: product ? productId : '', unitPriceEdited: false, discount: '', discountType: 'percent', name: product?.title || '', price: product ? String(product.price) : '' });
   };
 
-  const total = items.reduce((sum, item) => sum + Number(item.price) * Number(item.quantity), 0);
+  const pricingItems = items.map(item => ({
+    productId: item.productId, name: item.name, quantity: item.quantity,
+    ...(!item.productId || item.unitPriceEdited ? { unitPrice: item.price } : {}),
+    discount: item.discount, discountType: item.discountType,
+  }));
+  const ready = items.every(item => item.name.trim() && String(item.price).trim() !== '' && Number(item.quantity) > 0);
+  const pricing = useManualOrderPricing(form.phone, pricingItems, ready);
 
   const handleSave = async () => {
     if (!form.customerName.trim()) { setError('El nombre del cliente es requerido'); return; }
@@ -1986,11 +1993,13 @@ function NewOrderModal({ colors, onClose, onSaved }) {
     if (items.some(i => i.price.trim() === '' || !Number.isFinite(Number(i.price)) || Number(i.price) < 0)) {
       setError('Ingresa el precio de cada producto. Puedes escribir 0 si es gratis.'); return;
     }
+    if (!pricing.quote) { setError('Revisa los precios antes de crear el pedido.'); return; }
     setSaving(true); setError('');
     try {
-      await api.post('/orders', { ...form, items: items.map(({ name, quantity, price }) => ({ name, quantity, price })) });
+      await api.post('/orders', { ...form, ...pricing.orderBody });
       onSaved();
     } catch (err) {
+      if (err.response?.status === 409) pricing.refresh();
       setError(err.response?.data?.error || 'Error creando pedido');
       setSaving(false);
     }
@@ -2089,8 +2098,8 @@ function NewOrderModal({ colors, onClose, onSaved }) {
                     onChange={e => updateItem(idx, { quantity: e.target.value })} />
                   {/* Precio */}
                   <input style={{ ...inp, width: '90px', flexShrink: 0 }}
-                    type="number" min="0" value={item.price}
-                    onChange={e => updateItem(idx, { price: e.target.value })}
+                    type="number" min="0" value={item.productId && !item.unitPriceEdited ? (products.find(p => String(p.id) === item.productId)?.price ?? item.price) : item.price}
+                    onChange={e => updateItem(idx, { price: e.target.value, unitPriceEdited: true })}
                     placeholder="Precio" />
                   {items.length > 1 && (
                     <button aria-label={`Quitar producto de la línea ${idx + 1}`} onClick={() => removeItem(idx)} style={{ background: 'none', border: 'none', color: colors.red, cursor: 'pointer', padding: '4px', flexShrink: 0 }}>
@@ -2102,9 +2111,11 @@ function NewOrderModal({ colors, onClose, onSaved }) {
             </div>
           </div>
 
+          {items.some(item => item.name.trim()) && !ready && <span style={{ color: colors.textSecondary, fontSize: 12 }}>Completa el nombre, la cantidad y el precio de cada producto para calcular el total.</span>}
+          <ManualOrderPricing colors={colors} pricing={pricing} items={pricingItems} onLineChange={updateItem} />
           {/* Total */}
           <div style={{ textAlign: 'right', fontSize: '15px', fontWeight: 700, color: colors.green }}>
-            Total: ${total.toLocaleString('es-CL')}
+            Total: {pricing.quote ? '$' + pricing.quote.total.toLocaleString('es-CL') : '—'}
           </div>
 
           {error && <div style={{ padding: '8px 12px', backgroundColor: `${colors.red}22`, borderRadius: '8px', color: colors.red, fontSize: '13px' }}>{error}</div>}
@@ -2115,7 +2126,7 @@ function NewOrderModal({ colors, onClose, onSaved }) {
           <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: '8px', border: `1px solid ${colors.border}`, background: 'none', color: colors.textSecondary, cursor: 'pointer', fontSize: '13px' }}>
             Cancelar
           </button>
-          <button onClick={handleSave} disabled={saving}
+          <button onClick={handleSave} disabled={saving || !pricing.quote}
             style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: colors.green, color: 'white', fontWeight: 700, fontSize: '13px', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
             {saving ? 'Guardando...' : 'Crear pedido'}
           </button>

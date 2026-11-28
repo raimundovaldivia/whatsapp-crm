@@ -135,7 +135,7 @@ router.post('/:slug/quote', async (req, res) => {
       return { id, title: p.title, quantity, price: Number(p.price) };
     });
     const ctx = await xlPricing.context(getPool(), org.id, phone);
-    const priced = quantityPricing.apply(xlPricing.apply(lines, xlPricing.forStore(ctx)), products);
+    const priced = quantityPricing.storePrices(lines, products, ctx);
     res.json(quantityPricing.withShipping({ items: priced, total: Math.round(priced.reduce((s, i) => s + i.price * i.quantity, 0)) }, await quantityPricing.loadShipping(db, org.id)));
   } catch (err) { res.status(err.status || 503).json({ error: 'No pudimos confirmar los precios. Intenta nuevamente.' }); }
 });

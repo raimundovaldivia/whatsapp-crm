@@ -639,6 +639,7 @@ router.get('/:id/orders', async (req, res) => {
  * Crear una orden manual desde el panel admin.
  * Body: { items: [{productId, title, price, quantity}], sendSummary: boolean }
  */
+const manualPricing = require('../services/manual-order-pricing');
 const campaignOffers = require('../services/campaign-offers');
 const campaignOffersStore = require('../services/campaign-offers-store');
 
@@ -660,15 +661,24 @@ router.post('/:id/orders', async (req, res) => {
     const campaignRows = await campaignOffersStore.activeForConversation(db.getPool(), req.orgId, convId).catch(() => []);
     const requestedOfferIds = new Set((Array.isArray(req.body.offerIds) ? req.body.offerIds : (offerId != null ? [offerId] : [])).map(Number));
     const offersToRedeem = campaignRows.filter(o => o.status === 'sent' && !campaignOffers.isExpiredOffer(o) && requestedOfferIds.has(Number(o.id)));
-    const normalizedItems = rawItems.map(i => ({ ...i, product_id: i.product_id ?? i.productId ?? i.id }));
-    let items = normalizedItems;
-    for (const offer of offersToRedeem) items = campaignOffers.applyOfferToItems(items, offer, null).items;
-    const subtotal      = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
-    const discountNum   = parseFloat(discount) || 0;
-    const discountAmount = discountNum > 0
-      ? (discountType === 'percent' ? subtotal * (discountNum / 100) : Math.min(discountNum, subtotal))
-      : 0;
-    const totalPrice    = Math.max(0, subtotal - discountAmount);
+    let quote, items, subtotal, discountNum, discountAmount, totalPrice;
+    if (req.body.manualPricing) {
+      if (requestedOfferIds.size) return res.status(400).json({ error: 'Aplica el descuento de la oferta en el pedido manual.' });
+      quote = await manualPricing.quoteOrder(db, req.orgId, conv.phone_number, req.body);
+      manualPricing.verify(quote, req.body.quoteSignature);
+      items = quote.items;
+      totalPrice = quote.total;
+    } else {
+      const normalizedItems = rawItems.map(i => ({ ...i, product_id: i.product_id ?? i.productId ?? i.id }));
+      items = normalizedItems;
+      for (const offer of offersToRedeem) items = campaignOffers.applyOfferToItems(items, offer, null).items;
+      subtotal = items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity || 1)), 0);
+      discountNum = parseFloat(discount) || 0;
+      discountAmount = discountNum > 0
+        ? (discountType === 'percent' ? subtotal * (discountNum / 100) : Math.min(discountNum, subtotal))
+        : 0;
+      totalPrice = Math.max(0, subtotal - discountAmount);
+    }
 
     // Resolver nombre y dirección desde contacts (fuente de verdad)
     let customerName = conv.contact_name;
@@ -707,20 +717,22 @@ router.post('/:id/orders', async (req, res) => {
 
     // Guardar mensaje de resumen en el chat y enviarlo al cliente
     if (sendSummary) {
-      const lines = items.map(i => `• ${i.title} x${i.quantity || 1} — $${(parseFloat(i.price) * parseInt(i.quantity || 1)).toLocaleString('es-CL')}`);
-      const discountLine = discountAmount > 0
-        ? `\n_Descuento (${discountType === 'percent' ? `${discountNum}%` : `$${Math.round(discountAmount).toLocaleString('es-CL')}`}): -$${Math.round(discountAmount).toLocaleString('es-CL')}_`
-        : '';
-      const subtotalLine = discountAmount > 0
-        ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
+      const details = quote ? manualPricing.summary(quote) : (() => {
+        const lines = items.map(i => `• ${i.title} x${i.quantity || 1} — $${(parseFloat(i.price) * parseInt(i.quantity || 1)).toLocaleString('es-CL')}`);
+        const discountLine = discountAmount > 0
+          ? `\n_Descuento (${discountType === 'percent' ? `${discountNum}%` : `$${Math.round(discountAmount).toLocaleString('es-CL')}`}): -$${Math.round(discountAmount).toLocaleString('es-CL')}_`
+          : '';
+        const subtotalLine = discountAmount > 0
+          ? `\nSubtotal: $${subtotal.toLocaleString('es-CL')}` : '';
+        return `${lines.join('\n')}${subtotalLine}${discountLine}\nTotal: $${totalPrice.toLocaleString('es-CL')}`;
+      })();
       const orderNotices = require('../services/order-notices');
       if (await orderNotices.enabled(req.orgId)) {
-        const details = `${lines.join('\n')}${subtotalLine}${discountLine}\nTotal: $${totalPrice.toLocaleString('es-CL')}`;
         const notice = await orderNotices.send(req.orgId, { phone: order.customer_phone || conv.phone_number, customerName, orderName: `#DR-${order.id}` },
           { kind: 'order_summary', details, respectSendingHours: true, queueRef: { key: 'summary:' + order.id, summaryOrderId: order.id }, io });
         return res.json({ success: true, order, queued: !!notice.queued });
       }
-      const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${lines.join('\n')}${subtotalLine}${discountLine}\n\n*Total: $${totalPrice.toLocaleString('es-CL')}*\n\nTe contactaremos para coordinar la entrega y el pago.`;
+      const summary = `🛒 *Pedido #DR-${order.id} generado*\n\n${details}\n\nTe contactaremos para coordinar la entrega y el pago.`;
 
       const wc = await outboundConfig(req.orgId, conv);
       if (!wc) return res.json({ success: true, order, summaryWarning: 'Falta configurar WhatsApp para enviar el resumen.' });
@@ -758,7 +770,7 @@ router.post('/:id/orders', async (req, res) => {
         : 'No se pudo confirmar el envío del resumen. Revisa el chat antes de reenviarlo.';
       return res.json({ success: true, order, summaryWarning });
     }
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 

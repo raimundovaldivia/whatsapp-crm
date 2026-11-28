@@ -1,3 +1,4 @@
+import ManualOrderPricing, { useManualOrderPricing } from './ManualOrderPricing.jsx';
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
 import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote, Megaphone, Link2 } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
@@ -411,8 +412,8 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
   const [newProdEmpresas, setNewProdEmpresas] = useState([]); // lista de empresa contacts
   const [newProdSelEmpresas, setNewProdSelEmpresas] = useState(new Set()); // seleccionadas
   const [newProdForEmpresas, setNewProdForEmpresas] = useState(false); // toggle "solo ciertas empresas"
-  const [orderDiscount, setOrderDiscount]           = useState('');
-  const [orderDiscountType, setOrderDiscountType]   = useState('percent'); // 'percent' | 'fixed'
+  const [lineDiscounts, setLineDiscounts] = useState({});
+
 
   // Merge modal state
   const [showMergeModal, setShowMergeModal]     = useState(false);
@@ -995,8 +996,8 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     setOrderCity('');
     setOrderDetails(addressDetails());
     setOrderNote(customerNote || '');
-    setOrderDiscount('');
-    setOrderDiscountType('percent');
+    setLineDiscounts({});
+    pricing.reset();
     setOrderError('');
     setProductsLoading(true);
     // Precargar dirección del contacto
@@ -1012,41 +1013,16 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
       }
     } catch { /* ignorar si falla */ }
     try {
-      const r = await api.get('/products');
-      const all = (r.data.products || r.data.data || []).filter(p => p.active !== false);
-      // Si el cliente es empresa, mostrar solo productos empresa (is_business=true); si no, solo productos normales
-      const empresaProds = all.filter(p => p.is_business === true || p.is_business === 1 || p.is_business === 'true');
-      const normalProds  = all.filter(p => !p.is_business);
-      let displayProds;
-      if (isEmpresa) {
-        // Para empresas: intentar mostrar SOLO los productos que tienen precio asignado para este cliente
-        try {
-          const ov = await api.get(`/contacts/${encodeURIComponent(conversation.phone_number)}/prices`);
-          const overrides = ov.data.data || [];
-          if (overrides.length > 0) {
-            // La empresa tiene productos asignados → mostrar SOLO esos con su precio especial
-            const overrideMap = {};
-            for (const o of overrides) overrideMap[String(o.product_id)] = o.custom_price;
-            // Filtrar al catálogo completo (no solo B2B) para encontrar el producto aunque sea mixto
-            displayProds = all
-              .filter(p => overrideMap[String(p.id)] != null)
-              .map(p => ({ ...p, price: overrideMap[String(p.id)], _specialPrice: true }));
-          } else {
-            // Sin overrides → fallback a todos los productos B2B del catálogo
-            displayProds = empresaProds.length > 0 ? empresaProds : all;
-          }
-        } catch {
-          displayProds = empresaProds.length > 0 ? empresaProds : all;
-        }
-      } else {
-        displayProds = normalProds.length > 0 ? normalProds : all;
-      }
-      setProducts(displayProds);
+      const r = await api.get('/products/order-options', { params: { phone: conversation.phone_number } });
+      setProducts((r.data.products || []).map(p => ({ ...p, _specialPrice: p.special_price })));
     } catch { setProducts([]); }
     finally { setProductsLoading(false); }
   };
 
   const setQty = (id, delta) => {
+    if ((orderItems[id] || 0) + delta <= 0) {
+      setLineDiscounts(previous => { const next = { ...previous }; delete next[id]; return next; });
+    }
     setOrderItems(prev => {
       const cur = prev[id] || 0;
       const next = Math.max(0, cur + delta);
@@ -1056,18 +1032,12 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
   };
 
   const handleCreateOrder = async () => {
-    const items = Object.entries(orderItems).map(([id, qty]) => {
-      const p = products.find(p => String(p.id) === String(id));
-      return { productId: id, title: p?.title || id, price: p?.price || 0, quantity: qty };
-    });
-    if (!items.length) { setOrderError('Agrega al menos un producto'); return; }
+    if (!pricing.quote) { setOrderError('Revisa los precios antes de crear la orden.'); return; }
     setCreatingOrder(true); setOrderError('');
     try {
       const shippingAddress = orderAddress.trim() ? { address: orderAddress.trim(), city: orderCity.trim(), ...orderDetails } : {};
       const { data } = await api.post(`/conversations/${conversation.id}/orders`, {
-        items, sendSummary, shippingAddress,
-        discount: discountNum,
-        discountType: orderDiscountType,
+        ...pricing.orderBody, sendSummary, shippingAddress,
         note: orderNote.trim(),
       });
       setError(data.summaryWarning ? `Pedido #DR-${data.order.id} creado. ${data.summaryWarning}` : null);
@@ -1077,9 +1047,9 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
       setOrderCity('');
     setOrderDetails(addressDetails());
       setOrderNote('');
-      setOrderDiscount('');
-      setOrderDiscountType('percent');
+      setLineDiscounts({});
     } catch (err) {
+      if (err.response?.status === 409) pricing.refresh();
       setOrderError(err.response?.data?.error || err.message);
     } finally { setCreatingOrder(false); }
   };
@@ -1116,21 +1086,21 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     } finally { setSavingNewProd(false); }
   };
 
-  const orderSubtotal = Object.entries(orderItems).reduce((s, [id, qty]) => {
-    const p = products.find(p => String(p.id) === String(id));
-    return s + (parseFloat(p?.price || 0) * qty);
-  }, 0);
-  const discountNum    = parseFloat(orderDiscount) || 0;
-  const discountAmount = discountNum > 0
-    ? (orderDiscountType === 'percent' ? orderSubtotal * (discountNum / 100) : Math.min(discountNum, orderSubtotal))
-    : 0;
+  const selectedLines = Object.entries(orderItems).map(([id, quantity]) => ({
+    productId: id, quantity, name: products.find(p => String(p.id) === id)?.title || '', ...lineDiscounts[id],
+  }));
+  const pricing = useManualOrderPricing(conversation?.phone_number, selectedLines, showOrderModal);
+  const changeLineDiscount = (index, changes) => {
+    const id = selectedLines[index].productId;
+    setLineDiscounts(previous => ({ ...previous, [id]: { ...previous[id], ...changes } }));
+  };
   const productSearchTerm = normalizeProductSearch(orderProductSearch);
   const filteredOrderProducts = productSearchTerm
     ? products.filter(product => normalizeProductSearch([
         product.title, product.description, product.sku, product.category,
       ].filter(Boolean).join(' ')).includes(productSearchTerm))
     : products;
-  const orderTotal = Math.max(0, orderSubtotal - discountAmount);
+
 
   // ── Merge modal handlers ────────────────────────────────────────
   const openMergeModal = async () => {
@@ -2201,6 +2171,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
         product={editingOrderProduct} colors={colors}
         onClose={() => setEditingOrderProduct(null)}
         onSaved={updated => {
+          pricing.refresh();
           setProducts(previous => previous.map(p => String(p.id) === String(updated.id)
             ? { ...p, ...updated, ...(p._specialPrice ? { price:p.price, _specialPrice:true } : {}) }
             : p));
@@ -2229,6 +2200,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
               </button>
             </div>
 
+            <div style={{ minHeight:0, overflowY:'auto' }}>
             {/* Buscador de productos */}
             <div style={{ padding:'10px 16px', borderBottom:`1px solid ${colors.border}`, backgroundColor:colors.bgPanel }}>
               <div style={{ position:'relative' }}>
@@ -2251,7 +2223,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
             </div>
 
             {/* Product list */}
-            <div style={{ flex:1, overflowY:'auto', padding:'12px 16px' }}>
+            <div style={{ maxHeight:'35vh', overflowY:'auto', padding:'12px 16px' }}>
               {productsLoading ? (
                 <div style={{ textAlign:'center', padding:'40px', color:colors.textMuted }}>Cargando productos...</div>
               ) : products.length === 0 ? (
@@ -2437,24 +2409,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
                 />
                 <div style={{ fontSize:'10px', color:colors.textMuted }}>La verá el equipo de despacho. No se enviará en el resumen de WhatsApp.</div>
               </div>
-              {/* Descuento */}
-              <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
-                <div style={{ fontSize:'11px', color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'0.5px' }}>Descuento (opcional)</div>
-                <div style={{ display:'flex', gap:'6px' }}>
-                  <input
-                    type='number' min='0'
-                    value={orderDiscount}
-                    onChange={e => setOrderDiscount(e.target.value)}
-                    placeholder={orderDiscountType === 'percent' ? 'Ej: 10' : 'Ej: 5000'}
-                    style={{ flex:1, backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', outline:'none' }}
-                  />
-                  <select value={orderDiscountType} onChange={e => setOrderDiscountType(e.target.value)}
-                    style={{ backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'7px 10px', fontSize:'13px', cursor:'pointer', outline:'none' }}>
-                    <option value="percent">%</option>
-                    <option value="fixed">$</option>
-                  </select>
-                </div>
-              </div>
+              <ManualOrderPricing colors={colors} pricing={pricing} items={selectedLines} onLineChange={changeLineDiscount} />
 
               <label style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px', cursor:'pointer', fontSize:'13px', color:colors.textSecondary }}>
                 <input type="checkbox" checked={sendSummary} onChange={e => setSendSummary(e.target.checked)} />
@@ -2463,26 +2418,17 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
               {orderError && <div style={{ color:colors.red, fontSize:'12px', marginBottom:'8px' }}>{orderError}</div>}
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
                 <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
-                  {discountAmount > 0 && (
-                    <div style={{ fontSize:'11px', color:colors.textMuted }}>
-                      Subtotal: <span style={{ fontWeight:600 }}>${orderSubtotal.toLocaleString('es-CL')}</span>
-                    </div>
-                  )}
-                  {discountAmount > 0 && (
-                    <div style={{ fontSize:'11px', color:colors.dangerSoft }}>
-                      Descuento ({orderDiscountType === 'percent' ? `${discountNum}%` : `$${discountNum.toLocaleString('es-CL')}`}): <span style={{ fontWeight:600 }}>-${Math.round(discountAmount).toLocaleString('es-CL')}</span>
-                    </div>
-                  )}
                   <div>
                     <span style={{ fontSize:'12px', color:colors.textMuted }}>Total: </span>
-                    <span style={{ fontWeight:700, fontSize:'16px', color:colors.green }}>${orderTotal.toLocaleString('es-CL')}</span>
+                    <span style={{ fontWeight:700, fontSize:'16px', color:colors.green }}>{pricing.quote ? '$' + pricing.quote.total.toLocaleString('es-CL') : (selectedLines.length ? '…' : '$0')}</span>
                   </div>
                 </div>
-                <button onClick={handleCreateOrder} disabled={creatingOrder || Object.keys(orderItems).length===0} style={{ display:'flex', alignItems:'center', gap:'6px', padding:'8px 20px', borderRadius:'8px', border:'none', backgroundColor:Object.keys(orderItems).length>0?colors.green:colors.bgHover, color:Object.keys(orderItems).length>0?'#fff':colors.textMuted, fontWeight:700, fontSize:'13px', cursor:creatingOrder||Object.keys(orderItems).length===0?'not-allowed':'pointer', opacity:creatingOrder?0.7:1 }}>
+                <button onClick={handleCreateOrder} disabled={creatingOrder || !pricing.quote} style={{ display:'flex', alignItems:'center', gap:'6px', padding:'8px 20px', borderRadius:'8px', border:'none', backgroundColor:pricing.quote?colors.green:colors.bgHover, color:pricing.quote?'#fff':colors.textMuted, fontWeight:700, fontSize:'13px', cursor:creatingOrder||!pricing.quote?'not-allowed':'pointer', opacity:creatingOrder?0.7:1 }}>
                   <ShoppingCart size={14} />
                   {creatingOrder ? 'Creando...' : 'Crear orden'}
                 </button>
               </div>
+            </div>
             </div>
           </div>
         </div>

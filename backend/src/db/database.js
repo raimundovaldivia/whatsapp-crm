@@ -2163,7 +2163,7 @@ async function createStoreOrder({ conversationId, organizationId, items, custome
     const quantityPricing = require('../services/quantity-pricing');
     const { rows: quantitySettings } = await client.query('SELECT value FROM settings WHERE organization_id = $1 AND key = $2', [organizationId, quantityPricing.SETTING]);
     const quantityProducts = quantityPricing.decorate(products, quantityPricing.parseConfig(quantitySettings[0]?.value));
-    const adjusted = quantityPricing.apply(xlPricing.apply(resolvedItems, xlPricing.forStore(xlContext)), quantityProducts);
+    const adjusted = quantityPricing.storePrices(resolvedItems, quantityProducts, xlContext);
     resolvedItems.splice(0, resolvedItems.length, ...adjusted);
     total = Math.round(resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0));
     const { rows: shippingSettings } = await client.query('SELECT value FROM settings WHERE organization_id = $1 AND key = $2', [organizationId, 'store_shipping_rule']);
