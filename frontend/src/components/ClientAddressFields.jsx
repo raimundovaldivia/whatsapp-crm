@@ -1,12 +1,28 @@
 import { useEffect, useState } from 'react';
 import { api } from '../utils/api.js';
 
+export function addressDetails(source = {}) {
+  return { address2: source?.address2 ?? '', addressDescription: source?.addressDescription ?? source?.address_description ?? '' };
+}
+
+export function AddressDetailFields({ details, onChange, style, disabled = false }) {
+  return <>
+    <input aria-label="Casa / Depto." placeholder="Casa / Depto. (opcional)" autoComplete="address-line2"
+      maxLength={150} value={details.address2 || ''} disabled={disabled} style={style}
+      onChange={event => onChange({ ...details, address2: event.target.value })} />
+    <textarea aria-label="Descripción de la dirección" placeholder="Descripción o referencia para llegar (opcional)"
+      rows={2} maxLength={500} value={details.addressDescription || ''} disabled={disabled} style={{ ...style, resize: 'vertical' }}
+      onChange={event => onChange({ ...details, addressDescription: event.target.value })} />
+  </>;
+}
+
 export default function ClientAddressFields({
   phone,
   address,
   city,
   onAddressChange,
   onCityChange,
+  details, onDetailsChange,
   colors,
   compact = false,
 }) {
@@ -16,6 +32,7 @@ export default function ClientAddressFields({
     let alive = true;
     const cleanPhone = String(phone || '').trim();
     if (!cleanPhone) { setOptions([]); return () => { alive = false; }; }
+    setOptions([]);
     api.get(`/contacts/${encodeURIComponent(cleanPhone)}/addresses`)
       .then(response => { if (alive) setOptions(response.data?.data || []); })
       .catch(() => { if (alive) setOptions([]); });
@@ -44,6 +61,7 @@ export default function ClientAddressFields({
             if (!option) return;
             onAddressChange(option.address);
             onCityChange(option.city || '');
+            onDetailsChange(addressDetails(option));
           }}
           style={inputStyle}>
           <option value="">Elegir una dirección conocida ({options.length})</option>
@@ -54,6 +72,7 @@ export default function ClientAddressFields({
         <input value={address} onChange={event => onAddressChange(event.target.value)} placeholder="Calle y número" style={inputStyle} />
         <input value={city} onChange={event => onCityChange(event.target.value)} placeholder="Ciudad / Comuna" style={inputStyle} />
       </div>
+      <AddressDetailFields details={details} onChange={onDetailsChange} style={inputStyle} />
     </div>
   );
 }

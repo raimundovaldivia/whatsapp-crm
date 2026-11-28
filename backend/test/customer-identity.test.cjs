@@ -16,7 +16,7 @@ test('customer identity remains consistent across providers, historical phones a
     await engine.exec(`
       CREATE TABLE contacts (id SERIAL PRIMARY KEY, organization_id INT, phone TEXT, name TEXT,
         client_type TEXT, contact_type TEXT, source TEXT, last_seen_at TIMESTAMP, updated_at TIMESTAMP,
-        email TEXT, address TEXT, address1 TEXT, city TEXT, notes TEXT, UNIQUE(organization_id, phone));
+        email TEXT, address TEXT, address1 TEXT, address2 TEXT, address_description TEXT, city TEXT, notes TEXT, UNIQUE(organization_id, phone));
       CREATE TABLE conversations (id SERIAL PRIMARY KEY, organization_id INT, phone_number TEXT,
         contact_name TEXT, whatsapp_channel_id INT, updated_at TIMESTAMP, last_message_at TIMESTAMP,
         unread_count INT DEFAULT 0, is_pinned BOOLEAN DEFAULT FALSE, pinned_at TIMESTAMPTZ,
@@ -82,4 +82,3 @@ test('customer identity remains consistent across providers, historical phones a
     assert.equal((await db.getContact(1, '56922222222')).name, 'Ana');
   } finally { await engine.close(); }
 });
-

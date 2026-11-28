@@ -1,3 +1,4 @@
+import ClientAddressFields, { addressDetails } from './ClientAddressFields.jsx';
 import { useState, useEffect, useCallback } from 'react';
 import { Users, UserCheck, UserX, Search, RefreshCw, MessageSquare } from 'lucide-react';
 import { api } from '../utils/api.js';
@@ -168,11 +169,13 @@ export default function ContactsPanel({ onSelectConversation }) {
 function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
   const typeStyle = TYPE_COLORS[contact.contact_type] || TYPE_COLORS.lead;
   const displayName = contact.name && contact.name !== 'Cliente' ? contact.name : null;
-  const hasAddress = !!(contact.address);
+  const street = contact.address1 || contact.address;
+  const hasAddress = !!street;
 
   const [expanded, setExpanded] = useState(false);
   const [editing,  setEditing]  = useState(false);
   const [editName, setEditName] = useState('');
+  const [details, setDetails] = useState(addressDetails);
   const [editAddr, setEditAddr] = useState('');
   const [editCity, setEditCity] = useState('');
   const [saving,   setSaving]   = useState(false);
@@ -181,7 +184,8 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
   const startEdit = (e) => {
     e.stopPropagation();
     setEditName(contact.name || '');
-    setEditAddr(contact.address || '');
+    setEditAddr(contact.address1 || contact.address || '');
+    setDetails(addressDetails(contact));
     setEditCity(contact.city || '');
     setErr('');
     setEditing(true);
@@ -192,7 +196,7 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
     if (!editAddr.trim()) { setErr('La dirección es requerida'); return; }
     setSaving(true); setErr('');
     try {
-      await api.patch(`/contacts/${contact.phone}`, { name: editName.trim() || undefined, address: editAddr.trim(), city: editCity.trim() });
+      await api.patch(`/contacts/${contact.phone}`, { name: editName.trim() || undefined, address: editAddr.trim(), city: editCity.trim(), ...details });
       setEditing(false);
       onUpdated?.();
     } catch (err2) {
@@ -221,7 +225,7 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
               {displayName || contact.phone}
             </div>
             <div style={{ fontSize: '11px', color: hasAddress ? colors.textSecondary : colors.dangerSoft, fontStyle: hasAddress ? 'normal' : 'italic' }}>
-              {hasAddress ? (contact.address + (contact.city ? `, ${contact.city}` : '')) : '⚠ Sin dirección'}
+              {hasAddress ? (street + (contact.city ? `, ${contact.city}` : '')) : '⚠ Sin dirección'}
             </div>
           </div>
         </div>
@@ -248,10 +252,8 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxWidth: 460 }}>
               <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Nombre completo"
                 style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
-              <input value={editAddr} onChange={e => setEditAddr(e.target.value)} placeholder="Calle y número *"
-                style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${editAddr ? colors.border : colors.dangerSoft + '66'}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
-              <input value={editCity} onChange={e => setEditCity(e.target.value)} placeholder="Ciudad / Comuna"
-                style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }} />
+              <ClientAddressFields phone={contact.phone} address={editAddr} city={editCity} details={details}
+                onAddressChange={setEditAddr} onCityChange={setEditCity} onDetailsChange={setDetails} colors={colors} compact />
               {err && <div style={{ color: colors.dangerSoft, fontSize: '12px' }}>{err}</div>}
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={save} disabled={saving} style={{ padding: '7px 16px', borderRadius: '8px', border: 'none', backgroundColor: colors.successSoft, color: '#000', fontSize: '12px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
@@ -267,7 +269,10 @@ function ContactRow({ contact, colors, onGoToConversation, onUpdated }) {
               <div style={{ fontSize: '13px', color: colors.textSecondary, lineHeight: '1.6' }}>
                 {contact.email && <div>📧 {contact.email}</div>}
                 {hasAddress
-                  ? <div>📍 {contact.address}{contact.city ? `, ${contact.city}` : ''}</div>
+                  ? <div>📍 {[street, contact.city].filter(Boolean).join(', ')}
+                      {contact.address2 && <div>Casa / Depto.: {contact.address2}</div>}
+                      {contact.address_description && <div>Referencia: {contact.address_description}</div>}
+                    </div>
                   : <div style={{ color: colors.dangerSoft, fontStyle: 'italic' }}>⚠ Sin dirección — las órdenes de este contacto no tendrán dirección</div>
                 }
               </div>

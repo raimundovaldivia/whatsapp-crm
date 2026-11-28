@@ -2500,17 +2500,20 @@ async function getContact(orgId, phone) {
  * @param {number} orgId
  * @param {object} data - { phone, name?, email?, address?, city?, region?, notes?, shopifyId?, source? }
  */
-async function upsertContact(orgId, { phone, name, email, address, city, region, notes, shopifyId, source } = {}) {
+async function upsertContact(orgId, { phone, name, email, address, city, region, notes, shopifyId, source, address2, addressDescription } = {}) {
   if (!phone) return null;
   phone = normalizePhone(phone); // siempre normalizar antes de guardar
   if (!phone) return null;
   await pool.query(
-    `INSERT INTO contacts (organization_id, phone, name, email, address, city, region, notes, shopify_id, source, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+    `INSERT INTO contacts (organization_id, phone, name, email, address, city, region, notes, shopify_id, source, address1, address2, address_description, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $5, $11, $12, NOW())
      ON CONFLICT (organization_id, phone) DO UPDATE SET
        name       = COALESCE(EXCLUDED.name,       contacts.name),
        email      = COALESCE(EXCLUDED.email,      contacts.email),
        address    = COALESCE(EXCLUDED.address,    contacts.address),
+       address1   = COALESCE(EXCLUDED.address1, contacts.address1),
+       address2   = COALESCE(EXCLUDED.address2, contacts.address2),
+       address_description = COALESCE(EXCLUDED.address_description, contacts.address_description),
        city       = COALESCE(EXCLUDED.city,       contacts.city),
        region     = COALESCE(EXCLUDED.region,     contacts.region),
        notes      = COALESCE(EXCLUDED.notes,      contacts.notes),
@@ -2518,7 +2521,7 @@ async function upsertContact(orgId, { phone, name, email, address, city, region,
        source     = COALESCE(contacts.source, EXCLUDED.source),
        updated_at = NOW()`,
     [orgId, phone, normalizeName(name), email || null, address || null, city || null, region || null, notes || null, shopifyId || null,
-      ['facebook', 'instagram', 'whatsapp'].includes(source) ? source : 'whatsapp']
+      ['facebook', 'instagram', 'whatsapp'].includes(source) ? source : 'whatsapp', address2 ?? null, addressDescription ?? null]
   );
   return getContact(orgId, phone);
 }
@@ -2557,9 +2560,9 @@ async function upsertShopifyCustomerProfile(orgId, c) {
      ON CONFLICT (organization_id, phone) DO UPDATE SET
        name               = COALESCE(EXCLUDED.name,          contacts.name),
        email              = COALESCE(EXCLUDED.email,         contacts.email),
-       address1           = COALESCE(EXCLUDED.address1,      contacts.address1),
-       address2           = EXCLUDED.address2,
-       city               = COALESCE(EXCLUDED.city,          contacts.city),
+       address1           = COALESCE(contacts.address, EXCLUDED.address1, contacts.address1),
+       address2           = CASE WHEN contacts.address IS NOT NULL THEN contacts.address2 ELSE COALESCE(EXCLUDED.address2, contacts.address2) END,
+       city               = CASE WHEN contacts.address IS NOT NULL THEN contacts.city ELSE COALESCE(EXCLUDED.city, contacts.city) END,
        province           = EXCLUDED.province,
        zip                = EXCLUDED.zip,
        country            = EXCLUDED.country,

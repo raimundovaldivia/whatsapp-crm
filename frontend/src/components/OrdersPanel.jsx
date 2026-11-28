@@ -11,7 +11,7 @@ import { ordersAPI, api, conversationsAPI } from '../utils/api.js';
 import ConciliacionPanel from './ConciliacionPanel.jsx';
 import PaymentProofsPanel from './PaymentProofsPanel.jsx';
 import PaymentAccountsPanel from './PaymentAccountsPanel.jsx';
-import ClientAddressFields from './ClientAddressFields.jsx';
+import ClientAddressFields, { addressDetails } from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 import { alertOrderEditNotification } from '../utils/order-edit-notification.js';
@@ -500,7 +500,7 @@ export default function OrdersPanel({ onSelectConversation, onOrderPaid, payment
       const dataRows = dispatchOrders.map(order => {
         const row = new Array(26).fill('');
         row[0] = `${order.orderName || `#${order.id}`}${order.customerName || 'Cliente'}`;
-        row[1] = order.fullAddress || (order.lat != null && order.lng != null ? `${order.lat}, ${order.lng}` : '');
+        row[1] = [order.fullAddress || (order.lat != null && order.lng != null ? `${order.lat}, ${order.lng}` : ''), order.address2, order.addressDescription].filter(Boolean).join(' · ');
         row[7] = order.lat ?? '';
         row[8] = order.lng ?? '';
 
@@ -1341,6 +1341,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
   const [saving,     setSaving]     = useState(false);
   const [editErr,    setEditErr]    = useState('');
   const [addrEdit,   setAddrEdit]   = useState(false);
+  const [details, setDetails] = useState(addressDetails);
   const [addrStreet, setAddrStreet] = useState('');
   const [addrCity,   setAddrCity]   = useState('');
   const [addrSaving, setAddrSaving] = useState(false);
@@ -1374,6 +1375,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
     e.stopPropagation();
     setAddrStreet(addr.address || addr.address1 || '');
     setAddrCity(addr.city || '');
+    setDetails(addressDetails(addr));
     setAddrErr('');
     setAddrEdit(true);
   };
@@ -1382,7 +1384,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
     if (!addrStreet.trim()) { setAddrErr('Ingresa la dirección'); return; }
     setAddrSaving(true); setAddrErr('');
     try {
-      const { data } = await api.patch(`/orders/${order.id}/address`, { address: addrStreet.trim(), city: addrCity.trim() });
+      const { data } = await api.patch(`/orders/${order.id}/address`, { address: addrStreet.trim(), city: addrCity.trim(), ...details });
       alertOrderEditNotification(data.notification);
       setAddrEdit(false);
       onItemsUpdated?.();
@@ -1583,7 +1585,7 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
               {addrEdit ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <ClientAddressFields phone={order.customer_phone || order.phone_number} address={addrStreet} city={addrCity}
-                    onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
+                    details={details} onDetailsChange={setDetails} onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
                   {addrErr && <div style={{ color: colors.red, fontSize: '11px' }}>{addrErr}</div>}
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <button onClick={saveAddr} disabled={addrSaving} style={{ flex: 1, padding: '5px', borderRadius: '6px', border: 'none', backgroundColor: colors.green, color: '#000', fontSize: '11px', fontWeight: 600, cursor: addrSaving ? 'not-allowed' : 'pointer', opacity: addrSaving ? 0.7 : 1 }}>
@@ -1597,7 +1599,8 @@ function BotOrderCard({ order, onStatusChange, onResendLink, onSyncShopify, onGo
               ) : (
                 <div style={{ color: addr.address || addr.address1 ? colors.textPrimary : colors.textSecondary, fontSize: '13px', lineHeight: '1.7', fontStyle: addr.address || addr.address1 ? 'normal' : 'italic' }}>
                   {addr.address || addr.address1 || 'Sin dirección'}<br />
-                  {addr.city}{addr.zip ? ` · CP ${addr.zip}` : ''}
+                  {addr.address2 && <>{addr.address2}<br /></>}{addr.addressDescription && <>{addr.addressDescription}<br /></>}
+                        {addr.city}{addr.zip ? ` · CP ${addr.zip}` : ''}
                 </div>
               )}
             </div>
@@ -1701,6 +1704,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
   const { colors } = useTheme();
   const [expanded, setExpanded]     = useState(false);
   const [editingAddr, setEditingAddr] = useState(false);
+  const [details, setDetails] = useState(addressDetails);
   const [addrStreet, setAddrStreet]   = useState('');
   const [addrCity,   setAddrCity]     = useState('');
   const [savingAddr, setSavingAddr]   = useState(false);
@@ -1714,6 +1718,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
   function openEditAddr() {
     setAddrStreet(order.raw?.shipping_address1 || '');
     setAddrCity(order.raw?.shipping_city || '');
+    setDetails({ address2: order.raw?.shipping_address2 || '', addressDescription: order.raw?.shipping_address_description || '' });
     setEditingAddr(true);
   }
 
@@ -1721,7 +1726,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
     if (!addrStreet.trim()) return;
     setSavingAddr(true);
     try {
-      const { data } = await api.patch(`/orders/shopify/${order.dbId}/address`, { address1: addrStreet.trim(), city: addrCity.trim() });
+      const { data } = await api.patch(`/orders/shopify/${order.dbId}/address`, { address1: addrStreet.trim(), city: addrCity.trim(), ...details });
       alertOrderEditNotification(data.notification);
       setEditingAddr(false);
       onAddressUpdated?.();
@@ -1823,7 +1828,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
               {editingAddr ? (
                 <div style={{ marginTop: '6px' }}>
                   <ClientAddressFields phone={order.phone} address={addrStreet} city={addrCity}
-                    onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
+                    details={details} onDetailsChange={setDetails} onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <button onClick={saveAddr} disabled={savingAddr} style={{ flex: 1, padding: '4px', borderRadius: '6px', border: 'none', background: colors.green, color: '#fff', fontSize: '11px', cursor: 'pointer' }}>
                       {savingAddr ? '...' : 'Guardar'}
@@ -1836,7 +1841,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
               ) : (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
                   <span style={{ color: displayAddr ? colors.textSecondary : colors.textMuted, fontStyle: displayAddr ? 'normal' : 'italic' }}>
-                    📍 {displayAddr ? [displayAddr, displayCity].filter(Boolean).join(', ') : 'Sin dirección'}
+                    📍 {displayAddr ? [displayAddr, order.raw?.shipping_address2, displayCity, order.raw?.shipping_address_description].filter(Boolean).join(', ') : 'Sin dirección'}
                   </span>
                   <button onClick={openEditAddr} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textSecondary, fontSize: '10px', padding: '0 2px', lineHeight: 1 }}>
                     ✏️
@@ -1859,7 +1864,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
 // ─── Modal nuevo pedido manual ────────────────────────────────────
 function NewOrderModal({ colors, onClose, onSaved }) {
   const EMPTY_ITEM = { name: '', quantity: 1, price: '' };
-  const [form, setForm] = useState({ customerName: '', phone: '', address: '', city: '', status: 'nuevo' });
+  const [form, setForm] = useState({ customerName: '', phone: '', address: '', city: '', ...addressDetails(), status: 'nuevo' });
   const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -1913,8 +1918,9 @@ function NewOrderModal({ colors, onClose, onSaved }) {
       ...f,
       customerName: c.name || f.customerName,
       phone:        c.phone || f.phone,
-      address:      c.address || f.address,
-      city:         c.city || f.city,
+      address:      c.address1 || c.address || '',
+      ...addressDetails(c),
+      city:         c.city || '',
     }));
     setSuggestions([]); setSuggestFor(null);
   };
@@ -1950,7 +1956,8 @@ function NewOrderModal({ colors, onClose, onSaved }) {
         setForm(f => ({
           ...f,
           customerName: f.customerName || c.name || f.customerName,
-          address: f.address || c.address || f.address,
+          address: f.address || c.address1 || c.address || '',
+          ...(!f.address ? addressDetails(c) : {}),
           city: f.city || c.city || f.city,
         }));
       }
@@ -2027,6 +2034,7 @@ function NewOrderModal({ colors, onClose, onSaved }) {
           <div>
             <label style={{ fontSize: '11px', color: colors.textSecondary, display: 'block', marginBottom: '5px' }}>Dirección</label>
             <ClientAddressFields phone={form.phone} address={form.address} city={form.city}
+              details={form} onDetailsChange={value => setForm(f => ({ ...f, ...addressDetails(value) }))}
               onAddressChange={value => setField('address', value)} onCityChange={value => setField('city', value)} colors={colors} />
           </div>
 

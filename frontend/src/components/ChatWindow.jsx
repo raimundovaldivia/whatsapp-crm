@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react
 import { Bot, User, Send, Play, ThumbsUp, ThumbsDown, Trash2, FileText, X, Loader, AlertCircle, ChevronLeft, ShoppingCart, Plus, Minus, GitMerge, Search, History, BellOff, BarChart2, MessagesSquare, MoreVertical, Pencil, Paperclip, Image as ImageIcon, CircleDollarSign, CheckCircle2, Pin, StickyNote, Megaphone, Link2 } from 'lucide-react';
 import MessageBubble from './MessageBubble.jsx';
 import AgentToggle from './AgentToggle.jsx';
-import ClientAddressFields from './ClientAddressFields.jsx';
+import ClientAddressFields, { addressDetails } from './ClientAddressFields.jsx';
 import OrderProductEditor from './OrderProductEditor.jsx';
 import { conversationsAPI, api } from '../utils/api.js';
 import { useTheme } from '../theme.js';
@@ -155,6 +155,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
   const [showEditContact, setShowEditContact]     = useState(false);
   const [editContactName, setEditContactName]     = useState('');
   const [editContactAddress, setEditContactAddress] = useState('');
+  const [editDetails, setEditDetails] = useState(addressDetails);
   const [editContactCity, setEditContactCity]     = useState('');
   const [savingContact, setSavingContact]         = useState(false);
   const [localContactName, setLocalContactName]   = useState(null); // override local del nombre
@@ -164,13 +165,15 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     setEditContactName(conversation.contact_name || '');
     setEditContactAddress('');
     setEditContactCity('');
+    setEditDetails(addressDetails());
     // Intentar cargar datos actuales del contacto
     try {
       const r = await api.get('/contacts/by-phone', { params: { phone: conversation.phone_number } });
       const ct = r.data?.contact;
       if (ct) {
         setEditContactName(ct.name || conversation.contact_name || '');
-        setEditContactAddress(ct.address || '');
+        setEditContactAddress(ct.address1 || ct.address || '');
+        setEditDetails(addressDetails(ct));
         setEditContactCity(ct.city || '');
       }
     } catch (_) {}
@@ -185,11 +188,12 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
         name:    editContactName.trim(),
         address: editContactAddress.trim() || undefined,
         city:    editContactCity.trim() || undefined,
+        ...editDetails,
       });
       if (editContactName.trim()) setLocalContactName(editContactName.trim());
       setShowEditContact(false);
       if (editContactFromHistory) {
-        const nextAddress = [editContactAddress.trim(), editContactCity.trim()].filter(Boolean).join(', ');
+        const nextAddress = [editContactAddress.trim(), editDetails.address2, editContactCity.trim(), editDetails.addressDescription].filter(Boolean).join(', ');
         setHistoryData(current => current ? { ...current, contactAddress: nextAddress || null } : current);
         setShowHistory(true);
         setEditContactFromHistory(false);
@@ -200,7 +204,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     } finally {
       setSavingContact(false);
     }
-  }, [conversation, editContactName, editContactAddress, editContactCity, editContactFromHistory, onConversationUpdated]);
+  }, [conversation, editContactName, editContactAddress, editContactCity, editDetails, editContactFromHistory, onConversationUpdated]);
 
   // Historial de compras
   const [showHistory, setShowHistory]       = useState(false);
@@ -251,14 +255,17 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     if (!Array.isArray(items)) items = [];
     let address = '';
     let city = '';
+    let details = {};
     if (order._source === 'shopify') {
       address = order.shipping_address1 || '';
       city = order.shipping_city || '';
+      details = { address2: order.shipping_address2 || '', addressDescription: order.shipping_address_description || '' };
     } else {
       let raw = order.shipping_address;
       if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
       address = raw?.address || raw?.address1 || '';
       city = raw?.city || '';
+      details = addressDetails(raw);
     }
     setHistoryEdit({
       source: order._source,
@@ -267,6 +274,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
       label: order.shopify_name || (order._source === 'bot' ? crmOrderLabel(order.id) : `#${order.id}`),
       address,
       city,
+      ...details,
       note: order.delivery_note || (order._source === 'bot' ? order.notes : '') || '',
       updateContact: true,
       items: items.map((item, index) => ({
@@ -326,6 +334,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
         items: cleanItems,
         address,
         city: historyEdit.city.trim(),
+        ...addressDetails(historyEdit),
         note: historyEdit.note.trim(),
         updateContact: historyEdit.updateContact,
       });
@@ -389,6 +398,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
   const [orderProductSearch, setOrderProductSearch] = useState('');
   const [orderItems, setOrderItems]           = useState({}); // { productId: quantity }
   const [orderAddress, setOrderAddress]       = useState('');
+  const [orderDetails, setOrderDetails] = useState(addressDetails);
   const [orderCity, setOrderCity]             = useState('');
   const [orderNote, setOrderNote]             = useState('');
   const [sendSummary, setSendSummary]         = useState(true);
@@ -983,6 +993,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     setOrderProductSearch('');
     setOrderAddress('');
     setOrderCity('');
+    setOrderDetails(addressDetails());
     setOrderNote(customerNote || '');
     setOrderDiscount('');
     setOrderDiscountType('percent');
@@ -997,6 +1008,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
         const addr = ct.address1 || ct.address || '';
         if (addr) setOrderAddress(addr);
         if (ct.city) setOrderCity(ct.city);
+        setOrderDetails(addressDetails(ct));
       }
     } catch { /* ignorar si falla */ }
     try {
@@ -1051,7 +1063,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
     if (!items.length) { setOrderError('Agrega al menos un producto'); return; }
     setCreatingOrder(true); setOrderError('');
     try {
-      const shippingAddress = orderAddress.trim() ? { address: orderAddress.trim(), city: orderCity.trim() } : {};
+      const shippingAddress = orderAddress.trim() ? { address: orderAddress.trim(), city: orderCity.trim(), ...orderDetails } : {};
       const { data } = await api.post(`/conversations/${conversation.id}/orders`, {
         items, sendSummary, shippingAddress,
         discount: discountNum,
@@ -1063,6 +1075,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
       setOrderItems({});
       setOrderAddress('');
       setOrderCity('');
+    setOrderDetails(addressDetails());
       setOrderNote('');
       setOrderDiscount('');
       setOrderDiscountType('percent');
@@ -1829,7 +1842,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
             <div style={{ marginBottom:'22px' }}>
               <label style={{ fontSize:'12px', color: colors.textSecondary, display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección</label>
               <ClientAddressFields phone={conversation.phone_number} address={editContactAddress} city={editContactCity}
-                onAddressChange={setEditContactAddress} onCityChange={setEditContactCity} colors={colors} />
+                details={editDetails} onDetailsChange={setEditDetails} onAddressChange={setEditContactAddress} onCityChange={setEditContactCity} colors={colors} />
             </div>
 
             <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
@@ -1989,13 +2002,13 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
                             {(() => {
                               let addr;
                               if (isShopify) {
-                                addr = [o.shipping_address1, o.shipping_city].filter(Boolean).join(', ');
+                                addr = [o.shipping_address1, o.shipping_address2, o.shipping_city, o.shipping_address_description].filter(Boolean).join(', ');
                               } else {
                                 // shipping_address del bot es un objeto/JSON { address, city } — nunca mostrarlo crudo
                                 let a = o.shipping_address;
                                 if (typeof a === 'string') { try { a = JSON.parse(a); } catch {} }
                                 addr = (a && typeof a === 'object')
-                                  ? [a.address || a.address1, a.city].filter(Boolean).join(', ')
+                                  ? [a.address || a.address1, a.address2, a.city, a.addressDescription].filter(Boolean).join(', ')
                                   : (typeof a === 'string' ? a : '');
                               }
                               return addr ? (
@@ -2114,12 +2127,13 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
                     <div style={{ height:'1px', backgroundColor:colors.border, margin:'17px 0' }} />
                     <div style={{ fontSize:'12px', fontWeight:800, color:colors.textPrimary, marginBottom:'9px' }}>Entrega</div>
                     <ClientAddressFields phone={conversation.phone_number} address={historyEdit.address} city={historyEdit.city}
+                      details={historyEdit} onDetailsChange={data => setHistoryEdit(current => ({ ...current, ...addressDetails(data) }))}
                       onAddressChange={value => setHistoryEdit(current => ({ ...current, address:value }))}
                       onCityChange={value => setHistoryEdit(current => ({ ...current, city:value }))} colors={colors} />
                     <div style={{ marginTop:'13px' }}>
                       <div style={{ fontSize:'11px', fontWeight:800, color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:'6px' }}>Nota para el despacho</div>
                       <textarea value={historyEdit.note} onChange={e => setHistoryEdit(current => ({ ...current, note:e.target.value }))}
-                        maxLength={1000} rows={3} placeholder="Horario, referencia o instrucción adicional"
+                        maxLength={1000} rows={3} placeholder="Horario u otra instrucción para este despacho"
                         style={{ width:'100%', boxSizing:'border-box', resize:'vertical', backgroundColor:colors.bgSub, color:colors.textPrimary, border:`1px solid ${colors.border}`, borderRadius:'8px', padding:'8px 10px', fontSize:'13px', outline:'none' }} />
                     </div>
                     <label style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'11px', color:colors.textSecondary, fontSize:'11px', cursor:'pointer' }}>
@@ -2406,7 +2420,7 @@ export default function ChatWindow({ conversation, drafts, messages, availableCo
               <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
                 <div style={{ fontSize:'11px', color:colors.textSecondary, textTransform:'uppercase', letterSpacing:'0.5px' }}>Dirección de despacho</div>
                 <ClientAddressFields phone={conversation.phone_number} address={orderAddress} city={orderCity}
-                  onAddressChange={setOrderAddress} onCityChange={setOrderCity} colors={colors} compact />
+                  details={orderDetails} onDetailsChange={setOrderDetails} onAddressChange={setOrderAddress} onCityChange={setOrderCity} colors={colors} compact />
               </div>
               <div style={{ marginBottom:'12px', display:'flex', flexDirection:'column', gap:'6px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', gap:'8px', alignItems:'center' }}>

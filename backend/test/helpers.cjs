@@ -33,6 +33,7 @@ function load(file, deps = {}, extra = {}) {
       if (name === './response-guardrail') return load('src/services/response-guardrail.js', deps, extra);
       if (name === './broadcast-purchases' || name === '../services/broadcast-purchases') return require(path.join(root, 'src/services/broadcast-purchases.js'));
       if (name === './broadcast-send-window') return require(path.join(root, 'src/services/broadcast-send-window.js'));
+      if (name === '../utils/address-details') return require(path.join(root, 'src/utils/address-details.js'));
       if (name === './business-date' || name === '../services/business-date') return require(path.join(root, 'src/services/business-date.js'));
       if (name === './pipeline-outbound') return load('src/services/pipeline-outbound.js', deps, extra);
       if (name === './outbound-text-policy') return require(path.join(root, 'src/services/outbound-text-policy.js'));

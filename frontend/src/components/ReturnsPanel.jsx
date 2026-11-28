@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { api } from '../utils/api.js';
 export const RETURN_STATES = {requested:'Solicitado',approved:'Aprobado',scheduled:'Programado',in_progress:'En retiro/cambio',review:'Pendiente de resolución',resolved:'Resuelto',rejected:'Rechazado',cancelled:'Cancelado'};
 const money = n => '$'+Number(n||0).toLocaleString('es-CL');
-const address = value => typeof value === 'string' ? value : Object.values(value||{}).filter(v=>typeof v==='string').join(', ');
+function address(value) {
+  if (typeof value === 'string') return value;
+  return [value?.address || value?.address1, value?.city, value?.province, value?.country].filter(Boolean).join(', ');
+}
 export default function ReturnsPanel({colors,order,dispatch=false}) {
   const [cases,setCases]=useState([]),[drivers,setDrivers]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const [form,setForm]=useState({kind:'return',reason:'',replacementDescription:'',pickupRequired:true,moneyDirection:'none',moneyMethod:'none',moneyAmount:0});
@@ -45,7 +48,10 @@ export default function ReturnsPanel({colors,order,dispatch=false}) {
       <p>Pedido {row.order_id} · {row.kind==='exchange'?'Cambio':row.kind==='issue'?'Problema':'Devolución'}</p>
       <p>{row.reason}</p><ul>{row.items.map(item=><li key={item.index}>{item.quantity} × {item.name}</li>)}</ul>
       <p>{row.pickup_required?'Retirar los productos indicados.':'No requiere retiro.'} {row.replacement_description&&`Entregar: ${row.replacement_description}`}</p>
-      <p>{address(row.customer.address)} · {row.customer.phone}</p>
+      <p>{address(row.customer.address)} · {row.customer.phone}
+        {row.customer.address?.address2 && <><br/>Casa / Depto.: {row.customer.address.address2}</>}
+        {row.customer.address?.addressDescription && <><br/>Referencia: {row.customer.address.addressDescription}</>}
+      </p>
       <p>{row.money_direction==='none'?'Sin movimiento de dinero':`${row.money_direction==='refund'?'Devolver':'Cobrar'} ${money(row.money_amount)} · ${row.money_method==='credit'?'Saldo a favor':row.money_method} · ${row.money_confirmed?'Registrado':'Pendiente'}`}</p>
       {!row.scheduled_date&&<p style={{color:colors.red}}>Pendiente de asignar fecha y despachador{row.status==='requested'?' · primero aprueba la solicitud':''}.</p>}
       {row.scheduled_date&&<p>Programado: {String(row.scheduled_date).slice(0,10)} · {drivers.find(d=>d.id===row.driver_user_id)?.name||'Despachador asignado'}</p>}

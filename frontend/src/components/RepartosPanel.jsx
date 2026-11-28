@@ -581,7 +581,7 @@ function NuevoReparto({ colors }) {
       // Col A: #IDNombre
       row[0] = `${o.orderName}${o.customerName}`;
       // Col B: Dirección
-      row[1] = o.fullAddress || mapCoordinates(o)?.join(', ') || '';
+      row[1] = [o.fullAddress || mapCoordinates(o)?.join(', '), o.address2, o.addressDescription].filter(Boolean).join(' · ');
       row[7] = o.lat ?? '';
       row[8] = o.lng ?? '';
       // Col G: Notas (items)
@@ -1013,7 +1013,7 @@ function NuevoReparto({ colors }) {
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ color: colors.textPrimary, fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stop.customerName}</div>
-                          <div style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stop.fullAddress || mapCoordinates(stop)?.join(', ') || 'Sin dirección'}</div>
+                          <div style={{ color: colors.textMuted, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[stop.fullAddress || mapCoordinates(stop)?.join(', ') || 'Sin dirección', stop.address2, stop.addressDescription].filter(Boolean).join(' · ')}</div>
                         </div>
                         {stop.durationText && (
                           <span style={{ color: colors.textMuted, fontSize: '11px', flexShrink: 0 }}>{stop.durationText}</span>
@@ -1494,10 +1494,10 @@ function DespachosRepartos({ colors }) {
   const timeOf = r => new Date(r.at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
 
   function exportCSV() {
-    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Tipo de cliente', 'Teléfono', 'Dirección', 'Entregado', 'Pendiente', 'Próxima entrega', 'Estado', 'Medio de pago', 'Efectivo', 'Transferencia', 'Total entregado', 'Extras', 'Cobro', 'Nota'];
+    const head = ['Fecha', 'Hora', 'Repartidor', 'Ruta', 'Pedido', 'Cliente', 'Tipo de cliente', 'Teléfono', 'Dirección', 'Casa / Depto.', 'Descripción o referencia', 'Entregado', 'Pendiente', 'Próxima entrega', 'Estado', 'Medio de pago', 'Efectivo', 'Transferencia', 'Total entregado', 'Extras', 'Cobro', 'Nota'];
     const lines = filtered.map(r => [
       r.day, r.time_is_exact ? timeOf(r) : '', r.driver_name || '', r.route_name, r.order_label, r.customer_name || '', r.client_type === 'empresa' ? 'Empresa' : 'Persona natural', r.phone || '',
-      r.address || '', (r.items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '),
+      r.address || '', r.address2 || '', r.addressDescription || '', (r.items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '),
       (r.pending_items || []).map(i => `${i.quantity}x ${i.name}`).join(' | '), r.remainder_delivery_date || '',
       STOP_META[r.status]?.label || r.status, PAY_META[r.payment_method]?.label || '',
       Math.round(r.payment_cash_amount || 0), Math.round(r.payment_transfer_amount || 0),
@@ -1785,9 +1785,9 @@ function DespachosRepartos({ colors }) {
                             <div style={{ color: colors.textPrimary, fontWeight: 600 }}>{r.customer_name || '—'} <span style={{ color: colors.textMuted, fontWeight: 400 }}>{r.order_label}</span></div>
                             {r.status === 'pending' && ['sent', 'in_progress'].includes(r.route_status) && ['bot', 'shopify', 'return'].includes(r.source)
                               ? <DeliveryLocationEditor routeId={r.route_id} colors={colors} onSaved={load}
-                                  order={{ source: r.source, id: r.order_id, address: r.street, city: r.city, fullAddress: r.address,
+                                  order={{ source: r.source, id: r.order_id, address: r.street, city: r.city, address2: r.address2, addressDescription: r.addressDescription, fullAddress: r.address,
                                     lat: r.lat, lng: r.lng, manualLocation: r.manualLocation }} />
-                              : <div style={{ color: colors.textMuted, fontSize: '11px' }}>{r.address || ''}</div>}
+                              : <div style={{ color: colors.textMuted, fontSize: '11px' }}>{[r.address, r.address2, r.addressDescription].filter(Boolean).join(' · ')}</div>}
                             {r.note && <div style={{ color: '#fbbf24', fontSize: '11px' }}>📝 {r.note}</div>}
                           </td>
                           <td style={{ padding: '8px 12px', color: colors.textSecondary }}>
@@ -2470,7 +2470,7 @@ function HistorialRepartos({ colors }) {
                                     }} />
                                     <span style={{ flex: 1, minWidth: 0, fontSize: '12px', color: colors.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                       {o.customerName || o.orderName}
-                                      <span style={{ color: colors.textMuted }}> · {o.fullAddress || mapCoordinates(o)?.join(', ') || 'sin dirección'}</span>
+                                      <span style={{ color: colors.textMuted }}> · {[o.fullAddress || mapCoordinates(o)?.join(', ') || 'sin dirección', o.address2, o.addressDescription].filter(Boolean).join(' · ')}</span>
                                       {o.dispatchCount > 0 && <span style={{ color: '#fb923c', fontWeight: 700 }}> · 🔁 {o.dispatchCount + 1}º</span>}
                                     </span>
                                     <span style={{ fontSize: '12px', fontWeight: 700, color: colors.green }}>${Number(o.totalPrice || 0).toLocaleString('es-CL')}</span>

@@ -24,7 +24,7 @@ function normalizeDraft(draft) {
 
 function formatAddress(draft) {
   const address = streetAddress(draft.address, draft.city);
-  return [address, key(address) === key(draft.city) ? null : draft.city].filter(Boolean).join(', ');
+  return [address, draft.address2, key(address) === key(draft.city) ? null : draft.city, draft.addressDescription].filter(Boolean).join(', ');
 }
 
 function canonicalReview(reviewed) {
@@ -64,6 +64,8 @@ function signature(draft, priced) {
     items: priced.items.map(i => [key(i.name), Number(i.quantity), Number(i.price)]),
     total: Number(priced.total), name: key(draft.customer_name),
     address: key(streetAddress(draft.address, draft.city)), city: key(draft.city),
+    ...(draft.address2 ? { address2: key(draft.address2) } : {}),
+    ...(draft.addressDescription ? { addressDescription: key(draft.addressDescription) } : {}),
     phone: String(draft.customer_phone || ''), date: String(draft.delivery_date || ''), notes: key(draft.notes),
   });
 }
@@ -86,7 +88,7 @@ function matchesReview(previous, current, priced, history = []) {
       && i.quantity === Number(priced.items[n].quantity)
       && i.lineTotal === Number(priced.items[n].price) * i.quantity)
     && key(streetAddress(previous.address, previous.city)) === key(streetAddress(current.address, current.city))
-    && ['customer_name', 'city', 'customer_phone', 'delivery_date'].every(field => key(previous[field]) === key(current[field])));
+    && ['customer_name', 'city', 'customer_phone', 'delivery_date', 'address2', 'addressDescription'].every(field => key(previous[field]) === key(current[field])));
 }
 
 function reviewReply(draft, priced) {

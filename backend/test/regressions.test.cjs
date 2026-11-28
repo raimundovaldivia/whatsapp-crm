@@ -273,7 +273,9 @@ test('dispatch formats and edits the pending return address independently of its
       assert.equal(res.code,200,JSON.stringify(res.body));
       return res.body.orders.find(o => o.source === 'return');
     };
-    assert.equal((await orders()).fullAddress,'Ejemplo 123, Depto A 201, La Serena');
+    const original = await orders();
+    assert.equal(original.fullAddress,'Ejemplo 123, La Serena');
+    assert.equal(original.address2,'Depto A 201');
     const edit = async orgId => {
       const res = response();
       await handler(router,'patch','/orders/address')({orgId,body:{source:'return',id:'1',address:'Otra 456',city:'La Serena',updateContact:true}},res);
@@ -281,7 +283,9 @@ test('dispatch formats and edits the pending return address independently of its
     };
     assert.equal((await edit(2)).code,409);
     assert.equal((await edit(1)).code,200);
-    assert.equal((await orders()).fullAddress,'Otra 456, La Serena');
+    const moved = await orders();
+    assert.equal(moved.fullAddress,'Otra 456, La Serena');
+    assert.equal(moved.address2 ?? '', '');
     assert.equal((await f.query('SELECT shipping_address FROM orders WHERE id=1')).rows[0].shipping_address,null);
     await f.query('UPDATE order_returns SET route_id=1 WHERE id=1');
     assert.equal((await edit(1)).code,409);

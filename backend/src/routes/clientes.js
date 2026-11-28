@@ -50,6 +50,7 @@ function contactToCustomer(c) {
     address: {
       address1: c.address1 || c.address || null,
       address2: c.address2 || null,
+      addressDescription: c.address_description || null,
       city:     c.city     || null,
       province: c.province || null,
       zip:      c.zip      || null,
@@ -85,7 +86,7 @@ router.get('/repeat-deliveries', async (req, res) => {
       ),
       pool.query(
         `SELECT customer_phone AS phone, customer_name AS name, shopify_created_at AS d,
-                shipping_address1 AS street, shipping_city AS city
+                shipping_address1 AS street, shipping_city AS city, COALESCE(shipping_address2,raw_json->'shippingAddress'->>'address2') AS unit
            FROM shopify_orders
           WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
             AND (crm_status = 'entregado' OR delivered_at IS NOT NULL OR LOWER(COALESCE(fulfillment_status,'')) = 'fulfilled')`,
@@ -97,7 +98,7 @@ router.get('/repeat-deliveries', async (req, res) => {
       if (!a) return { street: '', city: '' };
       let x = a;
       if (typeof x === 'string') { try { x = JSON.parse(x); } catch { return { street: String(a).trim(), city: '' }; } }
-      if (x && typeof x === 'object') return { street: x.address || x.address1 || '', city: x.city || '' };
+      if (x && typeof x === 'object') return { street: x.address || x.address1 || '', city: x.city || '', unit: x.address2 || '' };
       return { street: String(a).trim(), city: '' };
     };
     const normalized = value => String(value || '').trim().toLocaleLowerCase('es-CL').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -110,12 +111,12 @@ router.get('/repeat-deliveries', async (req, res) => {
       const street = String(location?.street || '').trim();
       const city = String(location?.city || '').trim();
       // La comuna por sí sola no sirve como dirección de despacho.
-      if (street && normalized(street) !== normalized(city)) e.addrs.add([street, city].filter(Boolean).join(', '));
+      if (street && normalized(street) !== normalized(city)) e.addrs.add([street, location.unit, city].filter(Boolean).join(', '));
       if (r.name && r.name.length > (e.name ? e.name.length : 0)) e.name = r.name;
       if (!e.last || new Date(r.d) > new Date(e.last)) e.last = r.d;
     };
     for (const r of bot.rows)  add(r, botAddr(r.addr));
-    for (const r of shop.rows) add(r, { street: r.street, city: r.city });
+    for (const r of shop.rows) add(r, { street: r.street, unit: r.unit, city: r.city });
     const clientes = [...map.values()]
       .filter(e => e.deliveries > 1)
       .map(e => ({ phone: e.phone, name: e.name, deliveries: e.deliveries, addresses: [...e.addrs], addressCount: e.addrs.size, last: e.last }))
@@ -194,6 +195,8 @@ router.get('/all', async (req, res) => {
           try {
             const addr = JSON.parse(c.last_raw);
             c.address1 = addr?.address1 || null;
+            c.address2 = addr?.address2 || null;
+            c.address_description = addr?.addressDescription || null;
             c.city     = c.city || addr?.city || c.ord_city || null;
           } catch {}
         } else if (c.ord_city) {

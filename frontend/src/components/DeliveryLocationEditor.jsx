@@ -1,3 +1,4 @@
+import { AddressDetailFields, addressDetails } from './ClientAddressFields.jsx';
 import { useState } from 'react';
 import { api } from '../utils/api.js';
 import * as ui from '../ui.js';
@@ -6,6 +7,7 @@ export default function DeliveryLocationEditor({ order, routeId, colors, onSaved
   const [editing, setEditing] = useState(false);
   const [manual, setManual] = useState(false);
   const [coordinates, setCoordinates] = useState('');
+  const [details, setDetails] = useState(addressDetails);
   const [street, setStreet] = useState('');
   const [city, setCity] = useState('');
   const [error, setError] = useState('');
@@ -17,6 +19,7 @@ export default function DeliveryLocationEditor({ order, routeId, colors, onSaved
     setCoordinates(order.manualLocation ? `${order.lat}, ${order.lng}` : '');
     setStreet(order.address ?? order.fullAddress ?? '');
     setCity(order.city || '');
+    setDetails(addressDetails(order));
     setError('');
     setEditing(true);
   }
@@ -30,7 +33,7 @@ export default function DeliveryLocationEditor({ order, routeId, colors, onSaved
       const endpoint = routeId ? `/delivery/routes/${routeId}/stops/address` : '/delivery/orders/address';
       const target = routeId ? { stopKey: `${order.source}_${order.id}` } : { source: order.source, id: order.id };
       const location = manual ? { coordinates: coordinates.trim() } : { address: street.trim(), city: city.trim(), updateContact: true };
-      const { data } = await api.patch(endpoint, { ...target, ...location });
+      const { data } = await api.patch(endpoint, { ...target, ...location, ...details });
       onSaved(data.stop);
       setEditing(false);
     } catch (e) {
@@ -42,6 +45,8 @@ export default function DeliveryLocationEditor({ order, routeId, colors, onSaved
 
   if (!editing) return <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: colors.textMuted }}>
     {order.fullAddress && <span>{order.fullAddress} </span>}
+    {order.address2 && <div>Casa / Depto. · {order.address2}</div>}
+    {order.addressDescription && <div>Referencia · {order.addressDescription}</div>}
     {order.manualLocation && <span>📍 {order.lat}, {order.lng} </span>}
     <button type="button" style={actionStyle} onClick={event => { event.stopPropagation(); open(); }}>
       {order.fullAddress || order.manualLocation ? 'Editar ubicación' : '+ Agregar ubicación'}
@@ -65,6 +70,7 @@ export default function DeliveryLocationEditor({ order, routeId, colors, onSaved
       <input aria-label="Ciudad" placeholder="Ciudad" maxLength={100} style={input}
         value={city} disabled={saving} onChange={event => setCity(event.target.value)} />
     </>}
+    <AddressDetailFields details={details} onChange={setDetails} style={input} disabled={saving} />
     {error && <span role="alert" style={{ color: colors.red, fontSize: 12 }}>{error}</span>}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
       <button disabled={saving} style={ui.btn(colors, 'primary')}>{saving ? 'Guardando…' : 'Guardar ubicación'}</button>

@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
-const { load, handler, response } = require('./helpers.cjs');
+const { load, handler, response, noop } = require('./helpers.cjs');
 
 test('el checkout de Diez Ríos confirma por IA con los datos de la venta y conserva el pedido si falla el aviso', async () => {
   const slug = 'diez-rios-mrs96z69';
@@ -73,9 +73,39 @@ test('store orders calculate server-side, aggregate quantities and update stock 
       items: [{ productId: 10, quantity: 1 }, { productId: 10, quantity: 2 }],
       customerName: 'Cliente prueba',
       customerPhone: '56911111111',
-      shippingAddress: { address: 'Dirección prueba', city: 'La Serena' },
+      shippingAddress: { address: 'Dirección prueba', city: 'La Serena', address2: 'Depto. 24', addressDescription: 'Tocar el timbre azul' },
     });
 
+    const stored = (await engine.query('SELECT shipping_address FROM orders WHERE id = $1', [result.order.id])).rows[0];
+    assert.deepEqual(JSON.parse(stored.shipping_address), { address: 'Dirección prueba', city: 'La Serena', address2: 'Depto. 24', addressDescription: 'Tocar el timbre azul' });
+    await db.upsertContact(1, { phone: '56911111111', address: 'Dirección prueba', city: 'La Serena', address2: 'Depto. 24', addressDescription: 'Tocar el timbre azul' });
+    await db.upsertContact(1, { phone: '56911111111', name: 'Cliente' });
+    const contact = await db.getContact(1, '56911111111');
+    assert.equal(contact.address2, 'Depto. 24');
+    assert.equal(contact.address_description, 'Tocar el timbre azul');
+
+    const delivery = load('src/routes/delivery.js', {
+      '../db/database': { getPool: () => new Pool(), getSetting: async () => null },
+      '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+    });
+    const pending = response();
+    await handler(delivery, 'get', '/orders')({ orgId: 1, query: {} }, pending);
+    assert.equal(pending.code, 200, JSON.stringify(pending.body));
+    const stop = pending.body.orders.find(order => order.source === 'bot' && Number(order.id) === result.order.id);
+    assert.equal(stop.address2, 'Depto. 24');
+    assert.equal(stop.addressDescription, 'Tocar el timbre azul');
+    assert.equal(stop.fullAddress, 'Dirección prueba, La Serena');
+
+    const active = response();
+    const oldStop = { ...stop };
+    delete oldStop.address2;
+    delete oldStop.addressDescription;
+    await query("INSERT INTO delivery_routes(organization_id,name,status,orders,optimized_route) VALUES(1,'Prueba','sent',$1,$1)", [JSON.stringify([oldStop])]);
+    await handler(delivery, 'get', '/routes/active')({ orgId: 1, role: 'repartidor', userId: 1 }, active);
+    assert.equal(active.code, 200, JSON.stringify(active.body));
+    assert.equal(active.body.route.orders[0].address2, stop.address2);
+    assert.equal(active.body.route.optimized_route[0].addressDescription, stop.addressDescription);
+    assert.equal(active.body.route.optimized_route[0].fullAddress, stop.fullAddress);
     assert.equal(result.total, 15000);
     assert.equal(result.resolvedItems.length, 1);
     assert.equal(result.resolvedItems[0].quantity, 3);

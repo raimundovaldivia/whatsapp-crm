@@ -14,7 +14,7 @@ function mapHtml(stops, statuses, labelMode) {
       ...stopCoordinates(stop),
       label: String(stopLabel(stop.stopNumber || index + 1, labelMode)),
       name: String(stop.customerName || `Parada ${index + 1}`),
-      address: String(stop.fullAddress || navigationDestination(stop) || 'Sin dirección'),
+      address: [stop.fullAddress || navigationDestination(stop) || 'Sin dirección', stop.address2, stop.addressDescription].filter(Boolean).join(' · '),
       status: statuses[`${stop.source}_${stop.id}`] || 'pending',
     }))
     .filter(point => Number.isFinite(point.lat) && Number.isFinite(point.lng));
@@ -109,7 +109,7 @@ export default function RouteMapScreen({ route: navRoute, navigation }) {
           <View style={{ flex: 1 }}>
             <Text style={s.nextLabel}>SIGUIENTE PARADA</Text>
             <Text style={s.nextName} numberOfLines={1}>{stopLabel(next.stopNumber, labelMode)}. {next.customerName}</Text>
-            <Text style={s.nextAddress} numberOfLines={1}>{next.fullAddress || navigationDestination(next) || 'Sin dirección registrada'}</Text>
+            <Text style={s.nextAddress} numberOfLines={1}>{[next.fullAddress || navigationDestination(next) || 'Sin dirección registrada', next.address2].filter(Boolean).join(' · ')}</Text>
           </View>
           <TouchableOpacity style={s.navigateBtn} onPress={navigateNext}><Text style={s.navigateText}>Abrir navegación</Text></TouchableOpacity>
         </View>

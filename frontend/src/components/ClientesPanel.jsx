@@ -99,7 +99,7 @@ function ProductSelect({ value, onChange, options, placeholder = '— Selecciona
   );
 }
 import { api } from '../utils/api.js';
-import ClientAddressFields from './ClientAddressFields.jsx';
+import ClientAddressFields, { addressDetails } from './ClientAddressFields.jsx';
 import { useTheme } from '../theme.js';
 import * as ui from '../ui.js';
 
@@ -141,6 +141,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
   const [addrEditId,  setAddrEditId]  = useState(null);
   const [addrName,    setAddrName]    = useState('');
   const [addrEmail,   setAddrEmail]   = useState('');
+  const [details, setDetails] = useState(addressDetails);
   const [addrStreet,  setAddrStreet]  = useState('');
   const [addrCity,    setAddrCity]    = useState('');
   const [addrSaving,  setAddrSaving]  = useState(false);
@@ -151,6 +152,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
     setAddrEmail(c.email || '');
     setAddrStreet(c.address?.address1 || '');
     setAddrCity(c.address?.city || '');
+    setDetails(addressDetails(c.address));
     setAddrErr('');
   };
   const cancelAddrEdit = () => { setAddrEditId(null); setAddrErr(''); };
@@ -160,6 +162,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
       await api.patch(`/contacts/${c.phone}`, {
         name:    addrName.trim()   || undefined,
         email:   addrEmail.trim()  || undefined,
+        ...details,
         address: addrStreet.trim() || undefined,
         city:    addrCity.trim()   || undefined,
       });
@@ -168,7 +171,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
         ? { ...x,
             name:  addrName.trim()  || x.name,
             email: addrEmail.trim() || x.email,
-            address: { ...x.address, address1: addrStreet.trim(), city: addrCity.trim() } }
+            address: { ...x.address, ...details, address1: addrStreet.trim(), city: addrCity.trim() } }
         : x
       ));
       setAddrEditId(null);
@@ -811,7 +814,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
                                     <input value={addrEmail} onChange={e => setAddrEmail(e.target.value)} placeholder="Email" type="email"
                                       style={{ backgroundColor: colors.bgApp, color: colors.textPrimary, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '5px 8px', fontSize: '12px' }} />
                                     <ClientAddressFields phone={c.phone} address={addrStreet} city={addrCity}
-                                      onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
+                                      details={details} onDetailsChange={setDetails} onAddressChange={setAddrStreet} onCityChange={setAddrCity} colors={colors} compact />
                                     {addrErr && <div style={{ color: colors.dangerSoft, fontSize: '11px' }}>{addrErr}</div>}
                                     <div style={{ display: 'flex', gap: '6px' }}>
                                       <button onClick={() => saveAddr(c)} disabled={addrSaving}
@@ -828,7 +831,7 @@ export default function ClientesPanel({ onOpenConversation, showEggRepurchase = 
                                   <>
                                     {c.email && <div><span style={{ color: colors.textPrimary }}>Email:</span> {c.email}</div>}
                                     {c.address?.address1
-                                      ? <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {[c.address.address1, c.address.address2].filter(Boolean).join(', ')}</div>
+                                      ? <div><span style={{ color: colors.textPrimary }}>Dirección:</span> {[c.address.address1, c.address.address2, c.address.addressDescription].filter(Boolean).join(', ')}</div>
                                       : <div style={{ color: colors.dangerSoft, fontStyle: 'italic' }}>⚠ Sin dirección de calle</div>
                                     }
                                     {c.address?.city && <div><span style={{ color: colors.textPrimary }}>Ciudad:</span> {c.address.city}{c.address.province ? `, ${c.address.province}` : ''}</div>}

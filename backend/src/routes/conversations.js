@@ -685,8 +685,9 @@ router.post('/:id/orders', async (req, res) => {
     // Dirección: usar la del modal; si está vacía, usar la del contacto como fallback
     let finalAddress = shippingAddress;
     const addrEmpty = !shippingAddress?.address && !shippingAddress?.address1;
-    if (addrEmpty && contact?.address) {
-      finalAddress = { address: contact.address, city: contact.city || '' };
+    if (addrEmpty && (contact?.address1 || contact?.address)) {
+      finalAddress = { address: contact.address1 || contact.address, city: contact.city || '',
+        address2: contact.address2 || '', addressDescription: contact.address_description || '' };
     }
 
     order = await db.createOrder({

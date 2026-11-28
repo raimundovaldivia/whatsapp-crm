@@ -37,7 +37,7 @@ async function getClient() {
   _client = axios.create({
     baseURL,
     timeout: API_TIMEOUT_MS,
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: { 'X-Resel-Address-Format': '2', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
   _client.interceptors.response.use(
     r => r,
@@ -196,7 +196,7 @@ async function driverLocationClient(expected) {
   }
   // Fix the identity for the request even if another login resets the shared client.
   return axios.create({ baseURL: expected.baseUrl, timeout: 10000,
-    headers: { Authorization: `Bearer ${expected.token}` } });
+    headers: { Authorization: `Bearer ${expected.token}`, 'X-Resel-Address-Format': '2' } });
 }
 
 export async function updateDriverLocation(routeId, location, expectedSession = null, signal) {

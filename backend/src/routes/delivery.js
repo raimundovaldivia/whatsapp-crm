@@ -1,3 +1,4 @@
+const { addressDetails, shippingObject, shopifyAddress, legacyDriverResponse, readLegacyDriverAddress } = require('../utils/address-details');
 /**
  * delivery.js — API de repartos
  *
@@ -72,6 +73,15 @@ let io;
 function setSocketIO(socketIO) { io = socketIO; }
 
 router.use(requireAuth);
+router.use('/routes', (req, res, next) => {
+  const legacy = !req.get('X-Resel-Address-Format') && /okhttp|CFNetwork|Despachos|Expo\b/i.test(req.get('User-Agent') || '');
+  if (legacy) {
+    if (req.method === 'PATCH' && req.path.endsWith('/stops/address')) req.body = readLegacyDriverAddress(req.body);
+    const json = res.json.bind(res);
+    res.json = payload => json(legacyDriverResponse(payload));
+  }
+  next();
+});
 router.use('/returns', require('./order-returns'));
 const { routeItems } = require('../services/delivery-items');
 router.get('/routes/:id/order-items', requireRole('owner', 'admin', 'supervisor', 'coordinador', 'repartidor'), routeItems);
@@ -245,6 +255,7 @@ async function hydrateRouteItems(pool, route, orgId) {
   const orders = jsonList(route.orders);
   const optimized = jsonList(route.optimized_route);
   const itemMap = new Map();
+  const locationMap = new Map();
   const customerMap = new Map();
 
   for (const order of orders) {
@@ -257,28 +268,33 @@ async function hydrateRouteItems(pool, route, orgId) {
   const shopifyIds = [...new Set(all.filter(item => item?.source === 'shopify').map(item => String(item.id)).filter(Boolean))];
   const [botResult, shopifyResult] = await Promise.all([
     botIds.length
-      ? pool.query('SELECT id::text AS id, items, customer_phone, customer_name FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
+      ? pool.query('SELECT id::text AS id, items, customer_phone, customer_name, shipping_address FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
       : { rows: [] },
     shopifyIds.length
-      ? pool.query('SELECT shopify_order_id AS id, items, customer_phone, customer_name FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopifyIds])
+      ? pool.query('SELECT shopify_order_id AS id, items, customer_phone, customer_name, shipping_address1, shipping_city, shipping_address2, shipping_address_description, raw_json->\'shippingAddress\' AS raw_shipping FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopifyIds])
       : { rows: [] },
   ]);
 
   for (const row of botResult.rows) {
     const items = jsonList(row.items);
     if (items.length && !itemMap.has(`bot_${row.id}`)) itemMap.set(`bot_${row.id}`, items);
+    locationMap.set(`bot_${row.id}`, shippingObject(row.shipping_address));
     customerMap.set(`bot_${row.id}`, { phone: row.customer_phone, customerName: row.customer_name });
   }
   for (const row of shopifyResult.rows) {
     const items = jsonList(row.items);
     if (items.length && !itemMap.has(`shopify_${row.id}`)) itemMap.set(`shopify_${row.id}`, items);
+    locationMap.set(`shopify_${row.id}`, shopifyAddress(row));
     customerMap.set(`shopify_${row.id}`, { phone: row.customer_phone, customerName: row.customer_name });
   }
 
   const addItems = stop => {
     const customer = customerMap.get(orderKey(stop)) || {};
+    const location = locationMap.get(orderKey(stop));
+    const sameStreet = location && (location.address || location.address1) === stop.address && (!location.city || !stop.city || location.city === stop.city);
     const base = {
       ...stop,
+      ...(sameStreet && !['completed', 'cancelled'].includes(route.status) ? addressDetails(location) : {}),
       orderName: normalizeOrderLabel(stop?.orderName, stop?.source, stop?.id) || stop?.orderName,
       phone: stop?.phone || customer.phone || null,
       customerName: stop?.customerName || customer.customerName || 'Cliente',
@@ -561,8 +577,7 @@ function prioritizeOrders(orders) {
 function normalizeShopifyOrder(row) {
   // shipping_address viene de raw_json JSONB (puede ser objeto o null)
   const addr = jsonObject(row.shipping_address);
-  const street = row.shipping_address1 || addr.address1 || addr.address || '';
-  const city   = row.shipping_city || addr.city || '';
+  const { address: street, city, address2, addressDescription } = shopifyAddress(row);
   const items = jsonList(row.items).map(canonicalizeProductItem);
   return {
     id: row.id, source: 'shopify',
@@ -570,7 +585,7 @@ function normalizeShopifyOrder(row) {
     orderName: row.order_name || `#${row.id}`,      // shopify_name aliaseado como order_name
     customerName: row.customer_name || 'Sin nombre',
     phone: row.phone || addr.phone || '',             // customer_phone aliaseado como phone
-    address: street, city, fullAddress: [street, city].filter(Boolean).join(', '),
+    address: street, city, address2, addressDescription, fullAddress: [street, city].filter(Boolean).join(', '),
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
     deliveryDate: dateOnly(row.delivery_date),
     deliveryNote: row.delivery_note || null,
@@ -580,7 +595,7 @@ function normalizeShopifyOrder(row) {
 }
 
 function normalizeBotOrder(row) {
-  const addr = jsonObject(row.shipping_address);
+  const addr = shippingObject(row.shipping_address);
   // Fallback 1: contacts table (local DB)
   // Fallback 2: shopify_orders shipping address (más completo)
   const shopifyAddr = jsonObject(row.shopify_shipping);
@@ -594,6 +609,8 @@ function normalizeBotOrder(row) {
     || row.shopify_city
     || shopifyAddr.city
     || '';
+  const { address2, addressDescription } = addr.address || addr.address1 ? addr : row.contact_address
+    ? { address2: row.contact_address2, addressDescription: row.contact_description } : shopifyAddr;
   const isGeneric = n => !n || ['cliente', 'sin nombre', 'cliente sin nombre'].includes(n.trim().toLowerCase());
   const customerName = isGeneric(row.customer_name)
     ? (row.contact_name || row.customer_name || 'Sin nombre')
@@ -605,7 +622,7 @@ function normalizeBotOrder(row) {
     orderName: crmOrderLabel(row.id),
     customerName,
     phone: row.phone || '',
-    address: street, city, fullAddress: [street, city].filter(Boolean).join(', '),
+    address: street, city, address2, addressDescription, fullAddress: [street, city].filter(Boolean).join(', '),
     items, totalPrice: parseFloat(row.total_price) || 0, status: row.crm_status,
     deliveryDate: dateOnly(row.delivery_date),
     deliveryNote: row.delivery_note || null,
@@ -617,7 +634,7 @@ function normalizeBotOrder(row) {
 function normalizeReturnTask(row) {
   const customer = row.customer && typeof row.customer === 'object' ? row.customer : {};
   const rawAddress = customer.address;
-  const { city = '', address, address1, ...details } = typeof rawAddress === 'object' && rawAddress ? rawAddress : {};
+  const { city = '', address, address1, address2, addressDescription, ...details } = typeof rawAddress === 'object' && rawAddress ? rawAddress : {};
   const street = typeof rawAddress === 'string' ? rawAddress
     : [address || address1, ...Object.values(details)].filter(value => typeof value === 'string' && value.trim()).join(', ');
   const fullAddress = [street, city].filter(Boolean).join(', ');
@@ -649,7 +666,7 @@ function normalizeReturnTask(row) {
     ...manualLocationFields(row.manual_delivery_point),
     orderName: `↩ ${kindLabel} #${row.id} · Pedido ${row.order_source === 'bot' ? crmOrderLabel(row.order_id) : row.order_id}`,
     customerName: `↩ ${kindLabel} · ${customer.name || 'Cliente'}`,
-    phone: customer.phone || '', address: street, city, fullAddress,
+    phone: customer.phone || '', address: street, city, address2, addressDescription, fullAddress,
     items: routeItems, totalPrice: 0, status: row.status,
     deliveryDate: dateOnly(row.scheduled_date), deliveryNote: row.reason || null,
     returnTask: {
@@ -676,7 +693,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                customer_name,
                customer_phone        AS phone,
                shipping_city,
-               shipping_address1,
+               shipping_address1, shipping_address2, shipping_address_description,
                manual_delivery_point,
                raw_json->'shippingAddress'   AS shipping_address,
                items,
@@ -709,13 +726,14 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
                o.dispatch_count,
                o.last_attempt_status,
                ct.name                 AS contact_name,
-               ct.address              AS contact_address,
+               COALESCE(NULLIF(ct.address1, ''), ct.address) AS contact_address,
+               ct.address2 AS contact_address2, ct.address_description AS contact_description,
                ct.city                 AS contact_city,
-               so.raw_json->'shippingAddress'  AS shopify_shipping,
+               COALESCE(so.raw_json->'shippingAddress', '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object('address1', so.shipping_address1, 'address2', so.shipping_address2, 'addressDescription', so.shipping_address_description)) AS shopify_shipping,
                so.shipping_city                AS shopify_city
         FROM orders o
         LEFT JOIN LATERAL (
-          SELECT name, address, city
+          SELECT name, address, address1, address2, address_description, city
           FROM contacts
           WHERE organization_id = o.organization_id
             AND phone = ANY(ARRAY[
@@ -730,7 +748,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
           LIMIT 1
         ) ct ON true
         LEFT JOIN LATERAL (
-          SELECT raw_json, shipping_city
+          SELECT raw_json, shipping_city, shipping_address1, shipping_address2, shipping_address_description
           FROM shopify_orders
           WHERE organization_id = o.organization_id
             AND customer_phone = ANY(ARRAY[
@@ -2121,8 +2139,8 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
     const manual = manualLocationFields(row.manual_delivery_point);
     if (manual.manualLocation || !previousPins.has(key)) return manual;
     // A draft can still contain a pin that has since been replaced by an address.
-    const { address, city, fullAddress } = normalize(row);
-    const location = { address, city, fullAddress, manualLocation: false };
+    const { address, city, fullAddress, address2, addressDescription } = normalize(row);
+    const location = { address, city, fullAddress, address2, addressDescription, manualLocation: false };
     resetLocations.push({ key, location });
     return location;
   }
@@ -2153,7 +2171,7 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
   if (shopIds.length) {
     const { rows } = await pool.query(
       `SELECT shopify_order_id AS id, crm_status AS status, dispatch_count,
-              last_attempt_status, delivery_note, manual_delivery_point, shipping_city, shipping_address1,
+              last_attempt_status, delivery_note, manual_delivery_point, shipping_city, shipping_address1, shipping_address2, shipping_address_description,
               raw_json->'shippingAddress' AS shipping_address,
               (delivered_at IS NOT NULL OR ${importedShopifyClosed}
                 OR crm_status IN ('en_camino', 'entregado', 'cancelled')
@@ -2734,7 +2752,7 @@ function cleanAddressPayload(body) {
     if (!deliveryGeocoding.validPoint(point)) {
       throw Object.assign(new Error('Ingresa latitud y longitud válidas, por ejemplo -29.905, -71.251.'), { status: 400 });
     }
-    return { point };
+    return { point, ...addressDetails(body) };
   }
   const address = typeof body?.address === 'string' ? body.address.trim() : '';
   const city = typeof body?.city === 'string' ? body.city.trim() : '';
@@ -2742,7 +2760,7 @@ function cleanAddressPayload(body) {
     throw Object.assign(new Error('La dirección es requerida y no puede superar 300 caracteres'), { status: 400 });
   }
   if (city.length > 100) throw Object.assign(new Error('La ciudad no puede superar 100 caracteres'), { status: 400 });
-  return { address, city, fullAddress: [address, city].filter(Boolean).join(', ') };
+  return { address, city, ...addressDetails(body), fullAddress: [address, city].filter(Boolean).join(', ') };
 }
 
 function contactPhoneVariants(phone) {
@@ -2755,41 +2773,53 @@ function contactPhoneVariants(phone) {
   ].filter(Boolean))];
 }
 
-async function updateStoredOrderAddress(client, { source, orderId, orgId, address, city, point, updateContact, routeId = null }) {
+async function updateStoredOrderAddress(client, { source, orderId, orgId, address, city, address2, addressDescription, point, updateContact, routeId = null }) {
   let row;
   // A pin belongs to this delivery. Editing only its coordinates must preserve
   // the original street, apartment, contact details and provider payload.
   const pin = point ? JSON.stringify(point) : null;
+  const details = addressDetails({ address2, addressDescription });
+  const patch = { ...(point ? {} : { address, city }), ...details };
   if (source === 'bot') {
     const numericId = Number(orderId);
     if (!Number.isInteger(numericId) || numericId <= 0) throw Object.assign(new Error('Pedido inválido'), { status: 400 });
+    let priorAddress;
+    if (Object.keys(patch).length) {
+      const existing = await client.query('SELECT shipping_address FROM orders WHERE id = $1 AND organization_id = $2 FOR UPDATE', [numericId, orgId]);
+      priorAddress = existing.rows[0]?.shipping_address;
+    }
     ({ rows: [row] } = await client.query(
       `UPDATE orders
           SET shipping_address = COALESCE($1, shipping_address), manual_delivery_point = $4,
               delivery_modified = CASE WHEN $4::jsonb IS NULL THEN TRUE ELSE delivery_modified END, updated_at = NOW()
         WHERE id = $2 AND organization_id = $3
         RETURNING id, customer_phone`,
-      [point ? null : JSON.stringify({ address, city }), numericId, orgId, pin]
+      [Object.keys(patch).length ? JSON.stringify({ ...shippingObject(priorAddress), ...patch }) : null, numericId, orgId, pin]
     ));
   } else if (source === 'shopify') {
     ({ rows: [row] } = await client.query(
       `UPDATE shopify_orders
           SET shipping_address1 = CASE WHEN $5::jsonb IS NULL THEN $1 ELSE shipping_address1 END,
               shipping_city = CASE WHEN $5::jsonb IS NULL THEN $2 ELSE shipping_city END,
+              shipping_address2 = COALESCE($6, shipping_address2), shipping_address_description = COALESCE($7, shipping_address_description),
               manual_delivery_point = $5,
               delivery_modified = CASE WHEN $5::jsonb IS NULL THEN TRUE ELSE delivery_modified END, synced_at = NOW()
         WHERE shopify_order_id = $3 AND organization_id = $4
         RETURNING shopify_order_id AS id, customer_phone`,
-      [address ?? null, city || null, String(orderId), orgId, pin]
+      [address ?? null, city || null, String(orderId), orgId, pin, address2 ?? null, addressDescription ?? null]
     ));
   } else if (source === 'return') {
     const result = await client.query(
       `UPDATE order_returns
-          SET customer = CASE WHEN $3::jsonb IS NULL THEN customer ELSE jsonb_set(customer, '{address}', $3) END,
+          SET customer = CASE WHEN $3::jsonb IS NULL THEN customer ELSE jsonb_set(customer, '{address}', (CASE
+              WHEN jsonb_typeof(customer->'address') IS DISTINCT FROM 'object' THEN jsonb_build_object('address', customer->>'address')
+              WHEN $3::jsonb ? 'address' AND COALESCE(customer->'address'->>'address', customer->'address'->>'address1', '') <> $3::jsonb->>'address'
+                THEN (customer->'address') - 'address2' - 'addressDescription'
+              ELSE customer->'address' END) || $3::jsonb) END,
               manual_delivery_point = $4, updated_at = NOW()
         WHERE organization_id = $1 AND id = $2 AND route_id IS NOT DISTINCT FROM $5::int
           AND (status IN ('approved','scheduled') OR ($5 IS NOT NULL AND status = 'in_progress'))`,
-      [orgId, orderId, point ? null : JSON.stringify({ address, city }), pin, routeId]
+      [orgId, orderId, Object.keys(patch).length ? JSON.stringify(patch) : null, pin, routeId]
     );
     if (!result.rowCount) throw Object.assign(new Error('El cambio o devolución ya no está disponible para reparto'), { status: 409 });
     return;
@@ -2801,9 +2831,9 @@ async function updateStoredOrderAddress(client, { source, orderId, orgId, addres
     const variants = contactPhoneVariants(row.customer_phone);
     await client.query(
       `UPDATE contacts
-          SET address1 = $3, address = $3, city = $4, updated_at = NOW()
+          SET address1 = $3, address = $3, city = $4, address2 = COALESCE($5, address2), address_description = COALESCE($6, address_description), updated_at = NOW()
         WHERE organization_id = $1 AND phone = ANY($2::text[])`,
-      [orgId, variants, address, city || null]
+      [orgId, variants, address, city || null, address2 ?? null, addressDescription ?? null]
     );
   }
   return row;
@@ -2898,7 +2928,7 @@ router.patch('/routes/:id/stops/address', requireRole('owner', 'admin', 'supervi
       source, orderId, orgId: req.orgId, routeId: route.id, ...addressData, updateContact: req.body?.updateContact === true,
     });
     const audit = JSON.stringify({
-      [stopKey]: { address: updatedStop.address, city: updatedStop.city, lat: freshStop.lat, lng: freshStop.lng,
+      [stopKey]: { address: updatedStop.address, city: updatedStop.city, ...addressDetails(updatedStop), lat: freshStop.lat, lng: freshStop.lng,
         manualLocation: freshStop.manualLocation, changedAt: new Date().toISOString(), changedBy: req.userId, role: req.role },
     });
     await client.query(
@@ -3020,7 +3050,7 @@ async function createPartialRemainder(client, { orgId, routeId, stopKey, source,
 
   const shippingAddress = source === 'bot'
     ? order.shipping_address
-    : JSON.stringify({ address: order.shipping_address1 || '', city: order.shipping_city || '' });
+    : JSON.stringify(shopifyAddress(order));
   const prepaid = source === 'bot'
     ? order.status === 'paid'
     : String(order.financial_status || '').toLowerCase() === 'paid';
@@ -3759,7 +3789,7 @@ router.get('/dispatches', requireRole('owner', 'admin', 'supervisor', 'coordinad
           customer_name: st.customerName || null, phone: st.phone || ord?.customer_phone || null,
           client_type: clientTypeByPhone.get(normalizePhone(st.phone || ord?.customer_phone)) || 'personal',
           address: st.fullAddress || null,
-          street: st.address, city: st.city, lat: st.lat, lng: st.lng, manualLocation: st.manualLocation === true,
+          street: st.address, city: st.city, ...addressDetails(st), lat: st.lat, lng: st.lng, manualLocation: st.manualLocation === true,
           items: Array.isArray(partial?.deliveredItems)
             ? partial.deliveredItems.map(i => ({ name: i.name || i.title, quantity: i.quantity }))
             : (Array.isArray(st.items) ? st.items.map(i => ({ name: i.name || i.title, quantity: i.quantity })) : []),

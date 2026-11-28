@@ -1,3 +1,4 @@
+const { addressDetails, shopifyAddress, shippingObject } = require('../utils/address-details');
 /**
  * contacts.js — Gestión de contactos (leads y clientes)
  *
@@ -81,7 +82,7 @@ router.get('/suggest', async (req, res) => {
     }
 
     const { rows } = await pool.query(
-      `SELECT phone, name, address, city, contact_type, client_type, total_orders, last_order_at
+      `SELECT phone, name, address, address1, address2, address_description, city, contact_type, client_type, total_orders, last_order_at
          FROM contacts
         WHERE ${conds.join(' AND ')}
         ORDER BY last_order_at DESC NULLS LAST, last_seen_at DESC NULLS LAST, updated_at DESC
@@ -135,7 +136,7 @@ router.get('/:phone/addresses', async (req, res) => {
     ].filter(Boolean))];
     const [contacts, botOrders, shopifyOrders] = await Promise.all([
       pool.query(
-        `SELECT address1, address, city, updated_at
+        `SELECT address1, address, address2, address_description, city, updated_at
            FROM contacts
           WHERE organization_id = $1 AND phone = ANY($2::text[])`,
         [req.orgId, variants]
@@ -148,7 +149,7 @@ router.get('/:phone/addresses', async (req, res) => {
         [req.orgId, variants]
       ),
       pool.query(
-        `SELECT shipping_address1, shipping_city, raw_json->'shippingAddress' AS raw_shipping, shopify_created_at
+        `SELECT shipping_address1, shipping_address2, shipping_address_description, shipping_city, raw_json->'shippingAddress' AS raw_shipping, shopify_created_at
            FROM shopify_orders
           WHERE organization_id = $1 AND customer_phone = ANY($2::text[])
           ORDER BY shopify_created_at DESC`,
@@ -157,18 +158,16 @@ router.get('/:phone/addresses', async (req, res) => {
     ]);
 
     const candidates = [];
-    for (const row of contacts.rows) candidates.push({ address: row.address1 || row.address, city: row.city, source: 'contact', usedAt: row.updated_at });
+    for (const row of contacts.rows) candidates.push({ address: row.address1 || row.address, city: row.city, address2: row.address2, addressDescription: row.address_description, source: 'contact', usedAt: row.updated_at });
     for (const row of botOrders.rows) {
-      let raw = row.shipping_address;
-      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
-      candidates.push({ address: raw?.address || raw?.address1, city: raw?.city, source: 'order', usedAt: row.created_at });
+      const raw = shippingObject(row.shipping_address);
+      candidates.push({ address: raw?.address || raw?.address1, city: raw?.city, ...addressDetails(raw), source: 'order', usedAt: row.created_at });
     }
     for (const row of shopifyOrders.rows) {
       let raw = row.raw_shipping;
       if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
       candidates.push({
-        address: row.shipping_address1 || raw?.address1 || raw?.address,
-        city: row.shipping_city || raw?.city,
+        ...shopifyAddress({ ...row, raw_shipping: raw }),
         source: 'shopify',
         usedAt: row.shopify_created_at,
       });
@@ -187,7 +186,7 @@ router.get('/:phone/addresses', async (req, res) => {
       })
       .sort((a, b) => new Date(b.usedAt || 0) - new Date(a.usedAt || 0))
       .filter(item => {
-        const key = `${norm(item.address)}|${norm(item.city)}`;
+        const key = `${norm(item.address)}|${norm(item.address2)}|${norm(item.city)}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -195,7 +194,8 @@ router.get('/:phone/addresses', async (req, res) => {
       .map(item => ({
         address: String(item.address).trim(),
         city: String(item.city || '').trim(),
-        label: [String(item.address).trim(), String(item.city || '').trim()].filter(Boolean).join(', '),
+        ...addressDetails(item),
+        label: [String(item.address).trim(), item.address2, String(item.city || '').trim(), item.addressDescription].filter(Boolean).join(', '),
         source: item.source,
       }));
 
@@ -803,6 +803,7 @@ router.patch('/:phone', async (req, res) => {
   try {
     const pool = require('../db/database').getPool();
     const { name, email, address, city } = req.body;
+    const details = addressDetails(req.body);
     const { normalizePhone, normalizeName } = require('../db/database');
     const phone = normalizePhone(req.params.phone);
     const customerName = normalizeName(name);
@@ -810,8 +811,8 @@ router.patch('/:phone', async (req, res) => {
 
     // Upsert en tabla contacts
     const { rows: [contact] } = await pool.query(
-      `INSERT INTO contacts (organization_id, phone, name, email, address, address1, city, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $5, $6, NOW())
+      `INSERT INTO contacts (organization_id, phone, name, email, address, address1, city, address2, address_description, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, NOW())
        ON CONFLICT (organization_id, phone)
        DO UPDATE SET
          name       = CASE WHEN $3 IS NOT NULL THEN $3 ELSE contacts.name END,
@@ -819,9 +820,10 @@ router.patch('/:phone', async (req, res) => {
          address    = CASE WHEN $5 IS NOT NULL THEN $5 ELSE contacts.address END,
          address1   = CASE WHEN $5 IS NOT NULL THEN $5 ELSE contacts.address1 END,
          city       = CASE WHEN $6 IS NOT NULL THEN $6 ELSE contacts.city END,
+         address2 = COALESCE($7, contacts.address2), address_description = COALESCE($8, contacts.address_description),
          updated_at = NOW()
        RETURNING *`,
-      [req.orgId, phone, customerName, email || null, address || null, city || null]
+      [req.orgId, phone, customerName, email || null, address || null, city || null, details.address2 ?? null, details.addressDescription ?? null]
     );
 
     // Sincronizar contact_name en conversaciones para que el sidebar/header reflejen el cambio
@@ -836,17 +838,18 @@ router.patch('/:phone', async (req, res) => {
     // Una misma persona puede conservar teléfonos históricos. La dirección
     // vigente debe ser consistente en todos sus alias fuertes, sin tocar las
     // direcciones guardadas dentro de pedidos anteriores.
-    if (Object.hasOwn(req.body, 'address') || Object.hasOwn(req.body, 'city')) {
+    if (Object.hasOwn(req.body, 'address') || Object.hasOwn(req.body, 'city') || Object.keys(details).length) {
       await pool.query(
         `UPDATE contacts SET
            address  = CASE WHEN $1::boolean THEN $2 ELSE address END,
            address1 = CASE WHEN $1::boolean THEN $2 ELSE address1 END,
            city     = CASE WHEN $3::boolean THEN $4 ELSE city END,
+           address2 = COALESCE($7, address2), address_description = COALESCE($8, address_description),
            updated_at = NOW()
          WHERE organization_id = $5 AND phone = ANY($6::text[])`,
         [Object.hasOwn(req.body, 'address'), address?.trim() || null,
          Object.hasOwn(req.body, 'city'), city?.trim() || null,
-         req.orgId, identityPhones]
+         req.orgId, identityPhones, details.address2 ?? null, details.addressDescription ?? null]
       );
     }
 

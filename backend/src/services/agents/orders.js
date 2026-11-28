@@ -149,7 +149,7 @@ Campos posibles:
     · product_name: nombre del producto + variante tal como aparece en el catálogo o lo más parecido (ej: "Huevos XL Bandeja 30")
     · quantity: entero. "uno" → 1, "un par" → 2, "media docena" → 6. Si responde a una oferta citada en Instagram, usa el producto citado pero agrega el ítem solo cuando el cliente indique cuántos envases quiere. Las unidades por envase, la dirección y las preguntas sobre despacho no confirman cantidad. Para los demás pedidos, si no especifica → 1.
     · Si el cliente pidió varios productos, incluye TODOS. Si cambió de opinión ("mejor solo una", "quita la de color"), refleja el estado FINAL, no el histórico.
-- address: dirección de envío incluyendo calle, número y sector si los menciona
+- address: calle, número y sector del domicilio. Guarda casa interior, departamento, torre o piso en address2 y las referencias para encontrarlo en addressDescription. Ambos campos son opcionales. Si cambia de domicilio, usa solo los detalles del nuevo domicilio.
 - city: ciudad de envío
 - region: región o provincia si la menciona
 - customer_phone: teléfono si el cliente lo menciona explícitamente
@@ -204,6 +204,11 @@ Solo el JSON, nada más.`;
     // Merge: los nuevos datos sobreescriben, pero nunca eliminar datos ya confirmados.
     // items se reemplaza completo (la extracción es del historial entero, refleja el estado final).
     const merged = { ...base };
+    if ((extracted.address && base.address && extracted.address !== base.address) ||
+        (extracted.city && base.city && extracted.city !== base.city)) {
+      merged.address2 = '';
+      merged.addressDescription = '';
+    }
     for (const [key, value] of Object.entries(extracted)) {
       if (value === null || value === undefined || value === '') continue;
       if (key === 'items') {

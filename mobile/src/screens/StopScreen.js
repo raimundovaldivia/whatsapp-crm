@@ -47,12 +47,15 @@ export default function StopScreen({ route: navRoute, navigation }) {
   const [currentItems, setCurrentItems] = useState(Array.isArray(navRoute.params?.stop?.items) ? navRoute.params.stop.items : []);
   const [addressInfo, setAddressInfo] = useState({
     address: stop?.address || '', city: stop?.city || '', fullAddress: stop?.fullAddress || '',
+    address2: stop?.address2 || '', addressDescription: stop?.addressDescription || '',
     lat: stop?.lat ?? null, lng: stop?.lng ?? null, coverage: stop?.coverage || null,
     manualLocation: !!stop?.manualLocation,
   });
   const [editingAddress, setEditingAddress] = useState(false);
   const [addressDraft, setAddressDraft] = useState(stop?.address || '');
   const [cityDraft, setCityDraft] = useState(stop?.city || '');
+  const [unitDraft, setUnitDraft] = useState('');
+  const [descriptionDraft, setDescriptionDraft] = useState('');
   const [useCoordinates, setUseCoordinates] = useState(false);
   const [coordinatesDraft, setCoordinatesDraft] = useState('');
   const [savingAddress, setSavingAddress] = useState(false);
@@ -275,9 +278,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
     try {
       const location = useCoordinates ? { coordinates: coordinatesDraft.trim() }
         : { address: addressDraft.trim(), city: cityDraft.trim(), updateContact: true };
-      const updated = await updateStopAddress(routeId, stopKey, location);
+      const updated = await updateStopAddress(routeId, stopKey, { ...location, address2: unitDraft.trim(), addressDescription: descriptionDraft.trim() });
       if (updated) setAddressInfo({
         address: updated.address || '', city: updated.city || '', fullAddress: updated.fullAddress || '',
+        address2: updated.address2 || '', addressDescription: updated.addressDescription || '',
         lat: updated.lat ?? null, lng: updated.lng ?? null, coverage: updated.coverage || null,
         manualLocation: !!updated.manualLocation,
       });
@@ -473,6 +477,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
               <TextInput style={s.addressInput} value={cityDraft} onChangeText={setCityDraft}
                 placeholder="Ciudad" placeholderTextColor={C.muted} />
             </>}
+            <TextInput style={s.addressInput} value={unitDraft} onChangeText={setUnitDraft} maxLength={150}
+              accessibilityLabel="Casa / Depto." placeholder="Casa / Depto. (opcional)" placeholderTextColor={C.muted} />
+            <TextInput style={s.addressInput} value={descriptionDraft} onChangeText={setDescriptionDraft} maxLength={500} multiline
+              accessibilityLabel="Descripción de la dirección" placeholder="Descripción o referencia para llegar" placeholderTextColor={C.muted} />
             <View style={s.addressActions}>
               <TouchableOpacity style={s.addressCancel} onPress={() => setEditingAddress(false)} disabled={savingAddress}><Text style={s.addressCancelText}>Cancelar</Text></TouchableOpacity>
               <TouchableOpacity style={s.addressSave} onPress={saveAddress} disabled={savingAddress}><Text style={s.addressSaveText}>{savingAddress ? 'Guardando…' : 'Guardar ubicación'}</Text></TouchableOpacity>
@@ -482,10 +490,14 @@ export default function StopScreen({ route: navRoute, navigation }) {
           <>
             <Text style={s.infoValue}>{addressInfo.address || addressInfo.fullAddress || 'Sin dirección escrita'}</Text>
             {addressInfo.city ? <Text style={s.infoCity}>{addressInfo.city}</Text> : null}
+            {!!addressInfo.address2 && <Text style={s.infoValue}>Casa / Depto. · {addressInfo.address2}</Text>}
+            {!!addressInfo.addressDescription && <Text style={s.infoValue}>Referencia · {addressInfo.addressDescription}</Text>}
             {addressInfo.manualLocation && <Text style={s.infoCity}>📍 {addressInfo.lat}, {addressInfo.lng}</Text>}
             {['bot', 'shopify', 'return'].includes(stop?.source) && <TouchableOpacity onPress={() => {
               setAddressDraft(addressInfo.address || addressInfo.fullAddress || '');
               setCityDraft(addressInfo.city || '');
+              setUnitDraft(addressInfo.address2 || '');
+              setDescriptionDraft(addressInfo.addressDescription || '');
               setUseCoordinates(addressInfo.manualLocation || !addressInfo.fullAddress);
               setCoordinatesDraft(addressInfo.manualLocation ? `${addressInfo.lat}, ${addressInfo.lng}` : '');
               setEditingAddress(true);

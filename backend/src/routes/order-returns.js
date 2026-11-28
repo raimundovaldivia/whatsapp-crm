@@ -1,3 +1,4 @@
+const { shopifyAddress } = require('../utils/address-details');
 const router = require('express').Router();
 const { getPool } = require('../db/database');
 const { requireRole } = require('../middleware/auth');
@@ -46,7 +47,7 @@ router.post('/',requireRole(...ADMIN),async(req,res)=>{
       seen.add(index);return {index,quantity,name:original.name||original.title||original.product_name||'Producto',price:Number(original.price)||0};
     });
     const customer={name:order.customer_name||'Cliente',phone:order.customer_phone||'',
-      address:isShop?[order.shipping_address1||order.raw_json?.shippingAddress?.address1,order.raw_json?.shippingAddress?.address2,order.shipping_city].filter(Boolean).join(', '):(typeof order.shipping_address==='string' && order.shipping_address.trim().startsWith('{')?JSON.parse(order.shipping_address):order.shipping_address)};
+      address:isShop?shopifyAddress(order):(typeof order.shipping_address==='string' && order.shipping_address.trim().startsWith('{')?JSON.parse(order.shipping_address):order.shipping_address)};
     const event={action:'requested',userId:req.userId,at:new Date().toISOString(),note:b.reason.trim()};
     const {rows:[created]}=await client.query(`INSERT INTO order_returns(organization_id,source,order_id,kind,items,customer,reason,replacement_description,pickup_required,money_direction,money_method,money_amount,created_by,request_key,events)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,[req.orgId,b.source,String(b.orderId),b.kind,JSON.stringify(items),JSON.stringify(customer),b.reason.trim(),replacement,b.pickupRequired!==false,direction,method,amount,req.userId,b.requestKey,JSON.stringify([event])]);
