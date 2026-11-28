@@ -1863,7 +1863,7 @@ function ShopifyOrderCard({ order, selected, onToggleSelect, onAddressUpdated })
 
 // ─── Modal nuevo pedido manual ────────────────────────────────────
 function NewOrderModal({ colors, onClose, onSaved }) {
-  const EMPTY_ITEM = { name: '', quantity: 1, price: '' };
+  const EMPTY_ITEM = { productId: '', name: '', quantity: 1, price: '' };
   const [form, setForm] = useState({ customerName: '', phone: '', address: '', city: '', ...addressDetails(), status: 'nuevo' });
   const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
   const [products, setProducts] = useState([]);
@@ -1965,25 +1965,30 @@ function NewOrderModal({ colors, onClose, onSaved }) {
     finally { setLookingUp(false); }
   };
 
-  const setItem = (idx, k, v) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [k]: v } : it));
+  const updateItem = (idx, changes) => setItems(prev => prev.map((item, i) => i === idx ? { ...item, ...changes } : item));
 
   const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM }]);
   const removeItem = idx => setItems(prev => prev.filter((_, i) => i !== idx));
 
   const selectProduct = (idx, productId) => {
-    if (!productId) { setItem(idx, 'name', ''); setItem(idx, 'price', ''); return; }
-    const p = products.find(p => String(p.id) === productId);
-    if (p) { setItem(idx, 'name', p.title); setItem(idx, 'price', String(p.price)); }
+    const product = products.find(p => String(p.id) === productId);
+    updateItem(idx, { productId: product ? productId : '', name: product?.title || '', price: product ? String(product.price) : '' });
   };
 
-  const total = items.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 1), 0);
+  const total = items.reduce((sum, item) => sum + Number(item.price) * Number(item.quantity), 0);
 
   const handleSave = async () => {
     if (!form.customerName.trim()) { setError('El nombre del cliente es requerido'); return; }
     if (items.some(i => !i.name.trim())) { setError('Completa el nombre de todos los productos'); return; }
+    if (items.some(i => !Number.isSafeInteger(Number(i.quantity)) || Number(i.quantity) < 1)) {
+      setError('Ingresa una cantidad entera mayor que cero para cada producto'); return;
+    }
+    if (items.some(i => i.price.trim() === '' || !Number.isFinite(Number(i.price)) || Number(i.price) < 0)) {
+      setError('Ingresa el precio de cada producto. Puedes escribir 0 si es gratis.'); return;
+    }
     setSaving(true); setError('');
     try {
-      await api.post('/orders', { ...form, items });
+      await api.post('/orders', { ...form, items: items.map(({ name, quantity, price }) => ({ name, quantity, price })) });
       onSaved();
     } catch (err) {
       setError(err.response?.data?.error || 'Error creando pedido');
@@ -2065,8 +2070,8 @@ function NewOrderModal({ colors, onClose, onSaved }) {
                       <div style={{ ...inp, color: colors.textSecondary, fontSize: '12px' }}>Cargando productos del cliente…</div>
                     ) : products.length > 0 ? (
                       <select style={{ ...inp, width: '100%' }}
-                        onChange={e => { selectProduct(idx, e.target.value); }}
-                        defaultValue="">
+                        aria-label={`Producto de la línea ${idx + 1}`} value={item.productId}
+                        onChange={e => selectProduct(idx, e.target.value)}>
                         <option value="">— Seleccionar o escribir —</option>
                         {products.map(p => (
                           <option key={p.id} value={String(p.id)}>{p.title} · ${Number(p.price).toLocaleString('es-CL')}</option>
@@ -2075,20 +2080,20 @@ function NewOrderModal({ colors, onClose, onSaved }) {
                     ) : null}
                     <input style={{ ...inp, marginTop: products.length > 0 ? '4px' : '0' }}
                       value={item.name}
-                      onChange={e => setItem(idx, 'name', e.target.value)}
+                      onChange={e => updateItem(idx, { name: e.target.value, productId: '' })}
                       placeholder="Nombre del producto" />
                   </div>
                   {/* Cantidad */}
                   <input style={{ ...inp, width: '56px', textAlign: 'center', flexShrink: 0 }}
                     type="number" min="1" value={item.quantity}
-                    onChange={e => setItem(idx, 'quantity', e.target.value)} />
+                    onChange={e => updateItem(idx, { quantity: e.target.value })} />
                   {/* Precio */}
                   <input style={{ ...inp, width: '90px', flexShrink: 0 }}
                     type="number" min="0" value={item.price}
-                    onChange={e => setItem(idx, 'price', e.target.value)}
+                    onChange={e => updateItem(idx, { price: e.target.value })}
                     placeholder="Precio" />
                   {items.length > 1 && (
-                    <button onClick={() => removeItem(idx)} style={{ background: 'none', border: 'none', color: colors.red, cursor: 'pointer', padding: '4px', flexShrink: 0 }}>
+                    <button aria-label={`Quitar producto de la línea ${idx + 1}`} onClick={() => removeItem(idx)} style={{ background: 'none', border: 'none', color: colors.red, cursor: 'pointer', padding: '4px', flexShrink: 0 }}>
                       <Trash2 size={14} />
                     </button>
                   )}
