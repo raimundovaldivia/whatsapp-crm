@@ -660,6 +660,40 @@ test('driver route shows cash balance, persists load checklist and keeps order h
     assert.equal(historyRes.body.routes[0].optimized_route[0].customerName,'Cliente prueba');
   } finally {await f.engine.close();}
 });
+test('driver can start a sent route paid before delivery and the attempt preserves the payment', async () => {
+  const f = await fixture();
+  try {
+    await f.query("UPDATE delivery_routes SET status='sent' WHERE id=1");
+    await f.query("UPDATE orders SET status='paid', payment_method='transferencia', payment_marked_at=NOW() WHERE id=1");
+    const router = load('src/routes/delivery.js', {
+      '../db/database': f.db, '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+    });
+    const start = async () => {
+      const res = response();
+      await handler(router, 'patch', '/routes/1/start')({
+        orgId: 1, userId: 10, role: 'repartidor', params: { id: '1' }, body: {},
+      }, res);
+      return res;
+    };
+    for (const condition of ["delivered_at=NOW()", "delivery_date=CURRENT_DATE+2", "last_attempt_status='cancelado_definitivo'"]) {
+      await f.query('UPDATE orders SET ' + condition + ' WHERE id=1');
+      const blocked = await start();
+      assert.equal(blocked.code, 409);
+      assert.match(blocked.body.error, /#DR-1\b/);
+      await f.query('UPDATE orders SET delivered_at=NULL, delivery_date=NULL, last_attempt_status=NULL WHERE id=1');
+    }
+    const before = (await f.query('SELECT payment_marked_at FROM orders WHERE id=1')).rows[0];
+    assert.equal((await start()).body.route.status, 'in_progress');
+    assert.equal((await start()).code, 200);
+    const order = (await f.query('SELECT status, payment_method, payment_marked_at, dispatch_count, delivered_at FROM orders WHERE id=1')).rows[0];
+    assert.equal(order.status, 'paid');
+    assert.equal(order.payment_method, 'transferencia');
+    assert.deepEqual(order.payment_marked_at, before.payment_marked_at);
+    assert.equal(order.dispatch_count, 1);
+    assert.equal(order.delivered_at, null);
+  } finally { await f.engine.close(); }
+});
+
 test('assigning an active route sends the driver a push notification with route context',async()=>{
   const f=await fixture();const sent=[];
   try {

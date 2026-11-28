@@ -340,10 +340,11 @@ async function markOrdersEnRoute(client, orgId, orders) {
       [orgId, shopifyIds]
     ),
     botIds.length && client.query(
-      `UPDATE orders SET status = 'en_camino', updated_at = NOW(),
+      `UPDATE orders SET status = CASE WHEN status = 'paid' THEN 'paid' ELSE 'en_camino' END,
+              updated_at = NOW(),
               dispatch_count = COALESCE(dispatch_count, 0) + 1, last_attempt_at = NOW()
          WHERE organization_id = $1 AND id = ANY($2)
-           AND delivered_at IS NULL AND status NOT IN ('en_camino', 'entregado', 'paid', 'cancelled')`,
+           AND delivered_at IS NULL AND status NOT IN ('en_camino', 'entregado', 'cancelled')`,
       [orgId, botIds]
     ),
     returnIds.length && client.query(
@@ -761,7 +762,7 @@ router.get('/orders', requireRole('owner', 'admin', 'supervisor', 'coordinador')
           LIMIT 1
         ) so ON true
         WHERE o.organization_id = $1
-          AND (o.status IS NULL OR o.status NOT IN ('asignado_ruta', 'en_camino', 'entregado', 'cancelled'))
+          AND (o.status IS NULL OR o.status NOT IN ('asignado_ruta', 'en_camino', 'entregado', 'cancelled', 'paid'))
           AND (
             o.delivery_date IS NULL
             OR o.delivery_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
@@ -1540,7 +1541,8 @@ router.patch('/routes/:id/start', requireRole('owner', 'admin', 'supervisor', 'c
       const pendingOrders = jsonList(route.orders).filter(order => !['entregado', 'partial', 'cancelled', 'postponed', 'not_delivered'].includes(statuses[orderKey(order)]));
       const eligible = await partitionDispatchable(client, req.orgId, pendingOrders, { allowAssigned: true });
       if (eligible.skip.length) {
-        throw Object.assign(new Error('La ruta cambió: contiene pedidos entregados, cancelados, pagados o programados para otro día. Pide al administrador que la actualice.'), { status: 409, skipped: eligible.skip });
+        const labels = eligible.skip.map(order => normalizeOrderLabel(order.orderName, order.source, order.id) || orderKey(order));
+        throw Object.assign(new Error(`Revisa estas paradas con el administrador antes de iniciar el reparto: ${labels.join(', ')}.`), { status: 409, skipped: eligible.skip });
       }
 
       const checklist = route.load_checklist && typeof route.load_checklist === 'object' ? route.load_checklist : {};
@@ -2147,13 +2149,15 @@ async function partitionDispatchable(pool, orgId, orders, { allowAssigned = fals
   if (botIds.length) {
     const { rows } = await pool.query(
       `SELECT id::text AS id, status, dispatch_count, last_attempt_status, delivery_note, manual_delivery_point, shipping_address,
-              (delivered_at IS NOT NULL OR status IN ('en_camino', 'entregado', 'cancelled', 'paid')
-                OR (status = 'asignado_ruta' AND NOT $3::boolean)
+              (delivered_at IS NOT NULL OR status IN ('en_camino', 'entregado', 'cancelled')
+                OR (status IN ('asignado_ruta', 'paid') AND NOT $3::boolean)
+                OR (status = 'paid' AND last_attempt_status = 'cancelado_definitivo')
                  OR (delivery_date > (CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')::date
                      AND status <> 'no_entregado')
                  OR (NOT $3::boolean AND NOT ${botDispatchReady})) AS blocked
          FROM orders
-        WHERE organization_id = $1 AND id = ANY($2::int[])`,
+        WHERE organization_id = $1 AND id = ANY($2::int[])
+        ${allowAssigned ? 'ORDER BY id FOR UPDATE' : ''}`,
       [orgId, botIds, allowAssigned]
     );
     rows.forEach(row => {
