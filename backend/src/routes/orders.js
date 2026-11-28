@@ -51,15 +51,29 @@ router.use((req, res, next) => {
 router.post('/', async (req, res) => {
   try {
     const { customerName, phone, address, city, items, status, notes } = req.body;
-    if (!customerName) return res.status(400).json({ error: 'customerName es requerido' });
+    if (typeof customerName !== 'string' || !customerName.trim()) return res.status(400).json({ error: 'El nombre del cliente es requerido' });
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Agrega al menos un producto' });
 
-    const total = items.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 1), 0);
-    const itemsJson = JSON.stringify(items.map(i => ({
-      name: i.name || i.title || '',
-      quantity: Number(i.quantity) || 1,
-      price: Number(i.price) || 0,
-    })));
+    const lines = [];
+    for (const item of items) {
+      const name = item?.name || item?.title;
+      if (typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'Completa el nombre de todos los productos' });
+      }
+      const rawQuantity = item.quantity === undefined ? 1 : item.quantity;
+      const quantity = Number(rawQuantity);
+      if (!['number', 'string'].includes(typeof rawQuantity) || !Number.isSafeInteger(quantity) || quantity < 1) {
+        return res.status(400).json({ error: 'Ingresa una cantidad entera mayor que cero para cada producto' });
+      }
+      const price = Number(item.price);
+      if (!['string', 'number'].includes(typeof item.price) || String(item.price).trim() === '' || !Number.isFinite(price) || price < 0) {
+        return res.status(400).json({ error: 'Ingresa el precio de cada producto. Puedes escribir 0 si es gratis.' });
+      }
+      lines.push({ name: name.trim(), quantity, price });
+    }
+    const total = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
+    if (!Number.isFinite(total)) return res.status(400).json({ error: 'El total del pedido es inválido' });
+    const itemsJson = JSON.stringify(lines);
 
     const shippingJson = address ? JSON.stringify({ address1: address, city: city || '', ...addressDetails(req.body) }) : null;
     const orderStatus  = status || 'nuevo';
