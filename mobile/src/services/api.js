@@ -37,7 +37,7 @@ async function getClient() {
   _client = axios.create({
     baseURL,
     timeout: API_TIMEOUT_MS,
-    headers: { 'X-Resel-Address-Format': '2', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { 'X-Resel-Address-Format': '2', 'X-Resel-Prepaid-Delivery': '1', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
   _client.interceptors.response.use(
     r => r,
@@ -232,9 +232,10 @@ export async function unregisterPushToken(expoToken) {
  *        Si es transferencia, el pedido queda en "Por cobrar" en el CRM
  *        hasta que llegue el comprobante.
  */
-export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras, deliverAfter, paymentBreakdown, partialDelivery) {
+export async function updateStopStatus(routeId, stopKey, status, paymentMethod, note, extras, deliverAfter, paymentBreakdown, partialDelivery, expectPrepaid = false) {
   const client = await getClient();
   const body = { stopKey, status };
+  if (expectPrepaid) body.expectPrepaid = true;
   if (paymentMethod) body.paymentMethod = paymentMethod;
   if (paymentBreakdown) {
     body.paymentCashAmount = paymentBreakdown.cash;

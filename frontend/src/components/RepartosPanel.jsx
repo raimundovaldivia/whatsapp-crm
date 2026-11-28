@@ -1149,6 +1149,7 @@ function periodLabel(period, view) {
   return `Año ${start.getFullYear()}`;
 }
 const PAY_META = {
+  prepaid:       { label: 'Pagado antes de la entrega', icon: '✓', color: '#22c55e' },
   efectivo:      { label: 'Efectivo',      icon: '💵', color: '#22c55e' },
   transferencia: { label: 'Transferencia', icon: '🏦', color: '#38bdf8' },
   mixto:         { label: 'Efectivo + transferencia', icon: '💵🏦', color: '#a78bfa' },
@@ -1804,11 +1805,12 @@ function DespachosRepartos({ colors }) {
                           </td>
                           <td style={{ padding: '8px 12px' }}>{chip(sm.label, sm.color)}</td>
                           <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
-                            <select value={r.payment_method || ''} disabled={payBusy === r.stop_key}
+                            <select value={r.payment_method || ''} disabled={payBusy === r.stop_key || r.payment_method === 'prepaid'}
                               onChange={e => changePay(r, e.target.value || null)}
                               title="Cambiar medio de pago"
                               style={{ fontSize: '11px', padding: '3px 6px', borderRadius: '6px', background: colors.bgInput, color: colors.textPrimary, border: `1px solid ${colors.border}`, cursor: payBusy === r.stop_key ? 'wait' : 'pointer', opacity: payBusy === r.stop_key ? 0.6 : 1 }}>
                               <option value="">—</option>
+                              {r.payment_method === 'prepaid' && <option value="prepaid">Pagado antes de la entrega</option>}
                               <option value="efectivo">💵 Efectivo</option>
                               <option value="transferencia">🏦 Transferencia</option>
                               <option value="mixto">💵🏦 Efectivo + transferencia</option>

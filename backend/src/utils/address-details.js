@@ -34,19 +34,25 @@ function legacyDriverStop(stop) {
   return { ...stop, address: lines.join('\n') };
 }
 
-function legacyDriverResponse(payload) {
+function legacyDriverResponse(payload, { legacyAddress = true, legacyPayment = false } = {}) {
+  const displayStop = stop => {
+    const view = legacyAddress ? legacyDriverStop(stop) : stop;
+    if (!legacyPayment || !view?.prepaid) return view;
+    return { ...view, totalPrice: 0,
+      orderName: `${view.orderName || '#' + view.id} · YA PAGADO · Saldo $0. Al entregar, elige «Otro / no corresponde».` };
+  };
   const route = value => value && {
     ...value,
-    ...(Array.isArray(value.orders) && { orders: value.orders.map(legacyDriverStop) }),
-    ...(Array.isArray(value.optimized_route) && { optimized_route: value.optimized_route.map(legacyDriverStop) }),
+    ...(Array.isArray(value.orders) && { orders: value.orders.map(displayStop) }),
+    ...(Array.isArray(value.optimized_route) && { optimized_route: value.optimized_route.map(displayStop) }),
   };
   return {
     ...payload,
     ...(payload.route && { route: route(payload.route) }),
     ...(Array.isArray(payload.routes) && { routes: payload.routes.map(route) }),
-    ...(payload.stop && { stop: legacyDriverStop(payload.stop) }),
-    ...(Array.isArray(payload.orders) && { orders: payload.orders.map(legacyDriverStop) }),
-    ...(Array.isArray(payload.optimizedRoute) && { optimizedRoute: payload.optimizedRoute.map(legacyDriverStop) }),
+    ...(payload.stop && { stop: displayStop(payload.stop) }),
+    ...(Array.isArray(payload.orders) && { orders: payload.orders.map(displayStop) }),
+    ...(Array.isArray(payload.optimizedRoute) && { optimizedRoute: payload.optimizedRoute.map(displayStop) }),
   };
 }
 

@@ -484,6 +484,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                     {stop?.coverage?.status === 'outside' ? <Text style={s.coverageChip}>⚠ Fuera de cobertura · {stop.coverage.distanceKm} km</Text> : null}
                     {stop?.coverage?.status === 'unlocated' ? <Text style={s.coverageChip}>⚠ Dirección sin ubicar</Text> : null}
                     {stop.isReturn ? <Text style={s.stopHistory}>↩️ Cambio/devolución · abre para confirmar retiro y reemplazo</Text> : null}
+                    {!isDone && stop.prepaid && <Text style={s.stopPay}>Ya pagado · Saldo $0</Text>}
                     {isPriorityRetry(stop) && (
                       <View style={s.retryChip}>
                         <Text style={s.retryChipTitle}>⚠ PRIORIDAD · REINTENTO</Text>
@@ -497,7 +498,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                       <Text style={s.stopTime}>{stop.distanceText} · {stop.durationText}</Text>
                     ) : null}
                     {isDone && pay ? (
-                      <Text style={s.stopPay}>{PAY_LABEL[pay] || pay}</Text>
+                      <Text style={s.stopPay}>{pay === 'prepaid' ? 'Pagado antes de la entrega' : PAY_LABEL[pay] || pay}</Text>
                     ) : null}
                   </View>
                   <View style={[s.badge, { backgroundColor: color + '22', borderColor: color + '44' }]}>

@@ -16,4 +16,8 @@ function paymentBreakdown(method, totalValue, cashValue, transferValue) {
   return { cash: null, transfer: null };
 }
 
-module.exports = { paymentBreakdown };
+function orderIsPaid(source, row) {
+  return source === 'bot' ? row?.status === 'paid' : String(row?.financial_status || '').toLowerCase() === 'paid';
+}
+
+module.exports = { paymentBreakdown, orderIsPaid };
