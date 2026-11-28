@@ -23,6 +23,25 @@ async function ensureOrderNoticeLanes(client) {
   )`);
 }
 
+async function ensureDispatchAddressColumns(client) {
+  await client.query(`
+    DO $$ BEGIN
+      IF (SELECT count(*) FROM pg_attribute WHERE attrelid = 'contacts'::regclass
+          AND attname IN ('address2', 'address_description') AND NOT attisdropped) < 2 THEN
+        ALTER TABLE contacts
+          ADD COLUMN IF NOT EXISTS address2 TEXT,
+          ADD COLUMN IF NOT EXISTS address_description TEXT;
+      END IF;
+      IF (SELECT count(*) FROM pg_attribute WHERE attrelid = 'shopify_orders'::regclass
+          AND attname IN ('shipping_address2', 'shipping_address_description') AND NOT attisdropped) < 2 THEN
+        ALTER TABLE shopify_orders
+          ADD COLUMN IF NOT EXISTS shipping_address2 TEXT,
+          ADD COLUMN IF NOT EXISTS shipping_address_description TEXT;
+      END IF;
+    END $$;
+  `);
+}
+
 async function setupDatabase() {
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -539,8 +558,6 @@ async function setupDatabase() {
 
       -- Migración: dirección editable en shopify_orders
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address1 TEXT;
-      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address2 TEXT;
-      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address_description TEXT;
 
       -- ─── PEDIDOS AGENDADOS ─────────────────────────────────────────
       -- Clientes que quieren pedir para una fecha futura.
@@ -1150,7 +1167,6 @@ async function setupDatabase() {
       -- Migración: campos ricos de Shopify en contacts (para servir clientes desde DB local)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address1          TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address2          TEXT;
-      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address_description TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS province          TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS zip               TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS country           TEXT;
@@ -1986,6 +2002,7 @@ async function setupDatabase() {
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'referrals-rewards-v2.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'campaign-offers.sql'), 'utf8'));
     await client.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'outbound-message-queue.sql'), 'utf8'));
+    await ensureDispatchAddressColumns(client);
     await ensureWebOrderNoticeWordings(client);
     await ensureOrderNoticeLanes(client);
     console.log('✅ DB PostgreSQL multi-tenant configurada');
@@ -1995,4 +2012,4 @@ async function setupDatabase() {
   }
 }
 
-module.exports = { setupDatabase, ensureWebOrderNoticeWordings, ensureOrderNoticeLanes };
+module.exports = { setupDatabase, ensureDispatchAddressColumns, ensureWebOrderNoticeWordings, ensureOrderNoticeLanes };

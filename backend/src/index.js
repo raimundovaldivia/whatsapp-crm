@@ -188,9 +188,11 @@ app.use((err, _req, res, _next) => {
 const PORT = process.env.PORT || 3001;
 let eggRepurchaseTimer;
 
-const { setupDatabase, ensureWebOrderNoticeWordings, ensureOrderNoticeLanes } = require('./db/setup');
+const { setupDatabase, ensureDispatchAddressColumns, ensureWebOrderNoticeWordings, ensureOrderNoticeLanes } = require('./db/setup');
 
-require('./services/database-startup').prepareDatabase(setupDatabase).then(async () => {
+require('./services/database-startup').prepareDatabase(setupDatabase, process.env, () =>
+  ensureDispatchAddressColumns(require('./db/database').getPool())
+).then(async () => {
   // Existing installations may skip the full bootstrap. This field is required
   // by both ordinary mode changes and manual-reply campaigns.
   const pool = require('./db/database').getPool();
