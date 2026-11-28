@@ -43,7 +43,9 @@ export default function RouteDispatchControls({ route, loadReady, colors, onUpda
     return run(async () => {
       const { data } = await api.patch(`/delivery/routes/${route.id}/stops`, {
         stopKey: selected, status: 'entregado', note,
-        ...(payment ? { paymentMethod: payment } : {}),
+        ...(stops.find(stop => `${stop.source}_${stop.id}` === selected)?.prepaid
+          ? { expectPrepaid: true }
+          : payment ? { paymentMethod: payment } : {}),
       });
       onUpdated({ ...route, status: data.routeStatus, stop_statuses: data.stopStatuses,
         stop_payments: data.stopPayments, stop_payment_amounts: data.stopPaymentAmounts });
@@ -74,13 +76,13 @@ export default function RouteDispatchControls({ route, loadReady, colors, onUpda
           <button disabled={busy} onClick={() => { setSelected(key); setPayment(''); setNote(''); }} style={ui.btn(colors, 'primary')}>Registrar entrega</button>
         </div>
         {selected === key && <form onSubmit={deliver} style={{ display: 'grid', gap: 10, marginTop: 12 }}>
-          <label style={{ color: colors.textSecondary }}>Pago de esta entrega
+          {stop.prepaid ? <strong>Ya pagado · Saldo $0</strong> : <label style={{ color: colors.textSecondary }}>Pago de esta entrega
             <select aria-label="Pago de esta entrega" value={payment} onChange={e => setPayment(e.target.value)} disabled={busy} style={{ ...ui.input(colors), width: '100%' }}>
               <option value="">Pago pendiente / sin cobro</option>
               <option value="efectivo">Efectivo recibido</option>
               <option value="transferencia">Transferencia por verificar</option>
             </select>
-          </label>
+          </label>}
           <label style={{ color: colors.textSecondary }}>Nota de entrega
             <textarea aria-label="Nota de entrega" value={note} maxLength={500} onChange={e => setNote(e.target.value)} disabled={busy} style={{ ...ui.input(colors), width: '100%' }} />
           </label>

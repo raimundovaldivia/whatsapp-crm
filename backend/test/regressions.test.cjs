@@ -694,6 +694,45 @@ test('driver can start a sent route paid before delivery and the attempt preserv
   } finally { await f.engine.close(); }
 });
 
+test('prepaid stops display zero due and preserve the original payment even on an older phone', async () => {
+  const f = await fixture();
+  try {
+    const router = load('src/routes/delivery.js', {
+      '../db/database': f.db, '../middleware/auth': { requireAuth: noop, requireRole: () => noop },
+      '../services/order-notices': { enabled: async () => false },
+    });
+    const call = async (method, path, id, body = {}) => {
+      const res = response();
+      await handler(router, method, path)({ orgId: 1, role: 'repartidor', userId: 10, params: { id }, body }, res);
+      return res;
+    };
+    await f.query("UPDATE orders SET status='paid',payment_method='transferencia',payment_marked_at='2026-11-01',payment_transfer_amount=100 WHERE id=1");
+    await f.query("UPDATE shopify_orders SET financial_status='PAID',payment_method='efectivo',payment_cash_amount=100,total_price=100");
+    for (const [id, key] of [['1', 'bot_1'], ['3', 'shopify_gid://shopify/Order/42']]) {
+      const detail = await call('get', '/routes/1', id);
+      assert.equal(detail.body.route.orders[0].prepaid, true);
+      const delivered = await call('patch', '/routes/1/stops', id, { stopKey: key, status: 'entregado', paymentMethod: 'efectivo' });
+      assert.equal(delivered.code, 200, JSON.stringify(delivered.body));
+      assert.equal(delivered.body.stopPayments[key], 'prepaid');
+      assert.equal(delivered.body.stopPaymentAmounts[key].cash, 0);
+      assert.equal(delivered.body.stopPaymentAmounts[key].transfer, 0);
+      assert.equal(delivered.body.autoCharge, null);
+      const summary = (await call('get', '/routes/1', id)).body.route.financial_summary;
+      assert.equal(summary.cashCollected + summary.transferCollected + summary.otherCollected, 0);
+    }
+    const { rows: [bot] } = await f.query("SELECT status,payment_method,payment_transfer_amount,delivered_at,payment_marked_at::date::text AS paid_on FROM orders WHERE id=1");
+    assert.deepEqual([bot.status,bot.payment_method,Number(bot.payment_transfer_amount),bot.paid_on], ['paid','transferencia',100,'2026-11-01']);
+    assert.ok(bot.delivered_at);
+    const { rows: [shop] } = await f.query('SELECT financial_status,payment_method,payment_cash_amount FROM shopify_orders');
+    assert.deepEqual([shop.financial_status,shop.payment_method,Number(shop.payment_cash_amount)], ['PAID','efectivo',100]);
+    await f.query("UPDATE delivery_routes SET status='in_progress', driver_user_id=10 WHERE id=2");
+    const stale = await call('patch','/routes/1/stops','2',{stopKey:'bot_2',status:'entregado',expectPrepaid:true});
+    assert.equal(stale.code,409);
+    const unpaid = await call('patch','/routes/1/stops','2',{stopKey:'bot_2',status:'entregado',paymentMethod:'transferencia'});
+    assert.equal(unpaid.body.stopPayments.bot_2,'transferencia');
+  } finally { await f.engine.close(); }
+});
+
 test('assigning an active route sends the driver a push notification with route context',async()=>{
   const f=await fixture();const sent=[];
   try {

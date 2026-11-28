@@ -1,4 +1,5 @@
 const db = require('../db/database');
+const { orderIsPaid } = require('../utils/payment-breakdown');
 const deliveryNotifications = require('./delivery-notifications');
 
 async function sendOrderEditNotification(...args) {
@@ -80,6 +81,9 @@ async function routeItems(req, res) {
       const clean = items.filter(i => i.quantity > 0).map(i => ({ name:i.name.slice(0,200), title:i.name.slice(0,200), quantity:i.quantity, price:i.price, ...(i.extra ? {_deliveryExtra:true}: {}) }));
       const total = clean.reduce((s,i) => s+i.quantity*i.price,0);
       if (!Number.isSafeInteger(total)) throw Object.assign(new Error('Total inválido'), {status:400});
+      if (orderIsPaid(source, order) && total !== Number(order.total_price)) {
+        throw Object.assign(new Error('Este pedido ya fue pagado. Conserva el total y registra cualquier venta adicional en otro pedido.'), { status: 409 });
+      }
       await client.query(`UPDATE ${table} SET items=$1,total_price=$2,delivery_modified=TRUE WHERE ${column}=$3 AND organization_id=$4`, [JSON.stringify(clean),String(total),key,req.orgId]);
       // La ruta conserva una copia de cada pedido para funcionar sin conexión.
       // Mantenerla sincronizada evita que la carga muestre cantidades antiguas

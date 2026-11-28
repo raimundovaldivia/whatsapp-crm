@@ -30,7 +30,7 @@ const axios   = require('axios');
 const db          = require('../db/database');
 const { getPool } = require('../db/database');
 const collection  = require('../services/payment-collection');
-const { paymentBreakdown } = require('../utils/payment-breakdown');
+const { paymentBreakdown, orderIsPaid } = require('../utils/payment-breakdown');
 const deliveryNotifications = require('../services/delivery-notifications');
 const orderNotices = require('../services/order-notices');
 const deliveryTracking = require('../services/delivery-tracking');
@@ -74,11 +74,13 @@ function setSocketIO(socketIO) { io = socketIO; }
 
 router.use(requireAuth);
 router.use('/routes', (req, res, next) => {
-  const legacy = !req.get('X-Resel-Address-Format') && /okhttp|CFNetwork|Despachos|Expo\b/i.test(req.get('User-Agent') || '');
-  if (legacy) {
-    if (req.method === 'PATCH' && req.path.endsWith('/stops/address')) req.body = readLegacyDriverAddress(req.body);
+  const mobile = /okhttp|CFNetwork|Despachos|Expo\b/i.test(req.get('User-Agent') || '');
+  const legacyAddress = mobile && !req.get('X-Resel-Address-Format');
+  const legacyPayment = mobile && !req.get('X-Resel-Prepaid-Delivery');
+  if (legacyAddress || legacyPayment) {
+    if (legacyAddress && req.method === 'PATCH' && req.path.endsWith('/stops/address')) req.body = readLegacyDriverAddress(req.body);
     const json = res.json.bind(res);
-    res.json = payload => json(legacyDriverResponse(payload));
+    res.json = payload => json(legacyDriverResponse(payload, { legacyAddress, legacyPayment }));
   }
   next();
 });
@@ -244,12 +246,7 @@ async function notifyConsolidatedRouteCustomers(orgId, route) {
   };
 }
 
-/**
- * Rutas antiguas (y algunos resultados de optimización) pueden conservar la
- * parada pero no su copia de `items`. La consolidación no debe quedar vacía:
- * recupera los productos desde el pedido original y los incorpora en memoria
- * tanto a `orders` como a `optimized_route`.
- */
+// Las rutas antiguas también recuperan de la orden sus productos y el pago vigente.
 async function hydrateRouteItems(pool, route, orgId) {
   if (!route) return route;
   const orders = jsonList(route.orders);
@@ -268,20 +265,23 @@ async function hydrateRouteItems(pool, route, orgId) {
   const shopifyIds = [...new Set(all.filter(item => item?.source === 'shopify').map(item => String(item.id)).filter(Boolean))];
   const [botResult, shopifyResult] = await Promise.all([
     botIds.length
-      ? pool.query('SELECT id::text AS id, items, customer_phone, customer_name, shipping_address FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
+      ? pool.query('SELECT id::text AS id, items, customer_phone, customer_name, shipping_address, status FROM orders WHERE organization_id = $1 AND id = ANY($2::int[])', [orgId, botIds])
       : { rows: [] },
     shopifyIds.length
-      ? pool.query('SELECT shopify_order_id AS id, items, customer_phone, customer_name, shipping_address1, shipping_city, shipping_address2, shipping_address_description, raw_json->\'shippingAddress\' AS raw_shipping FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopifyIds])
+      ? pool.query('SELECT shopify_order_id AS id, items, customer_phone, customer_name, shipping_address1, shipping_city, shipping_address2, shipping_address_description, financial_status, raw_json->\'shippingAddress\' AS raw_shipping FROM shopify_orders WHERE organization_id = $1 AND shopify_order_id = ANY($2::text[])', [orgId, shopifyIds])
       : { rows: [] },
   ]);
 
+  const paidOrders = new Set();
   for (const row of botResult.rows) {
+    if (orderIsPaid('bot', row)) paidOrders.add(`bot_${row.id}`);
     const items = jsonList(row.items);
     if (items.length && !itemMap.has(`bot_${row.id}`)) itemMap.set(`bot_${row.id}`, items);
     locationMap.set(`bot_${row.id}`, shippingObject(row.shipping_address));
     customerMap.set(`bot_${row.id}`, { phone: row.customer_phone, customerName: row.customer_name });
   }
   for (const row of shopifyResult.rows) {
+    if (orderIsPaid('shopify', row)) paidOrders.add(`shopify_${row.id}`);
     const items = jsonList(row.items);
     if (items.length && !itemMap.has(`shopify_${row.id}`)) itemMap.set(`shopify_${row.id}`, items);
     locationMap.set(`shopify_${row.id}`, shopifyAddress(row));
@@ -289,11 +289,14 @@ async function hydrateRouteItems(pool, route, orgId) {
   }
 
   const addItems = stop => {
+    const key = orderKey(stop);
+    const pending = (route.stop_statuses?.[key] || 'pending') === 'pending';
     const customer = customerMap.get(orderKey(stop)) || {};
     const location = locationMap.get(orderKey(stop));
     const sameStreet = location && (location.address || location.address1) === stop.address && (!location.city || !stop.city || location.city === stop.city);
     const base = {
       ...stop,
+      prepaid: pending ? paidOrders.has(key) : route.stop_payments?.[key] === 'prepaid',
       ...(sameStreet && !['completed', 'cancelled'].includes(route.status) ? addressDetails(location) : {}),
       orderName: normalizeOrderLabel(stop?.orderName, stop?.source, stop?.id) || stop?.orderName,
       phone: stop?.phone || customer.phone || null,
@@ -1215,7 +1218,7 @@ async function routeFinancialSummary(pool, route, orgId) {
       transferCollected += Number.isFinite(transfer) ? transfer : 0;
     } else if (method === 'efectivo') cashCollected += Number.isFinite(cash) && cash > 0 ? cash : deliveredAmount;
     else if (method === 'transferencia') transferCollected += Number.isFinite(transfer) && transfer > 0 ? transfer : deliveredAmount;
-    else otherCollected += deliveredAmount;
+    else if (method !== 'prepaid') otherCollected += deliveredAmount;
   }
   const expense = expenseResult.rows[0] || { count: 0, total: 0 };
   return {
@@ -3055,9 +3058,7 @@ async function createPartialRemainder(client, { orgId, routeId, stopKey, source,
   const shippingAddress = source === 'bot'
     ? order.shipping_address
     : JSON.stringify(shopifyAddress(order));
-  const prepaid = source === 'bot'
-    ? order.status === 'paid'
-    : String(order.financial_status || '').toLowerCase() === 'paid';
+  const prepaid = orderIsPaid(source, order);
   const parentLabel = source === 'bot'
     ? crmOrderLabel(sourceId)
     : (normalizeOrderLabel(order.shopify_name, 'shopify', sourceId) || String(sourceId));
@@ -3236,7 +3237,7 @@ async function applyReturnRouteStop(client, { owned, routeId, stopKey, returnId,
 }
 
 async function applyStopUpdate(req, res, id, stopKey) {
-  const { status, paymentMethod, paymentCashAmount, paymentTransferAmount, note, extras, deliverAfter, deliveredQuantities } = req.body;  // status: 'entregado' | 'partial' | 'cancelled' | 'pending' | 'postponed' | 'not_delivered'
+  const { status, paymentMethod: requestedPayment, paymentCashAmount, paymentTransferAmount, note, extras, deliverAfter, deliveredQuantities } = req.body;
   let cleanNote = typeof note === 'string' ? note.trim().slice(0, 500) : '';
   // Reprogramado: el cliente pidió que se le entregue otro día.
   const needsDeliveryDate = status === 'postponed' || status === 'partial';
@@ -3267,7 +3268,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
     return res.status(400).json({ success: false, error: 'Indica el motivo para cerrar esta parada' });
 
   const VALID_PAYMENT = ['efectivo', 'transferencia', 'mixto', 'otro'];
-  if (paymentMethod && !VALID_PAYMENT.includes(paymentMethod))
+  if (requestedPayment && !VALID_PAYMENT.includes(requestedPayment))
     return res.status(400).json({ success: false, error: `Medio de pago inválido. Opciones: ${VALID_PAYMENT.join(', ')}` });
 
   // Un repartidor solo puede tocar rutas asignadas a él (o sin asignar).
@@ -3290,7 +3291,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
       if (status === 'partial') throw Object.assign(new Error('Las devoluciones no admiten entrega parcial.'), { status: 400 });
       const outcome = await applyReturnRouteStop(pool, {
         owned, routeId: id, stopKey, returnId: orderKey, orgId: req.orgId, userId: req.userId,
-        status, paymentMethod, note: cleanNote, deliverDate,
+        status, paymentMethod: requestedPayment, note: cleanNote, deliverDate,
       });
       await pool.query('COMMIT');
       committed = true;
@@ -3311,6 +3312,18 @@ async function applyStopUpdate(req, res, id, stopKey) {
     const order = await pool.query('SELECT * FROM ' + table + ' WHERE ' + column + ' = $1 AND organization_id = $2 FOR UPDATE', [kind === 'bot' ? Number(orderKey) : orderKey, req.orgId]);
     if (!order.rows.length) throw Object.assign(new Error('Pedido no encontrado'), { status: 404 });
     const orderRow = order.rows[0];
+    const isDelivery = status === 'entregado' || status === 'partial';
+    if (isDelivery && ['entregado', 'partial'].includes(owned.stop_statuses?.[stopKey])) {
+      throw Object.assign(new Error('Esta entrega ya está registrada. Actualiza la ruta.'), { status: 409 });
+    }
+    const prepaid = isDelivery && orderIsPaid(kind, orderRow);
+    if (prepaid && cleanExtras.some(item => item.price > 0)) {
+      throw Object.assign(new Error('Este pedido ya fue pagado. Registra la venta adicional en otro pedido.'), { status: 409 });
+    }
+    if (isDelivery && req.body.expectPrepaid === true && !prepaid) {
+      throw Object.assign(new Error('El estado del pago cambió. Actualiza la parada para ver el saldo.'), { status: 409 });
+    }
+    const paymentMethod = prepaid ? null : requestedPayment;
     let partial = null;
     let remainderOrderId = null;
     if (status === 'partial') {
@@ -3345,17 +3358,16 @@ async function applyStopUpdate(req, res, id, stopKey) {
         : (normalizeOrderLabel(currentStop.orderName, currentStop.source, currentStop.id) || String(orderKey)),
     };
     const deliveryTotal = Math.round((partial ? partial.deliveredTotal : (Number(orderRow.total_price) || 0)) + cleanExtras.reduce((sum, e) => sum + e.price * e.quantity, 0));
-    const isDelivery = status === 'entregado' || status === 'partial';
     const breakdown = isDelivery
       ? paymentBreakdown(paymentMethod, deliveryTotal, paymentCashAmount, paymentTransferAmount)
       : { cash: 0, transfer: 0 };
     const cashAmount = breakdown.cash || 0;
     const transferAmount = breakdown.transfer || 0;
     // Actualizar stop_statuses (y el medio de pago, si se entregó) en la ruta
-    const paymentJson = isDelivery && paymentMethod
-      ? JSON.stringify({ [stopKey]: paymentMethod })
+    const paymentJson = isDelivery && (prepaid || paymentMethod)
+      ? JSON.stringify({ [stopKey]: prepaid ? 'prepaid' : paymentMethod })
       : '{}';
-    const paymentAmountsJson = isDelivery && paymentMethod
+    const paymentAmountsJson = isDelivery && (prepaid || paymentMethod)
       ? JSON.stringify({ [stopKey]: { cash: cashAmount, transfer: transferAmount } })
       : '{}';
     // Nota del repartidor por parada (se guarda si viene; si va vacía no borra la anterior)
@@ -3551,7 +3563,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
           queueRef => recovery
             ? deliveryNotifications.sendDeliveryOutcomeRecovery(req.orgId, { ...operationalStop, queueRef }, { status, note: cleanNote, deliveryDate: deliverDate })
             : orderNotices.send(req.orgId, operationalStop, {
-                kind: status, queueRef, paymentMethod: paymentMethod || orderRow.payment_method,
+                kind: status, queueRef, paymentMethod: prepaid ? null : paymentMethod || orderRow.payment_method,
                 fields: partial ? { FECHA: deliverDate.split('-').reverse().join('-') } : {},
               }),
           { status, note: cleanNote, deliveryDate: deliverDate }
@@ -3588,6 +3600,7 @@ async function applyStopUpdate(req, res, id, stopKey) {
 
     res.json({
       success:       true,
+      prepaid,
       stopStatuses:  route.stop_statuses,
       stopPayments:  route.stop_payments || {},
       stopPaymentAmounts: route.stop_payment_amounts || {},

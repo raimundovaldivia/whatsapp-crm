@@ -5,7 +5,7 @@ import {
   Linking, Alert, ActivityIndicator, Platform, ScrollView,
 } from 'react-native';
 import {
-  updateStopStatus, getSellCatalog, getModules, getOrderItems, setOrderItems,
+  updateStopStatus, getRoute, getSellCatalog, getModules, getOrderItems, setOrderItems,
   getEnRouteNotificationStatus, sendEnRouteNotification, updateStopAddress,
 } from '../services/api';
 import { C, R, shadowSoft } from '../theme';
@@ -29,6 +29,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
   // Al entregar hay que registrar cómo pagó el cliente: se pregunta acá mismo,
   // con botones grandes, en vez de un Alert encadenado.
   const [askingPayment, setAskingPayment] = useState(false);
+  const [prepaid, setPrepaid] = useState(stop.prepaid === true);
   const [deliveryStatus, setDeliveryStatus] = useState('entregado');
   const [partialMode, setPartialMode] = useState(false);
   const [partialItems, setPartialItems] = useState([]);
@@ -244,6 +245,32 @@ export default function StopScreen({ route: navRoute, navigation }) {
       : item));
   }
 
+  async function reviewDelivery(nextStatus) {
+    setLoading(true);
+    try {
+      if (!stop.isReturn) {
+        const route = await getRoute(routeId);
+        const current = route?.orders?.find(order => `${order.source}_${order.id}` === stopKey);
+        if (!current) throw new Error('La parada ya no pertenece a esta ruta.');
+        setPrepaid(current.prepaid === true);
+        if (current.prepaid && extrasTotal > 0) {
+          Alert.alert('El pedido ya fue pagado', 'Registra los productos adicionales en otro pedido.', [
+            { text: 'Volver', style: 'cancel' },
+            { text: 'Quitar adicionales de esta entrega', onPress: () => setExtras({}) },
+          ]);
+          return;
+        }
+      }
+      setDeliveryStatus(nextStatus);
+      setPartialMode(false);
+      setAskingPayment(true);
+    } catch (err) {
+      Alert.alert('No se pudo revisar la parada', err.response?.data?.error || 'Actualiza la ruta antes de confirmar la entrega.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function continuePartialDelivery() {
     const hasDelivered = partialItems.some(item => item.deliveredQuantity > 0);
     const hasPending = partialItems.some(item => item.deliveredQuantity < item.orderedQuantity);
@@ -255,8 +282,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
       Alert.alert('Falta la fecha', 'Indica cuándo se entregará lo pendiente.');
       return;
     }
-    setPartialMode(false);
-    setAskingPayment(true);
+    reviewDelivery('partial');
   }
 
   function openMaps() {
@@ -351,10 +377,10 @@ export default function StopScreen({ route: navRoute, navigation }) {
       const resp = await updateStopStatus(
         routeId, stopKey, newStatus, paymentMethod, finalNote, extrasArray,
         newStatus === 'partial' ? partialDate : deliverAfter,
-        paymentBreakdown, partialDelivery
+        paymentBreakdown, partialDelivery, prepaid && ['entregado', 'partial'].includes(newStatus)
       );
       setStatus(newStatus);
-      setPaidWith(paymentMethod || null);
+      setPaidWith(resp?.prepaid ? 'prepaid' : paymentMethod || null);
       setDone(true);
       setAskingPayment(false);
       if (typeof onComplete === 'function') onComplete(newStatus);
@@ -540,6 +566,9 @@ export default function StopScreen({ route: navRoute, navigation }) {
       )}
 
       {/* N° Pedido */}
+      {prepaid && !done && <View style={s.infoCard}>
+        <Text style={[s.infoValue, { color: C.green, fontWeight: '700' }]}>Ya pagado · Saldo $0</Text>
+      </View>}
       <View style={s.infoCard}>
         <Text style={s.infoLabel}>🧾 Pedido</Text>
         <Text style={s.infoValue}>{stop.orderName}</Text>
@@ -570,6 +599,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
           {status === 'cancelled' && <Text style={s.donePay}>El pedido quedó cancelado definitivamente</Text>}
           {status === 'not_delivered' && <Text style={s.donePay}>El pedido no fue modificado</Text>}
           {paidWith === 'efectivo'     && <Text style={s.donePay}>💵 Pagado en efectivo</Text>}
+          {paidWith === 'prepaid' && <Text style={s.donePay}>Pagado antes de la entrega</Text>}
           {paidWith === 'transferencia' && <Text style={s.donePay}>🏦 Por transferencia — queda pendiente el comprobante</Text>}
           {paidWith === 'mixto' && <Text style={s.donePay}>💵🏦 Pago mixto registrado — la transferencia queda pendiente de conciliación</Text>}
           <Text style={s.doneSub}>Volviendo a la ruta...</Text>
@@ -608,7 +638,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
           </View>
           <TouchableOpacity style={[s.payBtn, s.partialConfirmBtn, loading && s.btnDisabled]}
             onPress={continuePartialDelivery} disabled={loading} activeOpacity={0.85}>
-            <Text style={s.payBtnText}>Continuar al pago</Text>
+            <Text style={s.payBtnText}>{prepaid ? 'Revisar entrega parcial' : 'Continuar al pago'}</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => { setPartialMode(false); setDeliveryStatus('entregado'); }} disabled={loading} activeOpacity={0.7}>
             <Text style={s.payCancel}>← Cancelar entrega parcial</Text>
@@ -709,6 +739,18 @@ export default function StopScreen({ route: navRoute, navigation }) {
 
           <TouchableOpacity onPress={() => setOutcomeMode(null)} disabled={loading} activeOpacity={0.7}>
             <Text style={s.payCancel}>← Volver</Text>
+          </TouchableOpacity>
+        </View>
+      ) : askingPayment && prepaid ? (
+        <View style={s.payBox}>
+          <Text style={s.payTitle}>Este pedido ya fue pagado</Text>
+          <Text style={s.paySub}>Confirma la entrega sin cobrar al cliente.</Text>
+          <TouchableOpacity style={[s.payBtn, s.payCash]} disabled={loading}
+            onPress={() => submit(deliveryStatus)}>
+            <Text style={s.payBtnText}>{deliveryStatus === 'partial' ? 'Confirmar entrega parcial' : 'Confirmar entrega'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity disabled={loading} onPress={() => { setAskingPayment(false); setPartialMode(deliveryStatus === 'partial'); }}>
+            <Text style={s.payCancel}>Volver</Text>
           </TouchableOpacity>
         </View>
       ) : askingPayment ? (
@@ -845,7 +887,8 @@ export default function StopScreen({ route: navRoute, navigation }) {
             )}
           </View>
 
-          {sellEnabled && catalog.length > 0 && (
+          {sellEnabled && prepaid && <Text style={s.sellSummary}>Registra las ventas adicionales en otro pedido.</Text>}
+          {sellEnabled && !prepaid && catalog.length > 0 && (
             <View style={s.sellBox}>
               <TouchableOpacity style={s.sellHead} onPress={() => setShowPicker(v => !v)} activeOpacity={0.7}>
                 <Text style={s.sellTitle}>🥚 Vender extra{extrasTotal > 0 ? ` · +${CLP(extrasTotal)}` : ''}</Text>
@@ -926,7 +969,7 @@ export default function StopScreen({ route: navRoute, navigation }) {
           <View style={s.statusRow}>
             <TouchableOpacity
               style={[s.statusBtn, s.deliveredBtn, loading && s.btnDisabled]}
-              onPress={() => { setDeliveryStatus('entregado'); setAskingPayment(true); }}
+              onPress={() => reviewDelivery('entregado')}
               disabled={loading}
               activeOpacity={0.85}>
               <Text style={s.statusIcon}>✓</Text>
