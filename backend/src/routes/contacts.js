@@ -16,6 +16,7 @@ const resolveIdentityPhones = typeof resolveCustomerPhones === 'function'
   : async (_pool, _orgId, phone) => [phone];
 const { loadPurchases, withPurchaseStats } = require('../services/broadcast-purchases');
 const productIdentity = require('../services/product-identity');
+const { loadAudienceCatalog, catalogPurchaseMatcher } = require('../services/audience-products');
 const canonicalizeProductItem = typeof productIdentity.canonicalizeProductItem === 'function'
   ? productIdentity.canonicalizeProductItem
   : item => ({ ...item, product_key: `raw:${String(item?.name || item?.title || '').toLowerCase()}`, product_label: item?.name || item?.title || '' });
@@ -288,18 +289,43 @@ router.get('/favorite-products', requireContactsAccess, async (req, res) => {
   }
 });
 
-router.get('/by-product', requireContactsAccess, async (req, res) => {
+router.get('/product-filter-options', requireContactsAccess, async (req, res) => {
+  try {
+    const catalog = await loadAudienceCatalog(db, req.orgId);
+    res.json({ products: catalog.map(p => ({
+      id: String(p.id), title: p.title, inactive: p.active === false || Boolean(p.deprecated_at),
+      business: Boolean(p.is_business),
+    })) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/by-product', requireContactsAccess, buyersByProduct);
+router.post('/by-product', requireContactsAccess, buyersByProduct);
+
+async function buyersByProduct(req, res) {
   const { getPool } = require('../db/database');
   const pool = getPool();
   const q = String(req.query.q || '').trim();
-  if (!q) return res.json({ success: true, phones: [], count: 0, term: '' });
   try {
+    let matches = item => productMatchesQuery(item, q);
+    if (req.method === 'POST') {
+      const ids = req.body?.productIds;
+      if (!Array.isArray(ids) || !ids.length || ids.some(id => typeof id !== 'string' || !id.trim())) {
+        return res.status(400).json({ error: 'Selecciona al menos un producto del catálogo.' });
+      }
+      matches = catalogPurchaseMatcher(await loadAudienceCatalog(db, req.orgId), ids);
+      if (!matches) return res.status(400).json({ error: 'El catálogo cambió. Vuelve a abrir la lista de productos.' });
+    } else if (!q) {
+      return res.json({ success: true, phones: [], count: 0, term: '' });
+    }
     const { rows } = await pool.query(
-      `SELECT customer_phone, items::text AS items FROM orders
+      `SELECT customer_phone, items::text AS items, false AS shopify FROM orders
          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
            AND status <> 'cancelled' AND items IS NOT NULL
        UNION ALL
-       SELECT customer_phone, items::text AS items FROM shopify_orders
+       SELECT customer_phone, items::text AS items, true AS shopify FROM shopify_orders
          WHERE organization_id = $1 AND customer_phone IS NOT NULL AND customer_phone <> ''
            AND items IS NOT NULL`,
       [req.orgId]
@@ -314,7 +340,7 @@ router.get('/by-product', requireContactsAccess, async (req, res) => {
       try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
     };
     const phones = [...new Set(rows
-      .filter(row => parseItems(row.items).some(item => !item?._deliveryExtra && productMatchesQuery(item, q)))
+      .filter(row => parseItems(row.items).some(item => item && !item._deliveryExtra && matches(item, row.shopify)))
       .map(row => norm(row.customer_phone)).filter(Boolean))];
     const ds = await db.getPrimaryDataSource(req.orgId);
     const scopes = ds?.config?.scopes || [];
@@ -338,7 +364,7 @@ router.get('/by-product', requireContactsAccess, async (req, res) => {
     console.error('[Contacts/by-product]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
-});
+}
 
 router.get('/broadcast', requireContactsAccess, async (req, res) => {
   const { getPool } = require('../db/database');

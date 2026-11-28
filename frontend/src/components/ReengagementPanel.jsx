@@ -1,3 +1,4 @@
+import CampaignProductFilter from './CampaignProductFilter.jsx';
 import JourneyDetails from './JourneyDetails.jsx';
 import ConversationReviewPanel from './ConversationReviewPanel.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -1503,9 +1504,10 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
   const [followUpPreview, setFollowUpPreview] = useState(null);
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [statusCheckCampaign, setStatusCheckCampaign] = useState(null);
-  const [prodTerm,  setProdTerm]  = useState('');    // texto del filtro por producto
-  const [prodPhones, setProdPhones] = useState(null); // Set de teléfonos que compraron el producto (null = sin filtro)
-  const [prodBusy,  setProdBusy]  = useState(false);
+  const [filterProducts, setFilterProducts] = useState([]);
+  const [prodTerm, setProdTerm] = useState(''); // Búsqueda libre propuesta por el planificador.
+  const [prodPhones, setProdPhones] = useState(null);
+  const productLabel = filterProducts.map(p => p.title).join(', ') || prodTerm;
   const [deliveryPhones, setDeliveryPhones] = useState(null); // no entregados en la ruta de ayer
   const [deliveryCases, setDeliveryCases] = useState(new Map());
   const [deliveryBusy, setDeliveryBusy] = useState(false);
@@ -1628,14 +1630,15 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
         currentAudience: {
           type: audienceType, segment: audienceSegment,
           purchaseDays: purchaseAge === 'all' ? null : Number(purchaseDays),
-          product: prodTerm.trim() || null,
+          product: prodTerm || null, products: filterProducts.map(p => p.title),
           deliveryIncidentsOnly: !!deliveryPhones,
           selectedCount: audience.length,
         },
       });
       const plan = data.plan;
-      let plannedProductPhones = null;
-      if (plan.audience.product) {
+      const keepProducts = plan.audience.keepSelectedProducts && filterProducts.length > 0;
+      let plannedProductPhones = keepProducts ? prodPhones : null;
+      if (!keepProducts && plan.audience.product) {
         const productResult = await api.get(`/contacts/by-product?q=${encodeURIComponent(plan.audience.product)}`);
         plannedProductPhones = new Set((productResult.data.phones || []).map(normPhone));
       }
@@ -1663,7 +1666,8 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
       setAudienceSegment(plan.audience.segment);
       setPurchaseAge(plan.audience.purchaseDays ? 'custom' : 'all');
       if (plan.audience.purchaseDays) setCustomPurchaseDays(String(plan.audience.purchaseDays));
-      setProdTerm(plan.audience.product || '');
+      if (!keepProducts) setFilterProducts([]);
+      setProdTerm(keepProducts ? '' : plan.audience.product || '');
       setProdPhones(plannedProductPhones);
       setDeliveryPhones(plannedDeliveryPhones);
       setDeliveryCases(plannedDeliveryCases);
@@ -1715,7 +1719,8 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
       const payload = {
         name: journeyName.trim(), objective: journeyObjective, cooldownHours: Number(journeyCooldown) || 0,
         audienceFilters: {
-          purchaseAge, purchaseDays, audienceType, audienceSegment, product: prodTerm.trim() || null,
+          purchaseAge, purchaseDays, audienceType, audienceSegment, product: productLabel || null,
+          products: filterProducts.map(({ id, title }) => ({ id, title })),
           excludeCompanies: audienceType === 'natural', deliveryIncidentsOnly: !!deliveryPhones,
           selectedCount: audience.length,
         },
@@ -2155,31 +2160,29 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
     return n;
   }
 
-  // Aplica/limpia el filtro por producto (ej: "jumbo"). Trae del backend los
-  // teléfonos que compraron ese producto y deja seleccionados solo esos.
-  async function applyProduct() {
-    const term = prodTerm.trim();
-    if (!term) { setProdPhones(null); return; }
-    setProdBusy(true);
-    try {
-      const { data } = await api.get(`/contacts/by-product?q=${encodeURIComponent(term)}`);
-      const set = new Set((data.phones || []).map(normPhone));
-      setProdPhones(set);
-      // Auto-seleccionar los contactos que quedan tras el filtro
-      setSelected(new Set(contacts.filter(c => set.has(normPhone(c.phone))).map(c => c.phone)));
-      if (!data.historyComplete) {
-        const since = data.orderCoverage?.oldestOrderAt
-          ? ` desde ${new Date(data.orderCoverage.oldestOrderAt).toLocaleDateString('es-CL')}`
-          : '';
-        showToast(`${set.size} coincidencias en el historial disponible${since}. Falta habilitar el historial completo de Shopify.`, 'error');
-      } else {
-        showToast(`${set.size} cliente(s) compraron "${term}"`);
-      }
-    } catch (e) {
-      showToast('No se pudo filtrar por producto: ' + (e.response?.data?.error || e.message), 'error');
-    } finally { setProdBusy(false); }
+  async function applyProducts(products) {
+    const { data } = await api.post('/contacts/by-product', { productIds: products.map(p => p.id) });
+    const phones = new Set(data.phones.map(normPhone));
+    setFilterProducts(products);
+    setProdTerm('');
+    setProdPhones(phones);
+    setSelected(new Set(contacts.filter(c => phones.has(normPhone(c.phone))).map(c => c.phone)));
+    setPreviewIdx(0);
+    if (!data.historyComplete) {
+      const since = data.orderCoverage?.oldestOrderAt
+        ? ` desde ${new Date(data.orderCoverage.oldestOrderAt).toLocaleDateString('es-CL')}` : '';
+      showToast(`${phones.size} coincidencias en el historial disponible${since}. Falta habilitar el historial completo de Shopify.`, 'error');
+    } else {
+      showToast(`${phones.size} cliente(s) compraron alguno de los productos seleccionados.`);
+    }
   }
-  function clearProduct() { setProdTerm(''); setProdPhones(null); }
+
+  function clearProduct() {
+    setFilterProducts([]);
+    setProdTerm('');
+    setProdPhones(null);
+    setPreviewIdx(0);
+  }
 
   async function toggleDeliveryAudience() {
     if (deliveryPhones) {
@@ -2687,7 +2690,7 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
 
               <div style={{ marginTop: 14, padding: '11px 13px', borderRadius: 10, backgroundColor: `${colors.blue}10`, border: `1px solid ${colors.blue}2d`, color: colors.textSecondary, fontSize: 12 }}>
                 <strong style={{ color: colors.textPrimary }}>Público actual: {audience.length} contacto(s).</strong>{' '}
-                Se guarda una fotografía exacta de los seleccionados y de estos filtros: {audienceType === 'natural' ? 'personas naturales' : audienceType === 'empresa' ? 'empresas' : 'personas y empresas'} · {({ all: 'todos los segmentos', lead: 'sin compras', new: '1 pedido', repeat: '2 a 4 pedidos', loyal: '5 o más pedidos' })[audienceSegment]} · {purchaseAgeLabel(purchaseDays)}{prodTerm.trim() ? ` · producto “${prodTerm.trim()}”` : ''}{deliveryPhones ? ' · no entregados ayer' : ''}.
+                Se guarda una fotografía exacta de los seleccionados y de estos filtros: {audienceType === 'natural' ? 'personas naturales' : audienceType === 'empresa' ? 'empresas' : 'personas y empresas'} · {({ all: 'todos los segmentos', lead: 'sin compras', new: '1 pedido', repeat: '2 a 4 pedidos', loyal: '5 o más pedidos' })[audienceSegment]} · {purchaseAgeLabel(purchaseDays)}{productLabel ? ` · productos: ${productLabel}` : ''}{deliveryPhones ? ' · no entregados ayer' : ''}.
               </div>
 
               <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
@@ -2869,28 +2872,8 @@ export function BroadcastPanel({ colors, testPhone, parentTemplates = [], freque
           style={{ flex: 1, minWidth: '180px', padding: '7px 12px', borderRadius: colors.radiusMd, border: `1px solid ${colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
         />
 
-        {/* Filtro por producto (ej: jumbo) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-          <input
-            value={prodTerm}
-            onChange={e => setProdTerm(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') applyProduct(); }}
-            placeholder="Producto (ej: jumbo)"
-            style={{ width: '150px', padding: '7px 12px', borderRadius: colors.radiusMd, border: `1px solid ${prodPhones ? colors.green + '66' : colors.border}`, backgroundColor: colors.bgCard, color: colors.textPrimary, fontSize: '13px', outline: 'none' }}
-          />
-          <button onClick={applyProduct} disabled={prodBusy}
-            style={{ padding: '6px 11px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
-              border: `1px solid ${colors.green}66`, backgroundColor: colors.green + '22', color: colors.green, opacity: prodBusy ? 0.6 : 1 }}>
-            {prodBusy ? '…' : 'Filtrar'}
-          </button>
-          {prodPhones && (
-            <button onClick={clearProduct}
-              style={{ padding: '6px 9px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${colors.border}`, backgroundColor: 'transparent', color: colors.textMuted }}>
-              ✕
-            </button>
-          )}
-        </div>
+        <CampaignProductFilter products={filterProducts} term={prodTerm}
+          disabled={sending || !!reviewPlan || journeyPlanning} onApply={applyProducts} onClear={clearProduct} />
 
         <label style={{ fontSize: 12, color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 6 }}>
           Público
